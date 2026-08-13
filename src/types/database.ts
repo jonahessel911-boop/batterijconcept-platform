@@ -198,7 +198,7 @@ export interface Factuur {
   notities: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;
+  leads?: Pick<Lead, "naam" | "email" | "lead_number" | "adviseur_id"> | null;
 }
 
 export interface WebhookLeadPayload {

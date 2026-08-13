@@ -209,3 +209,32 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
     ].join(""),
   });
 }
+
+export function factuurVerzondenEmail(opts: {
+  naam: string;
+  factuurNummer: string;
+  bedrag: string;
+  vervaldatum?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: `Factuur ${opts.factuurNummer}`,
+    preheader: `Je factuur ${opts.factuurNummer} van Batterijconcept.`,
+    bodyHtml: [
+      emailH1(`Factuur ${opts.factuurNummer}`),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Hierbij ontvang je je factuur van Batterijconcept. In de bijlage vind je de PDF."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
+         ${opts.vervaldatum ? `<p style="margin:0;font-size:15px;"><strong>Vervaldatum</strong><br />${opts.vervaldatum}</p>` : ""}`
+      ),
+      emailP(
+        "Heb je vragen over deze factuur? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ].join(""),
+  });
+}

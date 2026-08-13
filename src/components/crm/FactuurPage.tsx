@@ -22,6 +22,9 @@ export function FactuurPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [busy, setBusy] = useState<"pdf" | "send" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,13 +38,13 @@ export function FactuurPage() {
 
     try {
       const sb = getSupabaseBrowser();
-      const { data, error } = await sb
+      const { data, error: err } = await sb
         .from("facturen")
-        .select("*, leads(naam, lead_number)")
+        .select("*, leads(naam, email, lead_number)")
         .eq("id", id)
         .single();
 
-      if (error || !data) {
+      if (err || !data) {
         setNotFound(true);
       } else {
         const fac = data as Factuur;
@@ -71,6 +74,68 @@ export function FactuurPage() {
     return () => cancelAnimationFrame(frame);
   }, [load]);
 
+  async function downloadPdf() {
+    if (!factuur) return;
+    setBusy("pdf");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}/pdf`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "PDF downloaden mislukt");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${factuur.factuur_nummer}${
+        factuur.status === "concept" ? "-concept" : ""
+      }.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg("PDF gedownload.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "PDF mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sendToKlant() {
+    if (!factuur) return;
+    if (
+      !confirm(
+        `Factuur ${factuur.factuur_nummer} mailen naar ${
+          factuur.leads?.email || "de klant"
+        }?`
+      )
+    ) {
+      return;
+    }
+    setBusy("send");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Verzenden mislukt");
+      if (data.factuur) setFactuur(data.factuur as Factuur);
+      else await load();
+      setMsg("Factuur is gemaild naar de klant.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verzenden mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="facturen">
@@ -89,6 +154,8 @@ export function FactuurPage() {
       />
     );
   }
+
+  const isDraft = factuur.status === "concept";
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="facturen">
@@ -110,10 +177,46 @@ export function FactuurPage() {
             </h1>
             <p className="mt-2 text-sm text-muted">
               Aangemaakt {formatDateTimeNl(factuur.created_at)}
+              {isDraft ? " · Concept (nog niet verzonden)" : ""}
             </p>
           </div>
           <StatusBadge kind="factuur" value={factuur.status} />
         </div>
+
+        <div className="mt-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={downloadPdf}
+            className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          >
+            {busy === "pdf" ? "PDF laden…" : "PDF downloaden"}
+          </button>
+          <button
+            type="button"
+            disabled={busy !== null || !factuur.leads?.email}
+            onClick={sendToKlant}
+            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+            title={
+              factuur.leads?.email
+                ? `Mail naar ${factuur.leads.email}`
+                : "Lead heeft geen e-mail"
+            }
+          >
+            {busy === "send"
+              ? "Verzenden…"
+              : isDraft
+                ? "Verstuur naar klant"
+                : "Opnieuw versturen"}
+          </button>
+        </div>
+
+        {msg && (
+          <p className="mt-3 text-sm font-medium text-green-dark">{msg}</p>
+        )}
+        {error && (
+          <p className="mt-3 text-sm font-medium text-[#C45A12]">{error}</p>
+        )}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <InfoTile
@@ -124,7 +227,7 @@ export function FactuurPage() {
           />
           <InfoTile label="Klant" value={factuur.leads?.naam} />
           <InfoTile
-            label="Bedrag incl. btw"
+            label="Bedrag (BTW)"
             value={formatEuro(factuur.bedrag_inc_btw)}
           />
           <InfoTile
@@ -163,6 +266,9 @@ export function FactuurPage() {
               value={project.project_nummer}
               href={`/projecten/${project.id}`}
             />
+          )}
+          {factuur.leads?.email && (
+            <InfoTile label="E-mail klant" value={factuur.leads.email} />
           )}
         </div>
 

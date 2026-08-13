@@ -5,6 +5,7 @@ import { adresRegel } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
 import { offerteOndertekendEmail } from "@/lib/email/templates";
 import { ensureProjectForOfferte } from "@/lib/ensure-project";
+import { ensureBtwDraftFactuur } from "@/lib/ensure-btw-factuur";
 
 export const runtime = "nodejs";
 
@@ -164,6 +165,25 @@ export async function POST(
       console.error("Project na ondertekening:", projErr);
     }
 
+    // Concept BTW-factuur (draft, niet mailen)
+    let factuurMeta: {
+      id: string;
+      factuur_nummer: string;
+      created: boolean;
+    } | null = null;
+    try {
+      factuurMeta = await ensureBtwDraftFactuur(supabase, {
+        offerteId: offerte.id,
+        leadId: offerte.lead_id,
+        projectId: projectMeta?.id || null,
+        offerteNummer: offerte.offerte_nummer,
+        btwBedrag: Number(offerte.btw_bedrag) || 0,
+        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+      });
+    } catch (facErr) {
+      console.error("BTW-factuur na ondertekening:", facErr);
+    }
+
     const klantEmail = offerte.leads?.email as string | null | undefined;
     if (klantEmail) {
       try {
@@ -201,6 +221,8 @@ export async function POST(
       pdf_base64: pdfBytes.toString("base64"),
       project_id: projectMeta?.id ?? null,
       project_nummer: projectMeta?.project_nummer ?? null,
+      factuur_id: factuurMeta?.id ?? null,
+      factuur_nummer: factuurMeta?.factuur_nummer ?? null,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Onbekende fout";

@@ -110,6 +110,30 @@ export function OffertePage() {
     };
   }, [offerte, projecten.length, loading, load]);
 
+  // Ondertekend zonder BTW-factuur → concept aanmaken
+  useEffect(() => {
+    if (!offerte || loading) return;
+    if (offerte.status !== "ondertekend") return;
+    if (facturen.length > 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/offertes/${offerte.id}/factuur`, {
+          method: "POST",
+        });
+        if (!res.ok || cancelled) return;
+        await load();
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [offerte, facturen.length, loading, load]);
+
   if (loading) {
     return (
       <DetailShell activeTab="offertes">
