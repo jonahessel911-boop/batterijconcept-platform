@@ -1,7 +1,7 @@
 import { jsPDF } from "jspdf";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { BEDRIJFSWAARDEN } from "@/types/database";
-import { formatDateNl, formatEuro } from "@/lib/format";
+import { formatDateNl, formatDateTimeLongNl, formatEuro } from "@/lib/format";
 
 type SignPayload = {
   naam: string;
@@ -187,7 +187,11 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     doc.setTextColor(...CHARCOAL);
     doc.text(`Naam: ${sign.naam}`, margin, y);
     y += 7;
-    doc.text(`Datum: ${formatDateNl(sign.ondertekendOp)}`, margin, y);
+    doc.text(
+      `Datum en tijd: ${formatDateTimeLongNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
+      margin,
+      y
+    );
     y += 7;
     doc.text(`Offerte: ${offerte.offerte_nummer}`, margin, y);
     y += 10;
@@ -214,9 +218,10 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     doc.setFont("helvetica", "normal");
     doc.setTextColor(...MUTED);
     doc.text(
-      `Ondertekend door ${sign.naam} op ${formatDateNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
+      `Ondertekend door ${sign.naam} op ${formatDateTimeLongNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
       margin,
-      y
+      y,
+      { maxWidth: pageW - margin * 2 }
     );
   } else {
     doc.setFont("helvetica", "normal");
