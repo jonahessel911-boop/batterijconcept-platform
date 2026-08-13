@@ -19,7 +19,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
 
   return (
     <>
-      <div className="crm-card-list md:hidden">
+      <div className="crm-card-list flex md:hidden">
         {projecten.map((p) => (
           <article key={p.id} className="crm-card">
             <button

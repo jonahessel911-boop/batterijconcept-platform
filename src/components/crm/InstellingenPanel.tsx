@@ -196,7 +196,7 @@ export function InstellingenPanel({
           </p>
         ) : (
           <>
-            <div className="crm-card-list md:hidden">
+            <div className="crm-card-list flex md:hidden">
               {adviseurs.map((a) => (
                 <article key={a.id} className="crm-card space-y-2">
                   <input

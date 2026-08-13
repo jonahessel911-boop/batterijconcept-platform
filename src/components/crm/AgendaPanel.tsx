@@ -223,7 +223,7 @@ export function AgendaPanel({
           </p>
         ) : (
           <>
-            <div className="crm-card-list md:hidden">
+            <div className="crm-card-list flex md:hidden">
               {upcoming.map((a) => (
                 <article key={a.id} className="crm-card">
                   <p className="font-medium text-ink">

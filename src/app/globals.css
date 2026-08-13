@@ -112,9 +112,8 @@ body {
   }
 }
 
-/* Mobiele lijstkaarten */
+/* Mobiele lijstkaarten — géén display hier (anders overschrijft dit md:hidden) */
 .crm-card-list {
-  display: flex;
   flex-direction: column;
 }
 

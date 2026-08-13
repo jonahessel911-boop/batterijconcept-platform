@@ -19,7 +19,7 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
 
   return (
     <>
-      <div className="crm-card-list md:hidden">
+      <div className="crm-card-list flex md:hidden">
         {facturen.map((f) => (
           <article key={f.id} className="crm-card">
             <button
