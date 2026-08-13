@@ -103,7 +103,9 @@ export function AgendaPanel({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-      setOkMsg("Afspraak gepland — bevestigingsmail verstuurd.");
+      setOkMsg(
+        "Afspraak gepland — bevestigingsmail volgt de dag erna (of direct bij korte termijn)."
+      );
       setStartAt("");
       setNotities("");
       await load();

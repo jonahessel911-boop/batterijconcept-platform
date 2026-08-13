@@ -7,6 +7,11 @@ import {
   emailP,
 } from "./layout";
 import { formatDateTimeLongNl } from "@/lib/format";
+import {
+  afspraakBevestigingSequenceEmail,
+  afspraakMailVars,
+  afspraakReminder24uEmail,
+} from "./afspraak-sequence";
 
 export function leadThankYouEmail(opts: { naam: string }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
@@ -37,29 +42,23 @@ export function afspraakBevestigingEmail(opts: {
   startAt: string | Date;
   adviseurNaam: string;
   manageUrl: string;
+  lead?: {
+    postcode?: string | null;
+    huisnummer?: string | null;
+    toevoeging?: string | null;
+    straat?: string | null;
+    plaats?: string | null;
+  } | null;
 }) {
-  const first = opts.naam.split(" ")[0] || opts.naam;
-  const when = formatDateTimeLongNl(opts.startAt);
-  return emailLayout({
-    title: "Afspraak bevestigd",
-    preheader: `Afspraak met ${opts.adviseurNaam} op ${when}`,
-    bodyHtml: [
-      emailH1("Afspraak bevestigd"),
-      emailP(`Hoi ${first},`),
-      emailP(
-        `Je adviesafspraak met <strong>${opts.adviseurNaam}</strong> is ingepland. Hier zijn de details:`
-      ),
-      emailBox(
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>
-         <p style="margin:0;font-size:15px;"><strong>Je afspraak is met</strong><br />${opts.adviseurNaam}</p>`
-      ),
-      emailP(
-        "We kijken ernaar uit om samen te kijken welk batterijsysteem het beste bij jouw woning past."
-      ),
-      emailMuted("Liever afspraak verzetten of annuleren?"),
-      emailButton("Afspraak beheren", opts.manageUrl),
-    ].join(""),
-  });
+  return afspraakBevestigingSequenceEmail(
+    afspraakMailVars({
+      naam: opts.naam,
+      startAt: opts.startAt,
+      adviseurNaam: opts.adviseurNaam,
+      manageUrl: opts.manageUrl,
+      lead: opts.lead,
+    })
+  );
 }
 
 export function afspraakHerinneringEmail(opts: {
@@ -67,27 +66,23 @@ export function afspraakHerinneringEmail(opts: {
   startAt: string | Date;
   adviseurNaam: string;
   manageUrl: string;
+  lead?: {
+    postcode?: string | null;
+    huisnummer?: string | null;
+    toevoeging?: string | null;
+    straat?: string | null;
+    plaats?: string | null;
+  } | null;
 }) {
-  const first = opts.naam.split(" ")[0] || opts.naam;
-  const when = formatDateTimeLongNl(opts.startAt);
-  return emailLayout({
-    title: "Herinnering: jouw adviesafspraak morgen",
-    preheader: `Morgen met ${opts.adviseurNaam}: ${when}`,
-    bodyHtml: [
-      emailH1("Herinnering: je afspraak is morgen"),
-      emailP(`Hoi ${first},`),
-      emailP(
-        `Morgen staat jouw vrijblijvende adviesafspraak met <strong>${opts.adviseurNaam}</strong> gepland:`
-      ),
-      emailBox(
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>
-         <p style="margin:0;font-size:15px;"><strong>Je afspraak is met</strong><br />${opts.adviseurNaam}</p>`
-      ),
-      emailP("Tot morgen — we helpen je graag aan de juiste batterijkeuze."),
-      emailMuted("Liever afspraak verzetten of annuleren?"),
-      emailButton("Afspraak beheren", opts.manageUrl),
-    ].join(""),
-  });
+  return afspraakReminder24uEmail(
+    afspraakMailVars({
+      naam: opts.naam,
+      startAt: opts.startAt,
+      adviseurNaam: opts.adviseurNaam,
+      manageUrl: opts.manageUrl,
+      lead: opts.lead,
+    })
+  );
 }
 
 export function offerteVerstuurdEmail(opts: {

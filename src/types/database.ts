@@ -66,6 +66,7 @@ export interface Afspraak {
   manage_token: string | null;
   herinnering_verstuurd: boolean;
   bevestiging_verstuurd: boolean;
+  opwarm_verstuurd?: boolean;
   created_at: string;
   updated_at: string;
   leads?: Pick<Lead, "naam" | "email" | "telefoon" | "lead_number"> | null;

@@ -36,6 +36,7 @@ create table if not exists public.afspraken (
   manage_token          text unique default encode(gen_random_bytes(24), 'hex'),
   herinnering_verstuurd boolean not null default false,
   bevestiging_verstuurd boolean not null default false,
+  opwarm_verstuurd      boolean not null default false,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   constraint afspraken_tijd_check check (end_at > start_at)

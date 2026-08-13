@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { addMinutes } from "date-fns";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { afspraakGeannuleerdAdviseurEmail } from "@/lib/email/templates";
 import {
-  afspraakBevestigingEmail,
-  afspraakGeannuleerdAdviseurEmail,
-} from "@/lib/email/templates";
+  afspraakBevestigingSequenceEmail,
+  afspraakMailVars,
+} from "@/lib/email/afspraak-sequence";
 import { generateAvailableSlots } from "@/lib/slots";
 
 export const runtime = "nodejs";
@@ -156,44 +157,49 @@ export async function POST(
           status: "verzet",
           herinnering_verstuurd: false,
           bevestiging_verstuurd: false,
+          opwarm_verstuurd: false,
         })
         .eq("id", afspraak.id)
         .select(
-          "*, leads(naam, email, lead_number), adviseurs(naam, email)"
+          "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
         )
         .single();
 
       if (upErr || !updated) {
+        // Soft-fail zonder opwarm-kolom
+        if (upErr?.message?.includes("opwarm_verstuurd")) {
+          const retry = await sb
+            .from("afspraken")
+            .update({
+              start_at: start.toISOString(),
+              end_at: end.toISOString(),
+              status: "verzet",
+              herinnering_verstuurd: false,
+              bevestiging_verstuurd: false,
+            })
+            .eq("id", afspraak.id)
+            .select(
+              "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+            )
+            .single();
+          if (retry.error || !retry.data) {
+            return NextResponse.json(
+              {
+                error: "Verzetten mislukt",
+                detail: retry.error?.message || upErr.message,
+              },
+              { status: 500 }
+            );
+          }
+          return await afterVerzet(sb, retry.data);
+        }
         return NextResponse.json(
           { error: "Verzetten mislukt", detail: upErr?.message },
           { status: 500 }
         );
       }
 
-      const email = updated.leads?.email;
-      const manageUrl = `${appBaseUrl()}/afspraak/${updated.manage_token}`;
-      if (email) {
-        const html = afspraakBevestigingEmail({
-          naam: updated.leads?.naam || "klant",
-          startAt: updated.start_at,
-          adviseurNaam: updated.adviseurs?.naam || "Batterijconcept",
-          manageUrl,
-        });
-        const sent = await sendEmail({
-          to: email,
-          subject: "Afspraak verzet — nieuwe bevestiging",
-          html,
-          tag: "afspraak-verzet",
-        });
-        if (sent.ok) {
-          await sb
-            .from("afspraken")
-            .update({ bevestiging_verstuurd: true, status: "bevestigd" })
-            .eq("id", updated.id);
-        }
-      }
-
-      return NextResponse.json({ ok: true, afspraak: updated });
+      return await afterVerzet(sb, updated);
     }
 
     return NextResponse.json({ error: "Onbekende action" }, { status: 400 });
@@ -201,4 +207,50 @@ export async function POST(
     const message = e instanceof Error ? e.message : "Fout";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+async function afterVerzet(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  updated: {
+    id: string;
+    start_at: string;
+    manage_token: string;
+    leads?: {
+      naam?: string | null;
+      email?: string | null;
+      postcode?: string | null;
+      huisnummer?: string | null;
+      toevoeging?: string | null;
+      straat?: string | null;
+      plaats?: string | null;
+    } | null;
+    adviseurs?: { naam?: string | null } | null;
+  }
+) {
+  const email = updated.leads?.email;
+  const manageUrl = `${appBaseUrl()}/afspraak/${updated.manage_token}`;
+  // Bij verzetten: direct nieuwe bevestiging (nieuwe tijd bevestigen)
+  if (email) {
+    const vars = afspraakMailVars({
+      naam: updated.leads?.naam || "klant",
+      startAt: updated.start_at,
+      adviseurNaam: updated.adviseurs?.naam || "Batterijconcept",
+      manageUrl,
+      lead: updated.leads,
+    });
+    const sent = await sendEmail({
+      to: email,
+      subject: "Afspraak verzet — nieuwe bevestiging",
+      html: afspraakBevestigingSequenceEmail(vars),
+      tag: "afspraak-verzet",
+    });
+    if (sent.ok) {
+      await sb
+        .from("afspraken")
+        .update({ bevestiging_verstuurd: true, status: "bevestigd" })
+        .eq("id", updated.id);
+    }
+  }
+
+  return NextResponse.json({ ok: true, afspraak: updated });
 }
