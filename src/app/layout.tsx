@@ -17,7 +17,13 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: "Batterijconcept CRM",
   description: "Leads, offertes, projecten en facturen — Batterijconcept.nl",
-  icons: { icon: "/logo.png" },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "32x32" },
+      { url: "/icon-512.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
 };
 
 export const viewport = {
