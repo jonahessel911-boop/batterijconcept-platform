@@ -1,0 +1,16 @@
+-- =============================================================================
+-- Batterijconcept.nl CRM — Supabase setup
+-- =============================================================================
+--
+-- Run in Supabase → SQL Editor, in deze volgorde:
+--
+--   1. schema.sql  → leads, producten, offertes, offerte_regels,
+--                     projecten, facturen + generators + storage + RLS
+--   2. seed.sql    → productcatalogus (optioneel)
+--
+-- Env (.env.local):
+--   NEXT_PUBLIC_SUPABASE_URL=
+--   NEXT_PUBLIC_SUPABASE_ANON_KEY=
+--   SUPABASE_SERVICE_ROLE_KEY=
+--   WEBHOOK_SECRET=
+-- =============================================================================
