@@ -20,7 +20,7 @@ export function leadThankYouEmail(opts: { naam: string }) {
         "Super dat je interesse hebt in een thuisbatterij. We hebben je aanvraag ontvangen en gaan er direct mee aan de slag."
       ),
       emailP(
-        "<strong>Wat we voor je doen:</strong> we kijken naar jouw situatie (verbruik, zonnepanelen, meterkast) en adviseren eerlijk welk systeem het beste past — zonder upsell om de upsell."
+        "<strong>Wat we voor je doen:</strong> we kijken naar jouw situatie en maken een passend en logisch advies."
       ),
       emailP(
         "Binnen <strong>24 uur</strong> nemen we contact met je op om vrijblijvend een afspraak in te plannen voor het beste advies aan huis."
