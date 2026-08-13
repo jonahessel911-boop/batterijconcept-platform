@@ -87,6 +87,17 @@ body {
   border-bottom: none;
 }
 
+.crm-table--compact th {
+  padding: 0.45rem 0.65rem;
+  font-size: 0.625rem;
+}
+
+.crm-table--compact td {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+}
+
 /* Mobiel: geen iOS-zoom bij focus op formuliervelden */
 @media (max-width: 767px) {
   input,
