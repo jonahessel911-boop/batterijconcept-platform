@@ -1,185 +1,275 @@
 import { jsPDF } from "jspdf";
 import type { Factuur, Lead, Offerte } from "@/types/database";
-import { formatDateNl, formatDateShort, formatEuro, adresRegel } from "@/lib/format";
+import { formatDateShort } from "@/lib/format";
+import {
+  PDF_COLORS,
+  companyInfo,
+  formatEuroPdf,
+  loadLogoDataUrl,
+} from "@/lib/pdf-brand";
 
 type PdfInput = {
   factuur: Factuur;
   lead?: Pick<
     Lead,
-    "naam" | "email" | "telefoon" | "lead_number" | "straat" | "huisnummer" | "toevoeging" | "postcode" | "plaats"
+    | "naam"
+    | "email"
+    | "telefoon"
+    | "lead_number"
+    | "straat"
+    | "huisnummer"
+    | "toevoeging"
+    | "postcode"
+    | "plaats"
   > | null;
-  offerte?: Pick<Offerte, "offerte_nummer" | "subtotaal_ex_btw" | "btw_bedrag" | "totaal_inc_btw"> | null;
+  offerte?: Pick<
+    Offerte,
+    "offerte_nummer" | "subtotaal_ex_btw" | "btw_bedrag" | "totaal_inc_btw"
+  > | null;
 };
 
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [
-    parseInt(h.slice(0, 2), 16),
-    parseInt(h.slice(2, 4), 16),
-    parseInt(h.slice(4, 6), 16),
-  ];
-}
+const { green: GREEN, dark: DARK, orange: ORANGE, charcoal: CHARCOAL, muted: MUTED, line: LINE, grayRow: GRAY } =
+  PDF_COLORS;
 
-const GREEN = hexToRgb("#1A8A3E");
-const DARK = hexToRgb("#0D5C32");
-const CHARCOAL = hexToRgb("#2E3330");
-const MUTED = hexToRgb("#5A635C");
-
+/**
+ * Factuur-PDF in strakke layout:
+ * logo linksboven · bedrijfsgegevens rechts · titel · tabel · totalen.
+ */
 export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const { factuur, lead, offerte } = input;
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
-  const margin = 18;
-  let y = 0;
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 16;
+  const co = companyInfo();
+  let y = 14;
 
-  doc.setFillColor(...GREEN);
-  doc.rect(0, 0, pageW, 36, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text("Batterijconcept", margin, 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text("BTW-factuur", margin, 24);
-  if (factuur.status === "concept") {
-    doc.setFont("helvetica", "bold");
-    doc.text("CONCEPT / DRAFT", pageW - margin, 16, { align: "right" });
+  // —— Logo linksboven ——
+  const logo = loadLogoDataUrl();
+  if (logo) {
+    try {
+      doc.addImage(logo, "PNG", margin, y, 22, 22);
+    } catch {
+      /* ignore */
+    }
   }
-
-  y = 48;
-  doc.setTextColor(...DARK);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(14);
-  doc.text(factuur.factuur_nummer, margin, y);
+  doc.setTextColor(...DARK);
+  doc.text("Batterij", margin + (logo ? 26 : 0), y + 10);
+  doc.setTextColor(...ORANGE);
+  doc.text("concept", margin + (logo ? 26 : 0) + doc.getTextWidth("Batterij"), y + 10);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...MUTED);
+  doc.text("Opwekken · Opladen · Opslaan", margin + (logo ? 26 : 0), y + 16);
+
+  // —— Bedrijf rechtsboven ——
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...CHARCOAL);
+  const rightLines = [
+    co.legal,
+    co.adres,
+    co.postcodePlaats,
+    co.land,
+    co.btw ? `BTW: ${co.btw}` : null,
+    co.kvk ? `KVK: ${co.kvk}` : null,
+  ].filter(Boolean) as string[];
+  let ry = y + 4;
+  for (const line of rightLines) {
+    doc.text(line, pageW - margin, ry, { align: "right" });
+    ry += 4;
+  }
+
+  y = 44;
+
+  // —— Titel ——
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.setTextColor(...DARK);
+  doc.text(`Factuur ${factuur.factuur_nummer}`, margin, y);
+  if (factuur.status === "concept") {
+    doc.setFontSize(9);
+    doc.setTextColor(...ORANGE);
+    doc.text("CONCEPT", pageW - margin, y, { align: "right" });
+  }
+  y += 10;
+
+  // —— Datums (oranje labels zoals referentie) ——
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(...ORANGE);
+  doc.text("Factuurdatum:", margin, y);
+  doc.text("Vervaldatum:", margin + 55, y);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...CHARCOAL);
+  doc.setFontSize(9);
+  doc.text(formatDateShort(factuur.factuurdatum), margin + 28, y);
+  doc.text(
+    formatDateShort(factuur.vervaldatum) || "—",
+    margin + 82,
+    y
+  );
+  y += 12;
+
+  // —— Klant rechts ——
+  const klantX = pageW - margin - 70;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(...MUTED);
+  doc.text("Factuur aan", klantX, y - 8);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(...CHARCOAL);
+  let ky = y - 3;
+  doc.text(lead?.naam || "Klant", klantX, ky);
+  ky += 4.5;
+  if (lead) {
+    const street = [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
+      .filter(Boolean)
+      .join(" ");
+    if (street) {
+      doc.text(street, klantX, ky);
+      ky += 4.5;
+    }
+    const city = [lead.postcode, lead.plaats].filter(Boolean).join(" ");
+    if (city) {
+      doc.text(city, klantX, ky);
+      ky += 4.5;
+    }
+  }
+
   y += 8;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(...CHARCOAL);
-  doc.text(`Factuurdatum: ${formatDateShort(factuur.factuurdatum)}`, margin, y);
-  y += 6;
-  if (factuur.vervaldatum) {
-    doc.text(`Vervaldatum: ${formatDateShort(factuur.vervaldatum)}`, margin, y);
-    y += 6;
-  }
-  if (offerte?.offerte_nummer) {
-    doc.text(`Offerte: ${offerte.offerte_nummer}`, margin, y);
-    y += 6;
-  }
+  // —— Tabel header ——
+  const col = {
+    oms: margin,
+    aantal: margin + 95,
+    prijs: margin + 115,
+    btw: margin + 140,
+    bedrag: pageW - margin,
+  };
+  const tableW = pageW - margin * 2;
 
-  y += 6;
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.3);
+  doc.rect(margin, y, tableW, 8);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(...DARK);
-  doc.text("Factuur aan", margin, y);
-  y += 6;
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(...CHARCOAL);
-  doc.text(lead?.naam || "Klant", margin, y);
-  y += 5;
-  if (lead) {
-    const adr = adresRegel(lead);
-    if (adr && adr !== "—") {
-      doc.text(adr, margin, y);
-      y += 5;
-    }
-    if (lead.email) {
-      doc.text(lead.email, margin, y);
-      y += 5;
-    }
-  }
-
-  y += 10;
-  doc.setFillColor(244, 248, 245);
-  doc.rect(margin, y - 4, pageW - margin * 2, 12, "F");
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
+  doc.setFontSize(7);
   doc.setTextColor(...MUTED);
-  doc.text("Omschrijving", margin + 2, y + 3);
-  doc.text("Bedrag", pageW - margin - 2, y + 3, { align: "right" });
-  y += 14;
+  doc.text("OMSCHRIJVING", col.oms + 2, y + 5.5);
+  doc.text("AANTAL", col.aantal, y + 5.5, { align: "right" });
+  doc.text("PRIJS", col.prijs, y + 5.5, { align: "right" });
+  doc.text("BTW", col.btw, y + 5.5, { align: "right" });
+  doc.text("BEDRAG", col.bedrag - 2, y + 5.5, { align: "right" });
+  y += 8;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(...CHARCOAL);
+  // —— Regel(s) ——
   const oms =
     factuur.omschrijving ||
     (offerte
-      ? `BTW 21% over ${formatEuro(offerte.subtotaal_ex_btw)}`
+      ? `BTW 21% over ${formatEuroPdf(Number(offerte.subtotaal_ex_btw))}`
       : "BTW-factuur");
-  doc.text(oms, margin + 2, y);
-  doc.text(formatEuro(factuur.bedrag_inc_btw), pageW - margin - 2, y, {
-    align: "right",
-  });
-  y += 10;
+  const bedrag = Number(factuur.bedrag_inc_btw);
+  const btwPct = offerte ? "21%" : "—";
 
-  if (offerte) {
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
-    doc.text(
-      `Op basis van offerte ${offerte.offerte_nummer}: subtotaal excl. ${formatEuro(offerte.subtotaal_ex_btw)}, btw ${formatEuro(offerte.btw_bedrag)}, totaal incl. ${formatEuro(offerte.totaal_inc_btw)}.`,
-      margin,
-      y,
-      { maxWidth: pageW - margin * 2 }
-    );
-    y += 12;
-  }
-
-  y += 4;
-  doc.setDrawColor(200);
-  doc.line(margin, y, pageW - margin, y);
-  y += 10;
-
+  doc.setDrawColor(...LINE);
+  doc.rect(margin, y, tableW, 10);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
+  doc.setFontSize(9);
   doc.setTextColor(...CHARCOAL);
-  doc.text("Excl. btw", margin, y);
-  doc.text(formatEuro(factuur.bedrag_ex_btw), pageW - margin, y, {
+  doc.text(oms, col.oms + 2, y + 6.5);
+  doc.text("1", col.aantal, y + 6.5, { align: "right" });
+  doc.text(formatEuroPdf(bedrag), col.prijs, y + 6.5, { align: "right" });
+  doc.text(btwPct, col.btw, y + 6.5, { align: "right" });
+  doc.text(formatEuroPdf(bedrag), col.bedrag - 2, y + 6.5, {
     align: "right",
   });
-  y += 6;
-  doc.text("BTW", margin, y);
-  doc.text(formatEuro(factuur.btw_bedrag), pageW - margin, y, {
-    align: "right",
-  });
-  y += 8;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(...DARK);
-  doc.text("Totaal te betalen", margin, y);
-  doc.text(formatEuro(factuur.bedrag_inc_btw), pageW - margin, y, {
-    align: "right",
-  });
+  y += 18;
 
-  y += 16;
-  if (factuur.status === "concept") {
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(9);
+  if (offerte?.offerte_nummer) {
+    doc.setFontSize(8);
     doc.setTextColor(...MUTED);
-    doc.text(
-      "Dit is een conceptfactuur ter controle — nog niet verzonden naar de klant.",
-      margin,
-      y,
-      { maxWidth: pageW - margin * 2 }
-    );
+    doc.text(`Betreft offerte ${offerte.offerte_nummer}`, margin, y);
     y += 10;
   }
 
-  if (factuur.notities) {
+  // —— Betaling links + totalen rechts ——
+  const totalsX = pageW - margin - 72;
+  const totalsW = 72;
+
+  if (co.iban) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.setTextColor(...MUTED);
-    doc.text(factuur.notities, margin, y, {
-      maxWidth: pageW - margin * 2,
-    });
+    doc.setTextColor(...CHARCOAL);
+    const pay = doc.splitTextToSize(
+      `Mededeling betaling: ${factuur.factuur_nummer} op deze rekening ${co.iban}`,
+      95
+    );
+    doc.text(pay, margin, y + 4);
   }
 
+  // Excl
+  doc.setFillColor(...GRAY);
+  doc.rect(totalsX, y, totalsW, 7, "F");
+  doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
+  doc.setTextColor(...CHARCOAL);
+  doc.text("Excl. btw", totalsX + 2, y + 4.8);
+  doc.text(formatEuroPdf(Number(factuur.bedrag_ex_btw)), totalsX + totalsW - 2, y + 4.8, {
+    align: "right",
+  });
+  y += 7;
+
+  // BTW
+  doc.setFillColor(...GRAY);
+  doc.rect(totalsX, y, totalsW, 7, "F");
+  doc.text("BTW 21%", totalsX + 2, y + 4.8);
+  doc.text(formatEuroPdf(Number(factuur.btw_bedrag)), totalsX + totalsW - 2, y + 4.8, {
+    align: "right",
+  });
+  y += 7;
+
+  // Totaal groen
+  doc.setFillColor(...DARK);
+  doc.rect(totalsX, y, totalsW, 8, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("Totaal", totalsX + 2, y + 5.5);
+  doc.text(formatEuroPdf(bedrag), totalsX + totalsW - 2, y + 5.5, {
+    align: "right",
+  });
+  y += 16;
+
+  if (factuur.status === "concept") {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(...ORANGE);
+    doc.text(
+      "Dit is een conceptfactuur ter controle — nog niet verzonden naar de klant.",
+      margin,
+      y
+    );
+  }
+
+  // —— Footer ——
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.2);
+  doc.line(margin, pageH - 18, pageW - margin, pageH - 18);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
   doc.setTextColor(...MUTED);
-  doc.text(
-    `Batterijconcept.nl · info@batterijconcept.nl · 085 800 1645 · ${formatDateNl(new Date())}`,
-    margin,
-    285
-  );
+  const footerParts = [
+    `E-mail: ${co.factuurEmail}`,
+    co.kvk ? `KVK nr: ${co.kvk}` : null,
+    co.iban ? `IBAN nr: ${co.iban}` : null,
+    co.telefoon,
+  ].filter(Boolean);
+  doc.text(footerParts.join("  |  "), pageW / 2, pageH - 12, {
+    align: "center",
+  });
+  doc.text("Pagina: 1 / 1", pageW - margin, pageH - 12, { align: "right" });
 
   return doc.output("blob");
 }
