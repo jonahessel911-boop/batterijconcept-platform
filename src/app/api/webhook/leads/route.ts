@@ -4,10 +4,6 @@ import type { WebhookLeadPayload } from "@/types/database";
 
 export const runtime = "nodejs";
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
@@ -18,23 +14,11 @@ function badRequest(message: string) {
  * Ontvangt leads vanaf de website-scan (of andere bronnen).
  * Maakt automatisch een uniek lead_number aan.
  *
- * Headers:
- *   Authorization: Bearer <WEBHOOK_SECRET>
- *   of x-webhook-secret: <WEBHOOK_SECRET>
- *
  * Body (JSON):
  *   naam* , email, telefoon, postcode, huisnummer, toevoeging,
  *   straat, plaats, utm_source, utm_medium, utm_campaign, …
  */
 export async function POST(req: NextRequest) {
-  const secret = process.env.WEBHOOK_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    const headerSecret = req.headers.get("x-webhook-secret");
-    const token = auth?.startsWith("Bearer ") ? auth.slice(7) : headerSecret;
-    if (token !== secret) return unauthorized();
-  }
-
   let body: WebhookLeadPayload;
   try {
     body = await req.json();

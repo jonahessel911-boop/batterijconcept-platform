@@ -137,7 +137,7 @@ export async function POST(
 
     await supabase
       .from("leads")
-      .update({ status: "offerte" })
+      .update({ status: "afspraak" })
       .eq("id", offerte.lead_id);
 
     return new NextResponse(pdfBytes, {

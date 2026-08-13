@@ -1,4 +1,10 @@
-export type LeadStatus = "nieuw" | "contact" | "offerte" | "gewonnen" | "verloren";
+export type LeadStatus =
+  | "nieuw"
+  | "afspraak"
+  | "geen_interesse"
+  | "geen_contact"
+  | "deal";
+
 export type Prioriteit = "laag" | "normaal" | "hoog" | "urgent";
 export type OfferteStatus =
   | "concept"

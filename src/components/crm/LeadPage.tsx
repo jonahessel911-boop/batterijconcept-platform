@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import type { Factuur, Lead, Offerte, Project } from "@/types/database";
+import type { Factuur, Lead, LeadStatus, Offerte, Project } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import { StatusBadge } from "./StatusBadge";
+import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
@@ -93,6 +93,22 @@ export function LeadPage() {
     window.open(`/offerte/${o.sign_token}`, "_blank");
   }
 
+  async function updateStatus(status: LeadStatus) {
+    if (!lead) return;
+    const prev = lead.status;
+    setLead({ ...lead, status });
+    try {
+      const sb = getSupabaseBrowser();
+      const { error } = await sb
+        .from("leads")
+        .update({ status })
+        .eq("id", lead.id);
+      if (error) throw error;
+    } catch {
+      setLead({ ...lead, status: prev });
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell>
@@ -137,10 +153,18 @@ export function LeadPage() {
               {lead.bron ? ` · via ${lead.bron}` : ""}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <StatusBadge kind="lead" value={lead.status} />
-            <StatusBadge kind="prioriteit" value={lead.prioriteit} />
-          </div>
+          <select
+            value={lead.status}
+            onChange={(e) => updateStatus(e.target.value as LeadStatus)}
+            className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+            aria-label="Lead status"
+          >
+            {LEAD_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {leadStatusLabel[s]}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

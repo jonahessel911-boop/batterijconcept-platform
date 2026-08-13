@@ -1,11 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import type { Lead } from "@/types/database";
-import { StatusBadge } from "./StatusBadge";
+import type { Lead, LeadStatus } from "@/types/database";
+import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
 import { formatDateShort, formatDateTimeNl } from "@/lib/format";
 
-export function LeadsTable({ leads }: { leads: Lead[] }) {
+export function LeadsTable({
+  leads,
+  onStatusChange,
+}: {
+  leads: Lead[];
+  onStatusChange?: (leadId: string, status: LeadStatus) => void;
+}) {
   const router = useRouter();
 
   if (leads.length === 0) {
@@ -32,7 +38,6 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
             <th>Adres</th>
             <th>UTM</th>
             <th>Status</th>
-            <th>Prio</th>
             <th>Aangemaakt</th>
           </tr>
         </thead>
@@ -71,11 +76,21 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                   <span className="text-muted">—</span>
                 )}
               </td>
-              <td>
-                <StatusBadge kind="lead" value={lead.status} />
-              </td>
-              <td>
-                <StatusBadge kind="prioriteit" value={lead.prioriteit} />
+              <td onClick={(e) => e.stopPropagation()}>
+                <select
+                  value={lead.status}
+                  onChange={(e) =>
+                    onStatusChange?.(lead.id, e.target.value as LeadStatus)
+                  }
+                  className={`cursor-pointer border bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+                  aria-label="Lead status"
+                >
+                  {LEAD_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {leadStatusLabel[s]}
+                    </option>
+                  ))}
+                </select>
               </td>
               <td
                 className="text-muted whitespace-nowrap"

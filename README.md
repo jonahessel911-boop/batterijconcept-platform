@@ -41,13 +41,6 @@ Voer in de Supabase SQL Editor, in deze volgorde:
 
 `POST /api/webhook/leads`
 
-Headers:
-
-```
-Authorization: Bearer <WEBHOOK_SECRET>
-Content-Type: application/json
-```
-
 Body:
 
 ```json
@@ -79,7 +72,6 @@ Voorbeeld curl:
 
 ```bash
 curl -X POST http://localhost:3000/api/webhook/leads \
-  -H "Authorization: Bearer $WEBHOOK_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"naam":"Test Lead","email":"test@example.nl","postcode":"1234 AB","huisnummer":"1","utm_source":"google"}'
 ```
@@ -120,4 +112,3 @@ Response bevat `sign_url` → open die link.
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key (CRM browser) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role (webhook, sign, PDF) |
-| `WEBHOOK_SECRET` | Bearer-token voor lead-webhook |

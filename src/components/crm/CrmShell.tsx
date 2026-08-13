@@ -6,6 +6,7 @@ import type {
   CrmTab,
   Factuur,
   Lead,
+  LeadStatus,
   Offerte,
   Project,
 } from "@/types/database";
@@ -116,6 +117,25 @@ export function CrmShell() {
     window.open(`/offerte/${o.sign_token}`, "_blank");
   }
 
+  async function updateLeadStatus(leadId: string, status: LeadStatus) {
+    setLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, status } : l))
+    );
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update({ status })
+        .eq("id", leadId);
+      if (err) throw err;
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Status bijwerken mislukt"
+      );
+      void load();
+    }
+  }
+
   const titles: Record<CrmTab, { title: string; sub: string }> = {
     leads: { title: "Leads", sub: "Alle binnenkomende aanvragen" },
     offertes: {
@@ -174,7 +194,12 @@ export function CrmShell() {
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : (
               <>
-                {tab === "leads" && <LeadsTable leads={filteredLeads} />}
+                {tab === "leads" && (
+                  <LeadsTable
+                    leads={filteredLeads}
+                    onStatusChange={updateLeadStatus}
+                  />
+                )}
                 {tab === "offertes" && (
                   <OffertesTable
                     offertes={offertes}

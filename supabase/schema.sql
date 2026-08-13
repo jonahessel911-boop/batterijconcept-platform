@@ -42,7 +42,7 @@ create table if not exists public.leads (
   bron            text default 'website',
   -- CRM status
   status          text not null default 'nieuw'
-                    check (status in ('nieuw','contact','offerte','gewonnen','verloren')),
+                    check (status in ('nieuw','afspraak','geen_interesse','geen_contact','deal')),
   prioriteit      text not null default 'normaal'
                     check (prioriteit in ('laag','normaal','hoog','urgent')),
   notities        text,

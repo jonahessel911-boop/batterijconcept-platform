@@ -8,9 +8,11 @@
 --                     projecten, facturen + generators + storage + RLS
 --   2. seed.sql    → productcatalogus (optioneel)
 --
+-- Als je schema al eerder draaide met oude lead-statussen:
+--   migrate-lead-status.sql
+--
 -- Env (.env.local):
 --   NEXT_PUBLIC_SUPABASE_URL=
 --   NEXT_PUBLIC_SUPABASE_ANON_KEY=
 --   SUPABASE_SERVICE_ROLE_KEY=
---   WEBHOOK_SECRET=
 -- =============================================================================

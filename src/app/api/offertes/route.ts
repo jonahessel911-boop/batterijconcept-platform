@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await sb.from("leads").update({ status: "offerte" }).eq("id", body.lead_id);
+    await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
 
     const origin = req.nextUrl.origin;
     return NextResponse.json(

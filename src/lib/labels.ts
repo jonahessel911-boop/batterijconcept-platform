@@ -8,11 +8,19 @@ import type {
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
-  contact: "In contact",
-  offerte: "Offerte",
-  gewonnen: "Gewonnen",
-  verloren: "Verloren",
+  afspraak: "Afspraak",
+  geen_interesse: "Geen interesse",
+  geen_contact: "Geen contact",
+  deal: "Deal",
 };
+
+export const LEAD_STATUSES: LeadStatus[] = [
+  "nieuw",
+  "afspraak",
+  "geen_interesse",
+  "geen_contact",
+  "deal",
+];
 
 export const prioriteitLabel: Record<Prioriteit, string> = {
   laag: "Laag",
@@ -62,13 +70,26 @@ export function statusTone(
     return muted;
   }
 
-  if (["gewonnen", "ondertekend", "opgeleverd", "betaald"].includes(value)) {
+  if (["deal", "ondertekend", "opgeleverd", "betaald"].includes(value)) {
     return success;
   }
-  if (["urgent", "verlopen", "vervallen", "verloren", "geannuleerd"].includes(value)) {
+  if (
+    [
+      "urgent",
+      "verlopen",
+      "vervallen",
+      "geen_interesse",
+      "geen_contact",
+      "geannuleerd",
+    ].includes(value)
+  ) {
     return value === "urgent" ? urgent : warn;
   }
-  if (["nieuw", "verzonden", "in_uitvoering", "deels_betaald"].includes(value)) {
+  if (
+    ["nieuw", "afspraak", "verzonden", "in_uitvoering", "deels_betaald"].includes(
+      value
+    )
+  ) {
     return info;
   }
   return muted;
