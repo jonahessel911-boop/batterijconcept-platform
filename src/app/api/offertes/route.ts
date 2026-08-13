@@ -113,11 +113,43 @@ export async function POST(req: NextRequest) {
     await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
 
     const origin = req.nextUrl.origin;
+    const signUrl = `${origin}/offerte/${offerte.sign_token}`;
+
+    // Offerte-mail naar lead
+    try {
+      const { data: lead } = await sb
+        .from("leads")
+        .select("naam, email")
+        .eq("id", body.lead_id)
+        .single();
+
+      if (lead?.email) {
+        const { sendEmail } = await import("@/lib/email/postmark");
+        const { offerteVerstuurdEmail } = await import(
+          "@/lib/email/templates"
+        );
+        const { formatEuro } = await import("@/lib/format");
+        await sendEmail({
+          to: lead.email,
+          subject: `Offerte ${offerte.offerte_nummer} voor ${lead.naam}`,
+          html: offerteVerstuurdEmail({
+            naam: lead.naam,
+            offerteNummer: offerte.offerte_nummer,
+            signUrl,
+            totaalLabel: formatEuro(offerte.totaal_inc_btw),
+          }),
+          tag: "offerte-verstuurd",
+        });
+      }
+    } catch (mailErr) {
+      console.error("Offerte mail:", mailErr);
+    }
+
     return NextResponse.json(
       {
         ok: true,
         ...offerte,
-        sign_url: `${origin}/offerte/${offerte.sign_token}`,
+        sign_url: signUrl,
       },
       { status: 201 }
     );

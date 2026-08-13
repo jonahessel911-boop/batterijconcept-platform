@@ -4,12 +4,10 @@
 --
 -- Run in Supabase → SQL Editor, in deze volgorde:
 --
---   1. schema.sql  → leads, producten, offertes, offerte_regels,
---                     projecten, facturen + generators + storage + RLS
---   2. seed.sql    → productcatalogus (optioneel)
---
--- Als je schema al eerder draaide met oude lead-statussen:
---   migrate-lead-status.sql
+--   1. schema.sql
+--   2. seed.sql (optioneel — producten)
+--   3. agenda.sql (adviseurs + afspraken)
+--   4. migrate-lead-status.sql (alleen als oude statussen al bestaan)
 --
 -- Env (.env.local):
 --   NEXT_PUBLIC_SUPABASE_URL=

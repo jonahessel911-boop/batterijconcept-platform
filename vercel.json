@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/afspraak-herinneringen",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

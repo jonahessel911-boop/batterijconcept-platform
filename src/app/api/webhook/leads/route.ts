@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabase
       .from("leads")
       .insert(row)
-      .select("id, lead_number, created_at")
+      .select("id, lead_number, created_at, naam, email")
       .single();
 
     if (error) {
@@ -78,6 +78,22 @@ export async function POST(req: NextRequest) {
         { error: "Lead opslaan mislukt", detail: error.message },
         { status: 500 }
       );
+    }
+
+    // Bedankt-mail (niet blokkerend voor response)
+    if (data.email) {
+      try {
+        const { sendEmail } = await import("@/lib/email/postmark");
+        const { leadThankYouEmail } = await import("@/lib/email/templates");
+        await sendEmail({
+          to: data.email,
+          subject: "Bedankt voor je aanvraag! — Batterijconcept",
+          html: leadThankYouEmail({ naam: data.naam }),
+          tag: "lead-bedankt",
+        });
+      } catch (mailErr) {
+        console.error("Lead thank-you mail:", mailErr);
+      }
     }
 
     return NextResponse.json(

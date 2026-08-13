@@ -1,4 +1,5 @@
 import type {
+  AfspraakStatus,
   FactuurStatus,
   LeadStatus,
   OfferteStatus,
@@ -45,6 +46,14 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   geannuleerd: "Geannuleerd",
 };
 
+export const afspraakStatusLabel: Record<AfspraakStatus, string> = {
+  gepland: "Gepland",
+  bevestigd: "Bevestigd",
+  verzet: "Verzet",
+  geannuleerd: "Geannuleerd",
+  voltooid: "Voltooid",
+};
+
 export const factuurStatusLabel: Record<FactuurStatus, string> = {
   concept: "Concept",
   verzonden: "Verzonden",
@@ -55,7 +64,7 @@ export const factuurStatusLabel: Record<FactuurStatus, string> = {
 
 /** Tailwind classes voor status labels (strak, geen pills) */
 export function statusTone(
-  kind: "lead" | "offerte" | "project" | "factuur" | "prioriteit",
+  kind: "lead" | "offerte" | "project" | "factuur" | "prioriteit" | "afspraak",
   value: string
 ): string {
   const success = "border border-[#0D5C32]/25 bg-[#E8F6EC] text-[#0D5C32]";
@@ -70,7 +79,11 @@ export function statusTone(
     return muted;
   }
 
-  if (["deal", "ondertekend", "opgeleverd", "betaald"].includes(value)) {
+  if (
+    ["deal", "ondertekend", "opgeleverd", "betaald", "bevestigd", "voltooid"].includes(
+      value
+    )
+  ) {
     return success;
   }
   if (
@@ -86,9 +99,15 @@ export function statusTone(
     return value === "urgent" ? urgent : warn;
   }
   if (
-    ["nieuw", "afspraak", "verzonden", "in_uitvoering", "deels_betaald"].includes(
-      value
-    )
+    [
+      "nieuw",
+      "afspraak",
+      "verzonden",
+      "in_uitvoering",
+      "deels_betaald",
+      "gepland",
+      "verzet",
+    ].includes(value)
   ) {
     return info;
   }

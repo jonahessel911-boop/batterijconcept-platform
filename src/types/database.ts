@@ -25,7 +25,42 @@ export type FactuurStatus =
   | "deels_betaald"
   | "vervallen";
 
-export type CrmTab = "leads" | "offertes" | "projecten" | "facturen";
+export type CrmTab = "leads" | "agenda" | "offertes" | "projecten" | "facturen";
+
+export type AfspraakStatus =
+  | "gepland"
+  | "bevestigd"
+  | "verzet"
+  | "geannuleerd"
+  | "voltooid";
+
+export interface Adviseur {
+  id: string;
+  naam: string;
+  email: string | null;
+  telefoon: string | null;
+  actief: boolean;
+  werktijd_start: string;
+  werktijd_eind: string;
+}
+
+export interface Afspraak {
+  id: string;
+  lead_id: string;
+  adviseur_id: string;
+  start_at: string;
+  end_at: string;
+  status: AfspraakStatus;
+  titel: string | null;
+  notities: string | null;
+  manage_token: string | null;
+  herinnering_verstuurd: boolean;
+  bevestiging_verstuurd: boolean;
+  created_at: string;
+  updated_at: string;
+  leads?: Pick<Lead, "naam" | "email" | "telefoon" | "lead_number"> | null;
+  adviseurs?: Pick<Adviseur, "naam" | "email"> | null;
+}
 
 export interface Lead {
   id: string;

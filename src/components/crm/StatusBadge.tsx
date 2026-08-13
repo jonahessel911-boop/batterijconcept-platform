@@ -5,13 +5,14 @@ import {
   offerteStatusLabel,
   projectStatusLabel,
   factuurStatusLabel,
+  afspraakStatusLabel,
 } from "@/lib/labels";
 
 export function StatusBadge({
   kind,
   value,
 }: {
-  kind: "lead" | "offerte" | "project" | "factuur" | "prioriteit";
+  kind: "lead" | "offerte" | "project" | "factuur" | "prioriteit" | "afspraak";
   value: string;
 }) {
   const labels =
@@ -23,7 +24,9 @@ export function StatusBadge({
           ? projectStatusLabel
           : kind === "factuur"
             ? factuurStatusLabel
-            : prioriteitLabel;
+            : kind === "afspraak"
+              ? afspraakStatusLabel
+              : prioriteitLabel;
 
   const label = (labels as Record<string, string>)[value] ?? value;
 

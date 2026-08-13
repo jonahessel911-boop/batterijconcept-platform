@@ -17,8 +17,15 @@ import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
+import { AgendaPanel } from "./AgendaPanel";
 
-const VALID_TABS: CrmTab[] = ["leads", "offertes", "projecten", "facturen"];
+const VALID_TABS: CrmTab[] = [
+  "leads",
+  "agenda",
+  "offertes",
+  "projecten",
+  "facturen",
+];
 
 function parseTab(value: string | null): CrmTab {
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -107,6 +114,7 @@ export function CrmShell() {
 
   const counts = {
     leads: leads.length,
+    agenda: 0,
     offertes: offertes.length,
     projecten: projecten.length,
     facturen: facturen.length,
@@ -138,6 +146,10 @@ export function CrmShell() {
 
   const titles: Record<CrmTab, { title: string; sub: string }> = {
     leads: { title: "Leads", sub: "Alle binnenkomende aanvragen" },
+    agenda: {
+      title: "Agenda",
+      sub: "Plan afspraken en koppel adviseurs",
+    },
     offertes: {
       title: "Offertes",
       sub: "Verstuurde en ondertekende offertes",
@@ -200,6 +212,7 @@ export function CrmShell() {
                     onStatusChange={updateLeadStatus}
                   />
                 )}
+                {tab === "agenda" && <AgendaPanel leads={leads} />}
                 {tab === "offertes" && (
                   <OffertesTable
                     offertes={offertes}

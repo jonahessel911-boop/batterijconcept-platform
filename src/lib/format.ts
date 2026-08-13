@@ -24,6 +24,24 @@ export function formatDateTimeNl(date: Date | string | null | undefined): string
   return formatInTimeZone(d, TZ, "dd-MM-yyyy HH:mm", { locale: nl });
 }
 
+/** Datum + tijd lang: donderdag 13 augustus 2026 om 14:30 */
+export function formatDateTimeLongNl(
+  date: Date | string | null | undefined
+): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? new Date(date) : date;
+  return formatInTimeZone(d, TZ, "EEEE d MMMM yyyy 'om' HH:mm", { locale: nl });
+}
+
+/** Alleen tijd: 14:30 */
+export function formatTimeNl(date: Date | string | null | undefined): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? new Date(date) : date;
+  return formatInTimeZone(d, TZ, "HH:mm", { locale: nl });
+}
+
+export const AMSTERDAM_TZ = TZ;
+
 export function formatEuro(amount: number | null | undefined): string {
   const n = Number(amount ?? 0);
   return new Intl.NumberFormat("nl-NL", {
