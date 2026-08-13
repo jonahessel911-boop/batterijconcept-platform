@@ -20,7 +20,7 @@ export async function GET(
     const { data: afspraak, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email, werktijd_start, werktijd_eind)"
+        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email)"
       )
       .eq("manage_token", token)
       .single();
@@ -36,19 +36,8 @@ export async function GET(
       .neq("status", "geannuleerd")
       .neq("id", afspraak.id);
 
-    const startHour = parseInt(
-      String(afspraak.adviseurs?.werktijd_start || "09:00").split(":")[0],
-      10
-    );
-    const endHour = parseInt(
-      String(afspraak.adviseurs?.werktijd_eind || "17:00").split(":")[0],
-      10
-    );
-
     const slots = generateAvailableSlots({
       busy: busy || [],
-      startHour: Number.isFinite(startHour) ? startHour : 9,
-      endHour: Number.isFinite(endHour) ? endHour : 17,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),

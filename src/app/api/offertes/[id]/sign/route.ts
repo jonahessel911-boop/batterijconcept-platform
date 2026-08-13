@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildSignedOffertePdf } from "@/lib/pdf-offerte";
 import { adresRegel } from "@/lib/format";
+import { sendEmail } from "@/lib/email/postmark";
+import { offerteOndertekendEmail } from "@/lib/email/templates";
 
 export const runtime = "nodejs";
 
@@ -13,7 +15,7 @@ type Body = {
 
 /**
  * POST /api/offertes/[id]/sign
- * Ondertekent offerte, slaat handtekening op, genereert PDF.
+ * Ondertekent offerte, slaat handtekening op, genereert PDF, mailt klant.
  */
 export async function POST(
   req: NextRequest,
@@ -102,7 +104,8 @@ export async function POST(
     });
 
     const pdfBytes = Buffer.from(await pdfBlob.arrayBuffer());
-    const path = `${offerte.lead_id}/${offerte.offerte_nummer}-ondertekend.pdf`;
+    const filename = `${offerte.offerte_nummer}-ondertekend.pdf`;
+    const path = `${offerte.lead_id}/${filename}`;
 
     const { error: uploadErr } = await supabase.storage
       .from("offertes-signed")
@@ -137,14 +140,44 @@ export async function POST(
 
     await supabase
       .from("leads")
-      .update({ status: "afspraak" })
+      .update({ status: "deal" })
       .eq("id", offerte.lead_id);
+
+    const klantEmail = offerte.leads?.email as string | null | undefined;
+    const klantNaam = body.naam.trim() || offerte.leads?.naam || "klant";
+    if (klantEmail) {
+      try {
+        const html = offerteOndertekendEmail({
+          naam: klantNaam,
+          offerteNummer: offerte.offerte_nummer,
+          ondertekendOp,
+        });
+        const sent = await sendEmail({
+          to: klantEmail,
+          subject: `Ondertekende offerte ${offerte.offerte_nummer}`,
+          html,
+          tag: "offerte-ondertekend",
+          attachments: [
+            {
+              name: filename,
+              contentType: "application/pdf",
+              content: pdfBytes,
+            },
+          ],
+        });
+        if (!sent.ok) {
+          console.error("Offerte-ondertekend mail:", sent.error);
+        }
+      } catch (mailErr) {
+        console.error("Offerte-ondertekend mail:", mailErr);
+      }
+    }
 
     return new NextResponse(pdfBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${offerte.offerte_nummer}-ondertekend.pdf"`,
+        "Content-Disposition": `attachment; filename="${filename}"`,
         "X-Offerte-Nummer": offerte.offerte_nummer,
         "X-Signed-Pdf-Path": uploadErr ? "" : path,
       },

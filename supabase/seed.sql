@@ -5,6 +5,7 @@
 
 insert into public.producten (sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid)
 values
+  ('AE-G3-10', 'Alpha ESS G3-10', 'Thuisbatterij Alpha ESS G3, 10 kWh bruikbaar', 4995.00, 21, 'stuk'),
   ('AE-SMILE5', 'Alpha ESS Smile5', 'Thuisbatterij 5,7 kWh bruikbaar, 1-fase', 3495.00, 21, 'stuk'),
   ('AE-SMILE5-EXP', 'Alpha ESS Smile5 uitbreiding', 'Extra batterijmodule 2,8 kWh', 1895.00, 21, 'stuk'),
   ('AE-SMILE-T10', 'Alpha ESS Smile T10', 'Thuisbatterij 10,1 kWh, 3-fase', 5495.00, 21, 'stuk'),

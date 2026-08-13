@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ type Body = {
   titel?: string;
   intro_tekst?: string;
   geldig_dagen?: number;
+  financiering_voorbehoud?: boolean;
   regels: RegelInput[];
 };
 
@@ -74,27 +76,44 @@ export async function POST(req: NextRequest) {
     const geldigTot = new Date();
     geldigTot.setDate(geldigTot.getDate() + geldigDagen);
 
-    const { data: offerte, error } = await sb
+    const row: Record<string, unknown> = {
+      lead_id: body.lead_id,
+      offerte_nummer: offerteNr,
+      status: "verzonden",
+      titel: body.titel || "Offerte thuisbatterij",
+      intro_tekst:
+        body.intro_tekst ||
+        "Hierbij onze offerte voor jouw thuisbatterij, afgestemd op jouw situatie.",
+      subtotaal_ex_btw: Math.round(subtotaal * 100) / 100,
+      btw_bedrag: Math.round(btw * 100) / 100,
+      totaal_inc_btw: Math.round((subtotaal + btw) * 100) / 100,
+      geldig_tot: geldigTot.toISOString().slice(0, 10),
+      financiering_voorbehoud: Boolean(body.financiering_voorbehoud),
+    };
+
+    let insert = await sb
       .from("offertes")
-      .insert({
-        lead_id: body.lead_id,
-        offerte_nummer: offerteNr,
-        status: "verzonden",
-        titel: body.titel || "Offerte thuisbatterij",
-        intro_tekst:
-          body.intro_tekst ||
-          "Hierbij onze offerte voor jouw thuisbatterij, afgestemd op jouw situatie.",
-        subtotaal_ex_btw: Math.round(subtotaal * 100) / 100,
-        btw_bedrag: Math.round(btw * 100) / 100,
-        totaal_inc_btw: Math.round((subtotaal + btw) * 100) / 100,
-        geldig_tot: geldigTot.toISOString().slice(0, 10),
-      })
-      .select("id, offerte_nummer, sign_token, totaal_inc_btw")
+      .insert(row)
+      .select("id, offerte_nummer, sign_token, totaal_inc_btw, financiering_voorbehoud")
       .single();
 
-    if (error || !offerte) {
+    if (
+      insert.error &&
+      (insert.error.message?.includes("financiering_voorbehoud") ||
+        insert.error.code === "42703")
+    ) {
+      delete row.financiering_voorbehoud;
+      insert = await sb
+        .from("offertes")
+        .insert(row)
+        .select("id, offerte_nummer, sign_token, totaal_inc_btw")
+        .single();
+    }
+
+    const offerte = insert.data;
+    if (insert.error || !offerte) {
       return NextResponse.json(
-        { error: "Offerte aanmaken mislukt", detail: error?.message },
+        { error: "Offerte aanmaken mislukt", detail: insert.error?.message },
         { status: 500 }
       );
     }
@@ -115,7 +134,6 @@ export async function POST(req: NextRequest) {
     const origin = req.nextUrl.origin;
     const signUrl = `${origin}/offerte/${offerte.sign_token}`;
 
-    // Offerte-mail naar lead
     try {
       const { data: lead } = await sb
         .from("leads")
@@ -154,7 +172,9 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     );
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Onbekende fout";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: errMessage(e, "Onbekende fout") },
+      { status: 500 }
+    );
   }
 }

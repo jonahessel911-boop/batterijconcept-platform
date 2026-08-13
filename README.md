@@ -45,17 +45,22 @@ Body:
 
 ```json
 {
-  "naam": "Jan de Vries",
-  "email": "jan@example.nl",
-  "telefoon": "06 12345678",
+  "naam": "Jan Jansen",
+  "email": "jan@example.com",
+  "telefoon": "0612345678",
   "postcode": "1234 AB",
   "huisnummer": "12",
-  "toevoeging": "A",
-  "utm_source": "google",
-  "utm_medium": "cpc",
-  "utm_campaign": "thuisbatterij-scan"
+  "adres": "Voorbeeldstraat",
+  "woonplaats": "Amsterdam",
+  "utm_source": "google"
 }
 ```
+
+Het systeem zet automatisch:
+- `lead_number` (bijv. `BC-20260813-A1B2`)
+- `created_at` (aanmaakdatum)
+
+Aliases: `straat` = `adres`, `plaats` = `woonplaats`.
 
 Response `201`:
 
@@ -63,17 +68,26 @@ Response `201`:
 {
   "ok": true,
   "lead_id": "uuid…",
-  "lead_number": "BC-20260813-A1B2001",
-  "created_at": "…"
+  "lead_number": "BC-20260813-A1B2",
+  "created_at": "2026-08-13T11:00:00.000Z"
 }
 ```
 
 Voorbeeld curl:
 
 ```bash
-curl -X POST http://localhost:3000/api/webhook/leads \
+curl -X POST https://batterijconcept-platform.vercel.app/api/webhook/leads \
   -H "Content-Type: application/json" \
-  -d '{"naam":"Test Lead","email":"test@example.nl","postcode":"1234 AB","huisnummer":"1","utm_source":"google"}'
+  -d '{
+    "naam":"Jan Jansen",
+    "email":"jan@example.com",
+    "telefoon":"0612345678",
+    "postcode":"1234 AB",
+    "huisnummer":"12",
+    "adres":"Voorbeeldstraat",
+    "woonplaats":"Amsterdam",
+    "utm_source":"google"
+  }'
 ```
 
 ## Offerte aanmaken + ondertekenen

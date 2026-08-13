@@ -1,4 +1,4 @@
-import { ServerClient } from "postmark";
+import { ServerClient, Attachment } from "postmark";
 
 const FROM = process.env.POSTMARK_FROM_EMAIL || "info@batterijconcept.nl";
 
@@ -11,11 +11,19 @@ function getClient(): ServerClient | null {
   return client;
 }
 
+export type EmailAttachment = {
+  name: string;
+  contentType: string;
+  /** Raw bytes or base64 string */
+  content: Buffer | string;
+};
+
 export async function sendEmail(opts: {
   to: string;
   subject: string;
   html: string;
   tag?: string;
+  attachments?: EmailAttachment[];
 }): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const pm = getClient();
   if (!pm) {
@@ -24,6 +32,14 @@ export async function sendEmail(opts: {
   }
 
   try {
+    const Attachments = opts.attachments?.map((a) => {
+      const base64 =
+        typeof a.content === "string"
+          ? a.content
+          : a.content.toString("base64");
+      return new Attachment(a.name, base64, a.contentType);
+    });
+
     const result = await pm.sendEmail({
       From: FROM,
       To: opts.to,
@@ -31,6 +47,7 @@ export async function sendEmail(opts: {
       HtmlBody: opts.html,
       MessageStream: "outbound",
       Tag: opts.tag,
+      Attachments,
     });
     return { ok: true, messageId: result.MessageID };
   } catch (e) {

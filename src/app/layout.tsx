@@ -20,6 +20,12 @@ export const metadata: Metadata = {
   icons: { icon: "/logo.png" },
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover" as const,
+};
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="nl" className={`${outfit.variable} ${dmSans.variable} h-full`}>

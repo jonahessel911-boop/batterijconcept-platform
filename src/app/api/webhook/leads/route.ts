@@ -8,15 +8,22 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
 
+function pickStr(...values: (string | undefined | null)[]) {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
 /**
  * POST /api/webhook/leads
  *
  * Ontvangt leads vanaf de website-scan (of andere bronnen).
- * Maakt automatisch een uniek lead_number aan.
+ * Maakt automatisch lead_number + created_at aan.
  *
  * Body (JSON):
- *   naam* , email, telefoon, postcode, huisnummer, toevoeging,
- *   straat, plaats, utm_source, utm_medium, utm_campaign, …
+ *   naam* , email, telefoon, postcode, huisnummer,
+ *   adres|straat, woonplaats|plaats, utm_source, …
  */
 export async function POST(req: NextRequest) {
   let body: WebhookLeadPayload;
@@ -33,6 +40,7 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin();
 
+    // Uniek lead ID: BC-YYYYMMDD-XXXX
     const { data: leadNumber, error: numErr } = await supabase.rpc(
       "generate_lead_number"
     );
@@ -47,29 +55,30 @@ export async function POST(req: NextRequest) {
     const row = {
       lead_number: leadNumber as string,
       naam: body.naam.trim(),
-      email: body.email?.trim() || null,
-      telefoon: body.telefoon?.trim() || null,
-      postcode: body.postcode?.trim() || null,
-      huisnummer: body.huisnummer?.trim() || null,
-      toevoeging: body.toevoeging?.trim() || null,
-      straat: body.straat?.trim() || null,
-      plaats: body.plaats?.trim() || null,
-      utm_source: body.utm_source?.trim() || null,
-      utm_medium: body.utm_medium?.trim() || null,
-      utm_campaign: body.utm_campaign?.trim() || null,
-      utm_content: body.utm_content?.trim() || null,
-      utm_term: body.utm_term?.trim() || null,
-      bron: body.bron?.trim() || "website",
-      notities: body.notities?.trim() || null,
+      email: pickStr(body.email),
+      telefoon: pickStr(body.telefoon),
+      postcode: pickStr(body.postcode),
+      huisnummer: pickStr(body.huisnummer),
+      toevoeging: pickStr(body.toevoeging),
+      straat: pickStr(body.adres, body.straat),
+      plaats: pickStr(body.woonplaats, body.plaats),
+      utm_source: pickStr(body.utm_source),
+      utm_medium: pickStr(body.utm_medium),
+      utm_campaign: pickStr(body.utm_campaign),
+      utm_content: pickStr(body.utm_content),
+      utm_term: pickStr(body.utm_term),
+      bron: pickStr(body.bron) || "website",
+      notities: pickStr(body.notities),
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
+      // created_at / updated_at: database default now()
       raw_payload: body,
     };
 
     const { data, error } = await supabase
       .from("leads")
       .insert(row)
-      .select("id, lead_number, created_at, naam, email")
+      .select("id, lead_number, created_at, naam, email, straat, plaats, utm_source")
       .single();
 
     if (error) {
@@ -117,6 +126,22 @@ export async function GET() {
     endpoint: "/api/webhook/leads",
     method: "POST",
     description:
-      "Webhook voor lead-intake. Genereert uniek lead_number (BC-YYYYMMDD-XXXX).",
+      "Webhook voor lead-intake. Genereert uniek lead_number (BC-YYYYMMDD-XXXX) en created_at.",
+    example: {
+      naam: "Jan Jansen",
+      email: "jan@example.com",
+      telefoon: "0612345678",
+      postcode: "1234 AB",
+      huisnummer: "12",
+      adres: "Voorbeeldstraat",
+      woonplaats: "Amsterdam",
+      utm_source: "google",
+    },
+    response: {
+      ok: true,
+      lead_id: "uuid",
+      lead_number: "BC-20260813-A1B2",
+      created_at: "2026-08-13T11:00:00.000Z",
+    },
   });
 }

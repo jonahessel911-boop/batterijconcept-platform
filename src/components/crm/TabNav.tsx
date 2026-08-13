@@ -2,14 +2,16 @@
 
 import type { CrmTab } from "@/types/database";
 
-const TABS: { id: CrmTab; label: string }[] = [
+export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "leads", label: "Leads" },
   { id: "agenda", label: "Agenda" },
   { id: "offertes", label: "Offertes" },
   { id: "projecten", label: "Projecten" },
   { id: "facturen", label: "Facturen" },
+  { id: "instellingen", label: "Instellingen" },
 ];
 
+/** Desktop tab-balk (verborgen op telefoon — daar hamburger) */
 export function TabNav({
   active,
   onChange,
@@ -20,8 +22,8 @@ export function TabNav({
   counts?: Partial<Record<CrmTab, number>>;
 }) {
   return (
-    <nav className="flex gap-0 overflow-x-auto border-b border-line px-4 sm:px-5">
-      {TABS.map((tab) => {
+    <nav className="hidden gap-0 border-b border-line px-5 md:flex">
+      {CRM_TABS.map((tab) => {
         const isActive = active === tab.id;
         return (
           <button

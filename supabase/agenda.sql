@@ -8,6 +8,7 @@ create table if not exists public.adviseurs (
   naam            text not null,
   email           text,
   telefoon        text,
+  password_hash   text,
   actief          boolean not null default true,
   -- werktijden (Europe/Amsterdam), slots van 60 min
   werktijd_start  time not null default '09:00',
@@ -69,10 +70,17 @@ create policy "crm_afspraken_all" on public.afspraken
 create policy "crm_afspraken_anon" on public.afspraken
   for all to anon using (true) with check (true);
 
--- Voorbeeldadviseurs
+-- Adviseurs: Jona & Huub
 insert into public.adviseurs (naam, email, telefoon)
 select * from (values
-  ('Team Advies Noord', 'info@batterijconcept.nl', '085 800 1645'),
-  ('Team Advies Zuid', 'info@batterijconcept.nl', '085 800 1645')
+  ('Jona', 'info@batterijconcept.nl', '085 800 1645'),
+  ('Huub', 'info@batterijconcept.nl', '085 800 1645')
 ) as v(naam, email, telefoon)
 where not exists (select 1 from public.adviseurs limit 1);
+
+-- Lead ↔ adviseur (eigen portfolio)
+alter table public.leads
+  add column if not exists adviseur_id uuid
+    references public.adviseurs(id) on delete set null;
+
+create index if not exists leads_adviseur_id_idx on public.leads (adviseur_id);

@@ -93,10 +93,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await sb
-      .from("leads")
-      .update({ status: "afspraak" })
-      .eq("id", body.lead_id);
+    await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
+
+    // Koppel adviseur als kolom bestaat (niet-blokkerend)
+    if (body.adviseur_id) {
+      await sb
+        .from("leads")
+        .update({ adviseur_id: body.adviseur_id })
+        .eq("id", body.lead_id);
+    }
 
     const email = afspraak.leads?.email;
     const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;

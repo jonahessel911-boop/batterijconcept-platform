@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
+  Adviseur,
   CrmTab,
   Factuur,
   Lead,
@@ -11,6 +12,7 @@ import type {
   Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { errMessage } from "@/lib/errors";
 import { CrmHeader } from "./CrmHeader";
 import { TabNav } from "./TabNav";
 import { LeadsTable } from "./LeadsTable";
@@ -18,6 +20,8 @@ import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
 import { AgendaPanel } from "./AgendaPanel";
+import { InstellingenPanel } from "./InstellingenPanel";
+import { LeadToevoegenModal } from "./LeadToevoegenModal";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
@@ -25,7 +29,10 @@ const VALID_TABS: CrmTab[] = [
   "offertes",
   "projecten",
   "facturen",
+  "instellingen",
 ];
+
+const ADVISEUR_FILTER_KEY = "bc_adviseur_filter";
 
 function parseTab(value: string | null): CrmTab {
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -40,9 +47,55 @@ export function CrmShell() {
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [projecten, setProjecten] = useState<Project[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
+  const [adviseurFilter, setAdviseurFilter] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return localStorage.getItem(ADVISEUR_FILTER_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [addLeadOpen, setAddLeadOpen] = useState(false);
+  const [sessionUser, setSessionUser] = useState<{
+    id: string;
+    naam: string;
+    email: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const res = await fetch("/api/auth/login");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.adviseur) {
+          setSessionUser(data.adviseur);
+          // Standaard eigen portfolio tonen
+          setAdviseurFilter((prev) => prev || data.adviseur.id);
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function changeAdviseurFilter(id: string) {
+    setAdviseurFilter(id);
+    try {
+      if (id) localStorage.setItem(ADVISEUR_FILTER_KEY, id);
+      else localStorage.removeItem(ADVISEUR_FILTER_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function changeTab(next: CrmTab) {
     const params = new URLSearchParams(searchParams.toString());
@@ -51,6 +104,16 @@ export function CrmShell() {
     const qs = params.toString();
     router.replace(qs ? `/?${qs}` : "/", { scroll: false });
   }
+
+  const loadAdviseurs = useCallback(async () => {
+    try {
+      const res = await fetch("/api/adviseurs");
+      const data = await res.json();
+      if (res.ok) setAdviseurs(data.adviseurs || []);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!hasSupabaseConfig()) {
@@ -80,17 +143,21 @@ export function CrmShell() {
           .order("created_at", { ascending: false }),
       ]);
 
-      if (l.error) throw l.error;
+      // Toon de echte PostgREST-fout i.p.v. generieke melding
+      const firstErr = l.error || o.error || p.error || f.error;
+      if (firstErr) throw firstErr;
+
       setLeads((l.data as Lead[]) || []);
       setOffertes((o.data as Offerte[]) || []);
       setProjecten((p.data as Project[]) || []);
       setFacturen((f.data as Factuur[]) || []);
+      await loadAdviseurs();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Kon data niet laden");
+      setError(errMessage(e, "Kon data niet laden"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadAdviseurs]);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => {
@@ -99,10 +166,20 @@ export function CrmShell() {
     return () => cancelAnimationFrame(id);
   }, [load]);
 
+  const scopedLeads = useMemo(() => {
+    if (!adviseurFilter) return leads;
+    return leads.filter((l) => l.adviseur_id === adviseurFilter);
+  }, [leads, adviseurFilter]);
+
+  const scopedLeadIds = useMemo(
+    () => new Set(scopedLeads.map((l) => l.id)),
+    [scopedLeads]
+  );
+
   const filteredLeads = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return leads;
-    return leads.filter(
+    if (!q) return scopedLeads;
+    return scopedLeads.filter(
       (l) =>
         l.naam.toLowerCase().includes(q) ||
         l.lead_number.toLowerCase().includes(q) ||
@@ -110,14 +187,29 @@ export function CrmShell() {
         l.utm_source?.toLowerCase().includes(q) ||
         l.postcode?.toLowerCase().includes(q)
     );
-  }, [leads, search]);
+  }, [scopedLeads, search]);
+
+  const scopedOffertes = useMemo(() => {
+    if (!adviseurFilter) return offertes;
+    return offertes.filter((o) => scopedLeadIds.has(o.lead_id));
+  }, [offertes, adviseurFilter, scopedLeadIds]);
+
+  const scopedProjecten = useMemo(() => {
+    if (!adviseurFilter) return projecten;
+    return projecten.filter((p) => scopedLeadIds.has(p.lead_id));
+  }, [projecten, adviseurFilter, scopedLeadIds]);
+
+  const scopedFacturen = useMemo(() => {
+    if (!adviseurFilter) return facturen;
+    return facturen.filter((f) => scopedLeadIds.has(f.lead_id));
+  }, [facturen, adviseurFilter, scopedLeadIds]);
 
   const counts = {
-    leads: leads.length,
+    leads: scopedLeads.length,
     agenda: 0,
-    offertes: offertes.length,
-    projecten: projecten.length,
-    facturen: facturen.length,
+    offertes: scopedOffertes.length,
+    projecten: scopedProjecten.length,
+    facturen: scopedFacturen.length,
   };
 
   function openSignLink(o: Offerte) {
@@ -137,58 +229,135 @@ export function CrmShell() {
         .eq("id", leadId);
       if (err) throw err;
     } catch (e) {
+      setError(errMessage(e, "Status bijwerken mislukt"));
+      void load();
+    }
+  }
+
+  async function updateLeadAdviseur(
+    leadId: string,
+    adviseurId: string | null
+  ) {
+    const adv = adviseurs.find((a) => a.id === adviseurId) || null;
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === leadId
+          ? {
+              ...l,
+              adviseur_id: adviseurId,
+              adviseurs: adv ? { id: adv.id, naam: adv.naam } : null,
+            }
+          : l
+      )
+    );
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update({ adviseur_id: adviseurId })
+        .eq("id", leadId);
+      if (err) throw err;
+    } catch (e) {
+      const msg = errMessage(e, "Adviseur koppelen mislukt");
       setError(
-        e instanceof Error ? e.message : "Status bijwerken mislukt"
+        msg.includes("adviseur_id") || msg.includes("42703")
+          ? "Voer eerst supabase/migrate-lead-adviseur.sql uit in Supabase (SQL Editor)."
+          : msg
       );
       void load();
     }
   }
 
+  const filterLabel =
+    adviseurs.find((a) => a.id === adviseurFilter)?.naam || null;
+
   const titles: Record<CrmTab, { title: string; sub: string }> = {
-    leads: { title: "Leads", sub: "Alle binnenkomende aanvragen" },
+    leads: {
+      title: "Leads",
+      sub: filterLabel
+        ? `Leads van ${filterLabel}`
+        : "Alle binnenkomende aanvragen",
+    },
     agenda: {
       title: "Agenda",
-      sub: "Plan afspraken en koppel adviseurs",
+      sub: filterLabel
+        ? `Agenda van ${filterLabel}`
+        : "Plan afspraken en koppel adviseurs",
     },
     offertes: {
       title: "Offertes",
-      sub: "Verstuurde en ondertekende offertes",
+      sub: filterLabel
+        ? `Sales van ${filterLabel}`
+        : "Verstuurde en ondertekende offertes",
     },
     projecten: {
       title: "Projecten",
-      sub: "Installaties in planning en uitvoering",
+      sub: filterLabel
+        ? `Projecten van ${filterLabel}`
+        : "Installaties in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
-      sub: "Betalingen en openstaande posten",
+      sub: filterLabel
+        ? `Facturen van ${filterLabel}`
+        : "Betalingen en openstaande posten",
+    },
+    instellingen: {
+      title: "Instellingen",
+      sub: "Beheer teamleden en hun portfolio",
     },
   };
 
   return (
     <div className="crm-bg flex min-h-screen flex-col">
-      <CrmHeader onRefresh={load} loading={loading} />
+      <CrmHeader
+        onRefresh={load}
+        loading={loading}
+        adviseurs={adviseurs}
+        selectedAdviseurId={adviseurFilter}
+        onAdviseurChange={changeAdviseurFilter}
+        activeTab={tab}
+        onTabChange={changeTab}
+        tabCounts={counts}
+        userName={sessionUser?.naam}
+        onLogout={() => {
+          void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
+            router.replace("/login");
+            router.refresh();
+          });
+        }}
+      />
 
-      <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="font-display text-[1.75rem] font-semibold tracking-tight text-green-deeper">
+      <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col px-3 py-4 sm:px-6 sm:py-8">
+        <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
+          <div className="min-w-0">
+            <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
               {titles[tab].title}
             </h1>
             <p className="mt-0.5 text-sm text-muted">{titles[tab].sub}</p>
           </div>
 
           {tab === "leads" && (
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted/50">
-                ⌕
-              </span>
-              <input
-                type="search"
-                placeholder="Zoek naam, lead ID, UTM…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-64 border border-line bg-white py-2 pl-8 pr-3 text-sm outline-none transition placeholder:text-muted/60 focus:border-green"
-              />
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+              <div className="relative w-full sm:w-64">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted/50">
+                  ⌕
+                </span>
+                <input
+                  type="search"
+                  placeholder="Zoek naam, lead ID…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full border border-line bg-white py-2.5 pl-8 pr-3 text-sm outline-none transition placeholder:text-muted/60 focus:border-green sm:py-2"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddLeadOpen(true)}
+                className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] sm:min-h-0 sm:w-auto sm:py-2"
+              >
+                Lead toevoegen
+              </button>
             </div>
           )}
         </div>
@@ -202,32 +371,54 @@ export function CrmShell() {
         <div className="flex flex-1 flex-col overflow-hidden border border-line bg-white">
           <TabNav active={tab} onChange={changeTab} counts={counts} />
           <div className="flex-1 overflow-auto">
-            {loading ? (
+            {loading && tab !== "instellingen" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : (
               <>
                 {tab === "leads" && (
                   <LeadsTable
                     leads={filteredLeads}
+                    adviseurs={adviseurs}
                     onStatusChange={updateLeadStatus}
+                    onAdviseurChange={updateLeadAdviseur}
                   />
                 )}
-                {tab === "agenda" && <AgendaPanel leads={leads} />}
+                {tab === "agenda" && (
+                  <AgendaPanel
+                    key={adviseurFilter || "all"}
+                    leads={scopedLeads}
+                    defaultAdviseurId={adviseurFilter || undefined}
+                  />
+                )}
                 {tab === "offertes" && (
                   <OffertesTable
-                    offertes={offertes}
+                    offertes={scopedOffertes}
                     onOpenSign={openSignLink}
                   />
                 )}
                 {tab === "projecten" && (
-                  <ProjectenTable projecten={projecten} />
+                  <ProjectenTable projecten={scopedProjecten} />
                 )}
-                {tab === "facturen" && <FacturenTable facturen={facturen} />}
+                {tab === "facturen" && (
+                  <FacturenTable facturen={scopedFacturen} />
+                )}
+                {tab === "instellingen" && (
+                  <InstellingenPanel onAdviseursChange={loadAdviseurs} />
+                )}
               </>
             )}
           </div>
         </div>
       </main>
+
+      <LeadToevoegenModal
+        open={addLeadOpen}
+        onClose={() => setAddLeadOpen(false)}
+        defaultAdviseurId={adviseurFilter || undefined}
+        onCreated={(lead) => {
+          setLeads((prev) => [lead, ...prev]);
+        }}
+      />
     </div>
   );
 }

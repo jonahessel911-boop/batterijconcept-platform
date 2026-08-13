@@ -5,7 +5,13 @@ import type { Adviseur, Afspraak, Lead } from "@/types/database";
 import { formatDateTimeLongNl, formatDateTimeNl } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 
-export function AgendaPanel({ leads }: { leads: Lead[] }) {
+export function AgendaPanel({
+  leads,
+  defaultAdviseurId,
+}: {
+  leads: Lead[];
+  defaultAdviseurId?: string;
+}) {
   const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
@@ -17,7 +23,7 @@ export function AgendaPanel({ leads }: { leads: Lead[] }) {
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
   const [leadId, setLeadId] = useState("");
-  const [adviseurId, setAdviseurId] = useState("");
+  const [adviseurId, setAdviseurId] = useState(defaultAdviseurId || "");
   const [startAt, setStartAt] = useState("");
   const [notities, setNotities] = useState("");
 
@@ -33,15 +39,17 @@ export function AgendaPanel({ leads }: { leads: Lead[] }) {
       if (adv.error) throw new Error(adv.error);
       setAfspraken(a.afspraken || []);
       setAdviseurs(adv.adviseurs || []);
-      if (!adviseurId && adv.adviseurs?.[0]) {
-        setAdviseurId(adv.adviseurs[0].id);
-      }
+      setAdviseurId((prev) => {
+        if (prev) return prev;
+        if (defaultAdviseurId) return defaultAdviseurId;
+        return adv.adviseurs?.[0]?.id || "";
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
       setLoading(false);
     }
-  }, [adviseurId]);
+  }, [defaultAdviseurId]);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => void load());
@@ -63,10 +71,15 @@ export function AgendaPanel({ leads }: { leads: Lead[] }) {
 
   const upcoming = useMemo(
     () =>
-      afspraken.filter(
-        (a) => a.status !== "geannuleerd" && new Date(a.start_at) >= new Date()
-      ),
-    [afspraken]
+      afspraken.filter((a) => {
+        if (a.status === "geannuleerd") return false;
+        if (new Date(a.start_at) < new Date()) return false;
+        if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
+          return false;
+        }
+        return true;
+      }),
+    [afspraken, defaultAdviseurId]
   );
 
   async function plan(e: React.FormEvent) {
@@ -164,11 +177,15 @@ export function AgendaPanel({ leads }: { leads: Lead[] }) {
           </label>
 
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Notities
+            Interne notitie
+            <span className="ml-1 font-normal normal-case tracking-normal text-muted/80">
+              (alleen voor jullie, niet zichtbaar voor de klant)
+            </span>
             <textarea
               value={notities}
               onChange={(e) => setNotities(e.target.value)}
               rows={3}
+              placeholder="Bijv. bel vooraf, sleutel bij buren…"
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
             />
           </label>
@@ -202,37 +219,60 @@ export function AgendaPanel({ leads }: { leads: Lead[] }) {
             Nog geen geplande afspraken.
           </p>
         ) : (
-          <table className="crm-table">
-            <thead>
-              <tr>
-                <th>Wanneer</th>
-                <th>Lead</th>
-                <th>Adviseur</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <div className="crm-card-list md:hidden">
               {upcoming.map((a) => (
-                <tr key={a.id} className="cursor-default">
-                  <td className="whitespace-nowrap font-medium">
+                <article key={a.id} className="crm-card">
+                  <p className="font-medium text-ink">
                     {formatDateTimeLongNl(a.start_at)}
-                  </td>
-                  <td>
-                    <div className="font-medium">{a.leads?.naam || "—"}</div>
-                    <div className="font-mono text-[11px] text-muted">
-                      {a.leads?.lead_number}
-                    </div>
-                  </td>
-                  <td className="whitespace-nowrap">
-                    {a.adviseurs?.naam || "—"}
-                  </td>
-                  <td>
+                  </p>
+                  <p className="mt-1 text-sm font-medium">{a.leads?.naam || "—"}</p>
+                  <p className="font-mono text-[11px] text-muted">
+                    {a.leads?.lead_number}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-muted">
+                      {a.adviseurs?.naam || "—"}
+                    </span>
                     <StatusBadge kind="afspraak" value={a.status} />
-                  </td>
-                </tr>
+                  </div>
+                </article>
               ))}
-            </tbody>
-          </table>
+            </div>
+            <div className="hidden md:block">
+              <table className="crm-table">
+                <thead>
+                  <tr>
+                    <th>Wanneer</th>
+                    <th>Lead</th>
+                    <th>Adviseur</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcoming.map((a) => (
+                    <tr key={a.id} className="cursor-default">
+                      <td className="whitespace-nowrap font-medium">
+                        {formatDateTimeLongNl(a.start_at)}
+                      </td>
+                      <td>
+                        <div className="font-medium">{a.leads?.naam || "—"}</div>
+                        <div className="font-mono text-[11px] text-muted">
+                          {a.leads?.lead_number}
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {a.adviseurs?.naam || "—"}
+                      </td>
+                      <td>
+                        <StatusBadge kind="afspraak" value={a.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

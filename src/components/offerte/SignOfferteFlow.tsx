@@ -291,6 +291,12 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
                   Ik ga akkoord met de waarden van Batterijconcept.nl.
                 </span>
               </label>
+
+              {offerte.financiering_voorbehoud && (
+                <p className="mt-5 border border-orange/30 bg-[#FFF0E6] px-4 py-3 text-sm font-medium text-[#C45A12]">
+                  Onder voorbehoud van financiering Warmtefonds
+                </p>
+              )}
             </div>
 
             <button
@@ -348,45 +354,38 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
               <table className="crm-table">
                 <thead>
                   <tr>
-                    <th>Product / omschrijving</th>
+                    <th>Omschrijving</th>
                     <th>Aantal</th>
                     <th>Prijs</th>
-                    <th>Totaal</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {regels.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.omschrijving}</td>
-                      <td>{r.aantal}</td>
-                      <td>{formatEuro(r.prijs_ex_btw)}</td>
-                      <td className="font-medium">
-                        {formatEuro(
-                          r.totaal_ex_btw ?? r.aantal * r.prijs_ex_btw
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {regels.map((r) => {
+                    const lineInc =
+                      Math.round(
+                        r.aantal *
+                          r.prijs_ex_btw *
+                          (1 + (r.btw_percentage ?? 21) / 100) *
+                          100
+                      ) / 100;
+                    return (
+                      <tr key={r.id}>
+                        <td className="font-medium">{r.omschrijving}</td>
+                        <td>{r.aantal}</td>
+                        <td className="whitespace-nowrap font-medium">
+                          {formatEuro(lineInc)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            <div className="mt-5 space-y-1 text-right text-sm">
-              <p className="text-muted">
-                Subtotaal excl. btw{" "}
-                <span className="ml-4 inline-block w-28 text-ink">
-                  {formatEuro(offerte.subtotaal_ex_btw)}
-                </span>
-              </p>
-              <p className="text-muted">
-                Btw{" "}
-                <span className="ml-4 inline-block w-28 text-ink">
-                  {formatEuro(offerte.btw_bedrag)}
-                </span>
-              </p>
+            <div className="mt-5 border-t-2 border-green pt-4 text-right">
               <p className="font-display text-lg font-semibold text-green-deeper">
                 Totaal incl. btw{" "}
-                <span className="ml-4 inline-block w-28">
+                <span className="ml-4 inline-block min-w-[6rem] tabular-nums">
                   {formatEuro(offerte.totaal_inc_btw)}
                 </span>
               </p>
@@ -434,6 +433,11 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
                   </div>
                 </div>
               </div>
+              {offerte.financiering_voorbehoud && (
+                <p className="mt-4 text-sm font-medium text-[#C45A12]">
+                  Onder voorbehoud van financiering Warmtefonds
+                </p>
+              )}
             </div>
 
             {error && (

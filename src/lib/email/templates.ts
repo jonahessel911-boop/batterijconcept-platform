@@ -42,14 +42,16 @@ export function afspraakBevestigingEmail(opts: {
   const when = formatDateTimeLongNl(opts.startAt);
   return emailLayout({
     title: "Afspraak bevestigd",
-    preheader: `Je afspraak staat gepland op ${when}`,
+    preheader: `Afspraak met ${opts.adviseurNaam} op ${when}`,
     bodyHtml: [
       emailH1("Afspraak bevestigd"),
       emailP(`Hoi ${first},`),
-      emailP("Je adviesafspraak is ingepland. Hier zijn de details:"),
+      emailP(
+        `Je adviesafspraak met <strong>${opts.adviseurNaam}</strong> is ingepland. Hier zijn de details:`
+      ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>
-         <p style="margin:0;font-size:15px;"><strong>Adviseur</strong><br />${opts.adviseurNaam}</p>`
+         <p style="margin:0;font-size:15px;"><strong>Je afspraak is met</strong><br />${opts.adviseurNaam}</p>`
       ),
       emailP(
         "We kijken ernaar uit om samen te kijken welk batterijsysteem het beste bij jouw woning past."
@@ -70,14 +72,16 @@ export function afspraakHerinneringEmail(opts: {
   const when = formatDateTimeLongNl(opts.startAt);
   return emailLayout({
     title: "Herinnering: jouw adviesafspraak morgen",
-    preheader: `Morgen: ${when}`,
+    preheader: `Morgen met ${opts.adviseurNaam}: ${when}`,
     bodyHtml: [
       emailH1("Herinnering: je afspraak is morgen"),
       emailP(`Hoi ${first},`),
-      emailP("Morgen staat jouw vrijblijvende adviesafspraak gepland:"),
+      emailP(
+        `Morgen staat jouw vrijblijvende adviesafspraak met <strong>${opts.adviseurNaam}</strong> gepland:`
+      ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>
-         <p style="margin:0;font-size:15px;"><strong>Adviseur</strong><br />${opts.adviseurNaam}</p>`
+         <p style="margin:0;font-size:15px;"><strong>Je afspraak is met</strong><br />${opts.adviseurNaam}</p>`
       ),
       emailP("Tot morgen — we helpen je graag aan de juiste batterijkeuze."),
       emailMuted("Liever afspraak verzetten of annuleren?"),
@@ -114,6 +118,70 @@ export function offerteVerstuurdEmail(opts: {
       emailMuted(
         "Vragen over de offerte? We helpen je graag — info@batterijconcept.nl of 085 800 1645."
       ),
+    ].join(""),
+  });
+}
+
+export function teamWelkomEmail(opts: {
+  naam: string;
+  email: string;
+  password: string;
+  loginUrl: string;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: `Welkom bij het team, ${opts.naam}`,
+    preheader: "Je Batterijconcept CRM-account is klaar.",
+    bodyHtml: [
+      emailH1(`Welkom bij het team, ${opts.naam}`),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je bent toegevoegd aan het Batterijconcept-team. Met onderstaande gegevens kun je inloggen in de CRM."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>
+         <p style="margin:0;font-size:15px;"><strong>Wachtwoord</strong><br /><span style="font-family:ui-monospace,monospace;letter-spacing:0.04em;">${opts.password}</span></p>`
+      ),
+      emailP(
+        "Bewaar dit wachtwoord op een veilige plek. Je kunt later vragen om een nieuw wachtwoord via Instellingen."
+      ),
+      emailButton("Naar de CRM inloggen", opts.loginUrl),
+      emailMuted(
+        "Dit is een interne mail van Batterijconcept. Niet doorsturen naar klanten."
+      ),
+    ].join(""),
+  });
+}
+
+export function offerteOndertekendEmail(opts: {
+  naam: string;
+  offerteNummer: string;
+  ondertekendOp?: string | Date;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = opts.ondertekendOp
+    ? formatDateTimeLongNl(opts.ondertekendOp)
+    : null;
+  return emailLayout({
+    title: `Ondertekende offerte ${opts.offerteNummer}`,
+    preheader: `Bedankt voor je vertrouwen — offerte ${opts.offerteNummer} is ondertekend.`,
+    bodyHtml: [
+      emailH1(`Ondertekende offerte ${opts.offerteNummer}`),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Bedankt voor je vertrouwen in Batterijconcept. We hebben je ondertekende offerte ontvangen en gaan er direct mee aan de slag."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Offerte</strong><br />${opts.offerteNummer}</p>
+         ${when ? `<p style="margin:0;font-size:15px;"><strong>Ondertekend op</strong><br />${when}</p>` : ""}`
+      ),
+      emailP(
+        "In de bijlage vind je de ondertekende offerte inclusief handtekening (PDF). Bewaar deze goed voor je administratie."
+      ),
+      emailP(
+        "Heb je vragen over de planning of de installatie? We helpen je graag — mail ons op info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot snel, team Batterijconcept"),
     ].join(""),
   });
 }

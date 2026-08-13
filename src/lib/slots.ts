@@ -11,41 +11,40 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 
 const SLOT_MINUTES = 60;
 
+/** Vaste tijdslots per adviseur per dag (Europe/Amsterdam) */
+export const ADVISEUR_SLOT_HOURS = [10, 12, 14, 16, 18, 20] as const;
+
 export type BusySlot = { start_at: string; end_at: string };
 
 /**
- * Genereert beschikbare slots (Europe/Amsterdam) voor de komende dagen,
- * ma–vr tussen startUur–eindUur, exclusief bezette afspraken.
+ * Genereert beschikbare slots (Europe/Amsterdam) voor de komende dagen:
+ * 10:00, 12:00, 14:00, 16:00, 18:00, 20:00 — exclusief bezette afspraken.
  */
 export function generateAvailableSlots(opts: {
   daysAhead?: number;
-  startHour?: number;
-  endHour?: number;
   busy: BusySlot[];
   fromDate?: Date;
+  /** Alleen weekdagen (ma–vr). Default: true */
+  weekdaysOnly?: boolean;
 }): { start: Date; end: Date }[] {
   const daysAhead = opts.daysAhead ?? 21;
-  const startHour = opts.startHour ?? 9;
-  const endHour = opts.endHour ?? 17;
+  const weekdaysOnly = opts.weekdaysOnly ?? true;
   const from = opts.fromDate ?? new Date();
   const slots: { start: Date; end: Date }[] = [];
 
   for (let d = 1; d <= daysAhead; d++) {
     const dayLocal = toZonedTime(addDays(from, d), AMSTERDAM_TZ);
-    const dow = dayLocal.getDay(); // 0=zo
-    if (dow === 0 || dow === 6) continue;
+    const dow = dayLocal.getDay();
+    if (weekdaysOnly && (dow === 0 || dow === 6)) continue;
 
-    const dayStartLocal = setSeconds(
-      setMinutes(setHours(startOfDay(dayLocal), startHour), 0),
+    const dayBase = setSeconds(
+      setMinutes(setHours(startOfDay(dayLocal), 0), 0),
       0
     );
 
-    for (let h = startHour; h < endHour; h++) {
-      const slotStartLocal = setHours(dayStartLocal, h);
+    for (const hour of ADVISEUR_SLOT_HOURS) {
+      const slotStartLocal = setHours(dayBase, hour);
       const slotEndLocal = addMinutes(slotStartLocal, SLOT_MINUTES);
-      if (slotEndLocal.getHours() > endHour || (slotEndLocal.getHours() === endHour && slotEndLocal.getMinutes() > 0)) {
-        if (h + SLOT_MINUTES / 60 > endHour) break;
-      }
 
       const startUtc = fromZonedTime(slotStartLocal, AMSTERDAM_TZ);
       const endUtc = fromZonedTime(slotEndLocal, AMSTERDAM_TZ);

@@ -13,7 +13,7 @@ export function DetailShell({
   return (
     <div className="crm-bg min-h-screen">
       <CrmHeader onRefresh={onRefresh} loading={loading} />
-      <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto max-w-[1440px] px-3 py-4 sm:px-6 sm:py-8">
         {children}
       </main>
     </div>
@@ -45,7 +45,7 @@ export function Breadcrumb({
 
 export function HeroCard({ children }: { children: React.ReactNode }) {
   return (
-    <section className="border border-line bg-white p-6 sm:p-8">
+    <section className="border border-line bg-white p-4 sm:p-8">
       {children}
     </section>
   );
@@ -106,9 +106,11 @@ export function Panel({
 }) {
   return (
     <section className="mt-5 border border-line bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+      <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5 sm:py-3.5">
         <h2 className="font-display text-base font-semibold text-ink">{title}</h2>
-        {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
+        {subtitle && (
+          <p className="hidden text-xs text-muted sm:block">{subtitle}</p>
+        )}
       </div>
       <div className="p-1 sm:p-2">{children}</div>
     </section>

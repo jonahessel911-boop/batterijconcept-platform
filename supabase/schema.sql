@@ -106,6 +106,7 @@ create table if not exists public.offertes (
   ondertekend_ip        text,
   waarden_akkoord       boolean default false,
   signed_pdf_path       text,                     -- pad in Supabase Storage
+  financiering_voorbehoud boolean not null default false,
   -- meta
   notities              text,
   created_at            timestamptz not null default now(),

@@ -115,7 +115,16 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setDrawColor(200);
   doc.line(margin, y, margin + 70, y);
 
+  if (offerte.financiering_voorbehoud) {
+    y += 12;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...ORANGE);
+    doc.text("Onder voorbehoud van financiering Warmtefonds", margin, y);
+  }
+
   doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
   doc.setTextColor(...MUTED);
   doc.text(
     "Door te ondertekenen ga je akkoord met deze offerte en de waarden van Batterijconcept.nl.",
@@ -171,21 +180,21 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK);
   doc.text("Omschrijving", margin + 2, y);
-  doc.text("Aantal", pageW - margin - 70, y);
-  doc.text("Prijs", pageW - margin - 40, y);
-  doc.text("Totaal", pageW - margin - 2, y, { align: "right" });
+  doc.text("Aantal", pageW - margin - 55, y);
+  doc.text("Prijs", pageW - margin - 2, y, { align: "right" });
   y += 10;
 
   doc.setFont("helvetica", "normal");
   doc.setTextColor(...CHARCOAL);
   for (const r of regels) {
-    const desc = doc.splitTextToSize(r.omschrijving, 95);
+    const desc = doc.splitTextToSize(r.omschrijving, 110);
+    const lineInc =
+      Math.round(
+        r.aantal * r.prijs_ex_btw * (1 + (r.btw_percentage ?? 21) / 100) * 100
+      ) / 100;
     doc.text(desc, margin + 2, y);
-    doc.text(String(r.aantal), pageW - margin - 70, y);
-    doc.text(formatEuro(r.prijs_ex_btw), pageW - margin - 40, y);
-    doc.text(formatEuro(r.totaal_ex_btw ?? r.aantal * r.prijs_ex_btw), pageW - margin - 2, y, {
-      align: "right",
-    });
+    doc.text(String(r.aantal), pageW - margin - 55, y);
+    doc.text(formatEuro(lineInc), pageW - margin - 2, y, { align: "right" });
     y += Math.max(desc.length * 5, 8) + 2;
     if (y > 250) {
       doc.addPage();
@@ -193,23 +202,19 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     }
   }
 
-  y += 8;
-  doc.setDrawColor(...GREEN);
-  doc.line(pageW - margin - 70, y, pageW - margin, y);
-  y += 8;
-
-  doc.setFont("helvetica", "normal");
-  doc.text("Subtotaal excl. btw", pageW - margin - 70, y);
-  doc.text(formatEuro(offerte.subtotaal_ex_btw), pageW - margin - 2, y, { align: "right" });
   y += 6;
-  doc.text("Btw", pageW - margin - 70, y);
-  doc.text(formatEuro(offerte.btw_bedrag), pageW - margin - 2, y, { align: "right" });
-  y += 8;
+  doc.setDrawColor(...GREEN);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, pageW - margin, y);
+  y += 10;
+
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...DARK);
   doc.setFontSize(12);
-  doc.text("Totaal incl. btw", pageW - margin - 70, y);
-  doc.text(formatEuro(offerte.totaal_inc_btw), pageW - margin - 2, y, { align: "right" });
+  doc.text("Totaal incl. btw", margin, y);
+  doc.text(formatEuro(offerte.totaal_inc_btw), pageW - margin - 2, y, {
+    align: "right",
+  });
 
   y += 20;
   doc.setFontSize(9);
@@ -220,6 +225,14 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     margin,
     y
   );
+
+  if (offerte.financiering_voorbehoud) {
+    y += 10;
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...ORANGE);
+    doc.setFontSize(10);
+    doc.text("Onder voorbehoud van financiering Warmtefonds", margin, y);
+  }
 
   return doc.output("blob");
 }

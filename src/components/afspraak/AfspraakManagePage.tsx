@@ -150,7 +150,7 @@ export function AfspraakManagePage() {
           <span className="text-muted"> (Europe/Amsterdam)</span>
         </p>
         <p className="mt-3 text-sm text-ink">
-          <strong>Adviseur</strong>
+          <strong>Je afspraak is met</strong>
           <br />
           {afspraak.adviseurs?.naam || "Batterijconcept"}
         </p>

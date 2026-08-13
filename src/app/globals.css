@@ -87,6 +87,42 @@ body {
   border-bottom: none;
 }
 
+/* Mobiel: geen iOS-zoom bij focus op formuliervelden */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  .crm-table th,
+  .crm-table td {
+    padding: 0.65rem 0.75rem;
+  }
+}
+
+/* Mobiele lijstkaarten */
+.crm-card-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.crm-card {
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 1rem;
+  background: #fff;
+  text-align: left;
+  width: 100%;
+}
+
+.crm-card:active {
+  background: #f7faf8;
+}
+
+.crm-card:last-child {
+  border-bottom: none;
+}
+
 /* Signature canvas */
 .sig-canvas {
   touch-action: none;

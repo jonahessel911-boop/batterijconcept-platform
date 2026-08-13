@@ -25,7 +25,13 @@ export type FactuurStatus =
   | "deels_betaald"
   | "vervallen";
 
-export type CrmTab = "leads" | "agenda" | "offertes" | "projecten" | "facturen";
+export type CrmTab =
+  | "leads"
+  | "agenda"
+  | "offertes"
+  | "projecten"
+  | "facturen"
+  | "instellingen";
 
 export type AfspraakStatus =
   | "gepland"
@@ -82,8 +88,10 @@ export interface Lead {
   status: LeadStatus;
   prioriteit: Prioriteit;
   notities: string | null;
+  adviseur_id: string | null;
   created_at: string;
   updated_at: string;
+  adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
 }
 
 export interface Product {
@@ -126,11 +134,15 @@ export interface Offerte {
   ondertekend_op: string | null;
   waarden_akkoord: boolean | null;
   signed_pdf_path: string | null;
+  financiering_voorbehoud?: boolean | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
   // joins
-  leads?: Pick<Lead, "naam" | "email" | "lead_number" | "postcode" | "huisnummer" | "plaats"> | null;
+  leads?: Pick<
+    Lead,
+    "naam" | "email" | "lead_number" | "postcode" | "huisnummer" | "plaats" | "adviseur_id"
+  > | null;
   offerte_regels?: OfferteRegel[];
 }
 
@@ -147,7 +159,7 @@ export interface Project {
   notities: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "lead_number"> | null;
+  leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;
 }
 
 export interface Factuur {
@@ -167,7 +179,7 @@ export interface Factuur {
   notities: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "lead_number"> | null;
+  leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;
 }
 
 export interface WebhookLeadPayload {
@@ -177,8 +189,12 @@ export interface WebhookLeadPayload {
   postcode?: string;
   huisnummer?: string;
   toevoeging?: string;
+  /** Straatnaam — alias: `adres` */
   straat?: string;
+  adres?: string;
+  /** Woonplaats — alias: `woonplaats` */
   plaats?: string;
+  woonplaats?: string;
   utm_source?: string;
   utm_medium?: string;
   utm_campaign?: string;
