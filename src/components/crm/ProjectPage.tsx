@@ -34,6 +34,8 @@ export function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
+  const [kostenInput, setKostenInput] = useState("");
+  const [kostenSaving, setKostenSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,6 +60,9 @@ export function ProjectPage() {
       } else {
         const proj = data as Project;
         setProject(proj);
+        setKostenInput(
+          proj.projectkosten != null ? String(proj.projectkosten) : "0"
+        );
 
         const [o, f, sv] = await Promise.all([
           proj.offerte_id
@@ -121,6 +126,30 @@ export function ProjectPage() {
       setProject({ ...project, status: prev });
     } finally {
       setStatusSaving(false);
+    }
+  }
+
+  async function saveProjectkosten() {
+    if (!project) return;
+    const value = Number(kostenInput.replace(",", "."));
+    if (Number.isNaN(value) || value < 0) return;
+    setKostenSaving(true);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectkosten: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      if (data.project) {
+        setProject(data.project as Project);
+        setKostenInput(String(data.project.projectkosten ?? value));
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setKostenSaving(false);
     }
   }
 
@@ -207,6 +236,29 @@ export function ProjectPage() {
               href={`/offertes/${offerte.id}`}
             />
           )}
+          <div className="border border-line bg-wash px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Projectkosten (ex btw)
+            </p>
+            <div className="mt-1.5 flex gap-2">
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={kostenInput}
+                onChange={(e) => setKostenInput(e.target.value)}
+                className="w-full border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-green"
+              />
+              <button
+                type="button"
+                disabled={kostenSaving}
+                onClick={saveProjectkosten}
+                className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                {kostenSaving ? "…" : "Opslaan"}
+              </button>
+            </div>
+          </div>
         </div>
 
         {project.notities && (

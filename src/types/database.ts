@@ -34,6 +34,7 @@ export type CrmTab =
   | "offertes"
   | "projecten"
   | "facturen"
+  | "rapportage"
   | "instellingen";
 
 export type AfspraakStatus =
@@ -160,6 +161,7 @@ export interface Project {
   opleverdatum: string | null;
   monteur: string | null;
   notities: string | null;
+  projectkosten: number;
   created_at: string;
   updated_at: string;
   leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;

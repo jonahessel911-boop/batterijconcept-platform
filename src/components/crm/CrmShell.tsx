@@ -20,6 +20,7 @@ import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
+import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
@@ -30,6 +31,7 @@ const VALID_TABS: CrmTab[] = [
   "offertes",
   "projecten",
   "facturen",
+  "rapportage",
   "instellingen",
 ];
 
@@ -366,6 +368,10 @@ export function CrmShell() {
         ? `Facturen van ${filterLabel}`
         : "Betalingen en openstaande posten",
     },
+    rapportage: {
+      title: "Rapportage",
+      sub: "Omzet, kosten en winst per periode",
+    },
     instellingen: {
       title: "Instellingen",
       sub: "Beheer teamleden en hun portfolio",
@@ -465,6 +471,12 @@ export function CrmShell() {
                 )}
                 {tab === "facturen" && (
                   <FacturenTable facturen={scopedFacturen} />
+                )}
+                {tab === "rapportage" && (
+                  <RapportagePanel
+                    adviseurs={adviseurs}
+                    defaultAdviseurId={adviseurFilter || undefined}
+                  />
                 )}
                 {tab === "instellingen" && (
                   <InstellingenPanel onAdviseursChange={loadAdviseurs} />

@@ -162,6 +162,7 @@ create table if not exists public.projecten (
   opleverdatum    date,
   monteur         text,
   notities        text,
+  projectkosten   numeric(12,2) not null default 0,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
@@ -236,6 +237,28 @@ create trigger facturen_set_updated_at
   for each row execute function public.set_updated_at();
 
 -- -----------------------------------------------------------------------------
+-- RAPPORTAGE KOSTEN (ad spend / sales per dag)
+-- -----------------------------------------------------------------------------
+create table if not exists public.rapportage_kosten (
+  id           uuid primary key default gen_random_uuid(),
+  datum        date not null,
+  soort        text not null check (soort in ('ad_spend', 'sales')),
+  bedrag       numeric(12,2) not null default 0,
+  adviseur_id  uuid references public.adviseurs(id) on delete set null,
+  notities     text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+create index if not exists rapportage_kosten_datum_idx
+  on public.rapportage_kosten (datum);
+
+drop trigger if exists rapportage_kosten_set_updated_at on public.rapportage_kosten;
+create trigger rapportage_kosten_set_updated_at
+  before update on public.rapportage_kosten
+  for each row execute function public.set_updated_at();
+
+-- -----------------------------------------------------------------------------
 -- Nummer-generators (lead / offerte / project / factuur)
 -- -----------------------------------------------------------------------------
 create sequence if not exists public.lead_seq start 1;
@@ -304,6 +327,7 @@ alter table public.offerte_regels enable row level security;
 alter table public.projecten enable row level security;
 alter table public.facturen enable row level security;
 alter table public.service_verzoeken enable row level security;
+alter table public.rapportage_kosten enable row level security;
 
 drop policy if exists "crm_leads_all" on public.leads;
 drop policy if exists "crm_leads_anon" on public.leads;
@@ -357,6 +381,11 @@ create policy "crm_facturen_anon" on public.facturen
 create policy "crm_service_verzoeken_all" on public.service_verzoeken
   for all to authenticated using (true) with check (true);
 create policy "crm_service_verzoeken_anon" on public.service_verzoeken
+  for all to anon using (true) with check (true);
+
+create policy "crm_rapportage_kosten_all" on public.rapportage_kosten
+  for all to authenticated using (true) with check (true);
+create policy "crm_rapportage_kosten_anon" on public.rapportage_kosten
   for all to anon using (true) with check (true);
 
 create policy "signed_pdfs_authenticated_read"
