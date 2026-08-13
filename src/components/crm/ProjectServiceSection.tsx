@@ -80,11 +80,12 @@ export function ProjectServiceSection({
           Service verzoeken
         </h2>
         <p className="mt-0.5 text-sm text-muted">
-          Open verzoek → projectstatus Service. Afhandelen → Installatie
-          voltooid.
+          Binnenkomende verzoeken (via e-mail/webhook) worden hier gekoppeld.
+          Open → status Service · Afhandelen → Installatie voltooid.
         </p>
       </div>
 
+      {/* Handmatig toevoegen alleen voor intern gebruik / test */}
       <form
         onSubmit={createVerzoek}
         className="grid gap-3 border-b border-line px-5 py-4 sm:grid-cols-[1fr_1fr_auto]"
@@ -107,7 +108,7 @@ export function ProjectServiceSection({
           disabled={saving || !onderwerp.trim()}
           className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
         >
-          Verzoek inschieten
+          Verzoek toevoegen
         </button>
       </form>
 
@@ -126,6 +127,7 @@ export function ProjectServiceSection({
                   <p className="font-medium text-ink">{v.onderwerp}</p>
                   <p className="mt-0.5 text-[11px] text-muted">
                     {formatDateTimeNl(v.created_at)}
+                    {v.klant_email ? ` · ${v.klant_email}` : ""}
                     {v.omschrijving ? ` · ${v.omschrijving}` : ""}
                   </p>
                 </div>

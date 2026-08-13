@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { syncProjectServiceStatus } from "@/lib/service-verzoek";
+import {
+  findProjectByKlantEmail,
+  syncProjectServiceStatus,
+} from "@/lib/service-verzoek";
 
 export const runtime = "nodejs";
 
@@ -32,10 +35,11 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST /api/service-verzoeken — nieuw verzoek → projectstatus Service */
+/** POST /api/service-verzoeken — via project_id óf via klant-email */
 export async function POST(req: NextRequest) {
   let body: {
     project_id?: string;
+    email?: string;
     onderwerp?: string;
     omschrijving?: string;
   };
@@ -45,40 +49,85 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  const projectId = body.project_id?.trim();
   const onderwerp = body.onderwerp?.trim();
-  if (!projectId || !onderwerp) {
+  if (!onderwerp) {
     return NextResponse.json(
-      { error: "project_id en onderwerp zijn verplicht" },
+      { error: "onderwerp is verplicht" },
       { status: 400 }
     );
   }
 
   try {
     const sb = getSupabaseAdmin();
-    const { data: project, error: pErr } = await sb
-      .from("projecten")
-      .select("id, lead_id")
-      .eq("id", projectId)
-      .single();
 
-    if (pErr || !project) {
-      return NextResponse.json({ error: "Project niet gevonden" }, { status: 404 });
+    let projectId = body.project_id?.trim() || "";
+    let leadId = "";
+    let klantEmail: string | null = body.email?.trim().toLowerCase() || null;
+
+    if (!projectId && klantEmail) {
+      const match = await findProjectByKlantEmail(sb, klantEmail);
+      if (!match) {
+        return NextResponse.json(
+          {
+            error:
+              "Geen project gevonden voor dit e-mailadres. Lead moet een project hebben.",
+          },
+          { status: 404 }
+        );
+      }
+      projectId = match.project.id;
+      leadId = match.lead.id;
+    } else if (projectId) {
+      const { data: project, error: pErr } = await sb
+        .from("projecten")
+        .select("id, lead_id")
+        .eq("id", projectId)
+        .single();
+
+      if (pErr || !project) {
+        return NextResponse.json(
+          { error: "Project niet gevonden" },
+          { status: 404 }
+        );
+      }
+      leadId = project.lead_id;
+    } else {
+      return NextResponse.json(
+        { error: "project_id of email is verplicht" },
+        { status: 400 }
+      );
     }
 
-    const { data, error } = await sb
+    const insertRow: Record<string, unknown> = {
+      project_id: projectId,
+      lead_id: leadId,
+      onderwerp,
+      omschrijving: body.omschrijving?.trim() || null,
+      status: "open",
+    };
+    if (klantEmail) insertRow.klant_email = klantEmail;
+
+    let { data, error } = await sb
       .from("service_verzoeken")
-      .insert({
-        project_id: project.id,
-        lead_id: project.lead_id,
-        onderwerp,
-        omschrijving: body.omschrijving?.trim() || null,
-        status: "open",
-      })
+      .insert(insertRow)
       .select(
         "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status)"
       )
       .single();
+
+    if (
+      error &&
+      (error.message?.includes("klant_email") || error.code === "42703")
+    ) {
+      delete insertRow.klant_email;
+      ({ data, error } = await sb
+        .from("service_verzoeken")
+        .insert(insertRow)
+        .select(
+          "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status)"
+        )
+        .single());
+    }
 
     if (error || !data) {
       return NextResponse.json(
@@ -90,7 +139,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await syncProjectServiceStatus(sb, project.id);
+    await syncProjectServiceStatus(sb, projectId);
 
     const { data: refreshed } = await sb
       .from("service_verzoeken")

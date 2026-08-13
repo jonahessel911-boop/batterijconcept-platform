@@ -7,6 +7,7 @@ create table if not exists public.service_verzoeken (
   lead_id           uuid not null references public.leads(id) on delete cascade,
   onderwerp         text not null,
   omschrijving      text,
+  klant_email       text,
   status            text not null default 'open'
                       check (status in ('open', 'afgehandeld')),
   interne_notitie   text,

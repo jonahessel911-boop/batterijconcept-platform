@@ -171,6 +171,7 @@ export interface ServiceVerzoek {
   lead_id: string;
   onderwerp: string;
   omschrijving: string | null;
+  klant_email?: string | null;
   status: ServiceVerzoekStatus;
   interne_notitie: string | null;
   afgehandeld_op: string | null;
