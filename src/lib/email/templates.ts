@@ -94,7 +94,6 @@ export function offerteVerstuurdEmail(opts: {
   naam: string;
   offerteNummer: string;
   signUrl: string;
-  totaalLabel?: string;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   return emailLayout({
@@ -106,13 +105,11 @@ export function offerteVerstuurdEmail(opts: {
       emailP(
         "Bedankt voor je interesse in Batterijconcept. We hebben een offerte voor je klaargezet, afgestemd op jouw situatie."
       ),
-      opts.totaalLabel
-        ? emailBox(
-            `<p style="margin:0;font-size:15px;"><strong>Offerte</strong> ${opts.offerteNummer}<br /><strong>Totaal</strong> ${opts.totaalLabel}</p>`
-          )
-        : "",
+      emailBox(
+        `<p style="margin:0;font-size:15px;"><strong>Offerte</strong><br />${opts.offerteNummer}</p>`
+      ),
       emailP(
-        "Via de knop hieronder open je de offerte-portal. Daar kun je onze waarden bekijken, de producten inzien en digitaal ondertekenen."
+        "In de bijlage vind je de offerte als PDF. Via de knop hieronder open je ook de offerte-portal om digitaal te ondertekenen."
       ),
       emailButton("Bekijk &amp; onderteken offerte", opts.signUrl),
       emailMuted(
@@ -182,6 +179,33 @@ export function offerteOndertekendEmail(opts: {
         "Heb je vragen over de planning of de installatie? We helpen je graag — mail ons op info@batterijconcept.nl of bel 085 800 1645."
       ),
       emailMuted("Tot snel, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
+/** Interne mail naar adviseur bij annulering door klant */
+export function afspraakGeannuleerdAdviseurEmail(opts: {
+  adviseurNaam: string;
+  klantNaam: string;
+  leadNumber?: string | null;
+  startAt: string | Date;
+}) {
+  const first = opts.adviseurNaam.split(" ")[0] || opts.adviseurNaam;
+  const when = formatDateTimeLongNl(opts.startAt);
+  return emailLayout({
+    title: "Annulering afspraak",
+    preheader: `${opts.klantNaam} heeft de afspraak op ${when} geannuleerd.`,
+    bodyHtml: [
+      emailH1("Annulering afspraak"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Een klant heeft zojuist een adviesafspraak geannuleerd. De afspraak blijft in de agenda staan met status <strong>Geannuleerd</strong>."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}${opts.leadNumber ? ` <span style="color:#5A635C;">(${opts.leadNumber})</span>` : ""}</p>
+         <p style="margin:0;font-size:15px;"><strong>Geplande tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>`
+      ),
+      emailMuted("Dit is een interne melding van het Batterijconcept CRM."),
     ].join(""),
   });
 }

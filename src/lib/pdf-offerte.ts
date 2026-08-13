@@ -12,7 +12,8 @@ type SignPayload = {
 type PdfInput = {
   offerte: Offerte;
   regels: OfferteRegel[];
-  sign: SignPayload;
+  /** Alleen op pagina 2 — weglaten = concept-PDF voor mail */
+  sign?: SignPayload;
   adres?: string;
 };
 
@@ -32,17 +33,17 @@ const CHARCOAL = hexToRgb("#2E3330");
 const MUTED = hexToRgb("#5A635C");
 
 /**
- * Genereert ondertekende offerte-PDF:
- * pagina 1 = merk + waarden + handtekening
- * pagina 2 = producten / bedragen
+ * Offerte-PDF:
+ * pagina 1 = merk + waarden (geen handtekening)
+ * pagina 2 = producten / totaal + optioneel handtekening
  */
-export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
+export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const { offerte, regels, sign, adres } = input;
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 18;
 
-  // —— PAGINA 1: Merk + waarden + ondertekening ——
+  // —— PAGINA 1: Merk + waarden ——
   doc.setFillColor(...GREEN);
   doc.rect(0, 0, pageW, 42, "F");
 
@@ -75,64 +76,15 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     y += lines.length * 5 + 6;
   }
 
-  y = Math.max(y + 8, 150);
-  doc.setDrawColor(...GREEN);
-  doc.setLineWidth(0.4);
-  doc.line(margin, y, pageW - margin, y);
-  y += 12;
-
-  doc.setTextColor(...DARK);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("Ondertekening", margin, y);
-  y += 10;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(...CHARCOAL);
-  doc.text(`Naam: ${sign.naam}`, margin, y);
-  y += 7;
-  doc.text(`Datum: ${formatDateNl(sign.ondertekendOp)}`, margin, y);
-  y += 7;
-  doc.text(`Offerte: ${offerte.offerte_nummer}`, margin, y);
-  y += 12;
-
-  doc.setTextColor(...MUTED);
-  doc.text("Handtekening:", margin, y);
-  y += 4;
-
-  try {
-    const imgW = 70;
-    const imgH = 28;
-    doc.addImage(sign.handtekeningDataUrl, "PNG", margin, y, imgW, imgH);
-    y += imgH + 6;
-  } catch {
-    doc.setTextColor(...MUTED);
-    doc.text("(handtekening bijgevoegd)", margin, y + 8);
-    y += 16;
-  }
-
-  doc.setDrawColor(200);
-  doc.line(margin, y, margin + 70, y);
-
-  if (offerte.financiering_voorbehoud) {
-    y += 12;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(...ORANGE);
-    doc.text("Onder voorbehoud van financiering Warmtefonds", margin, y);
-  }
-
   doc.setFontSize(8);
-  doc.setFont("helvetica", "normal");
   doc.setTextColor(...MUTED);
   doc.text(
-    "Door te ondertekenen ga je akkoord met deze offerte en de waarden van Batterijconcept.nl.",
+    "Bekijk pagina 2 voor de offerte en ondertekening.",
     margin,
     285
   );
 
-  // —— PAGINA 2: Offerte-inhoud ——
+  // —— PAGINA 2: Offerte-inhoud + handtekening ——
   doc.addPage();
   doc.setFillColor(...DARK);
   doc.rect(0, 0, pageW, 28, "F");
@@ -174,7 +126,6 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     y += intro.length * 5 + 8;
   }
 
-  // Tabelkop
   doc.setFillColor(...hexToRgb("#E8F6EC"));
   doc.rect(margin, y - 5, pageW - margin * 2, 9, "F");
   doc.setFont("helvetica", "bold");
@@ -196,7 +147,7 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     doc.text(String(r.aantal), pageW - margin - 55, y);
     doc.text(formatEuro(lineInc), pageW - margin - 2, y, { align: "right" });
     y += Math.max(desc.length * 5, 8) + 2;
-    if (y > 250) {
+    if (y > 200) {
       doc.addPage();
       y = 30;
     }
@@ -216,23 +167,92 @@ export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
     align: "right",
   });
 
-  y += 20;
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(...MUTED);
-  doc.text(
-    `Ondertekend door ${sign.naam} op ${formatDateNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
-    margin,
-    y
-  );
+  y += 16;
+
+  // Handtekening alleen op pagina 2
+  doc.setDrawColor(...GREEN);
+  doc.setLineWidth(0.4);
+  doc.line(margin, y, pageW - margin, y);
+  y += 10;
+
+  doc.setTextColor(...DARK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("Ondertekening", margin, y);
+  y += 10;
+
+  if (sign) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(...CHARCOAL);
+    doc.text(`Naam: ${sign.naam}`, margin, y);
+    y += 7;
+    doc.text(`Datum: ${formatDateNl(sign.ondertekendOp)}`, margin, y);
+    y += 7;
+    doc.text(`Offerte: ${offerte.offerte_nummer}`, margin, y);
+    y += 10;
+
+    doc.setTextColor(...MUTED);
+    doc.text("Handtekening:", margin, y);
+    y += 4;
+
+    try {
+      const imgW = 70;
+      const imgH = 28;
+      doc.addImage(sign.handtekeningDataUrl, "PNG", margin, y, imgW, imgH);
+      y += imgH + 6;
+    } catch {
+      doc.text("(handtekening bijgevoegd)", margin, y + 8);
+      y += 16;
+    }
+
+    doc.setDrawColor(200);
+    doc.line(margin, y, margin + 70, y);
+    y += 10;
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED);
+    doc.text(
+      `Ondertekend door ${sign.naam} op ${formatDateNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
+      margin,
+      y
+    );
+  } else {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(...MUTED);
+    doc.text("Naam: _______________________________", margin, y);
+    y += 10;
+    doc.text("Datum: _______________________________", margin, y);
+    y += 10;
+    doc.text("Handtekening:", margin, y);
+    y += 28;
+    doc.setDrawColor(200);
+    doc.line(margin, y, margin + 70, y);
+  }
 
   if (offerte.financiering_voorbehoud) {
-    y += 10;
+    y += 12;
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...ORANGE);
     doc.setFontSize(10);
     doc.text("Onder voorbehoud van financiering Warmtefonds", margin, y);
   }
 
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...MUTED);
+  doc.text(
+    "Door te ondertekenen ga je akkoord met deze offerte en de waarden van Batterijconcept.nl.",
+    margin,
+    285
+  );
+
   return doc.output("blob");
+}
+
+/** Alias voor ondertekende PDF */
+export async function buildSignedOffertePdf(input: PdfInput): Promise<Blob> {
+  return buildOffertePdf(input);
 }

@@ -94,7 +94,9 @@ export async function POST(req: NextRequest) {
     let insert = await sb
       .from("offertes")
       .insert(row)
-      .select("id, offerte_nummer, sign_token, totaal_inc_btw, financiering_voorbehoud")
+      .select(
+        "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, financiering_voorbehoud"
+      )
       .single();
 
     if (
@@ -106,7 +108,9 @@ export async function POST(req: NextRequest) {
       insert = await sb
         .from("offertes")
         .insert(row)
-        .select("id, offerte_nummer, sign_token, totaal_inc_btw")
+        .select(
+          "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot"
+        )
         .single();
     }
 
@@ -137,16 +141,52 @@ export async function POST(req: NextRequest) {
     try {
       const { data: lead } = await sb
         .from("leads")
-        .select("naam, email")
+        .select(
+          "naam, email, postcode, huisnummer, toevoeging, straat, plaats"
+        )
         .eq("id", body.lead_id)
         .single();
 
       if (lead?.email) {
+        const { data: regels } = await sb
+          .from("offerte_regels")
+          .select("*")
+          .eq("offerte_id", offerte.id)
+          .order("sort_order");
+
+        const { buildOffertePdf } = await import("@/lib/pdf-offerte");
+        const { adresRegel } = await import("@/lib/format");
         const { sendEmail } = await import("@/lib/email/postmark");
         const { offerteVerstuurdEmail } = await import(
           "@/lib/email/templates"
         );
-        const { formatEuro } = await import("@/lib/format");
+
+        const fullOfferte = {
+          ...offerte,
+          financiering_voorbehoud:
+            "financiering_voorbehoud" in offerte
+              ? Boolean(
+                  (offerte as { financiering_voorbehoud?: boolean })
+                    .financiering_voorbehoud
+                )
+              : Boolean(body.financiering_voorbehoud),
+          leads: {
+            naam: lead.naam,
+            email: lead.email,
+            lead_number: "",
+            postcode: lead.postcode,
+            huisnummer: lead.huisnummer,
+            plaats: lead.plaats,
+          },
+        };
+
+        const pdfBlob = await buildOffertePdf({
+          offerte: fullOfferte as never,
+          regels: (regels || []) as never,
+          adres: adresRegel(lead),
+        });
+        const pdfBytes = Buffer.from(await pdfBlob.arrayBuffer());
+
         await sendEmail({
           to: lead.email,
           subject: `Offerte ${offerte.offerte_nummer} voor ${lead.naam}`,
@@ -154,9 +194,15 @@ export async function POST(req: NextRequest) {
             naam: lead.naam,
             offerteNummer: offerte.offerte_nummer,
             signUrl,
-            totaalLabel: formatEuro(offerte.totaal_inc_btw),
           }),
           tag: "offerte-verstuurd",
+          attachments: [
+            {
+              name: `${offerte.offerte_nummer}.pdf`,
+              contentType: "application/pdf",
+              content: pdfBytes,
+            },
+          ],
         });
       }
     } catch (mailErr) {

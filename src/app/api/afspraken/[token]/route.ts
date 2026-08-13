@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import {
   afspraakBevestigingEmail,
+  afspraakGeannuleerdAdviseurEmail,
 } from "@/lib/email/templates";
 import { generateAvailableSlots } from "@/lib/slots";
 
@@ -85,10 +86,38 @@ export async function POST(
     }
 
     if (body.action === "annuleer") {
-      await sb
+      const { error: cancelErr } = await sb
         .from("afspraken")
         .update({ status: "geannuleerd" })
         .eq("id", afspraak.id);
+
+      if (cancelErr) {
+        return NextResponse.json(
+          { error: "Annuleren mislukt", detail: cancelErr.message },
+          { status: 500 }
+        );
+      }
+
+      // Mail naar de adviseur (persoonlijke mail, niet info@)
+      const adviseurEmail = afspraak.adviseurs?.email?.trim();
+      if (adviseurEmail) {
+        try {
+          const html = afspraakGeannuleerdAdviseurEmail({
+            adviseurNaam: afspraak.adviseurs?.naam || "adviseur",
+            klantNaam: afspraak.leads?.naam || "Klant",
+            leadNumber: afspraak.leads?.lead_number,
+            startAt: afspraak.start_at,
+          });
+          await sendEmail({
+            to: adviseurEmail,
+            subject: "Annulering afspraak",
+            html,
+            tag: "afspraak-geannuleerd-adviseur",
+          });
+        } catch (mailErr) {
+          console.error("Annulering adviseur-mail:", mailErr);
+        }
+      }
 
       return NextResponse.json({ ok: true, status: "geannuleerd" });
     }

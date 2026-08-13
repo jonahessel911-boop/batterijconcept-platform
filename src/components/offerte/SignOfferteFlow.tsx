@@ -14,8 +14,8 @@ type Props = {
 
 /**
  * PDF-reader stijl: 2 scrollbare pagina's.
- * Pagina 1 — merk + waarden + naam + handtekening + datum
- * Pagina 2 — offerteproducten + handtekening-preview + Ondertekenen
+ * Pagina 1 — merk + waarden + akkoord
+ * Pagina 2 — offerte + naam + handtekening + Ondertekenen
  */
 export function SignOfferteFlow({ offerte, regels }: Props) {
   const [naam, setNaam] = useState(offerte.leads?.naam || "");
@@ -68,13 +68,13 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
   async function submit() {
     setError(null);
     if (!naam.trim()) {
-      setError("Vul je naam in op pagina 1.");
-      scrollToPage(1);
+      setError("Vul je naam in op pagina 2.");
+      scrollToPage(2);
       return;
     }
     if (!handtekening) {
-      setError("Zet je handtekening op pagina 1.");
-      scrollToPage(1);
+      setError("Zet je handtekening op pagina 2.");
+      scrollToPage(2);
       return;
     }
     if (!akkoord) {
@@ -244,67 +244,24 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
               ))}
             </ul>
 
-            <div className="mt-10 border-t border-[#e2e8e4] pt-8">
-              <h3 className="font-display text-lg font-semibold text-ink">
-                Ondertekening
-              </h3>
-              <p className="mt-1 text-sm text-muted">
-                Vul je gegevens in — je handtekening verschijnt ook op pagina 2.
-              </p>
-
-              <label className="mt-5 block text-sm font-medium text-ink">
-                Volledige naam
-                <input
-                  type="text"
-                  value={naam}
-                  onChange={(e) => setNaam(e.target.value)}
-                  placeholder="Voor- en achternaam"
-                  className="mt-1.5 w-full rounded-xl border border-[#d5e0d8] bg-white px-4 py-2.5 text-sm outline-none ring-green/30 focus:ring-2"
-                />
-              </label>
-
-              <div className="mt-4">
-                <p className="mb-1.5 text-sm font-medium text-ink">Datum</p>
-                <div className="rounded-xl bg-green-soft px-4 py-2.5 text-sm font-medium text-green-dark">
-                  {today}
-                  <span className="ml-2 font-normal text-muted">
-                    (Europe/Amsterdam)
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-4">
-                <p className="mb-1.5 text-sm font-medium text-ink">
-                  Handtekening
-                </p>
-                <SignaturePadField onChange={onSigChange} />
-              </div>
-
-              <label className="mt-4 flex items-start gap-3 text-sm text-ink">
-                <input
-                  type="checkbox"
-                  checked={akkoord}
-                  onChange={(e) => setAkkoord(e.target.checked)}
-                  className="mt-1 accent-green"
-                />
-                <span>
-                  Ik ga akkoord met de waarden van Batterijconcept.nl.
-                </span>
-              </label>
-
-              {offerte.financiering_voorbehoud && (
-                <p className="mt-5 border border-orange/30 bg-[#FFF0E6] px-4 py-3 text-sm font-medium text-[#C45A12]">
-                  Onder voorbehoud van financiering Warmtefonds
-                </p>
-              )}
-            </div>
+            <label className="mt-8 flex items-start gap-3 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={akkoord}
+                onChange={(e) => setAkkoord(e.target.checked)}
+                className="mt-1 accent-green"
+              />
+              <span>
+                Ik ga akkoord met de waarden van Batterijconcept.nl.
+              </span>
+            </label>
 
             <button
               type="button"
               onClick={() => scrollToPage(2)}
               className="mt-8 flex w-full items-center justify-center gap-2 rounded-full border border-[#d5e0d8] bg-wash py-3 text-sm font-semibold text-green-dark hover:bg-green-soft"
             >
-              Scroll naar pagina 2 — Offerte ↓
+              Scroll naar pagina 2 — Offerte &amp; ondertekenen ↓
             </button>
           </article>
 
@@ -391,48 +348,43 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
               </p>
             </div>
 
-            {/* Handtekening op pagina 2 */}
+            {/* Handtekening alleen op pagina 2 */}
             <div className="mt-10 rounded-2xl border border-[#e2e8e4] bg-wash/80 p-5">
               <h3 className="font-display text-base font-semibold text-ink">
-                Handtekening
+                Ondertekening
               </h3>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
-                    Naam
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-ink">
-                    {naam.trim() || (
-                      <span className="text-muted">Nog niet ingevuld</span>
-                    )}
-                  </p>
-                  <p className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
-                    Datum
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-green-dark">
-                    {today}
-                  </p>
-                </div>
-                <div>
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
-                    Handtekening
-                  </p>
-                  <div className="flex h-28 items-center justify-center rounded-xl border border-dashed border-[#c5d4c9] bg-white">
-                    {handtekening ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={handtekening}
-                        alt="Handtekening"
-                        className="max-h-24 max-w-full object-contain"
-                      />
-                    ) : (
-                      <p className="px-4 text-center text-xs text-muted">
-                        Zet je handtekening op pagina 1
-                      </p>
-                    )}
-                  </div>
+              <p className="mt-1 text-sm text-muted">
+                Vul je naam in en zet je handtekening hieronder.
+              </p>
+
+              <label className="mt-5 block text-sm font-medium text-ink">
+                Volledige naam
+                <input
+                  type="text"
+                  value={naam}
+                  onChange={(e) => setNaam(e.target.value)}
+                  placeholder="Voor- en achternaam"
+                  className="mt-1.5 w-full rounded-xl border border-[#d5e0d8] bg-white px-4 py-2.5 text-sm outline-none ring-green/30 focus:ring-2"
+                />
+              </label>
+
+              <div className="mt-4">
+                <p className="mb-1.5 text-sm font-medium text-ink">Datum</p>
+                <div className="rounded-xl bg-green-soft px-4 py-2.5 text-sm font-medium text-green-dark">
+                  {today}
+                  <span className="ml-2 font-normal text-muted">
+                    (Europe/Amsterdam)
+                  </span>
                 </div>
               </div>
+
+              <div className="mt-4">
+                <p className="mb-1.5 text-sm font-medium text-ink">
+                  Handtekening
+                </p>
+                <SignaturePadField onChange={onSigChange} />
+              </div>
+
               {offerte.financiering_voorbehoud && (
                 <p className="mt-4 text-sm font-medium text-[#C45A12]">
                   Onder voorbehoud van financiering Warmtefonds

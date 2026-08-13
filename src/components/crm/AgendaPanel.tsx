@@ -72,11 +72,14 @@ export function AgendaPanel({
   const upcoming = useMemo(
     () =>
       afspraken.filter((a) => {
-        if (a.status === "geannuleerd") return false;
-        if (new Date(a.start_at) < new Date()) return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
+        // Geannuleerd: blijven zichtbaar (niet uit DB) tot de geplande tijd voorbij is
+        if (a.status === "geannuleerd") {
+          return new Date(a.start_at) >= new Date();
+        }
+        if (new Date(a.start_at) < new Date()) return false;
         return true;
       }),
     [afspraken, defaultAdviseurId]
