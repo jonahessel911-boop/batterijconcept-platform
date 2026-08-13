@@ -5,6 +5,7 @@ import type {
   OfferteStatus,
   Prioriteit,
   ProjectStatus,
+  ServiceVerzoekStatus,
 } from "@/types/database";
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
@@ -55,6 +56,11 @@ export const PROJECT_STATUSES: ProjectStatus[] = [
   "installatie_voltooid",
   "service",
 ];
+
+export const serviceVerzoekStatusLabel: Record<ServiceVerzoekStatus, string> = {
+  open: "Open",
+  afgehandeld: "Afgehandeld",
+};
 
 export const afspraakStatusLabel: Record<AfspraakStatus, string> = {
   gepland: "Gepland",

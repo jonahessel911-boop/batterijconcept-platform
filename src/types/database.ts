@@ -26,6 +26,8 @@ export type FactuurStatus =
   | "deels_betaald"
   | "vervallen";
 
+export type ServiceVerzoekStatus = "open" | "afgehandeld";
+
 export type CrmTab =
   | "leads"
   | "agenda"
@@ -161,6 +163,21 @@ export interface Project {
   created_at: string;
   updated_at: string;
   leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;
+}
+
+export interface ServiceVerzoek {
+  id: string;
+  project_id: string;
+  lead_id: string;
+  onderwerp: string;
+  omschrijving: string | null;
+  status: ServiceVerzoekStatus;
+  interne_notitie: string | null;
+  afgehandeld_op: string | null;
+  created_at: string;
+  updated_at: string;
+  leads?: Pick<Lead, "naam" | "lead_number"> | null;
+  projecten?: Pick<Project, "id" | "project_nummer" | "titel" | "status"> | null;
 }
 
 export interface Factuur {

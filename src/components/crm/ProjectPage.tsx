@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { Factuur, Offerte, Project, ProjectStatus } from "@/types/database";
+import type { Factuur, Offerte, Project, ProjectStatus, ServiceVerzoek } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
@@ -12,6 +12,7 @@ import {
   statusTone,
 } from "@/lib/labels";
 import { StatusBadge } from "./StatusBadge";
+import { ProjectServiceSection } from "./ProjectServiceSection";
 import {
   BackLink,
   Breadcrumb,
@@ -27,6 +28,9 @@ export function ProjectPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [serviceVerzoeken, setServiceVerzoeken] = useState<ServiceVerzoek[]>(
+    []
+  );
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
@@ -55,7 +59,7 @@ export function ProjectPage() {
         const proj = data as Project;
         setProject(proj);
 
-        const [o, f] = await Promise.all([
+        const [o, f, sv] = await Promise.all([
           proj.offerte_id
             ? sb
                 .from("offertes")
@@ -69,10 +73,23 @@ export function ProjectPage() {
             .from("facturen")
             .select("*, leads(naam, lead_number)")
             .eq("project_id", id),
+          sb
+            .from("service_verzoeken")
+            .select("*")
+            .eq("project_id", id)
+            .order("created_at", { ascending: false }),
         ]);
 
         setOfferte((o.data as Offerte) || null);
         setFacturen((f.data as Factuur[]) || []);
+        if (sv && "error" in sv && sv.error) {
+          setServiceVerzoeken([]);
+        } else {
+          setServiceVerzoeken(
+            ((sv as { data: ServiceVerzoek[] | null }).data as ServiceVerzoek[]) ||
+              []
+          );
+        }
       }
     } catch {
       setNotFound(true);
@@ -197,6 +214,12 @@ export function ProjectPage() {
           </p>
         )}
       </HeroCard>
+
+      <ProjectServiceSection
+        project={project}
+        verzoeken={serviceVerzoeken}
+        onChanged={() => void load()}
+      />
 
       <Panel title="Facturen" subtitle={`${facturen.length}`}>
         {facturen.length === 0 ? (

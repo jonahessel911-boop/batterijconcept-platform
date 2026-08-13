@@ -10,6 +10,7 @@ import type {
   LeadStatus,
   Offerte,
   Project,
+  ServiceVerzoek,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { findAdminAdviseurId } from "@/lib/admin-adviseur";
@@ -19,6 +20,7 @@ import { TabNav } from "./TabNav";
 import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
+import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
 import { FacturenTable } from "./FacturenTable";
 import { AgendaPanel } from "./AgendaPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
@@ -48,6 +50,9 @@ export function CrmShell() {
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [projecten, setProjecten] = useState<Project[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [serviceVerzoeken, setServiceVerzoeken] = useState<ServiceVerzoek[]>(
+    []
+  );
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [adviseurFilter, setAdviseurFilter] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -209,6 +214,20 @@ export function CrmShell() {
       setProjecten((p.data as Project[]) || []);
       setFacturen((f.data as Factuur[]) || []);
       await loadAdviseurs();
+
+      try {
+        const sv = await fetch("/api/service-verzoeken");
+        if (sv.ok) {
+          const svData = await sv.json();
+          setServiceVerzoeken(
+            (svData.verzoeken as ServiceVerzoek[]) || []
+          );
+        } else {
+          setServiceVerzoeken([]);
+        }
+      } catch {
+        setServiceVerzoeken([]);
+      }
     } catch (e) {
       setError(errMessage(e, "Kon data niet laden"));
     } finally {
@@ -267,6 +286,11 @@ export function CrmShell() {
     if (!adviseurFilter) return facturen;
     return facturen.filter((f) => scopedLeadIds.has(f.lead_id));
   }, [facturen, adviseurFilter, scopedLeadIds]);
+
+  const scopedServiceVerzoeken = useMemo(() => {
+    if (!adviseurFilter) return serviceVerzoeken;
+    return serviceVerzoeken.filter((v) => scopedLeadIds.has(v.lead_id));
+  }, [serviceVerzoeken, adviseurFilter, scopedLeadIds]);
 
   const counts = {
     leads: scopedLeads.length,
@@ -461,7 +485,13 @@ export function CrmShell() {
                   />
                 )}
                 {tab === "projecten" && (
-                  <ProjectenTable projecten={scopedProjecten} />
+                  <div>
+                    <ProjectenTable projecten={scopedProjecten} />
+                    <ServiceVerzoekenPanel
+                      verzoeken={scopedServiceVerzoeken}
+                      onUpdated={() => void load()}
+                    />
+                  </div>
                 )}
                 {tab === "facturen" && (
                   <FacturenTable facturen={scopedFacturen} />
