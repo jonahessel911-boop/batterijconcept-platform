@@ -173,14 +173,12 @@ export async function POST(
       }
     }
 
-    return new NextResponse(pdfBytes, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "X-Offerte-Nummer": offerte.offerte_nummer,
-        "X-Signed-Pdf-Path": uploadErr ? "" : path,
-      },
+    // JSON i.p.v. raw PDF — voorkomt hangende blob-download in de browser
+    return NextResponse.json({
+      ok: true,
+      offerte_nummer: offerte.offerte_nummer,
+      filename,
+      pdf_base64: pdfBytes.toString("base64"),
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Onbekende fout";

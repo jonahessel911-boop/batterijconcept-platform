@@ -98,19 +98,41 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
         }
       );
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Ondertekenen mislukt");
+        throw new Error(
+          (data as { error?: string }).error || "Ondertekenen mislukt"
+        );
       }
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${offerte.offerte_nummer}-ondertekend.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Succes-scherm eerst — download mag niet de UI blokkeren
       setDone(true);
+
+      const pdfB64 = (data as { pdf_base64?: string; filename?: string })
+        .pdf_base64;
+      const filename =
+        (data as { filename?: string }).filename ||
+        `${offerte.offerte_nummer}-ondertekend.pdf`;
+
+      if (pdfB64) {
+        try {
+          const binary = atob(pdfB64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: "application/pdf" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (dlErr) {
+          console.warn("PDF-download overgeslagen:", dlErr);
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Er ging iets mis");
     } finally {
@@ -129,8 +151,8 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
             Offerte ondertekend
           </h1>
           <p className="mt-2 text-sm text-muted">
-            Bedankt{naam ? `, ${naam}` : ""}. Je PDF is gedownload en
-            opgeslagen bij Batterijconcept.
+            Bedankt{naam ? `, ${naam}` : ""}. Je ondertekende offerte staat in
+            je mailbox en is bij Batterijconcept opgeslagen.
           </p>
           <p className="mt-4 font-mono text-xs text-green-dark">
             {offerte.offerte_nummer} · {today}
