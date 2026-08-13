@@ -112,7 +112,7 @@ export function OffertePage() {
 
   if (loading) {
     return (
-      <DetailShell>
+      <DetailShell activeTab="offertes">
         <p className="py-20 text-center text-sm text-muted">Offerte laden…</p>
       </DetailShell>
     );
@@ -124,12 +124,13 @@ export function OffertePage() {
         title="Offerte niet gevonden"
         backHref="/?tab=offertes"
         backLabel="Terug naar offertes"
+        activeTab="offertes"
       />
     );
   }
 
   return (
-    <DetailShell onRefresh={load} loading={loading}>
+    <DetailShell onRefresh={load} loading={loading} activeTab="offertes">
       <Breadcrumb
         items={[
           { label: "Offertes", href: "/?tab=offertes" },

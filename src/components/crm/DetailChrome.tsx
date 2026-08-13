@@ -1,18 +1,54 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { CrmTab } from "@/types/database";
 import { CrmHeader } from "./CrmHeader";
+import { TabNav } from "./TabNav";
 
 export function DetailShell({
   children,
   onRefresh,
   loading,
+  activeTab = "leads",
 }: {
   children: React.ReactNode;
   onRefresh?: () => void;
   loading?: boolean;
+  /** Welke CRM-tab highlighten in de menubalk */
+  activeTab?: CrmTab;
 }) {
+  const router = useRouter();
+
+  function changeTab(tab: CrmTab) {
+    if (tab === "leads") router.push("/");
+    else router.push(`/?tab=${tab}`);
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/auth/login", { method: "DELETE" });
+    } catch {
+      /* ignore */
+    }
+    router.push("/login");
+    router.refresh();
+  }
+
   return (
     <div className="crm-bg min-h-screen">
-      <CrmHeader onRefresh={onRefresh} loading={loading} />
+      <CrmHeader
+        onRefresh={onRefresh}
+        loading={loading}
+        activeTab={activeTab}
+        onTabChange={changeTab}
+        onLogout={logout}
+      />
+      <div className="border-b border-line bg-white">
+        <div className="mx-auto max-w-[1440px]">
+          <TabNav active={activeTab} onChange={changeTab} />
+        </div>
+      </div>
       <main className="mx-auto max-w-[1440px] px-3 py-4 sm:px-6 sm:py-8">
         {children}
       </main>
@@ -121,13 +157,15 @@ export function NotFoundState({
   title,
   backHref,
   backLabel,
+  activeTab,
 }: {
   title: string;
   backHref: string;
   backLabel: string;
+  activeTab?: CrmTab;
 }) {
   return (
-    <DetailShell>
+    <DetailShell activeTab={activeTab}>
       <div className="mx-auto max-w-lg border border-line bg-white py-16 text-center">
         <h1 className="font-display text-2xl font-semibold text-ink">{title}</h1>
         <Link

@@ -126,7 +126,7 @@ export function ProjectPage() {
 
   if (loading) {
     return (
-      <DetailShell>
+      <DetailShell activeTab="projecten">
         <p className="py-20 text-center text-sm text-muted">Project laden…</p>
       </DetailShell>
     );
@@ -138,12 +138,13 @@ export function ProjectPage() {
         title="Project niet gevonden"
         backHref="/?tab=projecten"
         backLabel="Terug naar projecten"
+        activeTab="projecten"
       />
     );
   }
 
   return (
-    <DetailShell onRefresh={load} loading={loading}>
+    <DetailShell onRefresh={load} loading={loading} activeTab="projecten">
       <Breadcrumb
         items={[
           { label: "Projecten", href: "/?tab=projecten" },

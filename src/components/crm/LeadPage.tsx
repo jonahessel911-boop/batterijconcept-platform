@@ -147,7 +147,7 @@ export function LeadPage() {
 
   if (loading) {
     return (
-      <DetailShell>
+      <DetailShell activeTab="leads">
         <p className="py-20 text-center text-sm text-muted">Lead laden…</p>
       </DetailShell>
     );
@@ -159,6 +159,7 @@ export function LeadPage() {
         title="Lead niet gevonden"
         backHref="/"
         backLabel="Terug naar leads"
+        activeTab="leads"
       />
     );
   }
@@ -170,7 +171,7 @@ export function LeadPage() {
   ];
 
   return (
-    <DetailShell onRefresh={load} loading={loading}>
+    <DetailShell onRefresh={load} loading={loading} activeTab="leads">
       <Breadcrumb
         items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
       />
