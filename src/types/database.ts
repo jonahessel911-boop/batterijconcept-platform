@@ -13,11 +13,12 @@ export type OfferteStatus =
   | "verlopen"
   | "afgewezen";
 export type ProjectStatus =
-  | "gepland"
-  | "in_uitvoering"
-  | "wacht_op_materiaal"
-  | "opgeleverd"
-  | "geannuleerd";
+  | "schouw_inplannen"
+  | "btw_factuur_eruit"
+  | "product_ingekocht"
+  | "installatie_gepland"
+  | "installatie_voltooid"
+  | "service";
 export type FactuurStatus =
   | "concept"
   | "verzonden"

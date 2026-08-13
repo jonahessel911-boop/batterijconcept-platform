@@ -148,8 +148,15 @@ create table if not exists public.projecten (
   lead_id         uuid not null references public.leads(id) on delete cascade,
   offerte_id      uuid references public.offertes(id) on delete set null,
   project_nummer  text not null unique,           -- bijv. PRJ-2026-0001
-  status          text not null default 'gepland'
-                    check (status in ('gepland','in_uitvoering','wacht_op_materiaal','opgeleverd','geannuleerd')),
+  status          text not null default 'schouw_inplannen'
+                    check (status in (
+                      'schouw_inplannen',
+                      'btw_factuur_eruit',
+                      'product_ingekocht',
+                      'installatie_gepland',
+                      'installatie_voltooid',
+                      'service'
+                    )),
   titel           text,
   startdatum      date,
   opleverdatum    date,

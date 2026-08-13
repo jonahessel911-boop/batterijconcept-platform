@@ -86,6 +86,30 @@ export function OffertePage() {
     return () => cancelAnimationFrame(frame);
   }, [load]);
 
+  // Bestaande ondertekende offertes zonder project → alsnog aanmaken
+  useEffect(() => {
+    if (!offerte || loading) return;
+    if (offerte.status !== "ondertekend") return;
+    if (projecten.length > 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/offertes/${offerte.id}/project`, {
+          method: "POST",
+        });
+        if (!res.ok || cancelled) return;
+        await load();
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [offerte, projecten.length, loading, load]);
+
   if (loading) {
     return (
       <DetailShell>

@@ -4,6 +4,7 @@ import { buildSignedOffertePdf } from "@/lib/pdf-offerte";
 import { adresRegel } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
 import { offerteOndertekendEmail } from "@/lib/email/templates";
+import { ensureProjectForOfferte } from "@/lib/ensure-project";
 
 export const runtime = "nodejs";
 
@@ -143,8 +144,27 @@ export async function POST(
       .update({ status: "deal" })
       .eq("id", offerte.lead_id);
 
-    const klantEmail = offerte.leads?.email as string | null | undefined;
     const klantNaam = body.naam.trim() || offerte.leads?.naam || "klant";
+
+    // Project starten in status Schouw inplannen
+    let projectMeta: {
+      id: string;
+      project_nummer: string;
+      created: boolean;
+    } | null = null;
+    try {
+      projectMeta = await ensureProjectForOfferte(supabase, {
+        offerteId: offerte.id,
+        leadId: offerte.lead_id,
+        offerteNummer: offerte.offerte_nummer,
+        titel: offerte.titel,
+        klantNaam: offerte.leads?.naam || klantNaam,
+      });
+    } catch (projErr) {
+      console.error("Project na ondertekening:", projErr);
+    }
+
+    const klantEmail = offerte.leads?.email as string | null | undefined;
     if (klantEmail) {
       try {
         const html = offerteOndertekendEmail({
@@ -179,6 +199,8 @@ export async function POST(
       offerte_nummer: offerte.offerte_nummer,
       filename,
       pdf_base64: pdfBytes.toString("base64"),
+      project_id: projectMeta?.id ?? null,
+      project_nummer: projectMeta?.project_nummer ?? null,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Onbekende fout";

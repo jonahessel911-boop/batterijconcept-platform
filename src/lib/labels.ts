@@ -39,12 +39,22 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 };
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
-  gepland: "Gepland",
-  in_uitvoering: "In uitvoering",
-  wacht_op_materiaal: "Wacht op materiaal",
-  opgeleverd: "Opgeleverd",
-  geannuleerd: "Geannuleerd",
+  schouw_inplannen: "Schouw inplannen",
+  btw_factuur_eruit: "BTW factuur eruit",
+  product_ingekocht: "Product ingekocht",
+  installatie_gepland: "Installatie gepland",
+  installatie_voltooid: "Installatie voltooid",
+  service: "Service",
 };
+
+export const PROJECT_STATUSES: ProjectStatus[] = [
+  "schouw_inplannen",
+  "btw_factuur_eruit",
+  "product_ingekocht",
+  "installatie_gepland",
+  "installatie_voltooid",
+  "service",
+];
 
 export const afspraakStatusLabel: Record<AfspraakStatus, string> = {
   gepland: "Gepland",
@@ -80,9 +90,15 @@ export function statusTone(
   }
 
   if (
-    ["deal", "ondertekend", "opgeleverd", "betaald", "bevestigd", "voltooid"].includes(
-      value
-    )
+    [
+      "deal",
+      "ondertekend",
+      "installatie_voltooid",
+      "service",
+      "betaald",
+      "bevestigd",
+      "voltooid",
+    ].includes(value)
   ) {
     return success;
   }
@@ -103,7 +119,10 @@ export function statusTone(
       "nieuw",
       "afspraak",
       "verzonden",
-      "in_uitvoering",
+      "schouw_inplannen",
+      "btw_factuur_eruit",
+      "product_ingekocht",
+      "installatie_gepland",
       "deels_betaald",
       "gepland",
       "verzet",

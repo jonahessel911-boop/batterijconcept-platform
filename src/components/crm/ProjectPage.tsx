@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { Factuur, Offerte, Project } from "@/types/database";
+import type { Factuur, Offerte, Project, ProjectStatus } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import {
+  PROJECT_STATUSES,
+  projectStatusLabel,
+  statusTone,
+} from "@/lib/labels";
 import { StatusBadge } from "./StatusBadge";
 import {
   BackLink,
@@ -24,6 +29,7 @@ export function ProjectPage() {
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [statusSaving, setStatusSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,6 +86,27 @@ export function ProjectPage() {
     return () => cancelAnimationFrame(frame);
   }, [load]);
 
+  async function updateStatus(status: ProjectStatus) {
+    if (!project) return;
+    const prev = project.status;
+    setProject({ ...project, status });
+    setStatusSaving(true);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Status bijwerken mislukt");
+      if (data.project) setProject(data.project as Project);
+    } catch {
+      setProject({ ...project, status: prev });
+    } finally {
+      setStatusSaving(false);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell>
@@ -120,7 +147,19 @@ export function ProjectPage() {
               Aangemaakt {formatDateTimeNl(project.created_at)}
             </p>
           </div>
-          <StatusBadge kind="project" value={project.status} />
+          <select
+            value={project.status}
+            disabled={statusSaving}
+            onChange={(e) => updateStatus(e.target.value as ProjectStatus)}
+            className={`cursor-pointer border bg-white px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide outline-none focus:border-green disabled:opacity-60 ${statusTone("project", project.status)}`}
+            aria-label="Projectstatus"
+          >
+            {PROJECT_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {projectStatusLabel[s]}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -159,9 +198,9 @@ export function ProjectPage() {
         )}
       </HeroCard>
 
-      <Panel title="Gekoppelde facturen" subtitle={`${facturen.length}`}>
+      <Panel title="Facturen" subtitle={`${facturen.length}`}>
         {facturen.length === 0 ? (
-          <p className="px-2 py-8 text-center text-sm text-muted">
+          <p className="px-1 py-6 text-sm text-muted">
             Nog geen facturen op dit project.
           </p>
         ) : (
@@ -169,30 +208,30 @@ export function ProjectPage() {
             <thead>
               <tr>
                 <th>Factuur</th>
-                <th>Omschrijving</th>
                 <th>Status</th>
                 <th>Bedrag</th>
-                <th>Vervaldatum</th>
+                <th>Datum</th>
               </tr>
             </thead>
             <tbody>
               {facturen.map((f) => (
                 <tr key={f.id}>
-                  <td className="font-mono text-[11px] font-semibold text-green-dark">
+                  <td>
                     <Link
                       href={`/facturen/${f.id}`}
-                      className="hover:underline"
+                      className="font-mono text-xs font-semibold text-orange hover:underline"
                     >
                       {f.factuur_nummer}
                     </Link>
                   </td>
-                  <td className="text-muted">{f.omschrijving || "—"}</td>
                   <td>
                     <StatusBadge kind="factuur" value={f.status} />
                   </td>
-                  <td className="font-medium">{formatEuro(f.bedrag_inc_btw)}</td>
+                  <td className="tabular-nums">
+                    {formatEuro(f.bedrag_inc_btw)}
+                  </td>
                   <td className="text-muted">
-                    {formatDateShort(f.vervaldatum)}
+                    {formatDateShort(f.factuurdatum)}
                   </td>
                 </tr>
               ))}
