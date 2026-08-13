@@ -35,7 +35,7 @@ const VALID_TABS: CrmTab[] = [
   "instellingen",
 ];
 
-const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v2";
+const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v3";
 
 function parseTab(value: string | null): CrmTab {
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -88,22 +88,6 @@ export function CrmShell() {
       cancelled = true;
     };
   }, []);
-
-  // Standaard "Bekijk als" = Admin (niet eigen portfolio)
-  useEffect(() => {
-    if (adviseurs.length === 0) return;
-    const adminId = findAdminAdviseurId(adviseurs);
-    if (!adminId) return;
-    setAdviseurFilter((prev) => {
-      if (prev) return prev;
-      try {
-        localStorage.setItem(ADVISEUR_FILTER_KEY, adminId);
-      } catch {
-        /* ignore */
-      }
-      return adminId;
-    });
-  }, [adviseurs]);
 
   // Ongkoppelde leads eenmalig → Admin
   useEffect(() => {

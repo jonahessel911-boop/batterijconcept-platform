@@ -58,13 +58,12 @@ function MetricsCells({
   return (
     <>
       <MetricCell value={m.leads} bold={bold} />
+      <MetricCell value={m.afspraken} bold={bold} />
       <MetricCell value={m.deals} bold={bold} />
-      <MetricCell value={m.conversie} bold={bold} suffix="%" />
-      <MetricCell value={m.bemVol} money bold={bold} />
+      <MetricCell value={m.conversieAfspraak} bold={bold} suffix="%" />
+      <MetricCell value={m.conversieDeal} bold={bold} suffix="%" />
       <MetricCell value={m.omzet} money bold={bold} />
-      <MetricCell value={m.omzetPerDeal} money bold={bold} />
       <MetricCell value={m.projectkosten} money bold={bold} />
-      <MetricCell value={m.salesKosten} money bold={bold} />
       <MetricCell value={m.adSpend} money bold={bold} />
       <MetricCell value={m.winst} money bold={bold} danger />
     </>
@@ -140,6 +139,19 @@ function Row({
   );
 }
 
+const HEADERS = [
+  "Periode",
+  "Leads",
+  "Afspraken",
+  "Deals",
+  "Lead → afspr.",
+  "Lead → deal",
+  "Omzet",
+  "Projectkosten",
+  "Ad spend",
+  "Winst",
+] as const;
+
 export function RapportagePanel({
   adviseurs,
   defaultAdviseurId,
@@ -153,12 +165,10 @@ export function RapportagePanel({
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
 
-  // Kosten snel invoeren
   const [kostenDatum, setKostenDatum] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
   const [adSpend, setAdSpend] = useState("");
-  const [salesKosten, setSalesKosten] = useState("");
   const [savingKosten, setSavingKosten] = useState(false);
 
   const load = useCallback(async () => {
@@ -172,7 +182,6 @@ export function RapportagePanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       setTree(data.tree || []);
-      // Open huidig jaar standaard
       const current = (data.tree || []).find(
         (n: RapportageNode) => n.isCurrent
       );
@@ -200,45 +209,23 @@ export function RapportagePanel({
   }
 
   async function saveKosten() {
+    if (adSpend === "") return;
     setSavingKosten(true);
     setError(null);
     try {
-      const jobs = [];
-      if (adSpend !== "") {
-        jobs.push(
-          fetch("/api/rapportage", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              datum: kostenDatum,
-              soort: "ad_spend",
-              bedrag: Number(adSpend),
-              adviseur_id: adviseurId || null,
-            }),
-          })
-        );
-      }
-      if (salesKosten !== "") {
-        jobs.push(
-          fetch("/api/rapportage", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              datum: kostenDatum,
-              soort: "sales",
-              bedrag: Number(salesKosten),
-              adviseur_id: adviseurId || null,
-            }),
-          })
-        );
-      }
-      for (const p of jobs) {
-        const res = await p;
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-      }
+      const res = await fetch("/api/rapportage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          datum: kostenDatum,
+          soort: "ad_spend",
+          bedrag: Number(adSpend),
+          adviseur_id: adviseurId || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       setAdSpend("");
-      setSalesKosten("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
@@ -299,8 +286,7 @@ export function RapportagePanel({
           </p>
         </div>
 
-        {/* Kosten invoer */}
-        <div className="grid gap-3 border-b border-line bg-wash/50 px-4 py-3 sm:grid-cols-[auto_1fr_1fr_auto] sm:items-end sm:px-5">
+        <div className="grid gap-3 border-b border-line bg-wash/50 px-4 py-3 sm:grid-cols-[auto_1fr_auto] sm:items-end sm:px-5">
           <label className="text-xs font-medium text-muted">
             Datum
             <input
@@ -322,21 +308,9 @@ export function RapportagePanel({
               className="mt-1 block w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
             />
           </label>
-          <label className="text-xs font-medium text-muted">
-            Sales kosten (€)
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={salesKosten}
-              onChange={(e) => setSalesKosten(e.target.value)}
-              placeholder="0,00"
-              className="mt-1 block w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
-            />
-          </label>
           <button
             type="button"
-            disabled={savingKosten || (adSpend === "" && salesKosten === "")}
+            disabled={savingKosten || adSpend === ""}
             onClick={saveKosten}
             className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
           >
@@ -354,22 +328,10 @@ export function RapportagePanel({
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse">
+            <table className="w-full min-w-[860px] border-collapse">
               <thead>
                 <tr className="border-b border-line bg-[#fafbfa] text-left">
-                  {[
-                    "Periode",
-                    "Leads",
-                    "Deals",
-                    "Conversie",
-                    "Bem. vol",
-                    "Omzet",
-                    "Omzet / deal",
-                    "Projectkosten",
-                    "Sales kosten",
-                    "Ad spend",
-                    "Winst",
-                  ].map((h) => (
+                  {HEADERS.map((h) => (
                     <th
                       key={h}
                       className={[
@@ -386,7 +348,7 @@ export function RapportagePanel({
                 {tree.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={HEADERS.length}
                       className="px-4 py-10 text-center text-sm text-muted"
                     >
                       Nog geen data in deze periode.
@@ -409,9 +371,10 @@ export function RapportagePanel({
         )}
 
         <p className="border-t border-line px-4 py-3 text-[11px] text-muted sm:px-5">
-          Omzet = omzet excl. btw − projectkosten. Winst = omzet excl. btw −
-          projectkosten − ad spend − sales kosten. Projectkosten vul je in op
-          het project.
+          Lead → afspraak = unieke leads met afspraak ÷ leads. Lead → deal =
+          deals ÷ leads. Omzet = omzet excl. btw − projectkosten. Winst = omzet
+          excl. btw − projectkosten − ad spend. Projectkosten vul je in op het
+          project.
         </p>
       </div>
     </div>

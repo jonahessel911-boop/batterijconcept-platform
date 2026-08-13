@@ -16,14 +16,13 @@ const TZ = "Europe/Amsterdam";
 
 export type RapportageMetrics = {
   leads: number;
+  afspraken: number;
   deals: number;
-  conversie: number;
-  bemVol: number;
+  conversieAfspraak: number;
+  conversieDeal: number;
   omzetExBtw: number;
   projectkosten: number;
   omzet: number;
-  omzetPerDeal: number;
-  salesKosten: number;
   adSpend: number;
   winst: number;
 };
@@ -42,14 +41,13 @@ export type RapportageNode = {
 export function emptyMetrics(): RapportageMetrics {
   return {
     leads: 0,
+    afspraken: 0,
     deals: 0,
-    conversie: 0,
-    bemVol: 0,
+    conversieAfspraak: 0,
+    conversieDeal: 0,
     omzetExBtw: 0,
     projectkosten: 0,
     omzet: 0,
-    omzetPerDeal: 0,
-    salesKosten: 0,
     adSpend: 0,
     winst: 0,
   };
@@ -57,18 +55,18 @@ export function emptyMetrics(): RapportageMetrics {
 
 export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
   const omzet = round2(m.omzetExBtw - m.projectkosten);
-  const winst = round2(m.omzetExBtw - m.projectkosten - m.adSpend - m.salesKosten);
+  const winst = round2(m.omzetExBtw - m.projectkosten - m.adSpend);
   return {
     ...m,
     omzetExBtw: round2(m.omzetExBtw),
     projectkosten: round2(m.projectkosten),
     omzet,
-    omzetPerDeal: m.deals > 0 ? round2(omzet / m.deals) : 0,
-    salesKosten: round2(m.salesKosten),
     adSpend: round2(m.adSpend),
     winst,
-    conversie: m.leads > 0 ? Math.round((m.deals / m.leads) * 1000) / 10 : 0,
-    bemVol: round2(m.omzetExBtw),
+    conversieAfspraak:
+      m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
+    conversieDeal:
+      m.leads > 0 ? Math.round((m.deals / m.leads) * 1000) / 10 : 0,
   };
 }
 
@@ -79,14 +77,13 @@ function round2(n: number) {
 function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetrics {
   return {
     leads: a.leads + b.leads,
+    afspraken: a.afspraken + b.afspraken,
     deals: a.deals + b.deals,
-    conversie: 0,
-    bemVol: 0,
+    conversieAfspraak: 0,
+    conversieDeal: 0,
     omzetExBtw: a.omzetExBtw + b.omzetExBtw,
     projectkosten: a.projectkosten + b.projectkosten,
     omzet: 0,
-    omzetPerDeal: 0,
-    salesKosten: a.salesKosten + b.salesKosten,
     adSpend: a.adSpend + b.adSpend,
     winst: 0,
   };
@@ -103,6 +100,13 @@ function inRange(iso: string, start: Date, end: Date) {
 
 export type RapportageRaw = {
   leads: { id: string; created_at: string; status: string; adviseur_id: string | null }[];
+  afspraken: {
+    id: string;
+    lead_id: string;
+    adviseur_id: string | null;
+    start_at: string;
+    status: string;
+  }[];
   offertes: {
     id: string;
     lead_id: string;
@@ -135,6 +139,11 @@ export function buildRapportageTree(
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
     : raw.leads;
+  const afspraken = (
+    adviseurId
+      ? raw.afspraken.filter((a) => a.adviseur_id === adviseurId)
+      : raw.afspraken
+  ).filter((a) => a.status !== "geannuleerd");
   const offertes = adviseurId
     ? raw.offertes.filter((o) => o.adviseur_id === adviseurId)
     : raw.offertes;
@@ -156,6 +165,10 @@ export function buildRapportageTree(
     const y = Number(formatInTimeZone(l.created_at, TZ, "yyyy"));
     years.set(y, new Date(Date.UTC(y, 0, 1)));
   }
+  for (const a of afspraken) {
+    const y = Number(formatInTimeZone(a.start_at, TZ, "yyyy"));
+    years.set(y, new Date(Date.UTC(y, 0, 1)));
+  }
   for (const o of signed) {
     const y = Number(formatInTimeZone(o.ondertekend_op!, TZ, "yyyy"));
     years.set(y, new Date(Date.UTC(y, 0, 1)));
@@ -164,7 +177,6 @@ export function buildRapportageTree(
     const y = Number(k.datum.slice(0, 4));
     years.set(y, new Date(Date.UTC(y, 0, 1)));
   }
-  // Altijd huidig jaar tonen
   years.set(now.getFullYear(), new Date(Date.UTC(now.getFullYear(), 0, 1)));
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
@@ -174,13 +186,19 @@ export function buildRapportageTree(
     for (const l of leads) {
       if (inRange(l.created_at, start, end)) m.leads += 1;
     }
+    // Unieke leads met een afspraak in deze periode
+    const afspraakLeads = new Set<string>();
+    for (const a of afspraken) {
+      if (!inRange(a.start_at, start, end)) continue;
+      afspraakLeads.add(a.lead_id);
+    }
+    m.afspraken = afspraakLeads.size;
     for (const o of signed) {
       if (!inRange(o.ondertekend_op!, start, end)) continue;
       m.deals += 1;
       m.omzetExBtw += Number(o.subtotaal_ex_btw) || 0;
     }
     for (const p of projecten) {
-      // projectkosten tellen mee in de periode van de gekoppelde deal/offerte of project created
       const signedOff = signed.find((o) => o.id === p.offerte_id);
       const when = signedOff?.ondertekend_op || p.created_at;
       if (!inRange(when, start, end)) continue;
@@ -190,7 +208,6 @@ export function buildRapportageTree(
       const iso = `${k.datum}T12:00:00+02:00`;
       if (!inRange(iso, start, end)) continue;
       if (k.soort === "ad_spend") m.adSpend += Number(k.bedrag) || 0;
-      if (k.soort === "sales") m.salesKosten += Number(k.bedrag) || 0;
     }
     return finalizeMetrics(m);
   }
@@ -204,7 +221,6 @@ export function buildRapportageTree(
       const mStart = startOfMonth(new Date(year, month, 1));
       const mEnd = endOfMonth(mStart);
       if (mStart > now && year === now.getFullYear()) break;
-      if (mEnd < new Date(year, 0, 1)) continue;
 
       const weeks: RapportageNode[] = [];
       let cursor = startOfWeek(mStart, { weekStartsOn: 1 });
@@ -232,7 +248,7 @@ export function buildRapportageTree(
             }
             d = new Date(d.getTime() + 86400000);
           }
-          days.reverse(); // recentste dag eerst
+          days.reverse();
           const weekNum = getISOWeek(cursor);
           const weekLabel = `W${weekNum} · ${formatInTimeZone(wStart, TZ, "d MMM", { locale: nl })} – ${formatInTimeZone(wEnd, TZ, "d MMM", { locale: nl })}`;
           weeks.push({
@@ -241,8 +257,7 @@ export function buildRapportageTree(
             label: weekLabel,
             start: wStart.toISOString(),
             end: endOfDay(wEnd).toISOString(),
-            isCurrent:
-              now >= wStart && now <= endOfDay(wEnd),
+            isCurrent: now >= wStart && now <= endOfDay(wEnd),
             metrics: metricsFor(wStart, endOfDay(wEnd)),
             children: days,
           });
@@ -250,29 +265,17 @@ export function buildRapportageTree(
         cursor = new Date(cursor.getTime() + 7 * 86400000);
       }
 
-      const monthMetrics = weeks.reduce(
-        (acc, w) => addMetrics(acc, w.metrics),
-        emptyMetrics()
-      );
       months.push({
         key: `month-${year}-${String(month + 1).padStart(2, "0")}`,
         level: "month",
         label: `${year}-${String(month + 1).padStart(2, "0")}`,
         start: mStart.toISOString(),
         end: mEnd.toISOString(),
-        isCurrent:
-          now.getFullYear() === year && now.getMonth() === month,
-        metrics: finalizeMetrics(monthMetrics),
+        isCurrent: now.getFullYear() === year && now.getMonth() === month,
+        metrics: metricsFor(mStart, mEnd),
         children: weeks,
       });
     }
-
-    months.reverse(); // recentste maand eerst within display - actually keep chrono ascending for expand, or reverse for recent first like screenshot
-    // Screenshot shows 2026 then expanding to months - years desc, months can be ascending with current near end or descending
-    const yearMetrics = months.reduce(
-      (acc, m) => addMetrics(acc, m.metrics),
-      emptyMetrics()
-    );
 
     return {
       key: `year-${year}`,
@@ -281,7 +284,7 @@ export function buildRapportageTree(
       start: yStart.toISOString(),
       end: yEnd.toISOString(),
       isCurrent: now.getFullYear() === year,
-      metrics: finalizeMetrics(yearMetrics),
+      metrics: metricsFor(yStart, yEnd),
       children: months,
     };
   });

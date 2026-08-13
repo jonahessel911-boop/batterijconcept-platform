@@ -12,23 +12,25 @@ export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
-    const [leadsRes, offertesRes, projectenRes, kostenRes] = await Promise.all([
-      sb
-        .from("leads")
-        .select("id, created_at, status, adviseur_id"),
-      sb
-        .from("offertes")
-        .select(
-          "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, leads(adviseur_id)"
-        )
-        .eq("status", "ondertekend"),
-      sb
-        .from("projecten")
-        .select(
-          "id, lead_id, offerte_id, created_at, projectkosten, leads(adviseur_id)"
-        ),
-      sb.from("rapportage_kosten").select("datum, soort, bedrag, adviseur_id"),
-    ]);
+    const [leadsRes, afsprakenRes, offertesRes, projectenRes, kostenRes] =
+      await Promise.all([
+        sb.from("leads").select("id, created_at, status, adviseur_id"),
+        sb
+          .from("afspraken")
+          .select("id, lead_id, adviseur_id, start_at, status"),
+        sb
+          .from("offertes")
+          .select(
+            "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, leads(adviseur_id)"
+          )
+          .eq("status", "ondertekend"),
+        sb
+          .from("projecten")
+          .select(
+            "id, lead_id, offerte_id, created_at, projectkosten, leads(adviseur_id)"
+          ),
+        sb.from("rapportage_kosten").select("datum, soort, bedrag, adviseur_id"),
+      ]);
 
     // Soft-fail als migraties nog niet gedraaid zijn
     const kosten =
@@ -89,11 +91,13 @@ export async function GET(req: NextRequest) {
     });
 
     if (leadsRes.error) throw leadsRes.error;
+    if (afsprakenRes.error) throw afsprakenRes.error;
     if (offertesRes.error) throw offertesRes.error;
 
     const tree = buildRapportageTree(
       {
         leads: leadsRes.data || [],
+        afspraken: afsprakenRes.data || [],
         offertes,
         projecten: projectenSafe,
         kosten: kosten as {
