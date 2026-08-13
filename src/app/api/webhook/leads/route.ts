@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { getAdminAdviseurId } from "@/lib/admin-adviseur";
 import type { WebhookLeadPayload } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -52,6 +53,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const adminId = await getAdminAdviseurId(supabase);
+
     const row = {
       lead_number: leadNumber as string,
       naam: body.naam.trim(),
@@ -71,20 +74,41 @@ export async function POST(req: NextRequest) {
       notities: pickStr(body.notities),
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
+      // Standaard bij Admin tot iemand anders overneemt
+      ...(adminId ? { adviseur_id: adminId } : {}),
       // created_at / updated_at: database default now()
       raw_payload: body,
     };
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("leads")
       .insert(row)
       .select("id, lead_number, created_at, naam, email, straat, plaats, utm_source")
       .single();
 
-    if (error) {
+    // Fallback als adviseur_id-kolom nog niet gemigreerd is
+    if (
+      error &&
+      adminId &&
+      (error.message?.includes("adviseur_id") || error.code === "42703")
+    ) {
+      const { adviseur_id: _drop, ...withoutAdv } = row as typeof row & {
+        adviseur_id?: string;
+      };
+      void _drop;
+      ({ data, error } = await supabase
+        .from("leads")
+        .insert(withoutAdv)
+        .select(
+          "id, lead_number, created_at, naam, email, straat, plaats, utm_source"
+        )
+        .single());
+    }
+
+    if (error || !data) {
       console.error(error);
       return NextResponse.json(
-        { error: "Lead opslaan mislukt", detail: error.message },
+        { error: "Lead opslaan mislukt", detail: error?.message },
         { status: 500 }
       );
     }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { getAdminAdviseurId } from "@/lib/admin-adviseur";
 import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -50,12 +51,15 @@ export async function POST(req: NextRequest) {
       prioriteit: "normaal" as const,
     };
 
+    const adviseurId =
+      body.adviseur_id || (await getAdminAdviseurId(sb)) || null;
+
     // Probeer met adviseur_id; val terug als kolom nog niet gemigreerd is
     let insert = await sb
       .from("leads")
       .insert({
         ...base,
-        ...(body.adviseur_id ? { adviseur_id: body.adviseur_id } : {}),
+        ...(adviseurId ? { adviseur_id: adviseurId } : {}),
       })
       .select("*")
       .single();

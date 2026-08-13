@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
@@ -12,6 +12,7 @@ import type {
   Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { findAdminAdviseurId } from "@/lib/admin-adviseur";
 import { errMessage } from "@/lib/errors";
 import { CrmHeader } from "./CrmHeader";
 import { TabNav } from "./TabNav";
@@ -32,7 +33,7 @@ const VALID_TABS: CrmTab[] = [
   "instellingen",
 ];
 
-const ADVISEUR_FILTER_KEY = "bc_adviseur_filter";
+const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v2";
 
 function parseTab(value: string | null): CrmTab {
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -65,6 +66,7 @@ export function CrmShell() {
     naam: string;
     email: string;
   } | null>(null);
+  const orphanBackfillDone = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,8 +77,6 @@ export function CrmShell() {
         const data = await res.json();
         if (!cancelled && data.adviseur) {
           setSessionUser(data.adviseur);
-          // Standaard eigen portfolio tonen
-          setAdviseurFilter((prev) => prev || data.adviseur.id);
         }
       } catch {
         /* ignore */
@@ -86,6 +86,63 @@ export function CrmShell() {
       cancelled = true;
     };
   }, []);
+
+  // Standaard "Bekijk als" = Admin (niet eigen portfolio)
+  useEffect(() => {
+    if (adviseurs.length === 0) return;
+    const adminId = findAdminAdviseurId(adviseurs);
+    if (!adminId) return;
+    setAdviseurFilter((prev) => {
+      if (prev) return prev;
+      try {
+        localStorage.setItem(ADVISEUR_FILTER_KEY, adminId);
+      } catch {
+        /* ignore */
+      }
+      return adminId;
+    });
+  }, [adviseurs]);
+
+  // Ongkoppelde leads eenmalig → Admin
+  useEffect(() => {
+    if (orphanBackfillDone.current) return;
+    if (adviseurs.length === 0 || leads.length === 0) return;
+    const adminId = findAdminAdviseurId(adviseurs);
+    if (!adminId) return;
+    const orphanIds = leads.filter((l) => !l.adviseur_id).map((l) => l.id);
+    if (orphanIds.length === 0) {
+      orphanBackfillDone.current = true;
+      return;
+    }
+
+    orphanBackfillDone.current = true;
+    const admin = adviseurs.find((a) => a.id === adminId);
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.adviseur_id
+          ? l
+          : {
+              ...l,
+              adviseur_id: adminId,
+              adviseurs: admin
+                ? { id: admin.id, naam: admin.naam }
+                : l.adviseurs,
+            }
+      )
+    );
+
+    void (async () => {
+      try {
+        const sb = getSupabaseBrowser();
+        await sb
+          .from("leads")
+          .update({ adviseur_id: adminId })
+          .in("id", orphanIds);
+      } catch {
+        orphanBackfillDone.current = false;
+      }
+    })();
+  }, [adviseurs, leads]);
 
   function changeAdviseurFilter(id: string) {
     setAdviseurFilter(id);
@@ -168,8 +225,15 @@ export function CrmShell() {
 
   const scopedLeads = useMemo(() => {
     if (!adviseurFilter) return leads;
+    const adminId = findAdminAdviseurId(adviseurs);
+    // Admin-view: ook nog niet gekoppelde leads (tot backfill klaar is)
+    if (adminId && adviseurFilter === adminId) {
+      return leads.filter(
+        (l) => l.adviseur_id === adviseurFilter || !l.adviseur_id
+      );
+    }
     return leads.filter((l) => l.adviseur_id === adviseurFilter);
-  }, [leads, adviseurFilter]);
+  }, [leads, adviseurFilter, adviseurs]);
 
   const scopedLeadIds = useMemo(
     () => new Set(scopedLeads.map((l) => l.id)),
