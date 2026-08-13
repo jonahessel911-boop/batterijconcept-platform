@@ -135,8 +135,8 @@ export async function POST(req: NextRequest) {
 
     await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
 
-    const origin = req.nextUrl.origin;
-    const signUrl = `${origin}/offerte/${offerte.sign_token}`;
+    const { appBaseUrl } = await import("@/lib/email/postmark");
+    const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;
 
     try {
       const { data: lead } = await sb
