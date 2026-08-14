@@ -57,17 +57,21 @@ export async function sendEmail(opts: {
   }
 }
 
+const PRODUCTION_APP_URL = "https://platform.batterijconcept.nl";
+
 export function appBaseUrl(): string {
   const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
-  if (fromEnv) return fromEnv;
-
-  // Productie: altijd het echte domein (niet *.vercel.app)
-  if (
+  const isProd =
     process.env.VERCEL_ENV === "production" ||
-    process.env.NODE_ENV === "production"
-  ) {
-    return "https://platform.batterijconcept.nl";
+    process.env.NODE_ENV === "production";
+
+  // Productie-mails: nooit *.vercel.app — altijd het echte domein
+  if (isProd) {
+    if (fromEnv && !/\.vercel\.app$/i.test(fromEnv)) return fromEnv;
+    return PRODUCTION_APP_URL;
   }
+
+  if (fromEnv) return fromEnv;
 
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL.replace(/^https?:\/\//, "")}`;
