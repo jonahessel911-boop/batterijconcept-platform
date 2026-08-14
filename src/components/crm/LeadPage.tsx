@@ -36,6 +36,8 @@ export function LeadPage() {
   const [notFound, setNotFound] = useState(false);
   const [maakOfferteOpen, setMaakOfferteOpen] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [notitiesDraft, setNotitiesDraft] = useState("");
+  const [savingNotities, setSavingNotities] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,6 +114,7 @@ export function LeadPage() {
             ? { id: linked.id, naam: linked.naam }
             : null,
         });
+        setNotitiesDraft(leadData.notities || "");
         setOffertes((o.data as Offerte[]) || []);
         setProjecten((p.data as Project[]) || []);
         setFacturen((f.data as Factuur[]) || []);
@@ -171,6 +174,27 @@ export function LeadPage() {
       if (error) throw error;
     } catch {
       setLead({ ...lead, adviseur_id: prevId, adviseurs: prevJoin });
+    }
+  }
+
+  async function saveNotities() {
+    if (!lead) return;
+    const next = notitiesDraft.trim() || null;
+    if ((lead.notities || null) === next) return;
+    setSavingNotities(true);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error } = await sb
+        .from("leads")
+        .update({ notities: next })
+        .eq("id", lead.id);
+      if (error) throw error;
+      setLead({ ...lead, notities: next });
+      setOkMsg("Notitie opgeslagen.");
+    } catch {
+      setOkMsg(null);
+    } finally {
+      setSavingNotities(false);
     }
   }
 
@@ -271,26 +295,47 @@ export function LeadPage() {
           />
         </div>
 
-        {(lead.utm_medium || lead.utm_campaign || lead.notities) && (
-          <div className="mt-5 grid gap-3 border-t border-line pt-5 sm:grid-cols-3">
+        {(lead.utm_medium || lead.utm_campaign) && (
+          <div className="mt-5 grid gap-3 border-t border-line pt-5 sm:grid-cols-2">
             {lead.utm_medium && (
               <InfoTile label="utm_medium" value={lead.utm_medium} />
             )}
             {lead.utm_campaign && (
               <InfoTile label="utm_campaign" value={lead.utm_campaign} />
             )}
-            {lead.notities && (
-              <div className="border border-line bg-wash px-4 py-3 sm:col-span-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  Notities
-                </p>
-                <p className="mt-1 text-sm leading-relaxed text-ink">
-                  {lead.notities}
-                </p>
-              </div>
-            )}
           </div>
         )}
+
+        <div className="mt-5 border-t border-line pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Notities
+            </p>
+            <p className="text-[11px] text-muted">
+              Zichtbaar bij afspraken in de agenda
+            </p>
+          </div>
+          <textarea
+            value={notitiesDraft}
+            onChange={(e) => setNotitiesDraft(e.target.value)}
+            rows={4}
+            placeholder="Bijv. zonnepanelen aanwezig, bel vooraf, sleutel bij buren…"
+            className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void saveNotities()}
+              disabled={
+                savingNotities ||
+                (lead.notities || "") === (notitiesDraft.trim() || "")
+              }
+              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+            >
+              {savingNotities ? "Opslaan…" : "Notitie opslaan"}
+            </button>
+          </div>
+        </div>
       </HeroCard>
 
       {okMsg && (

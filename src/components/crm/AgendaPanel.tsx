@@ -85,6 +85,19 @@ export function AgendaPanel({
     [afspraken, defaultAdviseurId]
   );
 
+  const selectedLead = useMemo(
+    () => leads.find((l) => l.id === leadId) || null,
+    [leads, leadId]
+  );
+
+  // Bij kiezen lead: toon lead-notities in het formulier (niet overschrijven als al getypt)
+  useEffect(() => {
+    if (!selectedLead) return;
+    if (selectedLead.notities?.trim()) {
+      setNotities((prev) => prev || selectedLead.notities || "");
+    }
+  }, [selectedLead]);
+
   async function plan(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -132,7 +145,10 @@ export function AgendaPanel({
             <select
               required
               value={leadId}
-              onChange={(e) => setLeadId(e.target.value)}
+              onChange={(e) => {
+                setLeadId(e.target.value);
+                setNotities("");
+              }}
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
             >
               <option value="">Kies lead…</option>
@@ -143,6 +159,17 @@ export function AgendaPanel({
               ))}
             </select>
           </label>
+
+          {selectedLead?.notities?.trim() && (
+            <div className="border border-line bg-wash px-3 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Lead-notitie
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                {selectedLead.notities}
+              </p>
+            </div>
+          )}
 
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
             Adviseur
@@ -226,7 +253,10 @@ export function AgendaPanel({
         ) : (
           <>
             <div className="crm-card-list flex md:hidden">
-              {upcoming.map((a) => (
+              {upcoming.map((a) => {
+                const note =
+                  a.notities?.trim() || a.leads?.notities?.trim() || "";
+                return (
                 <article key={a.id} className="crm-card">
                   <p className="font-medium text-ink">
                     {formatDateTimeLongNl(a.start_at)}
@@ -235,6 +265,11 @@ export function AgendaPanel({
                   <p className="font-mono text-[11px] text-muted">
                     {a.leads?.lead_number}
                   </p>
+                  {note && (
+                    <p className="mt-2 text-sm leading-relaxed text-ink">
+                      {note}
+                    </p>
+                  )}
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="text-sm text-muted">
                       {a.adviseurs?.naam || "—"}
@@ -242,7 +277,8 @@ export function AgendaPanel({
                     <StatusBadge kind="afspraak" value={a.status} />
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
             <div className="hidden md:block">
               <table className="crm-table">
@@ -250,12 +286,16 @@ export function AgendaPanel({
                   <tr>
                     <th>Wanneer</th>
                     <th>Lead</th>
+                    <th>Notitie</th>
                     <th>Adviseur</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {upcoming.map((a) => (
+                  {upcoming.map((a) => {
+                    const note =
+                      a.notities?.trim() || a.leads?.notities?.trim() || "";
+                    return (
                     <tr key={a.id} className="cursor-default">
                       <td className="whitespace-nowrap font-medium">
                         {formatDateTimeLongNl(a.start_at)}
@@ -266,6 +306,13 @@ export function AgendaPanel({
                           {a.leads?.lead_number}
                         </div>
                       </td>
+                      <td className="max-w-[220px]">
+                        {note ? (
+                          <p className="line-clamp-2 text-sm text-ink">{note}</p>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap">
                         {a.adviseurs?.naam || "—"}
                       </td>
@@ -273,7 +320,8 @@ export function AgendaPanel({
                         <StatusBadge kind="afspraak" value={a.status} />
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

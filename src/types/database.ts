@@ -69,7 +69,10 @@ export interface Afspraak {
   opwarm_verstuurd?: boolean;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "email" | "telefoon" | "lead_number"> | null;
+  leads?: Pick<
+    Lead,
+    "naam" | "email" | "telefoon" | "lead_number" | "notities"
+  > | null;
   adviseurs?: Pick<Adviseur, "naam" | "email"> | null;
 }
 

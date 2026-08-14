@@ -17,7 +17,7 @@ export async function GET() {
     const { data, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number, notities), adviseurs(naam, email)"
       )
       .order("start_at", { ascending: true });
     if (error) throw error;
