@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getAdminAdviseurId } from "@/lib/admin-adviseur";
+import { enrichAddressFields } from "@/lib/postcode";
 import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -13,6 +14,8 @@ export async function POST(req: NextRequest) {
     telefoon?: string;
     postcode?: string;
     huisnummer?: string;
+    straat?: string;
+    plaats?: string;
     adviseur_id?: string | null;
   };
   try {
@@ -39,13 +42,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const postcode = body.postcode?.trim() || null;
+    const huisnummer = body.huisnummer?.trim() || null;
+    const enriched = await enrichAddressFields({
+      postcode,
+      huisnummer,
+      straat: body.straat?.trim() || null,
+      plaats: body.plaats?.trim() || null,
+    });
+
     const base = {
       lead_number: leadNumber as string,
       naam,
       email: body.email?.trim() || null,
       telefoon: body.telefoon?.trim() || null,
-      postcode: body.postcode?.trim() || null,
-      huisnummer: body.huisnummer?.trim() || null,
+      postcode,
+      huisnummer,
+      straat: enriched.straat,
+      plaats: enriched.plaats,
       bron: "crm",
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
@@ -54,7 +68,6 @@ export async function POST(req: NextRequest) {
     const adviseurId =
       body.adviseur_id || (await getAdminAdviseurId(sb)) || null;
 
-    // Probeer met adviseur_id; val terug als kolom nog niet gemigreerd is
     let insert = await sb
       .from("leads")
       .insert({

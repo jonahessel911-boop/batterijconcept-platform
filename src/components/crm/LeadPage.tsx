@@ -74,9 +74,38 @@ export function LeadPage() {
       if (l.error || !l.data) {
         setNotFound(true);
       } else {
-        const leadData = l.data as Lead;
+        let leadData = l.data as Lead;
         const advList = (advRes.adviseurs as Adviseur[]) || [];
         const linked = advList.find((a) => a.id === leadData.adviseur_id);
+
+        // Adres leeg + postcode/huisnr bekend → vul straat/plaats via API en sla op
+        if (
+          (!leadData.straat?.trim() || !leadData.plaats?.trim()) &&
+          leadData.postcode?.trim() &&
+          leadData.huisnummer?.trim()
+        ) {
+          try {
+            const qs = new URLSearchParams({
+              postcode: leadData.postcode,
+              number: leadData.huisnummer,
+            });
+            const pcRes = await fetch(`/api/postcode?${qs}`);
+            if (pcRes.ok) {
+              const pc = await pcRes.json();
+              const patch: Partial<Lead> = {};
+              if (!leadData.straat?.trim() && pc.straat) patch.straat = pc.straat;
+              if (!leadData.plaats?.trim() && pc.plaats) patch.plaats = pc.plaats;
+              if (Object.keys(patch).length > 0) {
+                const sb = getSupabaseBrowser();
+                await sb.from("leads").update(patch).eq("id", leadData.id);
+                leadData = { ...leadData, ...patch };
+              }
+            }
+          } catch {
+            /* non-blocking */
+          }
+        }
+
         setLead({
           ...leadData,
           adviseurs: linked

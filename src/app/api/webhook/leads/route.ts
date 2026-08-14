@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { getAdminAdviseurId } from "@/lib/admin-adviseur";
+import { enrichAddressFields } from "@/lib/postcode";
 import type { WebhookLeadPayload } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -55,16 +56,33 @@ export async function POST(req: NextRequest) {
 
     const adminId = await getAdminAdviseurId(supabase);
 
+    const postcode = pickStr(body.postcode);
+    const huisnummer = pickStr(body.huisnummer);
+    let straat = pickStr(body.adres, body.straat);
+    let plaats = pickStr(body.woonplaats, body.plaats);
+
+    // Als adres leeg is: vul straat/plaats via postcode-API
+    if ((!straat || !plaats) && postcode && huisnummer) {
+      const filled = await enrichAddressFields({
+        postcode,
+        huisnummer,
+        straat,
+        plaats,
+      });
+      straat = filled.straat;
+      plaats = filled.plaats;
+    }
+
     const row = {
       lead_number: leadNumber as string,
       naam: body.naam.trim(),
       email: pickStr(body.email),
       telefoon: pickStr(body.telefoon),
-      postcode: pickStr(body.postcode),
-      huisnummer: pickStr(body.huisnummer),
+      postcode,
+      huisnummer,
       toevoeging: pickStr(body.toevoeging),
-      straat: pickStr(body.adres, body.straat),
-      plaats: pickStr(body.woonplaats, body.plaats),
+      straat,
+      plaats,
       utm_source: pickStr(body.utm_source),
       utm_medium: pickStr(body.utm_medium),
       utm_campaign: pickStr(body.utm_campaign),

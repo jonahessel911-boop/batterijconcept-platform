@@ -19,6 +19,9 @@ export function LeadToevoegenModal({
   const [telefoon, setTelefoon] = useState("");
   const [postcode, setPostcode] = useState("");
   const [huisnummer, setHuisnummer] = useState("");
+  const [straat, setStraat] = useState("");
+  const [plaats, setPlaats] = useState("");
+  const [lookupBusy, setLookupBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +33,32 @@ export function LeadToevoegenModal({
     setTelefoon("");
     setPostcode("");
     setHuisnummer("");
+    setStraat("");
+    setPlaats("");
     setError(null);
+  }
+
+  async function lookupAdres(pc = postcode, nr = huisnummer) {
+    if (!pc.trim() || !nr.trim()) return;
+    // Alleen ophalen als adres nog leeg is
+    if (straat.trim() && plaats.trim()) return;
+
+    setLookupBusy(true);
+    try {
+      const qs = new URLSearchParams({
+        postcode: pc.trim(),
+        number: nr.trim(),
+      });
+      const res = await fetch(`/api/postcode?${qs}`);
+      const data = await res.json();
+      if (!res.ok) return;
+      if (!straat.trim() && data.straat) setStraat(data.straat);
+      if (!plaats.trim() && data.plaats) setPlaats(data.plaats);
+    } catch {
+      /* stil — opslaan mag nog zonder lookup */
+    } finally {
+      setLookupBusy(false);
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -38,6 +66,11 @@ export function LeadToevoegenModal({
     setSaving(true);
     setError(null);
     try {
+      // Laatste poging als adres nog leeg is
+      if ((!straat.trim() || !plaats.trim()) && postcode && huisnummer) {
+        await lookupAdres();
+      }
+
       const res = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -47,6 +80,8 @@ export function LeadToevoegenModal({
           telefoon,
           postcode,
           huisnummer,
+          straat: straat.trim() || undefined,
+          plaats: plaats.trim() || undefined,
           adviseur_id: defaultAdviseurId || null,
         }),
       });
@@ -82,7 +117,8 @@ export function LeadToevoegenModal({
               Lead toevoegen
             </h2>
             <p className="mt-0.5 text-xs text-muted">
-              Vul de basisgegevens in. Je kunt later meer toevoegen.
+              Vul postcode + huisnummer in — straat en plaats worden automatisch
+              aangevuld.
             </p>
           </div>
           <button
@@ -131,6 +167,7 @@ export function LeadToevoegenModal({
               <input
                 value={postcode}
                 onChange={(e) => setPostcode(e.target.value.toUpperCase())}
+                onBlur={() => void lookupAdres()}
                 placeholder="1234 AB"
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
@@ -140,6 +177,27 @@ export function LeadToevoegenModal({
               <input
                 value={huisnummer}
                 onChange={(e) => setHuisnummer(e.target.value)}
+                onBlur={() => void lookupAdres()}
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-[1fr_1fr] gap-3">
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Straat
+              <input
+                value={straat}
+                onChange={(e) => setStraat(e.target.value)}
+                placeholder={lookupBusy ? "Zoeken…" : "Automatisch"}
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Plaats
+              <input
+                value={plaats}
+                onChange={(e) => setPlaats(e.target.value)}
+                placeholder={lookupBusy ? "Zoeken…" : "Automatisch"}
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
             </label>
