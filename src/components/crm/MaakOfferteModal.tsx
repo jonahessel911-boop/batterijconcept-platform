@@ -38,6 +38,9 @@ export function MaakOfferteModal({
   const [producten, setProducten] = useState<Product[]>([]);
   const [productId, setProductId] = useState("");
   const [aantal, setAantal] = useState(1);
+  const [customOmschrijving, setCustomOmschrijving] = useState("");
+  const [customAantal, setCustomAantal] = useState(1);
+  const [customPrijs, setCustomPrijs] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [korting, setKorting] = useState("");
   const [useKorting, setUseKorting] = useState(false);
@@ -110,6 +113,34 @@ export function MaakOfferteModal({
     setAantal(1);
   }
 
+  function addCustomLine() {
+    const omschrijving = customOmschrijving.trim();
+    const prijs = Number(customPrijs.replace(",", "."));
+    if (!omschrijving) {
+      setError("Vul een omschrijving in voor de eigen regel.");
+      return;
+    }
+    if (Number.isNaN(prijs)) {
+      setError("Vul een geldige prijs excl. btw in.");
+      return;
+    }
+    setError(null);
+    setLines((prev) => [
+      ...prev,
+      {
+        key: `custom-${Date.now()}`,
+        product_id: null,
+        omschrijving,
+        aantal: Math.max(1, customAantal),
+        prijs_ex_btw: Math.round(prijs * 100) / 100,
+        btw_percentage: 21,
+      },
+    ]);
+    setCustomOmschrijving("");
+    setCustomAantal(1);
+    setCustomPrijs("");
+  }
+
   function removeLine(key: string) {
     setLines((prev) => prev.filter((l) => l.key !== key));
   }
@@ -117,7 +148,7 @@ export function MaakOfferteModal({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (lines.length === 0) {
-      setError("Voeg minstens één product toe.");
+      setError("Voeg minstens één regel toe (product of eigen regel).");
       return;
     }
     setSaving(true);
@@ -148,6 +179,9 @@ export function MaakOfferteModal({
       setUseKorting(false);
       setKorting("");
       setFinanciering(false);
+      setCustomOmschrijving("");
+      setCustomAantal(1);
+      setCustomPrijs("");
       onCreated(data.sign_url);
       onClose();
     } catch (err) {
@@ -194,41 +228,103 @@ export function MaakOfferteModal({
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <div className="space-y-4 overflow-y-auto p-5">
-            <div className="grid gap-2 sm:grid-cols-[1fr_80px_auto]">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted sm:col-span-1">
-                Product
-                <select
-                  value={productId}
-                  onChange={(e) => setProductId(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                >
-                  <option value="">Kies product…</option>
-                  {producten.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.naam} — {formatEuro(p.prijs_ex_btw)} excl. btw
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                Aantal
-                <input
-                  type="number"
-                  min={1}
-                  value={aantal}
-                  onChange={(e) => setAantal(Number(e.target.value) || 1)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                />
-              </label>
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={addProduct}
-                  disabled={!productId}
-                  className="w-full border border-green bg-green-soft px-3 py-2 text-sm font-semibold text-green-dark disabled:opacity-50"
-                >
-                  Toevoegen
-                </button>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Product uit catalogus
+              </p>
+              <div className="mt-1 grid gap-2 sm:grid-cols-[1fr_80px_auto]">
+                <label className="block text-xs font-medium text-muted sm:col-span-1">
+                  Product
+                  <select
+                    value={productId}
+                    onChange={(e) => setProductId(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                  >
+                    <option value="">Kies product…</option>
+                    {producten.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.naam} — {formatEuro(p.prijs_ex_btw)} excl. btw
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-xs font-medium text-muted">
+                  Aantal
+                  <input
+                    type="number"
+                    min={1}
+                    value={aantal}
+                    onChange={(e) => setAantal(Number(e.target.value) || 1)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={addProduct}
+                    disabled={!productId}
+                    className="w-full border border-green bg-green-soft px-3 py-2 text-sm font-semibold text-green-dark disabled:opacity-50"
+                  >
+                    Toevoegen
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="border border-line bg-wash/60 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Eigen regel
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Vrije regel die ook op de offerte bij de klant verschijnt (PDF +
+                ondertekenpagina).
+              </p>
+              <div className="mt-2 space-y-2">
+                <label className="block text-xs font-medium text-muted">
+                  Omschrijving
+                  <input
+                    type="text"
+                    value={customOmschrijving}
+                    onChange={(e) => setCustomOmschrijving(e.target.value)}
+                    placeholder="Bijv. Extra kabelwerk / montagebeugel"
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                  />
+                </label>
+                <div className="grid gap-2 sm:grid-cols-[80px_1fr_auto]">
+                  <label className="block text-xs font-medium text-muted">
+                    Aantal
+                    <input
+                      type="number"
+                      min={1}
+                      value={customAantal}
+                      onChange={(e) =>
+                        setCustomAantal(Number(e.target.value) || 1)
+                      }
+                      className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-muted">
+                    Prijs excl. btw (€)
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={customPrijs}
+                      onChange={(e) => setCustomPrijs(e.target.value)}
+                      placeholder="Bijv. 125,00"
+                      className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      onClick={addCustomLine}
+                      disabled={!customOmschrijving.trim() || customPrijs === ""}
+                      className="w-full border border-green bg-white px-3 py-2 text-sm font-semibold text-green-dark hover:bg-green-soft disabled:opacity-50"
+                    >
+                      Regel toevoegen
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -240,7 +336,14 @@ export function MaakOfferteModal({
                     className="flex items-start justify-between gap-3 px-3 py-2.5 text-sm"
                   >
                     <div className="min-w-0">
-                      <p className="font-medium text-ink">{l.omschrijving}</p>
+                      <p className="font-medium text-ink">
+                        {l.omschrijving}
+                        {!l.product_id && (
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                            Eigen
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-muted">
                         {l.aantal} × {formatEuro(l.prijs_ex_btw)} excl. →{" "}
                         {formatEuro(lineIncBtw(l))} incl.
