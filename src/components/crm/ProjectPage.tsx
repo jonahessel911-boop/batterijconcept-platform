@@ -198,7 +198,7 @@ export function ProjectPage() {
             value={project.status}
             disabled={statusSaving}
             onChange={(e) => updateStatus(e.target.value as ProjectStatus)}
-            className={`cursor-pointer border bg-white px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide outline-none focus:border-green disabled:opacity-60 ${statusTone("project", project.status)}`}
+            className={`cursor-pointer border bg-white px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green disabled:opacity-60 ${statusTone("project", project.status)}`}
             aria-label="Projectstatus"
           >
             {PROJECT_STATUSES.map((s) => (

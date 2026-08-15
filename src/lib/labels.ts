@@ -104,6 +104,7 @@ export function statusTone(
       "betaald",
       "bevestigd",
       "voltooid",
+      "afspraak",
     ].includes(value)
   ) {
     return success;
@@ -123,7 +124,6 @@ export function statusTone(
   if (
     [
       "nieuw",
-      "afspraak",
       "verzonden",
       "schouw_inplannen",
       "btw_factuur_eruit",

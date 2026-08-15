@@ -32,7 +32,7 @@ export function StatusBadge({
 
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(kind, value)}`}
+      className={`inline-flex items-center px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${statusTone(kind, value)}`}
     >
       {label}
     </span>

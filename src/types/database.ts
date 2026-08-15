@@ -226,7 +226,12 @@ export interface WebhookLeadPayload {
   utm_content?: string;
   utm_term?: string;
   bron?: string;
+  /** Vrije tekst / formuliervelden — aliases: `notes`, `opmerkingen`, `bericht`, `message` */
   notities?: string;
+  notes?: string;
+  opmerkingen?: string;
+  bericht?: string;
+  message?: string;
 }
 
 export const BEDRIJFSWAARDEN = [

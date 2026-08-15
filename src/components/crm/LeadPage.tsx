@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Adviseur, Factuur, Lead, LeadStatus, Offerte, Project } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
@@ -244,6 +245,12 @@ export function LeadPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={`/advies/${lead.id}`}
+              className="bg-green px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white hover:bg-green-dark sm:text-xs sm:normal-case sm:tracking-normal"
+            >
+              Start adviesproces
+            </Link>
             <button
               type="button"
               onClick={() => {
@@ -272,7 +279,7 @@ export function LeadPage() {
             <select
               value={lead.status}
               onChange={(e) => updateStatus(e.target.value as LeadStatus)}
-              className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+              className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
               aria-label="Lead status"
             >
               {LEAD_STATUSES.map((s) => (

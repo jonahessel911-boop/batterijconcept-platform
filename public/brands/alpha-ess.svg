@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" fill="none">
+  <rect width="200" height="48" rx="4" fill="#0B3D2E"/>
+  <text x="16" y="31" fill="#FFFFFF" font-family="Arial,sans-serif" font-size="18" font-weight="700">Alpha ESS</text>
+  <circle cx="178" cy="24" r="10" fill="#1A8A3E"/>
+  <path d="M174 24h8M178 20v8" stroke="#fff" stroke-width="2"/>
+</svg>

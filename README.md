@@ -52,6 +52,7 @@ Body:
   "huisnummer": "12",
   "adres": "Voorbeeldstraat",
   "woonplaats": "Amsterdam",
+  "notities": "Heeft zonnepanelen, wil 10 kWh batterij",
   "utm_source": "google"
 }
 ```
@@ -60,7 +61,7 @@ Het systeem zet automatisch:
 - `lead_number` (bijv. `BC-20260813-A1B2`)
 - `created_at` (aanmaakdatum)
 
-Aliases: `straat` = `adres`, `plaats` = `woonplaats`.
+Aliases: `straat` = `adres`, `plaats` = `woonplaats`, `notities` = `notes` / `opmerkingen` / `bericht` / `message`.
 
 Response `201`:
 
@@ -86,6 +87,7 @@ curl -X POST https://batterijconcept-platform.vercel.app/api/webhook/leads \
     "huisnummer":"12",
     "adres":"Voorbeeldstraat",
     "woonplaats":"Amsterdam",
+    "notities":"Heeft zonnepanelen, wil 10 kWh batterij",
     "utm_source":"google"
   }'
 ```

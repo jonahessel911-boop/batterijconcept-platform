@@ -27,22 +27,22 @@
   --color-charcoal: var(--charcoal);
   --color-white: var(--white);
   --color-line: var(--line);
-  --font-display: var(--font-outfit);
-  --font-body: var(--font-dm-sans);
+  --font-display: var(--font-poppins);
+  --font-body: var(--font-poppins);
 }
 
 body {
   background: var(--wash);
   color: var(--ink);
-  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-family: var(--font-poppins), system-ui, sans-serif;
 }
 
 .font-display {
-  font-family: var(--font-outfit), system-ui, sans-serif;
+  font-family: var(--font-poppins), system-ui, sans-serif;
 }
 
 .font-body {
-  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-family: var(--font-poppins), system-ui, sans-serif;
 }
 
 .crm-bg {
@@ -162,4 +162,105 @@ body {
   .pdf-page {
     padding: 2.5rem;
   }
+}
+
+/* Adviesproces */
+.advies-grid {
+  background-image:
+    linear-gradient(rgba(61, 214, 140, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61, 214, 140, 0.07) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@keyframes advies-dash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.advies-dash {
+  animation: advies-dash 1.2s linear infinite;
+}
+
+.advies-dash-slow {
+  animation: advies-dash 2.4s linear infinite;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scanLine {
+  0% {
+    top: -20%;
+  }
+  100% {
+    top: 100%;
+  }
+}
+
+@keyframes woning-scan-beam {
+  0% {
+    top: -15%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    top: 95%;
+    opacity: 0;
+  }
+}
+
+.woning-scan-beam {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(157, 255, 196, 0.55),
+    transparent
+  );
+  box-shadow: 0 0 28px 8px rgba(61, 214, 140, 0.35);
+  animation: woning-scan-beam 2.4s ease-in-out infinite;
+}
+
+.woning-scan-outline {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: woning-draw 2.8s ease forwards;
+}
+
+@keyframes woning-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.woning-scan-fill {
+  animation: fadeIn 0.6s ease 1.8s forwards;
+}
+
+.woning-scan-window {
+  opacity: 0;
+  animation: fadeIn 0.45s ease forwards;
+}
+
+/* Google Places autocomplete dropdown boven dark UI */
+.pac-container {
+  z-index: 10000 !important;
+  border-radius: 12px;
+  border: 1px solid #e2e8e4;
+  margin-top: 4px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  font-family: var(--font-poppins), system-ui, sans-serif;
 }

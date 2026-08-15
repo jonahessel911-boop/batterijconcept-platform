@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 48" fill="none">
+  <rect width="220" height="48" rx="4" fill="#E8F6EC"/>
+  <rect x="1" y="1" width="218" height="46" rx="3" stroke="#1A8A3E" stroke-width="2"/>
+  <circle cx="28" cy="24" r="12" fill="#1A8A3E"/>
+  <path d="M22 24l4 4 8-8" stroke="#fff" stroke-width="2" fill="none"/>
+  <text x="48" y="30" fill="#0D5C32" font-family="Arial,sans-serif" font-size="16" font-weight="700">Warmtefonds</text>
+</svg>

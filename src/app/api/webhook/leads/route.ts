@@ -25,7 +25,8 @@ function pickStr(...values: (string | undefined | null)[]) {
  *
  * Body (JSON):
  *   naam* , email, telefoon, postcode, huisnummer,
- *   adres|straat, woonplaats|plaats, utm_source, …
+ *   adres|straat, woonplaats|plaats, notities|notes|opmerkingen|bericht,
+ *   utm_source, …
  */
 export async function POST(req: NextRequest) {
   let body: WebhookLeadPayload;
@@ -89,7 +90,13 @@ export async function POST(req: NextRequest) {
       utm_content: pickStr(body.utm_content),
       utm_term: pickStr(body.utm_term),
       bron: pickStr(body.bron) || "website",
-      notities: pickStr(body.notities),
+      notities: pickStr(
+        body.notities,
+        body.notes,
+        body.opmerkingen,
+        body.bericht,
+        body.message
+      ),
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
       // Standaard bij Admin tot iemand anders overneemt
@@ -177,6 +184,7 @@ export async function GET() {
       huisnummer: "12",
       adres: "Voorbeeldstraat",
       woonplaats: "Amsterdam",
+      notities: "Heeft zonnepanelen, wil 10 kWh batterij",
       utm_source: "google",
     },
     response: {
