@@ -176,7 +176,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** PATCH /api/adviseurs — bijwerken / deactiveren / opnieuw uitnodigen */
+/** PATCH /api/adviseurs — bijwerken / deactiveren / opnieuw uitnodigen / wachtwoord */
 export async function PATCH(req: NextRequest) {
   let body: {
     id?: string;
@@ -185,6 +185,7 @@ export async function PATCH(req: NextRequest) {
     telefoon?: string | null;
     actief?: boolean;
     resend_invite?: boolean;
+    password?: string;
   };
   try {
     body = await req.json();
@@ -251,6 +252,37 @@ export async function PATCH(req: NextRequest) {
         mail_sent: sent.ok,
         mail_error: sent.error,
       });
+    }
+
+    if (typeof body.password === "string") {
+      const password = body.password.trim();
+      if (password.length < 8) {
+        return NextResponse.json(
+          { error: "Wachtwoord moet minstens 8 tekens zijn" },
+          { status: 400 }
+        );
+      }
+
+      const { data, error } = await sb
+        .from("adviseurs")
+        .update({ password_hash: hashPassword(password) })
+        .eq("id", body.id)
+        .select(ADVISEUR_PUBLIC)
+        .single();
+
+      if (error || !data) {
+        return NextResponse.json(
+          {
+            error:
+              error?.message?.includes("password_hash")
+                ? "Voer migrate-adviseur-password.sql uit in Supabase"
+                : error?.message || "Wachtwoord bijwerken mislukt",
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({ adviseur: data, password_updated: true });
     }
 
     const patch: Record<string, unknown> = {};

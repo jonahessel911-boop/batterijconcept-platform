@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Adviseur } from "@/types/database";
 
 export function InstellingenPanel({
@@ -17,6 +17,11 @@ export function InstellingenPanel({
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
   const [telefoon, setTelefoon] = useState("");
+
+  const [passwordForId, setPasswordForId] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,6 +42,49 @@ export function InstellingenPanel({
     const id = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(id);
   }, [load]);
+
+  function openPasswordForm(id: string) {
+    setPasswordForId(id);
+    setNewPassword("");
+    setConfirmPassword("");
+    setError(null);
+    setOkMsg(null);
+  }
+
+  function closePasswordForm() {
+    setPasswordForId(null);
+    setNewPassword("");
+    setConfirmPassword("");
+  }
+
+  async function savePassword(a: Adviseur) {
+    setError(null);
+    setOkMsg(null);
+    if (newPassword.trim().length < 8) {
+      setError("Wachtwoord moet minstens 8 tekens zijn");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Wachtwoorden komen niet overeen");
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      const res = await fetch("/api/adviseurs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: a.id, password: newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Wachtwoord bijwerken mislukt");
+      setOkMsg(`Wachtwoord van ${a.naam} is gewijzigd.`);
+      closePasswordForm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
 
   async function addPerson(e: React.FormEvent) {
     e.preventDefault();
@@ -123,6 +171,50 @@ export function InstellingenPanel({
     }
   }
 
+  function PasswordForm({ a }: { a: Adviseur }) {
+    if (passwordForId !== a.id) return null;
+    return (
+      <div className="mt-2 space-y-2 border border-line bg-wash px-3 py-3">
+        <p className="text-xs font-semibold text-ink">
+          Nieuw wachtwoord voor {a.naam}
+        </p>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="Min. 8 tekens"
+          className="w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+        />
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="Bevestig wachtwoord"
+          className="w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+        />
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={passwordSaving}
+            onClick={() => void savePassword(a)}
+            className="min-h-10 bg-green px-3 py-2 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+          >
+            {passwordSaving ? "Bezig…" : "Opslaan"}
+          </button>
+          <button
+            type="button"
+            onClick={closePasswordForm}
+            className="min-h-10 border border-line bg-white px-3 py-2 text-xs font-medium text-muted hover:bg-wash"
+          >
+            Annuleren
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-0 lg:grid-cols-[340px_1fr]">
       <aside className="border-b border-line p-5 lg:border-b-0 lg:border-r">
@@ -188,6 +280,20 @@ export function InstellingenPanel({
       </aside>
 
       <div className="min-w-0">
+        {(error || okMsg) && (
+          <div className="space-y-2 border-b border-line px-5 py-3 md:hidden">
+            {error && (
+              <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+                {error}
+              </p>
+            )}
+            {okMsg && (
+              <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+                {okMsg}
+              </p>
+            )}
+          </div>
+        )}
         {loading ? (
           <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
         ) : adviseurs.length === 0 ? (
@@ -238,7 +344,18 @@ export function InstellingenPanel({
                     >
                       {a.actief ? "Actief" : "Uit"}
                     </span>
-                    <div className="flex gap-3">
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          passwordForId === a.id
+                            ? closePasswordForm()
+                            : openPasswordForm(a.id)
+                        }
+                        className="min-h-10 text-sm font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        Wijzig wachtwoord
+                      </button>
                       {a.email && (
                         <button
                           type="button"
@@ -257,6 +374,7 @@ export function InstellingenPanel({
                       </button>
                     </div>
                   </div>
+                  <PasswordForm a={a} />
                 </article>
               ))}
             </div>
@@ -274,70 +392,17 @@ export function InstellingenPanel({
                 </thead>
                 <tbody>
                   {adviseurs.map((a) => (
-                    <tr key={a.id} className="cursor-default">
-                      <td>
-                        <input
-                          defaultValue={a.naam}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim();
-                            if (v && v !== a.naam) void saveRow(a, { naam: v });
-                          }}
-                          className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium text-ink outline-none hover:border-line focus:border-green"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          defaultValue={a.email || ""}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim() || null;
-                            if (v !== a.email) void saveRow(a, { email: v });
-                          }}
-                          className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          defaultValue={a.telefoon || ""}
-                          onBlur={(e) => {
-                            const v = e.target.value.trim() || null;
-                            if (v !== a.telefoon)
-                              void saveRow(a, { telefoon: v });
-                          }}
-                          className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
-                        />
-                      </td>
-                      <td>
-                        <span
-                          className={
-                            a.actief
-                              ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                              : "text-[11px] font-semibold uppercase tracking-wide text-muted"
-                          }
-                        >
-                          {a.actief ? "Actief" : "Uit"}
-                        </span>
-                      </td>
-                      <td className="whitespace-nowrap">
-                        <div className="flex flex-col items-start gap-1">
-                          {a.email && (
-                            <button
-                              type="button"
-                              onClick={() => void resendInvite(a)}
-                              className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
-                            >
-                              Stuur loginmail
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => void toggleActief(a)}
-                            className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
-                          >
-                            {a.actief ? "Deactiveren" : "Activeren"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <PasswordRow
+                      key={a.id}
+                      a={a}
+                      passwordForId={passwordForId}
+                      openPasswordForm={openPasswordForm}
+                      closePasswordForm={closePasswordForm}
+                      saveRow={saveRow}
+                      resendInvite={resendInvite}
+                      toggleActief={toggleActief}
+                      passwordForm={<PasswordForm a={a} />}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -346,5 +411,111 @@ export function InstellingenPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function PasswordRow({
+  a,
+  passwordForId,
+  openPasswordForm,
+  closePasswordForm,
+  saveRow,
+  resendInvite,
+  toggleActief,
+  passwordForm,
+}: {
+  a: Adviseur;
+  passwordForId: string | null;
+  openPasswordForm: (id: string) => void;
+  closePasswordForm: () => void;
+  saveRow: (a: Adviseur, patch: Partial<Adviseur>) => Promise<void>;
+  resendInvite: (a: Adviseur) => Promise<void>;
+  toggleActief: (a: Adviseur) => Promise<void>;
+  passwordForm: ReactNode;
+}) {
+  return (
+    <>
+      <tr className="cursor-default">
+        <td>
+          <input
+            defaultValue={a.naam}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v && v !== a.naam) void saveRow(a, { naam: v });
+            }}
+            className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium text-ink outline-none hover:border-line focus:border-green"
+          />
+        </td>
+        <td>
+          <input
+            defaultValue={a.email || ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== a.email) void saveRow(a, { email: v });
+            }}
+            className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
+          />
+        </td>
+        <td>
+          <input
+            defaultValue={a.telefoon || ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== a.telefoon) void saveRow(a, { telefoon: v });
+            }}
+            className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
+          />
+        </td>
+        <td>
+          <span
+            className={
+              a.actief
+                ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
+                : "text-[11px] font-semibold uppercase tracking-wide text-muted"
+            }
+          >
+            {a.actief ? "Actief" : "Uit"}
+          </span>
+        </td>
+        <td className="whitespace-nowrap">
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              onClick={() =>
+                passwordForId === a.id
+                  ? closePasswordForm()
+                  : openPasswordForm(a.id)
+              }
+              className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+            >
+              Wijzig wachtwoord
+            </button>
+            {a.email && (
+              <button
+                type="button"
+                onClick={() => void resendInvite(a)}
+                className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+              >
+                Stuur loginmail
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void toggleActief(a)}
+              className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+            >
+              {a.actief ? "Deactiveren" : "Activeren"}
+            </button>
+          </div>
+        </td>
+      </tr>
+      {passwordForId === a.id && (
+        <tr className="cursor-default">
+          <td colSpan={5} className="!bg-wash">
+            {passwordForm}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
