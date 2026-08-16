@@ -37,6 +37,8 @@ create table if not exists public.afspraken (
   herinnering_verstuurd boolean not null default false,
   bevestiging_verstuurd boolean not null default false,
   opwarm_verstuurd      boolean not null default false,
+  partner_aanwezig      boolean,
+  andere_offertes_gehad boolean,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   constraint afspraken_tijd_check check (end_at > start_at)

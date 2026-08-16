@@ -381,13 +381,11 @@ export function MapZoom({
           <button
             type="button"
             onClick={startHouseScan}
-            disabled={houseScan === "scanning"}
             className={[
               "rounded-full px-4 py-2 text-xs font-bold uppercase tracking-wide text-white transition",
               houseScan === "done"
                 ? "bg-green-dark hover:bg-green"
                 : "bg-green hover:bg-green-dark",
-              "disabled:opacity-60",
             ].join(" ")}
           >
             {houseScan === "done" ? "Opnieuw scannen" : "Scan woning"}

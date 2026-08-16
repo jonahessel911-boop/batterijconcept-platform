@@ -33,7 +33,11 @@ export interface AdviesAnswers {
   teruglevering: number | null;
   terugleveringIsProcent: boolean;
   prijsPerKwh: number | null;
+  /** Hoe terugleverkosten worden ingevuld */
+  terugleverkostenModus: "per_kwh" | "totaal";
   terugleverkostenPerKwh: number | null;
+  /** Jaarlijks totaalbedrag terugleverkosten (modus totaal) */
+  terugleverkostenTotaalJaar: number | null;
   financieringen: FinancieringOptie[];
   termijnbedragHuidig: number | null;
   looptijdMaanden: number;
@@ -48,7 +52,9 @@ export const INITIAL_ANSWERS: AdviesAnswers = {
   teruglevering: null,
   terugleveringIsProcent: false,
   prijsPerKwh: null,
+  terugleverkostenModus: "per_kwh",
   terugleverkostenPerKwh: null,
+  terugleverkostenTotaalJaar: null,
   financieringen: [],
   termijnbedragHuidig: null,
   looptijdMaanden: 15,

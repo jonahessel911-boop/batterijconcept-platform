@@ -122,8 +122,8 @@ export function AfspraakManagePage() {
         <p className="mt-2 text-sm text-ink">
           Je nieuwe afspraak staat op{" "}
           <strong>{formatDateTimeLongNl(afspraak.start_at)}</strong>. Je
-          ontvangt een bevestiging per e-mail, daarna een info-mail over
-          saldering, en een herinnering 24 uur van tevoren.
+          ontvangt een bevestiging per e-mail, 2 dagen van tevoren een
+          uitleg over saldering, en een herinnering 24 uur van tevoren.
         </p>
       </Shell>
     );

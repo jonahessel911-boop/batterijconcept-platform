@@ -258,7 +258,7 @@ ${brandHeader("Thuisbatterij-advies")}
   });
 }
 
-/** 02 — Opwarm saldering (halverwege tussen bevestiging en reminder) */
+/** 02 — Opwarm saldering (~2 dagen voor de afspraak) */
 export function afspraakOpwarmSalderingEmail(v: AfspraakMailVars): string {
   const body = `
 ${brandHeader("Voor je afspraak")}
@@ -536,7 +536,6 @@ ${brandHeader("⏰ Reminder", ORANGE)}
 
 /** Timing helpers for the sequence */
 const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
 
 export function shouldSendBevestigingNow(opts: {
   now: Date;
@@ -545,13 +544,15 @@ export function shouldSendBevestigingNow(opts: {
   alreadySent: boolean;
 }): boolean {
   if (opts.alreadySent) return false;
-  const msUntilStart = opts.startAt.getTime() - opts.now.getTime();
-  // Korte termijn: direct (geen dag wachten)
-  if (msUntilStart <= 36 * HOUR) return true;
-  // Dag na inplannen: ≥ 20 uur na created_at
-  return opts.now.getTime() - opts.createdAt.getTime() >= 20 * HOUR;
+  // Bevestiging gaat direct bij inplannen; cron vangt mislukte/gemiste mails op
+  return true;
 }
 
+/**
+ * Saldering-uitleg ~2 dagen (48u) voor de afspraak.
+ * Cron draait uurlijks: stuur in het venster 25u–49u voor start
+ * (incl. inhaal als de exacte 48u-run gemist is, vóór de 24u-reminder).
+ */
 export function shouldSendOpwarmNow(opts: {
   now: Date;
   createdAt: Date;
@@ -560,25 +561,14 @@ export function shouldSendOpwarmNow(opts: {
   alreadySent: boolean;
 }): boolean {
   if (opts.alreadySent || !opts.bevestigingSent) return false;
-  const confirmAt = new Date(opts.createdAt.getTime() + DAY);
-  const remindAt = new Date(opts.startAt.getTime() - DAY);
-  // Te weinig ruimte tussen bevestiging en reminder → skip
-  if (remindAt.getTime() - confirmAt.getTime() < 12 * HOUR) return false;
-  const opwarmAt = new Date(
-    (confirmAt.getTime() + remindAt.getTime()) / 2
-  );
-  // Cron uurlijks: ±1 uur rond midpoint, en nog vóór de reminder-window
-  const delta = Math.abs(opts.now.getTime() - opwarmAt.getTime());
-  if (delta > 75 * 60 * 1000) {
-    // Ook inhalen als we het midpoint gemist hebben maar nog ruim vóór reminder zitten
-    if (opts.now < opwarmAt) return false;
-    if (opts.now.getTime() >= remindAt.getTime() - HOUR) return false;
-    // Inhaal: stuur zodra we voorbij midpoint zijn (tot 1u voor reminder-window)
-    return true;
-  }
-  return opts.now.getTime() < remindAt.getTime() - HOUR;
+  const msUntil = opts.startAt.getTime() - opts.now.getTime();
+  // Te vroeg (> ~2 dagen) of te dicht op reminder/afspraak
+  if (msUntil > 49 * HOUR) return false;
+  if (msUntil <= 25 * HOUR) return false;
+  return true;
 }
 
+/** Reminder ~24 uur voor de afspraak */
 export function shouldSendReminderNow(opts: {
   now: Date;
   startAt: Date;

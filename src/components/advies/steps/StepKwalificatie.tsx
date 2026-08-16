@@ -84,7 +84,13 @@ export function StepKwalificatie({
       case "prijs_kwh":
         return (answers.prijsPerKwh ?? 0) > 0;
       case "terugleverkosten":
-        return answers.terugleverkostenPerKwh !== null;
+        if (answers.terugleverkostenModus === "totaal") {
+          return answers.terugleverkostenTotaalJaar !== null;
+        }
+        return (
+          answers.terugleverkostenPerKwh !== null &&
+          answers.teruglevering !== null
+        );
       case "kosten":
         return showKosten;
       default:
@@ -256,21 +262,96 @@ export function StepKwalificatie({
             )}
 
             {current.id === "terugleverkosten" && (
-              <div className="flex max-w-xs items-center gap-2">
-                <input
-                  type="number"
-                  step={0.01}
-                  value={answers.terugleverkostenPerKwh ?? ""}
-                  onChange={(e) =>
-                    onChange({
-                      terugleverkostenPerKwh: Number(e.target.value),
-                    })
-                  }
-                  placeholder="Bijv. 0,11"
-                  className={fieldInput}
-                  autoFocus
-                />
-                <span className="text-xs text-muted">€ / kWh</span>
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { id: "per_kwh" as const, label: "Per kWh" },
+                      { id: "totaal" as const, label: "Totaal bedrag" },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() =>
+                        onChange({ terugleverkostenModus: opt.id })
+                      }
+                      className={[
+                        btnChoice,
+                        answers.terugleverkostenModus === opt.id
+                          ? btnChoiceOn
+                          : btnChoiceOff,
+                      ].join(" ")}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {answers.terugleverkostenModus === "totaal" ? (
+                  <div className="flex max-w-xs items-center gap-2">
+                    <input
+                      type="number"
+                      step={1}
+                      min={0}
+                      value={answers.terugleverkostenTotaalJaar ?? ""}
+                      onChange={(e) =>
+                        onChange({
+                          terugleverkostenTotaalJaar: Number(e.target.value),
+                        })
+                      }
+                      placeholder="Bijv. 250"
+                      className={fieldInput}
+                      autoFocus
+                    />
+                    <span className="text-xs text-muted">€ / jaar</span>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex max-w-xs items-center gap-2">
+                      <input
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        value={answers.terugleverkostenPerKwh ?? ""}
+                        onChange={(e) =>
+                          onChange({
+                            terugleverkostenPerKwh: Number(e.target.value),
+                          })
+                        }
+                        placeholder="Bijv. 0,11"
+                        className={fieldInput}
+                        autoFocus
+                      />
+                      <span className="text-xs text-muted">€ / kWh</span>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium text-muted">
+                        Aantal kWh teruggeleverd (per jaar)
+                      </p>
+                      <div className="flex max-w-xs items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          value={
+                            answers.terugleveringIsProcent
+                              ? ""
+                              : (answers.teruglevering ?? "")
+                          }
+                          onChange={(e) =>
+                            onChange({
+                              teruglevering: Number(e.target.value),
+                              terugleveringIsProcent: false,
+                            })
+                          }
+                          placeholder="Bijv. 2000"
+                          className={fieldInput}
+                        />
+                        <span className="text-xs text-muted">kWh / jaar</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

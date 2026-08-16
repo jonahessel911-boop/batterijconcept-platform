@@ -26,8 +26,8 @@ type LeadRow = {
 /**
  * GET /api/cron/afspraak-herinneringen
  * Mailsequentie:
- * 1. Bevestiging — dag na inplannen (of direct bij korte termijn)
- * 2. Opwarm saldering — midpoint tussen bevestiging en 24u-reminder
+ * 1. Bevestiging — direct bij inplannen (cron vangt gemiste mails op)
+ * 2. Opwarm saldering — ~2 dagen (48u) voor de afspraak
  * 3. Reminder — ~24 uur voor de afspraak
  */
 export async function GET(req: Request) {

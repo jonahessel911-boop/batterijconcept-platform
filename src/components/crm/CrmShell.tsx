@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
+  Afspraak,
   CrmTab,
   Factuur,
   Lead,
@@ -24,6 +25,7 @@ import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
+import { LEAD_STATUSES } from "@/lib/labels";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
@@ -42,11 +44,20 @@ function parseTab(value: string | null): CrmTab {
   return "leads";
 }
 
+function parseLeadStatus(value: string | null): LeadStatus | "" {
+  if (value && LEAD_STATUSES.includes(value as LeadStatus)) {
+    return value as LeadStatus;
+  }
+  return "";
+}
+
 export function CrmShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tab = parseTab(searchParams.get("tab"));
+  const statusFilter = parseLeadStatus(searchParams.get("status"));
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [projecten, setProjecten] = useState<Project[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -148,6 +159,16 @@ export function CrmShell() {
     router.replace(qs ? `/?${qs}` : "/", { scroll: false });
   }
 
+  function changeStatusFilter(next: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!next) params.delete("status");
+    else params.set("status", next);
+    // Filter hoort bij leads-tab
+    params.delete("tab");
+    const qs = params.toString();
+    router.replace(qs ? `/?${qs}` : "/", { scroll: false });
+  }
+
   const loadAdviseurs = useCallback(async () => {
     try {
       const res = await fetch("/api/adviseurs");
@@ -168,8 +189,12 @@ export function CrmShell() {
     setError(null);
     try {
       const sb = getSupabaseBrowser();
-      const [l, o, p, f] = await Promise.all([
+      const [l, a, o, p, f] = await Promise.all([
         sb.from("leads").select("*").order("created_at", { ascending: false }),
+        sb
+          .from("afspraken")
+          .select("id, start_at, status, adviseur_id, lead_id")
+          .order("start_at", { ascending: true }),
         sb
           .from("offertes")
           .select(
@@ -187,10 +212,11 @@ export function CrmShell() {
       ]);
 
       // Toon de echte PostgREST-fout i.p.v. generieke melding
-      const firstErr = l.error || o.error || p.error || f.error;
+      const firstErr = l.error || a.error || o.error || p.error || f.error;
       if (firstErr) throw firstErr;
 
       setLeads((l.data as Lead[]) || []);
+      setAfspraken((a.data as Afspraak[]) || []);
       setOffertes((o.data as Offerte[]) || []);
       setProjecten((p.data as Project[]) || []);
       setFacturen((f.data as Factuur[]) || []);
@@ -227,9 +253,13 @@ export function CrmShell() {
   );
 
   const filteredLeads = useMemo(() => {
+    let list = scopedLeads;
+    if (statusFilter) {
+      list = list.filter((l) => l.status === statusFilter);
+    }
     const q = search.trim().toLowerCase();
-    if (!q) return scopedLeads;
-    return scopedLeads.filter(
+    if (!q) return list;
+    return list.filter(
       (l) =>
         l.naam.toLowerCase().includes(q) ||
         l.lead_number.toLowerCase().includes(q) ||
@@ -237,7 +267,7 @@ export function CrmShell() {
         l.utm_source?.toLowerCase().includes(q) ||
         l.postcode?.toLowerCase().includes(q)
     );
-  }, [scopedLeads, search]);
+  }, [scopedLeads, search, statusFilter]);
 
   const scopedOffertes = useMemo(() => {
     if (!adviseurFilter) return offertes;
@@ -254,9 +284,20 @@ export function CrmShell() {
     return facturen.filter((f) => scopedLeadIds.has(f.lead_id));
   }, [facturen, adviseurFilter, scopedLeadIds]);
 
+  const upcomingAfsprakenCount = useMemo(() => {
+    const now = Date.now();
+    return afspraken.filter((a) => {
+      if (adviseurFilter && a.adviseur_id !== adviseurFilter) return false;
+      if (a.status === "geannuleerd") {
+        return new Date(a.start_at).getTime() >= now;
+      }
+      return new Date(a.start_at).getTime() >= now;
+    }).length;
+  }, [afspraken, adviseurFilter]);
+
   const counts = {
     leads: scopedLeads.length,
-    agenda: 0,
+    agenda: upcomingAfsprakenCount,
     offertes: scopedOffertes.length,
     projecten: scopedProjecten.length,
     facturen: scopedFacturen.length,
@@ -433,6 +474,8 @@ export function CrmShell() {
                   <LeadsTable
                     leads={filteredLeads}
                     adviseurs={adviseurs}
+                    statusFilter={statusFilter}
+                    onStatusFilterChange={changeStatusFilter}
                     onStatusChange={updateLeadStatus}
                     onAdviseurChange={updateLeadAdviseur}
                   />

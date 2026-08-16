@@ -154,7 +154,9 @@ export function AdviesFlow() {
       (answers.jaarverbruikKwh ?? 0) > 0 &&
       answers.teruglevering !== null &&
       (answers.prijsPerKwh ?? 0) > 0 &&
-      answers.terugleverkostenPerKwh !== null;
+      (answers.terugleverkostenModus === "totaal"
+        ? answers.terugleverkostenTotaalJaar !== null
+        : answers.terugleverkostenPerKwh !== null);
     nextLabel = "Naar saldering";
   } else if (step === "financiering") {
     canNext = answers.financieringen.length > 0;

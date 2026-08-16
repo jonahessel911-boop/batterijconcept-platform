@@ -29,19 +29,33 @@ export function calcTerugleverKwh(a: AdviesAnswers): number {
 export function berekenKosten(a: AdviesAnswers): KostenBerekening {
   const verbruik = a.jaarverbruikKwh ?? 0;
   const prijs = a.prijsPerKwh ?? 0.28;
-  const terugFee = a.terugleverkostenPerKwh ?? 0.11;
   const terugKwh = calcTerugleverKwh(a);
+
+  const modus = a.terugleverkostenModus ?? "per_kwh";
+  let terugFee = a.terugleverkostenPerKwh ?? 0.11;
+  let terugKostenJaar = terugKwh * terugFee;
+
+  if (modus === "totaal") {
+    terugKostenJaar = Math.max(0, a.terugleverkostenTotaalJaar ?? 0);
+    terugFee = terugKwh > 0 ? terugKostenJaar / terugKwh : 0;
+  } else {
+    terugFee = a.terugleverkostenPerKwh ?? 0.11;
+    terugKostenJaar = terugKwh * terugFee;
+  }
 
   // Met saldering: afname na saldering + milde terugleverkosten
   const nettoAfnameNu = Math.max(0, verbruik - terugKwh);
   const huidigeKostenJaar =
-    nettoAfnameNu * prijs + terugKwh * Math.min(terugFee, 0.02);
+    nettoAfnameNu * prijs +
+    (modus === "totaal"
+      ? terugKostenJaar * 0.15
+      : terugKwh * Math.min(terugFee, 0.02));
   const huidigeKostenMaand = huidigeKostenJaar / 12;
 
   // Zonder saldering 2027: volledige afname + terugleverkosten, teruglever ~€0,05
   const terugWaarde2027 = 0.05;
   const kosten2027Jaar =
-    verbruik * prijs + terugKwh * terugFee - terugKwh * terugWaarde2027;
+    verbruik * prijs + terugKostenJaar - terugKwh * terugWaarde2027;
   const kosten2027Maand = kosten2027Jaar / 12;
 
   const verschilMaand = kosten2027Maand - huidigeKostenMaand;
@@ -50,7 +64,7 @@ export function berekenKosten(a: AdviesAnswers): KostenBerekening {
   const nuttigKwh = terugKwh * 0.7;
   const besparingZelf = (nuttigKwh * prijs) / 12;
   const handelWinst = (nuttigKwh * 0.08) / 12; // EMS spread
-  const terugFeeBesparing = (terugKwh * terugFee * 0.85) / 12;
+  const terugFeeBesparing = (terugKostenJaar * 0.85) / 12;
   const verdienenMetBatterijMaand = besparingZelf + handelWinst + terugFeeBesparing;
   const nieuweSituatieMaand = Math.max(
     0,

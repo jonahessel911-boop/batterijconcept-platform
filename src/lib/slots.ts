@@ -11,14 +11,16 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 
 const SLOT_MINUTES = 60;
 
-/** Vaste tijdslots per adviseur per dag (Europe/Amsterdam) */
-export const ADVISEUR_SLOT_HOURS = [10, 12, 14, 16, 18, 20] as const;
+/** Vaste tijdslots per adviseur per dag (Europe/Amsterdam), elk uur */
+export const ADVISEUR_SLOT_HOURS = [
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+] as const;
 
 export type BusySlot = { start_at: string; end_at: string };
 
 /**
  * Genereert beschikbare slots (Europe/Amsterdam) voor de komende dagen:
- * 10:00, 12:00, 14:00, 16:00, 18:00, 20:00 — exclusief bezette afspraken.
+ * 10:00 t/m 20:00 elk uur — exclusief bezette afspraken.
  */
 export function generateAvailableSlots(opts: {
   daysAhead?: number;

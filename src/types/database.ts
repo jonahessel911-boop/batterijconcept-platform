@@ -63,6 +63,8 @@ export interface Afspraak {
   status: AfspraakStatus;
   titel: string | null;
   notities: string | null;
+  partner_aanwezig: boolean | null;
+  andere_offertes_gehad: boolean | null;
   manage_token: string | null;
   herinnering_verstuurd: boolean;
   bevestiging_verstuurd: boolean;
@@ -71,7 +73,16 @@ export interface Afspraak {
   updated_at: string;
   leads?: Pick<
     Lead,
-    "naam" | "email" | "telefoon" | "lead_number" | "notities"
+    | "naam"
+    | "email"
+    | "telefoon"
+    | "lead_number"
+    | "notities"
+    | "postcode"
+    | "huisnummer"
+    | "toevoeging"
+    | "straat"
+    | "plaats"
   > | null;
   adviseurs?: Pick<Adviseur, "naam" | "email"> | null;
 }
