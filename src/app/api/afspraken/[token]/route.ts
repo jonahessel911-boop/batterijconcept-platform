@@ -89,7 +89,7 @@ export async function POST(
     if (body.action === "annuleer") {
       const { error: cancelErr } = await sb
         .from("afspraken")
-        .update({ status: "geannuleerd" })
+        .update({ status: "geannuleerd", herinnering_verstuurd: true })
         .eq("id", afspraak.id);
 
       if (cancelErr) {

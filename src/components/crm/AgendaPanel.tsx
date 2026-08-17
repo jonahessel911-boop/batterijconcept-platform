@@ -218,21 +218,20 @@ function AfspraakDetail({
   afspraak,
   onClose,
   onUpdated,
-  onDeleted,
 }: {
   afspraak: Afspraak;
   onClose: () => void;
   onUpdated: (a: Afspraak) => void;
-  onDeleted: () => void;
 }) {
   const [current, setCurrent] = useState(afspraak);
-  const [mode, setMode] = useState<"view" | "verzet">("view");
+  const [mode, setMode] = useState<"view" | "verzet" | "annuleer">("view");
   const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
     []
   );
   const [newStart, setNewStart] = useState("");
   const [useCustomTime, setUseCustomTime] = useState(false);
   const [customStart, setCustomStart] = useState("");
+  const [mailKlant, setMailKlant] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -259,6 +258,7 @@ function AfspraakDetail({
     setNewStart("");
     setCustomStart("");
     setUseCustomTime(false);
+    setMailKlant(null);
   }, [afspraak]);
 
   useEffect(() => {
@@ -302,6 +302,9 @@ function AfspraakDetail({
         resolvedStart = parsed.toISOString();
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
+      if (mailKlant === null) {
+        throw new Error("Kies of de klant een mail moet krijgen (ja/nee)");
+      }
 
       const res = await fetch("/api/afspraken", {
         method: "PATCH",
@@ -310,6 +313,7 @@ function AfspraakDetail({
           id: current.id,
           action: "verzet",
           start_at: resolvedStart,
+          mail_klant: mailKlant,
         }),
       });
       const data = await res.json();
@@ -318,10 +322,11 @@ function AfspraakDetail({
       setCurrent(next);
       onUpdated(next);
       setMode("view");
+      setMailKlant(null);
       setOkMsg(
         data.mail_sent
           ? "Afspraak verzet — klant heeft een nieuwe bevestiging ontvangen."
-          : "Afspraak verzet."
+          : "Afspraak verzet — geen mail naar de klant."
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
@@ -330,12 +335,9 @@ function AfspraakDetail({
     }
   }
 
-  async function verwijder() {
-    if (
-      !confirm(
-        "Afspraak verwijderen? De klant krijgt een annuleringsmail en de afspraak verdwijnt uit de agenda."
-      )
-    ) {
+  async function annuleer() {
+    if (mailKlant === null) {
+      setError("Kies of de klant een mail moet krijgen (ja/nee)");
       return;
     }
     setBusy(true);
@@ -344,13 +346,30 @@ function AfspraakDetail({
       const res = await fetch("/api/afspraken", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: current.id, action: "verwijder" }),
+        body: JSON.stringify({
+          id: current.id,
+          action: "annuleer",
+          mail_klant: mailKlant,
+        }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
-      onDeleted();
+      if (!res.ok) throw new Error(data.error || "Annuleren mislukt");
+      const next = (data.afspraak as Afspraak) || {
+        ...current,
+        status: "geannuleerd" as const,
+      };
+      setCurrent(next);
+      onUpdated(next);
+      setMode("view");
+      setMailKlant(null);
+      setOkMsg(
+        data.mail_sent
+          ? "Afspraak geannuleerd — klant heeft een mail ontvangen. De herinnering gaat niet meer uit."
+          : "Afspraak geannuleerd — geen mail naar de klant. De herinnering gaat niet meer uit."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
+    } finally {
       setBusy(false);
     }
   }
@@ -527,7 +546,8 @@ function AfspraakDetail({
                 Afspraak verzetten
               </p>
               <p className="mt-1 text-sm text-muted">
-                Kies een nieuw slot. De klant krijgt een nieuwe bevestigingsmail.
+                Kies een nieuw slot. De herinnering van 24 uur schuift mee naar
+                de nieuwe datum.
               </p>
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -568,6 +588,13 @@ function AfspraakDetail({
                   </select>
                 )}
               </div>
+              <div className="mt-4">
+                <JaNeeField
+                  label="Klant mailen over deze wijziging?"
+                  value={mailKlant}
+                  onChange={setMailKlant}
+                />
+              </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -575,15 +602,60 @@ function AfspraakDetail({
                   onClick={() => void verzet()}
                   className="min-h-11 bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
                 >
-                  {busy ? "Bezig…" : "Opslaan & mailen"}
+                  {busy ? "Bezig…" : "Opslaan"}
                 </button>
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => setMode("view")}
+                  onClick={() => {
+                    setMode("view");
+                    setMailKlant(null);
+                    setError(null);
+                  }}
                   className="min-h-11 border border-line px-4 py-2.5 text-sm font-semibold text-muted hover:bg-wash"
                 >
-                  Annuleren
+                  Terug
+                </button>
+              </div>
+            </section>
+          )}
+
+          {!cancelled && mode === "annuleer" && (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Afspraak annuleren
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                De afspraak krijgt status geannuleerd. De herinnering 1 dag van
+                tevoren gaat niet meer uit.
+              </p>
+              <div className="mt-4">
+                <JaNeeField
+                  label="Klant mailen over deze wijziging?"
+                  value={mailKlant}
+                  onChange={setMailKlant}
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void annuleer()}
+                  className="min-h-11 bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-60"
+                >
+                  {busy ? "Bezig…" : "Annuleren"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setMode("view");
+                    setMailKlant(null);
+                    setError(null);
+                  }}
+                  className="min-h-11 border border-line px-4 py-2.5 text-sm font-semibold text-muted hover:bg-wash"
+                >
+                  Terug
                 </button>
               </div>
             </section>
@@ -605,6 +677,7 @@ function AfspraakDetail({
               disabled={busy}
               onClick={() => {
                 setMode((m) => (m === "verzet" ? "view" : "verzet"));
+                setMailKlant(null);
                 setError(null);
                 setOkMsg(null);
               }}
@@ -613,14 +686,21 @@ function AfspraakDetail({
               Verzetten
             </button>
           )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void verwijder()}
-            className="flex min-h-12 flex-1 items-center justify-center border border-[#C45A12]/30 px-4 py-3 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
-          >
-            Verwijderen
-          </button>
+          {!cancelled && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setMode((m) => (m === "annuleer" ? "view" : "annuleer"));
+                setMailKlant(null);
+                setError(null);
+                setOkMsg(null);
+              }}
+              className="flex min-h-12 flex-1 items-center justify-center border border-[#C45A12]/30 px-4 py-3 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
+            >
+              Annuleren
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -1248,11 +1328,6 @@ export function AgendaPanel({
             const planned = new Date(a.start_at);
             setWeekAnchor(planned);
             setSelectedDayKey(dayKeyAmsterdam(planned));
-          }}
-          onDeleted={() => {
-            const id = selectedAfspraak.id;
-            setSelectedAfspraak(null);
-            setAfspraken((prev) => prev.filter((x) => x.id !== id));
           }}
         />
       )}

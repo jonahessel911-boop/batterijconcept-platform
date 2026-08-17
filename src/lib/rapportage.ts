@@ -16,7 +16,14 @@ const TZ = "Europe/Amsterdam";
 
 export type RapportageMetrics = {
   leads: number;
+  /** Unieke leads met een niet-geannuleerde afspraak (voor conversie). */
   afspraken: number;
+  /** Alle afspraken in de periode, inclusief geannuleerd. */
+  brutoAfspraken: number;
+  /** Afspraken die niet geannuleerd zijn. */
+  nettoAfspraken: number;
+  /** Geannuleerd ÷ bruto, in procenten. */
+  uitvalPct: number;
   deals: number;
   conversieAfspraak: number;
   conversieDeal: number;
@@ -42,6 +49,9 @@ export function emptyMetrics(): RapportageMetrics {
   return {
     leads: 0,
     afspraken: 0,
+    brutoAfspraken: 0,
+    nettoAfspraken: 0,
+    uitvalPct: 0,
     deals: 0,
     conversieAfspraak: 0,
     conversieDeal: 0,
@@ -67,6 +77,12 @@ export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
       m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
     conversieDeal:
       m.leads > 0 ? Math.round((m.deals / m.leads) * 1000) / 10 : 0,
+    uitvalPct:
+      m.brutoAfspraken > 0
+        ? Math.round(
+            ((m.brutoAfspraken - m.nettoAfspraken) / m.brutoAfspraken) * 1000
+          ) / 10
+        : 0,
   };
 }
 
@@ -78,6 +94,9 @@ function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetri
   return {
     leads: a.leads + b.leads,
     afspraken: a.afspraken + b.afspraken,
+    brutoAfspraken: a.brutoAfspraken + b.brutoAfspraken,
+    nettoAfspraken: a.nettoAfspraken + b.nettoAfspraken,
+    uitvalPct: 0,
     deals: a.deals + b.deals,
     conversieAfspraak: 0,
     conversieDeal: 0,
@@ -139,11 +158,9 @@ export function buildRapportageTree(
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
     : raw.leads;
-  const afspraken = (
-    adviseurId
-      ? raw.afspraken.filter((a) => a.adviseur_id === adviseurId)
-      : raw.afspraken
-  ).filter((a) => a.status !== "geannuleerd");
+  const afspraken = adviseurId
+    ? raw.afspraken.filter((a) => a.adviseur_id === adviseurId)
+    : raw.afspraken;
   const offertes = adviseurId
     ? raw.offertes.filter((o) => o.adviseur_id === adviseurId)
     : raw.offertes;
@@ -186,11 +203,14 @@ export function buildRapportageTree(
     for (const l of leads) {
       if (inRange(l.created_at, start, end)) m.leads += 1;
     }
-    // Unieke leads met een afspraak in deze periode
     const afspraakLeads = new Set<string>();
     for (const a of afspraken) {
       if (!inRange(a.start_at, start, end)) continue;
-      afspraakLeads.add(a.lead_id);
+      m.brutoAfspraken += 1;
+      if (a.status !== "geannuleerd") {
+        m.nettoAfspraken += 1;
+        afspraakLeads.add(a.lead_id);
+      }
     }
     m.afspraken = afspraakLeads.size;
     for (const o of signed) {

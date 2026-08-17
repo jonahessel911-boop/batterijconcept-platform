@@ -28,19 +28,27 @@ export async function GET() {
   }
 }
 
-/** PATCH — bevestigingsmail / verzetten / verwijderen (admin) */
+/** PATCH — bevestigingsmail / verzetten / annuleren (admin) */
 export async function PATCH(req: NextRequest) {
-  let body: { id?: string; action?: string; start_at?: string };
+  let body: {
+    id?: string;
+    action?: string;
+    start_at?: string;
+    mail_klant?: boolean;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  const actions = ["send_bevestiging", "verzet", "verwijder"];
+  const actions = ["send_bevestiging", "verzet", "verwijder", "annuleer"];
   if (!body.id || !body.action || !actions.includes(body.action)) {
     return NextResponse.json(
-      { error: "id en action (send_bevestiging | verzet | verwijder) zijn verplicht" },
+      {
+        error:
+          "id en action (send_bevestiging | verzet | annuleer) zijn verplicht",
+      },
       { status: 400 }
     );
   }
@@ -69,10 +77,45 @@ export async function PATCH(req: NextRequest) {
       ? afspraak.adviseurs[0]
       : afspraak.adviseurs;
 
-    if (body.action === "verwijder") {
+    if (body.action === "verwijder" || body.action === "annuleer") {
+      if (typeof body.mail_klant !== "boolean") {
+        return NextResponse.json(
+          { error: "Kies of de klant een mail moet krijgen (ja/nee)" },
+          { status: 400 }
+        );
+      }
+      if (afspraak.status === "geannuleerd") {
+        return NextResponse.json(
+          { error: "Deze afspraak is al geannuleerd" },
+          { status: 400 }
+        );
+      }
+
+      const { data: cancelledRow, error: cancelErr } = await sb
+        .from("afspraken")
+        .update({
+          status: "geannuleerd",
+          // Cron stuurt herinnering/opwarm alleen bij actieve status —
+          // extra vlag zodat een eventuele inhaler ook stopt.
+          herinnering_verstuurd: true,
+        })
+        .eq("id", afspraak.id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+        )
+        .single();
+
+      if (cancelErr || !cancelledRow) {
+        return NextResponse.json(
+          { error: "Annuleren mislukt", detail: cancelErr?.message },
+          { status: 500 }
+        );
+      }
+
+      let mailSent = false;
       const email = lead?.email?.trim();
-      if (email && afspraak.status !== "geannuleerd") {
-        await sendEmail({
+      if (body.mail_klant && email) {
+        const sent = await sendEmail({
           to: email,
           subject: "Afspraak geannuleerd — Batterijconcept",
           html: afspraakGeannuleerdKlantEmail({
@@ -81,21 +124,15 @@ export async function PATCH(req: NextRequest) {
           }),
           tag: "afspraak-verwijderd-klant",
         });
+        mailSent = sent.ok;
       }
 
-      const { error: delErr } = await sb
-        .from("afspraken")
-        .delete()
-        .eq("id", afspraak.id);
-
-      if (delErr) {
-        return NextResponse.json(
-          { error: "Verwijderen mislukt", detail: delErr.message },
-          { status: 500 }
-        );
-      }
-
-      return NextResponse.json({ ok: true, deleted: true });
+      return NextResponse.json({
+        ok: true,
+        cancelled: true,
+        mail_sent: mailSent,
+        afspraak: cancelledRow,
+      });
     }
 
     if (afspraak.status === "geannuleerd") {
@@ -106,6 +143,12 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (body.action === "verzet") {
+      if (typeof body.mail_klant !== "boolean") {
+        return NextResponse.json(
+          { error: "Kies of de klant een mail moet krijgen (ja/nee)" },
+          { status: 400 }
+        );
+      }
       if (!body.start_at) {
         return NextResponse.json(
           { error: "start_at is verplicht bij verzetten" },
@@ -175,7 +218,7 @@ export async function PATCH(req: NextRequest) {
 
       const email = lead?.email?.trim();
       let mailSent = false;
-      if (email && updated.manage_token) {
+      if (body.mail_klant && email && updated.manage_token) {
         const vars = afspraakMailVars({
           naam: lead?.naam || "klant",
           startAt: updated.start_at,

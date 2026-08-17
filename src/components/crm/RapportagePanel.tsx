@@ -22,12 +22,14 @@ function MetricCell({
   money,
   bold,
   danger,
+  warn,
   suffix,
 }: {
   value: number;
   money?: boolean;
   bold?: boolean;
   danger?: boolean;
+  warn?: boolean;
   suffix?: string;
 }) {
   const text = money
@@ -41,6 +43,7 @@ function MetricCell({
         "whitespace-nowrap px-2 py-2.5 text-right tabular-nums text-[13px]",
         bold ? "font-semibold text-ink" : "text-ink",
         danger && value < 0 ? "text-[#C62828]" : "",
+        warn && value > 0 ? "text-[#C45A12]" : "",
       ].join(" ")}
     >
       {text}
@@ -58,7 +61,9 @@ function MetricsCells({
   return (
     <>
       <MetricCell value={m.leads} bold={bold} />
-      <MetricCell value={m.afspraken} bold={bold} />
+      <MetricCell value={m.brutoAfspraken} bold={bold} />
+      <MetricCell value={m.nettoAfspraken} bold={bold} />
+      <MetricCell value={m.uitvalPct} bold={bold} suffix="%" warn />
       <MetricCell value={m.deals} bold={bold} />
       <MetricCell value={m.conversieAfspraak} bold={bold} suffix="%" />
       <MetricCell value={m.conversieDeal} bold={bold} suffix="%" />
@@ -142,7 +147,9 @@ function Row({
 const HEADERS = [
   "Periode",
   "Leads",
-  "Afspraken",
+  "Bruto",
+  "Netto",
+  "% uitval",
   "Deals",
   "Lead → afspr.",
   "Lead → deal",
@@ -328,7 +335,7 @@ export function RapportagePanel({
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] border-collapse">
+            <table className="w-full min-w-[1020px] border-collapse">
               <thead>
                 <tr className="border-b border-line bg-[#fafbfa] text-left">
                   {HEADERS.map((h) => (
@@ -371,10 +378,11 @@ export function RapportagePanel({
         )}
 
         <p className="border-t border-line px-4 py-3 text-[11px] text-muted sm:px-5">
-          Lead → afspraak = unieke leads met afspraak ÷ leads. Lead → deal =
-          deals ÷ leads. Omzet = omzet excl. btw − projectkosten. Winst = omzet
-          excl. btw − projectkosten − ad spend. Projectkosten vul je in op het
-          project.
+          Lead → afspraak = unieke leads met een netto-afspraak ÷ leads. Lead →
+          deal = deals ÷ leads. Bruto = alle afspraken in de periode. Netto =
+          niet geannuleerd. % uitval = geannuleerd ÷ bruto. Omzet = omzet excl.
+          btw − projectkosten. Winst = omzet excl. btw − projectkosten − ad
+          spend. Projectkosten vul je in op het project.
         </p>
       </div>
     </div>
