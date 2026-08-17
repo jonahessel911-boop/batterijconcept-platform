@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAvailableSlots } from "@/lib/slots";
+import { generateAvailableSlots, generateDayBlocks } from "@/lib/slots";
 import {
   appBaseUrl,
   sendEmail,
@@ -58,14 +58,26 @@ export async function GET(req: NextRequest) {
       .eq("adviseur_id", adviseurId)
       .neq("status", "geannuleerd");
 
+    const busyRows = busy || [];
     const slots = generateAvailableSlots({
-      busy: busy || [],
+      busy: busyRows,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
     }));
+    const blocks = generateDayBlocks({
+      busy: busyRows,
+    }).map((s) => ({
+      start_at: s.start.toISOString(),
+      end_at: s.end.toISOString(),
+      busy: s.busy,
+    }));
 
-    return NextResponse.json({ adviseurs: adviseurs || [], slots });
+    return NextResponse.json({
+      adviseurs: adviseurs || [],
+      slots,
+      blocks,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

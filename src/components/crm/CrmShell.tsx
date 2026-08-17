@@ -23,13 +23,16 @@ import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaPanel";
+import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
+import { inBelQueue } from "@/lib/bel-queue";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
+  "bellen",
   "agenda",
   "offertes",
   "projecten",
@@ -285,6 +288,19 @@ export function CrmShell() {
     return facturen.filter((f) => scopedLeadIds.has(f.lead_id));
   }, [facturen, adviseurFilter, scopedLeadIds]);
 
+  const appointmentLeadIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const a of afspraken) {
+      if (a.status && a.status !== "geannuleerd") ids.add(a.lead_id);
+    }
+    return ids;
+  }, [afspraken]);
+
+  const belQueueCount = useMemo(
+    () => scopedLeads.filter((l) => inBelQueue(l, appointmentLeadIds)).length,
+    [scopedLeads, appointmentLeadIds]
+  );
+
   const upcomingAfsprakenCount = useMemo(() => {
     const now = Date.now();
     return afspraken.filter((a) => {
@@ -298,6 +314,7 @@ export function CrmShell() {
 
   const counts = {
     leads: scopedLeads.length,
+    bellen: belQueueCount,
     agenda: upcomingAfsprakenCount,
     offertes: scopedOffertes.length,
     projecten: scopedProjecten.length,
@@ -369,6 +386,10 @@ export function CrmShell() {
       sub: filterLabel
         ? `Leads van ${filterLabel}`
         : "Alle binnenkomende aanvragen",
+    },
+    bellen: {
+      title: "Bellen",
+      sub: "Bel, plan in, daarna Volgende en kies de status",
     },
     agenda: {
       title: "Agenda",
@@ -479,6 +500,20 @@ export function CrmShell() {
                     onStatusFilterChange={changeStatusFilter}
                     onStatusChange={updateLeadStatus}
                     onAdviseurChange={updateLeadAdviseur}
+                  />
+                )}
+                {tab === "bellen" && (
+                  <BelPanel
+                    leads={scopedLeads}
+                    adviseurs={adviseurs}
+                    appointmentLeadIds={appointmentLeadIds}
+                    defaultAdviseurId={adviseurFilter || undefined}
+                    onLeadUpdated={(id, patch) => {
+                      setLeads((prev) =>
+                        prev.map((l) => (l.id === id ? { ...l, ...patch } : l))
+                      );
+                    }}
+                    onNeedReload={() => void load()}
                   />
                 )}
                 {tab === "agenda" && (

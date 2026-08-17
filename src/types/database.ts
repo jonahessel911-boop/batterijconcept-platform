@@ -31,6 +31,7 @@ export type ServiceVerzoekStatus = "open" | "afgehandeld";
 
 export type CrmTab =
   | "leads"
+  | "bellen"
   | "agenda"
   | "offertes"
   | "projecten"
@@ -110,6 +111,9 @@ export interface Lead {
   notities: string | null;
   terugbellen?: boolean;
   terugbel_notitie?: string | null;
+  belpogingen?: number;
+  laatst_gebeld_at?: string | null;
+  belpogingen_vandaag?: number;
   adviseur_id: string | null;
   created_at: string;
   updated_at: string;

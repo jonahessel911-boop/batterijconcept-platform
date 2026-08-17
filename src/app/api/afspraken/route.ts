@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addMinutes } from "date-fns";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import {
   afspraakBevestigingSequenceEmail,
@@ -159,7 +160,7 @@ export async function PATCH(req: NextRequest) {
       if (Number.isNaN(start.getTime())) {
         return NextResponse.json({ error: "Ongeldige start_at" }, { status: 400 });
       }
-      const end = addMinutes(start, 60);
+      const end = addMinutes(start, AFSPRAAK_DUUR_MINUTEN);
 
       const { data: busy } = await sb
         .from("afspraken")
@@ -347,7 +348,7 @@ export async function POST(req: NextRequest) {
   if (Number.isNaN(start.getTime())) {
     return NextResponse.json({ error: "Ongeldige start_at" }, { status: 400 });
   }
-  const end = addMinutes(start, 60);
+  const end = addMinutes(start, AFSPRAAK_DUUR_MINUTEN);
 
   const insertRow = {
     lead_id: body.lead_id,

@@ -9,30 +9,39 @@ import {
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
-const SLOT_MINUTES = 60;
+const SLOT_MINUTES = 120;
 
-/** Vaste tijdslots per adviseur per dag (Europe/Amsterdam), elk uur */
-export const ADVISEUR_SLOT_HOURS = [
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-] as const;
+/**
+ * Vijf afspraakblokken per dag (Europe/Amsterdam).
+ * 2 uur afspraak + 1 uur reistijd:
+ * 10:00–12:00, 13:00–15:00, 16:00–18:00, 19:00–21:00, 22:00–00:00.
+ */
+export const AFSPRAAK_DUUR_MINUTEN = SLOT_MINUTES;
+export const ADVISEUR_SLOT_HOURS = [10, 13, 16, 19, 22] as const;
 
 export type BusySlot = { start_at: string; end_at: string };
 
-/**
- * Genereert beschikbare slots (Europe/Amsterdam) voor de komende dagen:
- * 10:00 t/m 20:00 elk uur — exclusief bezette afspraken.
- */
-export function generateAvailableSlots(opts: {
+export type DayBlock = { start: Date; end: Date; busy: boolean };
+
+function overlapsBusy(startUtc: Date, endUtc: Date, busy: BusySlot[]) {
+  return busy.some((b) => {
+    const bStart = new Date(b.start_at).getTime();
+    const bEnd = new Date(b.end_at).getTime();
+    return startUtc.getTime() < bEnd && endUtc.getTime() > bStart;
+  });
+}
+
+/** Alle dagblokken (vrij + bezet) voor de komende dagen. */
+export function generateDayBlocks(opts: {
   daysAhead?: number;
   busy: BusySlot[];
   fromDate?: Date;
-  /** Alleen weekdagen (ma–vr). Default: true */
   weekdaysOnly?: boolean;
-}): { start: Date; end: Date }[] {
+}): DayBlock[] {
   const daysAhead = opts.daysAhead ?? 21;
   const weekdaysOnly = opts.weekdaysOnly ?? true;
   const from = opts.fromDate ?? new Date();
-  const slots: { start: Date; end: Date }[] = [];
+  const slots: DayBlock[] = [];
 
   for (let d = 1; d <= daysAhead; d++) {
     const dayLocal = toZonedTime(addDays(from, d), AMSTERDAM_TZ);
@@ -53,17 +62,51 @@ export function generateAvailableSlots(opts: {
 
       if (startUtc <= from) continue;
 
-      const overlaps = opts.busy.some((b) => {
-        const bStart = new Date(b.start_at).getTime();
-        const bEnd = new Date(b.end_at).getTime();
-        return startUtc.getTime() < bEnd && endUtc.getTime() > bStart;
+      slots.push({
+        start: startUtc,
+        end: endUtc,
+        busy: overlapsBusy(startUtc, endUtc, opts.busy),
       });
-
-      if (!overlaps) {
-        slots.push({ start: startUtc, end: endUtc });
-      }
     }
   }
 
   return slots;
+}
+
+/**
+ * Beschikbare slots: 5 blokken van 2 uur met 1 uur reistijd ertussen,
+ * exclusief bezette afspraken.
+ */
+export function generateAvailableSlots(opts: {
+  daysAhead?: number;
+  busy: BusySlot[];
+  fromDate?: Date;
+  weekdaysOnly?: boolean;
+}): { start: Date; end: Date }[] {
+  return generateDayBlocks(opts)
+    .filter((s) => !s.busy)
+    .map(({ start, end }) => ({ start, end }));
+}
+
+/** De 5 vaste blokken voor één dag (yyyy-MM-dd in Amsterdam). */
+export function blocksForDayKey(dayKey: string): { start: Date; end: Date }[] {
+  return ADVISEUR_SLOT_HOURS.map((hour) => {
+    const start = fromZonedTime(
+      `${dayKey}T${String(hour).padStart(2, "0")}:00:00`,
+      AMSTERDAM_TZ
+    );
+    return { start, end: addMinutes(start, SLOT_MINUTES) };
+  });
+}
+
+export function overlapsRange(
+  startAt: string | Date,
+  endAt: string | Date,
+  rangeStart: Date,
+  rangeEnd: Date
+): boolean {
+  return (
+    new Date(startAt).getTime() < rangeEnd.getTime() &&
+    new Date(endAt).getTime() > rangeStart.getTime()
+  );
 }

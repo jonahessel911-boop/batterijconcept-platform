@@ -4,6 +4,7 @@ import type { CrmTab } from "@/types/database";
 
 export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "leads", label: "Leads" },
+  { id: "bellen", label: "Bellen" },
   { id: "agenda", label: "Agenda" },
   { id: "offertes", label: "Offertes" },
   { id: "projecten", label: "Projecten" },

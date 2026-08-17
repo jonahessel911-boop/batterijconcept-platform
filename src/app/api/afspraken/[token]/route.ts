@@ -7,7 +7,7 @@ import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
-import { generateAvailableSlots } from "@/lib/slots";
+import { generateAvailableSlots, AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
 
 export const runtime = "nodejs";
 
@@ -131,7 +131,7 @@ export async function POST(
         );
       }
       const start = new Date(body.start_at);
-      const end = addMinutes(start, 60);
+      const end = addMinutes(start, AFSPRAAK_DUUR_MINUTEN);
 
       const { data: busy } = await sb
         .from("afspraken")

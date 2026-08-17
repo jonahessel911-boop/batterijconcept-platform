@@ -40,3 +40,13 @@ export function findAdminAdviseurId(
   );
   return byName?.id ?? null;
 }
+
+export function isAdminAdviseur(a: {
+  id?: string;
+  naam: string;
+  email?: string | null;
+}): boolean {
+  if (a.naam.trim().toLowerCase() === "admin") return true;
+  const email = a.email?.trim().toLowerCase();
+  return Boolean(email && email === adminEmail());
+}

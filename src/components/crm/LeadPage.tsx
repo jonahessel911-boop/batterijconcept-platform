@@ -7,6 +7,7 @@ import type { Adviseur, Factuur, Lead, LeadStatus, Offerte, Project } from "@/ty
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
+import { geenContactPogingLabel } from "@/lib/bel-queue";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
@@ -283,10 +284,22 @@ export function LeadPage() {
             <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-green-deeper sm:text-3xl">
               {lead.naam}
             </h1>
-            {lead.terugbellen && (
-              <p className="mt-2 inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
-                Terugbellen
-              </p>
+            {(lead.terugbellen ||
+              lead.status === "geen_contact" ||
+              (lead.belpogingen ?? 0) > 0) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {lead.terugbellen && (
+                  <span className="inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
+                    Terugbellen
+                  </span>
+                )}
+                {(lead.status === "geen_contact" ||
+                  (lead.belpogingen ?? 0) > 0) && (
+                  <span className="inline-flex items-center rounded-full border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+                    {geenContactPogingLabel(lead.belpogingen ?? 0)}
+                  </span>
+                )}
+              </div>
             )}
             <p className="mt-2 text-sm text-muted">
               Aangemaakt {formatDateTimeNl(lead.created_at)}
