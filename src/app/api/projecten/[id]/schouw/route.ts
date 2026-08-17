@@ -113,6 +113,31 @@ export async function POST(
       .filter(Boolean)
       .join("\n\n");
 
+    const { data: fotoRows } = await sb
+      .from("project_fotos")
+      .select("storage_path, bestandsnaam")
+      .eq("project_id", id)
+      .order("created_at", { ascending: true });
+
+    const fotoAttachments: {
+      name: string;
+      contentType: string;
+      content: Buffer;
+    }[] = [];
+    for (const f of (fotoRows || []).slice(0, 8)) {
+      const { data: file } = await sb.storage
+        .from("project-fotos")
+        .download(f.storage_path);
+      if (!file) continue;
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const name = f.bestandsnaam?.trim() || f.storage_path.split("/").pop() || "foto.jpg";
+      fotoAttachments.push({
+        name,
+        contentType: file.type || "image/jpeg",
+        content: bytes,
+      });
+    }
+
     let klantMail: { ok: boolean; error?: string } = {
       ok: false,
       error: "Geen klant-e-mail",
@@ -149,9 +174,11 @@ export async function POST(
           email: lead?.email,
           projectNummer: updated.project_nummer,
           notities: combinedNotes || null,
+          fotoCount: (fotoRows || []).length,
           portalUrl,
         }),
         tag: "schouw-partner",
+        attachments: fotoAttachments,
       });
     }
 

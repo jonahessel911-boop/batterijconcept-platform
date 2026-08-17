@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { InstallatieOrdersPage } from "@/components/installatie/InstallatieOrdersPage";
 
 export const metadata = {
@@ -5,5 +6,13 @@ export const metadata = {
 };
 
 export default function Page() {
-  return <InstallatieOrdersPage />;
+  return (
+    <Suspense
+      fallback={
+        <p className="py-16 text-center text-sm text-muted">Laden…</p>
+      }
+    >
+      <InstallatieOrdersPage />
+    </Suspense>
+  );
 }

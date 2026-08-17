@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { randomBytes } from "crypto";
+import { uploadProjectFotoFile } from "@/lib/project-fotos";
 
 export const runtime = "nodejs";
 
@@ -79,69 +79,15 @@ export async function POST(
       );
     }
 
-    if (!file.type.startsWith("image/")) {
+    const result = await uploadProjectFotoFile(sb, id, file, omschrijving);
+    if ("error" in result) {
       return NextResponse.json(
-        { error: "Alleen afbeeldingen zijn toegestaan" },
-        { status: 400 }
+        { error: result.error, detail: result.detail },
+        { status: result.status }
       );
     }
 
-    if (file.size > 8 * 1024 * 1024) {
-      return NextResponse.json(
-        { error: "Bestand mag max. 8 MB zijn" },
-        { status: 400 }
-      );
-    }
-
-    const ext =
-      file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
-      "jpg";
-    const storage_path = `${id}/${Date.now()}-${randomBytes(4).toString("hex")}.${ext}`;
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    const { error: uploadErr } = await sb.storage
-      .from("project-fotos")
-      .upload(storage_path, buffer, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    if (uploadErr) {
-      return NextResponse.json(
-        {
-          error: "Upload mislukt",
-          detail: uploadErr.message,
-        },
-        { status: 500 }
-      );
-    }
-
-    const { data: row, error: insertErr } = await sb
-      .from("project_fotos")
-      .insert({
-        project_id: id,
-        storage_path,
-        bestandsnaam: file.name,
-        omschrijving,
-      })
-      .select("id, project_id, storage_path, bestandsnaam, omschrijving, created_at")
-      .single();
-
-    if (insertErr || !row) {
-      return NextResponse.json(
-        { error: insertErr?.message || "Opslaan mislukt" },
-        { status: 500 }
-      );
-    }
-
-    const { data: signed } = await sb.storage
-      .from("project-fotos")
-      .createSignedUrl(storage_path, 60 * 60 * 6);
-
-    return NextResponse.json(
-      { foto: { ...row, url: signed?.signedUrl || null } },
-      { status: 201 }
-    );
+    return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

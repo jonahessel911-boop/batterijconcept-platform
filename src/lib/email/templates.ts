@@ -302,10 +302,18 @@ export function schouwPartnerEmail(opts: {
   email?: string | null;
   projectNummer?: string | null;
   notities?: string | null;
+  fotoCount?: number;
   portalUrl: string;
 }) {
   const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
   const when = formatDateTimeLongNl(opts.schouwAt);
+  const fotoCount = opts.fotoCount ?? 0;
+  const fotoLabel =
+    fotoCount === 0
+      ? "Geen foto's"
+      : fotoCount === 1
+        ? "1 foto (zie bijlage / portaal)"
+        : `${fotoCount} foto's (zie bijlagen / portaal)`;
   return emailLayout({
     title: "Nieuwe schouw ingepland",
     preheader: `Schouw bij ${opts.klantNaam} op ${when}.`,
@@ -313,7 +321,7 @@ export function schouwPartnerEmail(opts: {
       emailH1("Nieuwe schouw ingepland"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Er is een nieuwe schouw voor je ingepland. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je alle orders met notities, foto&apos;s en verdere details."
+        "Er is een nieuwe schouw voor je ingepland. Hieronder vind je de klant- en schouwgegevens, inclusief notities en foto&apos;s van de adviseur. In het installatieportaal zie je de volledige order."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>
@@ -322,7 +330,8 @@ export function schouwPartnerEmail(opts: {
          ${opts.telefoon ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${opts.telefoon}</p>` : ""}
          ${opts.email ? `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>` : ""}
          ${opts.projectNummer ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Order</strong><br />${opts.projectNummer}</p>` : ""}
-         ${opts.notities ? `<p style="margin:0;font-size:15px;"><strong>Notities</strong><br />${opts.notities.replace(/\n/g, "<br />")}</p>` : ""}`
+         ${opts.notities ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Notities</strong><br />${opts.notities.replace(/\n/g, "<br />")}</p>` : ""}
+         <p style="margin:0;font-size:15px;"><strong>Foto's</strong><br />${fotoLabel}</p>`
       ),
       emailButton("Ga naar portaal", opts.portalUrl),
       emailMuted("Dit is een mail van Batterijconcept voor installatiepartners."),

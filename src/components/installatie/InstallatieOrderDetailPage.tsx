@@ -39,6 +39,8 @@ export function InstallatieOrderDetailPage() {
   const [offerte, setOfferte] = useState<OfferteSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +65,26 @@ export function InstallatieOrderDetailPage() {
     const id = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(id);
   }, [load]);
+
+  async function uploadFoto(file: File) {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(
+        `/api/installatie/${token}/orders/${projectId}/fotos`,
+        { method: "POST", body: form }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      if (data.foto) setFotos((prev) => [...prev, data.foto]);
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Upload mislukt");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -117,21 +139,79 @@ export function InstallatieOrderDetailPage() {
       </header>
 
       <main className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 sm:px-6 sm:py-8">
-        {order.schouw_at && (
-          <section className="border border-line bg-white p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Schouw
-            </p>
+        <section className="border border-line bg-white p-5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Schouw
+          </p>
+          {order.schouw_at ? (
             <p className="mt-1 text-lg font-semibold capitalize text-ink">
               {formatDateTimeLongNl(order.schouw_at)}
             </p>
-            {order.schouw_notities && (
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {order.schouw_notities}
+          ) : (
+            <p className="mt-1 text-sm text-muted">Nog geen schouwdatum.</p>
+          )}
+          {order.schouw_notities?.trim() ? (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+              {order.schouw_notities}
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-muted">Geen schouw-notities.</p>
+          )}
+
+          <div className="mt-5 border-t border-line pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Foto&apos;s ({fotos.length})
               </p>
+              <label className="cursor-pointer text-xs font-semibold text-green-dark underline-offset-2 hover:underline">
+                {uploading ? "Uploaden…" : "Foto toevoegen"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadFoto(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            <p className="mt-1 text-[11px] text-muted">
+              Inclusief foto&apos;s van de adviseur. Jij kunt er zelf ook
+              toevoegen.
+            </p>
+            {uploadError && (
+              <p className="mt-2 text-xs text-[#C62828]">{uploadError}</p>
             )}
-          </section>
-        )}
+            {fotos.length === 0 ? (
+              <p className="mt-3 text-sm text-muted">Nog geen foto&apos;s.</p>
+            ) : (
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {fotos.map((f) =>
+                  f.url ? (
+                    <a
+                      key={f.id}
+                      href={f.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block border border-line"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={f.url}
+                        alt={f.bestandsnaam || "Foto"}
+                        className="aspect-square w-full object-cover"
+                      />
+                    </a>
+                  ) : null
+                )}
+              </div>
+            )}
+          </div>
+        </section>
 
         <section className="border border-line bg-white p-5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -205,36 +285,6 @@ export function InstallatieOrderDetailPage() {
             )}
           </section>
         )}
-
-        <section className="border border-line bg-white p-5">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-            Foto&apos;s ({fotos.length})
-          </p>
-          {fotos.length === 0 ? (
-            <p className="mt-3 text-sm text-muted">Geen foto&apos;s beschikbaar.</p>
-          ) : (
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {fotos.map((f) =>
-                f.url ? (
-                  <a
-                    key={f.id}
-                    href={f.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block border border-line"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={f.url}
-                      alt={f.bestandsnaam || "Foto"}
-                      className="aspect-square w-full object-cover"
-                    />
-                  </a>
-                ) : null
-              )}
-            </div>
-          )}
-        </section>
 
         {offerte && (
           <section className="border border-line bg-white p-5">
