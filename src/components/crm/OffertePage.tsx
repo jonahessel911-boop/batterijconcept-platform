@@ -30,6 +30,8 @@ export function OffertePage() {
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -134,6 +136,32 @@ export function OffertePage() {
     };
   }, [offerte, facturen.length, loading, load]);
 
+  async function downloadSignedPdf() {
+    if (!offerte) return;
+    setPdfBusy(true);
+    setPdfError(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerte.id}/pdf`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "PDF downloaden mislukt");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${offerte.offerte_nummer}-ondertekend.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "PDF mislukt");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="offertes">
@@ -218,12 +246,25 @@ export function OffertePage() {
             </a>
           )}
           {offerte.status === "ondertekend" && (
-            <span className="border border-green/25 bg-green-soft px-3 py-1.5 text-sm font-medium text-green-dark">
-              Ondertekend door {offerte.ondertekend_naam} op{" "}
-              {formatDateNl(offerte.ondertekend_op)}
-            </span>
+            <>
+              <span className="border border-green/25 bg-green-soft px-3 py-1.5 text-sm font-medium text-green-dark">
+                Ondertekend door {offerte.ondertekend_naam} op{" "}
+                {formatDateNl(offerte.ondertekend_op)}
+              </span>
+              <button
+                type="button"
+                disabled={pdfBusy}
+                onClick={() => void downloadSignedPdf()}
+                className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+              >
+                {pdfBusy ? "PDF laden…" : "PDF downloaden"}
+              </button>
+            </>
           )}
         </div>
+        {pdfError && (
+          <p className="mt-3 text-sm text-[#C62828]">{pdfError}</p>
+        )}
       </HeroCard>
 
       <Panel title="Regels" subtitle={`${regels.length} producten`}>

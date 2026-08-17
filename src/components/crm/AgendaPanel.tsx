@@ -19,7 +19,6 @@ import {
   formatTimeNl,
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
-import { blocksForDayKey, overlapsRange } from "@/lib/slots";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 
 type AgendaDay = { key: string; date: Date };
@@ -135,27 +134,6 @@ function statusAccent(status: Afspraak["status"]): string {
   return "border-l-green bg-green-soft/70";
 }
 
-function appointmentsForBlock(
-  list: Afspraak[],
-  start: Date,
-  end: Date
-): Afspraak[] {
-  return list.filter(
-    (a) =>
-      a.status !== "geannuleerd" &&
-      overlapsRange(a.start_at, a.end_at, start, end)
-  );
-}
-
-function leftoverAppointments(list: Afspraak[], dayKey: string): Afspraak[] {
-  const blocks = blocksForDayKey(dayKey);
-  return list.filter((a) => {
-    if (a.status === "geannuleerd") return true;
-    return !blocks.some((b) =>
-      overlapsRange(a.start_at, a.end_at, b.start, b.end)
-    );
-  });
-}
 function AfspraakChip({
   afspraak,
   variant = "week",
@@ -1250,47 +1228,22 @@ export function AgendaPanel({
                       }`}
                 </span>
               </div>
-              <div className="space-y-2.5">
-                {blocksForDayKey(selectedDay.key).map((block) => {
-                  const booked = appointmentsForBlock(
-                    selectedDayAfspraken,
-                    block.start,
-                    block.end
-                  );
-                  if (booked.length === 0) {
-                    return (
-                      <div
-                        key={block.start.toISOString()}
-                        className="flex items-center gap-3 rounded-xl border border-green/25 bg-green-soft/40 px-3.5 py-3"
-                      >
-                        <span className="w-14 shrink-0 font-display text-lg font-semibold tabular-nums text-green-dark">
-                          {formatTimeNl(block.start)}
-                        </span>
-                        <span className="text-sm text-green-dark/80">Vrij</span>
-                      </div>
-                    );
-                  }
-                  return booked.map((a) => (
+              {selectedDayAfspraken.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-line bg-wash/60 px-4 py-10 text-center text-sm text-muted">
+                  Geen afspraken op deze dag
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {selectedDayAfspraken.map((a) => (
                     <AfspraakChip
                       key={a.id}
                       afspraak={a}
                       variant="day"
                       onOpen={setSelectedAfspraak}
                     />
-                  ));
-                })}
-                {leftoverAppointments(
-                  selectedDayAfspraken,
-                  selectedDay.key
-                ).map((a) => (
-                  <AfspraakChip
-                    key={a.id}
-                    afspraak={a}
-                    variant="day"
-                    onOpen={setSelectedAfspraak}
-                  />
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Desktop / tablet: weekkolommen */}
@@ -1299,13 +1252,7 @@ export function AgendaPanel({
                 <div className="grid grid-cols-7 border-b border-line bg-wash/50">
                   {days.map((day) => {
                     const isToday = day.key === todayKey;
-                    const bookedSlots = blocksForDayKey(day.key).filter((b) =>
-                      appointmentsForBlock(
-                        byDay.get(day.key) || [],
-                        b.start,
-                        b.end
-                      ).length > 0
-                    ).length;
+                    const count = byDay.get(day.key)?.length ?? 0;
                     return (
                       <div
                         key={day.key}
@@ -1333,7 +1280,7 @@ export function AgendaPanel({
                           {formatDayNum(day.date)}
                         </p>
                         <p className="mt-1 text-[10px] text-muted">
-                          {bookedSlots}/5
+                          {count > 0 ? `${count}×` : "—"}
                         </p>
                       </div>
                     );
@@ -1347,48 +1294,26 @@ export function AgendaPanel({
                       <div
                         key={day.key}
                         className={[
-                          "min-h-[420px] space-y-1.5 border-r border-line p-1.5 last:border-r-0 sm:p-2",
+                          "min-h-[420px] border-r border-line p-1.5 last:border-r-0 sm:p-2",
                           isToday ? "bg-green-soft/20" : "bg-white",
                         ].join(" ")}
                       >
-                        {blocksForDayKey(day.key).map((block) => {
-                          const booked = appointmentsForBlock(
-                            list,
-                            block.start,
-                            block.end
-                          );
-                          if (booked.length === 0) {
-                            return (
-                              <div
-                                key={block.start.toISOString()}
-                                className="rounded-lg border border-green/20 bg-green-soft/50 px-2 py-1.5"
-                              >
-                                <span className="block text-[11px] font-bold tabular-nums leading-none text-green-dark">
-                                  {formatTimeNl(block.start)}
-                                </span>
-                                <span className="mt-1 block text-[11px] text-green-dark/70">
-                                  Vrij
-                                </span>
-                              </div>
-                            );
-                          }
-                          return booked.map((a) => (
-                            <AfspraakChip
-                              key={a.id}
-                              afspraak={a}
-                              variant="week"
-                              onOpen={setSelectedAfspraak}
-                            />
-                          ));
-                        })}
-                        {leftoverAppointments(list, day.key).map((a) => (
-                          <AfspraakChip
-                            key={a.id}
-                            afspraak={a}
-                            variant="week"
-                            onOpen={setSelectedAfspraak}
-                          />
-                        ))}
+                        {list.length === 0 ? (
+                          <p className="px-1 py-6 text-center text-[11px] text-muted/70">
+                            —
+                          </p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {list.map((a) => (
+                              <AfspraakChip
+                                key={a.id}
+                                afspraak={a}
+                                variant="week"
+                                onOpen={setSelectedAfspraak}
+                              />
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

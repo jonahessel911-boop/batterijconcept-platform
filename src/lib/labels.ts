@@ -90,11 +90,21 @@ export function statusTone(
   const muted = "border border-[#cfd6d1] bg-[#f5f7f6] text-[#5A635C]";
   const urgent = "border border-[#F37021] bg-[#F37021] text-white";
   const info = "border border-[#1A4A6E]/20 bg-[#E8F0F6] text-[#1A4A6E]";
+  const ink = "border border-[#1A1F1C]/25 bg-[#f5f7f6] text-[#1A1F1C]";
+  const yellow = "border border-[#C9A227]/35 bg-[#FFF8D6] text-[#8A6D00]";
+  const danger = "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]";
 
   if (kind === "prioriteit") {
     if (value === "urgent") return urgent;
     if (value === "hoog") return warn;
     return muted;
+  }
+
+  if (kind === "lead") {
+    if (value === "deal") return success;
+    if (value === "afspraak") return yellow;
+    if (value === "geen_contact") return ink;
+    if (value === "geen_interesse") return danger;
   }
 
   if (
@@ -106,7 +116,6 @@ export function statusTone(
       "betaald",
       "bevestigd",
       "voltooid",
-      "afspraak",
     ].includes(value)
   ) {
     return success;
@@ -116,8 +125,6 @@ export function statusTone(
       "urgent",
       "verlopen",
       "vervallen",
-      "geen_interesse",
-      "geen_contact",
       "geannuleerd",
     ].includes(value)
   ) {

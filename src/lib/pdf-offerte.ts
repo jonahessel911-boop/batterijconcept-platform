@@ -1,10 +1,7 @@
 import { jsPDF } from "jspdf";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { BEDRIJFSWAARDEN } from "@/types/database";
-import {
-  formatDateShort,
-  formatDateTimeLongNl,
-} from "@/lib/format";
+import { formatDateShort, formatDateTimeNl } from "@/lib/format";
 import {
   PDF_COLORS,
   companyInfo,
@@ -334,53 +331,37 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.text("Ondertekening", margin, y);
   y += 8;
 
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(...MUTED);
+  doc.text(
+    sign ? `Naam: ${sign.naam}` : "Naam: _______________________________",
+    margin,
+    y
+  );
+  y += 8;
+  doc.text(
+    sign
+      ? `Datum: ${formatDateTimeNl(sign.ondertekendOp)}`
+      : "Datum: _______________________________",
+    margin,
+    y
+  );
+  y += 8;
+  doc.text("Handtekening:", margin, y);
   if (sign) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...CHARCOAL);
-    doc.text(`Naam: ${sign.naam}`, margin, y);
-    y += 5;
-    doc.text(
-      `Datum en tijd: ${formatDateTimeLongNl(sign.ondertekendOp)} (Europe/Amsterdam)`,
-      margin,
-      y
-    );
-    y += 5;
-    doc.text(`Offerte: ${offerte.offerte_nummer}`, margin, y);
-    y += 8;
-    doc.setTextColor(...MUTED);
-    doc.text("Handtekening:", margin, y);
-    y += 3;
+    y += 2;
     try {
-      doc.addImage(sign.handtekeningDataUrl, "PNG", margin, y, 65, 26);
-      y += 30;
+      doc.addImage(sign.handtekeningDataUrl, "PNG", margin, y, 65, 20);
     } catch {
-      y += 20;
+      /* leeg veld blijft staan */
     }
-    doc.setDrawColor(...LINE);
-    doc.line(margin, y, margin + 65, y);
-    y += 6;
-    doc.setFontSize(8);
-    doc.setTextColor(...MUTED);
-    doc.text(
-      `Ondertekend door ${sign.naam} op ${formatDateTimeLongNl(sign.ondertekendOp)}`,
-      margin,
-      y,
-      { maxWidth: pageW - margin * 2 }
-    );
+    y += 20;
   } else {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
-    doc.text("Naam: _______________________________", margin, y);
-    y += 8;
-    doc.text("Datum: _______________________________", margin, y);
-    y += 8;
-    doc.text("Handtekening:", margin, y);
     y += 22;
-    doc.setDrawColor(...LINE);
-    doc.line(margin, y, margin + 65, y);
   }
+  doc.setDrawColor(...LINE);
+  doc.line(margin, y, margin + 65, y);
 
   drawFooter(doc, pageW, margin);
   return doc.output("blob");
