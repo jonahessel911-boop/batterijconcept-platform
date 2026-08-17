@@ -11,13 +11,44 @@ export async function ensureProjectForOfferte(
     klantNaam?: string | null;
   }
 ): Promise<{ id: string; project_nummer: string; created: boolean } | null> {
+  const { data: offerteMeta } = await sb
+    .from("offertes")
+    .select("installatie_partner_id, installatie_partners(naam)")
+    .eq("id", opts.offerteId)
+    .maybeSingle();
+
+  const partnerId =
+    (offerteMeta as { installatie_partner_id?: string | null } | null)
+      ?.installatie_partner_id || null;
+  const partnerJoin = (
+    offerteMeta as {
+      installatie_partners?:
+        | { naam?: string | null }
+        | { naam?: string | null }[]
+        | null;
+    } | null
+  )?.installatie_partners;
+  const partnerNaam = Array.isArray(partnerJoin)
+    ? partnerJoin[0]?.naam
+    : partnerJoin?.naam;
+
   const { data: existing } = await sb
     .from("projecten")
-    .select("id, project_nummer")
+    .select("id, project_nummer, installatie_partner_id")
     .eq("offerte_id", opts.offerteId)
     .maybeSingle();
 
   if (existing?.id) {
+    // Partner van offerte alsnog overnemen als project die nog mist
+    if (partnerId && !existing.installatie_partner_id) {
+      await sb
+        .from("projecten")
+        .update({
+          installatie_partner_id: partnerId,
+          ...(partnerNaam ? { monteur: partnerNaam } : {}),
+        })
+        .eq("id", existing.id);
+    }
     return {
       id: existing.id,
       project_nummer: existing.project_nummer,
@@ -39,18 +70,40 @@ export async function ensureProjectForOfferte(
       ? `Thuisbatterij — ${opts.klantNaam}`
       : `Project bij ${opts.offerteNummer}`);
 
-  const { data: created, error } = await sb
+  const insertRow: Record<string, unknown> = {
+    lead_id: opts.leadId,
+    offerte_id: opts.offerteId,
+    project_nummer: nummer as string,
+    status: "schouw_inplannen",
+    titel,
+    notities: `Automatisch aangemaakt na ondertekening van ${opts.offerteNummer}.`,
+  };
+  if (partnerId) {
+    insertRow.installatie_partner_id = partnerId;
+    if (partnerNaam) insertRow.monteur = partnerNaam;
+  }
+
+  let { data: created, error } = await sb
     .from("projecten")
-    .insert({
-      lead_id: opts.leadId,
-      offerte_id: opts.offerteId,
-      project_nummer: nummer as string,
-      status: "schouw_inplannen",
-      titel,
-      notities: `Automatisch aangemaakt na ondertekening van ${opts.offerteNummer}.`,
-    })
+    .insert(insertRow)
     .select("id, project_nummer")
     .single();
+
+  // Kolom ontbreekt nog → opnieuw zonder partner
+  if (
+    error &&
+    (error.message?.includes("installatie_partner_id") ||
+      error.code === "42703")
+  ) {
+    delete insertRow.installatie_partner_id;
+    const retry = await sb
+      .from("projecten")
+      .insert(insertRow)
+      .select("id, project_nummer")
+      .single();
+    created = retry.data;
+    error = retry.error;
+  }
 
   if (error || !created) {
     console.error("Project aanmaken:", error);

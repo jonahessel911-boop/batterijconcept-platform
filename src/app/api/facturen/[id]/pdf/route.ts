@@ -176,7 +176,7 @@ export async function POST(
         .from("projecten")
         .update({ status: "btw_factuur_eruit" })
         .eq("id", factuur.project_id)
-        .in("status", ["schouw_inplannen", "btw_factuur_eruit"]);
+        .in("status", ["schouw_inplannen", "schouw_gepland", "btw_factuur_eruit"]);
     }
 
     return NextResponse.json({

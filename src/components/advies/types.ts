@@ -62,11 +62,11 @@ export const INITIAL_ANSWERS: AdviesAnswers = {
   subsidieAkkoord: false,
 };
 
-/** 9,3 kWh Alpha ESS — demo-prijs voor intern adviesproces */
+/** 9,3 kWh Alpha ESS G3 S5 (1-fase) — pakketprijs EXCL. btw, incl. installatie */
 export const ALPHA_ESS_93 = {
-  naam: "Alpha ESS 9,3 kWh",
+  naam: "Alpha ESS G3 S5 — 9,3 kWh",
   capaciteitKwh: 9.3,
-  prijsExBtw: 4995,
+  prijsExBtw: 8381.5,
   btwPercentage: 21,
 } as const;
 

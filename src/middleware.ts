@@ -5,6 +5,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === "/login") return true;
   if (pathname.startsWith("/offerte/")) return true;
   if (pathname.startsWith("/afspraak/")) return true;
+  if (pathname.startsWith("/installatie/")) return true;
   if (pathname.startsWith("/api/webhook/")) return true;
   if (pathname.startsWith("/api/cron/")) return true;
   if (pathname.startsWith("/api/auth/login")) return true;
@@ -12,6 +13,13 @@ function isPublicPath(pathname: string): boolean {
   if (
     pathname.startsWith("/api/afspraken/") &&
     pathname !== "/api/afspraken/"
+  ) {
+    return true;
+  }
+
+  if (
+    pathname.startsWith("/api/installatie/") &&
+    pathname !== "/api/installatie/"
   ) {
     return true;
   }

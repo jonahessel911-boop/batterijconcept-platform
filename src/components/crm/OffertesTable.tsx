@@ -31,6 +31,7 @@ export function OffertesTable({
             <th>Offerte</th>
             <th>Klant</th>
             <th>Lead</th>
+            <th>Installateur</th>
             <th>Status</th>
             <th>Totaal</th>
             <th>Geldig tot</th>
@@ -58,6 +59,9 @@ export function OffertesTable({
                 >
                   {o.leads?.lead_number || o.lead_id.slice(0, 8)}
                 </Link>
+              </td>
+              <td className="text-muted whitespace-nowrap">
+                {o.installatie_partners?.naam || "—"}
               </td>
               <td>
                 <StatusBadge kind="offerte" value={o.status} />

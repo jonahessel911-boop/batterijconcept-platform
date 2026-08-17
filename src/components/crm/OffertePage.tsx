@@ -47,7 +47,7 @@ export function OffertePage() {
         sb
           .from("offertes")
           .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), offerte_regels(*)"
+            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
           )
           .eq("id", id)
           .single(),
@@ -186,6 +186,10 @@ export function OffertePage() {
             accent
           />
           <InfoTile label="Klant" value={offerte.leads?.naam} />
+          <InfoTile
+            label="Installateur (intern)"
+            value={offerte.installatie_partners?.naam || "Niet gekoppeld"}
+          />
           <InfoTile
             label="Totaal incl. btw"
             value={formatEuro(offerte.totaal_inc_btw)}

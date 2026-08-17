@@ -233,3 +233,72 @@ export function factuurVerzondenEmail(opts: {
     ].join(""),
   });
 }
+
+/** Klant: schouw is ingepland */
+export function schouwKlantEmail(opts: {
+  naam: string;
+  schouwAt: string | Date;
+  adres?: string | null;
+  projectNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = formatDateTimeLongNl(opts.schouwAt);
+  return emailLayout({
+    title: "Schouw gepland — Batterijconcept",
+    preheader: `Je schouw staat gepland op ${when}.`,
+    bodyHtml: [
+      emailH1("Schouw gepland"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Goed nieuws: de schouw voor je thuisbatterij is ingepland. Onze installatiepartner komt bij je langs om de situatie ter plaatse te bekijken."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
+      ),
+      emailP(
+        "Zorg dat er iemand aanwezig is die toegang heeft tot de meterkast en de beoogde installatieruimte. Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot dan, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
+/** Installatiepartner: nieuwe schouw / order */
+export function schouwPartnerEmail(opts: {
+  partnerNaam: string;
+  klantNaam: string;
+  schouwAt: string | Date;
+  adres?: string | null;
+  telefoon?: string | null;
+  email?: string | null;
+  projectNummer?: string | null;
+  notities?: string | null;
+  portalUrl: string;
+}) {
+  const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
+  const when = formatDateTimeLongNl(opts.schouwAt);
+  return emailLayout({
+    title: "Nieuwe schouw ingepland",
+    preheader: `Schouw bij ${opts.klantNaam} op ${when}.`,
+    bodyHtml: [
+      emailH1("Nieuwe schouw ingepland"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Er is een nieuwe schouw voor je ingepland. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je alle orders met notities, foto&apos;s en verdere details."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Schouw</strong><br />${when}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.telefoon ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${opts.telefoon}</p>` : ""}
+         ${opts.email ? `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Order</strong><br />${opts.projectNummer}</p>` : ""}
+         ${opts.notities ? `<p style="margin:0;font-size:15px;"><strong>Notities</strong><br />${opts.notities.replace(/\n/g, "<br />")}</p>` : ""}`
+      ),
+      emailButton("Ga naar portaal", opts.portalUrl),
+      emailMuted("Dit is een mail van Batterijconcept voor installatiepartners."),
+    ].join(""),
+  });
+}

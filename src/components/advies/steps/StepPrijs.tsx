@@ -83,12 +83,15 @@ export function StepPrijs({
         </button>
       ) : (
         <div className={card}>
-          <p className="text-sm text-muted">Richtprijs inclusief BTW</p>
+          <p className="text-sm text-muted">Richtprijs excl. BTW (incl. installatie)</p>
           <p className="mt-1 font-display text-3xl font-bold tabular-nums text-ink">
-            {formatEuroNl(prijs.prijsInc, 0)}
+            {formatEuroNl(prijs.prijsEx, 0)}
           </p>
           <p className="text-sm text-muted">
-            excl. BTW {formatEuroNl(prijs.prijsEx, 0)}
+            incl. BTW {formatEuroNl(prijs.prijsInc, 0)}
+          </p>
+          <p className="mt-2 text-xs font-semibold text-green-dark">
+            Incl. BTW subsidie-aanvraag
           </p>
         </div>
       )}

@@ -24,6 +24,7 @@ import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
+import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
 
@@ -198,7 +199,7 @@ export function CrmShell() {
         sb
           .from("offertes")
           .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats)"
+            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), installatie_partners(id, naam)"
           )
           .order("created_at", { ascending: false }),
         sb
@@ -399,7 +400,7 @@ export function CrmShell() {
     },
     instellingen: {
       title: "Instellingen",
-      sub: "Beheer teamleden en hun portfolio",
+      sub: "Teamleden, installatiepartners en portaal",
     },
   };
 
@@ -506,7 +507,10 @@ export function CrmShell() {
                   />
                 )}
                 {tab === "instellingen" && (
-                  <InstellingenPanel onAdviseursChange={loadAdviseurs} />
+                  <div>
+                    <InstellingenPanel onAdviseursChange={loadAdviseurs} />
+                    <InstallatiePartnersPanel />
+                  </div>
                 )}
               </>
             )}

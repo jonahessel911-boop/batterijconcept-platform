@@ -14,8 +14,8 @@ type Props = {
 
 /**
  * PDF-reader stijl: 2 scrollbare pagina's.
- * Pagina 1 — merk + waarden + akkoord
- * Pagina 2 — offerte + naam + handtekening + Ondertekenen
+ * Pagina 1 — merk + waarden
+ * Pagina 2 — offerte + naam + akkoord + handtekening + Ondertekenen
  */
 export function SignOfferteFlow({ offerte, regels }: Props) {
   const [naam, setNaam] = useState(offerte.leads?.naam || "");
@@ -78,8 +78,8 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
       return;
     }
     if (!akkoord) {
-      setError("Bevestig dat je akkoord gaat met onze waarden (pagina 1).");
-      scrollToPage(1);
+      setError("Bevestig dat je akkoord gaat met onze waarden.");
+      scrollToPage(2);
       return;
     }
 
@@ -266,18 +266,6 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
               ))}
             </ul>
 
-            <label className="mt-8 flex items-start gap-3 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={akkoord}
-                onChange={(e) => setAkkoord(e.target.checked)}
-                className="mt-1 accent-green"
-              />
-              <span>
-                Ik ga akkoord met de waarden van Batterijconcept.nl.
-              </span>
-            </label>
-
             <button
               type="button"
               onClick={() => scrollToPage(2)}
@@ -361,7 +349,19 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
               </table>
             </div>
 
-            <div className="mt-5 border-t-2 border-green pt-4 text-right">
+            <div className="mt-5 space-y-1.5 border-t-2 border-green pt-4 text-right">
+              <p className="text-sm text-muted">
+                Subtotaal excl. btw{" "}
+                <span className="ml-4 inline-block min-w-[6rem] tabular-nums text-ink">
+                  {formatEuro(offerte.subtotaal_ex_btw)}
+                </span>
+              </p>
+              <p className="text-sm text-muted">
+                BTW{" "}
+                <span className="ml-4 inline-block min-w-[6rem] tabular-nums text-ink">
+                  {formatEuro(offerte.btw_bedrag)}
+                </span>
+              </p>
               <p className="font-display text-lg font-semibold text-green-deeper">
                 Totaal incl. btw{" "}
                 <span className="ml-4 inline-block min-w-[6rem] tabular-nums">
@@ -399,6 +399,18 @@ export function SignOfferteFlow({ offerte, regels }: Props) {
                   </span>
                 </div>
               </div>
+
+              <label className="mt-5 flex items-start gap-3 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={akkoord}
+                  onChange={(e) => setAkkoord(e.target.checked)}
+                  className="mt-1 accent-green"
+                />
+                <span>
+                  Ik ga akkoord met de waarden van Batterijconcept.nl.
+                </span>
+              </label>
 
               <div className="mt-4">
                 <p className="mb-1.5 text-sm font-medium text-ink">

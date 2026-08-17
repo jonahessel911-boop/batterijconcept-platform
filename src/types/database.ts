@@ -14,6 +14,7 @@ export type OfferteStatus =
   | "afgewezen";
 export type ProjectStatus =
   | "schouw_inplannen"
+  | "schouw_gepland"
   | "btw_factuur_eruit"
   | "product_ingekocht"
   | "installatie_gepland"
@@ -136,6 +137,17 @@ export interface OfferteRegel {
   sort_order: number;
 }
 
+export interface InstallatiePartner {
+  id: string;
+  naam: string;
+  email: string;
+  telefoon: string | null;
+  actief: boolean;
+  portal_token: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Offerte {
   id: string;
   lead_id: string;
@@ -154,6 +166,7 @@ export interface Offerte {
   waarden_akkoord: boolean | null;
   signed_pdf_path: string | null;
   financiering_voorbehoud?: boolean | null;
+  installatie_partner_id?: string | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
@@ -163,6 +176,10 @@ export interface Offerte {
     "naam" | "email" | "lead_number" | "postcode" | "huisnummer" | "plaats" | "adviseur_id"
   > | null;
   offerte_regels?: OfferteRegel[];
+  installatie_partners?: Pick<
+    InstallatiePartner,
+    "id" | "naam" | "email" | "telefoon"
+  > | null;
 }
 
 export interface Project {
@@ -177,9 +194,42 @@ export interface Project {
   monteur: string | null;
   notities: string | null;
   projectkosten: number;
+  schouw_at?: string | null;
+  schouw_notities?: string | null;
+  installatie_partner_id?: string | null;
+  schouw_mail_klant_verstuurd?: boolean;
+  schouw_mail_partner_verstuurd?: boolean;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "lead_number" | "adviseur_id"> | null;
+  leads?: Pick<
+    Lead,
+    | "naam"
+    | "email"
+    | "telefoon"
+    | "lead_number"
+    | "notities"
+    | "postcode"
+    | "huisnummer"
+    | "toevoeging"
+    | "straat"
+    | "plaats"
+    | "adviseur_id"
+  > | null;
+  installatie_partners?: Pick<
+    InstallatiePartner,
+    "id" | "naam" | "email" | "telefoon"
+  > | null;
+}
+
+export interface ProjectFoto {
+  id: string;
+  project_id: string;
+  storage_path: string;
+  bestandsnaam: string | null;
+  omschrijving: string | null;
+  created_at: string;
+  /** Signed URL — alleen in API-responses */
+  url?: string | null;
 }
 
 export interface ServiceVerzoek {

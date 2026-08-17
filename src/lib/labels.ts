@@ -41,6 +41,7 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
   schouw_inplannen: "Schouw inplannen",
+  schouw_gepland: "Schouw gepland",
   btw_factuur_eruit: "BTW factuur eruit",
   product_ingekocht: "Product ingekocht",
   installatie_gepland: "Installatie gepland",
@@ -50,6 +51,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
   "schouw_inplannen",
+  "schouw_gepland",
   "btw_factuur_eruit",
   "product_ingekocht",
   "installatie_gepland",
@@ -126,6 +128,7 @@ export function statusTone(
       "nieuw",
       "verzonden",
       "schouw_inplannen",
+      "schouw_gepland",
       "btw_factuur_eruit",
       "product_ingekocht",
       "installatie_gepland",

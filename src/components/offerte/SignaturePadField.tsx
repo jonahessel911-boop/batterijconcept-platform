@@ -59,7 +59,7 @@ export function SignaturePadField({
         <button
           type="button"
           onClick={clear}
-          className="text-xs font-medium text-muted hover:text-ink"
+          className="min-h-10 px-3 py-2 text-sm font-medium text-muted hover:bg-wash hover:text-ink"
         >
           Wis handtekening
         </button>

@@ -13,6 +13,7 @@ import {
 } from "@/lib/labels";
 import { StatusBadge } from "./StatusBadge";
 import { ProjectServiceSection } from "./ProjectServiceSection";
+import { ProjectSchouwSection } from "./ProjectSchouwSection";
 import {
   BackLink,
   Breadcrumb,
@@ -51,7 +52,9 @@ export function ProjectPage() {
       const sb = getSupabaseBrowser();
       const { data, error } = await sb
         .from("projecten")
-        .select("*, leads(naam, lead_number)")
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon)"
+        )
         .eq("id", id)
         .single();
 
@@ -217,10 +220,14 @@ export function ProjectPage() {
             accent
           />
           <InfoTile label="Klant" value={project.leads?.naam} />
-          <InfoTile label="Monteur" value={project.monteur} />
+          <InfoTile label="Monteur" value={project.monteur || project.installatie_partners?.naam} />
           <InfoTile
-            label="Startdatum"
-            value={formatDateShort(project.startdatum)}
+            label="Schouw"
+            value={
+              project.schouw_at
+                ? formatDateTimeNl(project.schouw_at)
+                : formatDateShort(project.startdatum)
+            }
           />
         </div>
 
@@ -267,6 +274,8 @@ export function ProjectPage() {
           </p>
         )}
       </HeroCard>
+
+      <ProjectSchouwSection project={project} onChanged={() => void load()} />
 
       <ProjectServiceSection
         project={project}
