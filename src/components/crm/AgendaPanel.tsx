@@ -217,14 +217,31 @@ function AfspraakChip({
 function AfspraakDetail({
   afspraak,
   onClose,
+  onUpdated,
+  onDeleted,
 }: {
   afspraak: Afspraak;
   onClose: () => void;
+  onUpdated: (a: Afspraak) => void;
+  onDeleted: () => void;
 }) {
-  const note = appointmentNote(afspraak);
-  const mailed = Boolean(afspraak.bevestiging_verstuurd);
-  const lead = afspraak.leads;
+  const [current, setCurrent] = useState(afspraak);
+  const [mode, setMode] = useState<"view" | "verzet">("view");
+  const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
+    []
+  );
+  const [newStart, setNewStart] = useState("");
+  const [useCustomTime, setUseCustomTime] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const note = appointmentNote(current);
+  const mailed = Boolean(current.bevestiging_verstuurd);
+  const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
+  const cancelled = current.status === "geannuleerd";
   const straatNr = lead
     ? [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
         .filter(Boolean)
@@ -233,6 +250,16 @@ function AfspraakDetail({
   const postcodePlaats = lead
     ? [lead.postcode, lead.plaats].filter(Boolean).join(" ")
     : "";
+
+  useEffect(() => {
+    setCurrent(afspraak);
+    setMode("view");
+    setError(null);
+    setOkMsg(null);
+    setNewStart("");
+    setCustomStart("");
+    setUseCustomTime(false);
+  }, [afspraak]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -246,6 +273,87 @@ function AfspraakDetail({
       document.body.style.overflow = prev;
     };
   }, [onClose]);
+
+  useEffect(() => {
+    if (!current.adviseur_id) return;
+    let cancelledReq = false;
+    queueMicrotask(async () => {
+      const res = await fetch(
+        `/api/adviseurs?adviseur_id=${current.adviseur_id}`
+      );
+      const data = await res.json();
+      if (!cancelledReq) setSlots(data.slots || []);
+    });
+    return () => {
+      cancelledReq = true;
+    };
+  }, [current.adviseur_id]);
+
+  async function verzet() {
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      let resolvedStart = newStart;
+      if (useCustomTime) {
+        if (!customStart) throw new Error("Kies een tijdstip");
+        const parsed = new Date(customStart);
+        if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldig tijdstip");
+        resolvedStart = parsed.toISOString();
+      }
+      if (!resolvedStart) throw new Error("Kies een tijdslot");
+
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "verzet",
+          start_at: resolvedStart,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verzetten mislukt");
+      const next = (data.afspraak as Afspraak) || current;
+      setCurrent(next);
+      onUpdated(next);
+      setMode("view");
+      setOkMsg(
+        data.mail_sent
+          ? "Afspraak verzet — klant heeft een nieuwe bevestiging ontvangen."
+          : "Afspraak verzet."
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verwijder() {
+    if (
+      !confirm(
+        "Afspraak verwijderen? De klant krijgt een annuleringsmail en de afspraak verdwijnt uit de agenda."
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, action: "verwijder" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fout");
+      setBusy(false);
+    }
+  }
 
   return (
     <div
@@ -264,10 +372,10 @@ function AfspraakDetail({
               id="afspraak-detail-title"
               className="mt-0.5 font-display text-xl font-semibold capitalize text-ink sm:text-2xl"
             >
-              {formatDateTimeLongNl(afspraak.start_at)}
+              {formatDateTimeLongNl(current.start_at)}
             </h2>
             <p className="mt-1 text-sm tabular-nums text-muted">
-              {formatTimeNl(afspraak.start_at)} – {formatTimeNl(afspraak.end_at)}
+              {formatTimeNl(current.start_at)} – {formatTimeNl(current.end_at)}
             </p>
           </div>
           <button
@@ -284,7 +392,7 @@ function AfspraakDetail({
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge kind="afspraak" value={afspraak.status} />
+            <StatusBadge kind="afspraak" value={current.status} />
             {mailed && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-[11px] font-semibold text-green-dark">
                 Mail verstuurd
@@ -360,30 +468,30 @@ function AfspraakDetail({
               Adviseur
             </p>
             <p className="mt-1 text-sm font-medium text-ink">
-              {afspraak.adviseurs?.naam || "—"}
+              {current.adviseurs?.naam || "—"}
             </p>
           </section>
 
-          {(jaNeeLabel(afspraak.partner_aanwezig) ||
-            jaNeeLabel(afspraak.andere_offertes_gehad)) && (
+          {(jaNeeLabel(current.partner_aanwezig) ||
+            jaNeeLabel(current.andere_offertes_gehad)) && (
             <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                 Checks
               </p>
               <dl className="mt-3 space-y-2 text-sm">
-                {jaNeeLabel(afspraak.partner_aanwezig) && (
+                {jaNeeLabel(current.partner_aanwezig) && (
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-muted">Partner aanwezig</dt>
                     <dd className="font-semibold text-ink">
-                      {jaNeeLabel(afspraak.partner_aanwezig)}
+                      {jaNeeLabel(current.partner_aanwezig)}
                     </dd>
                   </div>
                 )}
-                {jaNeeLabel(afspraak.andere_offertes_gehad) && (
+                {jaNeeLabel(current.andere_offertes_gehad) && (
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-muted">Andere offertes gehad</dt>
                     <dd className="font-semibold text-ink">
-                      {jaNeeLabel(afspraak.andere_offertes_gehad)}
+                      {jaNeeLabel(current.andere_offertes_gehad)}
                     </dd>
                   </div>
                 )}
@@ -401,17 +509,118 @@ function AfspraakDetail({
               </p>
             </section>
           ) : null}
+
+          {error && (
+            <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+              {error}
+            </p>
+          )}
+          {okMsg && (
+            <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+              {okMsg}
+            </p>
+          )}
+
+          {!cancelled && mode === "verzet" && (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Afspraak verzetten
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Kies een nieuw slot. De klant krijgt een nieuwe bevestigingsmail.
+              </p>
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Nieuw tijdstip
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUseCustomTime((v) => !v);
+                      setNewStart("");
+                      setCustomStart("");
+                    }}
+                    className="text-xs font-medium text-green hover:underline"
+                  >
+                    {useCustomTime ? "Kies vast slot" : "Ander tijdstip…"}
+                  </button>
+                </div>
+                {useCustomTime ? (
+                  <input
+                    type="datetime-local"
+                    value={customStart}
+                    onChange={(e) => setCustomStart(e.target.value)}
+                    className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                  />
+                ) : (
+                  <select
+                    value={newStart}
+                    onChange={(e) => setNewStart(e.target.value)}
+                    className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                  >
+                    <option value="">Kies tijd…</option>
+                    {slots.slice(0, 80).map((s) => (
+                      <option key={s.start_at} value={s.start_at}>
+                        {formatDateTimeNl(s.start_at)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void verzet()}
+                  className="min-h-11 bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
+                >
+                  {busy ? "Bezig…" : "Opslaan & mailen"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setMode("view")}
+                  className="min-h-11 border border-line px-4 py-2.5 text-sm font-semibold text-muted hover:bg-wash"
+                >
+                  Annuleren
+                </button>
+              </div>
+            </section>
+          )}
         </div>
       </div>
 
       <footer className="shrink-0 border-t border-line bg-white px-4 py-4 sm:px-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 sm:flex-row-reverse">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 sm:flex-row-reverse sm:flex-wrap">
           <Link
-            href={`/leads/${afspraak.lead_id}`}
+            href={`/leads/${current.lead_id}`}
             className="flex min-h-12 flex-1 items-center justify-center bg-green px-4 py-3 text-sm font-semibold text-white hover:bg-green-dark"
           >
             Naar lead
           </Link>
+          {!cancelled && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setMode((m) => (m === "verzet" ? "view" : "verzet"));
+                setError(null);
+                setOkMsg(null);
+              }}
+              className="flex min-h-12 flex-1 items-center justify-center border border-green bg-white px-4 py-3 text-sm font-semibold text-green-dark hover:bg-green-soft disabled:opacity-60"
+            >
+              Verzetten
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void verwijder()}
+            className="flex min-h-12 flex-1 items-center justify-center border border-[#C45A12]/30 px-4 py-3 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
+          >
+            Verwijderen
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -1031,6 +1240,20 @@ export function AgendaPanel({
         <AfspraakDetail
           afspraak={selectedAfspraak}
           onClose={() => setSelectedAfspraak(null)}
+          onUpdated={(a) => {
+            setSelectedAfspraak(a);
+            setAfspraken((prev) =>
+              prev.map((x) => (x.id === a.id ? a : x))
+            );
+            const planned = new Date(a.start_at);
+            setWeekAnchor(planned);
+            setSelectedDayKey(dayKeyAmsterdam(planned));
+          }}
+          onDeleted={() => {
+            const id = selectedAfspraak.id;
+            setSelectedAfspraak(null);
+            setAfspraken((prev) => prev.filter((x) => x.id !== id));
+          }}
         />
       )}
     </div>

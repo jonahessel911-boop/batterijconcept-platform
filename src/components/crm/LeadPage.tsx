@@ -39,6 +39,8 @@ export function LeadPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [notitiesDraft, setNotitiesDraft] = useState("");
   const [savingNotities, setSavingNotities] = useState(false);
+  const [terugbelDraft, setTerugbelDraft] = useState("");
+  const [savingTerugbel, setSavingTerugbel] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,6 +118,7 @@ export function LeadPage() {
             : null,
         });
         setNotitiesDraft(leadData.notities || "");
+        setTerugbelDraft(leadData.terugbel_notitie || "");
         setOffertes((o.data as Offerte[]) || []);
         setProjecten((p.data as Project[]) || []);
         setFacturen((f.data as Factuur[]) || []);
@@ -175,6 +178,47 @@ export function LeadPage() {
       if (error) throw error;
     } catch {
       setLead({ ...lead, adviseur_id: prevId, adviseurs: prevJoin });
+    }
+  }
+
+  async function saveTerugbel(actief: boolean) {
+    if (!lead) return;
+    const note = terugbelDraft.trim() || null;
+    if (actief && !note) {
+      setOkMsg("Vul een terugbelnotitie in.");
+      return;
+    }
+    setSavingTerugbel(true);
+    try {
+      const sb = getSupabaseBrowser();
+      const patch = {
+        terugbellen: actief,
+        terugbel_notitie: actief ? note : null,
+      };
+      const { error } = await sb.from("leads").update(patch).eq("id", lead.id);
+      if (error) {
+        if (
+          error.message?.includes("terugbellen") ||
+          error.message?.includes("terugbel_notitie") ||
+          error.code === "42703"
+        ) {
+          throw new Error(
+            "Voer eerst supabase/migrate-lead-terugbellen.sql uit in Supabase."
+          );
+        }
+        throw error;
+      }
+      setLead({ ...lead, ...patch });
+      if (!actief) setTerugbelDraft("");
+      setOkMsg(
+        actief
+          ? "Terugbelnotitie gezet — lead staat gemarkeerd om terug te bellen."
+          : "Terugbellen afgevinkt."
+      );
+    } catch (e) {
+      setOkMsg(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setSavingTerugbel(false);
     }
   }
 
@@ -239,6 +283,11 @@ export function LeadPage() {
             <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-green-deeper sm:text-3xl">
               {lead.naam}
             </h1>
+            {lead.terugbellen && (
+              <p className="mt-2 inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
+                Terugbellen
+              </p>
+            )}
             <p className="mt-2 text-sm text-muted">
               Aangemaakt {formatDateTimeNl(lead.created_at)}
               {lead.bron ? ` · via ${lead.bron}` : ""}
@@ -312,6 +361,56 @@ export function LeadPage() {
             )}
           </div>
         )}
+
+        <div className="mt-5 border-t border-line pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Terugbellen
+            </p>
+            <p className="text-[11px] text-muted">
+              Zichtbaar in de leadlijst tot je het afvinkt
+            </p>
+          </div>
+          {lead.terugbellen && lead.terugbel_notitie?.trim() && (
+            <div className="mt-2 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3 text-sm leading-relaxed text-ink">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+                Terugbelnotitie
+              </p>
+              <p className="mt-1 whitespace-pre-wrap">{lead.terugbel_notitie}</p>
+            </div>
+          )}
+          <textarea
+            value={terugbelDraft}
+            onChange={(e) => setTerugbelDraft(e.target.value)}
+            rows={3}
+            placeholder="Bijv. niet opgenomen, bel morgenavond terug…"
+            className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
+          />
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            {lead.terugbellen && (
+              <button
+                type="button"
+                onClick={() => void saveTerugbel(false)}
+                disabled={savingTerugbel}
+                className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash disabled:opacity-50"
+              >
+                Afgevinkt — gebeld
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void saveTerugbel(true)}
+              disabled={savingTerugbel || !terugbelDraft.trim()}
+              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+            >
+              {savingTerugbel
+                ? "Opslaan…"
+                : lead.terugbellen
+                  ? "Notitie bijwerken"
+                  : "Zet terugbellen"}
+            </button>
+          </div>
+        </div>
 
         <div className="mt-5 border-t border-line pt-5">
           <div className="flex flex-wrap items-center justify-between gap-2">

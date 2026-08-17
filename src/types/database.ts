@@ -108,6 +108,8 @@ export interface Lead {
   status: LeadStatus;
   prioriteit: Prioriteit;
   notities: string | null;
+  terugbellen?: boolean;
+  terugbel_notitie?: string | null;
   adviseur_id: string | null;
   created_at: string;
   updated_at: string;

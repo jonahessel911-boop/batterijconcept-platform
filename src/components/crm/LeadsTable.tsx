@@ -32,6 +32,12 @@ export function LeadsTable({
   onAdviseurChange?: (leadId: string, adviseurId: string | null) => void;
 }) {
   const router = useRouter();
+  const rows = [...leads].sort((a, b) => {
+    const aFlag = a.terugbellen ? 1 : 0;
+    const bFlag = b.terugbellen ? 1 : 0;
+    if (aFlag !== bFlag) return bFlag - aFlag;
+    return 0;
+  });
 
   return (
     <div className="overflow-x-auto">
@@ -83,19 +89,34 @@ export function LeadsTable({
               </td>
             </tr>
           ) : (
-            leads.map((lead) => (
+            rows.map((lead) => (
               <tr
                 key={lead.id}
-                className="cursor-pointer"
+                className={[
+                  "cursor-pointer",
+                  lead.terugbellen ? "bg-[#FFF8F3]" : "",
+                ].join(" ")}
                 onClick={() => router.push(`/leads/${lead.id}`)}
               >
                 <td className="whitespace-nowrap tabular-nums text-muted">
                   {formatDateTimeNl(lead.created_at)}
                 </td>
                 <td>
-                  <span className="font-medium text-ink whitespace-nowrap">
-                    {lead.naam}
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium text-ink whitespace-nowrap">
+                      {lead.naam}
+                    </span>
+                    {lead.terugbellen && (
+                      <span className="inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                        Terugbellen
+                      </span>
+                    )}
                   </span>
+                  {lead.terugbellen && lead.terugbel_notitie?.trim() && (
+                    <p className="mt-0.5 max-w-[18rem] truncate text-[11px] text-[#C45A12]">
+                      {lead.terugbel_notitie}
+                    </p>
+                  )}
                 </td>
                 <td className="text-muted whitespace-nowrap">
                   {adresRegel(lead)}

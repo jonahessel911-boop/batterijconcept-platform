@@ -205,6 +205,33 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
   });
 }
 
+/** Klant: afspraak geannuleerd/verwijderd door backoffice */
+export function afspraakGeannuleerdKlantEmail(opts: {
+  naam: string;
+  startAt: string | Date;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = formatDateTimeLongNl(opts.startAt);
+  return emailLayout({
+    title: "Afspraak geannuleerd — Batterijconcept",
+    preheader: `Je afspraak op ${when} is geannuleerd.`,
+    bodyHtml: [
+      emailH1("Afspraak geannuleerd"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je adviesafspraak bij Batterijconcept is geannuleerd. Hieronder de oorspronkelijke datum en tijd:"
+      ),
+      emailBox(
+        `<p style="margin:0;font-size:15px;"><strong>Geplande tijd</strong><br />${when}</p>`
+      ),
+      emailP(
+        "Wil je een nieuwe afspraak? Mail ons op info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
+      ),
+      emailMuted("Tot snel, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 export function factuurVerzondenEmail(opts: {
   naam: string;
   factuurNummer: string;
