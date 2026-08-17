@@ -135,7 +135,10 @@ export function BelPanel({
     queue.find((l) => l.id === currentId) || queue[0] || null;
 
   const slotsByDay = useMemo(() => {
-    const map = new Map<string, { start_at: string; end_at: string }[]>();
+    const map = new Map<
+      string,
+      { start_at: string; end_at: string; busy?: boolean }[]
+    >();
     for (const s of slots) {
       const key = formatInTimeZone(s.start_at, AMSTERDAM_TZ, "yyyy-MM-dd");
       const list = map.get(key) || [];
