@@ -218,10 +218,12 @@ function AfspraakDetail({
   afspraak,
   onClose,
   onUpdated,
+  onRemoved,
 }: {
   afspraak: Afspraak;
   onClose: () => void;
   onUpdated: (a: Afspraak) => void;
+  onRemoved: (id: string) => void;
 }) {
   const [current, setCurrent] = useState(afspraak);
   const [mode, setMode] = useState<"view" | "verzet" | "annuleer">("view");
@@ -354,19 +356,36 @@ function AfspraakDetail({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Annuleren mislukt");
-      const next = (data.afspraak as Afspraak) || {
-        ...current,
-        status: "geannuleerd" as const,
-      };
-      setCurrent(next);
-      onUpdated(next);
-      setMode("view");
-      setMailKlant(null);
-      setOkMsg(
-        data.mail_sent
-          ? "Afspraak geannuleerd — klant heeft een mail ontvangen. De herinnering gaat niet meer uit."
-          : "Afspraak geannuleerd — geen mail naar de klant. De herinnering gaat niet meer uit."
-      );
+      onRemoved(current.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verwijderDefinitief() {
+    if (
+      !confirm(
+        "Afspraak definitief uit de agenda verwijderen? Dit kan niet ongedaan worden. De klant krijgt geen mail."
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "verwijder_definitief",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      onRemoved(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -626,8 +645,8 @@ function AfspraakDetail({
                 Afspraak annuleren
               </p>
               <p className="mt-1 text-sm text-muted">
-                De afspraak krijgt status geannuleerd. De herinnering 1 dag van
-                tevoren gaat niet meer uit.
+                De afspraak verdwijnt uit de agenda. Bij verzetten gebruik je
+                liever Verzetten — dan blijft de lead gewoon een afspraak.
               </p>
               <div className="mt-4">
                 <JaNeeField
@@ -701,6 +720,14 @@ function AfspraakDetail({
               Annuleren
             </button>
           )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void verwijderDefinitief()}
+            className="flex min-h-12 flex-1 items-center justify-center border border-line px-4 py-3 text-sm font-semibold text-[#8B1E1E] hover:bg-[#FDECEC] disabled:opacity-60"
+          >
+            Definitief verwijderen
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -808,16 +835,14 @@ export function AgendaPanel({
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
-        if (a.status === "geannuleerd") {
-          return new Date(a.start_at) >= new Date();
-        }
+        if (a.status === "geannuleerd") return false;
         if (new Date(a.start_at) < new Date()) return false;
         return true;
       }),
     [afspraken, defaultAdviseurId]
   );
 
-  /** Alle afspraken in de zichtbare week */
+  /** Alle actieve afspraken in de zichtbare week */
   const weekAfspraken = useMemo(() => {
     const startKey = days[0].key;
     const endExclusive = format(
@@ -826,6 +851,7 @@ export function AgendaPanel({
     );
     return afspraken
       .filter((a) => {
+        if (a.status === "geannuleerd") return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
@@ -1336,6 +1362,10 @@ export function AgendaPanel({
             const planned = new Date(a.start_at);
             setWeekAnchor(planned);
             setSelectedDayKey(dayKeyAmsterdam(planned));
+          }}
+          onRemoved={(id) => {
+            setSelectedAfspraak(null);
+            setAfspraken((prev) => prev.filter((x) => x.id !== id));
           }}
         />
       )}

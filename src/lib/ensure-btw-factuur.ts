@@ -1,8 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { aanbetalingVanOrder, RESTANT_VAST_INC_BTW } from "@/lib/aanbetaling";
+import { formatEuro } from "@/lib/format";
 
 /**
- * Maakt een concept BTW-factuur bij een ondertekende offerte (idempotent).
- * Bedrag = BTW van de offerte. Wordt NIET naar de klant gestuurd.
+ * Maakt een concept-aanbetalingsfactuur bij een ondertekende offerte (idempotent).
+ * Aanbetaling = orderbedrag minus €8.500 restant. Over de aanbetaling 21% btw.
+ * Wordt NIET automatisch naar de klant gestuurd.
  */
 export async function ensureBtwDraftFactuur(
   sb: SupabaseClient,
@@ -13,35 +16,48 @@ export async function ensureBtwDraftFactuur(
     offerteNummer: string;
     btwBedrag: number;
     subtotaalExBtw?: number;
+    totaalIncBtw?: number;
   }
 ): Promise<{ id: string; factuur_nummer: string; created: boolean } | null> {
-  const { data: existing } = await sb
+  const aanbetaling = aanbetalingVanOrder({
+    subtotaalExBtw: opts.subtotaalExBtw ?? 0,
+    btwBedrag: opts.btwBedrag,
+    totaalIncBtw: opts.totaalIncBtw,
+  });
+
+  const omschrijving = `Aanbetaling bij ${opts.offerteNummer} (restant ${formatEuro(RESTANT_VAST_INC_BTW)})`;
+  const today = new Date();
+  const verval = new Date(today);
+  verval.setDate(verval.getDate() + 7);
+  const factuurdatum = today.toISOString().slice(0, 10);
+  const vervaldatum = verval.toISOString().slice(0, 10);
+  const notities = `Concept — aanbetaling zodat het restant ${formatEuro(aanbetaling.restantIncBtw)} is. Over de aanbetaling ${aanbetaling.btwPercentage}% btw. Controleer vóór verzending.`;
+
+  const amounts = {
+    omschrijving,
+    bedrag_ex_btw: aanbetaling.bedragExBtw,
+    btw_bedrag: aanbetaling.btwBedrag,
+    bedrag_inc_btw: aanbetaling.bedragIncBtw,
+    notities,
+  };
+
+  const { data: existingList } = await sb
     .from("facturen")
-    .select("id, factuur_nummer")
-    .eq("offerte_id", opts.offerteId)
-    .ilike("omschrijving", "BTW-factuur%")
-    .maybeSingle();
+    .select("id, factuur_nummer, status, omschrijving")
+    .eq("offerte_id", opts.offerteId);
+
+  const existing =
+    (existingList || []).find((f) =>
+      /aanbetaling|btw-factuur/i.test(f.omschrijving || "")
+    ) || existingList?.[0];
 
   if (existing?.id) {
+    if (existing.status === "concept") {
+      await sb.from("facturen").update(amounts).eq("id", existing.id);
+    }
     return {
       id: existing.id,
       factuur_nummer: existing.factuur_nummer,
-      created: false,
-    };
-  }
-
-  // Fallback: any factuur for this offerte
-  const { data: anyFac } = await sb
-    .from("facturen")
-    .select("id, factuur_nummer")
-    .eq("offerte_id", opts.offerteId)
-    .limit(1)
-    .maybeSingle();
-
-  if (anyFac?.id) {
-    return {
-      id: anyFac.id,
-      factuur_nummer: anyFac.factuur_nummer,
       created: false,
     };
   }
@@ -54,11 +70,6 @@ export async function ensureBtwDraftFactuur(
     return null;
   }
 
-  const btw = Math.round(Number(opts.btwBedrag) * 100) / 100;
-  const today = new Date();
-  const verval = new Date(today);
-  verval.setDate(verval.getDate() + 14);
-
   const { data: created, error } = await sb
     .from("facturen")
     .insert({
@@ -67,24 +78,15 @@ export async function ensureBtwDraftFactuur(
       offerte_id: opts.offerteId,
       factuur_nummer: nummer as string,
       status: "concept",
-      omschrijving: `BTW-factuur bij ${opts.offerteNummer}`,
-      // Factuur voor het BTW-bedrag: te betalen = BTW
-      bedrag_ex_btw: 0,
-      btw_bedrag: btw,
-      bedrag_inc_btw: btw,
-      factuurdatum: today.toISOString().slice(0, 10),
-      vervaldatum: verval.toISOString().slice(0, 10),
-      notities: `Concept (draft) — BTW over subtotaal excl. ${
-        opts.subtotaalExBtw != null
-          ? `€ ${Number(opts.subtotaalExBtw).toFixed(2).replace(".", ",")}`
-          : "offerte"
-      }. Controleer vóór verzending naar de klant.`,
+      factuurdatum,
+      vervaldatum,
+      ...amounts,
     })
     .select("id, factuur_nummer")
     .single();
 
   if (error || !created) {
-    console.error("BTW-factuur aanmaken:", error);
+    console.error("Aanbetalingsfactuur aanmaken:", error);
     return null;
   }
 

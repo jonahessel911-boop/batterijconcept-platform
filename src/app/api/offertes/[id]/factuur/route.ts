@@ -18,7 +18,9 @@ export async function POST(
     const sb = getSupabaseAdmin();
     const { data: offerte, error } = await sb
       .from("offertes")
-      .select("id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw")
+      .select(
+        "id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw"
+      )
       .eq("id", id)
       .single();
 
@@ -45,6 +47,7 @@ export async function POST(
       offerteNummer: offerte.offerte_nummer,
       btwBedrag: Number(offerte.btw_bedrag) || 0,
       subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+      totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
     });
 
     if (!factuur) {

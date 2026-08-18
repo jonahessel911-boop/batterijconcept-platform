@@ -179,6 +179,7 @@ export async function POST(
         offerteNummer: offerte.offerte_nummer,
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
       });
     } catch (facErr) {
       console.error("BTW-factuur na ondertekening:", facErr);

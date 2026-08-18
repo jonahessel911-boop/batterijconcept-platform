@@ -169,24 +169,25 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const oms =
     factuur.omschrijving ||
     (offerte
-      ? `BTW 21% over ${formatEuroPdf(Number(offerte.subtotaal_ex_btw))}`
-      : "BTW-factuur");
-  const bedrag = Number(factuur.bedrag_inc_btw);
-  const btwPct = offerte ? "21%" : "—";
+      ? `Aanbetaling bij ${offerte.offerte_nummer} (restant € 8.500,00)`
+      : "Aanbetaling (restant € 8.500,00)");
+  const bedragEx = Number(factuur.bedrag_ex_btw);
+  const bedragInc = Number(factuur.bedrag_inc_btw);
+  const omsLines = doc.splitTextToSize(oms, 88);
 
   doc.setDrawColor(...LINE);
-  doc.rect(margin, y, tableW, 10);
+  doc.rect(margin, y, tableW, Math.max(10, omsLines.length * 4 + 6));
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(...CHARCOAL);
-  doc.text(oms, col.oms + 2, y + 6.5);
+  doc.text(omsLines, col.oms + 2, y + 6);
   doc.text("1", col.aantal, y + 6.5, { align: "right" });
-  doc.text(formatEuroPdf(bedrag), col.prijs, y + 6.5, { align: "right" });
-  doc.text(btwPct, col.btw, y + 6.5, { align: "right" });
-  doc.text(formatEuroPdf(bedrag), col.bedrag - 2, y + 6.5, {
+  doc.text(formatEuroPdf(bedragEx), col.prijs, y + 6.5, { align: "right" });
+  doc.text("21%", col.btw, y + 6.5, { align: "right" });
+  doc.text(formatEuroPdf(bedragEx), col.bedrag - 2, y + 6.5, {
     align: "right",
   });
-  y += 18;
+  y += Math.max(14, omsLines.length * 4 + 10);
 
   if (offerte?.offerte_nummer) {
     doc.setFontSize(8);
@@ -237,7 +238,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.setFont("helvetica", "bold");
   doc.setTextColor(255, 255, 255);
   doc.text("Totaal", totalsX + 2, y + 5.5);
-  doc.text(formatEuroPdf(bedrag), totalsX + totalsW - 2, y + 5.5, {
+  doc.text(formatEuroPdf(bedragInc), totalsX + totalsW - 2, y + 5.5, {
     align: "right",
   });
   y += 16;

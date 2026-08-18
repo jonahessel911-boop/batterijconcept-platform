@@ -227,7 +227,7 @@ export function FactuurPage() {
           />
           <InfoTile label="Klant" value={factuur.leads?.naam} />
           <InfoTile
-            label="Bedrag (BTW)"
+            label="Totaal incl. btw"
             value={formatEuro(factuur.bedrag_inc_btw)}
           />
           <InfoTile

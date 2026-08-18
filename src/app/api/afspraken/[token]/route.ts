@@ -8,6 +8,7 @@ import {
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
 import { generateAvailableSlots, AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
+import { syncLeadNaAfspraak } from "@/lib/afspraak-lead-status";
 
 export const runtime = "nodejs";
 
@@ -120,6 +121,8 @@ export async function POST(
         }
       }
 
+      await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
+
       return NextResponse.json({ ok: true, status: "geannuleerd" });
     }
 
@@ -213,6 +216,7 @@ async function afterVerzet(
   sb: ReturnType<typeof getSupabaseAdmin>,
   updated: {
     id: string;
+    lead_id?: string;
     start_at: string;
     manage_token: string;
     leads?: {
@@ -227,6 +231,10 @@ async function afterVerzet(
     adviseurs?: { naam?: string | null } | null;
   }
 ) {
+  if (updated.lead_id) {
+    await syncLeadNaAfspraak(sb, updated.lead_id);
+  }
+
   const email = updated.leads?.email;
   const manageUrl = `${appBaseUrl()}/afspraak/${updated.manage_token}`;
   // Bij verzetten: direct nieuwe bevestiging (nieuwe tijd bevestigen)

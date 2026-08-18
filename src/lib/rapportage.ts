@@ -11,6 +11,7 @@ import {
   startOfYear,
 } from "date-fns";
 import { nl } from "date-fns/locale";
+import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
 
 const TZ = "Europe/Amsterdam";
 
@@ -217,12 +218,10 @@ export function buildRapportageTree(
       if (!inRange(o.ondertekend_op!, start, end)) continue;
       m.deals += 1;
       m.omzetExBtw += Number(o.subtotaal_ex_btw) || 0;
-    }
-    for (const p of projecten) {
-      const signedOff = signed.find((o) => o.id === p.offerte_id);
-      const when = signedOff?.ondertekend_op || p.created_at;
-      if (!inRange(when, start, end)) continue;
-      m.projectkosten += Number(p.projectkosten) || 0;
+      const project = projecten.find((p) => p.offerte_id === o.id);
+      const kosten = Number(project?.projectkosten) || 0;
+      m.projectkosten +=
+        kosten > 0 ? kosten : STANDAARD_INSTALLATIEKOSTEN;
     }
     for (const k of kosten) {
       const iso = `${k.datum}T12:00:00+02:00`;

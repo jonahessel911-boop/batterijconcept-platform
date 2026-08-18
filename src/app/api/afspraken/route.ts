@@ -8,6 +8,7 @@ import {
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
 import { afspraakGeannuleerdKlantEmail } from "@/lib/email/templates";
+import { syncLeadNaAfspraak } from "@/lib/afspraak-lead-status";
 
 export const runtime = "nodejs";
 
@@ -43,12 +44,18 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  const actions = ["send_bevestiging", "verzet", "verwijder", "annuleer"];
+  const actions = [
+    "send_bevestiging",
+    "verzet",
+    "verwijder",
+    "annuleer",
+    "verwijder_definitief",
+  ];
   if (!body.id || !body.action || !actions.includes(body.action)) {
     return NextResponse.json(
       {
         error:
-          "id en action (send_bevestiging | verzet | annuleer) zijn verplicht",
+          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief) zijn verplicht",
       },
       { status: 400 }
     );
@@ -77,6 +84,22 @@ export async function PATCH(req: NextRequest) {
     const adviseur = Array.isArray(afspraak.adviseurs)
       ? afspraak.adviseurs[0]
       : afspraak.adviseurs;
+
+    if (body.action === "verwijder_definitief") {
+      const leadId = afspraak.lead_id as string;
+      const { error: delErr } = await sb
+        .from("afspraken")
+        .delete()
+        .eq("id", afspraak.id);
+      if (delErr) {
+        return NextResponse.json(
+          { error: "Verwijderen mislukt", detail: delErr.message },
+          { status: 500 }
+        );
+      }
+      await syncLeadNaAfspraak(sb, leadId);
+      return NextResponse.json({ ok: true, deleted: true, id: afspraak.id });
+    }
 
     if (body.action === "verwijder" || body.action === "annuleer") {
       if (typeof body.mail_klant !== "boolean") {
@@ -127,6 +150,8 @@ export async function PATCH(req: NextRequest) {
         });
         mailSent = sent.ok;
       }
+
+      await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
       return NextResponse.json({
         ok: true,
@@ -216,6 +241,8 @@ export async function PATCH(req: NextRequest) {
           { status: 500 }
         );
       }
+
+      await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
       const email = lead?.email?.trim();
       let mailSent = false;

@@ -154,7 +154,7 @@ const HEADERS = [
   "Lead → afspr.",
   "Lead → deal",
   "Omzet",
-  "Projectkosten",
+  "Installatiekosten",
   "Ad spend",
   "Winst",
 ] as const;
@@ -381,8 +381,9 @@ export function RapportagePanel({
           Lead → afspraak = unieke leads met een netto-afspraak ÷ leads. Lead →
           deal = deals ÷ leads. Bruto = alle afspraken in de periode. Netto =
           niet geannuleerd. % uitval = geannuleerd ÷ bruto. Omzet = omzet excl.
-          btw − projectkosten. Winst = omzet excl. btw − projectkosten − ad
-          spend. Projectkosten vul je in op het project.
+          btw − installatiekosten. Winst = omzet excl. btw − installatiekosten −
+          ad spend. Installatiekosten zijn standaard €675 per deal (aanpasbaar
+          op het project).
         </p>
       </div>
     </div>

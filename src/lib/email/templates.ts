@@ -194,7 +194,7 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
       emailH1("Annulering afspraak"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Een klant heeft zojuist een adviesafspraak geannuleerd. De afspraak blijft in de agenda staan met status <strong>Geannuleerd</strong>."
+        "Een klant heeft zojuist een adviesafspraak geannuleerd. De afspraak is uit de agenda gehaald."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}${opts.leadNumber ? ` <span style="color:#5A635C;">(${opts.leadNumber})</span>` : ""}</p>

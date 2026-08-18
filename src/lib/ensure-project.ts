@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
 
 /** Maakt een project aan voor een ondertekende offerte (idempotent). */
 export async function ensureProjectForOfferte(
@@ -77,6 +78,7 @@ export async function ensureProjectForOfferte(
     status: "schouw_inplannen",
     titel,
     notities: `Automatisch aangemaakt na ondertekening van ${opts.offerteNummer}.`,
+    projectkosten: STANDAARD_INSTALLATIEKOSTEN,
   };
   if (partnerId) {
     insertRow.installatie_partner_id = partnerId;

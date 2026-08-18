@@ -305,9 +305,7 @@ export function CrmShell() {
     const now = Date.now();
     return afspraken.filter((a) => {
       if (adviseurFilter && a.adviseur_id !== adviseurFilter) return false;
-      if (a.status === "geannuleerd") {
-        return new Date(a.start_at).getTime() >= now;
-      }
+      if (a.status === "geannuleerd") return false;
       return new Date(a.start_at).getTime() >= now;
     }).length;
   }, [afspraken, adviseurFilter]);

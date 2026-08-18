@@ -7,6 +7,11 @@ import type { Factuur, Offerte, Project, ProjectStatus, ServiceVerzoek } from "@
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
+  aanbetalingVanOrder,
+  openstaandOpOrder,
+} from "@/lib/aanbetaling";
+import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
+import {
   PROJECT_STATUSES,
   projectStatusLabel,
   statusTone,
@@ -64,7 +69,9 @@ export function ProjectPage() {
         const proj = data as Project;
         setProject(proj);
         setKostenInput(
-          proj.projectkosten != null ? String(proj.projectkosten) : "0"
+          proj.projectkosten != null && Number(proj.projectkosten) !== 0
+            ? String(proj.projectkosten)
+            : String(STANDAARD_INSTALLATIEKOSTEN)
         );
 
         const [o, f, sv] = await Promise.all([
@@ -156,6 +163,20 @@ export function ProjectPage() {
     }
   }
 
+  const aanbetaling = offerte
+    ? aanbetalingVanOrder({
+        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+        btwBedrag: Number(offerte.btw_bedrag) || 0,
+        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
+      })
+    : null;
+  const financieel = offerte
+    ? openstaandOpOrder({
+        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
+        facturen,
+      })
+    : null;
+
   if (loading) {
     return (
       <DetailShell activeTab="projecten">
@@ -245,7 +266,7 @@ export function ProjectPage() {
           )}
           <div className="border border-line bg-wash px-4 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Projectkosten (ex btw)
+              Installatiekosten (ex btw)
             </p>
             <div className="mt-1.5 flex gap-2">
               <input
@@ -267,6 +288,31 @@ export function ProjectPage() {
             </div>
           </div>
         </div>
+
+        {financieel && aanbetaling && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <InfoTile
+              label="Orderbedrag incl. btw"
+              value={formatEuro(financieel.orderIncBtw)}
+            />
+            <InfoTile
+              label="Aanbetaling"
+              value={formatEuro(aanbetaling.bedragIncBtw)}
+            />
+            <InfoTile
+              label="Restant"
+              value={formatEuro(aanbetaling.restantIncBtw)}
+            />
+            <InfoTile
+              label="Reeds betaald"
+              value={formatEuro(financieel.reedsBetaald)}
+            />
+            <InfoTile
+              label="Nog te innen"
+              value={formatEuro(financieel.openstaand)}
+            />
+          </div>
+        )}
 
         {project.notities && (
           <p className="mt-6 border-t border-line pt-6 text-sm leading-relaxed text-ink">
