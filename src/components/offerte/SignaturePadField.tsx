@@ -35,7 +35,9 @@ export function SignaturePadField({
     padRef.current = pad;
 
     pad.addEventListener("endStroke", () => {
-      onChange(pad.isEmpty() ? null : pad.toDataURL("image/png"));
+      onChange(
+        pad.isEmpty() ? null : pad.toDataURL("image/jpeg", 0.92)
+      );
     });
 
     resize();

@@ -22,9 +22,12 @@ export function FactuurPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [busy, setBusy] = useState<"pdf" | "send" | null>(null);
+  const [busy, setBusy] = useState<"pdf" | "send" | "paid" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [betaaldOp, setBetaaldOp] = useState(() =>
+    new Date().toISOString().slice(0, 10)
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,6 +52,9 @@ export function FactuurPage() {
       } else {
         const fac = data as Factuur;
         setFactuur(fac);
+        if (fac.betaald_op) {
+          setBetaaldOp(fac.betaald_op.slice(0, 10));
+        }
 
         const [o, p] = await Promise.all([
           fac.offerte_id
@@ -136,6 +142,36 @@ export function FactuurPage() {
     }
   }
 
+  async function markAsPaid() {
+    if (!factuur) return;
+    if (
+      !confirm(
+        `Factuur ${factuur.factuur_nummer} markeren als betaald op ${betaaldOp}?`
+      )
+    ) {
+      return;
+    }
+    setBusy("paid");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "betaald", betaald_op: betaaldOp }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Markeren als betaald mislukt");
+      if (data.factuur) setFactuur(data.factuur as Factuur);
+      else await load();
+      setMsg("Factuur gemarkeerd als betaald.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Markeren mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="facturen">
@@ -156,6 +192,7 @@ export function FactuurPage() {
   }
 
   const isDraft = factuur.status === "concept";
+  const isPaid = factuur.status === "betaald";
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="facturen">
@@ -209,6 +246,25 @@ export function FactuurPage() {
                 ? "Verstuur naar klant"
                 : "Opnieuw versturen"}
           </button>
+          {!isPaid ? (
+            <>
+              <input
+                type="date"
+                value={betaaldOp}
+                onChange={(e) => setBetaaldOp(e.target.value)}
+                className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                aria-label="Betaaldatum"
+              />
+              <button
+                type="button"
+                disabled={busy !== null || !betaaldOp}
+                onClick={markAsPaid}
+                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                {busy === "paid" ? "Opslaan…" : "Markeer als betaald"}
+              </button>
+            </>
+          ) : null}
         </div>
 
         {msg && (
@@ -272,9 +328,11 @@ export function FactuurPage() {
           )}
         </div>
 
-        {factuur.notities && (
+        {(offerte?.offerte_nummer || factuur.notities) && (
           <p className="mt-6 border-t border-line pt-6 text-sm leading-relaxed text-ink">
-            {factuur.notities}
+            {offerte?.offerte_nummer
+              ? `Betreft offerte ${offerte.offerte_nummer}`
+              : factuur.notities}
           </p>
         )}
       </HeroCard>

@@ -11,6 +11,12 @@ import type {
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
   afspraak: "Afspraak",
+  na_afspraak: "Na afspraak",
+  vervolg_fysiek: "Vervolg fysiek",
+  vervolg_tel: "Vervolg telefonisch",
+  vervolg_geen_contact: "Vervolg – geen contact",
+  offerte_afgewezen: "Offerte afgewezen",
+  niet_gekwalificeerd: "Niet gekwalificeerd",
   geen_interesse: "Geen interesse",
   geen_contact: "Geen contact",
   deal: "Deal",
@@ -19,6 +25,12 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
 export const LEAD_STATUSES: LeadStatus[] = [
   "nieuw",
   "afspraak",
+  "na_afspraak",
+  "vervolg_fysiek",
+  "vervolg_tel",
+  "vervolg_geen_contact",
+  "offerte_afgewezen",
+  "niet_gekwalificeerd",
   "geen_interesse",
   "geen_contact",
   "deal",
@@ -102,9 +114,17 @@ export function statusTone(
 
   if (kind === "lead") {
     if (value === "deal") return success;
-    if (value === "afspraak") return yellow;
-    if (value === "geen_contact") return ink;
-    if (value === "geen_interesse") return danger;
+    if (value === "afspraak" || value === "vervolg_fysiek") return yellow;
+    if (value === "na_afspraak") return warn;
+    if (value === "vervolg_tel") return info;
+    if (value === "vervolg_geen_contact" || value === "geen_contact") return ink;
+    if (
+      value === "geen_interesse" ||
+      value === "offerte_afgewezen" ||
+      value === "niet_gekwalificeerd"
+    ) {
+      return danger;
+    }
   }
 
   if (

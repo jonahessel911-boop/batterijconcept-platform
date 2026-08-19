@@ -124,6 +124,8 @@ export async function POST(
       .from("offertes")
       .update({
         status: "ondertekend",
+        actie_required: true,
+        backoffice_afgerond_at: null,
         ondertekend_naam: body.naam.trim(),
         ondertekend_handtekening: body.handtekening,
         ondertekend_op: ondertekendOp.toISOString(),
@@ -180,6 +182,12 @@ export async function POST(
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
         totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
+        financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
+        aanbetalingModus: offerte.aanbetaling_modus,
+        aanbetalingBedragInc:
+          offerte.aanbetaling_bedrag_inc != null
+            ? Number(offerte.aanbetaling_bedrag_inc)
+            : null,
       });
     } catch (facErr) {
       console.error("BTW-factuur na ondertekening:", facErr);

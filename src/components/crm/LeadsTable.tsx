@@ -136,7 +136,7 @@ export function LeadsTable({
                     onChange={(e) =>
                       onStatusChange?.(lead.id, e.target.value as LeadStatus)
                     }
-                    className={`max-w-[9.5rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+                    className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
                     aria-label="Lead status"
                   >
                     {LEAD_STATUSES.map((s) => (

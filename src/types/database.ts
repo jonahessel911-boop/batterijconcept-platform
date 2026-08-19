@@ -1,9 +1,17 @@
 export type LeadStatus =
   | "nieuw"
   | "afspraak"
+  | "na_afspraak"
+  | "vervolg_fysiek"
+  | "vervolg_tel"
+  | "vervolg_geen_contact"
+  | "offerte_afgewezen"
+  | "niet_gekwalificeerd"
   | "geen_interesse"
   | "geen_contact"
   | "deal";
+
+export type AfspraakSoort = "nieuw" | "bel" | "vervolg_fysiek" | "vervolg_tel";
 
 export type Prioriteit = "laag" | "normaal" | "hoog" | "urgent";
 export type OfferteStatus =
@@ -28,12 +36,19 @@ export type FactuurStatus =
   | "vervallen";
 
 export type ServiceVerzoekStatus = "open" | "afgehandeld";
+export type SollicitatieStatus =
+  | "nieuw"
+  | "gescreend"
+  | "gesprek"
+  | "aangenomen"
+  | "afgewezen";
 
 export type CrmTab =
   | "leads"
   | "bellen"
   | "agenda"
   | "offertes"
+  | "instroom"
   | "projecten"
   | "facturen"
   | "rapportage"
@@ -63,6 +78,7 @@ export interface Afspraak {
   start_at: string;
   end_at: string;
   status: AfspraakStatus;
+  soort?: AfspraakSoort;
   titel: string | null;
   notities: string | null;
   partner_aanwezig: boolean | null;
@@ -172,6 +188,13 @@ export interface Offerte {
   waarden_akkoord: boolean | null;
   signed_pdf_path: string | null;
   financiering_voorbehoud?: boolean | null;
+  aanbetaling_modus?: "restant" | "btw" | "handmatig" | null;
+  aanbetaling_bedrag_inc?: number | null;
+  actie_required?: boolean | null;
+  backoffice_afgerond_at?: string | null;
+  aanbetaling_te_innen_inc?: number | null;
+  backoffice_notitie?: string | null;
+  installateur_notitie?: string | null;
   installatie_partner_id?: string | null;
   notities: string | null;
   created_at: string;
@@ -205,6 +228,16 @@ export interface Project {
   installatie_partner_id?: string | null;
   schouw_mail_klant_verstuurd?: boolean;
   schouw_mail_partner_verstuurd?: boolean;
+  installatie_at?: string | null;
+  installatie_notities?: string | null;
+  installatie_mail_klant_verstuurd?: boolean;
+  installatie_mail_partner_verstuurd?: boolean;
+  schouw_herinnering_verstuurd?: boolean;
+  installatie_herinnering_verstuurd?: boolean;
+  aanbetaling_te_innen_inc?: number | null;
+  backoffice_notitie?: string | null;
+  installateur_notitie?: string | null;
+  backoffice_afgerond_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: Pick<
@@ -225,6 +258,31 @@ export interface Project {
     InstallatiePartner,
     "id" | "naam" | "email" | "telefoon"
   > | null;
+}
+
+export interface SollicitatieBestand {
+  id: string;
+  sollicitatie_id: string;
+  storage_path: string;
+  bestandsnaam: string | null;
+  mime_type: string | null;
+  grootte_bytes: number | null;
+  created_at: string;
+  url?: string | null;
+}
+
+export interface Sollicitatie {
+  id: string;
+  naam: string;
+  email: string | null;
+  telefoon: string | null;
+  bron: string | null;
+  status: SollicitatieStatus;
+  notitie: string | null;
+  raw_payload?: unknown;
+  created_at: string;
+  updated_at: string;
+  sollicitatie_bestanden?: SollicitatieBestand[];
 }
 
 export interface ProjectFoto {

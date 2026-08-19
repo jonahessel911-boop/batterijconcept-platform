@@ -68,7 +68,9 @@ function MetricsCells({
       <MetricCell value={m.conversieAfspraak} bold={bold} suffix="%" />
       <MetricCell value={m.conversieDeal} bold={bold} suffix="%" />
       <MetricCell value={m.omzet} money bold={bold} />
+      <MetricCell value={m.betaaldeOmzet} money bold={bold} />
       <MetricCell value={m.projectkosten} money bold={bold} />
+      <MetricCell value={m.inkoop} money bold={bold} />
       <MetricCell value={m.adSpend} money bold={bold} />
       <MetricCell value={m.winst} money bold={bold} danger />
     </>
@@ -154,7 +156,9 @@ const HEADERS = [
   "Lead → afspr.",
   "Lead → deal",
   "Omzet",
+  "Betaalde omzet",
   "Installatiekosten",
+  "Inkoop",
   "Ad spend",
   "Winst",
 ] as const;
@@ -335,7 +339,7 @@ export function RapportagePanel({
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px] border-collapse">
+            <table className="w-full min-w-[1220px] border-collapse">
               <thead>
                 <tr className="border-b border-line bg-[#fafbfa] text-left">
                   {HEADERS.map((h) => (
@@ -380,10 +384,11 @@ export function RapportagePanel({
         <p className="border-t border-line px-4 py-3 text-[11px] text-muted sm:px-5">
           Lead → afspraak = unieke leads met een netto-afspraak ÷ leads. Lead →
           deal = deals ÷ leads. Bruto = alle afspraken in de periode. Netto =
-          niet geannuleerd. % uitval = geannuleerd ÷ bruto. Omzet = omzet excl.
-          btw − installatiekosten. Winst = omzet excl. btw − installatiekosten −
-          ad spend. Installatiekosten zijn standaard €675 per deal (aanpasbaar
-          op het project).
+          niet geannuleerd. % uitval = geannuleerd ÷ bruto. Omzet = getekende
+          offertes excl. btw. Betaalde omzet = betaalde facturen excl. btw
+          (op betaaldatum). Winst = omzet excl. btw − installatiekosten − inkoop
+          − ad spend. Installatiekosten zijn standaard €675 per deal. Inkoop =
+          batterij + omvormer bij Alpha ESS 9,3 kWh (€1.499,73 + €1.089,62).
         </p>
       </div>
     </div>

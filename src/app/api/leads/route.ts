@@ -6,6 +6,48 @@ import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
+function ilikePattern(raw: string): string | null {
+  const q = raw.replace(/[%_,()]/g, " ").trim();
+  if (!q) return null;
+  return `%${q}%`;
+}
+
+/** GET /api/leads?q= — zoek leads op naam, nummer, telefoon of e-mail */
+export async function GET(req: NextRequest) {
+  const q = req.nextUrl.searchParams.get("q") || "";
+  const pattern = ilikePattern(q);
+  if (!pattern) {
+    return NextResponse.json({ leads: [] });
+  }
+
+  try {
+    const sb = getSupabaseAdmin();
+    const { data, error } = await sb
+      .from("leads")
+      .select(
+        "id, naam, lead_number, email, telefoon, notities, postcode, huisnummer, plaats, adviseur_id, status"
+      )
+      .or(
+        [
+          `naam.ilike.${pattern}`,
+          `lead_number.ilike.${pattern}`,
+          `telefoon.ilike.${pattern}`,
+          `email.ilike.${pattern}`,
+        ].join(",")
+      )
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+    return NextResponse.json({ leads: data || [] });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Zoeken mislukt") },
+      { status: 500 }
+    );
+  }
+}
+
 /** POST /api/leads — handmatig lead toevoegen vanuit CRM */
 export async function POST(req: NextRequest) {
   let body: {

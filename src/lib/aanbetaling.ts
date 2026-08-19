@@ -1,36 +1,87 @@
 /** BTW-tarief op de aanbetalingsfactuur. */
 export const AANBETALING_BTW_PERCENTAGE = 21;
 
-/** Restant na aanbetaling is altijd dit bedrag (incl. btw), zolang de order minstens zo hoog is. */
+/** Warmtefonds-plafond (incl. btw) bij modus `restant`. */
 export const RESTANT_VAST_INC_BTW = 8500;
+
+export type AanbetalingModus = "restant" | "btw" | "handmatig";
+
+export const AANBETALING_MODUS_OPTIES: {
+  value: AanbetalingModus;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "restant",
+    label: "Restant € 8.500",
+    hint: "Aanbetaling = totaal incl. btw − € 8.500 (Warmtefonds).",
+  },
+  {
+    value: "btw",
+    label: "BTW-bedrag",
+    hint: "Aanbetaling = 21% btw van de order.",
+  },
+  {
+    value: "handmatig",
+    label: "Handmatig bedrag",
+    hint: "Stel zelf het aanbetalingsbedrag incl. btw in.",
+  },
+];
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+export function parseEuroInput(raw: string): number {
+  return Number(String(raw).replace(/\s/g, "").replace(",", ".")) || 0;
+}
+
+function splitIncToExBtw(inc: number): { ex: number; btw: number; inc: number } {
+  const bedragIncBtw = round2(Math.max(0, inc));
+  const bedragExBtw = round2(
+    bedragIncBtw / (1 + AANBETALING_BTW_PERCENTAGE / 100)
+  );
+  return {
+    ex: bedragExBtw,
+    btw: round2(bedragIncBtw - bedragExBtw),
+    inc: bedragIncBtw,
+  };
+}
+
 export type Aanbetaling = {
+  modus: AanbetalingModus;
   btwPercentage: number;
-  /** Aanbetaling excl. btw (totaal / 1,21) */
   bedragExBtw: number;
-  /** 21% btw over de aanbetaling */
   btwBedrag: number;
-  /** Te betalen op de aanbetalingsfactuur = order minus €8.500 */
+  /** Aanbetaling incl. btw = order − Warmtefonds-deel */
   bedragIncBtw: number;
-  /** Altijd €8.500 als de order minstens zo hoog is, anders het hele orderbedrag */
+  /** Wat na de aanbetaling overblijft (Warmtefonds of rest) */
   restantIncBtw: number;
   orderExBtw: number;
   orderBtw: number;
   orderIncBtw: number;
 };
 
+export function normalizeAanbetalingModus(
+  value: string | null | undefined
+): AanbetalingModus {
+  if (value === "btw" || value === "handmatig" || value === "restant") {
+    return value;
+  }
+  return "restant";
+}
+
 /**
- * Aanbetaling = orderbedrag incl. minus €8.500 restant.
- * Over de aanbetaling wordt 21% btw berekend (bedrag is incl. btw).
+ * Aanbetaling = totaal bedrijfs incl. btw − Warmtefonds-deel.
+ * Alleen bij Warmtefonds (`financieringVoorbehoud`). Over de aanbetaling 21% btw.
  */
 export function aanbetalingVanOrder(opts: {
   subtotaalExBtw: number;
   btwBedrag?: number;
   totaalIncBtw?: number;
+  modus?: AanbetalingModus | string | null;
+  handmatigIncBtw?: number | null;
+  financieringVoorbehoud?: boolean | null;
 }): Aanbetaling {
   const orderExBtw = round2(Number(opts.subtotaalExBtw) || 0);
   const orderBtw =
@@ -42,20 +93,32 @@ export function aanbetalingVanOrder(opts: {
       ? round2(Number(opts.totaalIncBtw))
       : round2(orderExBtw + orderBtw);
 
-  const restantIncBtw = round2(
-    Math.min(RESTANT_VAST_INC_BTW, Math.max(0, orderIncBtw))
-  );
-  const bedragIncBtw = round2(Math.max(0, orderIncBtw - restantIncBtw));
-  const bedragExBtw = round2(
-    bedragIncBtw / (1 + AANBETALING_BTW_PERCENTAGE / 100)
-  );
-  const btwBedrag = round2(bedragIncBtw - bedragExBtw);
+  const modus = normalizeAanbetalingModus(opts.modus);
+  const warmtefonds = Boolean(opts.financieringVoorbehoud);
+
+  let bedragIncBtw = 0;
+  if (warmtefonds) {
+    if (modus === "btw") {
+      bedragIncBtw = round2(Math.min(orderBtw, orderIncBtw));
+    } else if (modus === "handmatig") {
+      const raw = round2(Number(opts.handmatigIncBtw) || 0);
+      bedragIncBtw = round2(Math.min(Math.max(0, raw), orderIncBtw));
+    } else {
+      bedragIncBtw = round2(
+        Math.max(0, orderIncBtw - RESTANT_VAST_INC_BTW)
+      );
+    }
+  }
+
+  const split = splitIncToExBtw(bedragIncBtw);
+  const restantIncBtw = round2(Math.max(0, orderIncBtw - split.inc));
 
   return {
+    modus,
     btwPercentage: AANBETALING_BTW_PERCENTAGE,
-    bedragExBtw,
-    btwBedrag,
-    bedragIncBtw,
+    bedragExBtw: split.ex,
+    btwBedrag: split.btw,
+    bedragIncBtw: split.inc,
     restantIncBtw,
     orderExBtw,
     orderBtw,

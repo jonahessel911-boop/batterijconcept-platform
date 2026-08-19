@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/afspraak-herinneringen",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/project-herinneringen",
+      "schedule": "0 8 * * *"
     }
   ]
 }

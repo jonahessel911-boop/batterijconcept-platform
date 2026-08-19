@@ -45,7 +45,8 @@ export function emailLayout(opts: {
           <tr>
             <td style="background:${WASH};padding:18px 28px;border-top:1px solid #e2e8e4;">
               <p style="margin:0;font-size:12px;color:${MUTED};line-height:1.5;">
-                Batterijconcept.nl · info@batterijconcept.nl · 085 800 1645<br />
+                BatterijConcept · Alfred Nobellaan 68, 3731DW De Bilt · KVK 42141855<br />
+                info@batterijconcept.nl · 085 800 1645<br />
                 Gecertificeerde monteurs · Gratis advies aan huis
               </p>
             </td>

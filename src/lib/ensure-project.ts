@@ -14,13 +14,27 @@ export async function ensureProjectForOfferte(
 ): Promise<{ id: string; project_nummer: string; created: boolean } | null> {
   const { data: offerteMeta } = await sb
     .from("offertes")
-    .select("installatie_partner_id, installatie_partners(naam)")
+    .select(
+      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie"
+    )
     .eq("id", opts.offerteId)
     .maybeSingle();
 
   const partnerId =
     (offerteMeta as { installatie_partner_id?: string | null } | null)
       ?.installatie_partner_id || null;
+  const aanbetalingTeInnen =
+    (
+      offerteMeta as { aanbetaling_te_innen_inc?: number | null } | null
+    )?.aanbetaling_te_innen_inc ?? null;
+  const backofficeNotitie =
+    (
+      offerteMeta as { backoffice_notitie?: string | null } | null
+    )?.backoffice_notitie ?? null;
+  const installateurNotitie =
+    (
+      offerteMeta as { installateur_notitie?: string | null } | null
+    )?.installateur_notitie ?? null;
   const partnerJoin = (
     offerteMeta as {
       installatie_partners?:
@@ -79,6 +93,9 @@ export async function ensureProjectForOfferte(
     titel,
     notities: `Automatisch aangemaakt na ondertekening van ${opts.offerteNummer}.`,
     projectkosten: STANDAARD_INSTALLATIEKOSTEN,
+    aanbetaling_te_innen_inc: aanbetalingTeInnen,
+    backoffice_notitie: backofficeNotitie,
+    installateur_notitie: installateurNotitie,
   };
   if (partnerId) {
     insertRow.installatie_partner_id = partnerId;
@@ -95,9 +112,15 @@ export async function ensureProjectForOfferte(
   if (
     error &&
     (error.message?.includes("installatie_partner_id") ||
+      error.message?.includes("aanbetaling_te_innen_inc") ||
+      error.message?.includes("backoffice_notitie") ||
+      error.message?.includes("installateur_notitie") ||
       error.code === "42703")
   ) {
     delete insertRow.installatie_partner_id;
+    delete insertRow.aanbetaling_te_innen_inc;
+    delete insertRow.backoffice_notitie;
+    delete insertRow.installateur_notitie;
     const retry = await sb
       .from("projecten")
       .insert(insertRow)

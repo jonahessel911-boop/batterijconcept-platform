@@ -19,22 +19,25 @@ import { CrmHeader } from "./CrmHeader";
 import { TabNav } from "./TabNav";
 import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
-import { ProjectenTable } from "./ProjectenTable";
+import { BackofficePanel } from "./BackofficePanel";
 import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaPanel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
+import { InstroomPanel } from "./InstroomPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
 import { inBelQueue } from "@/lib/bel-queue";
+import { appendLeadNotitie } from "@/lib/lead-notitie";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
   "bellen",
   "agenda",
   "offertes",
+  "instroom",
   "projecten",
   "facturen",
   "rapportage",
@@ -65,6 +68,7 @@ export function CrmShell() {
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [projecten, setProjecten] = useState<Project[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [instroomCount, setInstroomCount] = useState(0);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [adviseurFilter, setAdviseurFilter] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -193,7 +197,7 @@ export function CrmShell() {
     setError(null);
     try {
       const sb = getSupabaseBrowser();
-      const [l, a, o, p, f] = await Promise.all([
+      const [l, a, o, p, f, sCount] = await Promise.all([
         sb.from("leads").select("*").order("created_at", { ascending: false }),
         sb
           .from("afspraken")
@@ -207,12 +211,15 @@ export function CrmShell() {
           .order("created_at", { ascending: false }),
         sb
           .from("projecten")
-          .select("*, leads(naam, lead_number)")
+          .select(
+            "*, leads(naam, lead_number), installatie_partners(id, naam)"
+          )
           .order("created_at", { ascending: false }),
         sb
           .from("facturen")
           .select("*, leads(naam, lead_number)")
           .order("created_at", { ascending: false }),
+        sb.from("sollicitaties").select("id", { count: "exact", head: true }),
       ]);
 
       // Toon de echte PostgREST-fout i.p.v. generieke melding
@@ -224,6 +231,7 @@ export function CrmShell() {
       setOffertes((o.data as Offerte[]) || []);
       setProjecten((p.data as Project[]) || []);
       setFacturen((f.data as Factuur[]) || []);
+      setInstroomCount(sCount.count || 0);
       await loadAdviseurs();
     } catch (e) {
       setError(errMessage(e, "Kon data niet laden"));
@@ -290,8 +298,11 @@ export function CrmShell() {
 
   const appointmentLeadIds = useMemo(() => {
     const ids = new Set<string>();
+    const now = Date.now();
     for (const a of afspraken) {
-      if (a.status && a.status !== "geannuleerd") ids.add(a.lead_id);
+      if (a.status === "geannuleerd" || a.status === "voltooid") continue;
+      if (new Date(a.start_at).getTime() < now) continue;
+      ids.add(a.lead_id);
     }
     return ids;
   }, [afspraken]);
@@ -305,7 +316,7 @@ export function CrmShell() {
     const now = Date.now();
     return afspraken.filter((a) => {
       if (adviseurFilter && a.adviseur_id !== adviseurFilter) return false;
-      if (a.status === "geannuleerd") return false;
+      if (a.status === "geannuleerd" || a.status === "voltooid") return false;
       return new Date(a.start_at).getTime() >= now;
     }).length;
   }, [afspraken, adviseurFilter]);
@@ -315,6 +326,7 @@ export function CrmShell() {
     bellen: belQueueCount,
     agenda: upcomingAfsprakenCount,
     offertes: scopedOffertes.length,
+    instroom: instroomCount,
     projecten: scopedProjecten.length,
     facturen: scopedFacturen.length,
   };
@@ -325,14 +337,30 @@ export function CrmShell() {
   }
 
   async function updateLeadStatus(leadId: string, status: LeadStatus) {
+    const current = leads.find((l) => l.id === leadId);
+    let notities = current?.notities ?? null;
+    if (status === "niet_gekwalificeerd") {
+      const reden = window.prompt("Reden: niet goed gekwalificeerd");
+      if (reden === null) return;
+      if (!reden.trim()) {
+        setError("Vul een reden in bij niet gekwalificeerd.");
+        return;
+      }
+      notities = appendLeadNotitie(
+        notities,
+        `Niet gekwalificeerd: ${reden.trim()}`
+      );
+    }
     setLeads((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, status } : l))
+      prev.map((l) =>
+        l.id === leadId ? { ...l, status, notities } : l
+      )
     );
     try {
       const sb = getSupabaseBrowser();
       const { error: err } = await sb
         .from("leads")
-        .update({ status })
+        .update({ status, notities })
         .eq("id", leadId);
       if (err) throw err;
     } catch (e) {
@@ -401,11 +429,15 @@ export function CrmShell() {
         ? `Sales van ${filterLabel}`
         : "Verstuurde en ondertekende offertes",
     },
+    instroom: {
+      title: "Instroom",
+      sub: "Sollicitaties, status, notities en bestanden",
+    },
     projecten: {
-      title: "Projecten",
+      title: "Backoffice",
       sub: filterLabel
-        ? `Projecten van ${filterLabel}`
-        : "Installaties in planning en uitvoering",
+        ? `Backoffice van ${filterLabel}`
+        : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
@@ -527,8 +559,9 @@ export function CrmShell() {
                     onOpenSign={openSignLink}
                   />
                 )}
+                {tab === "instroom" && <InstroomPanel />}
                 {tab === "projecten" && (
-                  <ProjectenTable projecten={scopedProjecten} />
+                  <BackofficePanel projecten={scopedProjecten} />
                 )}
                 {tab === "facturen" && (
                   <FacturenTable facturen={scopedFacturen} />

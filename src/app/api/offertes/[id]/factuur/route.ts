@@ -19,7 +19,7 @@ export async function POST(
     const { data: offerte, error } = await sb
       .from("offertes")
       .select(
-        "id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw"
+        "id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc"
       )
       .eq("id", id)
       .single();
@@ -48,13 +48,19 @@ export async function POST(
       btwBedrag: Number(offerte.btw_bedrag) || 0,
       subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
       totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
+      financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
+      aanbetalingModus: offerte.aanbetaling_modus,
+      aanbetalingBedragInc:
+        offerte.aanbetaling_bedrag_inc != null
+          ? Number(offerte.aanbetaling_bedrag_inc)
+          : null,
     });
 
     if (!factuur) {
-      return NextResponse.json(
-        { error: "BTW-factuur aanmaken mislukt" },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        skipped: true,
+        reason: "Geen aanbetaling voor deze offerte",
+      });
     }
 
     return NextResponse.json({ factuur });

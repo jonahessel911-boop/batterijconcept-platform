@@ -5,7 +5,11 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const MAX_BELPOGINGEN = 7;
 export const MAX_BELPOGINGEN_PER_DAG = 2;
 
-const QUEUE_STATUSES: LeadStatus[] = ["nieuw", "geen_contact"];
+const QUEUE_STATUSES: LeadStatus[] = [
+  "nieuw",
+  "geen_contact",
+  "vervolg_geen_contact",
+];
 
 export function belpogingenOf(lead: Pick<Lead, "belpogingen">): number {
   return Math.max(0, Number(lead.belpogingen) || 0);
@@ -40,6 +44,9 @@ export function inBelQueue(
   if (!lead.telefoon?.trim()) return false;
   if (!QUEUE_STATUSES.includes(lead.status)) return false;
   if (lead.status === "afspraak") return false;
+  if (lead.status === "vervolg_fysiek" || lead.status === "vervolg_tel") {
+    return false;
+  }
   if (appointmentLeadIds?.has(lead.id)) return false;
   if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
   if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;

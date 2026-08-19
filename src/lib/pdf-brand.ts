@@ -15,14 +15,16 @@ export const PDF_COLORS = {
 /** Bedrijfsgegevens voor PDF (env overschrijft defaults). */
 export function companyInfo() {
   return {
-    naam: process.env.COMPANY_NAME || "Batterijconcept",
+    naam: process.env.COMPANY_NAME || "BatterijConcept",
     legal:
-      process.env.COMPANY_LEGAL || "Batterijconcept.nl",
-    adres: process.env.COMPANY_ADDRESS || "Nederland",
-    postcodePlaats: process.env.COMPANY_CITY || "",
+      process.env.COMPANY_LEGAL || "BatterijConcept",
+    adres: process.env.COMPANY_ADDRESS || "Alfred Nobellaan 68",
+    postcodePlaats: process.env.COMPANY_CITY || "3731DW De Bilt",
     land: process.env.COMPANY_COUNTRY || "Nederland",
     btw: process.env.COMPANY_BTW || "",
-    kvk: process.env.COMPANY_KVK || "",
+    kvk: process.env.COMPANY_KVK || "42141855",
+    vestigingsnummer:
+      process.env.COMPANY_VESTIGINGSNUMMER || "000066465834",
     iban: process.env.COMPANY_IBAN || "",
     email: process.env.COMPANY_EMAIL || "info@batterijconcept.nl",
     factuurEmail:

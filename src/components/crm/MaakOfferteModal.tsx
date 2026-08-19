@@ -426,10 +426,9 @@ export function MaakOfferteModal({
                 className="mt-1 accent-green"
               />
               <span>
-                <span className="font-medium">Financiering voorbehoud</span>
+                <span className="font-medium">Warmtefonds</span>
                 <span className="mt-1 block text-xs text-muted">
-                  Toont na ondertekening: “Onder voorbehoud van financiering
-                  Warmtefonds”
+                  Onder voorbehoud van financiering.
                 </span>
               </span>
             </label>

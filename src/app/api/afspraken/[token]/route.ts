@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addMinutes } from "date-fns";
+import { addMinutes, differenceInMinutes } from "date-fns";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { afspraakGeannuleerdAdviseurEmail } from "@/lib/email/templates";
@@ -7,8 +7,14 @@ import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
-import { generateAvailableSlots, AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
+import { generateAvailableSlots } from "@/lib/slots";
+import { blockingBusySlots, hasBlockingOverlap } from "@/lib/afspraak-busy";
 import { syncLeadNaAfspraak } from "@/lib/afspraak-lead-status";
+import {
+  afspraakBlokkeertAgenda,
+  afspraakDuurMinuten,
+  afspraakStuurtMail,
+} from "@/lib/afspraak-soort";
 
 export const runtime = "nodejs";
 
@@ -32,15 +38,14 @@ export async function GET(
       return NextResponse.json({ error: "Afspraak niet gevonden" }, { status: 404 });
     }
 
-    const { data: busy } = await sb
-      .from("afspraken")
-      .select("start_at, end_at")
-      .eq("adviseur_id", afspraak.adviseur_id)
-      .neq("status", "geannuleerd")
-      .neq("id", afspraak.id);
+    const busy = await blockingBusySlots(
+      sb,
+      afspraak.adviseur_id,
+      afspraak.id
+    );
 
     const slots = generateAvailableSlots({
-      busy: busy || [],
+      busy,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -134,22 +139,29 @@ export async function POST(
         );
       }
       const start = new Date(body.start_at);
-      const end = addMinutes(start, AFSPRAAK_DUUR_MINUTEN);
+      const bestaandeDuur = differenceInMinutes(
+        new Date(afspraak.end_at),
+        new Date(afspraak.start_at)
+      );
+      const duurMin =
+        bestaandeDuur > 0
+          ? bestaandeDuur
+          : afspraakDuurMinuten(afspraak.soort);
+      const end = addMinutes(start, duurMin);
 
-      const { data: busy } = await sb
-        .from("afspraken")
-        .select("id")
-        .eq("adviseur_id", afspraak.adviseur_id)
-        .neq("status", "geannuleerd")
-        .neq("id", afspraak.id)
-        .lt("start_at", end.toISOString())
-        .gt("end_at", start.toISOString());
-
-      if (busy && busy.length > 0) {
-        return NextResponse.json(
-          { error: "Dit tijdslot is niet meer beschikbaar" },
-          { status: 409 }
-        );
+      if (afspraakBlokkeertAgenda(afspraak.soort)) {
+        const overlap = await hasBlockingOverlap(sb, {
+          adviseurId: afspraak.adviseur_id,
+          start,
+          end,
+          excludeId: afspraak.id,
+        });
+        if (overlap) {
+          return NextResponse.json(
+            { error: "Dit tijdslot is niet meer beschikbaar" },
+            { status: 409 }
+          );
+        }
       }
 
       const { data: updated, error: upErr } = await sb
@@ -219,6 +231,7 @@ async function afterVerzet(
     lead_id?: string;
     start_at: string;
     manage_token: string;
+    soort?: string | null;
     leads?: {
       naam?: string | null;
       email?: string | null;
@@ -237,8 +250,7 @@ async function afterVerzet(
 
   const email = updated.leads?.email;
   const manageUrl = `${appBaseUrl()}/afspraak/${updated.manage_token}`;
-  // Bij verzetten: direct nieuwe bevestiging (nieuwe tijd bevestigen)
-  if (email) {
+  if (email && afspraakStuurtMail(updated.soort)) {
     const vars = afspraakMailVars({
       naam: updated.leads?.naam || "klant",
       startAt: updated.start_at,

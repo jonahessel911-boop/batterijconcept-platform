@@ -16,9 +16,11 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
 export function ProjectSchouwSection({
   project,
   onChanged,
+  embedded = false,
 }: {
   project: Project;
   onChanged: () => void;
+  embedded?: boolean;
 }) {
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
@@ -29,7 +31,14 @@ export function ProjectSchouwSection({
     project.installatie_partner_id || ""
   );
   const [notities, setNotities] = useState(project.schouw_notities || "");
+  const [installatieAt, setInstallatieAt] = useState(
+    toDatetimeLocalValue(project.installatie_at)
+  );
+  const [installatieNotities, setInstallatieNotities] = useState(
+    project.installatie_notities || ""
+  );
   const [saving, setSaving] = useState(false);
+  const [installatieSaving, setInstallatieSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -56,7 +65,15 @@ export function ProjectSchouwSection({
     setSchouwAt(toDatetimeLocalValue(project.schouw_at));
     setPartnerId(project.installatie_partner_id || "");
     setNotities(project.schouw_notities || "");
-  }, [project.schouw_at, project.installatie_partner_id, project.schouw_notities]);
+    setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
+    setInstallatieNotities(project.installatie_notities || "");
+  }, [
+    project.schouw_at,
+    project.installatie_partner_id,
+    project.schouw_notities,
+    project.installatie_at,
+    project.installatie_notities,
+  ]);
 
   async function planSchouw(e: React.FormEvent) {
     e.preventDefault();
@@ -97,6 +114,45 @@ export function ProjectSchouwSection({
     }
   }
 
+  async function planInstallatie(e: React.FormEvent) {
+    e.preventDefault();
+    setInstallatieSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      if (!installatieAt) throw new Error("Kies een installatiedatum");
+      if (!partnerId) throw new Error("Kies een installatiepartner");
+      const parsed = new Date(installatieAt);
+      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum");
+
+      const res = await fetch(`/api/projecten/${project.id}/installatie`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          installatie_at: parsed.toISOString(),
+          installatie_partner_id: partnerId,
+          installatie_notities: installatieNotities || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
+
+      const parts: string[] = ["Installatie ingepland."];
+      if (data.mails?.klant?.ok) parts.push("Mail naar klant verstuurd.");
+      else if (data.mails?.klant?.error)
+        parts.push(`Klantmail: ${data.mails.klant.error}`);
+      if (data.mails?.partner?.ok) parts.push("Mail naar partner verstuurd.");
+      else if (data.mails?.partner?.error)
+        parts.push(`Partnermail: ${data.mails.partner.error}`);
+      setOkMsg(parts.join(" "));
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setInstallatieSaving(false);
+    }
+  }
+
   async function uploadFoto(file: File) {
     setUploading(true);
     setError(null);
@@ -132,15 +188,8 @@ export function ProjectSchouwSection({
     }
   }
 
-  return (
-    <Panel
-      title="Schouw & installatie"
-      subtitle={
-        project.schouw_at
-          ? formatDateTimeLongNl(project.schouw_at)
-          : "Nog niet gepland"
-      }
-    >
+  const body = (
+    <>
       <form onSubmit={planSchouw} className="space-y-4 px-1 py-2">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
@@ -212,6 +261,64 @@ export function ProjectSchouwSection({
         </button>
       </form>
 
+      <form
+        onSubmit={planInstallatie}
+        className="mt-8 space-y-4 border-t border-line px-1 pt-6"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Installatie plannen
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+            Installatiedatum
+            <input
+              type="datetime-local"
+              required
+              value={installatieAt}
+              onChange={(e) => setInstallatieAt(e.target.value)}
+              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+            />
+          </label>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+            Installatiepartner
+            <select
+              required
+              value={partnerId}
+              onChange={(e) => setPartnerId(e.target.value)}
+              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+            >
+              <option value="">Kies partner…</option>
+              {partners.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.naam}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+          Installatie-notities
+          <textarea
+            value={installatieNotities}
+            onChange={(e) => setInstallatieNotities(e.target.value)}
+            rows={2}
+            placeholder="Bijv. parkeerplek achterom, ladder nodig…"
+            className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={installatieSaving || partners.length === 0}
+          className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+        >
+          {installatieSaving
+            ? "Bezig…"
+            : project.installatie_at
+              ? "Installatie bijwerken & opnieuw mailen"
+              : "Installatie inplannen & mailen"}
+        </button>
+      </form>
+
       <div className="mt-6 border-t border-line px-1 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -262,6 +369,21 @@ export function ProjectSchouwSection({
           </div>
         )}
       </div>
+    </>
+  );
+
+  if (embedded) return <div>{body}</div>;
+
+  return (
+    <Panel
+      title="Schouw & installatie"
+      subtitle={
+        project.schouw_at
+          ? formatDateTimeLongNl(project.schouw_at)
+          : "Nog niet gepland"
+      }
+    >
+      {body}
     </Panel>
   );
 }

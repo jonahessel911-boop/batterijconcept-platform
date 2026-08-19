@@ -303,6 +303,7 @@ export function BelPanel({
           adviseur_id: adviseurId,
           start_at: resolvedStart,
           notities: notities || undefined,
+          soort: "nieuw",
           partner_aanwezig: partnerAanwezig,
           andere_offertes_gehad: andereOffertes,
         }),

@@ -1,10 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { aanbetalingVanOrder, RESTANT_VAST_INC_BTW } from "@/lib/aanbetaling";
+import {
+  aanbetalingVanOrder,
+  normalizeAanbetalingModus,
+  type AanbetalingModus,
+} from "@/lib/aanbetaling";
 import { formatEuro } from "@/lib/format";
 
 /**
- * Maakt een concept-aanbetalingsfactuur bij een ondertekende offerte (idempotent).
- * Aanbetaling = orderbedrag minus €8.500 restant. Over de aanbetaling 21% btw.
+ * Maakt een concept-aanbetalingsfactuur bij een ondertekende Warmtefonds-offerte.
  * Wordt NIET automatisch naar de klant gestuurd.
  */
 export async function ensureBtwDraftFactuur(
@@ -17,21 +20,31 @@ export async function ensureBtwDraftFactuur(
     btwBedrag: number;
     subtotaalExBtw?: number;
     totaalIncBtw?: number;
+    financieringVoorbehoud?: boolean | null;
+    aanbetalingModus?: AanbetalingModus | string | null;
+    aanbetalingBedragInc?: number | null;
   }
 ): Promise<{ id: string; factuur_nummer: string; created: boolean } | null> {
   const aanbetaling = aanbetalingVanOrder({
     subtotaalExBtw: opts.subtotaalExBtw ?? 0,
     btwBedrag: opts.btwBedrag,
     totaalIncBtw: opts.totaalIncBtw,
+    modus: normalizeAanbetalingModus(opts.aanbetalingModus),
+    handmatigIncBtw: opts.aanbetalingBedragInc,
+    financieringVoorbehoud: opts.financieringVoorbehoud,
   });
 
-  const omschrijving = `Aanbetaling bij ${opts.offerteNummer} (restant ${formatEuro(RESTANT_VAST_INC_BTW)})`;
+  if (aanbetaling.bedragIncBtw <= 0) {
+    return null;
+  }
+
+  const omschrijving = `Aanbetaling bij ${opts.offerteNummer} (restant ${formatEuro(aanbetaling.restantIncBtw)})`;
   const today = new Date();
   const verval = new Date(today);
   verval.setDate(verval.getDate() + 7);
   const factuurdatum = today.toISOString().slice(0, 10);
   const vervaldatum = verval.toISOString().slice(0, 10);
-  const notities = `Concept — aanbetaling zodat het restant ${formatEuro(aanbetaling.restantIncBtw)} is. Over de aanbetaling ${aanbetaling.btwPercentage}% btw. Controleer vóór verzending.`;
+  const notities = `Betreft offerte ${opts.offerteNummer}`;
 
   const amounts = {
     omschrijving,

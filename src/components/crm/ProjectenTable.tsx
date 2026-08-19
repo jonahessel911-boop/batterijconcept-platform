@@ -12,7 +12,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
   if (projecten.length === 0) {
     return (
       <div className="px-6 py-14 text-center">
-        <p className="text-sm text-muted">Nog geen projecten.</p>
+        <p className="text-sm text-muted">Nog geen backoffice items.</p>
       </div>
     );
   }

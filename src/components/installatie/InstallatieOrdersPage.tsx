@@ -9,7 +9,7 @@ import {
   adresRegel,
   formatDateTimeNl,
 } from "@/lib/format";
-import { InstallatieSchouwAgenda } from "./InstallatieSchouwAgenda";
+import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 
 type OrderRow = Project & {
   leads?: Project["leads"];
@@ -123,7 +123,12 @@ export function InstallatieOrdersPage() {
             </div>
 
             {tab === "agenda" ? (
-              <InstallatieSchouwAgenda token={token} orders={orders} />
+              <PlanningAgenda
+                orders={orders}
+                linkHref={(event) =>
+                  `/installatie/${token}/orders/${event.order.id}`
+                }
+              />
             ) : orders.length === 0 ? (
               <p className="border border-line bg-white px-4 py-10 text-center text-sm text-muted">
                 Nog geen orders. Zodra Batterijconcept een schouw inplant,
@@ -138,6 +143,7 @@ export function InstallatieOrdersPage() {
                       <th>Klant</th>
                       <th>Adres</th>
                       <th>Schouw</th>
+                      <th>Installatie</th>
                       <th>Status</th>
                       <th>Tel</th>
                     </tr>
@@ -167,6 +173,11 @@ export function InstallatieOrdersPage() {
                           <td className="whitespace-nowrap tabular-nums">
                             {o.schouw_at
                               ? formatDateTimeNl(o.schouw_at)
+                              : "—"}
+                          </td>
+                          <td className="whitespace-nowrap tabular-nums">
+                            {o.installatie_at
+                              ? formatDateTimeNl(o.installatie_at)
                               : "—"}
                           </td>
                           <td className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-muted">

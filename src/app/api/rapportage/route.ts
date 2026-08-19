@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
-    const [leadsRes, afsprakenRes, offertesRes, projectenRes, kostenRes] =
+    const [leadsRes, afsprakenRes, offertesRes, projectenRes, kostenRes, facturenRes] =
       await Promise.all([
         sb.from("leads").select("id, created_at, status, adviseur_id"),
         sb
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
         sb
           .from("offertes")
           .select(
-            "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, leads(adviseur_id)"
+            "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, leads(adviseur_id), offerte_regels(omschrijving, aantal)"
           )
           .eq("status", "ondertekend"),
         sb
@@ -30,6 +30,11 @@ export async function GET(req: NextRequest) {
             "id, lead_id, offerte_id, created_at, projectkosten, leads(adviseur_id)"
           ),
         sb.from("rapportage_kosten").select("datum, soort, bedrag, adviseur_id"),
+        sb
+          .from("facturen")
+          .select(
+            "id, lead_id, status, bedrag_ex_btw, betaald_op, factuurdatum, leads(adviseur_id)"
+          ),
       ]);
 
     // Soft-fail als migraties nog niet gedraaid zijn
@@ -79,6 +84,10 @@ export async function GET(req: NextRequest) {
 
     const offertes = (offertesRes.data || []).map((o) => {
       const lead = o.leads as { adviseur_id?: string | null } | null;
+      const regels = (o.offerte_regels || []) as {
+        omschrijving?: string | null;
+        aantal?: number | null;
+      }[];
       return {
         id: o.id,
         lead_id: o.lead_id,
@@ -87,8 +96,24 @@ export async function GET(req: NextRequest) {
         created_at: o.created_at,
         subtotaal_ex_btw: Number(o.subtotaal_ex_btw) || 0,
         adviseur_id: lead?.adviseur_id ?? null,
+        regels,
       };
     });
+
+    const facturen = (facturenRes.error ? [] : facturenRes.data || []).map(
+      (f) => {
+        const lead = f.leads as { adviseur_id?: string | null } | null;
+        return {
+          id: f.id,
+          lead_id: f.lead_id,
+          status: f.status,
+          bedrag_ex_btw: Number(f.bedrag_ex_btw) || 0,
+          betaald_op: f.betaald_op as string | null,
+          factuurdatum: f.factuurdatum as string,
+          adviseur_id: lead?.adviseur_id ?? null,
+        };
+      }
+    );
 
     if (leadsRes.error) throw leadsRes.error;
     if (afsprakenRes.error) throw afsprakenRes.error;
@@ -106,6 +131,7 @@ export async function GET(req: NextRequest) {
           bedrag: number;
           adviseur_id: string | null;
         }[],
+        facturen,
       },
       adviseurId
     );

@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { Adviseur, Factuur, Lead, LeadStatus, Offerte, Project } from "@/types/database";
+import type {
+  Adviseur,
+  Afspraak,
+  Factuur,
+  Lead,
+  LeadStatus,
+  Offerte,
+  Project,
+} from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
 import { geenContactPogingLabel } from "@/lib/bel-queue";
+import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
@@ -16,8 +25,6 @@ import {
   BackLink,
   Breadcrumb,
   DetailShell,
-  HeroCard,
-  InfoTile,
   NotFoundState,
   Panel,
 } from "./DetailChrome";
@@ -32,6 +39,7 @@ export function LeadPage() {
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [projecten, setProjecten] = useState<Project[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [section, setSection] = useState<Section>("offertes");
   const [loading, setLoading] = useState(true);
@@ -39,9 +47,12 @@ export function LeadPage() {
   const [maakOfferteOpen, setMaakOfferteOpen] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [notitiesDraft, setNotitiesDraft] = useState("");
+  const [editingNotities, setEditingNotities] = useState(false);
   const [savingNotities, setSavingNotities] = useState(false);
   const [terugbelDraft, setTerugbelDraft] = useState("");
   const [savingTerugbel, setSavingTerugbel] = useState(false);
+  const [kwalReden, setKwalReden] = useState("");
+  const [showKwalForm, setShowKwalForm] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,7 +66,7 @@ export function LeadPage() {
 
     try {
       const sb = getSupabaseBrowser();
-      const [l, o, p, f, advRes] = await Promise.all([
+      const [l, o, p, f, a, advRes] = await Promise.all([
         sb.from("leads").select("*").eq("id", id).single(),
         sb
           .from("offertes")
@@ -74,6 +85,14 @@ export function LeadPage() {
           .select("*, leads(naam, lead_number)")
           .eq("lead_id", id)
           .order("created_at", { ascending: false }),
+        sb
+          .from("afspraken")
+          .select("*")
+          .eq("lead_id", id)
+          .in("status", ["gepland", "bevestigd"])
+          .gte("start_at", new Date().toISOString())
+          .order("start_at", { ascending: true })
+          .limit(8),
         fetch("/api/adviseurs").then((r) => r.json()),
       ]);
 
@@ -123,6 +142,7 @@ export function LeadPage() {
         setOffertes((o.data as Offerte[]) || []);
         setProjecten((p.data as Project[]) || []);
         setFacturen((f.data as Factuur[]) || []);
+        setAfspraken((a.data as Afspraak[]) || []);
         setAdviseurs(advList);
       }
     } catch {
@@ -144,20 +164,39 @@ export function LeadPage() {
     window.open(`/offerte/${o.sign_token}`, "_blank");
   }
 
-  async function updateStatus(status: LeadStatus) {
+  async function updateStatus(status: LeadStatus, extraNotitie?: string) {
     if (!lead) return;
+    if (status === "niet_gekwalificeerd" && !extraNotitie?.trim()) {
+      setShowKwalForm(true);
+      return;
+    }
     const prev = lead.status;
-    setLead({ ...lead, status });
+    const prevNotes = lead.notities;
+    const notities = extraNotitie?.trim()
+      ? appendLeadNotitie(lead.notities, extraNotitie.trim())
+      : lead.notities;
+    setLead({ ...lead, status, notities });
+    setShowKwalForm(false);
+    setKwalReden("");
     try {
       const sb = getSupabaseBrowser();
       const { error } = await sb
         .from("leads")
-        .update({ status })
+        .update({ status, notities })
         .eq("id", lead.id);
       if (error) throw error;
     } catch {
-      setLead({ ...lead, status: prev });
+      setLead({ ...lead, status: prev, notities: prevNotes });
     }
+  }
+
+  async function moveToCallcenter() {
+    if (!lead) return;
+    const reden = window.prompt("Notitie voor callcenter (verplicht):");
+    if (reden === null) return;
+    const note = reden.trim();
+    if (!note) return;
+    await updateStatus("vervolg_geen_contact", `Callcenter: ${note}`);
   }
 
   async function updateAdviseur(adviseurId: string | null) {
@@ -236,6 +275,7 @@ export function LeadPage() {
         .eq("id", lead.id);
       if (error) throw error;
       setLead({ ...lead, notities: next });
+      setEditingNotities(false);
       setOkMsg("Notitie opgeslagen.");
     } catch {
       setOkMsg(null);
@@ -265,9 +305,17 @@ export function LeadPage() {
 
   const sections: { id: Section; label: string; count: number }[] = [
     { id: "offertes", label: "Offertes", count: offertes.length },
-    { id: "projecten", label: "Projecten", count: projecten.length },
+    { id: "projecten", label: "Backoffice", count: projecten.length },
     { id: "facturen", label: "Facturen", count: facturen.length },
   ];
+
+  const statusLabel: Record<Afspraak["status"], string> = {
+    gepland: "Gepland",
+    bevestigd: "Bevestigd",
+    verzet: "Verzet",
+    voltooid: "Voltooid",
+    geannuleerd: "Geannuleerd",
+  };
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="leads">
@@ -275,8 +323,8 @@ export function LeadPage() {
         items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
       />
 
-      <HeroCard>
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <section className="border border-line bg-white p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
           <div>
             <p className="font-mono text-xs font-semibold text-green-dark">
               {lead.lead_number}
@@ -340,7 +388,14 @@ export function LeadPage() {
             </select>
             <select
               value={lead.status}
-              onChange={(e) => updateStatus(e.target.value as LeadStatus)}
+              onChange={(e) => {
+                const next = e.target.value as LeadStatus;
+                if (next === "niet_gekwalificeerd") {
+                  setShowKwalForm(true);
+                  return;
+                }
+                void updateStatus(next);
+              }}
               className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
               aria-label="Lead status"
             >
@@ -353,29 +408,156 @@ export function LeadPage() {
           </div>
         </div>
 
-        <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoTile label="E-mail" value={lead.email} />
-          <InfoTile label="Telefoon" value={lead.telefoon} />
-          <InfoTile label="Adres" value={adresRegel(lead)} />
-          <InfoTile
-            label="Adviseur"
-            value={lead.adviseurs?.naam || "Niet gekoppeld"}
-            accent={Boolean(lead.adviseur_id)}
-          />
-        </div>
-
-        {(lead.utm_medium || lead.utm_campaign) && (
-          <div className="mt-5 grid gap-3 border-t border-line pt-5 sm:grid-cols-2">
-            {lead.utm_medium && (
-              <InfoTile label="utm_medium" value={lead.utm_medium} />
-            )}
-            {lead.utm_campaign && (
-              <InfoTile label="utm_campaign" value={lead.utm_campaign} />
-            )}
+        {lead.status === "na_afspraak" && (
+          <div className="mt-6 border border-[#C45A12]/25 bg-[#FFF0E6] px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#C45A12]">
+              Uitkomst afspraak
+            </p>
+            <p className="mt-1 text-sm text-ink">
+              Kies wat er na het bezoek volgt. Vervolg plan je in de agenda.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                href="/?tab=agenda"
+                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
+              >
+                Vervolg afspraak (agenda)
+              </Link>
+              <button
+                type="button"
+                onClick={() => void updateStatus("offerte_afgewezen")}
+                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
+              >
+                Offerte afgewezen
+              </button>
+              <button
+                type="button"
+                onClick={() => void moveToCallcenter()}
+                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
+              >
+                Callcenter
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowKwalForm(true)}
+                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
+              >
+                Niet goed gekwalificeerd
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="mt-5 border-t border-line pt-5">
+        {showKwalForm && (
+          <div className="mt-4 border border-line bg-wash px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Reden niet gekwalificeerd
+            </p>
+            <textarea
+              value={kwalReden}
+              onChange={(e) => setKwalReden(e.target.value)}
+              rows={3}
+              placeholder="Waarom is deze lead niet goed gekwalificeerd?"
+              className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                disabled={!kwalReden.trim()}
+                onClick={() =>
+                  void updateStatus(
+                    "niet_gekwalificeerd",
+                    `Niet gekwalificeerd: ${kwalReden.trim()}`
+                  )
+                }
+                className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
+              >
+                Opslaan
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowKwalForm(false);
+                  setKwalReden("");
+                }}
+                className="border border-line px-3 py-2 text-xs font-semibold text-muted hover:bg-white"
+              >
+                Annuleren
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+          <section>
+            <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Basis info
+            </h2>
+            <dl className="mt-2 divide-y divide-line border-y border-line">
+              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                <dt className="font-semibold text-muted">E-mail</dt>
+                <dd className="text-ink">{lead.email || "—"}</dd>
+              </div>
+              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                <dt className="font-semibold text-muted">Telefoon</dt>
+                <dd className="text-ink">{lead.telefoon || "—"}</dd>
+              </div>
+              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                <dt className="font-semibold text-muted">Adres</dt>
+                <dd className="text-ink">{adresRegel(lead) || "—"}</dd>
+              </div>
+              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                <dt className="font-semibold text-muted">Adviseur</dt>
+                <dd className={lead.adviseur_id ? "text-orange" : "text-ink"}>
+                  {lead.adviseurs?.naam || "Niet gekoppeld"}
+                </dd>
+              </div>
+              {(lead.utm_medium || lead.utm_campaign) && (
+                <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                  <dt className="font-semibold text-muted">Campagne</dt>
+                  <dd className="text-ink">
+                    {[lead.utm_medium, lead.utm_campaign].filter(Boolean).join(" · ")}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </section>
+
+          <section>
+            <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Geplande afspraken
+            </h2>
+            {afspraken.length === 0 ? (
+              <p className="mt-2 border-y border-line py-4 text-sm text-muted">
+                Geen geplande afspraken.
+              </p>
+            ) : (
+              <ul className="mt-2 divide-y divide-line border-y border-line">
+                {afspraken.map((afspraak) => (
+                  <li
+                    key={afspraak.id}
+                    className="flex flex-wrap items-center justify-between gap-3 py-3"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-ink">
+                        {formatDateTimeNl(afspraak.start_at)}
+                      </p>
+                      <p className="text-xs text-muted">
+                        {statusLabel[afspraak.status]}
+                        {afspraak.soort ? ` · ${afspraak.soort}` : ""}
+                      </p>
+                    </div>
+                    {afspraak.notities?.trim() && (
+                      <p className="text-xs text-muted">{afspraak.notities}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <div className="mt-6 border-t border-line pt-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
               Terugbellen
@@ -427,35 +609,70 @@ export function LeadPage() {
 
         <div className="mt-5 border-t border-line pt-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Notities
-            </p>
+            <button
+              type="button"
+              onClick={() => setEditingNotities((v) => !v)}
+              className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:text-green-dark"
+            >
+              <span>Notities</span>
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                aria-hidden
+              >
+                <path d="M4 20h4l10-10-4-4L4 16v4Z" />
+                <path d="m12 6 4 4" />
+              </svg>
+            </button>
             <p className="text-[11px] text-muted">
               Zichtbaar bij afspraken in de agenda
             </p>
           </div>
-          <textarea
-            value={notitiesDraft}
-            onChange={(e) => setNotitiesDraft(e.target.value)}
-            rows={4}
-            placeholder="Bijv. zonnepanelen aanwezig, bel vooraf, sleutel bij buren…"
-            className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
-          />
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => void saveNotities()}
-              disabled={
-                savingNotities ||
-                (lead.notities || "") === (notitiesDraft.trim() || "")
-              }
-              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-            >
-              {savingNotities ? "Opslaan…" : "Notitie opslaan"}
-            </button>
-          </div>
+          {!editingNotities ? (
+            <div className="mt-2 min-h-24 border-y border-line py-3 text-sm leading-relaxed text-ink">
+              {lead.notities?.trim() || (
+                <span className="text-muted">Nog geen notities. Klik op het potlood om te bewerken.</span>
+              )}
+            </div>
+          ) : (
+            <>
+              <textarea
+                value={notitiesDraft}
+                onChange={(e) => setNotitiesDraft(e.target.value)}
+                rows={4}
+                placeholder="Bijv. zonnepanelen aanwezig, bel vooraf, sleutel bij buren…"
+                className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNotitiesDraft(lead.notities || "");
+                    setEditingNotities(false);
+                  }}
+                  className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash"
+                >
+                  Annuleren
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveNotities()}
+                  disabled={
+                    savingNotities ||
+                    (lead.notities || "") === (notitiesDraft.trim() || "")
+                  }
+                  className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+                >
+                  {savingNotities ? "Opslaan…" : "Notitie opslaan"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
-      </HeroCard>
+      </section>
 
       {okMsg && (
         <div className="mb-4 border border-green/30 bg-green-soft px-4 py-3 text-sm text-green-dark">

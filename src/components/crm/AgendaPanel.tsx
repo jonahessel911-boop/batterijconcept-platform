@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   addDays,
@@ -10,7 +10,7 @@ import {
 } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import type { Adviseur, Afspraak, Lead } from "@/types/database";
+import type { Adviseur, Afspraak, AfspraakSoort, Lead } from "@/types/database";
 import {
   AMSTERDAM_TZ,
   adresRegel,
@@ -20,6 +20,13 @@ import {
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import {
+  afspraakBlokkeertAgenda,
+  afspraakSoortLabel,
+  afspraakStuurtMail,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
+import { LeadZoekVeld } from "./LeadZoekVeld";
 
 type AgendaDay = { key: string; date: Date };
 
@@ -72,6 +79,94 @@ function jaNeeLabel(v: boolean | null | undefined): string | null {
   if (v === true) return "Ja";
   if (v === false) return "Nee";
   return null;
+}
+
+function PlanSoortPicker({
+  step,
+  onPick,
+}: {
+  step: "kies" | "vervolg";
+  onPick: (v: AfspraakSoort | "vervolg" | null) => void;
+}) {
+  if (step === "vervolg") {
+    return (
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => onPick(null)}
+          className="text-xs font-medium text-green hover:underline"
+        >
+          ← Terug
+        </button>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Vervolg
+        </p>
+        <button
+          type="button"
+          onClick={() => onPick("vervolg_fysiek")}
+          className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+        >
+          <span className="block text-sm font-semibold text-ink">
+            Vervolg fysiek
+          </span>
+          <span className="mt-0.5 block text-xs text-muted">
+            Blokkeert het slot — planning kan er niet overheen
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onPick("vervolg_tel")}
+          className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+        >
+          <span className="block text-sm font-semibold text-ink">
+            Vervolg telefonisch
+          </span>
+          <span className="mt-0.5 block text-xs text-muted">
+            Geen mail — planning mag er een afspraak overheen zetten
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => onPick("nieuw")}
+        className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+      >
+        <span className="block text-sm font-semibold text-ink">
+          Afspraak nieuw
+        </span>
+        <span className="mt-0.5 block text-xs text-muted">
+          Huisbezoek, bevestigingsmail, blokkeert het slot
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("bel")}
+        className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+      >
+        <span className="block text-sm font-semibold text-ink">
+          Belafspraak
+        </span>
+        <span className="mt-0.5 block text-xs text-muted">
+          Geen mail nodig — planning mag eroverheen boeken
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("vervolg")}
+        className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+      >
+        <span className="block text-sm font-semibold text-ink">Vervolg</span>
+        <span className="mt-0.5 block text-xs text-muted">
+          Fysiek of telefonisch
+        </span>
+      </button>
+    </div>
+  );
 }
 
 function JaNeeField({
@@ -127,10 +222,14 @@ function wazeUrl(query: string): string {
   return `https://waze.com/ul?q=${encodeURIComponent(query)}&navigate=yes`;
 }
 
-function statusAccent(status: Afspraak["status"]): string {
+function statusAccent(afspraak: Afspraak): string {
+  const status = afspraak.status;
   if (status === "geannuleerd") return "border-l-[#9aa39c] bg-[#f3f5f4]";
   if (status === "verzet") return "border-l-[#C45A12] bg-[#FFF8F3]";
   if (status === "voltooid") return "border-l-[#5a635c] bg-[#f5f7f6]";
+  if (!afspraakBlokkeertAgenda(afspraak.soort)) {
+    return "border-l-[#1A4A6E] bg-[#E8F0F6]";
+  }
   return "border-l-green bg-green-soft/70";
 }
 
@@ -183,6 +282,9 @@ function AfspraakChip({
             </span>
             <span className="mt-0.5 block truncate text-xs text-muted">
               {afspraak.adviseurs?.naam || "—"}
+              {afspraak.soort && afspraak.soort !== "nieuw"
+                ? ` · ${afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)]}`
+                : ""}
             </span>
           </span>
           <StatusBadge kind="afspraak" value={afspraak.status} />
@@ -198,7 +300,7 @@ function AfspraakChip({
       title={`${formatTimeNl(afspraak.start_at)} · ${naam}`}
       className={[
         "group w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left transition",
-        statusAccent(afspraak.status),
+        statusAccent(afspraak),
         "hover:brightness-[0.98] hover:shadow-sm",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-green",
         cancelled ? "opacity-50 line-through" : "",
@@ -210,6 +312,92 @@ function AfspraakChip({
       <span className="mt-1 block truncate text-[12px] font-semibold leading-tight text-ink">
         {naam}
       </span>
+      {afspraak.soort && afspraak.soort !== "nieuw" && (
+        <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
+          {afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)]}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function Icon({
+  children,
+  className = "h-6 w-6",
+  strokeWidth = "2",
+}: {
+  children: ReactNode;
+  className?: string;
+  strokeWidth?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
+function FooterAction({
+  label,
+  icon,
+  href,
+  onClick,
+  disabled,
+  tone = "ink",
+}: {
+  label: string;
+  icon: ReactNode;
+  href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  tone?: "ink" | "green" | "warn" | "danger" | "muted";
+}) {
+  const tones = {
+    ink: "text-ink hover:bg-wash",
+    green: "text-green-dark hover:bg-green-soft",
+    warn: "text-[#C45A12] hover:bg-[#FFF0E6]",
+    danger: "text-[#8B1E1E] hover:bg-[#FDECEC]",
+    muted: "text-muted hover:bg-wash",
+  };
+  const className = [
+    "flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-2.5",
+    "text-[11px] font-semibold leading-tight",
+    "disabled:opacity-40",
+    tones[tone],
+  ].join(" ");
+
+  const inner = (
+    <>
+      {icon}
+      <span className="text-center">{label}</span>
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} className={className}>
+        {inner}
+      </Link>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={className}
+    >
+      {inner}
     </button>
   );
 }
@@ -240,6 +428,7 @@ function AfspraakDetail({
 
   const note = appointmentNote(current);
   const mailed = Boolean(current.bevestiging_verstuurd);
+  const magKlantMail = afspraakStuurtMail(current.soort);
   const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
@@ -304,7 +493,7 @@ function AfspraakDetail({
         resolvedStart = parsed.toISOString();
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
-      if (mailKlant === null) {
+      if (magKlantMail && mailKlant === null) {
         throw new Error("Kies of de klant een mail moet krijgen (ja/nee)");
       }
 
@@ -315,7 +504,7 @@ function AfspraakDetail({
           id: current.id,
           action: "verzet",
           start_at: resolvedStart,
-          mail_klant: mailKlant,
+          mail_klant: magKlantMail ? mailKlant : false,
         }),
       });
       const data = await res.json();
@@ -338,7 +527,7 @@ function AfspraakDetail({
   }
 
   async function annuleer() {
-    if (mailKlant === null) {
+    if (magKlantMail && mailKlant === null) {
       setError("Kies of de klant een mail moet krijgen (ja/nee)");
       return;
     }
@@ -351,7 +540,7 @@ function AfspraakDetail({
         body: JSON.stringify({
           id: current.id,
           action: "annuleer",
-          mail_klant: mailKlant,
+          mail_klant: magKlantMail ? mailKlant : false,
         }),
       });
       const data = await res.json();
@@ -401,10 +590,10 @@ function AfspraakDetail({
       className="fixed inset-0 z-50 flex flex-col bg-wash"
     >
       <header className="shrink-0 border-b border-line bg-white px-4 py-4 sm:px-6">
-        <div className="mx-auto flex w-full max-w-3xl items-start justify-between gap-3">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-              Afspraak
+              {afspraakSoortLabel[normalizeAfspraakSoort(current.soort)]}
             </p>
             <h2
               id="afspraak-detail-title"
@@ -419,10 +608,12 @@ function AfspraakDetail({
           <button
             type="button"
             onClick={onClose}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line text-lg text-muted hover:bg-wash hover:text-ink"
+            className="-mr-1 flex h-20 w-20 shrink-0 items-center justify-center rounded-full text-ink hover:bg-wash"
             aria-label="Sluiten"
           >
-            ×
+            <Icon className="h-11 w-11" strokeWidth="2.5">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </Icon>
           </button>
         </div>
       </header>
@@ -431,7 +622,7 @@ function AfspraakDetail({
         <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge kind="afspraak" value={current.status} />
-            {mailed && (
+            {mailed && magKlantMail && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-[11px] font-semibold text-green-dark">
                 Mail verstuurd
               </span>
@@ -482,17 +673,27 @@ function AfspraakDetail({
                     href={wazeUrl(adres)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex min-h-12 items-center justify-center rounded-xl bg-[#33CCFF] px-4 py-3 text-sm font-bold text-[#0A2A3A] hover:brightness-95"
+                    className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#33CCFF] px-4 py-3 text-sm font-bold text-[#0A2A3A] hover:brightness-95"
                   >
-                    Open in Waze
+                    <Icon className="h-5 w-5" strokeWidth="2.2">
+                      <circle cx="12" cy="12" r="9" />
+                      <circle cx="9" cy="14" r="0.8" />
+                      <circle cx="15" cy="14" r="0.8" />
+                      <path d="M8.5 10.5c.9-1.2 2.1-1.8 3.5-1.8s2.6.6 3.5 1.8" />
+                    </Icon>
+                    <span>Navigeer met Waze</span>
                   </a>
                   <a
                     href={googleMapsUrl(adres)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex min-h-12 items-center justify-center rounded-xl bg-green px-4 py-3 text-sm font-bold text-white hover:bg-green-dark"
+                    className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-green px-4 py-3 text-sm font-bold text-white hover:bg-green-dark"
                   >
-                    Open in Google Maps
+                    <Icon className="h-5 w-5" strokeWidth="2.2">
+                      <path d="M12 21s6-5.3 6-11a6 6 0 1 0-12 0c0 5.7 6 11 6 11Z" />
+                      <circle cx="12" cy="10" r="2.2" />
+                    </Icon>
+                    <span>Navigeer met Google Maps</span>
                   </a>
                 </div>
               </>
@@ -565,8 +766,9 @@ function AfspraakDetail({
                 Afspraak verzetten
               </p>
               <p className="mt-1 text-sm text-muted">
-                Kies een nieuw slot. De herinnering van 24 uur schuift mee naar
-                de nieuwe datum.
+                {magKlantMail
+                  ? "Kies een nieuw slot. De herinnering van 24 uur schuift mee naar de nieuwe datum."
+                  : "Kies een nieuw slot. De klant krijgt hier geen mail van."}
               </p>
               <div className="mt-4 space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -607,13 +809,15 @@ function AfspraakDetail({
                   </select>
                 )}
               </div>
-              <div className="mt-4">
-                <JaNeeField
-                  label="Klant mailen over deze wijziging?"
-                  value={mailKlant}
-                  onChange={setMailKlant}
-                />
-              </div>
+              {magKlantMail && (
+                <div className="mt-4">
+                  <JaNeeField
+                    label="Klant mailen over deze wijziging?"
+                    value={mailKlant}
+                    onChange={setMailKlant}
+                  />
+                </div>
+              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -645,16 +849,20 @@ function AfspraakDetail({
                 Afspraak annuleren
               </p>
               <p className="mt-1 text-sm text-muted">
-                De afspraak verdwijnt uit de agenda. Bij verzetten gebruik je
-                liever Verzetten — dan blijft de lead gewoon een afspraak.
+                De afspraak verdwijnt uit de agenda.
+                {magKlantMail
+                  ? ""
+                  : " De klant krijgt hier geen mail van."}
               </p>
-              <div className="mt-4">
-                <JaNeeField
-                  label="Klant mailen over deze wijziging?"
-                  value={mailKlant}
-                  onChange={setMailKlant}
-                />
-              </div>
+              {magKlantMail && (
+                <div className="mt-4">
+                  <JaNeeField
+                    label="Klant mailen over deze wijziging?"
+                    value={mailKlant}
+                    onChange={setMailKlant}
+                  />
+                </div>
+              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -682,17 +890,23 @@ function AfspraakDetail({
         </div>
       </div>
 
-      <footer className="shrink-0 border-t border-line bg-white px-4 py-4 sm:px-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 sm:flex-row-reverse sm:flex-wrap">
-          <Link
+      <footer className="shrink-0 border-t border-line bg-white px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1 sm:px-4">
+        <div className="mx-auto flex w-full max-w-3xl items-stretch">
+          <FooterAction
+            label="Lead"
+            tone="green"
             href={`/leads/${current.lead_id}`}
-            className="flex min-h-12 flex-1 items-center justify-center bg-green px-4 py-3 text-sm font-semibold text-white hover:bg-green-dark"
-          >
-            Naar lead
-          </Link>
+            icon={
+              <Icon>
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </Icon>
+            }
+          />
           {!cancelled && (
-            <button
-              type="button"
+            <FooterAction
+              label="Verzetten"
+              tone="ink"
               disabled={busy}
               onClick={() => {
                 setMode((m) => (m === "verzet" ? "view" : "verzet"));
@@ -700,14 +914,18 @@ function AfspraakDetail({
                 setError(null);
                 setOkMsg(null);
               }}
-              className="flex min-h-12 flex-1 items-center justify-center border border-green bg-white px-4 py-3 text-sm font-semibold text-green-dark hover:bg-green-soft disabled:opacity-60"
-            >
-              Verzetten
-            </button>
+              icon={
+                <Icon>
+                  <rect x="3" y="4" width="18" height="18" rx="2" />
+                  <path d="M16 2v4M8 2v4M3 10h18" />
+                </Icon>
+              }
+            />
           )}
           {!cancelled && (
-            <button
-              type="button"
+            <FooterAction
+              label="Annuleren"
+              tone="warn"
               disabled={busy}
               onClick={() => {
                 setMode((m) => (m === "annuleer" ? "view" : "annuleer"));
@@ -715,26 +933,25 @@ function AfspraakDetail({
                 setError(null);
                 setOkMsg(null);
               }}
-              className="flex min-h-12 flex-1 items-center justify-center border border-[#C45A12]/30 px-4 py-3 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
-            >
-              Annuleren
-            </button>
+              icon={
+                <Icon>
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m9 9 6 6M15 9l-6 6" />
+                </Icon>
+              }
+            />
           )}
-          <button
-            type="button"
+          <FooterAction
+            label="Verwijderen"
+            tone="danger"
             disabled={busy}
             onClick={() => void verwijderDefinitief()}
-            className="flex min-h-12 flex-1 items-center justify-center border border-line px-4 py-3 text-sm font-semibold text-[#8B1E1E] hover:bg-[#FDECEC] disabled:opacity-60"
-          >
-            Definitief verwijderen
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex min-h-12 flex-1 items-center justify-center border border-line px-4 py-3 text-sm font-semibold text-muted hover:bg-wash"
-          >
-            Sluiten
-          </button>
+            icon={
+              <Icon>
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+              </Icon>
+            }
+          />
         </div>
       </footer>
     </div>
@@ -753,16 +970,22 @@ export function AgendaPanel({
   const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
     []
   );
+  const [blocks, setBlocks] = useState<
+    { start_at: string; end_at: string; busy?: boolean }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [planKeuze, setPlanKeuze] = useState<AfspraakSoort | "vervolg" | null>(
+    null
+  );
   const [selectedAfspraak, setSelectedAfspraak] = useState<Afspraak | null>(
     null
   );
 
-  const [leadId, setLeadId] = useState("");
+  const [pickedLead, setPickedLead] = useState<Lead | null>(null);
   const [adviseurId, setAdviseurId] = useState(defaultAdviseurId || "");
   const [startAt, setStartAt] = useState("");
   const [customStart, setCustomStart] = useState("");
@@ -822,7 +1045,10 @@ export function AgendaPanel({
     queueMicrotask(async () => {
       const res = await fetch(`/api/adviseurs?adviseur_id=${adviseurId}`);
       const data = await res.json();
-      if (!cancelled) setSlots(data.slots || []);
+      if (!cancelled) {
+        setSlots(data.slots || []);
+        setBlocks(data.blocks || []);
+      }
     });
     return () => {
       cancelled = true;
@@ -835,7 +1061,7 @@ export function AgendaPanel({
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
-        if (a.status === "geannuleerd") return false;
+        if (a.status === "geannuleerd" || a.status === "voltooid") return false;
         if (new Date(a.start_at) < new Date()) return false;
         return true;
       }),
@@ -851,7 +1077,7 @@ export function AgendaPanel({
     );
     return afspraken
       .filter((a) => {
-        if (a.status === "geannuleerd") return false;
+        if (a.status === "geannuleerd" || a.status === "voltooid") return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
@@ -884,10 +1110,7 @@ export function AgendaPanel({
 
   const selectedDayAfspraken = byDay.get(selectedDayKey) || [];
 
-  const selectedLead = useMemo(
-    () => leads.find((l) => l.id === leadId) || null,
-    [leads, leadId]
-  );
+  const selectedLead = pickedLead;
 
   useEffect(() => {
     if (!selectedLead) return;
@@ -911,8 +1134,26 @@ export function AgendaPanel({
     setSelectedDayKey(dayKeyAmsterdam(now));
   }
 
+  const planSoort: AfspraakSoort | null =
+    planKeuze && planKeuze !== "vervolg" ? planKeuze : null;
+  const isHuisbezoek = planSoort === "nieuw";
+  const timeOptions =
+    planSoort && !afspraakBlokkeertAgenda(planSoort) && blocks.length > 0
+      ? blocks
+      : slots;
+
+  function resetPlanFields() {
+    setStartAt("");
+    setCustomStart("");
+    setNotities("");
+    setPickedLead(null);
+    setPartnerAanwezig(null);
+    setAndereOffertes(null);
+  }
+
   async function plan(e: React.FormEvent) {
     e.preventDefault();
+    if (!planSoort) return;
     setSaving(true);
     setError(null);
     setOkMsg(null);
@@ -927,10 +1168,11 @@ export function AgendaPanel({
         resolvedStart = parsed.toISOString();
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
-      if (partnerAanwezig === null) {
+      if (!pickedLead?.id) throw new Error("Kies een lead");
+      if (isHuisbezoek && partnerAanwezig === null) {
         throw new Error("Beantwoord: Partner aanwezig?");
       }
-      if (andereOffertes === null) {
+      if (isHuisbezoek && andereOffertes === null) {
         throw new Error("Beantwoord: Andere offertes al gehad?");
       }
 
@@ -938,12 +1180,17 @@ export function AgendaPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          lead_id: leadId,
+          lead_id: pickedLead.id,
           adviseur_id: adviseurId,
           start_at: resolvedStart,
           notities: notities || undefined,
-          partner_aanwezig: partnerAanwezig,
-          andere_offertes_gehad: andereOffertes,
+          soort: planSoort,
+          ...(isHuisbezoek
+            ? {
+                partner_aanwezig: partnerAanwezig,
+                andere_offertes_gehad: andereOffertes,
+              }
+            : {}),
         }),
       });
       const data = await res.json();
@@ -955,13 +1202,10 @@ export function AgendaPanel({
           `Afspraak gepland — mail niet verstuurd: ${data.bevestiging_error}`
         );
       } else {
-        setOkMsg("Afspraak gepland.");
+        setOkMsg("Gepland.");
       }
-      setStartAt("");
-      setCustomStart("");
-      setNotities("");
-      setPartnerAanwezig(null);
-      setAndereOffertes(null);
+      resetPlanFields();
+      setPlanKeuze(null);
       const planned = new Date(resolvedStart);
       setWeekAnchor(planned);
       setSelectedDayKey(dayKeyAmsterdam(planned));
@@ -976,25 +1220,40 @@ export function AgendaPanel({
 
   const planForm = (
     <form onSubmit={plan} className="space-y-3">
-      <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-        Lead
-        <select
-          required
-          value={leadId}
-          onChange={(e) => {
-            setLeadId(e.target.value);
-            setNotities("");
-          }}
-          className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green sm:py-2"
-        >
-          <option value="">Kies lead…</option>
-          {leads.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.naam} ({l.lead_number})
-            </option>
-          ))}
-        </select>
-      </label>
+      <button
+        type="button"
+        onClick={() => {
+          resetPlanFields();
+          setPlanKeuze(null);
+        }}
+        className="text-xs font-medium text-green hover:underline"
+      >
+        ← Ander type
+      </button>
+      <p className="text-sm font-semibold text-ink">
+        {afspraakSoortLabel[planSoort || "nieuw"]}
+      </p>
+      {isHuisbezoek ? (
+        <p className="text-xs text-muted">
+          Klant krijgt bevestiging, opwarm-mail en 24u-herinnering.
+        </p>
+      ) : (
+        <p className="text-xs text-muted">
+          Geen mail naar de klant.{" "}
+          {planSoort && !afspraakBlokkeertAgenda(planSoort)
+            ? "Planning mag hier een fysieke afspraak overheen zetten."
+            : "Dit slot wordt geblokkeerd."}
+        </p>
+      )}
+
+      <LeadZoekVeld
+        value={pickedLead}
+        onChange={(lead) => {
+          setPickedLead(lead);
+          setNotities("");
+        }}
+        suggestions={leads}
+      />
 
       {selectedLead?.notities?.trim() && (
         <div className="border border-line bg-wash px-3 py-2.5">
@@ -1061,25 +1320,30 @@ export function AgendaPanel({
             className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green sm:py-2"
           >
             <option value="">Kies tijd…</option>
-            {slots.slice(0, 80).map((s) => (
+            {timeOptions.slice(0, 80).map((s) => (
               <option key={s.start_at} value={s.start_at}>
                 {formatDateTimeNl(s.start_at)}
+                {"busy" in s && s.busy ? " (fysiek bezet)" : ""}
               </option>
             ))}
           </select>
         )}
       </div>
 
-      <JaNeeField
-        label="Partner aanwezig?"
-        value={partnerAanwezig}
-        onChange={setPartnerAanwezig}
-      />
-      <JaNeeField
-        label="Andere offertes al gehad?"
-        value={andereOffertes}
-        onChange={setAndereOffertes}
-      />
+      {isHuisbezoek && (
+        <>
+          <JaNeeField
+            label="Partner aanwezig?"
+            value={partnerAanwezig}
+            onChange={setPartnerAanwezig}
+          />
+          <JaNeeField
+            label="Andere offertes al gehad?"
+            value={andereOffertes}
+            onChange={setAndereOffertes}
+          />
+        </>
+      )}
 
       <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
         Interne notitie
@@ -1109,26 +1373,53 @@ export function AgendaPanel({
       <button
         type="submit"
         disabled={
-          saving || partnerAanwezig === null || andereOffertes === null
+          saving ||
+          (isHuisbezoek &&
+            (partnerAanwezig === null || andereOffertes === null))
         }
         className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-0"
       >
-        {saving ? "Bezig…" : "Afspraak plannen"}
+        {saving
+          ? "Bezig…"
+          : planSoort === "bel"
+            ? "Belafspraak plannen"
+            : planSoort === "vervolg_fysiek"
+              ? "Vervolg fysiek plannen"
+              : planSoort === "vervolg_tel"
+                ? "Vervolg telefonisch plannen"
+                : "Afspraak plannen"}
       </button>
     </form>
+  );
+
+  const planSidebar = !planSoort ? (
+    <PlanSoortPicker
+      step={planKeuze === "vervolg" ? "vervolg" : "kies"}
+      onPick={setPlanKeuze}
+    />
+  ) : (
+    planForm
   );
 
   return (
     <div className="grid gap-0 lg:grid-cols-[300px_1fr]">
       {/* Desktop form */}
       <aside className="hidden border-b border-line p-5 lg:block lg:border-b-0 lg:border-r">
-        <h2 className="font-display text-base font-semibold text-ink">
-          Nieuwe afspraak
-        </h2>
+        <h2 className="font-display text-base font-semibold text-ink">Nieuw</h2>
         <p className="mt-1 text-xs text-muted">
-          Koppel een lead aan een adviseur en kies een slot.
+          Kies het type, koppel een lead en een tijdstip.
         </p>
-        <div className="mt-4">{planForm}</div>
+        <div className="mt-4">{planSidebar}</div>
+        {!planSoort && okMsg && (
+          <p className="mt-3 border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+            {okMsg}
+          </p>
+        )}
+        {!planSoort && error && (
+          <p className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+            {error}
+          </p>
+        )}
       </aside>
 
       <div className="min-w-0">
@@ -1136,12 +1427,17 @@ export function AgendaPanel({
         <div className="border-b border-line px-3 py-3 lg:hidden">
           <button
             type="button"
-            onClick={() => setFormOpen((v) => !v)}
+            onClick={() => {
+              setFormOpen((v) => {
+                if (v) setPlanKeuze(null);
+                return !v;
+              });
+            }}
             className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c]"
           >
-            {formOpen ? "Sluiten" : "Nieuwe afspraak"}
+            {formOpen ? "Sluiten" : "Nieuw"}
           </button>
-          {formOpen && <div className="mt-4">{planForm}</div>}
+          {formOpen && <div className="mt-4">{planSidebar}</div>}
         </div>
 
         {/* Week navigatie */}

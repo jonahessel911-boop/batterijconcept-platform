@@ -38,6 +38,39 @@ export async function GET(
 
     const filename = `${offerte.offerte_nummer}-ondertekend.pdf`;
 
+    const regels = (offerte.offerte_regels || []).sort(
+      (a: { sort_order: number }, b: { sort_order: number }) =>
+        a.sort_order - b.sort_order
+    );
+
+    const sign =
+      offerte.ondertekend_naam &&
+      offerte.ondertekend_op &&
+      offerte.ondertekend_handtekening
+        ? {
+            naam: offerte.ondertekend_naam,
+            handtekeningDataUrl: offerte.ondertekend_handtekening,
+            ondertekendOp: new Date(offerte.ondertekend_op),
+          }
+        : undefined;
+
+    if (sign) {
+      const blob = await buildSignedOffertePdf({
+        offerte,
+        regels,
+        sign,
+        adres: offerte.leads ? adresRegel(offerte.leads) : undefined,
+      });
+      const bytes = Buffer.from(await blob.arrayBuffer());
+      return new NextResponse(bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+      });
+    }
+
     if (offerte.signed_pdf_path) {
       const { data: file, error: dlErr } = await sb.storage
         .from("offertes-signed")
@@ -54,22 +87,9 @@ export async function GET(
       }
     }
 
-    const regels = (offerte.offerte_regels || []).sort(
-      (a: { sort_order: number }, b: { sort_order: number }) =>
-        a.sort_order - b.sort_order
-    );
-
     const blob = await buildSignedOffertePdf({
       offerte,
       regels,
-      sign:
-        offerte.ondertekend_naam && offerte.ondertekend_op
-          ? {
-              naam: offerte.ondertekend_naam,
-              handtekeningDataUrl: offerte.ondertekend_handtekening || "",
-              ondertekendOp: new Date(offerte.ondertekend_op),
-            }
-          : undefined,
       adres: offerte.leads ? adresRegel(offerte.leads) : undefined,
     });
     const bytes = Buffer.from(await blob.arrayBuffer());

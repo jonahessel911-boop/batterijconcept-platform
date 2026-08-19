@@ -82,6 +82,7 @@ export async function POST(
         installatie_partner_id: partner.id,
         monteur: partner.naam,
         status: "schouw_gepland",
+        schouw_herinnering_verstuurd: false,
       })
       .eq("id", id)
       .select(

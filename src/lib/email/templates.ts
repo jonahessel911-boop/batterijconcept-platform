@@ -7,6 +7,7 @@ import {
   emailP,
 } from "./layout";
 import { formatDateTimeLongNl } from "@/lib/format";
+import { planningVensterNl } from "@/lib/planning-window";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -336,5 +337,147 @@ export function schouwPartnerEmail(opts: {
       emailButton("Ga naar portaal", opts.portalUrl),
       emailMuted("Dit is een mail van Batterijconcept voor installatiepartners."),
     ].join(""),
+  });
+}
+
+/** Klant: installatie is ingepland */
+export function installatieKlantEmail(opts: {
+  naam: string;
+  installatieAt: string | Date;
+  adres?: string | null;
+  projectNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = formatDateTimeLongNl(opts.installatieAt);
+  const venster = planningVensterNl(opts.installatieAt);
+  return emailLayout({
+    title: "Installatie gepland — Batterijconcept",
+    preheader: `Je installatie staat gepland op ${when}.`,
+    bodyHtml: [
+      emailH1("Installatie gepland"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Goed nieuws: de installatie van je thuisbatterij is ingepland. Onze installatiepartner komt bij je langs."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Tijdvenster</strong><br />${venster.label}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
+      ),
+      emailP(
+        "Zorg dat er iemand aanwezig is en dat de meterkast en installatieruimte bereikbaar zijn. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot dan, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
+/** Installatiepartner: nieuwe installatie */
+export function installatiePartnerEmail(opts: {
+  partnerNaam: string;
+  klantNaam: string;
+  installatieAt: string | Date;
+  adres?: string | null;
+  telefoon?: string | null;
+  email?: string | null;
+  projectNummer?: string | null;
+  notities?: string | null;
+  portalUrl: string;
+}) {
+  const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
+  const when = formatDateTimeLongNl(opts.installatieAt);
+  const venster = planningVensterNl(opts.installatieAt);
+  return emailLayout({
+    title: "Nieuwe installatie ingepland",
+    preheader: `Installatie ${opts.klantNaam} op ${when}.`,
+    bodyHtml: [
+      emailH1("Nieuwe installatie ingepland"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Er staat een installatie voor je ingepland. Bekijk de details in het installatieportaal."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Tijdvenster</strong><br />${venster.label}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>
+         ${opts.telefoon ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${opts.telefoon}</p>` : ""}
+         ${opts.email ? `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Order</strong><br />${opts.projectNummer}</p>` : ""}
+         ${opts.notities ? `<p style="margin:0;font-size:15px;"><strong>Notities</strong><br />${opts.notities.replace(/\n/g, "<br />")}</p>` : ""}`
+      ),
+      emailButton("Ga naar portaal", opts.portalUrl),
+      emailMuted("Dit is een mail van Batterijconcept voor installatiepartners."),
+    ].join(""),
+  });
+}
+
+function planningHerinneringEmail(opts: {
+  naam: string;
+  soort: "schouw" | "installatie";
+  at: string | Date;
+  adres?: string | null;
+  belangrijkeInfo?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const label = opts.soort === "schouw" ? "schouw" : "installatie";
+  const venster = planningVensterNl(opts.at);
+  const when = formatDateTimeLongNl(opts.at);
+
+  return emailLayout({
+    title: `Morgen is je ${label} — Batterijconcept`,
+    preheader: `Morgen is het zover! ${venster.label}`,
+    bodyHtml: [
+      emailH1("Morgen is het zover! 🎉"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        `Morgen is je ${label} voor je thuisbatterij. We kijken ernaar uit!`
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Wanneer</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Tijdvenster</strong><br />${venster.label}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${
+           opts.belangrijkeInfo
+             ? `<p style="margin:0;font-size:15px;"><strong>Belangrijke info</strong><br />${opts.belangrijkeInfo.replace(/\n/g, "<br />")}</p>`
+             : ""
+         }`
+      ),
+      emailP(
+        "Zorg dat er iemand aanwezig is en dat de meterkast en installatieruimte bereikbaar zijn."
+      ),
+      emailMuted("Tot morgen, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
+export function schouwHerinneringKlantEmail(opts: {
+  naam: string;
+  schouwAt: string | Date;
+  adres?: string | null;
+  belangrijkeInfo?: string | null;
+}) {
+  return planningHerinneringEmail({
+    naam: opts.naam,
+    soort: "schouw",
+    at: opts.schouwAt,
+    adres: opts.adres,
+    belangrijkeInfo: opts.belangrijkeInfo,
+  });
+}
+
+export function installatieHerinneringKlantEmail(opts: {
+  naam: string;
+  installatieAt: string | Date;
+  adres?: string | null;
+  belangrijkeInfo?: string | null;
+}) {
+  return planningHerinneringEmail({
+    naam: opts.naam,
+    soort: "installatie",
+    at: opts.installatieAt,
+    adres: opts.adres,
+    belangrijkeInfo: opts.belangrijkeInfo,
   });
 }

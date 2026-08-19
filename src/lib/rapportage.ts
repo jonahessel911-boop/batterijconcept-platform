@@ -11,7 +11,8 @@ import {
   startOfYear,
 } from "date-fns";
 import { nl } from "date-fns/locale";
-import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
+import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
+import { factuurIsBetaald } from "@/lib/aanbetaling";
 
 const TZ = "Europe/Amsterdam";
 
@@ -30,7 +31,9 @@ export type RapportageMetrics = {
   conversieDeal: number;
   omzetExBtw: number;
   projectkosten: number;
+  inkoop: number;
   omzet: number;
+  betaaldeOmzet: number;
   adSpend: number;
   winst: number;
 };
@@ -58,20 +61,24 @@ export function emptyMetrics(): RapportageMetrics {
     conversieDeal: 0,
     omzetExBtw: 0,
     projectkosten: 0,
+    inkoop: 0,
     omzet: 0,
+    betaaldeOmzet: 0,
     adSpend: 0,
     winst: 0,
   };
 }
 
 export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
-  const omzet = round2(m.omzetExBtw - m.projectkosten);
-  const winst = round2(m.omzetExBtw - m.projectkosten - m.adSpend);
+  const omzet = round2(m.omzetExBtw);
+  const winst = round2(m.omzetExBtw - m.projectkosten - m.inkoop - m.adSpend);
   return {
     ...m,
     omzetExBtw: round2(m.omzetExBtw),
     projectkosten: round2(m.projectkosten),
+    inkoop: round2(m.inkoop),
     omzet,
+    betaaldeOmzet: round2(m.betaaldeOmzet),
     adSpend: round2(m.adSpend),
     winst,
     conversieAfspraak:
@@ -103,7 +110,9 @@ function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetri
     conversieDeal: 0,
     omzetExBtw: a.omzetExBtw + b.omzetExBtw,
     projectkosten: a.projectkosten + b.projectkosten,
+    inkoop: a.inkoop + b.inkoop,
     omzet: 0,
+    betaaldeOmzet: a.betaaldeOmzet + b.betaaldeOmzet,
     adSpend: a.adSpend + b.adSpend,
     winst: 0,
   };
@@ -116,6 +125,19 @@ function dayKey(d: Date) {
 function inRange(iso: string, start: Date, end: Date) {
   const t = new Date(iso).getTime();
   return t >= start.getTime() && t <= end.getTime();
+}
+
+function factuurBetaalIso(f: {
+  status: string;
+  betaald_op: string | null;
+  factuurdatum: string;
+}): string | null {
+  if (f.status === "concept" || f.status === "vervallen") return null;
+  if (!factuurIsBetaald(f.status, f.betaald_op)) return null;
+  const raw = f.betaald_op || f.factuurdatum;
+  if (!raw) return null;
+  if (raw.length <= 10) return `${raw}T12:00:00+02:00`;
+  return raw;
 }
 
 export type RapportageRaw = {
@@ -135,6 +157,7 @@ export type RapportageRaw = {
     created_at: string;
     subtotaal_ex_btw: number;
     adviseur_id: string | null;
+    regels?: { omschrijving?: string | null; aantal?: number | null }[];
   }[];
   projecten: {
     id: string;
@@ -148,6 +171,15 @@ export type RapportageRaw = {
     datum: string;
     soort: "ad_spend" | "sales";
     bedrag: number;
+    adviseur_id: string | null;
+  }[];
+  facturen: {
+    id: string;
+    lead_id: string;
+    status: string;
+    bedrag_ex_btw: number;
+    betaald_op: string | null;
+    factuurdatum: string;
     adviseur_id: string | null;
   }[];
 };
@@ -171,6 +203,9 @@ export function buildRapportageTree(
   const kosten = adviseurId
     ? raw.kosten.filter((k) => !k.adviseur_id || k.adviseur_id === adviseurId)
     : raw.kosten;
+  const facturen = adviseurId
+    ? (raw.facturen || []).filter((f) => f.adviseur_id === adviseurId)
+    : raw.facturen || [];
 
   const signed = offertes.filter(
     (o) => o.status === "ondertekend" && o.ondertekend_op
@@ -193,6 +228,12 @@ export function buildRapportageTree(
   }
   for (const k of kosten) {
     const y = Number(k.datum.slice(0, 4));
+    years.set(y, new Date(Date.UTC(y, 0, 1)));
+  }
+  for (const f of facturen) {
+    const iso = factuurBetaalIso(f);
+    if (!iso) continue;
+    const y = Number(formatInTimeZone(iso, TZ, "yyyy"));
     years.set(y, new Date(Date.UTC(y, 0, 1)));
   }
   years.set(now.getFullYear(), new Date(Date.UTC(now.getFullYear(), 0, 1)));
@@ -222,11 +263,17 @@ export function buildRapportageTree(
       const kosten = Number(project?.projectkosten) || 0;
       m.projectkosten +=
         kosten > 0 ? kosten : STANDAARD_INSTALLATIEKOSTEN;
+      m.inkoop += hardwareKostenVoorRegels(o.regels || []).totaal;
     }
     for (const k of kosten) {
       const iso = `${k.datum}T12:00:00+02:00`;
       if (!inRange(iso, start, end)) continue;
       if (k.soort === "ad_spend") m.adSpend += Number(k.bedrag) || 0;
+    }
+    for (const f of facturen) {
+      const iso = factuurBetaalIso(f);
+      if (!iso || !inRange(iso, start, end)) continue;
+      m.betaaldeOmzet += Number(f.bedrag_ex_btw) || 0;
     }
     return finalizeMetrics(m);
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { generateAvailableSlots, generateDayBlocks } from "@/lib/slots";
+import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   appBaseUrl,
   sendEmail,
@@ -52,13 +53,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Adviseur niet gevonden" }, { status: 404 });
     }
 
-    const { data: busy } = await sb
-      .from("afspraken")
-      .select("start_at, end_at")
-      .eq("adviseur_id", adviseurId)
-      .neq("status", "geannuleerd");
-
-    const busyRows = busy || [];
+    const busyRows = await blockingBusySlots(sb, adviseurId);
     const slots = generateAvailableSlots({
       busy: busyRows,
     }).map((s) => ({

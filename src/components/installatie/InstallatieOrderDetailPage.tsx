@@ -215,6 +215,26 @@ export function InstallatieOrderDetailPage() {
 
         <section className="border border-line bg-white p-5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Installatie
+          </p>
+          {order.installatie_at ? (
+            <p className="mt-1 text-lg font-semibold capitalize text-ink">
+              {formatDateTimeLongNl(order.installatie_at)}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-muted">
+              Nog geen installatiedatum.
+            </p>
+          )}
+          {order.installatie_notities?.trim() ? (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+              {order.installatie_notities}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="border border-line bg-white p-5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
             Klantgegevens
           </p>
           <p className="mt-1 text-base font-semibold text-ink">

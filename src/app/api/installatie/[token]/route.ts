@@ -34,7 +34,7 @@ export async function GET(
     const { data: orders, error } = await sb
       .from("projecten")
       .select(
-        "id, project_nummer, titel, status, schouw_at, schouw_notities, notities, monteur, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number)"
+        "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, notities, monteur, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number)"
       )
       .eq("installatie_partner_id", partner.id)
       .order("schouw_at", { ascending: true, nullsFirst: false });

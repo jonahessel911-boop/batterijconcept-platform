@@ -1,4 +1,5 @@
 import { SignOfferteFlow } from "@/components/offerte/SignOfferteFlow";
+import { companyInfo } from "@/lib/pdf-brand";
 import { getSupabaseAdmin, hasSupabaseConfig } from "@/lib/supabase";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import type { Metadata } from "next";
@@ -46,6 +47,20 @@ export default async function OfferteSignPage({
   const { token } = await params;
   const data = await loadOfferte(token);
   if (!data) notFound();
+  const co = companyInfo();
 
-  return <SignOfferteFlow offerte={data.offerte} regels={data.regels} />;
+  return (
+    <SignOfferteFlow
+      offerte={data.offerte}
+      regels={data.regels}
+      bedrijf={{
+        naam: co.legal || co.naam,
+        legal: co.legal || co.naam,
+        kvk: co.kvk || "42141855",
+        vestigingsnummer: co.vestigingsnummer || "000066465834",
+        adres: co.adres || "Alfred Nobellaan 68",
+        postcodePlaats: co.postcodePlaats || "3731DW De Bilt",
+      }}
+    />
+  );
 }

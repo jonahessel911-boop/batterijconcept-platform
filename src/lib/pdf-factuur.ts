@@ -75,6 +75,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
     co.land,
     co.btw ? `BTW: ${co.btw}` : null,
     co.kvk ? `KVK: ${co.kvk}` : null,
+    co.vestigingsnummer ? `Vestigingsnr: ${co.vestigingsnummer}` : null,
   ].filter(Boolean) as string[];
   let ry = y + 4;
   for (const line of rightLines) {
@@ -169,8 +170,8 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const oms =
     factuur.omschrijving ||
     (offerte
-      ? `Aanbetaling bij ${offerte.offerte_nummer} (restant € 8.500,00)`
-      : "Aanbetaling (restant € 8.500,00)");
+      ? `Aanbetaling bij ${offerte.offerte_nummer}`
+      : "Aanbetaling");
   const bedragEx = Number(factuur.bedrag_ex_btw);
   const bedragInc = Number(factuur.bedrag_inc_btw);
   const omsLines = doc.splitTextToSize(oms, 88);
@@ -264,6 +265,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const footerParts = [
     `E-mail: ${co.factuurEmail}`,
     co.kvk ? `KVK nr: ${co.kvk}` : null,
+    co.vestigingsnummer ? `Vestigingsnr: ${co.vestigingsnummer}` : null,
     co.iban ? `IBAN nr: ${co.iban}` : null,
     co.telefoon,
   ].filter(Boolean);
