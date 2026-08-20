@@ -10,6 +10,7 @@ import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/
 import {
   MAX_BELPOGINGEN,
   MAX_BELPOGINGEN_PER_DAG,
+  MIN_UREN_TUSSEN_BELPOGINGEN,
   activeBelAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
@@ -471,9 +472,10 @@ export function BelPanel({
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           Alleen leads zonder afspraak, deal of “geen interesse” staan hier.
-          Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag — daarna
-          komen ze morgen terug. Na {MAX_BELPOGINGEN} keer geen contact vallen
-          ze eruit. Terugbel-afspraken verschijnen hier op de dag zelf.
+          Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min.
+          {MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later
+          terug. Na {MAX_BELPOGINGEN} keer geen contact vallen ze eruit.
+          Terugbel-afspraken verschijnen hier op de dag zelf.
         </p>
       </div>
     );

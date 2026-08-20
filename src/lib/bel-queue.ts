@@ -5,6 +5,8 @@ import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 
 export const MAX_BELPOGINGEN = 7;
 export const MAX_BELPOGINGEN_PER_DAG = 2;
+/** Minimale pauze tussen twee belpogingen op dezelfde dag (uren, Amsterdam). */
+export const MIN_UREN_TUSSEN_BELPOGINGEN = 3;
 
 const QUEUE_STATUSES: LeadStatus[] = [
   "nieuw",
@@ -84,6 +86,18 @@ export function isTerugbelDueToday(
   return amsterdamDayKey(afspraak.start_at) === amsterdamDayKey(now);
 }
 
+/** Nog te kort geleden gebeld voor een 2e poging vandaag. */
+export function inBelCooldown(
+  lead: Pick<Lead, "laatst_gebeld_at">,
+  now = new Date()
+): boolean {
+  if (!lead.laatst_gebeld_at) return false;
+  const last = new Date(lead.laatst_gebeld_at).getTime();
+  if (Number.isNaN(last)) return false;
+  const minMs = MIN_UREN_TUSSEN_BELPOGINGEN * 60 * 60 * 1000;
+  return now.getTime() - last < minMs;
+}
+
 export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>,
@@ -101,6 +115,8 @@ export function inBelQueue(
   if (cancelledAppointmentLeadIds?.has(lead.id)) return false;
   if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
   if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+  // 2e poging vandaag pas na pauze — niet meteen achter de nieuwe leads aan
+  if (inBelCooldown(lead)) return false;
   return true;
 }
 
