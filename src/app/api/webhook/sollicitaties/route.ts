@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import type { SollicitatieStatus } from "@/types/database";
 import { uploadSollicitatieBestand } from "@/lib/sollicitatie-bestanden";
+import {
+  parseSollicitatieStatus,
+  sanitizeSollicitatiePayload,
+} from "@/lib/sollicitatie";
 import { sendEmail } from "@/lib/email/postmark";
 import { emailBox, emailH1, emailLayout, emailMuted, emailP } from "@/lib/email/layout";
 
 export const runtime = "nodejs";
-
-const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
-  "nieuw",
-  "gescreend",
-  "gesprek",
-  "aangenomen",
-  "afgewezen",
-];
 
 function pickStr(...values: unknown[]) {
   for (const value of values) {
@@ -59,10 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Veld 'naam' is verplicht" }, { status: 400 });
   }
 
-  const statusInput = pickStr(body.status) as SollicitatieStatus | null;
-  const status = SOLLICITATIE_STATUSES.includes(statusInput || "nieuw")
-    ? (statusInput as SollicitatieStatus)
-    : "nieuw";
+  const status = parseSollicitatieStatus(body.status);
 
   try {
     const sb = getSupabaseAdmin();
@@ -75,7 +67,7 @@ export async function POST(req: NextRequest) {
         status,
         notitie: pickStr(body.notitie, body.notes, body.opmerking, body.message),
         bron: pickStr(body.bron, body.source) || "webhook",
-        raw_payload: body,
+        raw_payload: sanitizeSollicitatiePayload(body),
       })
       .select("id, naam, email, status, created_at")
       .single();
@@ -98,7 +90,6 @@ export async function POST(req: NextRequest) {
       bestand = uploaded.bestand;
     }
 
-    // Interne notificatie: nieuwe sollicitatie
     try {
       const detailBlok = [
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Naam</strong><br />${data.naam}</p>`,

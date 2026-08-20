@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import type { SollicitatieStatus } from "@/types/database";
+import { parseSollicitatieStatus } from "@/lib/sollicitatie";
 
 export const runtime = "nodejs";
-
-const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
-  "nieuw",
-  "gescreend",
-  "gesprek",
-  "aangenomen",
-  "afgewezen",
-];
 
 function pickStr(v: unknown) {
   if (typeof v !== "string") return null;
@@ -82,10 +74,7 @@ export async function POST(req: NextRequest) {
     if (!naam) {
       return NextResponse.json({ error: "Naam is verplicht" }, { status: 400 });
     }
-    const statusInput = pickStr(body.status) as SollicitatieStatus | null;
-    const status = SOLLICITATIE_STATUSES.includes(statusInput || "nieuw")
-      ? (statusInput as SollicitatieStatus)
-      : "nieuw";
+    const status = parseSollicitatieStatus(body.status);
 
     const sb = getSupabaseAdmin();
     const { data, error } = await sb
