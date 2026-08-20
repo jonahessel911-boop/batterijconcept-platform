@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
 import type { Offerte, OfferteRegel } from "@/types/database";
-import { formatDateNl, formatEuro, adresRegel } from "@/lib/format";
+import { formatDateNl, formatDateTimeNl, formatEuro, adresRegel } from "@/lib/format";
 import { offerteRegelsVoorWeergave } from "@/lib/offerte-regels";
 import { SignaturePadField } from "./SignaturePadField";
 
@@ -31,7 +31,7 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  const today = useMemo(() => formatDateNl(new Date()), []);
+  const today = useMemo(() => formatDateTimeNl(new Date()), []);
   const offerteDatum = useMemo(
     () => formatDateNl(offerte.created_at),
     [offerte.created_at]
@@ -310,18 +310,6 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                     {formatEuro(offerte.totaal_inc_btw)}
                   </span>
                 </div>
-              </div>
-
-              <div className="mt-10 space-y-2 text-sm text-muted">
-                <p>Deze offerte heeft een geldigheidstermijn van 30 dagen.</p>
-                <p>Graag vernemen we van je wat we voor je kunnen betekenen.</p>
-                <p className="pt-2 text-ink">
-                  Met vriendelijke groet,
-                  <br />
-                  <span className="font-medium">
-                    {bedrijf.legal || bedrijf.naam}
-                  </span>
-                </p>
               </div>
 
               <div className="relative z-10 mt-10 rounded-2xl border border-[#e2e8e4] bg-wash/80 p-5">

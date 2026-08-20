@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import type { Offerte, OfferteRegel } from "@/types/database";
-import { formatDateNl, formatEuro } from "@/lib/format";
+import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { companyInfo, loadLogoDataUrl } from "@/lib/pdf-brand";
 import { offerteRegelsVoorWeergave } from "@/lib/offerte-regels";
 
@@ -27,6 +27,7 @@ const LINE: [number, number, number] = [226, 232, 228];
 const WASH: [number, number, number] = [244, 248, 245];
 const SOFT: [number, number, number] = [232, 246, 236];
 const DATUM_BG: [number, number, number] = [232, 236, 233];
+const FIELD_BORDER: [number, number, number] = [213, 224, 216];
 
 function ensureSpace(
   doc: jsPDF,
@@ -36,41 +37,27 @@ function ensureSpace(
   margin: number
 ): number {
   const pageH = doc.internal.pageSize.getHeight();
-  if (y + need < pageH - 22) return y;
-  drawFooter(doc, pageW, margin);
+  if (y + need < pageH - 18) return y;
+  drawCornerAccent(doc, pageW, pageH);
   doc.addPage();
   return 18;
 }
 
+/** Zelfde diagonale header als de ondertekenpagina. */
 function drawDiagonalHeader(doc: jsPDF, pageW: number) {
-  // Donkere driehoek links-boven (diagonaal omhoog naar rechts)
   doc.setFillColor(...DEEPER);
-  doc.triangle(0, 0, pageW, 0, 0, 72, "F");
+  doc.triangle(0, 0, pageW, 0, 0, 68, "F");
   doc.setFillColor(...GREEN);
-  doc.triangle(0, 0, pageW * 0.72, 0, 0, 58, "F");
+  doc.triangle(0, 0, pageW * 0.72, 0, 0, 54, "F");
   doc.setFillColor(...MINT);
-  doc.triangle(pageW * 0.35, 0, pageW, 0, pageW, 38, "F");
+  doc.triangle(pageW * 0.35, 0, pageW, 0, pageW, 36, "F");
 }
 
 function drawCornerAccent(doc: jsPDF, pageW: number, pageH: number) {
   doc.setFillColor(...GREEN);
-  doc.triangle(pageW, pageH - 42, pageW, pageH, pageW - 55, pageH, "F");
+  doc.triangle(pageW, pageH - 36, pageW, pageH, pageW - 48, pageH, "F");
   doc.setFillColor(...MINT);
-  doc.triangle(pageW, pageH - 22, pageW, pageH, pageW - 28, pageH, "F");
-}
-
-function drawFooter(doc: jsPDF, pageW: number, margin: number) {
-  const pageH = doc.internal.pageSize.getHeight();
-  const co = companyInfo();
-  drawCornerAccent(doc, pageW, pageH);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7);
-  doc.setTextColor(...MUTED);
-  doc.text(
-    `${co.legal} · ${co.website} · ${co.email} · ${co.telefoon} · KVK ${co.kvk}`,
-    margin,
-    pageH - 8
-  );
+  doc.triangle(pageW, pageH - 18, pageW, pageH, pageW - 24, pageH, "F");
 }
 
 function embedSignature(
@@ -111,8 +98,8 @@ function embedSignature(
 }
 
 /**
- * Offerte-PDF in referentiestijl: diagonale header, logo rechts,
- * datum/nummer, 4-koloms tabel, totalen in kaders, ondertekening.
+ * PDF 1-op-1 met de ondertekenpagina.
+ * Bij `sign`: naam, handtekening en onderteken-datum/tijd (Europe/Amsterdam) ingevuld.
  */
 export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const { offerte, regels, sign, adres } = input;
@@ -125,30 +112,28 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
 
   drawDiagonalHeader(doc, pageW);
 
-  // OFFERTE links
+  // —— Header: OFFERTE links, logo + bedrijf rechts ——
   doc.setFont("helvetica", "bold");
   doc.setFontSize(28);
   doc.setTextColor(...INK);
-  doc.text("OFFERTE", margin, 28);
+  doc.text("OFFERTE", margin, 26);
 
-  // Logo + bedrijf rechts (zelfde volgorde als ondertekenpagina)
   const logo = loadLogoDataUrl();
   const rightX = pageW - margin;
-  let brandY = 12;
-  const logoSize = 14;
+  const logoSize = 12;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
+  doc.setFontSize(10);
   const word = "Batterij";
   const word2 = "concept";
-  const totalBrandW = doc.getTextWidth(word) + doc.getTextWidth(word2);
-  const brandStart = rightX - totalBrandW;
+  const brandW = doc.getTextWidth(word) + doc.getTextWidth(word2);
+  const brandStart = rightX - brandW;
   if (logo) {
     try {
       doc.addImage(
         logo,
         "PNG",
-        brandStart - logoSize - 2,
-        brandY,
+        brandStart - logoSize - 2.5,
+        11,
         logoSize,
         logoSize
       );
@@ -157,9 +142,9 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     }
   }
   doc.setTextColor(...DEEPER);
-  doc.text(word, brandStart, brandY + 7);
+  doc.text(word, brandStart, 18.5);
   doc.setTextColor(...ORANGE);
-  doc.text(word2, brandStart + doc.getTextWidth(word), brandY + 7);
+  doc.text(word2, brandStart + doc.getTextWidth(word), 18.5);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
@@ -171,36 +156,36 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     co.website || null,
     co.kvk ? `KvK ${co.kvk}` : null,
   ].filter(Boolean) as string[];
-  let ry = brandY + 18;
+  let ry = 24;
   for (const line of rightLines) {
     doc.text(line, rightX, ry, { align: "right" });
     ry += 3.6;
   }
 
-  let y = Math.max(58, ry + 6);
+  let y = Math.max(52, ry + 8);
 
-  // Datum-blok + offertenummer
+  // —— Datum + offertenummer ——
   doc.setFillColor(...DATUM_BG);
-  doc.rect(margin, y, 28, 6, "F");
+  doc.rect(margin, y, 22, 5.5, "F");
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
   doc.setTextColor(...INK);
-  doc.text("DATUM", margin + 2.5, y + 4.2);
+  doc.text("DATUM", margin + 2, y + 3.8);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
-  doc.text(formatDateNl(offerte.created_at), margin, y + 12);
+  doc.text(formatDateNl(offerte.created_at), margin, y + 11);
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
-  doc.text("OFFERTENUMMER", margin + 48, y + 4.2);
-  doc.setFont("helvetica", "normal");
+  doc.text("OFFERTENUMMER", margin + 52, y + 3.8);
+  doc.setFont("courier", "normal");
   doc.setFontSize(10);
-  doc.text(offerte.offerte_nummer, margin + 48, y + 12);
+  doc.text(offerte.offerte_nummer, margin + 52, y + 11);
 
-  y += 22;
+  y += 20;
 
-  // Offerte aan
+  // —— Offerte aan ——
   const klant = offerte.leads?.naam || "Klant";
   const adresTxt = adres && adres !== "—" ? adres : "";
   const klantEmail = offerte.leads?.email?.trim() || "";
@@ -210,85 +195,78 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setTextColor(...INK);
   doc.text("OFFERTE AAN:", margin, y);
   y += 5;
-  doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   doc.text(klant, margin, y);
   y += 4.5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(...MUTED);
   if (adresTxt) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
     doc.text(adresTxt, margin, y);
-    y += 4.5;
+    y += 4.2;
   }
   if (klantEmail) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
     doc.text(klantEmail, margin, y);
-    y += 4.5;
+    y += 4.2;
   }
   if (klantTel) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
     doc.text(klantTel, margin, y);
-    y += 4.5;
+    y += 4.2;
   }
-  y += 4;
+  y += 5;
 
   if (offerte.intro_tekst) {
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
+    doc.setFontSize(9.5);
     doc.setTextColor(...INK);
     const intro = doc.splitTextToSize(offerte.intro_tekst, contentW);
     doc.text(intro, margin, y);
-    y += intro.length * 4.5 + 6;
+    y += intro.length * 4.6 + 6;
   }
 
-  // Tabelkolommen: Omschrijving | Aantal (geen prijzen per regel)
-  const colDesc = margin + 4;
-  const colAantal = pageW - margin - 4;
-  const descMaxW = colAantal - colDesc - 16;
+  // —— Tabel: Omschrijving | Aantal ——
+  const colDesc = margin;
+  const colAantal = pageW - margin;
+  const descMaxW = contentW - 22;
   const weergaveRegels = offerteRegelsVoorWeergave(regels, {
     financieringVoorbehoud: offerte.financiering_voorbehoud,
   });
 
   doc.setDrawColor(...DEEPER);
-  doc.setLineWidth(0.6);
-  doc.line(margin, y + 7, pageW - margin, y + 7);
+  doc.setLineWidth(0.7);
+  doc.line(margin, y + 6.5, pageW - margin, y + 6.5);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7.5);
   doc.setTextColor(...DEEPER);
-  doc.text("OMSCHRIJVING", colDesc, y + 5);
-  doc.text("AANTAL", colAantal, y + 5, { align: "right" });
-  y += 10;
+  doc.text("OMSCHRIJVING", colDesc, y + 4.5);
+  doc.text("AANTAL", colAantal, y + 4.5, { align: "right" });
+  y += 9;
 
   for (const r of weergaveRegels) {
     const desc = doc.splitTextToSize(r.omschrijving, descMaxW);
-    const rowH = Math.max(9, desc.length * 4.2 + 4);
+    const rowH = Math.max(8, desc.length * 4.2 + 3);
     y = ensureSpace(doc, y, rowH + 2, pageW, margin);
 
     doc.setDrawColor(...LINE);
     doc.setLineWidth(0.25);
-    doc.line(margin, y + rowH - 1, pageW - margin, y + rowH - 1);
+    doc.line(margin, y + rowH - 0.5, pageW - margin, y + rowH - 0.5);
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
+    doc.setFontSize(9.5);
     doc.setTextColor(...INK);
-    doc.text(desc, colDesc, y + 4);
+    doc.text(desc, colDesc, y + 3.5);
     doc.setFont("helvetica", "normal");
-    doc.text(String(r.aantal), colAantal, y + 4, { align: "right" });
+    doc.text(String(r.aantal), colAantal, y + 3.5, { align: "right" });
     y += rowH;
   }
 
   y += 8;
-  y = ensureSpace(doc, y, 32, pageW, margin);
+  y = ensureSpace(doc, y, 30, pageW, margin);
 
-  // Totalen in kaders (rechts)
-  const boxW = 72;
+  // —— Totalen (rechts, zelfde kaders als pagina) ——
+  const boxW = 78;
   const boxX = pageW - margin - boxW;
-  const rows: { label: string; value: string; bold?: boolean }[] = [
+  const totalRows: { label: string; value: string; bold?: boolean }[] = [
     {
       label: "Totaal excl. BTW",
       value: formatEuro(Number(offerte.subtotaal_ex_btw)),
@@ -304,63 +282,41 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     },
   ];
 
-  for (const row of rows) {
-    doc.setDrawColor(200, 210, 204);
+  for (const row of totalRows) {
+    doc.setDrawColor(213, 221, 216);
     doc.setLineWidth(0.3);
     if (row.bold) {
       doc.setFillColor(...WASH);
-      doc.rect(boxX, y, boxW, 8, "FD");
+      doc.rect(boxX, y, boxW, 8.5, "FD");
     } else {
       doc.setFillColor(255, 255, 255);
       doc.rect(boxX, y, boxW, 8, "FD");
     }
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
-    doc.setFontSize(8);
+    doc.setFontSize(8.5);
     doc.setTextColor(...(row.bold ? DEEPER : MUTED));
-    doc.text(row.label, boxX + 2.5, y + 5.2);
+    doc.text(row.label, boxX + 3, y + 5.4);
     doc.setTextColor(...(row.bold ? DEEPER : INK));
-    doc.text(row.value, boxX + boxW - 2.5, y + 5.2, { align: "right" });
-    y += 8;
+    doc.text(row.value, boxX + boxW - 3, y + 5.4, { align: "right" });
+    y += row.bold ? 8.5 : 8;
   }
 
+  // —— Ondertekening (zelfde blok als pagina) ——
   y += 10;
-  y = ensureSpace(doc, y, 28, pageW, margin);
+  const sigH = offerte.financiering_voorbehoud ? 92 : 84;
+  y = ensureSpace(doc, y, sigH + 6, pageW, margin);
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(...MUTED);
-  doc.text(
-    "Deze offerte heeft een geldigheidstermijn van 30 dagen.",
-    margin,
-    y
-  );
-  y += 5;
-  doc.text(
-    "Graag vernemen we van je wat we voor je kunnen betekenen.",
-    margin,
-    y
-  );
-  y += 7;
-  doc.setTextColor(...INK);
-  doc.text("Met vriendelijke groet,", margin, y);
-  y += 5;
-  doc.setFont("helvetica", "bold");
-  doc.text(co.legal || co.naam, margin, y);
-  y += 10;
-
-  const boxH = offerte.financiering_voorbehoud ? 94 : 86;
-  y = ensureSpace(doc, y, boxH + 4, pageW, margin);
   doc.setFillColor(...WASH);
   doc.setDrawColor(...LINE);
   doc.setLineWidth(0.3);
-  doc.roundedRect(margin, y, contentW, boxH, 3, 3, "FD");
+  doc.roundedRect(margin, y, contentW, sigH, 3, 3, "FD");
 
   let sy = y + 8;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(...INK);
   doc.text("Ondertekening", margin + 5, sy);
-  sy += 6;
+  sy += 5.5;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(...MUTED);
@@ -373,20 +329,22 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   );
   sy += 8;
 
+  // Volledige naam
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(...INK);
   doc.text("Volledige naam", margin + 5, sy);
   sy += 2;
   doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(213, 224, 216);
+  doc.setDrawColor(...FIELD_BORDER);
   doc.roundedRect(margin + 5, sy, contentW - 10, 8, 1.5, 1.5, "FD");
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
+  doc.setFontSize(9.5);
   doc.setTextColor(...INK);
   doc.text(sign?.naam || " ", margin + 8, sy + 5.5);
   sy += 12;
 
+  // Datum / tijd ondertekening
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.text("Datum", margin + 5, sy);
@@ -394,23 +352,24 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setFillColor(...SOFT);
   doc.roundedRect(margin + 5, sy, contentW - 10, 8, 1.5, 1.5, "F");
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
+  doc.setFontSize(9.5);
   doc.setTextColor(...DEEPER);
-  const datumLabel = sign
-    ? formatDateNl(sign.ondertekendOp)
-    : formatDateNl(new Date());
-  doc.text(datumLabel, margin + 8, sy + 5.5);
-  doc.setFont("helvetica", "normal");
+  const ondertekenLabel = sign
+    ? formatDateTimeNl(sign.ondertekendOp)
+    : formatDateTimeNl(new Date());
+  doc.text(ondertekenLabel, margin + 8, sy + 5.5);
   doc.setTextColor(...MUTED);
+  doc.setFontSize(8);
   doc.text(
     "(Europe/Amsterdam)",
-    margin + 8 + doc.getTextWidth(datumLabel) + 3,
+    margin + 8 + doc.getTextWidth(ondertekenLabel) + 3,
     sy + 5.5
   );
   sy += 12;
 
+  // Akkoord
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
+  doc.setFontSize(9);
   doc.setTextColor(...INK);
   doc.text(
     sign
@@ -419,17 +378,18 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     margin + 5,
     sy
   );
-  sy += 6;
+  sy += 7;
 
+  // Handtekening
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.text("Handtekening", margin + 5, sy);
   sy += 2;
   doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(213, 224, 216);
-  doc.roundedRect(margin + 5, sy, 70, 22, 1.5, 1.5, "FD");
+  doc.setDrawColor(...FIELD_BORDER);
+  doc.roundedRect(margin + 5, sy, 78, 24, 1.5, 1.5, "FD");
   if (sign) {
-    embedSignature(doc, sign.handtekeningDataUrl, margin + 7, sy + 1, 66, 20);
+    embedSignature(doc, sign.handtekeningDataUrl, margin + 7, sy + 1.5, 74, 21);
   }
 
   if (offerte.financiering_voorbehoud) {
@@ -439,11 +399,12 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     doc.text(
       "Onder voorbehoud van financiering Warmtefonds",
       margin + 5,
-      y + boxH - 6
+      y + sigH - 5
     );
   }
 
-  drawFooter(doc, pageW, margin);
+  // Alleen hoekje zoals op de pagina — geen extra footertekst
+  drawCornerAccent(doc, pageW, pageH);
   return doc.output("blob");
 }
 

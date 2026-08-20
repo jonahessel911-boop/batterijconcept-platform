@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { InstallatiePartner, Product } from "@/types/database";
 import { formatEuro } from "@/lib/format";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import {
+  isAlphaEssMetOmvormerRegel,
+  omvormerOmschrijvingVoor,
+} from "@/lib/offerte-regels";
 
 type Line = {
   key: string;
@@ -115,11 +119,7 @@ export function MaakOfferteModal({
     if (!p) return;
     const isAlpha = p.naam.startsWith("Alpha ESS");
     const qty = Math.max(1, aantal);
-    const omvormerKw = p.naam.includes("G3 T10")
-      ? "10 kW"
-      : p.naam.includes("G3 S5")
-        ? "5 kW"
-        : null;
+    const omvormerLabel = omvormerOmschrijvingVoor(p.naam);
     setLines((prev) => {
       const next: Line[] = [
         ...prev,
@@ -133,15 +133,20 @@ export function MaakOfferteModal({
         },
       ];
       if (isAlpha) {
-        if (omvormerKw) {
-          next.push({
-            key: `omvormer-${p.id}-${Date.now()}`,
-            product_id: null,
-            omschrijving: `Incl. ${omvormerKw} omvormer`,
-            aantal: qty,
-            prijs_ex_btw: 0,
-            btw_percentage: 21,
-          });
+        if (omvormerLabel && isAlphaEssMetOmvormerRegel(p.naam)) {
+          const hasOmvormer = [...prev, ...next].some((l) =>
+            /omvormer/i.test(l.omschrijving)
+          );
+          if (!hasOmvormer) {
+            next.push({
+              key: `omvormer-${p.id}-${Date.now()}`,
+              product_id: null,
+              omschrijving: omvormerLabel,
+              aantal: qty,
+              prijs_ex_btw: 0,
+              btw_percentage: 21,
+            });
+          }
         }
         next.push({
           key: `subsidie-${p.id}-${Date.now()}`,
