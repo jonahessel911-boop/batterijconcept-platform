@@ -124,13 +124,17 @@ function pickStr(...values: unknown[]): string | null {
   return null;
 }
 
-function decodeBase64Payload(raw: string): Buffer | null {
+function decodeBase64Payload(raw: string): Uint8Array<ArrayBuffer> | null {
   const trimmed = raw.trim();
   const dataUrl = /^data:([^;]+);base64,(.+)$/i.exec(trimmed);
   const b64 = dataUrl ? dataUrl[2] : trimmed.replace(/\s+/g, "");
   try {
     const buf = Buffer.from(b64, "base64");
-    return buf.length > 0 ? buf : null;
+    if (buf.length <= 0) return null;
+    // Kopie naar een echte ArrayBuffer (BlobPart / File-compatibel)
+    const copy = new Uint8Array(buf.length);
+    copy.set(buf);
+    return copy;
   } catch {
     return null;
   }
