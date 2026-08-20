@@ -17,7 +17,8 @@ const AFSPRAAK_STATUS = new Set([
 /**
  * Leadstatus volgt de agenda:
  * - nog een toekomstige actieve afspraak → status bij het soort
- * - geen actieve afspraak meer → terug naar bellijst (alleen vanuit afspraak-status)
+ * - geen actieve afspraak meer (geannuleerd/voltooid) → `na_afspraak`
+ *   (niet terug naar de bellijst)
  *   Uitkomsten na bezoek (`na_afspraak`, afgewezen, etc.) blijven staan.
  */
 export async function syncLeadNaAfspraak(
@@ -58,7 +59,7 @@ export async function syncLeadNaAfspraak(
 
   const { data: lead } = await sb
     .from("leads")
-    .select("status, belpogingen")
+    .select("status")
     .eq("id", leadId)
     .single();
   if (!lead) return;
@@ -72,8 +73,40 @@ export async function syncLeadNaAfspraak(
     return;
   }
 
-  if (!AFSPRAAK_STATUS.has(lead.status)) return;
+  // Geen actieve toekomstige afspraak meer
+  if (AFSPRAAK_STATUS.has(lead.status)) {
+    // Geannuleerd huisbezoek/vervolg → niet terug naar bellijst
+    let upd = await sb
+      .from("leads")
+      .update({
+        status: "na_afspraak",
+        terugbellen: false,
+        terugbel_notitie: null,
+      })
+      .eq("id", leadId);
+    if (
+      upd.error &&
+      (upd.error.code === "42703" ||
+        upd.error.message?.includes("terugbel"))
+    ) {
+      await sb
+        .from("leads")
+        .update({ status: "na_afspraak" })
+        .eq("id", leadId);
+    }
+    return;
+  }
 
-  const next = Number(lead.belpogingen) > 0 ? "geen_contact" : "nieuw";
-  await sb.from("leads").update({ status: next }).eq("id", leadId);
+  // Alleen terugbel afgerond/geannuleerd: vlag uitzetten, status laten
+  const clear = await sb
+    .from("leads")
+    .update({ terugbellen: false, terugbel_notitie: null })
+    .eq("id", leadId);
+  if (
+    clear.error &&
+    (clear.error.code === "42703" ||
+      clear.error.message?.includes("terugbel"))
+  ) {
+    /* kolom ontbreekt — negeren */
+  }
 }

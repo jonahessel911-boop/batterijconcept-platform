@@ -86,7 +86,9 @@ export function isTerugbelDueToday(
 
 export function inBelQueue(
   lead: Lead,
-  appointmentLeadIds?: Set<string>
+  appointmentLeadIds?: Set<string>,
+  /** Leads met geannuleerde (huisbezoek)afspraak zonder actieve follow-up */
+  cancelledAppointmentLeadIds?: Set<string>
 ): boolean {
   if (isSollicitatieLead(lead)) return false;
   if (!lead.telefoon?.trim()) return false;
@@ -96,9 +98,45 @@ export function inBelQueue(
     return false;
   }
   if (appointmentLeadIds?.has(lead.id)) return false;
+  if (cancelledAppointmentLeadIds?.has(lead.id)) return false;
   if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
   if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
   return true;
+}
+
+/**
+ * Lead had een fysieke/vervolg-afspraak die geannuleerd is en heeft geen
+ * actieve toekomstige afspraak meer → hoort niet in de bellijst.
+ */
+export function cancelledAppointmentLeadIds(
+  afspraken: Afspraak[],
+  now = new Date()
+): Set<string> {
+  const nowMs = now.getTime();
+  const byLead = new Map<string, Afspraak[]>();
+  for (const a of afspraken) {
+    const list = byLead.get(a.lead_id) || [];
+    list.push(a);
+    byLead.set(a.lead_id, list);
+  }
+
+  const out = new Set<string>();
+  for (const [leadId, list] of byLead) {
+    const hasActiveFuture = list.some(
+      (a) =>
+        ACTIEVE_AFSPRAAK.has(a.status) &&
+        new Date(a.start_at).getTime() >= nowMs
+    );
+    if (hasActiveFuture) continue;
+
+    const hadCancelledVisit = list.some((a) => {
+      if (a.status !== "geannuleerd") return false;
+      const soort = normalizeAfspraakSoort(a.soort);
+      return soort === "nieuw" || soort === "vervolg_fysiek" || soort === "vervolg_tel";
+    });
+    if (hadCancelledVisit) out.add(leadId);
+  }
+  return out;
 }
 
 export function sortBelQueue(leads: Lead[]): Lead[] {

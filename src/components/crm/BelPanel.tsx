@@ -97,6 +97,7 @@ export function BelPanel({
   afspraken = [],
   adviseurs,
   appointmentLeadIds,
+  cancelledAppointmentLeadIds,
   defaultAdviseurId,
   onLeadUpdated,
   onNeedReload,
@@ -105,13 +106,19 @@ export function BelPanel({
   afspraken?: Afspraak[];
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
+  cancelledAppointmentLeadIds?: Set<string>;
   defaultAdviseurId?: string;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
   onNeedReload?: () => void;
 }) {
   const normalQueue = useMemo(
-    () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
-    [leads, appointmentLeadIds]
+    () =>
+      sortBelQueue(
+        leads.filter((l) =>
+          inBelQueue(l, appointmentLeadIds, cancelledAppointmentLeadIds)
+        )
+      ),
+    [leads, appointmentLeadIds, cancelledAppointmentLeadIds]
   );
 
   /** Terugbel-afspraken die vandaag (Amsterdam) aan de beurt zijn. */

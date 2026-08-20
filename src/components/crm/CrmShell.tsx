@@ -29,7 +29,7 @@ import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { InstroomPanel } from "./InstroomPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
-import { amsterdamDayKey, inBelQueue } from "@/lib/bel-queue";
+import { amsterdamDayKey, cancelledAppointmentLeadIds, inBelQueue } from "@/lib/bel-queue";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 
 const VALID_TABS: CrmTab[] = [
@@ -312,6 +312,11 @@ export function CrmShell() {
     return ids;
   }, [afspraken]);
 
+  const cancelledOutOfBelIds = useMemo(
+    () => cancelledAppointmentLeadIds(afspraken),
+    [afspraken]
+  );
+
   const terugbelTodayCount = useMemo(() => {
     const today = new Set(
       afspraken
@@ -332,9 +337,10 @@ export function CrmShell() {
 
   const belQueueCount = useMemo(
     () =>
-      scopedLeads.filter((l) => inBelQueue(l, appointmentLeadIds)).length +
-      terugbelTodayCount,
-    [scopedLeads, appointmentLeadIds, terugbelTodayCount]
+      scopedLeads.filter((l) =>
+        inBelQueue(l, appointmentLeadIds, cancelledOutOfBelIds)
+      ).length + terugbelTodayCount,
+    [scopedLeads, appointmentLeadIds, cancelledOutOfBelIds, terugbelTodayCount]
   );
 
   const upcomingAfsprakenCount = useMemo(() => {
@@ -563,6 +569,7 @@ export function CrmShell() {
                     afspraken={afspraken}
                     adviseurs={adviseurs}
                     appointmentLeadIds={appointmentLeadIds}
+                    cancelledAppointmentLeadIds={cancelledOutOfBelIds}
                     defaultAdviseurId={adviseurFilter || undefined}
                     onLeadUpdated={(id, patch) => {
                       setLeads((prev) =>
