@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
       const { data: lead } = await sb
         .from("leads")
         .select(
-          "naam, email, postcode, huisnummer, toevoeging, straat, plaats"
+          "naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats"
         )
         .eq("id", body.lead_id)
         .single();
@@ -186,9 +186,12 @@ export async function POST(req: NextRequest) {
           leads: {
             naam: lead.naam,
             email: lead.email,
+            telefoon: lead.telefoon,
             lead_number: "",
             postcode: lead.postcode,
             huisnummer: lead.huisnummer,
+            toevoeging: lead.toevoeging,
+            straat: lead.straat,
             plaats: lead.plaats,
           },
         };

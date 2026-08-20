@@ -45,7 +45,9 @@ export function OffertePage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [mailMsg, setMailMsg] = useState<string | null>(null);
   const [actieOpen, setActieOpen] = useState(false);
   const [aanbetalingModus, setAanbetalingModus] =
     useState<AanbetalingModus>("restant");
@@ -276,7 +278,7 @@ export function OffertePage() {
     }
   }
 
-  async function downloadSignedPdf() {
+  async function downloadPdf() {
     if (!offerte) return;
     setPdfBusy(true);
     setPdfError(null);
@@ -290,7 +292,10 @@ export function OffertePage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${offerte.offerte_nummer}-ondertekend.pdf`;
+      a.download =
+        offerte.status === "ondertekend"
+          ? `${offerte.offerte_nummer}-ondertekend.pdf`
+          : `${offerte.offerte_nummer}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -299,6 +304,27 @@ export function OffertePage() {
       setPdfError(e instanceof Error ? e.message : "PDF mislukt");
     } finally {
       setPdfBusy(false);
+    }
+  }
+
+  async function verstuurPdfOpnieuw() {
+    if (!offerte) return;
+    setMailBusy(true);
+    setMailMsg(null);
+    setPdfError(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerte.id}/verstuur-pdf`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opnieuw mailen mislukt");
+      setMailMsg(
+        `Actuele PDF gemaild naar ${data.emailed_to || "de klant"}.`
+      );
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "Mailen mislukt");
+    } finally {
+      setMailBusy(false);
     }
   }
 
@@ -405,6 +431,24 @@ export function OffertePage() {
               Open ondertekenlink →
             </a>
           )}
+          <button
+            type="button"
+            disabled={pdfBusy}
+            onClick={() => void downloadPdf()}
+            className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          >
+            {pdfBusy ? "PDF laden…" : "PDF downloaden"}
+          </button>
+          {offerte.status !== "ondertekend" && offerte.leads?.email && (
+            <button
+              type="button"
+              disabled={mailBusy}
+              onClick={() => void verstuurPdfOpnieuw()}
+              className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+            >
+              {mailBusy ? "Mailen…" : "Actuele PDF mailen"}
+            </button>
+          )}
           {offerte.status === "ondertekend" && (
             <>
               <span className="border border-green/25 bg-green-soft px-3 py-1.5 text-sm font-medium text-green-dark">
@@ -422,19 +466,14 @@ export function OffertePage() {
               >
                 Backoffice
               </button>
-              <button
-                type="button"
-                disabled={pdfBusy}
-                onClick={() => void downloadSignedPdf()}
-                className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
-              >
-                {pdfBusy ? "PDF laden…" : "PDF downloaden"}
-              </button>
             </>
           )}
         </div>
         {pdfError && (
           <p className="mt-3 text-sm text-[#C62828]">{pdfError}</p>
+        )}
+        {mailMsg && (
+          <p className="mt-3 text-sm text-green-dark">{mailMsg}</p>
         )}
       </HeroCard>
 

@@ -131,27 +131,35 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setTextColor(...INK);
   doc.text("OFFERTE", margin, 28);
 
-  // Logo + bedrijf rechts
+  // Logo + bedrijf rechts (zelfde volgorde als ondertekenpagina)
   const logo = loadLogoDataUrl();
   const rightX = pageW - margin;
   let brandY = 12;
+  const logoSize = 14;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  const word = "Batterij";
+  const word2 = "concept";
+  const totalBrandW = doc.getTextWidth(word) + doc.getTextWidth(word2);
+  const brandStart = rightX - totalBrandW;
   if (logo) {
     try {
-      doc.addImage(logo, "PNG", rightX - 14, brandY, 14, 14);
+      doc.addImage(
+        logo,
+        "PNG",
+        brandStart - logoSize - 2,
+        brandY,
+        logoSize,
+        logoSize
+      );
     } catch {
       /* ignore */
     }
   }
-  const brandTextEnd = rightX - (logo ? 16 : 0);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.setTextColor(...ORANGE);
-  doc.text("concept", brandTextEnd, brandY + 6, { align: "right" });
-  const conceptW = doc.getTextWidth("concept");
   doc.setTextColor(...DEEPER);
-  doc.text("Batterij", brandTextEnd - conceptW, brandY + 6, {
-    align: "right",
-  });
+  doc.text(word, brandStart, brandY + 7);
+  doc.setTextColor(...ORANGE);
+  doc.text(word2, brandStart + doc.getTextWidth(word), brandY + 7);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
