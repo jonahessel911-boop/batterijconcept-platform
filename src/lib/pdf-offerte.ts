@@ -303,7 +303,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
 
   // —— Ondertekening (zelfde blok als pagina) ——
   y += 10;
-  const sigH = offerte.financiering_voorbehoud ? 92 : 84;
+  const sigH = offerte.financiering_voorbehoud ? 98 : 90;
   y = ensureSpace(doc, y, sigH + 6, pageW, margin);
 
   doc.setFillColor(...WASH);
@@ -337,59 +337,64 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   sy += 2;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(...FIELD_BORDER);
-  doc.roundedRect(margin + 5, sy, contentW - 10, 8, 1.5, 1.5, "FD");
+  doc.roundedRect(margin + 5, sy, contentW - 10, 9, 1.5, 1.5, "FD");
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
+  doc.setFontSize(10);
   doc.setTextColor(...INK);
-  doc.text(sign?.naam || " ", margin + 8, sy + 5.5);
-  sy += 12;
+  doc.text(sign?.naam || " ", margin + 8, sy + 6);
+  sy += 13;
 
-  // Datum / tijd ondertekening
+  // Datum / tijd ondertekening — één regel (geen overlappende breedte-berekening)
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
+  doc.setTextColor(...INK);
   doc.text("Datum", margin + 5, sy);
   sy += 2;
   doc.setFillColor(...SOFT);
-  doc.roundedRect(margin + 5, sy, contentW - 10, 8, 1.5, 1.5, "F");
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  doc.setTextColor(...DEEPER);
+  doc.roundedRect(margin + 5, sy, contentW - 10, 9, 1.5, 1.5, "F");
   const ondertekenLabel = sign
     ? formatDateTimeNl(sign.ondertekendOp)
     : formatDateTimeNl(new Date());
-  doc.text(ondertekenLabel, margin + 8, sy + 5.5);
-  doc.setTextColor(...MUTED);
-  doc.setFontSize(8);
-  doc.text(
-    "(Europe/Amsterdam)",
-    margin + 8 + doc.getTextWidth(ondertekenLabel) + 3,
-    sy + 5.5
-  );
-  sy += 12;
-
-  // Akkoord
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
+  doc.setFontSize(10);
+  doc.setTextColor(...DEEPER);
+  doc.text(ondertekenLabel, margin + 8, sy + 6);
+  const timeW = doc.getTextWidth(ondertekenLabel);
+  doc.setFontSize(8);
+  doc.setTextColor(...MUTED);
+  doc.text("  (Europe/Amsterdam)", margin + 8 + timeW, sy + 6);
+  sy += 13;
+
+  // Akkoord — vierkantje tekenen i.p.v. unicode (die in PDF uitrekt)
+  doc.setDrawColor(...INK);
+  doc.setLineWidth(0.35);
+  const checkSize = 3.2;
+  const checkX = margin + 5;
+  const checkY = sy - 2.4;
+  doc.rect(checkX, checkY, checkSize, checkSize, "S");
+  if (sign) {
+    doc.setDrawColor(...GREEN);
+    doc.setLineWidth(0.55);
+    doc.line(checkX + 0.6, checkY + 1.6, checkX + 1.3, checkY + 2.5);
+    doc.line(checkX + 1.3, checkY + 2.5, checkX + 2.6, checkY + 0.7);
+  }
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
   doc.setTextColor(...INK);
-  doc.text(
-    sign
-      ? "☑  Ik ga akkoord met deze offerte."
-      : "☐  Ik ga akkoord met deze offerte.",
-    margin + 5,
-    sy
-  );
-  sy += 7;
+  doc.text("Ik ga akkoord met deze offerte.", checkX + checkSize + 2.5, sy);
+  sy += 8;
 
   // Handtekening
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
+  doc.setTextColor(...INK);
   doc.text("Handtekening", margin + 5, sy);
   sy += 2;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(...FIELD_BORDER);
-  doc.roundedRect(margin + 5, sy, 78, 24, 1.5, 1.5, "FD");
+  doc.roundedRect(margin + 5, sy, 80, 26, 1.5, 1.5, "FD");
   if (sign) {
-    embedSignature(doc, sign.handtekeningDataUrl, margin + 7, sy + 1.5, 74, 21);
+    embedSignature(doc, sign.handtekeningDataUrl, margin + 7, sy + 1.5, 76, 23);
   }
 
   if (offerte.financiering_voorbehoud) {
