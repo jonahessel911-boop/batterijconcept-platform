@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
         sb.from("leads").select("id, created_at, status, adviseur_id"),
         sb
           .from("afspraken")
-          .select("id, lead_id, adviseur_id, start_at, status"),
+          .select("id, lead_id, adviseur_id, start_at, status, soort"),
         sb
           .from("offertes")
           .select(
@@ -116,13 +116,41 @@ export async function GET(req: NextRequest) {
     );
 
     if (leadsRes.error) throw leadsRes.error;
-    if (afsprakenRes.error) throw afsprakenRes.error;
+    let afsprakenData: {
+      id: string;
+      lead_id: string;
+      adviseur_id: string | null;
+      start_at: string;
+      status: string;
+      soort?: string | null;
+    }[] = (afsprakenRes.data || []) as {
+      id: string;
+      lead_id: string;
+      adviseur_id: string | null;
+      start_at: string;
+      status: string;
+      soort?: string | null;
+    }[];
+    if (afsprakenRes.error) {
+      if (
+        afsprakenRes.error.code === "42703" ||
+        afsprakenRes.error.message?.includes("soort")
+      ) {
+        const retry = await sb
+          .from("afspraken")
+          .select("id, lead_id, adviseur_id, start_at, status");
+        if (retry.error) throw retry.error;
+        afsprakenData = (retry.data || []) as typeof afsprakenData;
+      } else {
+        throw afsprakenRes.error;
+      }
+    }
     if (offertesRes.error) throw offertesRes.error;
 
     const tree = buildRapportageTree(
       {
         leads: leadsRes.data || [],
-        afspraken: afsprakenRes.data || [],
+        afspraken: afsprakenData,
         offertes,
         projecten: projectenSafe,
         kosten: kosten as {

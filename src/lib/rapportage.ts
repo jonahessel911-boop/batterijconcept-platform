@@ -13,6 +13,7 @@ import {
 import { nl } from "date-fns/locale";
 import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import { factuurIsBetaald } from "@/lib/aanbetaling";
+import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 
 const TZ = "Europe/Amsterdam";
 
@@ -148,6 +149,7 @@ export type RapportageRaw = {
     adviseur_id: string | null;
     start_at: string;
     status: string;
+    soort?: string | null;
   }[];
   offertes: {
     id: string;
@@ -191,9 +193,10 @@ export function buildRapportageTree(
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
     : raw.leads;
-  const afspraken = adviseurId
+  const afspraken = (adviseurId
     ? raw.afspraken.filter((a) => a.adviseur_id === adviseurId)
-    : raw.afspraken;
+    : raw.afspraken
+  ).filter((a) => afspraakBlokkeertAgenda(a.soort));
   const offertes = adviseurId
     ? raw.offertes.filter((o) => o.adviseur_id === adviseurId)
     : raw.offertes;
