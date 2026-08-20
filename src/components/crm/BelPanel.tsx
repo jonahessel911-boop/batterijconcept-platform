@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Adviseur, Lead, LeadStatus } from "@/types/database";
+import type { Adviseur, Afspraak, Lead, LeadStatus } from "@/types/database";
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { getSupabaseBrowser } from "@/lib/supabase";
@@ -10,10 +10,12 @@ import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/
 import {
   MAX_BELPOGINGEN,
   MAX_BELPOGINGEN_PER_DAG,
+  activeBelAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
   geenContactPogingLabel,
   inBelQueue,
+  isTerugbelDueToday,
   sortBelQueue,
 } from "@/lib/bel-queue";
 
@@ -92,6 +94,7 @@ function JaNeeField({
 
 export function BelPanel({
   leads,
+  afspraken = [],
   adviseurs,
   appointmentLeadIds,
   defaultAdviseurId,
@@ -99,23 +102,49 @@ export function BelPanel({
   onNeedReload,
 }: {
   leads: Lead[];
+  afspraken?: Afspraak[];
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
   defaultAdviseurId?: string;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
   onNeedReload?: () => void;
 }) {
-  const queue = useMemo(
+  const normalQueue = useMemo(
     () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
     [leads, appointmentLeadIds]
   );
+
+  /** Terugbel-afspraken die vandaag (Amsterdam) aan de beurt zijn. */
+  const terugbelToday = useMemo(() => {
+    const items: { lead: Lead; afspraak: Afspraak }[] = [];
+    for (const a of afspraken) {
+      if (!isTerugbelDueToday(a)) continue;
+      const lead = leads.find((l) => l.id === a.lead_id);
+      if (!lead?.telefoon?.trim()) continue;
+      items.push({ lead, afspraak: a });
+    }
+    items.sort(
+      (a, b) =>
+        new Date(a.afspraak.start_at).getTime() -
+        new Date(b.afspraak.start_at).getTime()
+    );
+    return items;
+  }, [afspraken, leads]);
+
+  const queue = useMemo(() => {
+    const terugbelLeads = terugbelToday.map((t) => t.lead);
+    const ids = new Set(terugbelLeads.map((l) => l.id));
+    return [...terugbelLeads, ...normalQueue.filter((l) => !ids.has(l.id))];
+  }, [terugbelToday, normalQueue]);
+
   const planAdviseurs = useMemo(
     () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
     [adviseurs]
   );
 
   const [currentId, setCurrentId] = useState<string | null>(null);
-  const [pickStatus, setPickStatus] = useState(false);
+  /** null = Volgende-knop · status = uitkomsten · terugbel = interne terugbel-afspraak */
+  const [nextMode, setNextMode] = useState<"status" | "terugbel" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -130,9 +159,21 @@ export function BelPanel({
   const [notities, setNotities] = useState("");
   const [partnerAanwezig, setPartnerAanwezig] = useState<boolean | null>(null);
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
+  const [terugbelAt, setTerugbelAt] = useState("");
+  const [terugbelNotitie, setTerugbelNotitie] = useState("");
 
   const current =
-    queue.find((l) => l.id === currentId) || queue[0] || null;
+    queue.find((l) => l.id === currentId) ||
+    terugbelToday[0]?.lead ||
+    normalQueue[0] ||
+    null;
+
+  const currentTerugbel = current
+    ? activeBelAfspraak(afspraken, current.id)
+    : null;
+  const currentIsTerugbelDue = Boolean(
+    currentTerugbel && isTerugbelDueToday(currentTerugbel)
+  );
 
   const slotsByDay = useMemo(() => {
     const map = new Map<
@@ -158,7 +199,7 @@ export function BelPanel({
 
   useEffect(() => {
     if (!current) return;
-    setPickStatus(false);
+    setNextMode(null);
     setError(null);
     setCopied(false);
     setStartAt("");
@@ -167,6 +208,8 @@ export function BelPanel({
     setNotities(current.notities || "");
     setPartnerAanwezig(null);
     setAndereOffertes(null);
+    setTerugbelAt("");
+    setTerugbelNotitie(current.terugbel_notitie || "");
     const preferred = current.adviseur_id || defaultAdviseurId || "";
     const allowed = planAdviseurs.some((a) => a.id === preferred)
       ? preferred
@@ -192,8 +235,19 @@ export function BelPanel({
 
   function goNextLead(excludeId: string) {
     const rest = queue.filter((l) => l.id !== excludeId);
-    setCurrentId(rest[0]?.id || null);
-    setPickStatus(false);
+    const nextTerugbel = terugbelToday.find((t) => t.lead.id !== excludeId);
+    setCurrentId(nextTerugbel?.lead.id || rest[0]?.id || null);
+    setNextMode(null);
+  }
+
+  async function completeTerugbelAfspraak(leadId: string) {
+    const afspraak = activeBelAfspraak(afspraken, leadId);
+    if (!afspraak) return;
+    const sb = getSupabaseBrowser();
+    await sb
+      .from("afspraken")
+      .update({ status: "voltooid" })
+      .eq("id", afspraak.id);
   }
 
   async function copyPhone(nummer: string) {
@@ -235,6 +289,7 @@ export function BelPanel({
         belpogingen_vandaag: Math.min(vandaag, MAX_BELPOGINGEN_PER_DAG),
         laatst_gebeld_at: now,
         terugbellen: false,
+        terugbel_notitie: null,
       };
       const sb = getSupabaseBrowser();
       let { error: err } = await sb
@@ -264,7 +319,9 @@ export function BelPanel({
         }
         throw err;
       }
+      await completeTerugbelAfspraak(current.id);
       onLeadUpdated(current.id, patch);
+      onNeedReload?.();
       goNextLead(current.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
@@ -312,6 +369,7 @@ export function BelPanel({
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
       onLeadUpdated(current.id, { status: "afspraak" });
+      await completeTerugbelAfspraak(current.id);
       onNeedReload?.();
       goNextLead(current.id);
     } catch (err) {
@@ -321,7 +379,53 @@ export function BelPanel({
     }
   }
 
-  if (queue.length === 0) {
+  async function planTerugbel(e: React.FormEvent) {
+    e.preventDefault();
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!terugbelAt) throw new Error("Kies datum en tijd");
+      const parsed = new Date(terugbelAt);
+      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
+      if (!adviseurId) throw new Error("Kies een adviseur");
+      const note = terugbelNotitie.trim();
+      if (!note) throw new Error("Vul een notitie in");
+
+      const res = await fetch("/api/afspraken", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lead_id: current.id,
+          adviseur_id: adviseurId,
+          start_at: parsed.toISOString(),
+          notities: note,
+          soort: "bel",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Terugbel-afspraak mislukt");
+
+      const now = new Date().toISOString();
+      const leadPatch: Partial<Lead> = {
+        terugbellen: true,
+        terugbel_notitie: note,
+        laatst_gebeld_at: now,
+      };
+      const sb = getSupabaseBrowser();
+      await sb.from("leads").update(leadPatch).eq("id", current.id);
+
+      onLeadUpdated(current.id, leadPatch);
+      onNeedReload?.();
+      goNextLead(current.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (queue.length === 0 && terugbelToday.length === 0) {
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
@@ -331,7 +435,7 @@ export function BelPanel({
           Alleen leads zonder afspraak, deal of “geen interesse” staan hier.
           Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag — daarna
           komen ze morgen terug. Na {MAX_BELPOGINGEN} keer geen contact vallen
-          ze eruit.
+          ze eruit. Terugbel-afspraken verschijnen hier op de dag zelf.
         </p>
       </div>
     );
@@ -346,10 +450,53 @@ export function BelPanel({
   const position = queue.findIndex((l) => l.id === current.id) + 1;
 
   return (
-    <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
+    <div>
+      {terugbelToday.length > 0 && (
+        <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+            Terugbellen vandaag ({terugbelToday.length})
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {terugbelToday.map(({ lead, afspraak }) => {
+              const active = current?.id === lead.id;
+              return (
+                <button
+                  key={afspraak.id}
+                  type="button"
+                  onClick={() => {
+                    setCurrentId(lead.id);
+                    setNextMode(null);
+                    setError(null);
+                  }}
+                  className={[
+                    "inline-flex max-w-full items-center gap-2 border px-2.5 py-1 text-left text-xs",
+                    active
+                      ? "border-[#C45A12] bg-[#C45A12] text-white"
+                      : "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]",
+                  ].join(" ")}
+                >
+                  <span
+                    className={[
+                      "shrink-0 font-bold tabular-nums",
+                      active ? "text-white" : "text-[#C45A12]",
+                    ].join(" ")}
+                  >
+                    {formatTimeNl(afspraak.start_at)}
+                  </span>
+                  <span className="truncate font-medium">{lead.naam}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {position} van {queue.length} in de bellijst
+          {currentIsTerugbelDue
+            ? "Terugbel afspraak vandaag"
+            : `${position} van ${queue.length} in de bellijst`}
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -384,7 +531,19 @@ export function BelPanel({
           <p className="mt-1 text-sm text-muted">{current.email}</p>
         )}
 
-        {current.terugbel_notitie?.trim() && (
+        {currentIsTerugbelDue && currentTerugbel && (
+          <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+              Gepland terugbelmoment · {formatTimeNl(currentTerugbel.start_at)}
+            </p>
+            {(currentTerugbel.notities || current.terugbel_notitie)?.trim() ? (
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                {currentTerugbel.notities || current.terugbel_notitie}
+              </p>
+            ) : null}
+          </div>
+        )}
+        {!currentIsTerugbelDue && current.terugbel_notitie?.trim() && (
           <div className="mt-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
               Terugbelnotitie
@@ -420,19 +579,19 @@ export function BelPanel({
 
       <aside className="flex flex-col bg-wash/40 p-4 sm:p-5">
         <div className="lg:sticky lg:top-0">
-          {!pickStatus ? (
+          {!nextMode ? (
             <button
               type="button"
               disabled={busy}
               onClick={() => {
-                setPickStatus(true);
+                setNextMode("status");
                 setError(null);
               }}
               className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-14 sm:text-base"
             >
               Volgende
             </button>
-          ) : (
+          ) : nextMode === "status" ? (
             <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
               <p className="text-sm font-semibold text-ink">Kies de status</p>
               <p className="text-xs text-muted">
@@ -458,12 +617,86 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => setPickStatus(false)}
+                onClick={() => {
+                  setNextMode("terugbel");
+                  setError(null);
+                }}
+                className="flex min-h-12 w-full items-center justify-center border border-[#C45A12]/40 bg-[#FFF0E6] px-4 text-sm font-semibold text-[#C45A12] hover:bg-[#FFE4D4] disabled:opacity-60"
+              >
+                Terugbel afspraak
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setNextMode(null)}
                 className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
               >
                 Terug
               </button>
             </div>
+          ) : (
+            <form
+              onSubmit={(e) => void planTerugbel(e)}
+              className="space-y-3 rounded-2xl border border-line bg-white p-4"
+            >
+              <p className="text-sm font-semibold text-ink">Terugbel afspraak</p>
+              <p className="text-xs text-muted">
+                Alleen intern — de klant krijgt geen mail. Staat in de agenda als
+                terugbelmoment.
+              </p>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Adviseur
+                <select
+                  required
+                  value={adviseurId}
+                  onChange={(e) => setAdviseurId(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                >
+                  <option value="">Kies adviseur…</option>
+                  {planAdviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Datum &amp; tijd
+                <input
+                  type="datetime-local"
+                  required
+                  value={terugbelAt}
+                  onChange={(e) => setTerugbelAt(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Notitie
+                <textarea
+                  required
+                  value={terugbelNotitie}
+                  onChange={(e) => setTerugbelNotitie(e.target.value)}
+                  rows={3}
+                  placeholder="Bijv. bel terug over offerte, bereikbaar na 17:00…"
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={busy || !adviseurId || !terugbelAt || !terugbelNotitie.trim()}
+                className="flex min-h-12 w-full items-center justify-center bg-[#C45A12] px-4 text-sm font-semibold text-white hover:bg-[#a84a0e] disabled:opacity-60"
+              >
+                {busy ? "Bezig…" : "Terugbel afspraak opslaan"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setNextMode("status")}
+                className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
+              >
+                Terug
+              </button>
+            </form>
           )}
 
           {error && (
@@ -611,6 +844,7 @@ export function BelPanel({
           </form>
         </div>
       </aside>
+    </div>
     </div>
   );
 }

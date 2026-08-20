@@ -1,6 +1,7 @@
 import { formatInTimeZone } from "date-fns-tz";
-import type { Lead, LeadStatus } from "@/types/database";
+import type { Afspraak, Lead, LeadStatus } from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 
 export const MAX_BELPOGINGEN = 7;
 export const MAX_BELPOGINGEN_PER_DAG = 2;
@@ -10,6 +11,23 @@ const QUEUE_STATUSES: LeadStatus[] = [
   "geen_contact",
   "vervolg_geen_contact",
 ];
+
+const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
+
+/** Sollicitaties horen in Instroom, niet in de bel-queue. */
+export function isSollicitatieLead(lead: Pick<Lead, "naam" | "bron">): boolean {
+  const naam = (lead.naam || "").toLowerCase();
+  if (naam.includes("sollicitant")) return true;
+  const bron = (lead.bron || "").toLowerCase();
+  if (
+    bron.includes("sollicit") ||
+    bron.includes("werkenbij") ||
+    bron.includes("vacature")
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export function belpogingenOf(lead: Pick<Lead, "belpogingen">): number {
   return Math.max(0, Number(lead.belpogingen) || 0);
@@ -37,10 +55,40 @@ export function geenContactPogingLabel(pogingen: number): string {
   return `Geen contact ${n}/${MAX_BELPOGINGEN}`;
 }
 
+/** Actieve terugbel-afspraak (soort bel) voor deze lead. */
+export function activeBelAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) =>
+        a.lead_id === leadId &&
+        ACTIEVE_AFSPRAAK.has(a.status) &&
+        normalizeAfspraakSoort(a.soort) === "bel"
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+/** Vanaf 00:01 Amsterdam op de dag van de terugbel-afspraak tot afgehandeld. */
+export function isTerugbelDueToday(
+  afspraak: Afspraak,
+  now = new Date()
+): boolean {
+  if (!ACTIEVE_AFSPRAAK.has(afspraak.status)) return false;
+  if (normalizeAfspraakSoort(afspraak.soort) !== "bel") return false;
+  return amsterdamDayKey(afspraak.start_at) === amsterdamDayKey(now);
+}
+
 export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>
 ): boolean {
+  if (isSollicitatieLead(lead)) return false;
   if (!lead.telefoon?.trim()) return false;
   if (!QUEUE_STATUSES.includes(lead.status)) return false;
   if (lead.status === "afspraak") return false;

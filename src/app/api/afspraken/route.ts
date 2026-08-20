@@ -498,6 +498,7 @@ async function afterCreate(
     start_at: string;
     created_at: string;
     manage_token: string;
+    notities?: string | null;
     leads?: {
       naam?: string | null;
       email?: string | null;
@@ -517,14 +518,23 @@ async function afterCreate(
     .select("status")
     .eq("id", body.lead_id)
     .single();
-  if (leadRow?.status !== "deal") {
+  if (leadRow?.status !== "deal" && soort !== "bel") {
     await sb
       .from("leads")
       .update({ status: leadStatusVoorAfspraakSoort(soort) })
       .eq("id", body.lead_id);
   }
 
-  if (body.adviseur_id) {
+  if (soort === "bel") {
+    await sb
+      .from("leads")
+      .update({
+        terugbellen: true,
+        terugbel_notitie: afspraak.notities || null,
+        ...(body.adviseur_id ? { adviseur_id: body.adviseur_id } : {}),
+      })
+      .eq("id", body.lead_id);
+  } else if (body.adviseur_id) {
     await sb
       .from("leads")
       .update({ adviseur_id: body.adviseur_id })

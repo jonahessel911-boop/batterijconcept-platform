@@ -29,7 +29,7 @@ import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { InstroomPanel } from "./InstroomPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
-import { inBelQueue } from "@/lib/bel-queue";
+import { amsterdamDayKey, inBelQueue } from "@/lib/bel-queue";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 
 const VALID_TABS: CrmTab[] = [
@@ -201,7 +201,7 @@ export function CrmShell() {
         sb.from("leads").select("*").order("created_at", { ascending: false }),
         sb
           .from("afspraken")
-          .select("id, start_at, status, adviseur_id, lead_id")
+          .select("id, start_at, end_at, status, adviseur_id, lead_id, soort, notities")
           .order("start_at", { ascending: true }),
         sb
           .from("offertes")
@@ -301,15 +301,40 @@ export function CrmShell() {
     const now = Date.now();
     for (const a of afspraken) {
       if (a.status === "geannuleerd" || a.status === "voltooid") continue;
+      // Terugbel-afspraken: altijd uit de normale bellijst (aparte sectie op de dag zelf)
+      if (a.soort === "bel") {
+        ids.add(a.lead_id);
+        continue;
+      }
       if (new Date(a.start_at).getTime() < now) continue;
       ids.add(a.lead_id);
     }
     return ids;
   }, [afspraken]);
 
+  const terugbelTodayCount = useMemo(() => {
+    const today = new Set(
+      afspraken
+        .filter(
+          (a) =>
+            a.soort === "bel" &&
+            a.status !== "geannuleerd" &&
+            a.status !== "voltooid" &&
+            amsterdamDayKey(a.start_at) === amsterdamDayKey(new Date())
+        )
+        .map((a) => a.lead_id)
+    );
+    return [...today].filter((id) => {
+      const lead = scopedLeads.find((l) => l.id === id);
+      return Boolean(lead?.telefoon?.trim());
+    }).length;
+  }, [afspraken, scopedLeads]);
+
   const belQueueCount = useMemo(
-    () => scopedLeads.filter((l) => inBelQueue(l, appointmentLeadIds)).length,
-    [scopedLeads, appointmentLeadIds]
+    () =>
+      scopedLeads.filter((l) => inBelQueue(l, appointmentLeadIds)).length +
+      terugbelTodayCount,
+    [scopedLeads, appointmentLeadIds, terugbelTodayCount]
   );
 
   const upcomingAfsprakenCount = useMemo(() => {
@@ -535,6 +560,7 @@ export function CrmShell() {
                 {tab === "bellen" && (
                   <BelPanel
                     leads={scopedLeads}
+                    afspraken={afspraken}
                     adviseurs={adviseurs}
                     appointmentLeadIds={appointmentLeadIds}
                     defaultAdviseurId={adviseurFilter || undefined}

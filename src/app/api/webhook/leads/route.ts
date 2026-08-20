@@ -3,8 +3,11 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { getAdminAdviseurId } from "@/lib/admin-adviseur";
 import { enrichAddressFields } from "@/lib/postcode";
 import type { WebhookLeadPayload } from "@/types/database";
+import { looksLikeSollicitatie } from "@/lib/sollicitatie-detect";
 
 export const runtime = "nodejs";
+
+const SOLLICITATIE_WEBHOOK = "/api/webhook/sollicitaties";
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -38,6 +41,52 @@ export async function POST(req: NextRequest) {
 
   if (!body.naam || typeof body.naam !== "string" || !body.naam.trim()) {
     return badRequest("Veld 'naam' is verplicht");
+  }
+
+  // Sollicitaties horen in Instroom, niet in de lead/bel-queue
+  if (looksLikeSollicitatie(body as unknown as Record<string, unknown>)) {
+    const origin = new URL(req.url).origin;
+    const forwardUrl = `${origin}${SOLLICITATIE_WEBHOOK}`;
+    try {
+      const forwardRes = await fetch(forwardUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(req.headers.get("x-webhook-secret")
+            ? { "x-webhook-secret": req.headers.get("x-webhook-secret")! }
+            : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      const forwardData = await forwardRes.json().catch(() => ({}));
+      if (!forwardRes.ok) {
+        return NextResponse.json(
+          {
+            error:
+              "Dit lijkt een sollicitatie. Gebruik POST /api/webhook/sollicitaties",
+            detail: forwardData.error,
+          },
+          { status: forwardRes.status }
+        );
+      }
+      return NextResponse.json(
+        {
+          ...forwardData,
+          redirected_from: "leads",
+          hint: "Sollicitaties komen in Instroom, niet in Bellen/Leads.",
+        },
+        { status: forwardRes.status }
+      );
+    } catch (e) {
+      return NextResponse.json(
+        {
+          error:
+            "Dit lijkt een sollicitatie. Stuur naar POST /api/webhook/sollicitaties (Instroom).",
+          detail: e instanceof Error ? e.message : undefined,
+        },
+        { status: 400 }
+      );
+    }
   }
 
   try {
@@ -175,7 +224,7 @@ export async function GET() {
     endpoint: "/api/webhook/leads",
     method: "POST",
     description:
-      "Webhook voor lead-intake. Genereert uniek lead_number (BC-YYYYMMDD-XXXX) en created_at.",
+      "Webhook voor lead-intake (thuisbatterij-aanvragen). Genereert uniek lead_number (BC-YYYYMMDD-XXXX). Sollicitaties worden doorgestuurd naar /api/webhook/sollicitaties (Instroom).",
     example: {
       naam: "Jan Jansen",
       email: "jan@example.com",

@@ -10,7 +10,7 @@ export const AFSPRAAK_SOORTEN: AfspraakSoort[] = [
 
 export const afspraakSoortLabel: Record<AfspraakSoort, string> = {
   nieuw: "Afspraak",
-  bel: "Belafspraak",
+  bel: "Terugbel afspraak",
   vervolg_fysiek: "Vervolg fysiek",
   vervolg_tel: "Vervolg telefonisch",
 };
