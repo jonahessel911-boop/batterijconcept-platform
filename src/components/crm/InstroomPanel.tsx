@@ -115,7 +115,11 @@ export function InstroomPanel() {
         body: form,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      if (!res.ok) {
+        throw new Error(
+          [data.error || "Upload mislukt", data.detail].filter(Boolean).join(": ")
+        );
+      }
       const bestand = data.bestand as SollicitatieBestand;
       setItems((prev) =>
         prev.map((item) =>

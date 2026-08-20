@@ -26,45 +26,77 @@ function pickStr(...values: (string | undefined | null)[]) {
  * Ontvangt leads vanaf de website-scan (of andere bronnen).
  * Maakt automatisch lead_number + created_at aan.
  *
- * Body (JSON):
+ * Body (JSON of multipart):
  *   naam* , email, telefoon, postcode, huisnummer,
  *   adres|straat, woonplaats|plaats, notities|notes|opmerkingen|bericht,
  *   utm_source, …
  */
 export async function POST(req: NextRequest) {
-  let body: WebhookLeadPayload;
+  const contentType = req.headers.get("content-type") || "";
+  const isMultipart = contentType.includes("multipart/form-data");
+
+  let body: WebhookLeadPayload & Record<string, unknown>;
+  let formData: FormData | null = null;
+
   try {
-    body = await req.json();
+    if (isMultipart) {
+      formData = await req.formData();
+      const fields: Record<string, unknown> = {};
+      for (const [key, value] of formData.entries()) {
+        if (typeof value === "string") fields[key] = value;
+        else if (value instanceof File && value.size > 0) {
+          fields[key] = value;
+          // Detectiehulp voor sollicitaties zonder bron=…
+          if (!fields.cv && !fields.resume && !fields.file) fields.cv = value;
+        }
+      }
+      body = fields as WebhookLeadPayload & Record<string, unknown>;
+    } else {
+      body = (await req.json()) as WebhookLeadPayload & Record<string, unknown>;
+    }
   } catch {
-    return badRequest("Ongeldige JSON");
+    return badRequest("Ongeldige payload (JSON of multipart)");
   }
 
-  if (!body.naam || typeof body.naam !== "string" || !body.naam.trim()) {
+  const naam = pickStr(
+    typeof body.naam === "string" ? body.naam : null,
+    typeof body.name === "string" ? (body.name as string) : null
+  );
+  if (!naam) {
     return badRequest("Veld 'naam' is verplicht");
   }
+  body.naam = naam;
 
   // Sollicitaties horen in Instroom, niet in de lead/bel-queue
-  if (looksLikeSollicitatie(body as unknown as Record<string, unknown>)) {
+  if (looksLikeSollicitatie(body as Record<string, unknown>)) {
     const origin = new URL(req.url).origin;
     const forwardUrl = `${origin}${SOLLICITATIE_WEBHOOK}`;
     try {
-      const forwardRes = await fetch(forwardUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(req.headers.get("x-webhook-secret")
-            ? { "x-webhook-secret": req.headers.get("x-webhook-secret")! }
-            : {}),
-        },
-        body: JSON.stringify(body),
-      });
+      const secret = req.headers.get("x-webhook-secret");
+      const forwardRes = formData
+        ? await fetch(forwardUrl, {
+            method: "POST",
+            headers: {
+              ...(secret ? { "x-webhook-secret": secret } : {}),
+            },
+            body: formData,
+          })
+        : await fetch(forwardUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(secret ? { "x-webhook-secret": secret } : {}),
+            },
+            body: JSON.stringify(body),
+          });
       const forwardData = await forwardRes.json().catch(() => ({}));
       if (!forwardRes.ok) {
         return NextResponse.json(
           {
             error:
               "Dit lijkt een sollicitatie. Gebruik POST /api/webhook/sollicitaties",
-            detail: forwardData.error,
+            detail: forwardData.error || forwardData.warning,
+            upload_errors: forwardData.upload_errors,
           },
           { status: forwardRes.status }
         );

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { uploadSollicitatieBestand } from "@/lib/sollicitatie-bestanden";
+import {
+  collectFormFiles,
+  filesFromJsonPayload,
+  uploadSollicitatieBestand,
+} from "@/lib/sollicitatie-bestanden";
 import {
   parseSollicitatieStatus,
   sanitizeSollicitatiePayload,
@@ -25,22 +29,44 @@ function withWebhookAuth(req: NextRequest) {
   return Boolean(provided && provided === expected);
 }
 
+function buildNotitie(
+  body: Record<string, unknown>,
+  files: File[]
+): string | null {
+  const base = pickStr(
+    body.notitie,
+    body.notes,
+    body.opmerking,
+    body.message,
+    body.bericht
+  );
+  // Alleen bestandsnaam in notitie zetten als die er nog niet in staat
+  if (!files.length) return base;
+  const names = files.map((f) => f.name).filter(Boolean);
+  if (!names.length) return base;
+  if (base && names.every((n) => base.includes(n))) return base;
+  const suffix = `Bestand: ${names.join(", ")}`;
+  return base ? `${base}\n${suffix}` : suffix;
+}
+
 export async function POST(req: NextRequest) {
   if (!withWebhookAuth(req)) {
     return NextResponse.json({ error: "Unauthorized webhook" }, { status: 401 });
   }
 
-  let body: Record<string, unknown>;
-  let uploadFile: File | null = null;
+  let body: Record<string, unknown> = {};
+  let uploadFiles: File[] = [];
   try {
     const contentType = req.headers.get("content-type") || "";
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
-      body = Object.fromEntries(form.entries()) as Record<string, unknown>;
-      const maybeFile = form.get("file") ?? form.get("cv") ?? form.get("resume");
-      uploadFile = maybeFile instanceof File ? maybeFile : null;
+      body = Object.fromEntries(
+        [...form.entries()].filter(([, v]) => typeof v === "string")
+      ) as Record<string, unknown>;
+      uploadFiles = collectFormFiles(form);
     } else {
       body = (await req.json()) as Record<string, unknown>;
+      uploadFiles = await filesFromJsonPayload(body);
     }
   } catch {
     return NextResponse.json(
@@ -55,6 +81,7 @@ export async function POST(req: NextRequest) {
   }
 
   const status = parseSollicitatieStatus(body.status);
+  const notitie = buildNotitie(body, uploadFiles);
 
   try {
     const sb = getSupabaseAdmin();
@@ -65,29 +92,34 @@ export async function POST(req: NextRequest) {
         email: pickStr(body.email, body.mail),
         telefoon: pickStr(body.telefoon, body.phone, body.mobiel),
         status,
-        notitie: pickStr(body.notitie, body.notes, body.opmerking, body.message),
+        notitie,
         bron: pickStr(body.bron, body.source) || "webhook",
-        raw_payload: sanitizeSollicitatiePayload(body),
+        raw_payload: sanitizeSollicitatiePayload({
+          ...body,
+          _bestanden: uploadFiles.map((f) => ({
+            name: f.name,
+            size: f.size,
+            type: f.type,
+          })),
+        }),
       })
       .select("id, naam, email, status, created_at")
       .single();
 
     if (error) throw error;
 
-    let bestand = null;
-    if (uploadFile && uploadFile.size > 0) {
-      const uploaded = await uploadSollicitatieBestand(sb, data.id, uploadFile);
+    const bestanden = [];
+    const uploadErrors: string[] = [];
+    for (const file of uploadFiles) {
+      const uploaded = await uploadSollicitatieBestand(sb, data.id, file);
       if ("error" in uploaded) {
-        return NextResponse.json(
-          {
-            error: "Sollicitatie opgeslagen, maar bestand upload mislukt",
-            detail: uploaded.error,
-            sollicitatie: data,
-          },
-          { status: 207 }
+        uploadErrors.push(
+          `${file.name}: ${uploaded.detail || uploaded.error}`
         );
+        console.error("Sollicitatie bestand upload fout:", uploaded);
+        continue;
       }
-      bestand = uploaded.bestand;
+      bestanden.push(uploaded.bestand);
     }
 
     try {
@@ -96,7 +128,13 @@ export async function POST(req: NextRequest) {
         `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${data.email || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${pickStr(body.telefoon, body.phone, body.mobiel) || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Status</strong><br />${status}</p>`,
-        `<p style="margin:0;font-size:15px;"><strong>Bestand</strong><br />${bestand?.bestandsnaam || "Geen bestand meegestuurd"}</p>`,
+        `<p style="margin:0;font-size:15px;"><strong>Bestanden</strong><br />${
+          bestanden.length
+            ? bestanden.map((b) => b.bestandsnaam).join(", ")
+            : uploadFiles.length
+              ? `Upload mislukt (${uploadErrors.join("; ") || "onbekend"})`
+              : "Geen bestand meegestuurd"
+        }</p>`,
       ].join("");
 
       const html = emailLayout({
@@ -120,8 +158,21 @@ export async function POST(req: NextRequest) {
       console.error("Sollicitatie notificatie mail fout:", mailErr);
     }
 
+    if (uploadFiles.length > 0 && bestanden.length === 0) {
+      return NextResponse.json(
+        {
+          ok: true,
+          sollicitatie: data,
+          bestanden,
+          warning: "Sollicitatie opgeslagen, maar bestand(en) upload mislukt",
+          upload_errors: uploadErrors,
+        },
+        { status: 207 }
+      );
+    }
+
     return NextResponse.json(
-      { ok: true, sollicitatie: data, bestand },
+      { ok: true, sollicitatie: data, bestanden, bestand: bestanden[0] || null },
       { status: 201 }
     );
   } catch (e) {
@@ -145,10 +196,12 @@ export async function GET() {
         status: "nieuw",
         notitie: "Beschikbaar vanaf september",
         bron: "werkenbij-formulier",
+        file_url: "https://… (optioneel)",
+        file_base64: "… (optioneel)",
       },
       multipart: {
         fields: ["naam*", "email", "telefoon", "status", "notitie", "bron"],
-        fileField: "file (of cv / resume)",
+        fileField: "willekeurige veldnaam — alle File-uploads worden meegenomen",
       },
     },
   });
