@@ -22,7 +22,7 @@ async function loadOfferte(token: string): Promise<{
     const { data, error } = await sb
       .from("offertes")
       .select(
-        `*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
+        `*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
       )
       .eq("sign_token", token)
       .single();
@@ -60,6 +60,9 @@ export default async function OfferteSignPage({
         vestigingsnummer: co.vestigingsnummer || "000066465834",
         adres: co.adres || "Alfred Nobellaan 68",
         postcodePlaats: co.postcodePlaats || "3731DW De Bilt",
+        telefoon: co.telefoon,
+        email: co.email,
+        website: co.website,
       }}
     />
   );

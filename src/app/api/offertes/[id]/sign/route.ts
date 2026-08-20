@@ -68,7 +68,7 @@ export async function POST(
     let query = supabase
       .from("offertes")
       .select(
-        `*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
+        `*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
       );
 
     if (token) {

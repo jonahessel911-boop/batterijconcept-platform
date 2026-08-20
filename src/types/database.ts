@@ -202,7 +202,16 @@ export interface Offerte {
   // joins
   leads?: Pick<
     Lead,
-    "naam" | "email" | "lead_number" | "postcode" | "huisnummer" | "plaats" | "adviseur_id"
+    | "naam"
+    | "email"
+    | "telefoon"
+    | "lead_number"
+    | "postcode"
+    | "huisnummer"
+    | "plaats"
+    | "straat"
+    | "toevoeging"
+    | "adviseur_id"
   > | null;
   offerte_regels?: OfferteRegel[];
   installatie_partners?: Pick<

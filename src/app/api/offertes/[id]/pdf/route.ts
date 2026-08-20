@@ -20,7 +20,7 @@ export async function GET(
     const { data: offerte, error } = await sb
       .from("offertes")
       .select(
-        `*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
+        `*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offerte_regels(*)`
       )
       .eq("id", id)
       .single();

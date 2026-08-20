@@ -85,8 +85,21 @@ export function MaakOfferteModal({
         btw_percentage: 21,
       });
     }
+    if (
+      financiering &&
+      !out.some((l) => /warmtefonds\s+aanvraag/i.test(l.omschrijving))
+    ) {
+      out.push({
+        key: "warmtefonds-service",
+        product_id: null,
+        omschrijving: "Warmtefonds aanvraag service",
+        aantal: 1,
+        prijs_ex_btw: 0,
+        btw_percentage: 21,
+      });
+    }
     return out;
-  }, [lines, useKorting, kortingBedrag]);
+  }, [lines, useKorting, kortingBedrag, financiering]);
 
   const totaalInc = useMemo(
     () =>
@@ -102,6 +115,11 @@ export function MaakOfferteModal({
     if (!p) return;
     const isAlpha = p.naam.startsWith("Alpha ESS");
     const qty = Math.max(1, aantal);
+    const omvormerKw = p.naam.includes("G3 T10")
+      ? "10 kW"
+      : p.naam.includes("G3 S5")
+        ? "5 kW"
+        : null;
     setLines((prev) => {
       const next: Line[] = [
         ...prev,
@@ -115,6 +133,16 @@ export function MaakOfferteModal({
         },
       ];
       if (isAlpha) {
+        if (omvormerKw) {
+          next.push({
+            key: `omvormer-${p.id}-${Date.now()}`,
+            product_id: null,
+            omschrijving: `Incl. ${omvormerKw} omvormer`,
+            aantal: qty,
+            prijs_ex_btw: 0,
+            btw_percentage: 21,
+          });
+        }
         next.push({
           key: `subsidie-${p.id}-${Date.now()}`,
           product_id: null,
@@ -123,6 +151,19 @@ export function MaakOfferteModal({
           prijs_ex_btw: 0,
           btw_percentage: 21,
         });
+        const hasInstallatie = [...prev, ...next].some((l) =>
+          /installatie\s*\+\s*installatieopname/i.test(l.omschrijving)
+        );
+        if (!hasInstallatie) {
+          next.push({
+            key: `installatie-${p.id}-${Date.now()}`,
+            product_id: null,
+            omschrijving: "Installatie + installatieopname",
+            aantal: 1,
+            prijs_ex_btw: 0,
+            btw_percentage: 21,
+          });
+        }
       }
       return next;
     });
@@ -428,7 +469,8 @@ export function MaakOfferteModal({
               <span>
                 <span className="font-medium">Warmtefonds</span>
                 <span className="mt-1 block text-xs text-muted">
-                  Onder voorbehoud van financiering.
+                  Onder voorbehoud van financiering · regel “Warmtefonds
+                  aanvraag service” op de offerte.
                 </span>
               </span>
             </label>
