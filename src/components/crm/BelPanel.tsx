@@ -168,6 +168,9 @@ export function BelPanel({
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
   const [terugbelAt, setTerugbelAt] = useState("");
   const [terugbelNotitie, setTerugbelNotitie] = useState("");
+  const [leadNotitieDraft, setLeadNotitieDraft] = useState("");
+  const [editingLeadNotitie, setEditingLeadNotitie] = useState(false);
+  const [savingLeadNotitie, setSavingLeadNotitie] = useState(false);
 
   const current =
     queue.find((l) => l.id === currentId) ||
@@ -217,6 +220,9 @@ export function BelPanel({
     setAndereOffertes(null);
     setTerugbelAt("");
     setTerugbelNotitie(current.terugbel_notitie || "");
+    setLeadNotitieDraft(current.notities || "");
+    setEditingLeadNotitie(false);
+    setSavingLeadNotitie(false);
     const preferred = current.adviseur_id || defaultAdviseurId || "";
     const allowed = planAdviseurs.some((a) => a.id === preferred)
       ? preferred
@@ -255,6 +261,31 @@ export function BelPanel({
       .from("afspraken")
       .update({ status: "voltooid" })
       .eq("id", afspraak.id);
+  }
+
+  async function saveLeadNotitie() {
+    if (!current) return;
+    const next = leadNotitieDraft.trim() || null;
+    if ((current.notities || null) === next) {
+      setEditingLeadNotitie(false);
+      return;
+    }
+    setSavingLeadNotitie(true);
+    setError(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update({ notities: next })
+        .eq("id", current.id);
+      if (err) throw err;
+      onLeadUpdated(current.id, { notities: next });
+      setEditingLeadNotitie(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
+    } finally {
+      setSavingLeadNotitie(false);
+    }
   }
 
   async function copyPhone(nummer: string) {
@@ -560,16 +591,80 @@ export function BelPanel({
             </p>
           </div>
         )}
-        {current.notities?.trim() && (
-          <div className="mt-4 rounded-xl bg-wash px-3.5 py-3">
+        <div className="mt-4 rounded-xl bg-wash px-3.5 py-3">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
               Lead-notitie
             </p>
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-              {current.notities}
-            </p>
+            {!editingLeadNotitie ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setLeadNotitieDraft(current.notities || "");
+                  setEditingLeadNotitie(true);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-green-dark hover:underline"
+                aria-label="Notitie bewerken"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  aria-hidden
+                >
+                  <path d="M4 20h4l10-10-4-4L4 16v4Z" />
+                  <path d="m12 6 4 4" />
+                </svg>
+                Bewerken
+              </button>
+            ) : null}
           </div>
-        )}
+          {!editingLeadNotitie ? (
+            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+              {current.notities?.trim() || (
+                <span className="text-muted">
+                  Nog geen notitie. Klik op bewerken om er een toe te voegen.
+                </span>
+              )}
+            </p>
+          ) : (
+            <>
+              <textarea
+                value={leadNotitieDraft}
+                onChange={(e) => setLeadNotitieDraft(e.target.value)}
+                rows={5}
+                placeholder="Bijv. bel vooraf, meerdere offertes, sleutel bij buren…"
+                className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm leading-relaxed text-ink outline-none focus:border-green"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={savingLeadNotitie}
+                  onClick={() => {
+                    setLeadNotitieDraft(current.notities || "");
+                    setEditingLeadNotitie(false);
+                  }}
+                  className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-white/80"
+                >
+                  Annuleren
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    savingLeadNotitie ||
+                    (current.notities || "") === (leadNotitieDraft.trim() || "")
+                  }
+                  onClick={() => void saveLeadNotitie()}
+                  className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                >
+                  {savingLeadNotitie ? "Opslaan…" : "Opslaan"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
         <p className="mt-5 font-mono text-lg font-semibold tabular-nums text-ink">
           {phone}
