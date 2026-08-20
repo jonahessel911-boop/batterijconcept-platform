@@ -193,12 +193,6 @@ export function RapportagePanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       setTree(data.tree || []);
-      const current = (data.tree || []).find(
-        (n: RapportageNode) => n.isCurrent
-      );
-      if (current) {
-        setOpen((prev) => new Set([...prev, current.key]));
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
