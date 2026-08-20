@@ -1,14 +1,8 @@
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import {
-  endOfDay,
-  endOfMonth,
   endOfWeek,
-  endOfYear,
   getISOWeek,
-  startOfDay,
-  startOfMonth,
   startOfWeek,
-  startOfYear,
 } from "date-fns";
 import { nl } from "date-fns/locale";
 import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
@@ -16,6 +10,39 @@ import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 
 const TZ = "Europe/Amsterdam";
+
+function amsStartOfDay(year: number, month1: number, day: number): Date {
+  return fromZonedTime(new Date(year, month1 - 1, day, 0, 0, 0, 0), TZ);
+}
+
+function amsEndOfDay(year: number, month1: number, day: number): Date {
+  return fromZonedTime(new Date(year, month1 - 1, day, 23, 59, 59, 999), TZ);
+}
+
+function amsStartOfMonth(year: number, month1: number): Date {
+  return amsStartOfDay(year, month1, 1);
+}
+
+function amsEndOfMonth(year: number, month1: number): Date {
+  const last = new Date(year, month1, 0).getDate();
+  return amsEndOfDay(year, month1, last);
+}
+
+function amsStartOfYear(year: number): Date {
+  return amsStartOfDay(year, 1, 1);
+}
+
+function amsEndOfYear(year: number): Date {
+  return amsEndOfDay(year, 12, 31);
+}
+
+function amsYmd(d: Date) {
+  return {
+    y: Number(formatInTimeZone(d, TZ, "yyyy")),
+    m: Number(formatInTimeZone(d, TZ, "M")),
+    d: Number(formatInTimeZone(d, TZ, "d")),
+  };
+}
 
 export type RapportageMetrics = {
   leads: number;
@@ -214,32 +241,28 @@ export function buildRapportageTree(
     (o) => o.status === "ondertekend" && o.ondertekend_op
   );
 
-  const now = toZonedTime(new Date(), TZ);
-  const years = new Map<number, Date>();
+  const now = new Date();
+  const nowParts = amsYmd(now);
+  const years = new Map<number, true>();
 
   for (const l of leads) {
-    const y = Number(formatInTimeZone(l.created_at, TZ, "yyyy"));
-    years.set(y, new Date(Date.UTC(y, 0, 1)));
+    years.set(Number(formatInTimeZone(l.created_at, TZ, "yyyy")), true);
   }
   for (const a of afspraken) {
-    const y = Number(formatInTimeZone(a.start_at, TZ, "yyyy"));
-    years.set(y, new Date(Date.UTC(y, 0, 1)));
+    years.set(Number(formatInTimeZone(a.start_at, TZ, "yyyy")), true);
   }
   for (const o of signed) {
-    const y = Number(formatInTimeZone(o.ondertekend_op!, TZ, "yyyy"));
-    years.set(y, new Date(Date.UTC(y, 0, 1)));
+    years.set(Number(formatInTimeZone(o.ondertekend_op!, TZ, "yyyy")), true);
   }
   for (const k of kosten) {
-    const y = Number(k.datum.slice(0, 4));
-    years.set(y, new Date(Date.UTC(y, 0, 1)));
+    years.set(Number(k.datum.slice(0, 4)), true);
   }
   for (const f of facturen) {
     const iso = factuurBetaalIso(f);
     if (!iso) continue;
-    const y = Number(formatInTimeZone(iso, TZ, "yyyy"));
-    years.set(y, new Date(Date.UTC(y, 0, 1)));
+    years.set(Number(formatInTimeZone(iso, TZ, "yyyy")), true);
   }
-  years.set(now.getFullYear(), new Date(Date.UTC(now.getFullYear(), 0, 1)));
+  years.set(nowParts.y, true);
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
 
@@ -282,40 +305,81 @@ export function buildRapportageTree(
   }
 
   return yearList.map((year) => {
-    const yStart = startOfYear(new Date(year, 0, 1));
-    const yEnd = endOfYear(new Date(year, 0, 1));
+    const yStart = amsStartOfYear(year);
+    // Huidig jaar: alleen t/m vandaag — anders tellen toekomstige afspraken
+    // mee in het jaartotaal terwijl die maanden nog niet zichtbaar zijn.
+    const yEnd =
+      year === nowParts.y
+        ? amsEndOfDay(nowParts.y, nowParts.m, nowParts.d)
+        : amsEndOfYear(year);
     const months: RapportageNode[] = [];
+    const lastMonth = year === nowParts.y ? nowParts.m : 12;
 
-    for (let month = 0; month < 12; month++) {
-      const mStart = startOfMonth(new Date(year, month, 1));
-      const mEnd = endOfMonth(mStart);
-      if (mStart > now && year === now.getFullYear()) break;
+    for (let month1 = 1; month1 <= lastMonth; month1++) {
+      const mStart = amsStartOfMonth(year, month1);
+      const mEndRaw = amsEndOfMonth(year, month1);
+      const mEnd =
+        year === nowParts.y && month1 === nowParts.m ? yEnd : mEndRaw;
 
       const weeks: RapportageNode[] = [];
-      let cursor = startOfWeek(mStart, { weekStartsOn: 1 });
-      while (cursor <= mEnd) {
-        const wStart = cursor < mStart ? mStart : cursor;
-        const wEndRaw = endOfWeek(cursor, { weekStartsOn: 1 });
-        const wEnd = wEndRaw > mEnd ? mEnd : wEndRaw;
+      const localMonthStart = toZonedTime(mStart, TZ);
+      let cursor = startOfWeek(localMonthStart, { weekStartsOn: 1 });
+      const localMonthEnd = toZonedTime(mEnd, TZ);
+
+      while (cursor <= localMonthEnd) {
+        const cursorParts = {
+          y: cursor.getFullYear(),
+          m: cursor.getMonth() + 1,
+          d: cursor.getDate(),
+        };
+        const weekStartLocal = cursor < localMonthStart ? localMonthStart : cursor;
+        const weekEndLocalRaw = endOfWeek(cursor, { weekStartsOn: 1 });
+        const weekEndLocal =
+          weekEndLocalRaw > localMonthEnd ? localMonthEnd : weekEndLocalRaw;
+
+        const wStart = amsStartOfDay(
+          weekStartLocal.getFullYear(),
+          weekStartLocal.getMonth() + 1,
+          weekStartLocal.getDate()
+        );
+        let wEnd = amsEndOfDay(
+          weekEndLocal.getFullYear(),
+          weekEndLocal.getMonth() + 1,
+          weekEndLocal.getDate()
+        );
+        if (wEnd > mEnd) wEnd = mEnd;
+
         if (wStart <= now) {
           const days: RapportageNode[] = [];
-          let d = startOfDay(wStart);
-          while (d <= wEnd) {
-            if (d <= now) {
-              const dStart = startOfDay(d);
-              const dEnd = endOfDay(d);
-              const label = formatInTimeZone(d, TZ, "EEE d MMM", { locale: nl });
+          let dCursor = new Date(weekStartLocal);
+          while (dCursor <= weekEndLocal) {
+            const dp = {
+              y: dCursor.getFullYear(),
+              m: dCursor.getMonth() + 1,
+              d: dCursor.getDate(),
+            };
+            const dStart = amsStartOfDay(dp.y, dp.m, dp.d);
+            let dEnd = amsEndOfDay(dp.y, dp.m, dp.d);
+            if (dEnd > mEnd) dEnd = mEnd;
+            if (dStart <= now) {
+              const label = formatInTimeZone(dStart, TZ, "EEE d MMM", {
+                locale: nl,
+              });
               days.push({
-                key: `day-${dayKey(d)}`,
+                key: `day-${dayKey(dStart)}`,
                 level: "day",
                 label,
                 start: dStart.toISOString(),
                 end: dEnd.toISOString(),
-                isCurrent: dayKey(d) === dayKey(now),
+                isCurrent: dayKey(dStart) === dayKey(now),
                 metrics: metricsFor(dStart, dEnd),
               });
             }
-            d = new Date(d.getTime() + 86400000);
+            dCursor = new Date(
+              dCursor.getFullYear(),
+              dCursor.getMonth(),
+              dCursor.getDate() + 1
+            );
           }
           days.reverse();
           const weekNum = getISOWeek(cursor);
@@ -325,22 +389,27 @@ export function buildRapportageTree(
             level: "week",
             label: weekLabel,
             start: wStart.toISOString(),
-            end: endOfDay(wEnd).toISOString(),
-            isCurrent: now >= wStart && now <= endOfDay(wEnd),
-            metrics: metricsFor(wStart, endOfDay(wEnd)),
+            end: wEnd.toISOString(),
+            isCurrent: now >= wStart && now <= wEnd,
+            metrics: metricsFor(wStart, wEnd),
             children: days,
           });
         }
-        cursor = new Date(cursor.getTime() + 7 * 86400000);
+
+        cursor = new Date(
+          cursorParts.y,
+          cursorParts.m - 1,
+          cursorParts.d + 7
+        );
       }
 
       months.push({
-        key: `month-${year}-${String(month + 1).padStart(2, "0")}`,
+        key: `month-${year}-${String(month1).padStart(2, "0")}`,
         level: "month",
-        label: `${year}-${String(month + 1).padStart(2, "0")}`,
+        label: `${year}-${String(month1).padStart(2, "0")}`,
         start: mStart.toISOString(),
         end: mEnd.toISOString(),
-        isCurrent: now.getFullYear() === year && now.getMonth() === month,
+        isCurrent: nowParts.y === year && nowParts.m === month1,
         metrics: metricsFor(mStart, mEnd),
         children: weeks,
       });
@@ -352,7 +421,7 @@ export function buildRapportageTree(
       label: String(year),
       start: yStart.toISOString(),
       end: yEnd.toISOString(),
-      isCurrent: now.getFullYear() === year,
+      isCurrent: nowParts.y === year,
       metrics: metricsFor(yStart, yEnd),
       children: months,
     };
