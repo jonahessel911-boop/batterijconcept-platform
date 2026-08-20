@@ -378,13 +378,15 @@ export function RapportagePanel({
         <p className="border-t border-line px-4 py-3 text-[11px] text-muted sm:px-5">
           Lead → afspraak = unieke leads met een netto fysieke afspraak ÷ leads.
           Alleen huisbezoek / vervolg fysiek tellen mee (geen bel- of
-          telefonische afspraken). Lead → deal = deals ÷ leads. Bruto = alle
-          fysieke afspraken in de periode. Netto = niet geannuleerd. % uitval =
-          geannuleerd ÷ bruto. Omzet = getekende offertes excl. btw. Betaalde
-          omzet = betaalde facturen excl. btw (op betaaldatum). Winst = omzet
-          excl. btw − installatiekosten − inkoop − ad spend. Installatiekosten
-          zijn standaard €675 per deal. Inkoop = batterij + omvormer bij Alpha
-          ESS 9,3 kWh (€1.499,73 + €1.089,62).
+          telefonische afspraken). Geplande afspraken (ook in de toekomst)
+          tellen mee t/m de laatste geplande datum. Lead → deal = deals ÷
+          leads. Bruto = alle fysieke afspraken in de periode. Netto = niet
+          geannuleerd. % uitval = geannuleerd ÷ bruto. Omzet = getekende
+          offertes excl. btw. Betaalde omzet = betaalde facturen excl. btw
+          (op betaaldatum). Winst = omzet excl. btw − installatiekosten −
+          inkoop − ad spend. Installatiekosten zijn standaard €675 per deal.
+          Inkoop = batterij + omvormer bij Alpha ESS 9,3 kWh (€1.499,73 +
+          €1.089,62).
         </p>
       </div>
     </div>

@@ -243,6 +243,17 @@ export function buildRapportageTree(
 
   const now = new Date();
   const nowParts = amsYmd(now);
+
+  // Horizont: t/m vandaag óf t/m de laatste geplande (fysieke) afspraak —
+  // zodat geplande afspraken in de toekomst wél in bruto/netto meetellen,
+  // terwijl jaar/maand/week/dag-totalen gelijk blijven optellen.
+  let horizon = now;
+  for (const a of afspraken) {
+    const t = new Date(a.start_at);
+    if (!Number.isNaN(t.getTime()) && t > horizon) horizon = t;
+  }
+  const horizonParts = amsYmd(horizon);
+
   const years = new Map<number, true>();
 
   for (const l of leads) {
@@ -263,6 +274,7 @@ export function buildRapportageTree(
     years.set(Number(formatInTimeZone(iso, TZ, "yyyy")), true);
   }
   years.set(nowParts.y, true);
+  years.set(horizonParts.y, true);
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
 
@@ -306,20 +318,22 @@ export function buildRapportageTree(
 
   return yearList.map((year) => {
     const yStart = amsStartOfYear(year);
-    // Huidig jaar: alleen t/m vandaag — anders tellen toekomstige afspraken
-    // mee in het jaartotaal terwijl die maanden nog niet zichtbaar zijn.
+    // Bereik t/m horizon (vandaag of laatste geplande afspraak), zodat
+    // toekomstige afspraken meetellen en jaar = som van de maanden blijft.
     const yEnd =
-      year === nowParts.y
-        ? amsEndOfDay(nowParts.y, nowParts.m, nowParts.d)
+      year === horizonParts.y
+        ? amsEndOfDay(horizonParts.y, horizonParts.m, horizonParts.d)
         : amsEndOfYear(year);
     const months: RapportageNode[] = [];
-    const lastMonth = year === nowParts.y ? nowParts.m : 12;
+    const lastMonth = year === horizonParts.y ? horizonParts.m : 12;
 
     for (let month1 = 1; month1 <= lastMonth; month1++) {
       const mStart = amsStartOfMonth(year, month1);
       const mEndRaw = amsEndOfMonth(year, month1);
       const mEnd =
-        year === nowParts.y && month1 === nowParts.m ? yEnd : mEndRaw;
+        year === horizonParts.y && month1 === horizonParts.m
+          ? yEnd
+          : mEndRaw;
 
       const weeks: RapportageNode[] = [];
       const localMonthStart = toZonedTime(mStart, TZ);
@@ -349,7 +363,7 @@ export function buildRapportageTree(
         );
         if (wEnd > mEnd) wEnd = mEnd;
 
-        if (wStart <= now) {
+        if (wStart <= horizon) {
           const days: RapportageNode[] = [];
           let dCursor = new Date(weekStartLocal);
           while (dCursor <= weekEndLocal) {
@@ -361,7 +375,7 @@ export function buildRapportageTree(
             const dStart = amsStartOfDay(dp.y, dp.m, dp.d);
             let dEnd = amsEndOfDay(dp.y, dp.m, dp.d);
             if (dEnd > mEnd) dEnd = mEnd;
-            if (dStart <= now) {
+            if (dStart <= horizon) {
               const label = formatInTimeZone(dStart, TZ, "EEE d MMM", {
                 locale: nl,
               });

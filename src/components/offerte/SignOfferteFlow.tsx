@@ -208,8 +208,6 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                     <p className="font-semibold uppercase tracking-wide">
                       {bedrijf.legal || bedrijf.naam}
                     </p>
-                    <p>{bedrijf.adres}</p>
-                    <p>{bedrijf.postcodePlaats}</p>
                     {bedrijf.telefoon ? <p>{bedrijf.telefoon}</p> : null}
                     {bedrijf.email ? <p>{bedrijf.email}</p> : null}
                     {bedrijf.website ? <p>{bedrijf.website}</p> : null}
@@ -271,8 +269,8 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                 <table className="w-full border-collapse text-sm">
                   <thead>
                     <tr className="border-b-2 border-green-deeper text-left text-[11px] font-bold uppercase tracking-wide text-green-deeper">
-                      <th className="pb-2 pr-3 font-bold">Aantal</th>
-                      <th className="pb-2 font-bold">Omschrijving</th>
+                      <th className="pb-2 pr-3 font-bold">Omschrijving</th>
+                      <th className="pb-2 text-right font-bold">Aantal</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -281,11 +279,11 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                         key={r.id}
                         className="border-b border-[#e2e8e4] text-ink"
                       >
-                        <td className="py-3 pr-3 align-top tabular-nums">
-                          {r.aantal}
-                        </td>
-                        <td className="py-3 align-top font-medium">
+                        <td className="py-3 pr-3 align-top font-medium">
                           {r.omschrijving}
+                        </td>
+                        <td className="py-3 align-top text-right tabular-nums">
+                          {r.aantal}
                         </td>
                       </tr>
                     ))}

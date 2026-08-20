@@ -67,7 +67,7 @@ function drawFooter(doc: jsPDF, pageW: number, margin: number) {
   doc.setFontSize(7);
   doc.setTextColor(...MUTED);
   doc.text(
-    `${co.legal} · ${co.adres}, ${co.postcodePlaats} · KVK ${co.kvk}`,
+    `${co.legal} · ${co.website} · ${co.email} · ${co.telefoon} · KVK ${co.kvk}`,
     margin,
     pageH - 8
   );
@@ -158,8 +158,6 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setTextColor(...INK);
   const rightLines = [
     (co.legal || co.naam).toUpperCase(),
-    co.adres,
-    co.postcodePlaats,
     co.telefoon || null,
     co.email || null,
     co.website || null,
@@ -240,10 +238,10 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     y += intro.length * 4.5 + 6;
   }
 
-  // Tabelkolommen: Aantal | Omschrijving (geen prijzen per regel)
-  const colAantal = margin + 4;
-  const colDesc = margin + 22;
-  const descMaxW = pageW - margin - colDesc;
+  // Tabelkolommen: Omschrijving | Aantal (geen prijzen per regel)
+  const colDesc = margin + 4;
+  const colAantal = pageW - margin - 4;
+  const descMaxW = colAantal - colDesc - 16;
   const weergaveRegels = offerteRegelsVoorWeergave(regels, {
     financieringVoorbehoud: offerte.financiering_voorbehoud,
   });
@@ -254,8 +252,8 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7.5);
   doc.setTextColor(...DEEPER);
-  doc.text("AANTAL", colAantal, y + 5);
   doc.text("OMSCHRIJVING", colDesc, y + 5);
+  doc.text("AANTAL", colAantal, y + 5, { align: "right" });
   y += 10;
 
   for (const r of weergaveRegels) {
@@ -267,12 +265,12 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
     doc.setLineWidth(0.25);
     doc.line(margin, y + rowH - 1, pageW - margin, y + rowH - 1);
 
-    doc.setFont("helvetica", "normal");
+    doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.setTextColor(...INK);
-    doc.text(String(r.aantal), colAantal, y + 4);
-    doc.setFont("helvetica", "bold");
     doc.text(desc, colDesc, y + 4);
+    doc.setFont("helvetica", "normal");
+    doc.text(String(r.aantal), colAantal, y + 4, { align: "right" });
     y += rowH;
   }
 
