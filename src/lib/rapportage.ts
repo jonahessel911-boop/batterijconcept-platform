@@ -62,7 +62,6 @@ export type RapportageMetrics = {
   inkoop: number;
   omzet: number;
   betaaldeOmzet: number;
-  adSpend: number;
   winst: number;
 };
 
@@ -92,14 +91,13 @@ export function emptyMetrics(): RapportageMetrics {
     inkoop: 0,
     omzet: 0,
     betaaldeOmzet: 0,
-    adSpend: 0,
     winst: 0,
   };
 }
 
 export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
   const omzet = round2(m.omzetExBtw);
-  const winst = round2(m.omzetExBtw - m.projectkosten - m.inkoop - m.adSpend);
+  const winst = round2(m.omzetExBtw - m.projectkosten - m.inkoop);
   return {
     ...m,
     omzetExBtw: round2(m.omzetExBtw),
@@ -107,7 +105,6 @@ export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
     inkoop: round2(m.inkoop),
     omzet,
     betaaldeOmzet: round2(m.betaaldeOmzet),
-    adSpend: round2(m.adSpend),
     winst,
     conversieAfspraak:
       m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
@@ -141,7 +138,6 @@ function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetri
     inkoop: a.inkoop + b.inkoop,
     omzet: 0,
     betaaldeOmzet: a.betaaldeOmzet + b.betaaldeOmzet,
-    adSpend: a.adSpend + b.adSpend,
     winst: 0,
   };
 }
@@ -196,12 +192,6 @@ export type RapportageRaw = {
     projectkosten: number;
     adviseur_id: string | null;
   }[];
-  kosten: {
-    datum: string;
-    soort: "ad_spend" | "sales";
-    bedrag: number;
-    adviseur_id: string | null;
-  }[];
   facturen: {
     id: string;
     lead_id: string;
@@ -230,9 +220,6 @@ export function buildRapportageTree(
   const projecten = adviseurId
     ? raw.projecten.filter((p) => p.adviseur_id === adviseurId)
     : raw.projecten;
-  const kosten = adviseurId
-    ? raw.kosten.filter((k) => !k.adviseur_id || k.adviseur_id === adviseurId)
-    : raw.kosten;
   const facturen = adviseurId
     ? (raw.facturen || []).filter((f) => f.adviseur_id === adviseurId)
     : raw.facturen || [];
@@ -264,9 +251,6 @@ export function buildRapportageTree(
   }
   for (const o of signed) {
     years.set(Number(formatInTimeZone(o.ondertekend_op!, TZ, "yyyy")), true);
-  }
-  for (const k of kosten) {
-    years.set(Number(k.datum.slice(0, 4)), true);
   }
   for (const f of facturen) {
     const iso = factuurBetaalIso(f);
@@ -302,11 +286,6 @@ export function buildRapportageTree(
       m.projectkosten +=
         kosten > 0 ? kosten : STANDAARD_INSTALLATIEKOSTEN;
       m.inkoop += hardwareKostenVoorRegels(o.regels || []).totaal;
-    }
-    for (const k of kosten) {
-      const iso = `${k.datum}T12:00:00+02:00`;
-      if (!inRange(iso, start, end)) continue;
-      if (k.soort === "ad_spend") m.adSpend += Number(k.bedrag) || 0;
     }
     for (const f of facturen) {
       const iso = factuurBetaalIso(f);

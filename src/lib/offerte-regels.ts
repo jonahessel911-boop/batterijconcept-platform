@@ -32,9 +32,9 @@ export function omvormerOmschrijvingVoor(
 ): string | null {
   if (!isAlphaEssMetOmvormerRegel(text)) return null;
   const t = text || "";
-  if (/g3\s*t10/i.test(t)) return "Incl. 10 kW omvormer";
-  if (/g3\s*s5/i.test(t)) return "Incl. 5 kW omvormer";
-  return "Incl. omvormer";
+  if (/g3\s*t10/i.test(t)) return "10 kW omvormer";
+  if (/g3\s*s5/i.test(t)) return "5 kW omvormer";
+  return "Omvormer";
 }
 
 function virtualRegel(

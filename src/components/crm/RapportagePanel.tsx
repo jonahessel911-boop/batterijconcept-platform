@@ -71,7 +71,6 @@ function MetricsCells({
       <MetricCell value={m.betaaldeOmzet} money bold={bold} />
       <MetricCell value={m.projectkosten} money bold={bold} />
       <MetricCell value={m.inkoop} money bold={bold} />
-      <MetricCell value={m.adSpend} money bold={bold} />
       <MetricCell value={m.winst} money bold={bold} danger />
     </>
   );
@@ -159,7 +158,6 @@ const HEADERS = [
   "Betaalde omzet",
   "Installatiekosten",
   "Inkoop",
-  "Ad spend",
   "Winst",
 ] as const;
 
@@ -175,12 +173,6 @@ export function RapportagePanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
-
-  const [kostenDatum, setKostenDatum] = useState(() =>
-    new Date().toISOString().slice(0, 10)
-  );
-  const [adSpend, setAdSpend] = useState("");
-  const [savingKosten, setSavingKosten] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,32 +203,6 @@ export function RapportagePanel({
       else next.add(key);
       return next;
     });
-  }
-
-  async function saveKosten() {
-    if (adSpend === "") return;
-    setSavingKosten(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/rapportage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          datum: kostenDatum,
-          soort: "ad_spend",
-          bedrag: Number(adSpend),
-          adviseur_id: adviseurId || null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-      setAdSpend("");
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fout");
-    } finally {
-      setSavingKosten(false);
-    }
   }
 
   const selectedNaam =
@@ -291,38 +257,6 @@ export function RapportagePanel({
           </p>
         </div>
 
-        <div className="grid gap-3 border-b border-line bg-wash/50 px-4 py-3 sm:grid-cols-[auto_1fr_auto] sm:items-end sm:px-5">
-          <label className="text-xs font-medium text-muted">
-            Datum
-            <input
-              type="date"
-              value={kostenDatum}
-              onChange={(e) => setKostenDatum(e.target.value)}
-              className="mt-1 block w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
-            />
-          </label>
-          <label className="text-xs font-medium text-muted">
-            Ad spend (€)
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={adSpend}
-              onChange={(e) => setAdSpend(e.target.value)}
-              placeholder="0,00"
-              className="mt-1 block w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={savingKosten || adSpend === ""}
-            onClick={saveKosten}
-            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-          >
-            {savingKosten ? "Opslaan…" : "Kosten opslaan"}
-          </button>
-        </div>
-
         {error && (
           <p className="border-b border-line bg-[#FFF0E6] px-4 py-2 text-sm text-[#C45A12]">
             {error}
@@ -333,7 +267,7 @@ export function RapportagePanel({
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1220px] border-collapse">
+            <table className="w-full min-w-[1100px] border-collapse">
               <thead>
                 <tr className="border-b border-line bg-[#fafbfa] text-left">
                   {HEADERS.map((h) => (

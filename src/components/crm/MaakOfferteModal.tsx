@@ -151,7 +151,7 @@ export function MaakOfferteModal({
         next.push({
           key: `subsidie-${p.id}-${Date.now()}`,
           product_id: null,
-          omschrijving: "Incl. BTW subsidie-aanvraag",
+          omschrijving: "BTW subsidie-aanvraag",
           aantal: 1,
           prijs_ex_btw: 0,
           btw_percentage: 21,

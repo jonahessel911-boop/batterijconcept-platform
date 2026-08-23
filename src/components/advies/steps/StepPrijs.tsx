@@ -91,7 +91,7 @@ export function StepPrijs({
             incl. BTW {formatEuroNl(prijs.prijsInc, 0)}
           </p>
           <p className="mt-2 text-xs font-semibold text-green-dark">
-            Incl. BTW subsidie-aanvraag
+            BTW subsidie-aanvraag
           </p>
         </div>
       )}
