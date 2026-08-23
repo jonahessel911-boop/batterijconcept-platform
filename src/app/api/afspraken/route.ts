@@ -45,6 +45,7 @@ export async function PATCH(req: NextRequest) {
     action?: string;
     start_at?: string;
     mail_klant?: boolean;
+    notitie?: string;
   };
   try {
     body = await req.json();
@@ -117,12 +118,24 @@ export async function PATCH(req: NextRequest) {
           { status: 400 }
         );
       }
+      const annuleerNotitie = body.notitie?.trim() || "";
+      if (annuleerNotitie.length < 3) {
+        return NextResponse.json(
+          { error: "Vul een notitie in bij annuleren (min. 3 tekens)" },
+          { status: 400 }
+        );
+      }
       if (afspraak.status === "geannuleerd") {
         return NextResponse.json(
           { error: "Deze afspraak is al geannuleerd" },
           { status: 400 }
         );
       }
+
+      const bestaande = (afspraak.notities as string | null)?.trim() || "";
+      const samengevoegd = bestaande
+        ? `${bestaande}\n\nAnnulering (CRM): ${annuleerNotitie}`
+        : `Annulering (CRM): ${annuleerNotitie}`;
 
       const { data: cancelledRow, error: cancelErr } = await sb
         .from("afspraken")
@@ -131,6 +144,7 @@ export async function PATCH(req: NextRequest) {
           // Cron stuurt herinnering/opwarm alleen bij actieve status —
           // extra vlag zodat een eventuele inhaler ook stopt.
           herinnering_verstuurd: true,
+          notities: samengevoegd,
         })
         .eq("id", afspraak.id)
         .select(

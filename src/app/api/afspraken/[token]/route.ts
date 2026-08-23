@@ -64,7 +64,11 @@ export async function POST(
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
-  let body: { action: "annuleer" | "verzet"; start_at?: string };
+  let body: {
+    action: "annuleer" | "verzet";
+    start_at?: string;
+    notitie?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -93,9 +97,26 @@ export async function POST(
     }
 
     if (body.action === "annuleer") {
+      const annuleerNotitie = body.notitie?.trim() || "";
+      if (annuleerNotitie.length < 3) {
+        return NextResponse.json(
+          { error: "Vul een reden in bij annuleren (min. 3 tekens)" },
+          { status: 400 }
+        );
+      }
+
+      const bestaande = (afspraak.notities as string | null)?.trim() || "";
+      const samengevoegd = bestaande
+        ? `${bestaande}\n\nAnnulering (klant): ${annuleerNotitie}`
+        : `Annulering (klant): ${annuleerNotitie}`;
+
       const { error: cancelErr } = await sb
         .from("afspraken")
-        .update({ status: "geannuleerd", herinnering_verstuurd: true })
+        .update({
+          status: "geannuleerd",
+          herinnering_verstuurd: true,
+          notities: samengevoegd,
+        })
         .eq("id", afspraak.id);
 
       if (cancelErr) {
@@ -114,6 +135,7 @@ export async function POST(
             klantNaam: afspraak.leads?.naam || "Klant",
             leadNumber: afspraak.leads?.lead_number,
             startAt: afspraak.start_at,
+            reden: annuleerNotitie,
           });
           await sendEmail({
             to: adviseurEmail,

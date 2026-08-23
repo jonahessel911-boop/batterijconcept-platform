@@ -7,12 +7,17 @@ import {
 } from "@/lib/email/templates";
 import { adresRegel } from "@/lib/format";
 import { isTomorrowAmsterdam } from "@/lib/planning-window";
+import {
+  isOneWeekBeforeSchouwWeek,
+  schouwWeekFromDate,
+} from "@/lib/schouw-week";
 
 export const runtime = "nodejs";
 
 /**
  * GET /api/cron/project-herinneringen
- * Stuurt klant-herinnering 1 dag voor schouw of installatie.
+ * - Schouw: 1 week vóór de schouwweek → contact opnemen voor exacte datum/tijd
+ * - Installatie: 1 dag van tevoren
  */
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -31,11 +36,9 @@ export async function GET(req: Request) {
     const { data: projects, error } = await sb
       .from("projecten")
       .select(
-        "id, project_nummer, schouw_at, schouw_notities, installatie_at, installatie_notities, installateur_notitie, schouw_herinnering_verstuurd, installatie_herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats, notities)"
+        "id, project_nummer, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, installateur_notitie, schouw_herinnering_verstuurd, installatie_herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats, notities)"
       )
-      .or(
-        "schouw_at.not.is.null,installatie_at.not.is.null"
-      );
+      .or("schouw_at.not.is.null,installatie_at.not.is.null");
 
     if (error) {
       if (
@@ -46,7 +49,7 @@ export async function GET(req: Request) {
         return NextResponse.json(
           {
             error:
-              "Run migrate-project-installatie-agenda.sql in Supabase.",
+              "Run migrate-project-installatie-agenda.sql (en migrate-schouw-week.sql) in Supabase.",
           },
           { status: 400 }
         );
@@ -72,17 +75,25 @@ export async function GET(req: Request) {
         .filter(Boolean)
         .join("\n\n");
 
+      const week =
+        p.schouw_jaar != null && p.schouw_week != null
+          ? { jaar: p.schouw_jaar as number, week: p.schouw_week as number }
+          : p.schouw_at
+            ? schouwWeekFromDate(p.schouw_at as string)
+            : null;
+
       if (
-        p.schouw_at &&
+        week &&
         !p.schouw_herinnering_verstuurd &&
-        isTomorrowAmsterdam(p.schouw_at, now)
+        isOneWeekBeforeSchouwWeek(week.jaar, week.week, now)
       ) {
         const mail = await sendEmail({
           to: lead.email.trim(),
-          subject: "Morgen is je schouw — Batterijconcept",
+          subject: "Schouwweek nadert — Batterijconcept",
           html: schouwHerinneringKlantEmail({
             naam: lead.naam || "klant",
-            schouwAt: p.schouw_at,
+            schouwJaar: week.jaar,
+            schouwWeek: week.week,
             adres: adres !== "—" ? adres : null,
             belangrijkeInfo: belangrijkeInfo || null,
           }),

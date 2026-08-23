@@ -9,6 +9,7 @@ import {
   adresRegel,
   formatDateTimeNl,
 } from "@/lib/format";
+import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 
 type OrderRow = Project & {
@@ -171,9 +172,7 @@ export function InstallatieOrdersPage() {
                             {adres}
                           </td>
                           <td className="whitespace-nowrap tabular-nums">
-                            {o.schouw_at
-                              ? formatDateTimeNl(o.schouw_at)
-                              : "—"}
+                            {formatProjectSchouwWeek(o) || "—"}
                           </td>
                           <td className="whitespace-nowrap tabular-nums">
                             {o.installatie_at

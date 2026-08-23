@@ -18,8 +18,8 @@ export function companyInfo() {
     naam: process.env.COMPANY_NAME || "BatterijConcept",
     legal:
       process.env.COMPANY_LEGAL || "BatterijConcept",
-    adres: process.env.COMPANY_ADDRESS || "Alfred Nobellaan 68",
-    postcodePlaats: process.env.COMPANY_CITY || "3731DW De Bilt",
+    adres: process.env.COMPANY_ADDRESS || "",
+    postcodePlaats: process.env.COMPANY_CITY || "",
     land: process.env.COMPANY_COUNTRY || "Nederland",
     btw: process.env.COMPANY_BTW || "",
     kvk: process.env.COMPANY_KVK || "42141855",

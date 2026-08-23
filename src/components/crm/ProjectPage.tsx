@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import type { Factuur, Offerte, Project, ProjectStatus, ServiceVerzoek } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 import {
   aanbetalingVanOrder,
   openstaandOpOrder,
@@ -95,7 +96,7 @@ export function ProjectPage() {
       const { data, error } = await sb
         .from("projecten")
         .select(
-          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon)"
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, adviseurs(id, naam)), installatie_partners(id, naam, email, telefoon)"
         )
         .eq("id", id)
         .single();
@@ -292,13 +293,17 @@ export function ProjectPage() {
           : offerte.offerte_nummer || undefined,
     });
   }
-  if (project.schouw_at) {
+  if (project.schouw_at || project.schouw_week) {
     feedItems.push({
       key: `project-schouw-${project.id}`,
-      at: project.schouw_at,
+      at: project.schouw_at || project.created_at,
       kind: "event",
-      title: "Schouw gepland",
-      body: project.monteur || project.installatie_partners?.naam || undefined,
+      title: "Schouwweek gepland",
+      body:
+        formatProjectSchouwWeek(project) ||
+        project.monteur ||
+        project.installatie_partners?.naam ||
+        undefined,
     });
   }
   if (project.installatie_at) {
@@ -333,7 +338,7 @@ export function ProjectPage() {
       kind: "note",
       title: "Notitie backoffice",
       body: project.backoffice_notitie,
-      author: "Backoffice",
+      author: project.backoffice_notitie_door || "Backoffice",
     });
   }
   if (project.installateur_notitie) {
@@ -343,7 +348,7 @@ export function ProjectPage() {
       kind: "note",
       title: "Notitie installateur",
       body: project.installateur_notitie,
-      author: "Installateur",
+      author: project.installateur_notitie_door || "Installateur",
     });
   }
 
@@ -422,6 +427,16 @@ export function ProjectPage() {
             </button>
             {aboutOpen ? (
               <div className="mt-1 divide-y divide-line">
+                <SidebarField label="Adviseur">
+                  {(() => {
+                    const lead = Array.isArray(project.leads)
+                      ? project.leads[0]
+                      : project.leads;
+                    const adv = lead?.adviseurs;
+                    const naam = Array.isArray(adv) ? adv[0]?.naam : adv?.naam;
+                    return naam || "—";
+                  })()}
+                </SidebarField>
                 <SidebarField label="Status">
                   <select
                     value={project.status}
@@ -452,10 +467,8 @@ export function ProjectPage() {
                 <SidebarField label="Installatiepartner">
                   {project.installatie_partners?.naam || project.monteur || "—"}
                 </SidebarField>
-                <SidebarField label="Schouwdatum">
-                  {project.schouw_at
-                    ? formatDateTimeNl(project.schouw_at)
-                    : "Nog niet gepland"}
+                <SidebarField label="Schouwweek">
+                  {formatProjectSchouwWeek(project) || "Nog niet gepland"}
                 </SidebarField>
                 <SidebarField label="Installatie">
                   {project.installatie_at

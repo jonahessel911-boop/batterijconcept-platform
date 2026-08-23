@@ -7,12 +7,17 @@ import {
   schouwPartnerEmail,
 } from "@/lib/email/templates";
 import { adresRegel } from "@/lib/format";
+import {
+  isValidSchouwWeek,
+  schouwWeekFromDate,
+  schouwWeekToMondayIso,
+} from "@/lib/schouw-week";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/projecten/[id]/schouw
- * Plant schouw in, koppelt partner, mailt klant + installatiepartner.
+ * Plant schouw in op ISO-week, koppelt partner, mailt klant + installatiepartner.
  */
 export async function POST(
   req: NextRequest,
@@ -20,6 +25,9 @@ export async function POST(
 ) {
   const { id } = await ctx.params;
   let body: {
+    schouw_jaar?: number;
+    schouw_week?: number;
+    /** Legacy: exacte datetime — wordt omgezet naar week. */
     schouw_at?: string;
     installatie_partner_id?: string;
     schouw_notities?: string | null;
@@ -30,16 +38,40 @@ export async function POST(
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  if (!body.schouw_at || !body.installatie_partner_id) {
+  if (!body.installatie_partner_id) {
     return NextResponse.json(
-      { error: "schouw_at en installatie_partner_id zijn verplicht" },
+      { error: "installatie_partner_id is verplicht" },
       { status: 400 }
     );
   }
 
-  const schouwAt = new Date(body.schouw_at);
-  if (Number.isNaN(schouwAt.getTime())) {
-    return NextResponse.json({ error: "Ongeldige schouw_at" }, { status: 400 });
+  let schouwJaar = body.schouw_jaar;
+  let schouwWeek = body.schouw_week;
+  if (
+    (schouwJaar == null || schouwWeek == null) &&
+    body.schouw_at
+  ) {
+    const derived = schouwWeekFromDate(body.schouw_at);
+    schouwJaar = derived.jaar;
+    schouwWeek = derived.week;
+  }
+
+  if (
+    schouwJaar == null ||
+    schouwWeek == null ||
+    !isValidSchouwWeek(schouwJaar, schouwWeek)
+  ) {
+    return NextResponse.json(
+      { error: "Kies een geldige schouwweek (jaar + weeknummer)" },
+      { status: 400 }
+    );
+  }
+
+  let schouwAtIso: string;
+  try {
+    schouwAtIso = schouwWeekToMondayIso(schouwJaar, schouwWeek);
+  } catch {
+    return NextResponse.json({ error: "Ongeldige schouwweek" }, { status: 400 });
   }
 
   try {
@@ -77,7 +109,9 @@ export async function POST(
     const { data: updated, error: updateErr } = await sb
       .from("projecten")
       .update({
-        schouw_at: schouwAt.toISOString(),
+        schouw_at: schouwAtIso,
+        schouw_jaar: schouwJaar,
+        schouw_week: schouwWeek,
         schouw_notities: schouwNotities,
         installatie_partner_id: partner.id,
         monteur: partner.naam,
@@ -91,12 +125,18 @@ export async function POST(
       .single();
 
     if (updateErr || !updated) {
+      const missingWeek =
+        updateErr?.message?.includes("schouw_jaar") ||
+        updateErr?.message?.includes("schouw_week") ||
+        updateErr?.code === "42703";
       return NextResponse.json(
         {
-          error: "Schouw opslaan mislukt",
+          error: missingWeek
+            ? "Run migrate-schouw-week.sql in Supabase."
+            : "Schouw opslaan mislukt",
           detail: updateErr?.message,
         },
-        { status: 500 }
+        { status: missingWeek ? 400 : 500 }
       );
     }
 
@@ -131,7 +171,10 @@ export async function POST(
         .download(f.storage_path);
       if (!file) continue;
       const bytes = Buffer.from(await file.arrayBuffer());
-      const name = f.bestandsnaam?.trim() || f.storage_path.split("/").pop() || "foto.jpg";
+      const name =
+        f.bestandsnaam?.trim() ||
+        f.storage_path.split("/").pop() ||
+        "foto.jpg";
       fotoAttachments.push({
         name,
         contentType: file.type || "image/jpeg",
@@ -154,7 +197,8 @@ export async function POST(
         subject: "Schouw gepland — Batterijconcept",
         html: schouwKlantEmail({
           naam: lead.naam || "klant",
-          schouwAt,
+          schouwJaar,
+          schouwWeek,
           adres: adres !== "—" ? adres : null,
           projectNummer: updated.project_nummer,
         }),
@@ -169,7 +213,8 @@ export async function POST(
         html: schouwPartnerEmail({
           partnerNaam: partner.naam,
           klantNaam: lead?.naam || "Klant",
-          schouwAt,
+          schouwJaar,
+          schouwWeek,
           adres: adres !== "—" ? adres : null,
           telefoon: lead?.telefoon,
           email: lead?.email,

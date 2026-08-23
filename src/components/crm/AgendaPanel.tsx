@@ -244,6 +244,8 @@ function AfspraakChip({
 }) {
   const cancelled = afspraak.status === "geannuleerd";
   const naam = afspraak.leads?.naam || "—";
+  const soortLabel =
+    afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)];
 
   if (variant === "day") {
     return (
@@ -254,7 +256,7 @@ function AfspraakChip({
           "flex w-full items-stretch gap-0 overflow-hidden rounded-xl border border-line text-left transition",
           "hover:border-green/35 hover:shadow-[0_4px_16px_rgba(13,92,50,0.08)]",
           "active:scale-[0.99]",
-          cancelled ? "opacity-50" : "",
+          cancelled ? "opacity-70" : "",
         ].join(" ")}
       >
         <span
@@ -269,22 +271,40 @@ function AfspraakChip({
         />
         <span className="flex min-w-0 flex-1 items-center gap-3 bg-white px-3.5 py-3">
           <span className="shrink-0">
-            <span className="block font-display text-lg font-semibold tabular-nums leading-none text-ink">
+            <span
+              className={[
+                "block font-display text-lg font-semibold tabular-nums leading-none text-ink",
+                cancelled ? "line-through text-muted" : "",
+              ].join(" ")}
+            >
               {formatTimeNl(afspraak.start_at)}
             </span>
-            <span className="mt-1 block text-[11px] tabular-nums text-muted">
+            <span
+              className={[
+                "mt-1 block text-[11px] tabular-nums text-muted",
+                cancelled ? "line-through" : "",
+              ].join(" ")}
+            >
               {formatTimeNl(afspraak.end_at)}
             </span>
           </span>
           <span className="min-w-0 flex-1 border-l border-line pl-3">
-            <span className="block truncate text-sm font-semibold text-ink">
+            <span
+              className={[
+                "block truncate text-sm font-semibold text-ink",
+                cancelled ? "line-through text-muted" : "",
+              ].join(" ")}
+            >
               {naam}
             </span>
             <span className="mt-0.5 block truncate text-xs text-muted">
-              {afspraak.adviseurs?.naam || "—"}
-              {afspraak.soort && afspraak.soort !== "nieuw"
-                ? ` · ${afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)]}`
-                : ""}
+              {[
+                cancelled ? "Geannuleerd" : null,
+                soortLabel,
+                !cancelled ? afspraak.adviseurs?.naam || null : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
           </span>
           <StatusBadge kind="afspraak" value={afspraak.status} />
@@ -297,26 +317,41 @@ function AfspraakChip({
     <button
       type="button"
       onClick={() => onOpen(afspraak)}
-      title={`${formatTimeNl(afspraak.start_at)} · ${naam}`}
+      title={[
+        cancelled ? "Geannuleerd" : null,
+        formatTimeNl(afspraak.start_at),
+        naam,
+        soortLabel,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       className={[
         "group w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left transition",
         statusAccent(afspraak),
         "hover:brightness-[0.98] hover:shadow-sm",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-green",
-        cancelled ? "opacity-50 line-through" : "",
+        cancelled ? "opacity-75" : "",
       ].join(" ")}
     >
-      <span className="block text-[11px] font-bold tabular-nums leading-none text-green-dark">
+      <span
+        className={[
+          "block text-[11px] font-bold tabular-nums leading-none",
+          cancelled ? "text-muted line-through" : "text-green-dark",
+        ].join(" ")}
+      >
         {formatTimeNl(afspraak.start_at)}
       </span>
-      <span className="mt-1 block truncate text-[12px] font-semibold leading-tight text-ink">
+      <span
+        className={[
+          "mt-1 block truncate text-[12px] font-semibold leading-tight",
+          cancelled ? "text-muted line-through" : "text-ink",
+        ].join(" ")}
+      >
         {naam}
       </span>
-      {afspraak.soort && afspraak.soort !== "nieuw" && (
-        <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
-          {afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)]}
-        </span>
-      )}
+      <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
+        {cancelled ? `Geannuleerd · ${soortLabel}` : soortLabel}
+      </span>
     </button>
   );
 }
@@ -422,6 +457,7 @@ function AfspraakDetail({
   const [useCustomTime, setUseCustomTime] = useState(false);
   const [customStart, setCustomStart] = useState("");
   const [mailKlant, setMailKlant] = useState<boolean | null>(null);
+  const [annuleerNotitie, setAnnuleerNotitie] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -450,6 +486,7 @@ function AfspraakDetail({
     setCustomStart("");
     setUseCustomTime(false);
     setMailKlant(null);
+    setAnnuleerNotitie("");
   }, [afspraak]);
 
   useEffect(() => {
@@ -531,6 +568,10 @@ function AfspraakDetail({
       setError("Kies of de klant een mail moet krijgen (ja/nee)");
       return;
     }
+    if (annuleerNotitie.trim().length < 3) {
+      setError("Vul een notitie in bij annuleren");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -541,11 +582,14 @@ function AfspraakDetail({
           id: current.id,
           action: "annuleer",
           mail_klant: magKlantMail ? mailKlant : false,
+          notitie: annuleerNotitie.trim(),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Annuleren mislukt");
-      onRemoved(current.id);
+      if (data.afspraak) onUpdated(data.afspraak as Afspraak);
+      else onRemoved(current.id);
+      onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -849,11 +893,23 @@ function AfspraakDetail({
                 Afspraak annuleren
               </p>
               <p className="mt-1 text-sm text-muted">
-                De afspraak verdwijnt uit de agenda.
+                De afspraak blijft zichtbaar in de agenda (met streep). Een
+                notitie is verplicht.
                 {magKlantMail
                   ? ""
                   : " De klant krijgt hier geen mail van."}
               </p>
+              <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-muted">
+                Notitie / reden
+                <textarea
+                  value={annuleerNotitie}
+                  onChange={(e) => setAnnuleerNotitie(e.target.value)}
+                  rows={3}
+                  required
+                  placeholder="Waarom wordt deze afspraak geannuleerd?"
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                />
+              </label>
               {magKlantMail && (
                 <div className="mt-4">
                   <JaNeeField
@@ -878,6 +934,7 @@ function AfspraakDetail({
                   onClick={() => {
                     setMode("view");
                     setMailKlant(null);
+                    setAnnuleerNotitie("");
                     setError(null);
                   }}
                   className="min-h-11 border border-line px-4 py-2.5 text-sm font-semibold text-muted hover:bg-wash"
@@ -1068,7 +1125,7 @@ export function AgendaPanel({
     [afspraken, defaultAdviseurId]
   );
 
-  /** Alle actieve afspraken in de zichtbare week */
+  /** Afspraken in de zichtbare week (incl. geannuleerd, excl. voltooid) */
   const weekAfspraken = useMemo(() => {
     const startKey = days[0].key;
     const endExclusive = format(
@@ -1077,7 +1134,7 @@ export function AgendaPanel({
     );
     return afspraken
       .filter((a) => {
-        if (a.status === "geannuleerd" || a.status === "voltooid") return false;
+        if (a.status === "voltooid") return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }

@@ -8,6 +8,7 @@ import {
 } from "./layout";
 import { formatDateTimeLongNl } from "@/lib/format";
 import { planningVensterNl } from "@/lib/planning-window";
+import { formatSchouwWeekLabel } from "@/lib/schouw-week";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -185,9 +186,11 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
   klantNaam: string;
   leadNumber?: string | null;
   startAt: string | Date;
+  reden?: string | null;
 }) {
   const first = opts.adviseurNaam.split(" ")[0] || opts.adviseurNaam;
   const when = formatDateTimeLongNl(opts.startAt);
+  const reden = opts.reden?.trim();
   return emailLayout({
     title: "Annulering afspraak",
     preheader: `${opts.klantNaam} heeft de afspraak op ${when} geannuleerd.`,
@@ -199,7 +202,12 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}${opts.leadNumber ? ` <span style="color:#5A635C;">(${opts.leadNumber})</span>` : ""}</p>
-         <p style="margin:0;font-size:15px;"><strong>Geplande tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>`
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Geplande tijd</strong><br />${when} <span style="color:#5A635C;">(Europe/Amsterdam)</span></p>
+         ${
+           reden
+             ? `<p style="margin:0;font-size:15px;"><strong>Reden</strong><br />${reden.replace(/\n/g, "<br />")}</p>`
+             : ""
+         }`
       ),
       emailMuted("Dit is een interne melding van het Batterijconcept CRM."),
     ].join(""),
@@ -262,18 +270,19 @@ export function factuurVerzondenEmail(opts: {
   });
 }
 
-/** Klant: schouw is ingepland */
+/** Klant: schouw is ingepland (op weekniveau) */
 export function schouwKlantEmail(opts: {
   naam: string;
-  schouwAt: string | Date;
+  schouwJaar: number;
+  schouwWeek: number;
   adres?: string | null;
   projectNummer?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
-  const when = formatDateTimeLongNl(opts.schouwAt);
+  const when = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
   return emailLayout({
     title: "Schouw gepland — Batterijconcept",
-    preheader: `Je schouw staat gepland op ${when}.`,
+    preheader: `Je schouw staat gepland in ${when}.`,
     bodyHtml: [
       emailH1("Schouw gepland"),
       emailP(`Hoi ${first},`),
@@ -281,12 +290,12 @@ export function schouwKlantEmail(opts: {
         "Goed nieuws: de schouw voor je thuisbatterij is ingepland. Onze installatiepartner komt bij je langs om de situatie ter plaatse te bekijken."
       ),
       emailBox(
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${when}</p>
          ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
          ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
       ),
       emailP(
-        "Zorg dat er iemand aanwezig is die toegang heeft tot de meterkast en de beoogde installatieruimte. Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+        "Ongeveer één week van tevoren nemen we contact met je op om de exacte datum en tijd af te stemmen. Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
       ),
       emailMuted("Tot dan, team Batterijconcept"),
     ].join(""),
@@ -297,7 +306,8 @@ export function schouwKlantEmail(opts: {
 export function schouwPartnerEmail(opts: {
   partnerNaam: string;
   klantNaam: string;
-  schouwAt: string | Date;
+  schouwJaar: number;
+  schouwWeek: number;
   adres?: string | null;
   telefoon?: string | null;
   email?: string | null;
@@ -307,7 +317,7 @@ export function schouwPartnerEmail(opts: {
   portalUrl: string;
 }) {
   const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
-  const when = formatDateTimeLongNl(opts.schouwAt);
+  const when = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
   const fotoCount = opts.fotoCount ?? 0;
   const fotoLabel =
     fotoCount === 0
@@ -317,16 +327,16 @@ export function schouwPartnerEmail(opts: {
         : `${fotoCount} foto's (zie bijlagen / portaal)`;
   return emailLayout({
     title: "Nieuwe schouw ingepland",
-    preheader: `Schouw bij ${opts.klantNaam} op ${when}.`,
+    preheader: `Schouw bij ${opts.klantNaam} in ${when}.`,
     bodyHtml: [
       emailH1("Nieuwe schouw ingepland"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Er is een nieuwe schouw voor je ingepland. Hieronder vind je de klant- en schouwgegevens, inclusief notities en foto&apos;s van de adviseur. In het installatieportaal zie je de volledige order."
+        "Er is een nieuwe schouw voor je ingepland. Exacte dag en tijd volgt ongeveer één week van tevoren na contact met de klant. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>
-         <p style="margin:0 0 8px;font-size:15px;"><strong>Schouw</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${when}</p>
          ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
          ${opts.telefoon ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${opts.telefoon}</p>` : ""}
          ${opts.email ? `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>` : ""}
@@ -454,16 +464,36 @@ function planningHerinneringEmail(opts: {
 
 export function schouwHerinneringKlantEmail(opts: {
   naam: string;
-  schouwAt: string | Date;
+  schouwJaar: number;
+  schouwWeek: number;
   adres?: string | null;
   belangrijkeInfo?: string | null;
 }) {
-  return planningHerinneringEmail({
-    naam: opts.naam,
-    soort: "schouw",
-    at: opts.schouwAt,
-    adres: opts.adres,
-    belangrijkeInfo: opts.belangrijkeInfo,
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
+  return emailLayout({
+    title: "Schouwweek nadert — Batterijconcept",
+    preheader: `We nemen contact op over de exacte datum van je schouw (${when}).`,
+    bodyHtml: [
+      emailH1("Schouwweek nadert"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je schouw staat gepland in onderstaande week. We nemen binnenkort contact met je op om de exacte datum en tijd af te stemmen."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${when}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${
+           opts.belangrijkeInfo
+             ? `<p style="margin:0;font-size:15px;"><strong>Belangrijke info</strong><br />${opts.belangrijkeInfo.replace(/\n/g, "<br />")}</p>`
+             : ""
+         }`
+      ),
+      emailP(
+        "Heb je vragen of voorkeuren voor een dagdeel? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot snel, team Batterijconcept"),
+    ].join(""),
   });
 }
 

@@ -195,12 +195,14 @@ export interface Offerte {
   aanbetaling_te_innen_inc?: number | null;
   backoffice_notitie?: string | null;
   installateur_notitie?: string | null;
+  backoffice_notitie_door?: string | null;
+  installateur_notitie_door?: string | null;
   installatie_partner_id?: string | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
   // joins
-  leads?: Pick<
+  leads?: (Pick<
     Lead,
     | "naam"
     | "email"
@@ -212,7 +214,9 @@ export interface Offerte {
     | "straat"
     | "toevoeging"
     | "adviseur_id"
-  > | null;
+  > & {
+    adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
+  }) | null;
   offerte_regels?: OfferteRegel[];
   installatie_partners?: Pick<
     InstallatiePartner,
@@ -233,6 +237,10 @@ export interface Project {
   notities: string | null;
   projectkosten: number;
   schouw_at?: string | null;
+  /** ISO-weekjaar van de schouw (exacte dag/tijd volgt later). */
+  schouw_jaar?: number | null;
+  /** ISO-weeknummer 1–53. */
+  schouw_week?: number | null;
   schouw_notities?: string | null;
   installatie_partner_id?: string | null;
   schouw_mail_klant_verstuurd?: boolean;
@@ -246,10 +254,12 @@ export interface Project {
   aanbetaling_te_innen_inc?: number | null;
   backoffice_notitie?: string | null;
   installateur_notitie?: string | null;
+  backoffice_notitie_door?: string | null;
+  installateur_notitie_door?: string | null;
   backoffice_afgerond_at?: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<
+  leads?: (Pick<
     Lead,
     | "naam"
     | "email"
@@ -262,7 +272,9 @@ export interface Project {
     | "straat"
     | "plaats"
     | "adviseur_id"
-  > | null;
+  > & {
+    adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
+  }) | null;
   installatie_partners?: Pick<
     InstallatiePartner,
     "id" | "naam" | "email" | "telefoon"

@@ -15,8 +15,9 @@ export function AfspraakManagePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<"annuleer" | "verzet" | null>(null);
-  const [mode, setMode] = useState<"view" | "verzet">("view");
+  const [mode, setMode] = useState<"view" | "verzet" | "annuleer">("view");
   const [newStart, setNewStart] = useState("");
+  const [annuleerNotitie, setAnnuleerNotitie] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,14 +41,20 @@ export function AfspraakManagePage() {
   }, [load]);
 
   async function annuleer() {
-    if (!confirm("Weet je zeker dat je de afspraak wilt annuleren?")) return;
+    if (annuleerNotitie.trim().length < 3) {
+      setError("Vul een reden in bij annuleren");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const res = await fetch(`/api/afspraken/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "annuleer" }),
+        body: JSON.stringify({
+          action: "annuleer",
+          notitie: annuleerNotitie.trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Annuleren mislukt");
@@ -99,13 +106,15 @@ export function AfspraakManagePage() {
     );
   }
 
+  if (!afspraak) return null;
+
   if (done === "annuleer") {
     return (
       <Shell>
         <h1 className="font-display text-2xl font-semibold text-green-deeper">
           Afspraak geannuleerd
         </h1>
-        <p className="mt-2 text-sm text-muted">
+        <p className="mt-3 text-sm leading-relaxed text-muted">
           Je afspraak is geannuleerd. Wil je opnieuw plannen? Bel ons op 085 800
           1645 of mail info@batterijconcept.nl.
         </p>
@@ -113,39 +122,32 @@ export function AfspraakManagePage() {
     );
   }
 
-  if (done === "verzet" && afspraak) {
+  if (done === "verzet") {
     return (
       <Shell>
         <h1 className="font-display text-2xl font-semibold text-green-deeper">
           Afspraak verzet
         </h1>
-        <p className="mt-2 text-sm text-ink">
-          Je nieuwe afspraak staat op{" "}
-          <strong>{formatDateTimeLongNl(afspraak.start_at)}</strong>. Je
-          ontvangt een bevestiging per e-mail, 2 dagen van tevoren een
-          uitleg over saldering, en een herinnering 24 uur van tevoren.
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          Je nieuwe tijd is bevestigd:
+        </p>
+        <p className="mt-2 text-base font-semibold text-ink">
+          {formatDateTimeLongNl(afspraak.start_at)}
         </p>
       </Shell>
     );
   }
 
-  if (!afspraak) return null;
-
   const cancelled = afspraak.status === "geannuleerd";
 
   return (
     <Shell>
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted">
-        Afspraak beheren
-      </p>
-      <h1 className="mt-1 font-display text-2xl font-semibold text-green-deeper">
-        {afspraak.leads?.naam || "Jouw afspraak"}
+      <h1 className="font-display text-2xl font-semibold text-green-deeper">
+        Jouw afspraak
       </h1>
-
-      <div className="mt-6 border border-line bg-wash p-4">
-        <p className="text-sm text-ink">
-          <strong>Datum &amp; tijd</strong>
-          <br />
+      <div className="mt-6 rounded-xl border border-line bg-wash px-4 py-4">
+        <p className="text-sm text-muted">Geplande tijd</p>
+        <p className="mt-1 text-lg font-semibold text-ink">
           {formatDateTimeLongNl(afspraak.start_at)}
           <span className="text-muted"> (Europe/Amsterdam)</span>
         </p>
@@ -165,7 +167,10 @@ export function AfspraakManagePage() {
           </p>
           <button
             type="button"
-            onClick={() => setMode("verzet")}
+            onClick={() => {
+              setMode("verzet");
+              setError(null);
+            }}
             className="w-full bg-orange px-4 py-3 text-sm font-semibold text-white hover:bg-[#e0651c]"
           >
             Afspraak verzetten
@@ -173,10 +178,57 @@ export function AfspraakManagePage() {
           <button
             type="button"
             disabled={busy}
-            onClick={annuleer}
+            onClick={() => {
+              setMode("annuleer");
+              setError(null);
+            }}
             className="w-full border border-line bg-white px-4 py-3 text-sm font-semibold text-muted hover:border-[#C45A12]/40 hover:text-[#C45A12]"
           >
             Afspraak annuleren
+          </button>
+        </div>
+      ) : mode === "annuleer" ? (
+        <div className="mt-8 space-y-3">
+          <h2 className="font-display text-lg font-semibold text-ink">
+            Afspraak annuleren
+          </h2>
+          <p className="text-sm text-muted">
+            Laat even weten waarom je wilt annuleren — dat helpt ons.
+          </p>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+            Reden
+            <textarea
+              value={annuleerNotitie}
+              onChange={(e) => setAnnuleerNotitie(e.target.value)}
+              rows={3}
+              required
+              placeholder="Bijv. tijdstip schikt niet, andere prioriteit…"
+              className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+            />
+          </label>
+          {error && (
+            <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
+              {error}
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={busy || annuleerNotitie.trim().length < 3}
+            onClick={() => void annuleer()}
+            className="w-full bg-[#C45A12] px-4 py-3 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-60"
+          >
+            {busy ? "Bezig…" : "Bevestig annulering"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("view");
+              setAnnuleerNotitie("");
+              setError(null);
+            }}
+            className="w-full border border-line px-4 py-2.5 text-sm text-muted"
+          >
+            ← Terug
           </button>
         </div>
       ) : (
@@ -204,7 +256,7 @@ export function AfspraakManagePage() {
           <button
             type="button"
             disabled={busy || !newStart}
-            onClick={verzet}
+            onClick={() => void verzet()}
             className="w-full bg-orange px-4 py-3 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
           >
             {busy ? "Bezig…" : "Bevestig nieuwe tijd"}
@@ -227,9 +279,9 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="crm-bg min-h-screen px-4 py-10">
       <div className="mx-auto max-w-lg border border-line bg-white p-6 sm:p-8">
         <p className="font-display text-sm font-semibold text-green-dark">
-          Batterij<span className="text-orange">concept</span>
+          Batterijconcept
         </p>
-        <div className="mt-6">{children}</div>
+        {children}
       </div>
     </div>
   );

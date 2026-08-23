@@ -12,11 +12,13 @@ import {
   MAX_BELPOGINGEN_PER_DAG,
   MIN_UREN_TUSSEN_BELPOGINGEN,
   activeBelAfspraak,
+  annuleringsNotitieFromAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
   geenContactPogingLabel,
   inBelQueue,
   isTerugbelDueToday,
+  latestCancelledVisitAfspraak,
   sortBelQueue,
 } from "@/lib/bel-queue";
 
@@ -112,44 +114,6 @@ export function BelPanel({
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
   onNeedReload?: () => void;
 }) {
-  const normalQueue = useMemo(
-    () =>
-      sortBelQueue(
-        leads.filter((l) =>
-          inBelQueue(l, appointmentLeadIds, cancelledAppointmentLeadIds)
-        )
-      ),
-    [leads, appointmentLeadIds, cancelledAppointmentLeadIds]
-  );
-
-  /** Terugbel-afspraken die vandaag (Amsterdam) aan de beurt zijn. */
-  const terugbelToday = useMemo(() => {
-    const items: { lead: Lead; afspraak: Afspraak }[] = [];
-    for (const a of afspraken) {
-      if (!isTerugbelDueToday(a)) continue;
-      const lead = leads.find((l) => l.id === a.lead_id);
-      if (!lead?.telefoon?.trim()) continue;
-      items.push({ lead, afspraak: a });
-    }
-    items.sort(
-      (a, b) =>
-        new Date(a.afspraak.start_at).getTime() -
-        new Date(b.afspraak.start_at).getTime()
-    );
-    return items;
-  }, [afspraken, leads]);
-
-  const queue = useMemo(() => {
-    const terugbelLeads = terugbelToday.map((t) => t.lead);
-    const ids = new Set(terugbelLeads.map((l) => l.id));
-    return [...terugbelLeads, ...normalQueue.filter((l) => !ids.has(l.id))];
-  }, [terugbelToday, normalQueue]);
-
-  const planAdviseurs = useMemo(
-    () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
-    [adviseurs]
-  );
-
   const [currentId, setCurrentId] = useState<string | null>(null);
   /** null = Volgende-knop · status = uitkomsten · terugbel = interne terugbel-afspraak */
   const [nextMode, setNextMode] = useState<"status" | "terugbel" | null>(null);
@@ -172,18 +136,89 @@ export function BelPanel({
   const [leadNotitieDraft, setLeadNotitieDraft] = useState("");
   const [editingLeadNotitie, setEditingLeadNotitie] = useState(false);
   const [savingLeadNotitie, setSavingLeadNotitie] = useState(false);
+  /** Leads die deze sessie al via Volgende zijn doorgeschoven. */
+  const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
 
-  const current =
-    queue.find((l) => l.id === currentId) ||
-    terugbelToday[0]?.lead ||
-    normalQueue[0] ||
-    null;
+  const planAdviseurs = useMemo(
+    () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
+    [adviseurs]
+  );
+
+  const normalQueue = useMemo(
+    () =>
+      sortBelQueue(
+        leads.filter((l) =>
+          inBelQueue(l, appointmentLeadIds, cancelledAppointmentLeadIds)
+        ),
+        cancelledAppointmentLeadIds
+      ),
+    [leads, appointmentLeadIds, cancelledAppointmentLeadIds]
+  );
+
+  /** Terugbel-afspraken die vandaag (Amsterdam) aan de beurt zijn. */
+  const terugbelToday = useMemo(() => {
+    const items: { lead: Lead; afspraak: Afspraak }[] = [];
+    for (const a of afspraken) {
+      if (!isTerugbelDueToday(a)) continue;
+      const lead = leads.find((l) => l.id === a.lead_id);
+      if (!lead?.telefoon?.trim()) continue;
+      if (uitgesteldIds.has(lead.id)) continue;
+      items.push({ lead, afspraak: a });
+    }
+    items.sort(
+      (a, b) =>
+        new Date(a.afspraak.start_at).getTime() -
+        new Date(b.afspraak.start_at).getTime()
+    );
+    return items;
+  }, [afspraken, leads, uitgesteldIds]);
+
+  /** Geannuleerde eerst, daarna terugbel vandaag, daarna rest. Uitgestelde leads eruit. */
+  const queue = useMemo(() => {
+    const cancelledFirst = normalQueue.filter(
+      (l) =>
+        cancelledAppointmentLeadIds?.has(l.id) && !uitgesteldIds.has(l.id)
+    );
+    const cancelledSet = new Set(cancelledFirst.map((l) => l.id));
+    const terugbelLeads = terugbelToday
+      .map((t) => t.lead)
+      .filter((l) => !cancelledSet.has(l.id));
+    const terugbelIds = new Set(terugbelLeads.map((l) => l.id));
+    const rest = normalQueue.filter(
+      (l) =>
+        !cancelledSet.has(l.id) &&
+        !terugbelIds.has(l.id) &&
+        !uitgesteldIds.has(l.id)
+    );
+    return [...cancelledFirst, ...terugbelLeads, ...rest];
+  }, [
+    terugbelToday,
+    normalQueue,
+    cancelledAppointmentLeadIds,
+    uitgesteldIds,
+  ]);
+
+  const current = useMemo(() => {
+    if (currentId) {
+      return queue.find((l) => l.id === currentId) || null;
+    }
+    return queue[0] || null;
+  }, [queue, currentId]);
 
   const currentTerugbel = current
     ? activeBelAfspraak(afspraken, current.id)
     : null;
   const currentIsTerugbelDue = Boolean(
     currentTerugbel && isTerugbelDueToday(currentTerugbel)
+  );
+  const currentCancelledAfspraak = current
+    ? latestCancelledVisitAfspraak(afspraken, current.id)
+    : null;
+  const currentIsCancelledReplan = Boolean(
+    current && cancelledAppointmentLeadIds?.has(current.id)
+  );
+  const currentAnnuleringsNotitie = annuleringsNotitieFromAfspraak(
+    currentCancelledAfspraak
   );
 
   const slotsByDay = useMemo(() => {
@@ -201,12 +236,14 @@ export function BelPanel({
   }, [slots]);
 
   useEffect(() => {
-    if (!current) {
-      setCurrentId(null);
+    if (queue.length === 0) {
+      if (currentId !== null) setCurrentId(null);
       return;
     }
-    if (currentId !== current.id) setCurrentId(current.id);
-  }, [current, currentId]);
+    if (!currentId || !queue.some((l) => l.id === currentId)) {
+      setCurrentId(queue[0].id);
+    }
+  }, [queue, currentId]);
 
   useEffect(() => {
     if (!current) return;
@@ -248,10 +285,54 @@ export function BelPanel({
   }, [adviseurId]);
 
   function goNextLead(excludeId: string) {
-    const rest = queue.filter((l) => l.id !== excludeId);
-    const nextTerugbel = terugbelToday.find((t) => t.lead.id !== excludeId);
-    setCurrentId(nextTerugbel?.lead.id || rest[0]?.id || null);
+    setUitgesteldIds((prev) => {
+      const next = new Set(prev);
+      next.add(excludeId);
+      return next;
+    });
+    const skip = new Set(uitgesteldIds);
+    skip.add(excludeId);
+    const rest = queue.filter((l) => l.id !== excludeId && !skip.has(l.id));
+    setCurrentId(rest[0]?.id || null);
     setNextMode(null);
+  }
+
+  /** Geannuleerde lead: Volgende = door naar volgende, deze sessie niet meer tonen. */
+  async function skipCancelledLead() {
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const now = new Date().toISOString();
+      const vandaag = belpogingenVandaagOf(current) + 1;
+      const patch: Partial<Lead> = {
+        belpogingen: Math.min(belpogingenOf(current) + 1, MAX_BELPOGINGEN),
+        belpogingen_vandaag: Math.min(vandaag, MAX_BELPOGINGEN_PER_DAG),
+        laatst_gebeld_at: now,
+      };
+      const sb = getSupabaseBrowser();
+      let { error: err } = await sb
+        .from("leads")
+        .update(patch)
+        .eq("id", current.id);
+      if (
+        err &&
+        (err.message?.includes("belpogingen_vandaag") || err.code === "42703")
+      ) {
+        const { belpogingen_vandaag: _, ...withoutDay } = patch;
+        const retry = await sb
+          .from("leads")
+          .update(withoutDay)
+          .eq("id", current.id);
+        err = retry.error;
+      }
+      if (!err) onLeadUpdated(current.id, patch);
+      goNextLead(current.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function completeTerugbelAfspraak(leadId: string) {
@@ -491,6 +572,22 @@ export function BelPanel({
 
   return (
     <div>
+      {cancelledAppointmentLeadIds &&
+        [...cancelledAppointmentLeadIds].some((id) =>
+          queue.some((l) => l.id === id)
+        ) && (
+        <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+            Opnieuw plannen — afspraak geannuleerd (
+            {
+              queue.filter((l) => cancelledAppointmentLeadIds.has(l.id))
+                .length
+            }
+            )
+          </p>
+        </div>
+      )}
+
       {terugbelToday.length > 0 && (
         <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
@@ -534,13 +631,19 @@ export function BelPanel({
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {currentIsTerugbelDue
-            ? "Terugbel afspraak vandaag"
-            : `${position} van ${queue.length} in de bellijst`}
+          {currentIsCancelledReplan
+            ? "Opnieuw plannen — afspraak geannuleerd"
+            : currentIsTerugbelDue
+              ? "Terugbel afspraak vandaag"
+              : `${position} van ${queue.length} in de bellijst`}
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {current.status === "geen_contact" || pogingen > 0 ? (
+          {currentIsCancelledReplan ? (
+            <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
+              Afspraak geannuleerd
+            </span>
+          ) : current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
               {geenContactPogingLabel(pogingen)}
             </span>
@@ -569,6 +672,27 @@ export function BelPanel({
         <p className="mt-2 text-sm text-muted">{adresRegel(current)}</p>
         {current.email && (
           <p className="mt-1 text-sm text-muted">{current.email}</p>
+        )}
+
+        {currentIsCancelledReplan && (
+          <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+              Afspraak geannuleerd
+              {currentCancelledAfspraak
+                ? ` · was ${formatDateTimeNl(currentCancelledAfspraak.start_at)}`
+                : ""}
+            </p>
+            {currentAnnuleringsNotitie ? (
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                {currentAnnuleringsNotitie}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-muted">
+                Geen annuleringsnotitie. Plan opnieuw in voor bevestiging &amp;
+                herinnering.
+              </p>
+            )}
+          </div>
         )}
 
         {currentIsTerugbelDue && currentTerugbel && (
@@ -688,6 +812,10 @@ export function BelPanel({
               type="button"
               disabled={busy}
               onClick={() => {
+                if (currentIsCancelledReplan) {
+                  void skipCancelledLead();
+                  return;
+                }
                 setNextMode("status");
                 setError(null);
               }}

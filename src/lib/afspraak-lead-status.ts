@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { leadStatusVoorAfspraakSoort } from "@/lib/afspraak-soort";
+import {
+  leadStatusVoorAfspraakSoort,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
 
 const BESCHERMDE_STATUS = new Set([
   "deal",
@@ -17,9 +20,9 @@ const AFSPRAAK_STATUS = new Set([
 /**
  * Leadstatus volgt de agenda:
  * - nog een toekomstige actieve afspraak → status bij het soort
- * - geen actieve afspraak meer (geannuleerd/voltooid) → `na_afspraak`
- *   (niet terug naar de bellijst)
- *   Uitkomsten na bezoek (`na_afspraak`, afgewezen, etc.) blijven staan.
+ * - geannuleerde *nieuwe* afspraak → `nieuw` (terug in bellijst)
+ * - geannuleerde vervolgafspraak → `na_afspraak` (niet in bellijst)
+ * - voltooid bezoek wordt elders op `na_afspraak` gezet (cron)
  */
 export async function syncLeadNaAfspraak(
   sb: SupabaseClient,
@@ -75,11 +78,26 @@ export async function syncLeadNaAfspraak(
 
   // Geen actieve toekomstige afspraak meer
   if (AFSPRAAK_STATUS.has(lead.status)) {
-    // Geannuleerd huisbezoek/vervolg → niet terug naar bellijst
+    // Alleen geannuleerde *nieuwe* afspraak → bellijst; vervolg → na_afspraak
+    let terugNaarBel = lead.status === "afspraak";
+    const { data: recentCancelled } = await sb
+      .from("afspraken")
+      .select("soort, updated_at, start_at")
+      .eq("lead_id", leadId)
+      .eq("status", "geannuleerd")
+      .order("updated_at", { ascending: false })
+      .limit(5);
+    if (recentCancelled?.length) {
+      const newest = recentCancelled[0];
+      const soort = normalizeAfspraakSoort(newest.soort);
+      terugNaarBel = soort === "nieuw";
+    }
+
+    const nextStatus = terugNaarBel ? "nieuw" : "na_afspraak";
     let upd = await sb
       .from("leads")
       .update({
-        status: "na_afspraak",
+        status: nextStatus,
         terugbellen: false,
         terugbel_notitie: null,
       })
@@ -89,10 +107,7 @@ export async function syncLeadNaAfspraak(
       (upd.error.code === "42703" ||
         upd.error.message?.includes("terugbel"))
     ) {
-      await sb
-        .from("leads")
-        .update({ status: "na_afspraak" })
-        .eq("id", leadId);
+      await sb.from("leads").update({ status: nextStatus }).eq("id", leadId);
     }
     return;
   }

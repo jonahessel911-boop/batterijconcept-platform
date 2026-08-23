@@ -16,6 +16,13 @@ const QUEUE_STATUSES: LeadStatus[] = [
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
+const BEL_BLOKKEER_STATUS = new Set<LeadStatus>([
+  "deal",
+  "geen_interesse",
+  "offerte_afgewezen",
+  "niet_gekwalificeerd",
+]);
+
 /** Sollicitaties horen in Instroom, niet in de bel-queue. */
 export function isSollicitatieLead(lead: Pick<Lead, "naam" | "bron">): boolean {
   const naam = (lead.naam || "").toLowerCase();
@@ -98,31 +105,10 @@ export function inBelCooldown(
   return now.getTime() - last < minMs;
 }
 
-export function inBelQueue(
-  lead: Lead,
-  appointmentLeadIds?: Set<string>,
-  /** Leads met geannuleerde (huisbezoek)afspraak zonder actieve follow-up */
-  cancelledAppointmentLeadIds?: Set<string>
-): boolean {
-  if (isSollicitatieLead(lead)) return false;
-  if (!lead.telefoon?.trim()) return false;
-  if (!QUEUE_STATUSES.includes(lead.status)) return false;
-  if (lead.status === "afspraak") return false;
-  if (lead.status === "vervolg_fysiek" || lead.status === "vervolg_tel") {
-    return false;
-  }
-  if (appointmentLeadIds?.has(lead.id)) return false;
-  if (cancelledAppointmentLeadIds?.has(lead.id)) return false;
-  if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
-  if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
-  // 2e poging vandaag pas na pauze — niet meteen achter de nieuwe leads aan
-  if (inBelCooldown(lead)) return false;
-  return true;
-}
-
 /**
- * Lead had een fysieke/vervolg-afspraak die geannuleerd is en heeft geen
- * actieve toekomstige afspraak meer → hoort niet in de bellijst.
+ * Lead had een *nieuwe* (eerste) fysieke afspraak die geannuleerd is en heeft
+ * geen actieve toekomstige afspraak meer → opnieuw in de bellijst (prioriteit).
+ * Vervolgafspraken / terugbel tellen hier niet mee.
  */
 export function cancelledAppointmentLeadIds(
   afspraken: Afspraak[],
@@ -145,18 +131,92 @@ export function cancelledAppointmentLeadIds(
     );
     if (hasActiveFuture) continue;
 
-    const hadCancelledVisit = list.some((a) => {
-      if (a.status !== "geannuleerd") return false;
-      const soort = normalizeAfspraakSoort(a.soort);
-      return soort === "nieuw" || soort === "vervolg_fysiek" || soort === "vervolg_tel";
-    });
-    if (hadCancelledVisit) out.add(leadId);
+    const hadCancelledNieuw = list.some(
+      (a) =>
+        a.status === "geannuleerd" &&
+        normalizeAfspraakSoort(a.soort) === "nieuw"
+    );
+    if (hadCancelledNieuw) out.add(leadId);
   }
   return out;
 }
 
-export function sortBelQueue(leads: Lead[]): Lead[] {
+/** Meest recente geannuleerde *nieuwe* afspraak van de lead. */
+export function latestCancelledVisitAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) =>
+        a.lead_id === leadId &&
+        a.status === "geannuleerd" &&
+        normalizeAfspraakSoort(a.soort) === "nieuw"
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.updated_at || b.start_at).getTime() -
+        new Date(a.updated_at || a.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+/** Haalt de annuleringsreden uit afspraak-notities, indien aanwezig. */
+export function annuleringsNotitieFromAfspraak(
+  afspraak: Pick<Afspraak, "notities"> | null | undefined
+): string | null {
+  const raw = afspraak?.notities?.trim();
+  if (!raw) return null;
+  const match = raw.match(/Annulering\s*\([^)]*\):\s*([\s\S]+)$/i);
+  if (match?.[1]?.trim()) return match[1].trim();
+  if (/annulering/i.test(raw)) return raw;
+  return null;
+}
+
+export function inBelQueue(
+  lead: Lead,
+  appointmentLeadIds?: Set<string>,
+  /** Leads met geannuleerde afspraak → juist wél in de bellijst (herplannen) */
+  cancelledAppointmentLeadIds?: Set<string>
+): boolean {
+  if (isSollicitatieLead(lead)) return false;
+  if (!lead.telefoon?.trim()) return false;
+  if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
+  if (appointmentLeadIds?.has(lead.id)) return false;
+
+  const isCancelledReplan = cancelledAppointmentLeadIds?.has(lead.id) === true;
+
+  if (isCancelledReplan) {
+    // Geannuleerde nieuwe afspraak: prioriteit, maar wél daglimiet / cooldown
+    // zodat "Volgende" ze niet eindeloos terugbrengt.
+    if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
+    if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+    if (inBelCooldown(lead)) return false;
+    return true;
+  }
+
+  if (!QUEUE_STATUSES.includes(lead.status)) return false;
+  // na_afspraak alleen via annulering (hierboven), niet na voltooid bezoek
+  if (lead.status === "na_afspraak") return false;
+  if (lead.status === "afspraak") return false;
+  if (lead.status === "vervolg_fysiek" || lead.status === "vervolg_tel") {
+    return false;
+  }
+  if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
+  if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+  if (inBelCooldown(lead)) return false;
+  return true;
+}
+
+export function sortBelQueue(
+  leads: Lead[],
+  cancelledIds?: Set<string>
+): Lead[] {
   return [...leads].sort((a, b) => {
+    const aCancel = cancelledIds?.has(a.id) ? 1 : 0;
+    const bCancel = cancelledIds?.has(b.id) ? 1 : 0;
+    if (aCancel !== bCancel) return bCancel - aCancel;
+
     const aToday = belpogingenVandaagOf(a);
     const bToday = belpogingenVandaagOf(b);
     if (aToday !== bToday) return aToday - bToday;

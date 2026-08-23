@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { InstallatiePartner, Project, ProjectFoto } from "@/types/database";
-import { formatDateTimeLongNl } from "@/lib/format";
+import {
+  formatProjectSchouwWeek,
+  schouwWeekFromDate,
+  schouwWeekValue,
+  upcomingSchouwWeekOptions,
+} from "@/lib/schouw-week";
 import { Panel } from "./DetailChrome";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
@@ -11,6 +16,17 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function initialSchouwWeekValue(project: Project): string {
+  if (project.schouw_jaar && project.schouw_week) {
+    return schouwWeekValue(project.schouw_jaar, project.schouw_week);
+  }
+  if (project.schouw_at) {
+    const { jaar, week } = schouwWeekFromDate(project.schouw_at);
+    return schouwWeekValue(jaar, week);
+  }
+  return "";
 }
 
 export function ProjectSchouwSection({
@@ -22,10 +38,11 @@ export function ProjectSchouwSection({
   onChanged: () => void;
   embedded?: boolean;
 }) {
+  const weekOptions = useMemo(() => upcomingSchouwWeekOptions(60), []);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
-  const [schouwAt, setSchouwAt] = useState(
-    toDatetimeLocalValue(project.schouw_at)
+  const [schouwWeek, setSchouwWeek] = useState(() =>
+    initialSchouwWeekValue(project)
   );
   const [partnerId, setPartnerId] = useState(
     project.installatie_partner_id || ""
@@ -62,18 +79,42 @@ export function ProjectSchouwSection({
   }, [loadPartnersAndFotos]);
 
   useEffect(() => {
-    setSchouwAt(toDatetimeLocalValue(project.schouw_at));
+    setSchouwWeek(initialSchouwWeekValue(project));
     setPartnerId(project.installatie_partner_id || "");
     setNotities(project.schouw_notities || "");
     setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
     setInstallatieNotities(project.installatie_notities || "");
   }, [
     project.schouw_at,
+    project.schouw_jaar,
+    project.schouw_week,
     project.installatie_partner_id,
     project.schouw_notities,
     project.installatie_at,
     project.installatie_notities,
   ]);
+
+  const schouwSelectOptions = useMemo(() => {
+    const base = [...weekOptions];
+    if (schouwWeek && !base.some((o) => o.value === schouwWeek)) {
+      const m = /^(\d{4})-W(\d{1,2})$/i.exec(schouwWeek);
+      if (m) {
+        const jaar = Number(m[1]);
+        const week = Number(m[2]);
+        base.unshift({
+          value: schouwWeek,
+          label:
+            formatProjectSchouwWeek({
+              schouw_jaar: jaar,
+              schouw_week: week,
+            }) || schouwWeek,
+          jaar,
+          week,
+        });
+      }
+    }
+    return base;
+  }, [weekOptions, schouwWeek]);
 
   async function planSchouw(e: React.FormEvent) {
     e.preventDefault();
@@ -81,16 +122,17 @@ export function ProjectSchouwSection({
     setError(null);
     setOkMsg(null);
     try {
-      if (!schouwAt) throw new Error("Kies een schouwdatum");
+      if (!schouwWeek) throw new Error("Kies een schouwweek");
       if (!partnerId) throw new Error("Kies een installatiepartner");
-      const parsed = new Date(schouwAt);
-      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum");
+      const opt = schouwSelectOptions.find((o) => o.value === schouwWeek);
+      if (!opt) throw new Error("Ongeldige schouwweek");
 
       const res = await fetch(`/api/projecten/${project.id}/schouw`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          schouw_at: parsed.toISOString(),
+          schouw_jaar: opt.jaar,
+          schouw_week: opt.week,
           installatie_partner_id: partnerId,
           schouw_notities: notities || null,
         }),
@@ -98,7 +140,7 @@ export function ProjectSchouwSection({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      const parts: string[] = ["Schouw ingepland."];
+      const parts: string[] = ["Schouwweek ingepland."];
       if (data.mails?.klant?.ok) parts.push("Mail naar klant verstuurd.");
       else if (data.mails?.klant?.error)
         parts.push(`Klantmail: ${data.mails.klant.error}`);
@@ -188,19 +230,34 @@ export function ProjectSchouwSection({
     }
   }
 
+  const schouwLabel = formatProjectSchouwWeek(project);
+  const hasSchouw = Boolean(
+    project.schouw_week || project.schouw_at || project.schouw_jaar
+  );
+
   const body = (
     <>
       <form onSubmit={planSchouw} className="space-y-4 px-1 py-2">
+        <p className="text-sm text-muted">
+          Kies een week. Ongeveer één week van tevoren stemmen we de exacte
+          datum en tijd met de klant af.
+        </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Schouwdatum
-            <input
-              type="datetime-local"
+            Schouwweek
+            <select
               required
-              value={schouwAt}
-              onChange={(e) => setSchouwAt(e.target.value)}
+              value={schouwWeek}
+              onChange={(e) => setSchouwWeek(e.target.value)}
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-            />
+            >
+              <option value="">Kies week…</option>
+              {schouwSelectOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
             Installatiepartner
@@ -255,9 +312,9 @@ export function ProjectSchouwSection({
         >
           {saving
             ? "Bezig…"
-            : project.schouw_at
-              ? "Schouw bijwerken & opnieuw mailen"
-              : "Schouw inplannen & mailen"}
+            : hasSchouw
+              ? "Schouwweek bijwerken & opnieuw mailen"
+              : "Schouwweek inplannen & mailen"}
         </button>
       </form>
 
@@ -377,11 +434,7 @@ export function ProjectSchouwSection({
   return (
     <Panel
       title="Schouw & installatie"
-      subtitle={
-        project.schouw_at
-          ? formatDateTimeLongNl(project.schouw_at)
-          : "Nog niet gepland"
-      }
+      subtitle={schouwLabel || "Nog niet gepland"}
     >
       {body}
     </Panel>

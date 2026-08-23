@@ -15,7 +15,7 @@ export async function ensureProjectForOfferte(
   const { data: offerteMeta } = await sb
     .from("offertes")
     .select(
-      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie"
+      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door"
     )
     .eq("id", opts.offerteId)
     .maybeSingle();
@@ -35,6 +35,14 @@ export async function ensureProjectForOfferte(
     (
       offerteMeta as { installateur_notitie?: string | null } | null
     )?.installateur_notitie ?? null;
+  const backofficeNotitieDoor =
+    (
+      offerteMeta as { backoffice_notitie_door?: string | null } | null
+    )?.backoffice_notitie_door ?? null;
+  const installateurNotitieDoor =
+    (
+      offerteMeta as { installateur_notitie_door?: string | null } | null
+    )?.installateur_notitie_door ?? null;
   const partnerJoin = (
     offerteMeta as {
       installatie_partners?:
@@ -96,6 +104,8 @@ export async function ensureProjectForOfferte(
     aanbetaling_te_innen_inc: aanbetalingTeInnen,
     backoffice_notitie: backofficeNotitie,
     installateur_notitie: installateurNotitie,
+    backoffice_notitie_door: backofficeNotitieDoor,
+    installateur_notitie_door: installateurNotitieDoor,
   };
   if (partnerId) {
     insertRow.installatie_partner_id = partnerId;
@@ -121,6 +131,8 @@ export async function ensureProjectForOfferte(
     delete insertRow.aanbetaling_te_innen_inc;
     delete insertRow.backoffice_notitie;
     delete insertRow.installateur_notitie;
+    delete insertRow.backoffice_notitie_door;
+    delete insertRow.installateur_notitie_door;
     const retry = await sb
       .from("projecten")
       .insert(insertRow)

@@ -45,15 +45,14 @@ export function OffertePage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
-  const [mailBusy, setMailBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const [mailMsg, setMailMsg] = useState<string | null>(null);
   const [actieOpen, setActieOpen] = useState(false);
   const [aanbetalingModus, setAanbetalingModus] =
     useState<AanbetalingModus>("restant");
   const [aanbetalingHandmatig, setAanbetalingHandmatig] = useState("");
   const [backofficeNotitie, setBackofficeNotitie] = useState("");
   const [installateurNotitie, setInstallateurNotitie] = useState("");
+  const [sessionNaam, setSessionNaam] = useState<string | null>(null);
   const [actieSaving, setActieSaving] = useState(false);
   const [actieMsg, setActieMsg] = useState<string | null>(null);
   const [projectFotos, setProjectFotos] = useState<ProjectFoto[]>([]);
@@ -77,7 +76,7 @@ export function OffertePage() {
         sb
           .from("offertes")
           .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
+            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats, adviseur_id, adviseurs(id, naam)), offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
           )
           .eq("id", id)
           .single(),
@@ -128,6 +127,25 @@ export function OffertePage() {
     const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const res = await fetch("/api/auth/login");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.adviseur?.naam) {
+          setSessionNaam(data.adviseur.naam as string);
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Bestaande ondertekende offertes zonder project → alsnog aanmaken
   useEffect(() => {
@@ -227,6 +245,12 @@ export function OffertePage() {
           aanbetaling_te_innen_inc: preview.bedragIncBtw,
           backoffice_notitie: backofficeNotitie || null,
           installateur_notitie: installateurNotitie || null,
+          backoffice_notitie_door: backofficeNotitie.trim()
+            ? sessionNaam || offerte.backoffice_notitie_door || null
+            : null,
+          installateur_notitie_door: installateurNotitie.trim()
+            ? sessionNaam || offerte.installateur_notitie_door || null
+            : null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -304,27 +328,6 @@ export function OffertePage() {
       setPdfError(e instanceof Error ? e.message : "PDF mislukt");
     } finally {
       setPdfBusy(false);
-    }
-  }
-
-  async function verstuurPdfOpnieuw() {
-    if (!offerte) return;
-    setMailBusy(true);
-    setMailMsg(null);
-    setPdfError(null);
-    try {
-      const res = await fetch(`/api/offertes/${offerte.id}/verstuur-pdf`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Opnieuw mailen mislukt");
-      setMailMsg(
-        `Actuele PDF gemaild naar ${data.emailed_to || "de klant"}.`
-      );
-    } catch (e) {
-      setPdfError(e instanceof Error ? e.message : "Mailen mislukt");
-    } finally {
-      setMailBusy(false);
     }
   }
 
@@ -439,16 +442,6 @@ export function OffertePage() {
           >
             {pdfBusy ? "PDF laden…" : "PDF downloaden"}
           </button>
-          {offerte.status !== "ondertekend" && offerte.leads?.email && (
-            <button
-              type="button"
-              disabled={mailBusy}
-              onClick={() => void verstuurPdfOpnieuw()}
-              className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
-            >
-              {mailBusy ? "Mailen…" : "Actuele PDF mailen"}
-            </button>
-          )}
           {offerte.status === "ondertekend" && (
             <>
               <span className="border border-green/25 bg-green-soft px-3 py-1.5 text-sm font-medium text-green-dark">
@@ -472,9 +465,6 @@ export function OffertePage() {
         {pdfError && (
           <p className="mt-3 text-sm text-[#C62828]">{pdfError}</p>
         )}
-        {mailMsg && (
-          <p className="mt-3 text-sm text-green-dark">{mailMsg}</p>
-        )}
       </HeroCard>
 
       {offerte.status === "ondertekend" && actieOpen && (
@@ -497,6 +487,27 @@ export function OffertePage() {
               >
                 ×
               </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-line bg-wash px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Adviseur van dit project
+              </p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {(() => {
+                  const lead = Array.isArray(offerte.leads)
+                    ? offerte.leads[0]
+                    : offerte.leads;
+                  const adv = lead?.adviseurs;
+                  const naam = Array.isArray(adv) ? adv[0]?.naam : adv?.naam;
+                  return naam || "Nog niet toegewezen";
+                })()}
+              </p>
+              {sessionNaam ? (
+                <p className="mt-1 text-xs text-muted">
+                  Notities worden opgeslagen als {sessionNaam}
+                </p>
+              ) : null}
             </div>
 
             <div className="mt-4">
@@ -587,14 +598,6 @@ export function OffertePage() {
             </div>
             {actieMsg && <p className="mt-3 text-sm text-muted">{actieMsg}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={actieSaving}
-                onClick={() => void saveBackofficeActie(false)}
-                className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
-              >
-                {actieSaving ? "Opslaan…" : "Tussentijds opslaan"}
-              </button>
               <button
                 type="button"
                 disabled={actieSaving}

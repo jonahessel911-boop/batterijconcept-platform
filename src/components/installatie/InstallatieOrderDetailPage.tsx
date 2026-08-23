@@ -10,6 +10,7 @@ import {
   formatDateTimeLongNl,
   formatEuro,
 } from "@/lib/format";
+import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 
 type OrderDetail = Project & {
   leads?: Project["leads"];
@@ -143,12 +144,12 @@ export function InstallatieOrderDetailPage() {
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
             Schouw
           </p>
-          {order.schouw_at ? (
-            <p className="mt-1 text-lg font-semibold capitalize text-ink">
-              {formatDateTimeLongNl(order.schouw_at)}
+          {formatProjectSchouwWeek(order) ? (
+            <p className="mt-1 text-lg font-semibold text-ink">
+              {formatProjectSchouwWeek(order)}
             </p>
           ) : (
-            <p className="mt-1 text-sm text-muted">Nog geen schouwdatum.</p>
+            <p className="mt-1 text-sm text-muted">Nog geen schouwweek.</p>
           )}
           {order.schouw_notities?.trim() ? (
             <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">

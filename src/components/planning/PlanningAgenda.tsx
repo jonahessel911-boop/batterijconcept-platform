@@ -8,6 +8,7 @@ import { nl } from "date-fns/locale";
 import type { Project } from "@/types/database";
 import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
+import { schouwWeekFromDate } from "@/lib/schouw-week";
 
 export type PlanningOrder = Project & {
   leads?: Project["leads"];
@@ -140,7 +141,12 @@ export function PlanningAgenda({
         <span
           className={`mt-0.5 block text-[11px] font-bold tabular-nums ${style.text}`}
         >
-          {formatTimeNl(event.at)}
+          {event.kind === "schouw"
+            ? `W${
+                event.order.schouw_week ??
+                schouwWeekFromDate(event.at).week
+              }`
+            : formatTimeNl(event.at)}
         </span>
         <span className="mt-1 block truncate text-[12px] font-semibold text-ink">
           {lead?.naam || event.order.project_nummer}

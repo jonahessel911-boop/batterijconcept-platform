@@ -25,6 +25,8 @@ export async function PATCH(
     aanbetaling_te_innen_inc?: number | string | null;
     backoffice_notitie?: string | null;
     installateur_notitie?: string | null;
+    backoffice_notitie_door?: string | null;
+    installateur_notitie_door?: string | null;
   };
   try {
     body = await req.json();
@@ -75,6 +77,14 @@ export async function PATCH(
   if (body.installateur_notitie !== undefined) {
     patch.installateur_notitie = body.installateur_notitie?.trim() || null;
   }
+  if (body.backoffice_notitie_door !== undefined) {
+    patch.backoffice_notitie_door =
+      body.backoffice_notitie_door?.trim() || null;
+  }
+  if (body.installateur_notitie_door !== undefined) {
+    patch.installateur_notitie_door =
+      body.installateur_notitie_door?.trim() || null;
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -87,9 +97,26 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, leads(naam)"
+        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, leads(naam)"
       )
       .single();
+
+    if (
+      update.error &&
+      (update.error.message?.includes("notitie_door") ||
+        update.error.code === "42703")
+    ) {
+      delete patch.backoffice_notitie_door;
+      delete patch.installateur_notitie_door;
+      update = await sb
+        .from("offertes")
+        .update(patch)
+        .eq("id", id)
+        .select(
+          "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, leads(naam)"
+        )
+        .single();
+    }
 
     if (
       update.error &&
@@ -102,7 +129,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           error:
-            "Run migrate-offerte-backoffice-actie.sql in Supabase om backoffice velden in te stellen.",
+            "Run migrate-offerte-backoffice-actie.sql en migrate-notitie-door.sql in Supabase.",
         },
         { status: 400 }
       );
@@ -128,17 +155,42 @@ export async function PATCH(
       const projectId = ensured?.id || null;
 
       if (projectId) {
-        await sb
+        const projectPatch: Record<string, unknown> = {
+          aanbetaling_te_innen_inc:
+            offerte.aanbetaling_te_innen_inc != null
+              ? Number(offerte.aanbetaling_te_innen_inc)
+              : null,
+          backoffice_notitie: offerte.backoffice_notitie || null,
+          installateur_notitie: offerte.installateur_notitie || null,
+        };
+        const o = offerte as {
+          backoffice_notitie_door?: string | null;
+          installateur_notitie_door?: string | null;
+        };
+        if (o.backoffice_notitie_door !== undefined) {
+          projectPatch.backoffice_notitie_door =
+            o.backoffice_notitie_door || null;
+        }
+        if (o.installateur_notitie_door !== undefined) {
+          projectPatch.installateur_notitie_door =
+            o.installateur_notitie_door || null;
+        }
+        const projUp = await sb
           .from("projecten")
-          .update({
-            aanbetaling_te_innen_inc:
-              offerte.aanbetaling_te_innen_inc != null
-                ? Number(offerte.aanbetaling_te_innen_inc)
-                : null,
-            backoffice_notitie: offerte.backoffice_notitie || null,
-            installateur_notitie: offerte.installateur_notitie || null,
-          })
+          .update(projectPatch)
           .eq("id", projectId);
+        if (
+          projUp.error &&
+          (projUp.error.message?.includes("notitie_door") ||
+            projUp.error.code === "42703")
+        ) {
+          delete projectPatch.backoffice_notitie_door;
+          delete projectPatch.installateur_notitie_door;
+          await sb
+            .from("projecten")
+            .update(projectPatch)
+            .eq("id", projectId);
+        }
       }
 
       await ensureBtwDraftFactuur(sb, {
