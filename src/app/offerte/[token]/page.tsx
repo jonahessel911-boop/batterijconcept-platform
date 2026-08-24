@@ -47,6 +47,7 @@ export default async function OfferteSignPage({
   const { token } = await params;
   const data = await loadOfferte(token);
   if (!data) notFound();
+  if (data.offerte.status === "concept") notFound();
   const co = companyInfo();
 
   return (

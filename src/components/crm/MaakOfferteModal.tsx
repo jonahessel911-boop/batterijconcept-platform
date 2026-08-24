@@ -18,12 +18,65 @@ type Line = {
   btw_percentage: number;
 };
 
+type KortingModus = "bedrag" | "nieuw_totaal";
+type KortingZichtbaar = "zichtbaar" | "verborgen";
+
 function lineIncBtw(l: Line) {
   return (
     Math.round(
       l.aantal * l.prijs_ex_btw * (1 + l.btw_percentage / 100) * 100
     ) / 100
   );
+}
+
+function linesTotaalInc(list: Line[]) {
+  return Math.round(list.reduce((s, l) => s + lineIncBtw(l), 0) * 100) / 100;
+}
+
+/** Verdeel korting (incl. btw) over betaalde regels zodat geen kortingsregel nodig is. */
+function applyHiddenKorting(lines: Line[], kortingInc: number): Line[] {
+  if (kortingInc <= 0) return lines.map((l) => ({ ...l }));
+
+  const hasPaid = lines.some((l) => l.prijs_ex_btw > 0);
+  if (!hasPaid) return lines.map((l) => ({ ...l }));
+
+  const paidInc = linesTotaalInc(lines.filter((l) => l.prijs_ex_btw > 0));
+  if (paidInc <= 0) return lines.map((l) => ({ ...l }));
+
+  const targetInc =
+    Math.round((linesTotaalInc(lines) - kortingInc) * 100) / 100;
+  const scale = Math.max(0, (paidInc - kortingInc) / paidInc);
+
+  const scaled = lines.map((l) => {
+    if (l.prijs_ex_btw <= 0) return { ...l };
+    return {
+      ...l,
+      prijs_ex_btw: Math.round(l.prijs_ex_btw * scale * 100) / 100,
+    };
+  });
+
+  // Afrondingsrest op grootste betaalde regel
+  const actual = linesTotaalInc(scaled);
+  const diff = Math.round((actual - targetInc) * 100) / 100;
+  if (Math.abs(diff) < 0.005) return scaled;
+
+  let best = -1;
+  let bestEx = -1;
+  for (let i = 0; i < scaled.length; i++) {
+    if (scaled[i].prijs_ex_btw > bestEx) {
+      bestEx = scaled[i].prijs_ex_btw;
+      best = i;
+    }
+  }
+  if (best < 0) return scaled;
+
+  const l = scaled[best];
+  const dEx = -diff / (l.aantal * (1 + l.btw_percentage / 100));
+  scaled[best] = {
+    ...l,
+    prijs_ex_btw: Math.round((l.prijs_ex_btw + dEx) * 100) / 100,
+  };
+  return scaled;
 }
 
 export function MaakOfferteModal({
@@ -37,7 +90,7 @@ export function MaakOfferteModal({
   leadId: string;
   leadNaam: string;
   onClose: () => void;
-  onCreated: (signUrl?: string) => void;
+  onCreated: (offerteId: string) => void;
 }) {
   const [producten, setProducten] = useState<Product[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
@@ -48,8 +101,11 @@ export function MaakOfferteModal({
   const [customAantal, setCustomAantal] = useState(1);
   const [customPrijs, setCustomPrijs] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
-  const [korting, setKorting] = useState("");
   const [useKorting, setUseKorting] = useState(false);
+  const [kortingModus, setKortingModus] = useState<KortingModus>("bedrag");
+  const [kortingZichtbaar, setKortingZichtbaar] =
+    useState<KortingZichtbaar>("zichtbaar");
+  const [korting, setKorting] = useState("");
   const [financiering, setFinanciering] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,22 +129,43 @@ export function MaakOfferteModal({
     };
   }, [open]);
 
-  const kortingBedrag = Number(korting.replace(",", ".")) || 0;
+  const kortingInput = Number(korting.replace(",", ".")) || 0;
+
+  const basisTotaalInc = useMemo(() => linesTotaalInc(lines), [lines]);
+
+  const kortingInc = useMemo(() => {
+    if (!useKorting || kortingInput <= 0) return 0;
+    if (kortingModus === "nieuw_totaal") {
+      if (kortingInput >= basisTotaalInc) return 0;
+      return Math.round((basisTotaalInc - kortingInput) * 100) / 100;
+    }
+    return Math.min(kortingInput, basisTotaalInc);
+  }, [useKorting, kortingInput, kortingModus, basisTotaalInc]);
 
   const previewLines = useMemo(() => {
-    const out = [...lines];
-    if (useKorting && kortingBedrag > 0) {
-      // Korting ex BTW zodat aftrek zichtbaar is op totaal incl BTW
-      const ex = Math.round((kortingBedrag / 1.21) * 100) / 100;
-      out.push({
-        key: "korting",
-        product_id: null,
-        omschrijving: "Korting",
-        aantal: 1,
-        prijs_ex_btw: -ex,
-        btw_percentage: 21,
-      });
+    let out: Line[];
+
+    if (useKorting && kortingInc > 0) {
+      if (kortingZichtbaar === "zichtbaar") {
+        const ex = Math.round((kortingInc / 1.21) * 100) / 100;
+        out = [
+          ...lines,
+          {
+            key: "korting",
+            product_id: null,
+            omschrijving: "Korting",
+            aantal: 1,
+            prijs_ex_btw: -ex,
+            btw_percentage: 21,
+          },
+        ];
+      } else {
+        out = applyHiddenKorting(lines, kortingInc);
+      }
+    } else {
+      out = [...lines];
     }
+
     if (
       financiering &&
       !out.some((l) => /warmtefonds\s+aanvraag/i.test(l.omschrijving))
@@ -103,14 +180,9 @@ export function MaakOfferteModal({
       });
     }
     return out;
-  }, [lines, useKorting, kortingBedrag, financiering]);
+  }, [lines, useKorting, kortingInc, kortingZichtbaar, financiering]);
 
-  const totaalInc = useMemo(
-    () =>
-      Math.round(previewLines.reduce((s, l) => s + lineIncBtw(l), 0) * 100) /
-      100,
-    [previewLines]
-  );
+  const totaalInc = useMemo(() => linesTotaalInc(previewLines), [previewLines]);
 
   if (!open) return null;
 
@@ -218,6 +290,30 @@ export function MaakOfferteModal({
       setError("Kies een installateur (intern).");
       return;
     }
+    if (useKorting) {
+      if (kortingInput <= 0) {
+        setError("Vul een geldig kortingsbedrag of nieuw totaal in.");
+        return;
+      }
+      if (kortingModus === "nieuw_totaal") {
+        if (kortingInput >= basisTotaalInc) {
+          setError("Het nieuwe totaal moet lager zijn dan het huidige totaal.");
+          return;
+        }
+      } else if (kortingInput >= basisTotaalInc) {
+        setError("De korting mag niet groter of gelijk zijn aan het totaal.");
+        return;
+      }
+      if (
+        kortingZichtbaar === "verborgen" &&
+        !lines.some((l) => l.prijs_ex_btw > 0)
+      ) {
+        setError(
+          "Verborgen korting vereist minstens één regel met een prijs."
+        );
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     try {
@@ -245,13 +341,15 @@ export function MaakOfferteModal({
 
       setLines([]);
       setUseKorting(false);
+      setKortingModus("bedrag");
+      setKortingZichtbaar("zichtbaar");
       setKorting("");
       setFinanciering(false);
       setPartnerId("");
       setCustomOmschrijving("");
       setCustomAantal(1);
       setCustomPrijs("");
-      onCreated(data.sign_url);
+      onCreated(data.id);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -439,30 +537,131 @@ export function MaakOfferteModal({
               </ul>
             )}
 
-            <label className="flex items-start gap-3 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={useKorting}
-                onChange={(e) => setUseKorting(e.target.checked)}
-                className="mt-1 accent-green"
-              />
-              <span className="flex-1">
-                <span className="font-medium">Kortingsregel</span>
-                <span className="mt-1 block text-xs text-muted">
-                  Bedrag incl. btw dat van het totaal afgaat
+            <div className="border border-line bg-wash/60 p-3">
+              <label className="flex items-start gap-3 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={useKorting}
+                  onChange={(e) => setUseKorting(e.target.checked)}
+                  className="mt-1 accent-green"
+                />
+                <span>
+                  <span className="font-medium">Korting toepassen</span>
+                  <span className="mt-1 block text-xs text-muted">
+                    Bedragen zijn incl. btw
+                    {basisTotaalInc > 0
+                      ? ` · huidig totaal ${formatEuro(basisTotaalInc)}`
+                      : ""}
+                  </span>
                 </span>
-                {useKorting && (
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="Bijv. 250"
-                    value={korting}
-                    onChange={(e) => setKorting(e.target.value)}
-                    className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                  />
-                )}
-              </span>
-            </label>
+              </label>
+
+              {useKorting && (
+                <div className="mt-3 space-y-3 border-t border-line pt-3">
+                  <fieldset>
+                    <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
+                      Hoe bepalen?
+                    </legend>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(
+                        [
+                          {
+                            id: "bedrag" as const,
+                            label: "Kortingsbedrag",
+                          },
+                          {
+                            id: "nieuw_totaal" as const,
+                            label: "Nieuw totaal",
+                          },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setKortingModus(opt.id)}
+                          className={[
+                            "border px-3 py-1.5 text-sm font-medium transition",
+                            kortingModus === opt.id
+                              ? "border-green bg-green text-white"
+                              : "border-line bg-white text-ink hover:bg-wash",
+                          ].join(" ")}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+
+                  <label className="block text-xs font-medium text-muted">
+                    {kortingModus === "nieuw_totaal"
+                      ? "Nieuw totaal incl. btw (€)"
+                      : "Korting incl. btw (€)"}
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={
+                        kortingModus === "nieuw_totaal"
+                          ? "Bijv. 7500"
+                          : "Bijv. 250"
+                      }
+                      value={korting}
+                      onChange={(e) => setKorting(e.target.value)}
+                      className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                    />
+                  </label>
+
+                  <fieldset>
+                    <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
+                      Op de offerte
+                    </legend>
+                    <div className="mt-2 space-y-2">
+                      <label className="flex items-start gap-2 text-sm text-ink">
+                        <input
+                          type="radio"
+                          name="korting-zichtbaar"
+                          checked={kortingZichtbaar === "zichtbaar"}
+                          onChange={() => setKortingZichtbaar("zichtbaar")}
+                          className="mt-1 accent-green"
+                        />
+                        <span>
+                          <span className="font-medium">Korting tonen</span>
+                          <span className="mt-0.5 block text-xs text-muted">
+                            Apart kortingsregel op de offerte
+                          </span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 text-sm text-ink">
+                        <input
+                          type="radio"
+                          name="korting-zichtbaar"
+                          checked={kortingZichtbaar === "verborgen"}
+                          onChange={() => setKortingZichtbaar("verborgen")}
+                          className="mt-1 accent-green"
+                        />
+                        <span>
+                          <span className="font-medium">
+                            Alleen totaalprijs aanpassen
+                          </span>
+                          <span className="mt-0.5 block text-xs text-muted">
+                            Geen kortingsregel — productprijzen worden
+                            herberekend
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  </fieldset>
+
+                  {kortingInc > 0 && (
+                    <p className="text-xs text-muted">
+                      Korting {formatEuro(kortingInc)}
+                      {kortingZichtbaar === "verborgen"
+                        ? " · verwerkt in de regelprijzen"
+                        : " · als aparte regel"}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
 
             <label className="flex items-start gap-3 border border-line bg-wash px-3 py-3 text-sm text-ink">
               <input
@@ -506,6 +705,14 @@ export function MaakOfferteModal({
             </label>
 
             <div className="border-t border-line pt-3 text-right space-y-1">
+              {useKorting && kortingInc > 0 && (
+                <p className="text-sm text-muted">
+                  Was{" "}
+                  <span className="ml-2 inline-block min-w-[6rem] tabular-nums line-through">
+                    {formatEuro(basisTotaalInc)}
+                  </span>
+                </p>
+              )}
               <p className="text-sm text-muted">
                 Subtotaal excl. btw{" "}
                 <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
@@ -563,7 +770,7 @@ export function MaakOfferteModal({
               disabled={saving || lines.length === 0}
               className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
             >
-              {saving ? "Bezig…" : "Offerte versturen"}
+              {saving ? "Bezig…" : "Offerte aanmaken"}
             </button>
           </div>
         </form>

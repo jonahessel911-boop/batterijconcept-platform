@@ -24,7 +24,7 @@ type Body = {
 
 /**
  * POST /api/offertes
- * Maakt een offerte + regels voor een lead_id.
+ * Maakt een concept-offerte (nog niet naar de klant gemaild).
  */
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
     const row: Record<string, unknown> = {
       lead_id: body.lead_id,
       offerte_nummer: offerteNr,
-      status: "verzonden",
+      status: "concept",
       titel: body.titel || "Offerte thuisbatterij",
       intro_tekst:
         body.intro_tekst ||
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
       .from("offertes")
       .insert(row)
       .select(
-        "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, financiering_voorbehoud, installatie_partner_id"
+        "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, financiering_voorbehoud, installatie_partner_id, status"
       )
       .single();
 
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
         .from("offertes")
         .insert(row)
         .select(
-          "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot"
+          "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, status"
         )
         .single();
     }
@@ -150,80 +150,6 @@ export async function POST(req: NextRequest) {
 
     const { appBaseUrl } = await import("@/lib/email/postmark");
     const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;
-
-    try {
-      const { data: lead } = await sb
-        .from("leads")
-        .select(
-          "naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats"
-        )
-        .eq("id", body.lead_id)
-        .single();
-
-      if (lead?.email) {
-        const { data: regels } = await sb
-          .from("offerte_regels")
-          .select("*")
-          .eq("offerte_id", offerte.id)
-          .order("sort_order");
-
-        const { buildOffertePdf } = await import("@/lib/pdf-offerte");
-        const { adresRegel } = await import("@/lib/format");
-        const { sendEmail } = await import("@/lib/email/postmark");
-        const { offerteVerstuurdEmail } = await import(
-          "@/lib/email/templates"
-        );
-
-        const fullOfferte = {
-          ...offerte,
-          financiering_voorbehoud:
-            "financiering_voorbehoud" in offerte
-              ? Boolean(
-                  (offerte as { financiering_voorbehoud?: boolean })
-                    .financiering_voorbehoud
-                )
-              : Boolean(body.financiering_voorbehoud),
-          leads: {
-            naam: lead.naam,
-            email: lead.email,
-            telefoon: lead.telefoon,
-            lead_number: "",
-            postcode: lead.postcode,
-            huisnummer: lead.huisnummer,
-            toevoeging: lead.toevoeging,
-            straat: lead.straat,
-            plaats: lead.plaats,
-          },
-        };
-
-        const pdfBlob = await buildOffertePdf({
-          offerte: fullOfferte as never,
-          regels: (regels || []) as never,
-          adres: adresRegel(lead),
-        });
-        const pdfBytes = Buffer.from(await pdfBlob.arrayBuffer());
-
-        await sendEmail({
-          to: lead.email,
-          subject: `Offerte ${offerte.offerte_nummer} voor ${lead.naam}`,
-          html: offerteVerstuurdEmail({
-            naam: lead.naam,
-            offerteNummer: offerte.offerte_nummer,
-            signUrl,
-          }),
-          tag: "offerte-verstuurd",
-          attachments: [
-            {
-              name: `${offerte.offerte_nummer}.pdf`,
-              contentType: "application/pdf",
-              content: pdfBytes,
-            },
-          ],
-        });
-      }
-    } catch (mailErr) {
-      console.error("Offerte mail:", mailErr);
-    }
 
     return NextResponse.json(
       {

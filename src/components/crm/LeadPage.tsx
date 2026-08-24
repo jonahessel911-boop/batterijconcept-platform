@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import type {
   Adviseur,
   Afspraak,
@@ -34,6 +34,7 @@ type Section = "offertes" | "projecten" | "facturen";
 export function LeadPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const router = useRouter();
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [offertes, setOffertes] = useState<Offerte[]>([]);
@@ -732,14 +733,9 @@ export function LeadPage() {
         leadId={lead.id}
         leadNaam={lead.naam}
         onClose={() => setMaakOfferteOpen(false)}
-        onCreated={(signUrl) => {
-          setOkMsg(
-            signUrl
-              ? "Offerte aangemaakt en naar de klant gemaild."
-              : "Offerte aangemaakt."
-          );
-          setSection("offertes");
-          void load();
+        onCreated={(offerteId) => {
+          setMaakOfferteOpen(false);
+          router.push(`/offertes/${offerteId}`);
         }}
       />
     </DetailShell>

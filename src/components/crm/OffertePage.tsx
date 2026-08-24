@@ -46,6 +46,8 @@ export function OffertePage() {
   const [notFound, setNotFound] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [verstuurBusy, setVerstuurBusy] = useState(false);
+  const [verstuurMsg, setVerstuurMsg] = useState<string | null>(null);
   const [actieOpen, setActieOpen] = useState(false);
   const [aanbetalingModus, setAanbetalingModus] =
     useState<AanbetalingModus>("restant");
@@ -331,6 +333,30 @@ export function OffertePage() {
     }
   }
 
+  async function verstuurOfferte() {
+    if (!offerte) return;
+    setVerstuurBusy(true);
+    setVerstuurMsg(null);
+    setPdfError(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerte.id}/verstuur`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Versturen mislukt");
+      setVerstuurMsg(
+        offerte.leads?.email
+          ? `Offerte verstuurd naar ${offerte.leads.email}.`
+          : "Offerte verstuurd."
+      );
+      await load();
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "Versturen mislukt");
+    } finally {
+      setVerstuurBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="offertes">
@@ -370,6 +396,9 @@ export function OffertePage() {
             </h1>
             <p className="mt-2 text-sm text-muted">
               Aangemaakt {formatDateTimeNl(offerte.created_at)}
+              {offerte.status === "concept"
+                ? " · Concept (nog niet verzonden)"
+                : ""}
             </p>
           </div>
           <StatusBadge kind="offerte" value={offerte.status} />
@@ -424,24 +453,45 @@ export function OffertePage() {
         )}
 
         <div className="mt-6 flex flex-wrap gap-3">
-          {offerte.sign_token && offerte.status !== "ondertekend" && (
-            <a
-              href={`/offerte/${offerte.sign_token}`}
-              target="_blank"
-              rel="noreferrer"
-              className="bg-orange px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c]"
-            >
-              Open ondertekenlink →
-            </a>
-          )}
           <button
             type="button"
-            disabled={pdfBusy}
+            disabled={pdfBusy || verstuurBusy}
             onClick={() => void downloadPdf()}
             className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
             {pdfBusy ? "PDF laden…" : "PDF downloaden"}
           </button>
+          {offerte.status !== "ondertekend" && (
+            <button
+              type="button"
+              disabled={verstuurBusy || pdfBusy || !offerte.leads?.email}
+              onClick={() => void verstuurOfferte()}
+              className="bg-orange px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+              title={
+                offerte.leads?.email
+                  ? `Mail naar ${offerte.leads.email}`
+                  : "Lead heeft geen e-mail"
+              }
+            >
+              {verstuurBusy
+                ? "Verzenden…"
+                : offerte.status === "concept"
+                  ? "Verstuur offerte"
+                  : "Opnieuw versturen"}
+            </button>
+          )}
+          {offerte.sign_token &&
+            offerte.status !== "ondertekend" &&
+            offerte.status !== "concept" && (
+              <a
+                href={`/offerte/${offerte.sign_token}`}
+                target="_blank"
+                rel="noreferrer"
+                className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash"
+              >
+                Open ondertekenlink →
+              </a>
+            )}
           {offerte.status === "ondertekend" && (
             <>
               <span className="border border-green/25 bg-green-soft px-3 py-1.5 text-sm font-medium text-green-dark">
@@ -462,6 +512,9 @@ export function OffertePage() {
             </>
           )}
         </div>
+        {verstuurMsg && (
+          <p className="mt-3 text-sm font-medium text-green-dark">{verstuurMsg}</p>
+        )}
         {pdfError && (
           <p className="mt-3 text-sm text-[#C62828]">{pdfError}</p>
         )}
