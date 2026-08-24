@@ -20,6 +20,7 @@ type Line = {
 
 type KortingModus = "bedrag" | "nieuw_totaal";
 type KortingZichtbaar = "zichtbaar" | "verborgen";
+type KortingBtw = "incl" | "excl";
 
 function lineIncBtw(l: Line) {
   return (
@@ -31,6 +32,19 @@ function lineIncBtw(l: Line) {
 
 function linesTotaalInc(list: Line[]) {
   return Math.round(list.reduce((s, l) => s + lineIncBtw(l), 0) * 100) / 100;
+}
+
+function linesTotaalEx(list: Line[]) {
+  return (
+    Math.round(
+      list.reduce((s, l) => s + l.aantal * l.prijs_ex_btw, 0) * 100
+    ) / 100
+  );
+}
+
+function toIncBtw(bedrag: number, btw: KortingBtw) {
+  if (btw === "incl") return Math.round(bedrag * 100) / 100;
+  return Math.round(bedrag * 1.21 * 100) / 100;
 }
 
 /** Verdeel korting (incl. btw) over betaalde regels zodat geen kortingsregel nodig is. */
@@ -105,6 +119,7 @@ export function MaakOfferteModal({
   const [kortingModus, setKortingModus] = useState<KortingModus>("bedrag");
   const [kortingZichtbaar, setKortingZichtbaar] =
     useState<KortingZichtbaar>("zichtbaar");
+  const [kortingBtw, setKortingBtw] = useState<KortingBtw>("incl");
   const [korting, setKorting] = useState("");
   const [financiering, setFinanciering] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -132,15 +147,28 @@ export function MaakOfferteModal({
   const kortingInput = Number(korting.replace(",", ".")) || 0;
 
   const basisTotaalInc = useMemo(() => linesTotaalInc(lines), [lines]);
+  const basisTotaalEx = useMemo(() => linesTotaalEx(lines), [lines]);
+
+  /** Ingevoerd bedrag omgerekend naar incl. btw (voor korting/nieuw totaal). */
+  const kortingInputInc = useMemo(
+    () => toIncBtw(kortingInput, kortingBtw),
+    [kortingInput, kortingBtw]
+  );
 
   const kortingInc = useMemo(() => {
     if (!useKorting || kortingInput <= 0) return 0;
     if (kortingModus === "nieuw_totaal") {
-      if (kortingInput >= basisTotaalInc) return 0;
-      return Math.round((basisTotaalInc - kortingInput) * 100) / 100;
+      if (kortingInputInc >= basisTotaalInc) return 0;
+      return Math.round((basisTotaalInc - kortingInputInc) * 100) / 100;
     }
-    return Math.min(kortingInput, basisTotaalInc);
-  }, [useKorting, kortingInput, kortingModus, basisTotaalInc]);
+    return Math.min(kortingInputInc, basisTotaalInc);
+  }, [
+    useKorting,
+    kortingInput,
+    kortingInputInc,
+    kortingModus,
+    basisTotaalInc,
+  ]);
 
   const previewLines = useMemo(() => {
     let out: Line[];
@@ -296,11 +324,19 @@ export function MaakOfferteModal({
         return;
       }
       if (kortingModus === "nieuw_totaal") {
-        if (kortingInput >= basisTotaalInc) {
-          setError("Het nieuwe totaal moet lager zijn dan het huidige totaal.");
+        const teHoog =
+          kortingBtw === "incl"
+            ? kortingInput >= basisTotaalInc
+            : kortingInput >= basisTotaalEx;
+        if (teHoog) {
+          setError(
+            kortingBtw === "incl"
+              ? "Het nieuwe totaal moet lager zijn dan het huidige totaal incl. btw."
+              : "Het nieuwe totaal moet lager zijn dan het huidige totaal excl. btw."
+          );
           return;
         }
-      } else if (kortingInput >= basisTotaalInc) {
+      } else if (kortingInputInc >= basisTotaalInc) {
         setError("De korting mag niet groter of gelijk zijn aan het totaal.");
         return;
       }
@@ -343,6 +379,7 @@ export function MaakOfferteModal({
       setUseKorting(false);
       setKortingModus("bedrag");
       setKortingZichtbaar("zichtbaar");
+      setKortingBtw("incl");
       setKorting("");
       setFinanciering(false);
       setPartnerId("");
@@ -548,10 +585,9 @@ export function MaakOfferteModal({
                 <span>
                   <span className="font-medium">Korting toepassen</span>
                   <span className="mt-1 block text-xs text-muted">
-                    Bedragen zijn incl. btw
                     {basisTotaalInc > 0
-                      ? ` · huidig totaal ${formatEuro(basisTotaalInc)}`
-                      : ""}
+                      ? `Huidig totaal ${formatEuro(basisTotaalEx)} excl. / ${formatEuro(basisTotaalInc)} incl.`
+                      : "Stel korting of nieuw offertebedrag in"}
                   </span>
                 </span>
               </label>
@@ -592,10 +628,38 @@ export function MaakOfferteModal({
                     </div>
                   </fieldset>
 
+                  <fieldset>
+                    <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
+                      Bedrag is
+                    </legend>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(
+                        [
+                          { id: "excl" as const, label: "Excl. btw" },
+                          { id: "incl" as const, label: "Incl. btw" },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setKortingBtw(opt.id)}
+                          className={[
+                            "border px-3 py-1.5 text-sm font-medium transition",
+                            kortingBtw === opt.id
+                              ? "border-green bg-green text-white"
+                              : "border-line bg-white text-ink hover:bg-wash",
+                          ].join(" ")}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+
                   <label className="block text-xs font-medium text-muted">
                     {kortingModus === "nieuw_totaal"
-                      ? "Nieuw totaal incl. btw (€)"
-                      : "Korting incl. btw (€)"}
+                      ? `Nieuw offertebedrag ${kortingBtw === "incl" ? "incl." : "excl."} btw (€)`
+                      : `Korting ${kortingBtw === "incl" ? "incl." : "excl."} btw (€)`}
                     <input
                       type="text"
                       inputMode="decimal"
@@ -609,6 +673,20 @@ export function MaakOfferteModal({
                       className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
                     />
                   </label>
+                  {kortingModus === "nieuw_totaal" &&
+                    kortingInput > 0 &&
+                    kortingBtw === "excl" && (
+                      <p className="text-xs text-muted">
+                        = {formatEuro(kortingInputInc)} incl. btw
+                      </p>
+                    )}
+                  {kortingModus === "bedrag" &&
+                    kortingInput > 0 &&
+                    kortingBtw === "excl" && (
+                      <p className="text-xs text-muted">
+                        = {formatEuro(kortingInputInc)} korting incl. btw
+                      </p>
+                    )}
 
                   <fieldset>
                     <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -653,7 +731,7 @@ export function MaakOfferteModal({
 
                   {kortingInc > 0 && (
                     <p className="text-xs text-muted">
-                      Korting {formatEuro(kortingInc)}
+                      Korting {formatEuro(kortingInc)} incl. btw
                       {kortingZichtbaar === "verborgen"
                         ? " · verwerkt in de regelprijzen"
                         : " · als aparte regel"}
