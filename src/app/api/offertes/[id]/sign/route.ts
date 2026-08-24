@@ -12,7 +12,8 @@ export const runtime = "nodejs";
 type Body = {
   naam: string;
   handtekening: string;
-  waarden_akkoord: boolean;
+  voorwaarden_akkoord: boolean;
+  correspondentie_akkoord: boolean;
 };
 
 /**
@@ -42,9 +43,12 @@ export async function POST(
       { status: 400 }
     );
   }
-  if (!body.waarden_akkoord) {
+  if (!body.voorwaarden_akkoord || !body.correspondentie_akkoord) {
     return NextResponse.json(
-      { error: "Je moet akkoord gaan met onze waarden" },
+      {
+        error:
+          "Je moet akkoord gaan met de algemene voorwaarden en correspondentie",
+      },
       { status: 400 }
     );
   }

@@ -26,7 +26,8 @@ type Props = {
 export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
   const [naam, setNaam] = useState(offerte.leads?.naam || "");
   const [handtekening, setHandtekening] = useState<string | null>(null);
-  const [akkoord, setAkkoord] = useState(false);
+  const [akkoordVoorwaarden, setAkkoordVoorwaarden] = useState(false);
+  const [akkoordCorrespondentie, setAkkoordCorrespondentie] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -60,8 +61,14 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
       setError("Zet je handtekening.");
       return;
     }
-    if (!akkoord) {
-      setError("Bevestig dat je akkoord gaat met deze offerte.");
+    if (!akkoordVoorwaarden) {
+      setError("Bevestig dat je akkoord gaat met de algemene voorwaarden.");
+      return;
+    }
+    if (!akkoordCorrespondentie) {
+      setError(
+        "Bevestig dat Batterijconcept je mag benaderen voor verdere correspondentie."
+      );
       return;
     }
 
@@ -75,7 +82,8 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
           body: JSON.stringify({
             naam: naam.trim(),
             handtekening,
-            waarden_akkoord: true,
+            voorwaarden_akkoord: true,
+            correspondentie_akkoord: true,
           }),
         }
       );
@@ -341,15 +349,31 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                   </div>
                 </div>
 
-                <label className="mt-5 flex items-start gap-3 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    checked={akkoord}
-                    onChange={(e) => setAkkoord(e.target.checked)}
-                    className="mt-1 accent-green"
-                  />
-                  <span>Ik ga akkoord met deze offerte.</span>
-                </label>
+                <div className="mt-5 space-y-3">
+                  <label className="flex items-start gap-3 text-sm text-ink">
+                    <input
+                      type="checkbox"
+                      checked={akkoordVoorwaarden}
+                      onChange={(e) => setAkkoordVoorwaarden(e.target.checked)}
+                      className="mt-1 accent-green"
+                    />
+                    <span>Ik ga akkoord met de algemene voorwaarden</span>
+                  </label>
+                  <label className="flex items-start gap-3 text-sm text-ink">
+                    <input
+                      type="checkbox"
+                      checked={akkoordCorrespondentie}
+                      onChange={(e) =>
+                        setAkkoordCorrespondentie(e.target.checked)
+                      }
+                      className="mt-1 accent-green"
+                    />
+                    <span>
+                      Ik ga akkoord dat Batterijconcept mij mag benaderen voor
+                      verdere correspondentie voor zijn bestelling
+                    </span>
+                  </label>
+                </div>
 
                 <div className="mt-4">
                   <p className="mb-1.5 text-sm font-medium text-ink">

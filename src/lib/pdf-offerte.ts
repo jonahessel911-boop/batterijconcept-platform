@@ -303,7 +303,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
 
   // —— Ondertekening (zelfde blok als pagina) ——
   y += 10;
-  const sigH = offerte.financiering_voorbehoud ? 98 : 90;
+  const sigH = offerte.financiering_voorbehoud ? 124 : 116;
   y = ensureSpace(doc, y, sigH + 6, pageW, margin);
 
   doc.setFillColor(...WASH);
@@ -363,26 +363,34 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   doc.setFontSize(8);
   doc.setTextColor(...MUTED);
   doc.text("  (Europe/Amsterdam)", margin + 8 + timeW, sy + 6);
-  sy += 13;
+  sy += 12;
 
-  // Akkoord — vierkantje tekenen i.p.v. unicode (die in PDF uitrekt)
-  doc.setDrawColor(...INK);
-  doc.setLineWidth(0.35);
+  const akkoordTeksten = [
+    "Ik ga akkoord met de algemene voorwaarden",
+    "Ik ga akkoord dat Batterijconcept mij mag benaderen voor verdere correspondentie voor zijn bestelling",
+  ];
   const checkSize = 3.2;
   const checkX = margin + 5;
-  const checkY = sy - 2.4;
-  doc.rect(checkX, checkY, checkSize, checkSize, "S");
-  if (sign) {
-    doc.setDrawColor(...GREEN);
-    doc.setLineWidth(0.55);
-    doc.line(checkX + 0.6, checkY + 1.6, checkX + 1.3, checkY + 2.5);
-    doc.line(checkX + 1.3, checkY + 2.5, checkX + 2.6, checkY + 0.7);
+  const textMaxW = contentW - 10 - checkSize - 3;
+
+  for (const tekst of akkoordTeksten) {
+    const checkY = sy - 2.4;
+    doc.setDrawColor(...INK);
+    doc.setLineWidth(0.35);
+    doc.rect(checkX, checkY, checkSize, checkSize, "S");
+    if (sign) {
+      doc.setDrawColor(...GREEN);
+      doc.setLineWidth(0.55);
+      doc.line(checkX + 0.6, checkY + 1.6, checkX + 1.3, checkY + 2.5);
+      doc.line(checkX + 1.3, checkY + 2.5, checkX + 2.6, checkY + 0.7);
+    }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...INK);
+    const lines = doc.splitTextToSize(tekst, textMaxW) as string[];
+    doc.text(lines, checkX + checkSize + 2.5, sy);
+    sy += Math.max(6.5, lines.length * 3.6 + 2.5);
   }
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9.5);
-  doc.setTextColor(...INK);
-  doc.text("Ik ga akkoord met deze offerte.", checkX + checkSize + 2.5, sy);
-  sy += 8;
 
   // Handtekening
   doc.setFont("helvetica", "bold");
