@@ -480,9 +480,7 @@ export function OffertePage() {
                   : "Opnieuw versturen"}
             </button>
           )}
-          {offerte.sign_token &&
-            offerte.status !== "ondertekend" &&
-            offerte.status !== "concept" && (
+          {offerte.sign_token && offerte.status !== "ondertekend" && (
               <a
                 href={`/offerte/${offerte.sign_token}`}
                 target="_blank"

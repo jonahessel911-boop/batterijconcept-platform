@@ -92,12 +92,6 @@ export async function POST(
         { status: 409 }
       );
     }
-    if (offerte.status === "concept") {
-      return NextResponse.json(
-        { error: "Deze offerte is nog niet verzonden" },
-        { status: 403 }
-      );
-    }
 
     const regels = (offerte.offerte_regels || []).sort(
       (a: { sort_order: number }, b: { sort_order: number }) =>

@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
@@ -81,6 +82,7 @@ export async function POST(req: NextRequest) {
       lead_id: body.lead_id,
       offerte_nummer: offerteNr,
       status: "concept",
+      sign_token: randomBytes(24).toString("hex"),
       titel: body.titel || "Offerte thuisbatterij",
       intro_tekst:
         body.intro_tekst ||
