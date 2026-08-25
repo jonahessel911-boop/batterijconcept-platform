@@ -48,9 +48,9 @@ export type RapportageMetrics = {
   leads: number;
   /** Unieke leads met een niet-geannuleerde afspraak (voor conversie). */
   afspraken: number;
-  /** Alle afspraken in de periode, inclusief geannuleerd. */
+  /** Fysieke afspraken ingepland in de periode (op created_at), incl. geannuleerd. */
   brutoAfspraken: number;
-  /** Afspraken die niet geannuleerd zijn. */
+  /** Ingeplande afspraken die niet geannuleerd zijn. */
   nettoAfspraken: number;
   /** Geannuleerd ÷ bruto, in procenten. */
   uitvalPct: number;
@@ -171,6 +171,8 @@ export type RapportageRaw = {
     lead_id: string;
     adviseur_id: string | null;
     start_at: string;
+    /** Moment waarop de beller de afspraak inplande. */
+    created_at: string;
     status: string;
     soort?: string | null;
   }[];
@@ -203,6 +205,14 @@ export type RapportageRaw = {
   }[];
 };
 
+/** Tijdstip waarop de afspraak is ingepland (beller-prestatie), niet de afspraakdatum. */
+function afspraakIngeplandAt(a: {
+  created_at?: string | null;
+  start_at: string;
+}): string {
+  return a.created_at || a.start_at;
+}
+
 export function buildRapportageTree(
   raw: RapportageRaw,
   adviseurId: string | null
@@ -231,15 +241,10 @@ export function buildRapportageTree(
   const now = new Date();
   const nowParts = amsYmd(now);
 
-  // Horizont: t/m vandaag óf t/m de laatste geplande (fysieke) afspraak —
-  // zodat geplande afspraken in de toekomst wél in bruto/netto meetellen,
-  // terwijl jaar/maand/week/dag-totalen gelijk blijven optellen.
-  let horizon = now;
-  for (const a of afspraken) {
-    const t = new Date(a.start_at);
-    if (!Number.isNaN(t.getTime()) && t > horizon) horizon = t;
-  }
-  const horizonParts = amsYmd(horizon);
+  // Rapportage t/m vandaag: afspraken tellen op inplandatum, niet op
+  // toekomstige bezoekdatum — geen horizon-extensie meer nodig.
+  const horizon = now;
+  const horizonParts = nowParts;
 
   const years = new Map<number, true>();
 
@@ -247,7 +252,10 @@ export function buildRapportageTree(
     years.set(Number(formatInTimeZone(l.created_at, TZ, "yyyy")), true);
   }
   for (const a of afspraken) {
-    years.set(Number(formatInTimeZone(a.start_at, TZ, "yyyy")), true);
+    years.set(
+      Number(formatInTimeZone(afspraakIngeplandAt(a), TZ, "yyyy")),
+      true
+    );
   }
   for (const o of signed) {
     years.set(Number(formatInTimeZone(o.ondertekend_op!, TZ, "yyyy")), true);
@@ -258,7 +266,6 @@ export function buildRapportageTree(
     years.set(Number(formatInTimeZone(iso, TZ, "yyyy")), true);
   }
   years.set(nowParts.y, true);
-  years.set(horizonParts.y, true);
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
 
@@ -269,7 +276,7 @@ export function buildRapportageTree(
     }
     const afspraakLeads = new Set<string>();
     for (const a of afspraken) {
-      if (!inRange(a.start_at, start, end)) continue;
+      if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
       m.brutoAfspraken += 1;
       if (a.status !== "geannuleerd") {
         m.nettoAfspraken += 1;
@@ -297,8 +304,6 @@ export function buildRapportageTree(
 
   return yearList.map((year) => {
     const yStart = amsStartOfYear(year);
-    // Bereik t/m horizon (vandaag of laatste geplande afspraak), zodat
-    // toekomstige afspraken meetellen en jaar = som van de maanden blijft.
     const yEnd =
       year === horizonParts.y
         ? amsEndOfDay(horizonParts.y, horizonParts.m, horizonParts.d)

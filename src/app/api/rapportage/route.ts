@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
         sb.from("leads").select("id, created_at, status, adviseur_id"),
         sb
           .from("afspraken")
-          .select("id, lead_id, adviseur_id, start_at, status, soort"),
+          .select("id, lead_id, adviseur_id, start_at, created_at, status, soort"),
         sb
           .from("offertes")
           .select(
@@ -112,6 +112,7 @@ export async function GET(req: NextRequest) {
       lead_id: string;
       adviseur_id: string | null;
       start_at: string;
+      created_at: string;
       status: string;
       soort?: string | null;
     }[] = (afsprakenRes.data || []) as {
@@ -119,6 +120,7 @@ export async function GET(req: NextRequest) {
       lead_id: string;
       adviseur_id: string | null;
       start_at: string;
+      created_at: string;
       status: string;
       soort?: string | null;
     }[];
@@ -129,7 +131,7 @@ export async function GET(req: NextRequest) {
       ) {
         const retry = await sb
           .from("afspraken")
-          .select("id, lead_id, adviseur_id, start_at, status");
+          .select("id, lead_id, adviseur_id, start_at, created_at, status");
         if (retry.error) throw retry.error;
         afsprakenData = (retry.data || []) as typeof afsprakenData;
       } else {
