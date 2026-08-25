@@ -216,9 +216,9 @@ export function RapportagePanel({
             Periode overzicht
           </p>
           <p className="mt-0.5 text-sm text-muted">
-            Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto =
-            moment van inplannen. Lead→afspraak = % leads uit die periode
-            (aanmaakdatum) met fysieke afspraak.
+            Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto
+            en Lead→afspraak op het moment dat de afspraak is ingepland (niet
+            lead-aanmaakdatum of bezoekdatum).
           </p>
           <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
             Verkoopmedewerker

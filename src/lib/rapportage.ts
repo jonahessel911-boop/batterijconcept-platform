@@ -47,8 +47,8 @@ function amsYmd(d: Date) {
 export type RapportageMetrics = {
   leads: number;
   /**
-   * Leads uit deze periode (created_at) met ≥1 niet-geannuleerde fysieke afspraak.
-   * Basis voor Lead → afspraak conversie (cohort).
+   * Unieke leads van niet-geannuleerde fysieke afspraken die in deze
+   * periode zijn ingepland (afspraak.created_at). Basis Lead → afspraak.
    */
   afspraken: number;
   /** Fysieke afspraken ingepland in de periode (op created_at), incl. geannuleerd. */
@@ -272,13 +272,7 @@ export function buildRapportageTree(
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
 
-  /** Leads die (ooit) een niet-geannuleerde fysieke afspraak hebben. */
-  const leadsMetAfspraak = new Set(
-    afspraken
-      .filter((a) => a.status !== "geannuleerd")
-      .map((a) => a.lead_id)
-  );
-  /** Leads met ondertekende offerte. */
+  /** Leads met ondertekende offerte (voor Lead → deal cohort). */
   const leadsMetDeal = new Set(signed.map((o) => o.lead_id));
 
   function metricsFor(start: Date, end: Date): RapportageMetrics {
@@ -290,15 +284,18 @@ export function buildRapportageTree(
       periodLeadIds.push(l.id);
     }
 
-    // Volume: wanneer de beller inplant (afspraak.created_at)
+    // Volume + Lead→afspraak: moment dat de afspraak is INGEPLAND
+    const afspraakLeads = new Set<string>();
     for (const a of afspraken) {
       if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
       m.brutoAfspraken += 1;
-      if (a.status !== "geannuleerd") m.nettoAfspraken += 1;
+      if (a.status !== "geannuleerd") {
+        m.nettoAfspraken += 1;
+        afspraakLeads.add(a.lead_id);
+      }
     }
+    m.afspraken = afspraakLeads.size;
 
-    // Conversie: van leads die IN deze periode binnenkwamen, hoeveel hebben afspraak/deal
-    m.afspraken = periodLeadIds.filter((id) => leadsMetAfspraak.has(id)).length;
     const cohortDeals = periodLeadIds.filter((id) =>
       leadsMetDeal.has(id)
     ).length;
