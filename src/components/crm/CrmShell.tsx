@@ -278,6 +278,9 @@ export function CrmShell() {
         l.lead_number.toLowerCase().includes(q) ||
         l.email?.toLowerCase().includes(q) ||
         l.utm_source?.toLowerCase().includes(q) ||
+        l.lander?.toLowerCase().includes(q) ||
+        l.campaign_name?.toLowerCase().includes(q) ||
+        l.ad_name?.toLowerCase().includes(q) ||
         l.postcode?.toLowerCase().includes(q)
     );
   }, [scopedLeads, search, statusFilter]);

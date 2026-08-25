@@ -29,6 +29,7 @@ function pickStr(...values: (string | undefined | null)[]) {
  * Body (JSON of multipart):
  *   naam* , email, telefoon, postcode, huisnummer,
  *   adres|straat, woonplaats|plaats, notities|notes|opmerkingen|bericht,
+ *   lander|Lander, campaign_name|Campaign_name, ad_name|Ad_name,
  *   utm_source, …
  */
 export async function POST(req: NextRequest) {
@@ -170,6 +171,19 @@ export async function POST(req: NextRequest) {
       utm_campaign: pickStr(body.utm_campaign),
       utm_content: pickStr(body.utm_content),
       utm_term: pickStr(body.utm_term),
+      lander: pickStr(
+        body.lander,
+        typeof body.Lander === "string" ? body.Lander : null
+      ),
+      campaign_name: pickStr(
+        body.campaign_name,
+        typeof body.Campaign_name === "string" ? body.Campaign_name : null,
+        body.campaign
+      ),
+      ad_name: pickStr(
+        body.ad_name,
+        typeof body.Ad_name === "string" ? body.Ad_name : null
+      ),
       bron: pickStr(body.bron) || "website",
       notities: pickStr(
         body.notities,
@@ -189,7 +203,9 @@ export async function POST(req: NextRequest) {
     let { data, error } = await supabase
       .from("leads")
       .insert(row)
-      .select("id, lead_number, created_at, naam, email, straat, plaats, utm_source")
+      .select(
+        "id, lead_number, created_at, naam, email, straat, plaats, utm_source, lander, campaign_name, ad_name"
+      )
       .single();
 
     // Fallback als adviseur_id-kolom nog niet gemigreerd is
@@ -205,6 +221,36 @@ export async function POST(req: NextRequest) {
       ({ data, error } = await supabase
         .from("leads")
         .insert(withoutAdv)
+        .select(
+          "id, lead_number, created_at, naam, email, straat, plaats, utm_source, lander, campaign_name, ad_name"
+        )
+        .single());
+    }
+
+    // Fallback als lander/campaign_name/ad_name nog niet gemigreerd zijn
+    if (
+      error &&
+      (error.message?.includes("lander") ||
+        error.message?.includes("campaign_name") ||
+        error.message?.includes("ad_name") ||
+        error.code === "42703")
+    ) {
+      const {
+        lander: _l,
+        campaign_name: _c,
+        ad_name: _a,
+        ...withoutAttr
+      } = row as typeof row & {
+        lander?: string | null;
+        campaign_name?: string | null;
+        ad_name?: string | null;
+      };
+      void _l;
+      void _c;
+      void _a;
+      ({ data, error } = await supabase
+        .from("leads")
+        .insert(withoutAttr)
         .select(
           "id, lead_number, created_at, naam, email, straat, plaats, utm_source"
         )
@@ -266,7 +312,10 @@ export async function GET() {
       adres: "Voorbeeldstraat",
       woonplaats: "Amsterdam",
       notities: "Heeft zonnepanelen, wil 10 kWh batterij",
-      utm_source: "google",
+      lander: "thuisbatterij-scan",
+      Campaign_name: "Meta_NL_Augustus",
+      Ad_name: "Video_besparing_v2",
+      utm_source: "facebook",
     },
     response: {
       ok: true,

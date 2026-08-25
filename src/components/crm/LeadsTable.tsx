@@ -47,6 +47,7 @@ export function LeadsTable({
           <tr>
             <th>Binnengekomen</th>
             <th>Naam</th>
+            <th>Lander</th>
             <th>Adres</th>
             <th>Woonplaats</th>
             <th>Tel nr</th>
@@ -72,7 +73,7 @@ export function LeadsTable({
         <tbody>
           {leads.length === 0 ? (
             <tr>
-              <td colSpan={7} className="!cursor-default px-6 py-14 text-center">
+              <td colSpan={8} className="!cursor-default px-6 py-14 text-center">
                 <p className="font-display text-base font-semibold text-ink">
                   {statusFilter
                     ? `Geen leads met status “${leadStatusLabel[statusFilter]}”`
@@ -114,6 +115,9 @@ export function LeadsTable({
                       {lead.terugbel_notitie}
                     </p>
                   )}
+                </td>
+                <td className="max-w-[10rem] truncate text-muted" title={lead.lander || undefined}>
+                  {lead.lander || "—"}
                 </td>
                 <td className="text-muted whitespace-nowrap">
                   {adresRegel(lead)}

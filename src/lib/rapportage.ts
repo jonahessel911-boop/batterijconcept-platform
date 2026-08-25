@@ -46,7 +46,10 @@ function amsYmd(d: Date) {
 
 export type RapportageMetrics = {
   leads: number;
-  /** Unieke leads met een niet-geannuleerde afspraak (voor conversie). */
+  /**
+   * Leads uit deze periode (created_at) met ≥1 niet-geannuleerde fysieke afspraak.
+   * Basis voor Lead → afspraak conversie (cohort).
+   */
   afspraken: number;
   /** Fysieke afspraken ingepland in de periode (op created_at), incl. geannuleerd. */
   brutoAfspraken: number;
@@ -269,21 +272,37 @@ export function buildRapportageTree(
 
   const yearList = [...years.keys()].sort((a, b) => b - a);
 
+  /** Leads die (ooit) een niet-geannuleerde fysieke afspraak hebben. */
+  const leadsMetAfspraak = new Set(
+    afspraken
+      .filter((a) => a.status !== "geannuleerd")
+      .map((a) => a.lead_id)
+  );
+  /** Leads met ondertekende offerte. */
+  const leadsMetDeal = new Set(signed.map((o) => o.lead_id));
+
   function metricsFor(start: Date, end: Date): RapportageMetrics {
     const m = emptyMetrics();
+    const periodLeadIds: string[] = [];
     for (const l of leads) {
-      if (inRange(l.created_at, start, end)) m.leads += 1;
+      if (!inRange(l.created_at, start, end)) continue;
+      m.leads += 1;
+      periodLeadIds.push(l.id);
     }
-    const afspraakLeads = new Set<string>();
+
+    // Volume: wanneer de beller inplant (afspraak.created_at)
     for (const a of afspraken) {
       if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
       m.brutoAfspraken += 1;
-      if (a.status !== "geannuleerd") {
-        m.nettoAfspraken += 1;
-        afspraakLeads.add(a.lead_id);
-      }
+      if (a.status !== "geannuleerd") m.nettoAfspraken += 1;
     }
-    m.afspraken = afspraakLeads.size;
+
+    // Conversie: van leads die IN deze periode binnenkwamen, hoeveel hebben afspraak/deal
+    m.afspraken = periodLeadIds.filter((id) => leadsMetAfspraak.has(id)).length;
+    const cohortDeals = periodLeadIds.filter((id) =>
+      leadsMetDeal.has(id)
+    ).length;
+
     for (const o of signed) {
       if (!inRange(o.ondertekend_op!, start, end)) continue;
       m.deals += 1;
@@ -299,7 +318,13 @@ export function buildRapportageTree(
       if (!iso || !inRange(iso, start, end)) continue;
       m.betaaldeOmzet += Number(f.bedrag_ex_btw) || 0;
     }
-    return finalizeMetrics(m);
+
+    const out = finalizeMetrics(m);
+    out.conversieDeal =
+      m.leads > 0
+        ? Math.round((cohortDeals / m.leads) * 1000) / 10
+        : 0;
+    return out;
   }
 
   return yearList.map((year) => {

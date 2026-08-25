@@ -535,11 +535,40 @@ export function LeadPage() {
                   {lead.adviseurs?.naam || "Niet gekoppeld"}
                 </dd>
               </div>
-              {(lead.utm_medium || lead.utm_campaign) && (
+              {(lead.lander ||
+                lead.campaign_name ||
+                lead.ad_name ||
+                lead.utm_medium ||
+                lead.utm_campaign ||
+                lead.utm_source) && (
                 <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
-                  <dt className="font-semibold text-muted">Campagne</dt>
-                  <dd className="text-ink">
-                    {[lead.utm_medium, lead.utm_campaign].filter(Boolean).join(" · ")}
+                  <dt className="font-semibold text-muted">Bron / ads</dt>
+                  <dd className="space-y-1 text-ink">
+                    {lead.lander && (
+                      <p>
+                        <span className="text-muted">Lander: </span>
+                        {lead.lander}
+                      </p>
+                    )}
+                    {(lead.campaign_name || lead.utm_campaign) && (
+                      <p>
+                        <span className="text-muted">Campaign: </span>
+                        {lead.campaign_name || lead.utm_campaign}
+                      </p>
+                    )}
+                    {lead.ad_name && (
+                      <p>
+                        <span className="text-muted">Ad: </span>
+                        {lead.ad_name}
+                      </p>
+                    )}
+                    {(lead.utm_source || lead.utm_medium) && (
+                      <p className="text-xs text-muted">
+                        {[lead.utm_source, lead.utm_medium]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
                   </dd>
                 </div>
               )}

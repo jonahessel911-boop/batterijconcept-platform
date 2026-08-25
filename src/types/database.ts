@@ -135,6 +135,12 @@ export interface Lead {
   utm_campaign: string | null;
   utm_content: string | null;
   utm_term: string | null;
+  /** Landing page / lander (webhook attribution). */
+  lander: string | null;
+  /** Campagnenaam (webhook). */
+  campaign_name: string | null;
+  /** Advertentienaam (webhook). */
+  ad_name: string | null;
   bron: string | null;
   status: LeadStatus;
   prioriteit: Prioriteit;
@@ -404,6 +410,16 @@ export interface WebhookLeadPayload {
   utm_campaign?: string;
   utm_content?: string;
   utm_term?: string;
+  /** Landing page — aliases: `Lander` */
+  lander?: string;
+  Lander?: string;
+  /** Campagnenaam — aliases: `Campaign_name`, `campaign` */
+  campaign_name?: string;
+  Campaign_name?: string;
+  campaign?: string;
+  /** Advertentienaam — aliases: `Ad_name` */
+  ad_name?: string;
+  Ad_name?: string;
   bron?: string;
   /** Vrije tekst / formuliervelden — aliases: `notes`, `opmerkingen`, `bericht`, `message` */
   notities?: string;
