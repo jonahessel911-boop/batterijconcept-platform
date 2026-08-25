@@ -17,19 +17,35 @@ export function normalizeHouseNumber(raw: string): string {
   return m ? m[1] : raw.trim();
 }
 
+/** Nummer + optionele toevoeging voor de lookup-API (bijv. 12A). */
+export function postcodeApiNumber(
+  huisnummer: string,
+  toevoeging?: string | null
+): string {
+  const nr = normalizeHouseNumber(huisnummer);
+  const toev = (toevoeging || "").trim().replace(/\s+/g, "");
+  if (!toev) return nr;
+  // Als huisnummer al de toevoeging bevat (12A), niet dubbel plakken
+  if (huisnummer.trim().toUpperCase().endsWith(toev.toUpperCase())) {
+    return huisnummer.trim().replace(/\s+/g, "");
+  }
+  return `${nr}${toev}`;
+}
+
 /**
  * Lookup via json.api-postcode.nl
  * Token: POSTCODE_API_TOKEN env
  */
 export async function lookupPostcode(
   postcode: string,
-  huisnummer: string
+  huisnummer: string,
+  toevoeging?: string | null
 ): Promise<PostcodeLookupResult | null> {
   const token = process.env.POSTCODE_API_TOKEN;
   if (!token) return null;
 
   const pc = normalizePostcode(postcode);
-  const nr = normalizeHouseNumber(huisnummer);
+  const nr = postcodeApiNumber(huisnummer, toevoeging);
   if (!/^\d{4}[A-Z]{2}$/.test(pc) || !nr) return null;
 
   const url = new URL("https://json.api-postcode.nl/");
@@ -60,7 +76,7 @@ export async function lookupPostcode(
     street: data.street,
     city: data.city,
     postcode: data.postcode || pc,
-    house_number: String(data.house_number ?? nr),
+    house_number: String(data.house_number ?? normalizeHouseNumber(huisnummer)),
     province: data.province,
   };
 }
@@ -69,6 +85,7 @@ export async function lookupPostcode(
 export async function enrichAddressFields(opts: {
   postcode?: string | null;
   huisnummer?: string | null;
+  toevoeging?: string | null;
   straat?: string | null;
   plaats?: string | null;
 }): Promise<{ straat: string | null; plaats: string | null }> {
@@ -82,7 +99,11 @@ export async function enrichAddressFields(opts: {
   }
 
   try {
-    const hit = await lookupPostcode(opts.postcode, opts.huisnummer);
+    const hit = await lookupPostcode(
+      opts.postcode,
+      opts.huisnummer,
+      opts.toevoeging
+    );
     if (!hit) return { straat, plaats };
     return {
       straat: straat || hit.street,

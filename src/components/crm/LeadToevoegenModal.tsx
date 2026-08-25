@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Lead } from "@/types/database";
+import { normalizePostcode } from "@/lib/postcode";
 
 export function LeadToevoegenModal({
   open,
@@ -19,9 +20,11 @@ export function LeadToevoegenModal({
   const [telefoon, setTelefoon] = useState("");
   const [postcode, setPostcode] = useState("");
   const [huisnummer, setHuisnummer] = useState("");
+  const [toevoeging, setToevoeging] = useState("");
   const [straat, setStraat] = useState("");
   const [plaats, setPlaats] = useState("");
   const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMsg, setLookupMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,29 +36,45 @@ export function LeadToevoegenModal({
     setTelefoon("");
     setPostcode("");
     setHuisnummer("");
+    setToevoeging("");
     setStraat("");
     setPlaats("");
+    setLookupMsg(null);
     setError(null);
   }
 
-  async function lookupAdres(pc = postcode, nr = huisnummer) {
-    if (!pc.trim() || !nr.trim()) return;
-    // Alleen ophalen als adres nog leeg is
-    if (straat.trim() && plaats.trim()) return;
+  async function lookupAdres(opts?: { force?: boolean }) {
+    const pc = postcode.trim();
+    const nr = huisnummer.trim();
+    if (!pc || !nr) {
+      setLookupMsg("Vul postcode en huisnummer in");
+      return false;
+    }
+    if (!opts?.force && straat.trim() && plaats.trim()) return true;
 
     setLookupBusy(true);
+    setLookupMsg(null);
     try {
       const qs = new URLSearchParams({
-        postcode: pc.trim(),
-        number: nr.trim(),
+        postcode: pc,
+        number: nr,
       });
+      if (toevoeging.trim()) qs.set("toevoeging", toevoeging.trim());
       const res = await fetch(`/api/postcode?${qs}`);
       const data = await res.json();
-      if (!res.ok) return;
-      if (!straat.trim() && data.straat) setStraat(data.straat);
-      if (!plaats.trim() && data.plaats) setPlaats(data.plaats);
+      if (!res.ok) {
+        setLookupMsg(data.error || "Adres niet gevonden");
+        return false;
+      }
+      if (data.postcode) setPostcode(normalizePostcode(String(data.postcode)));
+      if (data.huisnummer) setHuisnummer(String(data.huisnummer));
+      if (data.straat) setStraat(data.straat);
+      if (data.plaats) setPlaats(data.plaats);
+      setLookupMsg("Adres opgehaald — je kunt het nog wijzigen");
+      return true;
     } catch {
-      /* stil — opslaan mag nog zonder lookup */
+      setLookupMsg("Lookup mislukt");
+      return false;
     } finally {
       setLookupBusy(false);
     }
@@ -66,9 +85,8 @@ export function LeadToevoegenModal({
     setSaving(true);
     setError(null);
     try {
-      // Laatste poging als adres nog leeg is
       if ((!straat.trim() || !plaats.trim()) && postcode && huisnummer) {
-        await lookupAdres();
+        await lookupAdres({ force: true });
       }
 
       const res = await fetch("/api/leads", {
@@ -78,8 +96,11 @@ export function LeadToevoegenModal({
           naam,
           email,
           telefoon,
-          postcode,
-          huisnummer,
+          postcode: postcode.trim()
+            ? normalizePostcode(postcode)
+            : undefined,
+          huisnummer: huisnummer.trim() || undefined,
+          toevoeging: toevoeging.trim() || undefined,
           straat: straat.trim() || undefined,
           plaats: plaats.trim() || undefined,
           adviseur_id: defaultAdviseurId || null,
@@ -117,8 +138,8 @@ export function LeadToevoegenModal({
               Lead toevoegen
             </h2>
             <p className="mt-0.5 text-xs text-muted">
-              Vul postcode + huisnummer in — straat en plaats worden automatisch
-              aangevuld.
+              Postcode + huisnummer (+ toev.) → adres ophalen, daarna
+              wijzigen indien nodig.
             </p>
           </div>
           <button
@@ -161,13 +182,12 @@ export function LeadToevoegenModal({
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
             />
           </label>
-          <div className="grid grid-cols-[1fr_100px] gap-3">
+          <div className="grid grid-cols-[1fr_80px_64px] gap-2">
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Postcode
               <input
                 value={postcode}
                 onChange={(e) => setPostcode(e.target.value.toUpperCase())}
-                onBlur={() => void lookupAdres()}
                 placeholder="1234 AB"
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
@@ -177,18 +197,37 @@ export function LeadToevoegenModal({
               <input
                 value={huisnummer}
                 onChange={(e) => setHuisnummer(e.target.value)}
-                onBlur={() => void lookupAdres()}
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Toev.
+              <input
+                value={toevoeging}
+                onChange={(e) => setToevoeging(e.target.value)}
+                placeholder="A"
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
             </label>
           </div>
-          <div className="grid grid-cols-[1fr_1fr] gap-3">
+          <button
+            type="button"
+            disabled={lookupBusy || !postcode.trim() || !huisnummer.trim()}
+            onClick={() => void lookupAdres({ force: true })}
+            className="w-full border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          >
+            {lookupBusy ? "Adres ophalen…" : "Adres ophalen"}
+          </button>
+          {lookupMsg && (
+            <p className="text-xs text-muted">{lookupMsg}</p>
+          )}
+          <div className="grid grid-cols-2 gap-3">
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Straat
               <input
                 value={straat}
                 onChange={(e) => setStraat(e.target.value)}
-                placeholder={lookupBusy ? "Zoeken…" : "Automatisch"}
+                placeholder="Automatisch of handmatig"
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
             </label>
@@ -197,7 +236,7 @@ export function LeadToevoegenModal({
               <input
                 value={plaats}
                 onChange={(e) => setPlaats(e.target.value)}
-                placeholder={lookupBusy ? "Zoeken…" : "Automatisch"}
+                placeholder="Automatisch of handmatig"
                 className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
               />
             </label>

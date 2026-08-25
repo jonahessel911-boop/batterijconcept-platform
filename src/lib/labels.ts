@@ -12,29 +12,91 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
   afspraak: "Afspraak",
   na_afspraak: "Na afspraak",
-  vervolg_fysiek: "Vervolg fysiek",
+  vervolg_fysiek: "Vervolg op locatie",
   vervolg_tel: "Vervolg telefonisch",
-  vervolg_geen_contact: "Vervolg – geen contact",
+  vervolg_geen_contact: "Na Vervolg telefonisch 3x geen gehoor",
   offerte_afgewezen: "Offerte afgewezen",
-  niet_gekwalificeerd: "Niet gekwalificeerd",
-  geen_interesse: "Geen interesse",
+  niet_gekwalificeerd: "Niet goed gekwalificeerd door beller",
+  geen_interesse: "Geen interesse in thuisbatterij",
   geen_contact: "Geen contact",
   deal: "Deal",
+  sale_financiering: "Sale met financiering",
+  sale_eigen_middelen: "Sale met eigen middelen",
+  deur_niet_open: "Deur niet open / klant niet bereikbaar",
+  afspraak_afgezegd_klant: "Afspraak door klant afgezegd",
+  huurwoning: "Huurwoning",
+  foutief_nummer: "Foutief nummer",
+  gegevens_niet_overeen: "Gegevens komen niet overeen",
 };
 
-export const LEAD_STATUSES: LeadStatus[] = [
-  "nieuw",
-  "afspraak",
-  "na_afspraak",
+/** Uitkomsten na een fysieke afspraak (actiepunten in agenda). */
+export const AFSPRAAK_UITKOMSTEN: LeadStatus[] = [
   "vervolg_fysiek",
   "vervolg_tel",
-  "vervolg_geen_contact",
+  "sale_financiering",
+  "sale_eigen_middelen",
   "offerte_afgewezen",
-  "niet_gekwalificeerd",
   "geen_interesse",
-  "geen_contact",
-  "deal",
+  "niet_gekwalificeerd",
+  "deur_niet_open",
+  "afspraak_afgezegd_klant",
+  "vervolg_geen_contact",
 ];
+
+/** Bel-uitkomsten (excl. terugbel-afspraak / warme terugbel — die zijn aparte acties). */
+export const BEL_UITKOMSTEN: LeadStatus[] = [
+  "huurwoning",
+  "foutief_nummer",
+  "gegevens_niet_overeen",
+  "geen_interesse",
+];
+
+/**
+ * Alle leadstatussen gegroepeerd voor dropdowns (met scheiding).
+ * Volgorde = weergavevolgorde.
+ */
+export const LEAD_STATUS_GROUPS: {
+  label: string;
+  statuses: LeadStatus[];
+}[] = [
+  {
+    label: "Pipeline",
+    statuses: ["nieuw", "afspraak", "na_afspraak"],
+  },
+  {
+    label: "Uitkomst afspraak",
+    statuses: [
+      "vervolg_fysiek",
+      "vervolg_tel",
+      "sale_financiering",
+      "sale_eigen_middelen",
+      "offerte_afgewezen",
+      "geen_interesse",
+      "niet_gekwalificeerd",
+      "deur_niet_open",
+      "afspraak_afgezegd_klant",
+      "vervolg_geen_contact",
+    ],
+  },
+  {
+    label: "Bellen",
+    statuses: [
+      "huurwoning",
+      "foutief_nummer",
+      "gegevens_niet_overeen",
+      "geen_contact",
+    ],
+  },
+  {
+    label: "Overig",
+    statuses: ["deal"],
+  },
+];
+
+/** Platte lijst (zelfde volgorde als groepen). */
+export const LEAD_STATUSES: LeadStatus[] = LEAD_STATUS_GROUPS.flatMap(
+  (g) => g.statuses
+);
 
 export const prioriteitLabel: Record<Prioriteit, string> = {
   laag: "Laag",
@@ -113,15 +175,31 @@ export function statusTone(
   }
 
   if (kind === "lead") {
-    if (value === "deal") return success;
+    if (
+      value === "deal" ||
+      value === "sale_financiering" ||
+      value === "sale_eigen_middelen"
+    ) {
+      return success;
+    }
     if (value === "afspraak" || value === "vervolg_fysiek") return yellow;
     if (value === "na_afspraak") return warn;
     if (value === "vervolg_tel") return info;
-    if (value === "vervolg_geen_contact" || value === "geen_contact") return ink;
+    if (
+      value === "vervolg_geen_contact" ||
+      value === "geen_contact" ||
+      value === "deur_niet_open"
+    ) {
+      return ink;
+    }
     if (
       value === "geen_interesse" ||
       value === "offerte_afgewezen" ||
-      value === "niet_gekwalificeerd"
+      value === "niet_gekwalificeerd" ||
+      value === "afspraak_afgezegd_klant" ||
+      value === "huurwoning" ||
+      value === "foutief_nummer" ||
+      value === "gegevens_niet_overeen"
     ) {
       return danger;
     }

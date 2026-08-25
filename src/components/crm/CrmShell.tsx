@@ -29,7 +29,8 @@ import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { InstroomPanel } from "./InstroomPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
-import { amsterdamDayKey, cancelledAppointmentLeadIds, inBelQueue } from "@/lib/bel-queue";
+import { cancelledAppointmentLeadIds, inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
+import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 
 const VALID_TABS: CrmTab[] = [
@@ -301,8 +302,11 @@ export function CrmShell() {
     const now = Date.now();
     for (const a of afspraken) {
       if (a.status === "geannuleerd" || a.status === "voltooid") continue;
-      // Terugbel-afspraken: altijd uit de normale bellijst (aparte sectie op de dag zelf)
-      if (a.soort === "bel") {
+      // Terugbel-afspraken: altijd uit de normale bellijst (aparte sectie tot afgehandeld)
+      if (
+        normalizeAfspraakSoort(a.soort) === "bel" ||
+        normalizeAfspraakSoort(a.soort) === "warme_bel"
+      ) {
         ids.add(a.lead_id);
         continue;
       }
@@ -317,19 +321,11 @@ export function CrmShell() {
     [afspraken]
   );
 
-  const terugbelTodayCount = useMemo(() => {
-    const today = new Set(
-      afspraken
-        .filter(
-          (a) =>
-            a.soort === "bel" &&
-            a.status !== "geannuleerd" &&
-            a.status !== "voltooid" &&
-            amsterdamDayKey(a.start_at) === amsterdamDayKey(new Date())
-        )
-        .map((a) => a.lead_id)
+  const terugbelDueCount = useMemo(() => {
+    const due = new Set(
+      afspraken.filter((a) => isTerugbelDue(a)).map((a) => a.lead_id)
     );
-    return [...today].filter((id) => {
+    return [...due].filter((id) => {
       const lead = scopedLeads.find((l) => l.id === id);
       return Boolean(lead?.telefoon?.trim());
     }).length;
@@ -339,8 +335,8 @@ export function CrmShell() {
     () =>
       scopedLeads.filter((l) =>
         inBelQueue(l, appointmentLeadIds, cancelledOutOfBelIds)
-      ).length + terugbelTodayCount,
-    [scopedLeads, appointmentLeadIds, cancelledOutOfBelIds, terugbelTodayCount]
+      ).length + terugbelDueCount,
+    [scopedLeads, appointmentLeadIds, cancelledOutOfBelIds, terugbelDueCount]
   );
 
   const upcomingAfsprakenCount = useMemo(() => {

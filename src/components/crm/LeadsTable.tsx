@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import type { Adviseur, Lead, LeadStatus } from "@/types/database";
-import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
+import { leadStatusLabel, statusTone } from "@/lib/labels";
 import { formatDateTimeNl } from "@/lib/format";
+import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 
 function adresRegel(lead: Lead): string {
   const parts = [
@@ -62,11 +63,7 @@ export function LeadsTable({
                   title="Filter op status"
                 >
                   <option value="">Alles</option>
-                  {LEAD_STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {leadStatusLabel[s]}
-                    </option>
-                  ))}
+                  <LeadStatusSelectOptions />
                 </select>
               </div>
             </th>
@@ -139,11 +136,7 @@ export function LeadsTable({
                     className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
                     aria-label="Lead status"
                   >
-                    {LEAD_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {leadStatusLabel[s]}
-                      </option>
-                    ))}
+                    <LeadStatusSelectOptions />
                   </select>
                 </td>
               </tr>

@@ -13,14 +13,18 @@ import type {
   Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
-import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import { LEAD_STATUSES, leadStatusLabel, statusTone } from "@/lib/labels";
+import { formatDateTimeNl } from "@/lib/format";
+import { leadStatusLabel, statusTone } from "@/lib/labels";
+import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 import { geenContactPogingLabel } from "@/lib/bel-queue";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
 import { FacturenTable } from "./FacturenTable";
 import { MaakOfferteModal } from "./MaakOfferteModal";
+import { LeadAdresEditor } from "./LeadAdresEditor";
+import { LeadContactEditor } from "./LeadContactEditor";
+import { LeadTimeline } from "./LeadTimeline";
 import {
   BackLink,
   Breadcrumb,
@@ -115,6 +119,9 @@ export function LeadPage() {
               postcode: leadData.postcode,
               number: leadData.huisnummer,
             });
+            if (leadData.toevoeging?.trim()) {
+              qs.set("toevoeging", leadData.toevoeging.trim());
+            }
             const pcRes = await fetch(`/api/postcode?${qs}`);
             if (pcRes.ok) {
               const pc = await pcRes.json();
@@ -186,6 +193,15 @@ export function LeadPage() {
         .update({ status, notities })
         .eq("id", lead.id);
       if (error) throw error;
+      void fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "status",
+          titel: `Status → ${status}`,
+          detail: extraNotitie?.trim() || null,
+        }),
+      }).catch(() => {});
     } catch {
       setLead({ ...lead, status: prev, notities: prevNotes });
     }
@@ -400,11 +416,7 @@ export function LeadPage() {
               className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
               aria-label="Lead status"
             >
-              {LEAD_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {leadStatusLabel[s]}
-                </option>
-              ))}
+              <LeadStatusSelectOptions />
             </select>
           </div>
         </div>
@@ -496,16 +508,26 @@ export function LeadPage() {
             </h2>
             <dl className="mt-2 divide-y divide-line border-y border-line">
               <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
-                <dt className="font-semibold text-muted">E-mail</dt>
-                <dd className="text-ink">{lead.email || "—"}</dd>
-              </div>
-              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
-                <dt className="font-semibold text-muted">Telefoon</dt>
-                <dd className="text-ink">{lead.telefoon || "—"}</dd>
+                <dt className="font-semibold text-muted">Contact</dt>
+                <dd className="text-ink">
+                  <LeadContactEditor
+                    lead={lead}
+                    onSaved={(patch) =>
+                      setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                    }
+                  />
+                </dd>
               </div>
               <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
                 <dt className="font-semibold text-muted">Adres</dt>
-                <dd className="text-ink">{adresRegel(lead) || "—"}</dd>
+                <dd className="text-ink">
+                  <LeadAdresEditor
+                    lead={lead}
+                    onSaved={(patch) =>
+                      setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                    }
+                  />
+                </dd>
               </div>
               <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
                 <dt className="font-semibold text-muted">Adviseur</dt>
@@ -556,6 +578,15 @@ export function LeadPage() {
               </ul>
             )}
           </section>
+        </div>
+
+        <div className="mt-8">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Geschiedenis
+          </h2>
+          <div className="mt-3 border border-line bg-white px-4 py-4">
+            <LeadTimeline leadId={lead.id} />
+          </div>
         </div>
 
         <div className="mt-6 border-t border-line pt-5">

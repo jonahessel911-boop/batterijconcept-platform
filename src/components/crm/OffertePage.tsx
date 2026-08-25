@@ -17,6 +17,7 @@ import {
   formatDateTimeNl,
   formatEuro,
 } from "@/lib/format";
+import { isKortingRegel, kortingIncVanRegels } from "@/lib/offerte-regels";
 import {
   aanbetalingVanOrder,
   normalizeAanbetalingModus,
@@ -669,8 +670,16 @@ export function OffertePage() {
         </div>
       )}
 
-      <Panel title="Regels" subtitle={`${regels.length} producten`}>
-        {regels.length === 0 ? (
+      <Panel
+        title="Regels"
+        subtitle={`${regels.filter((r) => !isKortingRegel(r)).length} producten`}
+      >
+        {(() => {
+          const productRegels = regels.filter((r) => !isKortingRegel(r));
+          const kortingInc = kortingIncVanRegels(regels);
+          return (
+            <>
+        {productRegels.length === 0 ? (
           <p className="px-3 py-8 text-center text-sm text-muted">
             Geen regels op deze offerte.
           </p>
@@ -685,7 +694,7 @@ export function OffertePage() {
               </tr>
             </thead>
             <tbody>
-              {regels.map((r) => (
+              {productRegels.map((r) => (
                 <tr key={r.id}>
                   <td>{r.omschrijving}</td>
                   <td>{r.aantal}</td>
@@ -717,7 +726,18 @@ export function OffertePage() {
               {formatEuro(offerte.totaal_inc_btw)}
             </span>
           </p>
+          {kortingInc < 0 && (
+            <p className="text-muted">
+              Korting{" "}
+              <span className="ml-4 inline-block w-28 text-ink">
+                {formatEuro(kortingInc)}
+              </span>
+            </p>
+          )}
         </div>
+            </>
+          );
+        })()}
       </Panel>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2">

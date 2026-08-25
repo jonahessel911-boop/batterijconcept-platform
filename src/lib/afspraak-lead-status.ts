@@ -1,8 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  leadStatusVoorAfspraakSoort,
-  normalizeAfspraakSoort,
-} from "@/lib/afspraak-soort";
+import { leadStatusVoorAfspraakSoort } from "@/lib/afspraak-soort";
 
 const BESCHERMDE_STATUS = new Set([
   "deal",
@@ -20,8 +17,7 @@ const AFSPRAAK_STATUS = new Set([
 /**
  * Leadstatus volgt de agenda:
  * - nog een toekomstige actieve afspraak → status bij het soort
- * - geannuleerde *nieuwe* afspraak → `nieuw` (terug in bellijst)
- * - geannuleerde vervolgafspraak → `na_afspraak` (niet in bellijst)
+ * - geannuleerde/afgeronde afspraak (geen nieuwe meer) → `na_afspraak` (niet in bellijst)
  * - voltooid bezoek wordt elders op `na_afspraak` gezet (cron)
  */
 export async function syncLeadNaAfspraak(
@@ -76,40 +72,34 @@ export async function syncLeadNaAfspraak(
     return;
   }
 
-  // Geen actieve toekomstige afspraak meer
-  if (AFSPRAAK_STATUS.has(lead.status)) {
-    // Alleen geannuleerde *nieuwe* afspraak → bellijst; vervolg → na_afspraak
-    let terugNaarBel = lead.status === "afspraak";
-    const { data: recentCancelled } = await sb
+  // Geen actieve toekomstige afspraak meer → uit bellijst
+  // Ook "nieuw" als die door een eerdere annulering terug in de bellijst stond
+  if (AFSPRAAK_STATUS.has(lead.status) || lead.status === "nieuw") {
+    const { count } = await sb
       .from("afspraken")
-      .select("soort, updated_at, start_at")
-      .eq("lead_id", leadId)
-      .eq("status", "geannuleerd")
-      .order("updated_at", { ascending: false })
-      .limit(5);
-    if (recentCancelled?.length) {
-      const newest = recentCancelled[0];
-      const soort = normalizeAfspraakSoort(newest.soort);
-      terugNaarBel = soort === "nieuw";
+      .select("id", { count: "exact", head: true })
+      .eq("lead_id", leadId);
+    if ((count ?? 0) === 0) {
+      // Echte nieuwe lead zonder afspraakgeschiedenis — status laten
+    } else {
+      const nextStatus = "na_afspraak";
+      let upd = await sb
+        .from("leads")
+        .update({
+          status: nextStatus,
+          terugbellen: false,
+          terugbel_notitie: null,
+        })
+        .eq("id", leadId);
+      if (
+        upd.error &&
+        (upd.error.code === "42703" ||
+          upd.error.message?.includes("terugbel"))
+      ) {
+        await sb.from("leads").update({ status: nextStatus }).eq("id", leadId);
+      }
+      return;
     }
-
-    const nextStatus = terugNaarBel ? "nieuw" : "na_afspraak";
-    let upd = await sb
-      .from("leads")
-      .update({
-        status: nextStatus,
-        terugbellen: false,
-        terugbel_notitie: null,
-      })
-      .eq("id", leadId);
-    if (
-      upd.error &&
-      (upd.error.code === "42703" ||
-        upd.error.message?.includes("terugbel"))
-    ) {
-      await sb.from("leads").update({ status: nextStatus }).eq("id", leadId);
-    }
-    return;
   }
 
   // Alleen terugbel afgerond/geannuleerd: vlag uitzetten, status laten

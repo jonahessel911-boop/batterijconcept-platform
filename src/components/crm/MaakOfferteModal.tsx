@@ -704,7 +704,7 @@ export function MaakOfferteModal({
                         <span>
                           <span className="font-medium">Korting tonen</span>
                           <span className="mt-0.5 block text-xs text-muted">
-                            Apart kortingsregel op de offerte
+                            Als − € onder de totaalprijs op de offerte
                           </span>
                         </span>
                       </label>
@@ -734,7 +734,7 @@ export function MaakOfferteModal({
                       Korting {formatEuro(kortingInc)} incl. btw
                       {kortingZichtbaar === "verborgen"
                         ? " · verwerkt in de regelprijzen"
-                        : " · als aparte regel"}
+                        : " · onder de prijs"}
                     </p>
                   )}
                 </div>
@@ -825,6 +825,16 @@ export function MaakOfferteModal({
                   {formatEuro(totaalInc)}
                 </span>
               </p>
+              {useKorting &&
+                kortingInc > 0 &&
+                kortingZichtbaar === "zichtbaar" && (
+                  <p className="text-sm text-muted">
+                    Korting{" "}
+                    <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
+                      {formatEuro(-kortingInc)}
+                    </span>
+                  </p>
+                )}
             </div>
 
             {error && (

@@ -1,7 +1,10 @@
 import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead, LeadStatus } from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import {
+  isTerugbelSoort,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
 
 export const MAX_BELPOGINGEN = 7;
 export const MAX_BELPOGINGEN_PER_DAG = 2;
@@ -18,9 +21,16 @@ const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
 const BEL_BLOKKEER_STATUS = new Set<LeadStatus>([
   "deal",
+  "sale_financiering",
+  "sale_eigen_middelen",
   "geen_interesse",
   "offerte_afgewezen",
   "niet_gekwalificeerd",
+  "huurwoning",
+  "foutief_nummer",
+  "gegevens_niet_overeen",
+  "deur_niet_open",
+  "afspraak_afgezegd_klant",
 ]);
 
 /** Sollicitaties horen in Instroom, niet in de bel-queue. */
@@ -64,7 +74,7 @@ export function geenContactPogingLabel(pogingen: number): string {
   return `Geen contact ${n}/${MAX_BELPOGINGEN}`;
 }
 
-/** Actieve terugbel-afspraak (soort bel) voor deze lead. */
+/** Actieve terugbel-afspraak (bel / warme_bel) voor deze lead. */
 export function activeBelAfspraak(
   afspraken: Afspraak[],
   leadId: string
@@ -74,23 +84,39 @@ export function activeBelAfspraak(
       (a) =>
         a.lead_id === leadId &&
         ACTIEVE_AFSPRAAK.has(a.status) &&
-        normalizeAfspraakSoort(a.soort) === "bel"
+        isTerugbelSoort(a.soort)
     )
-    .sort(
-      (a, b) =>
+    .sort((a, b) => {
+      // Warme terugbel eerst
+      const aWarm = normalizeAfspraakSoort(a.soort) === "warme_bel" ? 1 : 0;
+      const bWarm = normalizeAfspraakSoort(b.soort) === "warme_bel" ? 1 : 0;
+      if (aWarm !== bWarm) return bWarm - aWarm;
+      return (
         new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
-    );
+      );
+    });
   return list[0] || null;
 }
 
-/** Vanaf 00:01 Amsterdam op de dag van de terugbel-afspraak tot afgehandeld. */
-export function isTerugbelDueToday(
+/**
+ * Terugbel-afspraak die bovenaan de bellijst hoort: vanaf de Amsterdam-dag
+ * van het geplande moment tot afgevinkt/afgehandeld (ook als die dag al voorbij is).
+ */
+export function isTerugbelDue(
   afspraak: Afspraak,
   now = new Date()
 ): boolean {
   if (!ACTIEVE_AFSPRAAK.has(afspraak.status)) return false;
-  if (normalizeAfspraakSoort(afspraak.soort) !== "bel") return false;
-  return amsterdamDayKey(afspraak.start_at) === amsterdamDayKey(now);
+  if (!isTerugbelSoort(afspraak.soort)) return false;
+  return amsterdamDayKey(afspraak.start_at) <= amsterdamDayKey(now);
+}
+
+/** @deprecated alias — gebruik isTerugbelDue */
+export function isTerugbelDueToday(
+  afspraak: Afspraak,
+  now = new Date()
+): boolean {
+  return isTerugbelDue(afspraak, now);
 }
 
 /** Nog te kort geleden gebeld voor een 2e poging vandaag. */
@@ -106,9 +132,8 @@ export function inBelCooldown(
 }
 
 /**
- * Lead had een *nieuwe* (eerste) fysieke afspraak die geannuleerd is en heeft
- * geen actieve toekomstige afspraak meer → opnieuw in de bellijst (prioriteit).
- * Vervolgafspraken / terugbel tellen hier niet mee.
+ * Lead had een *nieuwe* fysieke afspraak die geannuleerd is en heeft
+ * geen actieve toekomstige afspraak meer → uit de bellijst (herplannen via agenda).
  */
 export function cancelledAppointmentLeadIds(
   afspraken: Afspraak[],
@@ -176,27 +201,17 @@ export function annuleringsNotitieFromAfspraak(
 export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>,
-  /** Leads met geannuleerde afspraak → juist wél in de bellijst (herplannen) */
+  /** Leads met geannuleerde afspraak → uit de bellijst */
   cancelledAppointmentLeadIds?: Set<string>
 ): boolean {
   if (isSollicitatieLead(lead)) return false;
   if (!lead.telefoon?.trim()) return false;
   if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
   if (appointmentLeadIds?.has(lead.id)) return false;
-
-  const isCancelledReplan = cancelledAppointmentLeadIds?.has(lead.id) === true;
-
-  if (isCancelledReplan) {
-    // Geannuleerde nieuwe afspraak: prioriteit, maar wél daglimiet / cooldown
-    // zodat "Volgende" ze niet eindeloos terugbrengt.
-    if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
-    if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
-    if (inBelCooldown(lead)) return false;
-    return true;
-  }
+  // Geannuleerde huisbezoek-afspraak zonder nieuwe afspraak: niet bellen
+  if (cancelledAppointmentLeadIds?.has(lead.id)) return false;
 
   if (!QUEUE_STATUSES.includes(lead.status)) return false;
-  // na_afspraak alleen via annulering (hierboven), niet na voltooid bezoek
   if (lead.status === "na_afspraak") return false;
   if (lead.status === "afspraak") return false;
   if (lead.status === "vervolg_fysiek" || lead.status === "vervolg_tel") {
@@ -208,15 +223,8 @@ export function inBelQueue(
   return true;
 }
 
-export function sortBelQueue(
-  leads: Lead[],
-  cancelledIds?: Set<string>
-): Lead[] {
+export function sortBelQueue(leads: Lead[]): Lead[] {
   return [...leads].sort((a, b) => {
-    const aCancel = cancelledIds?.has(a.id) ? 1 : 0;
-    const bCancel = cancelledIds?.has(b.id) ? 1 : 0;
-    if (aCancel !== bCancel) return bCancel - aCancel;
-
     const aToday = belpogingenVandaagOf(a);
     const bToday = belpogingenVandaagOf(b);
     if (aToday !== bToday) return aToday - bToday;

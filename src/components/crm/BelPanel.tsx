@@ -6,21 +6,41 @@ import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { getSupabaseBrowser } from "@/lib/supabase";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import {
   MAX_BELPOGINGEN,
   MAX_BELPOGINGEN_PER_DAG,
   MIN_UREN_TUSSEN_BELPOGINGEN,
   activeBelAfspraak,
-  annuleringsNotitieFromAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
   geenContactPogingLabel,
   inBelQueue,
-  isTerugbelDueToday,
-  latestCancelledVisitAfspraak,
+  isTerugbelDue,
   sortBelQueue,
 } from "@/lib/bel-queue";
+import { leadStatusLabel } from "@/lib/labels";
+import { ReistijdHint } from "./ReistijdHint";
+
+async function clientLogLeadEvent(
+  leadId: string,
+  opts: {
+    soort: string;
+    titel: string;
+    detail?: string | null;
+  }
+) {
+  try {
+    await fetch(`/api/leads/${leadId}/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts),
+    });
+  } catch {
+    /* non-blocking */
+  }
+}
 
 function CopyIcon() {
   return (
@@ -133,6 +153,7 @@ export function BelPanel({
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
   const [terugbelAt, setTerugbelAt] = useState("");
   const [terugbelNotitie, setTerugbelNotitie] = useState("");
+  const [terugbelWarm, setTerugbelWarm] = useState(false);
   const [leadNotitieDraft, setLeadNotitieDraft] = useState("");
   const [editingLeadNotitie, setEditingLeadNotitie] = useState(false);
   const [savingLeadNotitie, setSavingLeadNotitie] = useState(false);
@@ -149,54 +170,47 @@ export function BelPanel({
       sortBelQueue(
         leads.filter((l) =>
           inBelQueue(l, appointmentLeadIds, cancelledAppointmentLeadIds)
-        ),
-        cancelledAppointmentLeadIds
+        )
       ),
     [leads, appointmentLeadIds, cancelledAppointmentLeadIds]
   );
 
-  /** Terugbel-afspraken die vandaag (Amsterdam) aan de beurt zijn. */
-  const terugbelToday = useMemo(() => {
-    const items: { lead: Lead; afspraak: Afspraak }[] = [];
+  /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld). */
+  const terugbelDue = useMemo(() => {
+    const items: { lead: Lead; afspraak: Afspraak; warm: boolean }[] = [];
     for (const a of afspraken) {
-      if (!isTerugbelDueToday(a)) continue;
+      if (!isTerugbelDue(a)) continue;
       const lead = leads.find((l) => l.id === a.lead_id);
       if (!lead?.telefoon?.trim()) continue;
-      if (uitgesteldIds.has(lead.id)) continue;
-      items.push({ lead, afspraak: a });
+      items.push({
+        lead,
+        afspraak: a,
+        warm: normalizeAfspraakSoort(a.soort) === "warme_bel",
+      });
     }
-    items.sort(
-      (a, b) =>
+    items.sort((a, b) => {
+      if (a.warm !== b.warm) return a.warm ? -1 : 1;
+      return (
         new Date(a.afspraak.start_at).getTime() -
         new Date(b.afspraak.start_at).getTime()
-    );
+      );
+    });
     return items;
-  }, [afspraken, leads, uitgesteldIds]);
+  }, [afspraken, leads]);
 
-  /** Geannuleerde eerst, daarna terugbel vandaag, daarna rest. Uitgestelde leads eruit. */
+  /**
+   * Openstaande terugbel bovenaan, daarna rest.
+   * Uitgesteld geldt alleen voor de normale lijst — terugbel blijft bovenaan
+   * tot afgevinkt (niet weg na “Volgende” / plannen in dezelfde sessie).
+   */
   const queue = useMemo(() => {
-    const cancelledFirst = normalQueue.filter(
-      (l) =>
-        cancelledAppointmentLeadIds?.has(l.id) && !uitgesteldIds.has(l.id)
-    );
-    const cancelledSet = new Set(cancelledFirst.map((l) => l.id));
-    const terugbelLeads = terugbelToday
-      .map((t) => t.lead)
-      .filter((l) => !cancelledSet.has(l.id));
+    const terugbelLeads = terugbelDue.map((t) => t.lead);
     const terugbelIds = new Set(terugbelLeads.map((l) => l.id));
     const rest = normalQueue.filter(
-      (l) =>
-        !cancelledSet.has(l.id) &&
-        !terugbelIds.has(l.id) &&
-        !uitgesteldIds.has(l.id)
+      (l) => !terugbelIds.has(l.id) && !uitgesteldIds.has(l.id)
     );
-    return [...cancelledFirst, ...terugbelLeads, ...rest];
-  }, [
-    terugbelToday,
-    normalQueue,
-    cancelledAppointmentLeadIds,
-    uitgesteldIds,
-  ]);
+    return [...terugbelLeads, ...rest];
+  }, [terugbelDue, normalQueue, uitgesteldIds]);
 
   const current = useMemo(() => {
     if (currentId) {
@@ -209,16 +223,7 @@ export function BelPanel({
     ? activeBelAfspraak(afspraken, current.id)
     : null;
   const currentIsTerugbelDue = Boolean(
-    currentTerugbel && isTerugbelDueToday(currentTerugbel)
-  );
-  const currentCancelledAfspraak = current
-    ? latestCancelledVisitAfspraak(afspraken, current.id)
-    : null;
-  const currentIsCancelledReplan = Boolean(
-    current && cancelledAppointmentLeadIds?.has(current.id)
-  );
-  const currentAnnuleringsNotitie = annuleringsNotitieFromAfspraak(
-    currentCancelledAfspraak
+    currentTerugbel && isTerugbelDue(currentTerugbel)
   );
 
   const slotsByDay = useMemo(() => {
@@ -297,44 +302,6 @@ export function BelPanel({
     setNextMode(null);
   }
 
-  /** Geannuleerde lead: Volgende = door naar volgende, deze sessie niet meer tonen. */
-  async function skipCancelledLead() {
-    if (!current) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const now = new Date().toISOString();
-      const vandaag = belpogingenVandaagOf(current) + 1;
-      const patch: Partial<Lead> = {
-        belpogingen: Math.min(belpogingenOf(current) + 1, MAX_BELPOGINGEN),
-        belpogingen_vandaag: Math.min(vandaag, MAX_BELPOGINGEN_PER_DAG),
-        laatst_gebeld_at: now,
-      };
-      const sb = getSupabaseBrowser();
-      let { error: err } = await sb
-        .from("leads")
-        .update(patch)
-        .eq("id", current.id);
-      if (
-        err &&
-        (err.message?.includes("belpogingen_vandaag") || err.code === "42703")
-      ) {
-        const { belpogingen_vandaag: _, ...withoutDay } = patch;
-        const retry = await sb
-          .from("leads")
-          .update(withoutDay)
-          .eq("id", current.id);
-        err = retry.error;
-      }
-      if (!err) onLeadUpdated(current.id, patch);
-      goNextLead(current.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fout");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function completeTerugbelAfspraak(leadId: string) {
     const afspraak = activeBelAfspraak(afspraken, leadId);
     if (!afspraak) return;
@@ -343,6 +310,33 @@ export function BelPanel({
       .from("afspraken")
       .update({ status: "voltooid" })
       .eq("id", afspraak.id);
+  }
+
+  /** Terugbel afvinken zonder status te wijzigen — uit prioriteit, terug naar normale regels. */
+  async function dismissTerugbel() {
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await completeTerugbelAfspraak(current.id);
+      const patch: Partial<Lead> = {
+        terugbellen: false,
+        terugbel_notitie: null,
+      };
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update(patch)
+        .eq("id", current.id);
+      if (err) throw err;
+      onLeadUpdated(current.id, patch);
+      onNeedReload?.();
+      goNextLead(current.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Afvinken mislukt");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveLeadNotitie() {
@@ -441,6 +435,14 @@ export function BelPanel({
       }
       await completeTerugbelAfspraak(current.id);
       onLeadUpdated(current.id, patch);
+      void clientLogLeadEvent(current.id, {
+        soort: "status",
+        titel: `Status → ${leadStatusLabel[status] || status}`,
+        detail:
+          status === "geen_contact"
+            ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}`
+            : null,
+      });
       onNeedReload?.();
       goNextLead(current.id);
     } catch (e) {
@@ -512,6 +514,8 @@ export function BelPanel({
       const note = terugbelNotitie.trim();
       if (!note) throw new Error("Vul een notitie in");
 
+      const oudeTerugbelId = activeBelAfspraak(afspraken, current.id)?.id;
+
       const res = await fetch("/api/afspraken", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -520,11 +524,19 @@ export function BelPanel({
           adviseur_id: adviseurId,
           start_at: parsed.toISOString(),
           notities: note,
-          soort: "bel",
+          soort: terugbelWarm ? "warme_bel" : "bel",
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Terugbel-afspraak mislukt");
+
+      const sb = getSupabaseBrowser();
+      if (oudeTerugbelId) {
+        await sb
+          .from("afspraken")
+          .update({ status: "voltooid" })
+          .eq("id", oudeTerugbelId);
+      }
 
       const now = new Date().toISOString();
       const leadPatch: Partial<Lead> = {
@@ -532,10 +544,16 @@ export function BelPanel({
         terugbel_notitie: note,
         laatst_gebeld_at: now,
       };
-      const sb = getSupabaseBrowser();
       await sb.from("leads").update(leadPatch).eq("id", current.id);
 
       onLeadUpdated(current.id, leadPatch);
+      void clientLogLeadEvent(current.id, {
+        soort: "terugbel",
+        titel: terugbelWarm
+          ? "Warme terugbelafspraak gepland"
+          : "Terugbelafspraak gepland",
+        detail: `${note} · ${parsed.toLocaleString("nl-NL")}`,
+      });
       onNeedReload?.();
       goNextLead(current.id);
     } catch (err) {
@@ -545,7 +563,7 @@ export function BelPanel({
     }
   }
 
-  if (queue.length === 0 && terugbelToday.length === 0) {
+  if (queue.length === 0 && terugbelDue.length === 0) {
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
@@ -556,7 +574,8 @@ export function BelPanel({
           Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min.
           {MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later
           terug. Na {MAX_BELPOGINGEN} keer geen contact vallen ze eruit.
-          Terugbel-afspraken verschijnen hier op de dag zelf.
+          Terugbel-afspraken staan bovenaan vanaf de geplande dag tot je ze
+          afvinkt.
         </p>
       </div>
     );
@@ -572,29 +591,13 @@ export function BelPanel({
 
   return (
     <div>
-      {cancelledAppointmentLeadIds &&
-        [...cancelledAppointmentLeadIds].some((id) =>
-          queue.some((l) => l.id === id)
-        ) && (
+      {terugbelDue.length > 0 && (
         <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-            Opnieuw plannen — afspraak geannuleerd (
-            {
-              queue.filter((l) => cancelledAppointmentLeadIds.has(l.id))
-                .length
-            }
-            )
-          </p>
-        </div>
-      )}
-
-      {terugbelToday.length > 0 && (
-        <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-            Terugbellen vandaag ({terugbelToday.length})
+            Terugbellen ({terugbelDue.length}) — bovenaan tot afgevinkt
           </p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {terugbelToday.map(({ lead, afspraak }) => {
+            {terugbelDue.map(({ lead, afspraak, warm }) => {
               const active = current?.id === lead.id;
               return (
                 <button
@@ -608,19 +611,30 @@ export function BelPanel({
                   className={[
                     "inline-flex max-w-full items-center gap-2 border px-2.5 py-1 text-left text-xs",
                     active
-                      ? "border-[#C45A12] bg-[#C45A12] text-white"
-                      : "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]",
+                      ? warm
+                        ? "border-[#C9A227] bg-[#C9A227] text-white"
+                        : "border-[#C45A12] bg-[#C45A12] text-white"
+                      : warm
+                        ? "border-[#C9A227]/50 bg-[#FFF8D6] text-[#8A6D00] hover:border-[#C9A227]"
+                        : "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]",
                   ].join(" ")}
                 >
                   <span
                     className={[
                       "shrink-0 font-bold tabular-nums",
-                      active ? "text-white" : "text-[#C45A12]",
+                      active
+                        ? "text-white"
+                        : warm
+                          ? "text-[#8A6D00]"
+                          : "text-[#C45A12]",
                     ].join(" ")}
                   >
                     {formatTimeNl(afspraak.start_at)}
                   </span>
-                  <span className="truncate font-medium">{lead.naam}</span>
+                  <span className="truncate font-medium">
+                    {warm ? "★ " : ""}
+                    {lead.naam}
+                  </span>
                 </button>
               );
             })}
@@ -631,19 +645,13 @@ export function BelPanel({
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {currentIsCancelledReplan
-            ? "Opnieuw plannen — afspraak geannuleerd"
-            : currentIsTerugbelDue
-              ? "Terugbel afspraak vandaag"
-              : `${position} van ${queue.length} in de bellijst`}
+          {currentIsTerugbelDue
+            ? "Terugbel afspraak — bovenaan tot afgevinkt"
+            : `${position} van ${queue.length} in de bellijst`}
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {currentIsCancelledReplan ? (
-            <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
-              Afspraak geannuleerd
-            </span>
-          ) : current.status === "geen_contact" || pogingen > 0 ? (
+          {current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
               {geenContactPogingLabel(pogingen)}
             </span>
@@ -674,31 +682,10 @@ export function BelPanel({
           <p className="mt-1 text-sm text-muted">{current.email}</p>
         )}
 
-        {currentIsCancelledReplan && (
-          <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-              Afspraak geannuleerd
-              {currentCancelledAfspraak
-                ? ` · was ${formatDateTimeNl(currentCancelledAfspraak.start_at)}`
-                : ""}
-            </p>
-            {currentAnnuleringsNotitie ? (
-              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {currentAnnuleringsNotitie}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm text-muted">
-                Geen annuleringsnotitie. Plan opnieuw in voor bevestiging &amp;
-                herinnering.
-              </p>
-            )}
-          </div>
-        )}
-
         {currentIsTerugbelDue && currentTerugbel && (
           <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-              Gepland terugbelmoment · {formatTimeNl(currentTerugbel.start_at)}
+              Gepland terugbelmoment · {formatDateTimeNl(currentTerugbel.start_at)}
             </p>
             {(currentTerugbel.notities || current.terugbel_notitie)?.trim() ? (
               <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
@@ -812,10 +799,6 @@ export function BelPanel({
               type="button"
               disabled={busy}
               onClick={() => {
-                if (currentIsCancelledReplan) {
-                  void skipCancelledLead();
-                  return;
-                }
                 setNextMode("status");
                 setError(null);
               }}
@@ -829,6 +812,16 @@ export function BelPanel({
               <p className="text-xs text-muted">
                 Daarna komt de volgende lead in de bellijst.
               </p>
+              {currentIsTerugbelDue && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void dismissTerugbel()}
+                  className="flex min-h-12 w-full items-center justify-center border border-[#C45A12] bg-[#FFF0E6] px-4 text-sm font-semibold text-[#C45A12] hover:bg-[#FFE4D4] disabled:opacity-60"
+                >
+                  Terugbel afgevinkt
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy}
@@ -841,8 +834,32 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
+                onClick={() => void saveOutcome("huurwoning")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Huurwoning
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveOutcome("foutief_nummer")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Foutief nummer
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveOutcome("gegevens_niet_overeen")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Gegevens komen niet overeen
+              </button>
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => void saveOutcome("geen_interesse")}
-                className="flex min-h-12 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
               >
                 Geen interesse
               </button>
@@ -851,11 +868,26 @@ export function BelPanel({
                 disabled={busy}
                 onClick={() => {
                   setNextMode("terugbel");
+                  setTerugbelWarm(false);
                   setError(null);
                 }}
                 className="flex min-h-12 w-full items-center justify-center border border-[#C45A12]/40 bg-[#FFF0E6] px-4 text-sm font-semibold text-[#C45A12] hover:bg-[#FFE4D4] disabled:opacity-60"
               >
-                Terugbel afspraak
+                {currentIsTerugbelDue
+                  ? "Nieuwe terugbelafspraak"
+                  : "Terugbelafspraak"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setNextMode("terugbel");
+                  setTerugbelWarm(true);
+                  setError(null);
+                }}
+                className="flex min-h-12 w-full items-center justify-center border border-[#C9A227]/50 bg-[#FFF8D6] px-4 text-sm font-semibold text-[#8A6D00] hover:bg-[#fff0b8] disabled:opacity-60"
+              >
+                Warme terugbelafspraak
               </button>
               <button
                 type="button"
@@ -871,10 +903,13 @@ export function BelPanel({
               onSubmit={(e) => void planTerugbel(e)}
               className="space-y-3 rounded-2xl border border-line bg-white p-4"
             >
-              <p className="text-sm font-semibold text-ink">Terugbel afspraak</p>
+              <p className="text-sm font-semibold text-ink">
+                {terugbelWarm ? "Warme terugbelafspraak" : "Terugbel afspraak"}
+              </p>
               <p className="text-xs text-muted">
-                Alleen intern — de klant krijgt geen mail. Staat in de agenda als
-                terugbelmoment.
+                {terugbelWarm
+                  ? "Prioriteit in de bellijst — bijv. klant pakt agenda erbij maar wil al een afspraak. Intern, geen mail."
+                  : "Alleen intern — de klant krijgt geen mail. De lead gaat uit de normale bellijst en staat bovenaan vanaf de geplande dag tot je afvinkt."}
               </p>
               <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                 Adviseur
@@ -918,7 +953,11 @@ export function BelPanel({
                 disabled={busy || !adviseurId || !terugbelAt || !terugbelNotitie.trim()}
                 className="flex min-h-12 w-full items-center justify-center bg-[#C45A12] px-4 text-sm font-semibold text-white hover:bg-[#a84a0e] disabled:opacity-60"
               >
-                {busy ? "Bezig…" : "Terugbel afspraak opslaan"}
+                {busy
+                  ? "Bezig…"
+                  : terugbelWarm
+                    ? "Warme terugbel opslaan"
+                    : "Terugbel afspraak opslaan"}
               </button>
               <button
                 type="button"
@@ -1041,6 +1080,13 @@ export function BelPanel({
                 </div>
               )}
             </div>
+            <ReistijdHint
+              adviseurId={adviseurId}
+              startAt={useCustomTime ? customStart : startAt}
+              lead={current}
+              afspraken={afspraken}
+              allLeads={leads}
+            />
             <JaNeeField
               label="Partner aanwezig?"
               value={partnerAanwezig}

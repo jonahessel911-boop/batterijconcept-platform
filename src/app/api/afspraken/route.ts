@@ -12,10 +12,13 @@ import { hasBlockingOverlap } from "@/lib/afspraak-busy";
 import {
   afspraakBlokkeertAgenda,
   afspraakDuurMinuten,
+  afspraakSoortLabel,
   afspraakStuurtMail,
+  isInterneAfspraakSoort,
   leadStatusVoorAfspraakSoort,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
+import { logLeadEvent } from "@/lib/lead-events";
 import type { AfspraakSoort } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -27,7 +30,7 @@ export async function GET() {
     const { data, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs(naam, email)"
       )
       .order("start_at", { ascending: true });
     if (error) throw error;
@@ -470,6 +473,17 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (error && (error.message?.includes("soort") || error.code === "42703")) {
+      // Zonder soort-kolom mag alleen de default (nieuw) door; bel/vervolg niet stil omzetten
+      if (soort !== "nieuw") {
+        return NextResponse.json(
+          {
+            error:
+              "Afspraaksoort niet ondersteund. Voer supabase/migrate-afspraak-vervolg-punt.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 500 }
+        );
+      }
       const { soort: _soort, ...withoutSoort } = insertRow;
       const retry = await sb
         .from("afspraken")
@@ -532,14 +546,14 @@ async function afterCreate(
     .select("status")
     .eq("id", body.lead_id)
     .single();
-  if (leadRow?.status !== "deal" && soort !== "bel") {
+  if (leadRow?.status !== "deal" && !isInterneAfspraakSoort(soort)) {
     await sb
       .from("leads")
       .update({ status: leadStatusVoorAfspraakSoort(soort) })
       .eq("id", body.lead_id);
   }
 
-  if (soort === "bel") {
+  if (soort === "bel" || soort === "warme_bel") {
     await sb
       .from("leads")
       .update({
@@ -554,6 +568,16 @@ async function afterCreate(
       .update({ adviseur_id: body.adviseur_id })
       .eq("id", body.lead_id);
   }
+
+  await logLeadEvent({
+    leadId: body.lead_id,
+    soort: isInterneAfspraakSoort(soort) ? "terugbel" : "afspraak",
+    titel: `${afspraakSoortLabel[soort] || soort} gepland`,
+    detail: new Date(afspraak.start_at).toLocaleString("nl-NL", {
+      timeZone: "Europe/Amsterdam",
+    }),
+    meta: { afspraak_id: afspraak.id, soort },
+  });
 
   const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
   const email = afspraak.leads?.email?.trim();

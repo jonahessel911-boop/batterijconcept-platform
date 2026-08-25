@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro, adresRegel } from "@/lib/format";
-import { offerteRegelsVoorWeergave } from "@/lib/offerte-regels";
+import { offerteRegelsVoorWeergave, kortingIncVanRegels } from "@/lib/offerte-regels";
 import { SignaturePadField } from "./SignaturePadField";
 
 type Props = {
@@ -44,6 +44,7 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
       }),
     [regels, offerte.financiering_voorbehoud]
   );
+  const kortingInc = useMemo(() => kortingIncVanRegels(regels), [regels]);
   const alreadySigned = offerte.status === "ondertekend";
   const klantAdres = offerte.leads ? adresRegel(offerte.leads) : "—";
 
@@ -318,6 +319,14 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                     {formatEuro(offerte.totaal_inc_btw)}
                   </span>
                 </div>
+                {kortingInc < 0 && (
+                  <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
+                    <span className="text-muted">Korting</span>
+                    <span className="tabular-nums text-ink">
+                      {formatEuro(kortingInc)}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="relative z-10 mt-10 rounded-2xl border border-[#e2e8e4] bg-wash/80 p-5">

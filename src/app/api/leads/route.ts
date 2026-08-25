@@ -56,6 +56,7 @@ export async function POST(req: NextRequest) {
     telefoon?: string;
     postcode?: string;
     huisnummer?: string;
+    toevoeging?: string;
     straat?: string;
     plaats?: string;
     adviseur_id?: string | null;
@@ -86,9 +87,11 @@ export async function POST(req: NextRequest) {
 
     const postcode = body.postcode?.trim() || null;
     const huisnummer = body.huisnummer?.trim() || null;
+    const toevoeging = body.toevoeging?.trim() || null;
     const enriched = await enrichAddressFields({
       postcode,
       huisnummer,
+      toevoeging,
       straat: body.straat?.trim() || null,
       plaats: body.plaats?.trim() || null,
     });
@@ -100,6 +103,7 @@ export async function POST(req: NextRequest) {
       telefoon: body.telefoon?.trim() || null,
       postcode,
       huisnummer,
+      toevoeging,
       straat: enriched.straat,
       plaats: enriched.plaats,
       bron: "crm",
@@ -125,6 +129,21 @@ export async function POST(req: NextRequest) {
         insert.error.code === "42703")
     ) {
       insert = await sb.from("leads").insert(base).select("*").single();
+    }
+
+    if (
+      insert.error &&
+      insert.error.message?.includes("toevoeging")
+    ) {
+      const { toevoeging: _t, ...withoutToev } = base;
+      insert = await sb
+        .from("leads")
+        .insert({
+          ...withoutToev,
+          ...(adviseurId ? { adviseur_id: adviseurId } : {}),
+        })
+        .select("*")
+        .single();
     }
 
     if (insert.error || !insert.data) {

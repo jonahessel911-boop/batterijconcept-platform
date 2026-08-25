@@ -2,7 +2,7 @@ import { jsPDF } from "jspdf";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { companyInfo, loadLogoDataUrl } from "@/lib/pdf-brand";
-import { offerteRegelsVoorWeergave } from "@/lib/offerte-regels";
+import { offerteRegelsVoorWeergave, kortingIncVanRegels } from "@/lib/offerte-regels";
 
 type SignPayload = {
   naam: string;
@@ -231,6 +231,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const weergaveRegels = offerteRegelsVoorWeergave(regels, {
     financieringVoorbehoud: offerte.financiering_voorbehoud,
   });
+  const kortingInc = kortingIncVanRegels(regels);
 
   doc.setDrawColor(...DEEPER);
   doc.setLineWidth(0.7);
@@ -261,7 +262,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   }
 
   y += 8;
-  y = ensureSpace(doc, y, 30, pageW, margin);
+  y = ensureSpace(doc, y, 30 + (kortingInc < 0 ? 8 : 0), pageW, margin);
 
   // —— Totalen (rechts, zelfde kaders als pagina) ——
   const boxW = 78;
@@ -281,6 +282,12 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
       bold: true,
     },
   ];
+  if (kortingInc < 0) {
+    totalRows.push({
+      label: "Korting",
+      value: formatEuro(kortingInc),
+    });
+  }
 
   for (const row of totalRows) {
     doc.setDrawColor(213, 221, 216);

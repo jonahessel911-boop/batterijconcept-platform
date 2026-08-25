@@ -10,7 +10,13 @@ import {
 } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import type { Adviseur, Afspraak, AfspraakSoort, Lead } from "@/types/database";
+import type {
+  Adviseur,
+  Afspraak,
+  AfspraakSoort,
+  Lead,
+  LeadStatus,
+} from "@/types/database";
 import {
   AMSTERDAM_TZ,
   adresRegel,
@@ -24,9 +30,14 @@ import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
   afspraakStuurtMail,
+  afspraakZichtbaarInAgenda,
+  needsVervolgPunt,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
+import { AFSPRAAK_UITKOMSTEN, leadStatusLabel, statusTone } from "@/lib/labels";
+import { getSupabaseBrowser } from "@/lib/supabase";
 import { LeadZoekVeld } from "./LeadZoekVeld";
+import { ReistijdHint } from "./ReistijdHint";
 
 type AgendaDay = { key: string; date: Date };
 
@@ -235,17 +246,23 @@ function statusAccent(afspraak: Afspraak): string {
 
 function AfspraakChip({
   afspraak,
+  allAfspraken,
   variant = "week",
   onOpen,
 }: {
   afspraak: Afspraak;
+  allAfspraken: Afspraak[];
   variant?: "week" | "day";
   onOpen: (a: Afspraak) => void;
 }) {
   const cancelled = afspraak.status === "geannuleerd";
+  const done = afspraak.status === "voltooid";
+  const needsAction = needsVervolgPunt(afspraak, allAfspraken);
+  const muted = cancelled || done;
   const naam = afspraak.leads?.naam || "—";
   const soortLabel =
     afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)];
+  const statusNote = cancelled ? "Geannuleerd" : done ? "Voltooid" : null;
 
   if (variant === "day") {
     return (
@@ -256,7 +273,8 @@ function AfspraakChip({
           "flex w-full items-stretch gap-0 overflow-hidden rounded-xl border border-line text-left transition",
           "hover:border-green/35 hover:shadow-[0_4px_16px_rgba(13,92,50,0.08)]",
           "active:scale-[0.99]",
-          cancelled ? "opacity-70" : "",
+          muted ? "opacity-70" : "",
+          needsAction ? "ring-1 ring-[#C45A12]/40" : "",
         ].join(" ")}
       >
         <span
@@ -264,9 +282,11 @@ function AfspraakChip({
             "w-1.5 shrink-0",
             afspraak.status === "geannuleerd"
               ? "bg-[#9aa39c]"
-              : afspraak.status === "verzet"
-                ? "bg-[#C45A12]"
-                : "bg-green",
+              : afspraak.status === "voltooid"
+                ? "bg-[#5a635c]"
+                : afspraak.status === "verzet"
+                  ? "bg-[#C45A12]"
+                  : "bg-green",
           ].join(" ")}
         />
         <span className="flex min-w-0 flex-1 items-center gap-3 bg-white px-3.5 py-3">
@@ -274,7 +294,7 @@ function AfspraakChip({
             <span
               className={[
                 "block font-display text-lg font-semibold tabular-nums leading-none text-ink",
-                cancelled ? "line-through text-muted" : "",
+                cancelled ? "line-through text-muted" : done ? "text-muted" : "",
               ].join(" ")}
             >
               {formatTimeNl(afspraak.start_at)}
@@ -289,19 +309,33 @@ function AfspraakChip({
             </span>
           </span>
           <span className="min-w-0 flex-1 border-l border-line pl-3">
-            <span
-              className={[
-                "block truncate text-sm font-semibold text-ink",
-                cancelled ? "line-through text-muted" : "",
-              ].join(" ")}
-            >
-              {naam}
+            <span className="flex items-center gap-2">
+              <span
+                className={[
+                  "block truncate text-sm font-semibold text-ink",
+                  cancelled
+                    ? "line-through text-muted"
+                    : done
+                      ? "text-muted"
+                      : "",
+                ].join(" ")}
+              >
+                {naam}
+              </span>
+              {needsAction && (
+                <span
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold text-white"
+                  title="Vervolg punt nodig"
+                >
+                  i
+                </span>
+              )}
             </span>
             <span className="mt-0.5 block truncate text-xs text-muted">
               {[
-                cancelled ? "Geannuleerd" : null,
+                statusNote,
                 soortLabel,
-                !cancelled ? afspraak.adviseurs?.naam || null : null,
+                !muted ? afspraak.adviseurs?.naam || null : null,
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -318,7 +352,8 @@ function AfspraakChip({
       type="button"
       onClick={() => onOpen(afspraak)}
       title={[
-        cancelled ? "Geannuleerd" : null,
+        needsAction ? "Vervolg punt nodig" : null,
+        statusNote,
         formatTimeNl(afspraak.start_at),
         naam,
         soortLabel,
@@ -326,31 +361,54 @@ function AfspraakChip({
         .filter(Boolean)
         .join(" · ")}
       className={[
-        "group w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left transition",
+        "group relative w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left transition",
         statusAccent(afspraak),
         "hover:brightness-[0.98] hover:shadow-sm",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-green",
-        cancelled ? "opacity-75" : "",
+        muted ? "opacity-75" : "",
+        needsAction ? "ring-1 ring-[#C45A12]/35" : "",
       ].join(" ")}
     >
+      {needsAction && (
+        <span
+          className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#C45A12] text-[9px] font-bold leading-none text-white"
+          aria-label="Vervolg punt nodig"
+        >
+          i
+        </span>
+      )}
       <span
         className={[
           "block text-[11px] font-bold tabular-nums leading-none",
-          cancelled ? "text-muted line-through" : "text-green-dark",
+          cancelled
+            ? "text-muted line-through"
+            : done
+              ? "text-muted"
+              : "text-green-dark",
         ].join(" ")}
       >
         {formatTimeNl(afspraak.start_at)}
       </span>
       <span
         className={[
-          "mt-1 block truncate text-[12px] font-semibold leading-tight",
-          cancelled ? "text-muted line-through" : "text-ink",
+          "mt-1 block truncate pr-4 text-[12px] font-semibold leading-tight",
+          cancelled
+            ? "text-muted line-through"
+            : done
+              ? "text-muted"
+              : "text-ink",
         ].join(" ")}
       >
         {naam}
       </span>
       <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
-        {cancelled ? `Geannuleerd · ${soortLabel}` : soortLabel}
+        {[
+          statusNote,
+          soortLabel,
+          afspraak.adviseurs?.naam || null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </span>
     </button>
   );
@@ -439,14 +497,18 @@ function FooterAction({
 
 function AfspraakDetail({
   afspraak,
+  allAfspraken,
   onClose,
   onUpdated,
   onRemoved,
+  onCreated,
 }: {
   afspraak: Afspraak;
+  allAfspraken: Afspraak[];
   onClose: () => void;
   onUpdated: (a: Afspraak) => void;
   onRemoved: (id: string) => void;
+  onCreated: (a: Afspraak) => void;
 }) {
   const [current, setCurrent] = useState(afspraak);
   const [mode, setMode] = useState<"view" | "verzet" | "annuleer">("view");
@@ -458,6 +520,8 @@ function AfspraakDetail({
   const [customStart, setCustomStart] = useState("");
   const [mailKlant, setMailKlant] = useState<boolean | null>(null);
   const [annuleerNotitie, setAnnuleerNotitie] = useState("");
+  const [vervolgAt, setVervolgAt] = useState("");
+  const [vervolgNotitie, setVervolgNotitie] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -468,6 +532,7 @@ function AfspraakDetail({
   const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
+  const needsAction = needsVervolgPunt(current, allAfspraken);
   const straatNr = lead
     ? [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
         .filter(Boolean)
@@ -487,6 +552,8 @@ function AfspraakDetail({
     setUseCustomTime(false);
     setMailKlant(null);
     setAnnuleerNotitie("");
+    setVervolgAt("");
+    setVervolgNotitie("");
   }, [afspraak]);
 
   useEffect(() => {
@@ -626,6 +693,81 @@ function AfspraakDetail({
     }
   }
 
+  async function planVervolgPunt(e: { preventDefault: () => void }) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      if (!vervolgAt) throw new Error("Kies datum en tijd");
+      const parsed = new Date(vervolgAt);
+      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
+      const noteText = vervolgNotitie.trim();
+      if (!noteText) throw new Error("Vul een notitie in");
+      if (!current.adviseur_id) throw new Error("Geen adviseur op deze afspraak");
+
+      const res = await fetch("/api/afspraken", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lead_id: current.lead_id,
+          adviseur_id: current.adviseur_id,
+          start_at: parsed.toISOString(),
+          notities: noteText,
+          soort: "vervolg_punt",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Vervolg punt opslaan mislukt");
+      if (data.afspraak) onCreated(data.afspraak as Afspraak);
+      setVervolgAt("");
+      setVervolgNotitie("");
+      setOkMsg("Vervolg punt gepland in de agenda (intern).");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function afboekLead(status: LeadStatus) {
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update({ status })
+        .eq("id", current.lead_id);
+      if (err) throw err;
+      const next: Afspraak = {
+        ...current,
+        leads: current.leads
+          ? { ...current.leads, status }
+          : current.leads,
+      };
+      setCurrent(next);
+      onUpdated(next);
+      void fetch(`/api/leads/${current.lead_id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "status",
+          titel: `Status → ${leadStatusLabel[status] || status}`,
+          detail: "Via actiepunten na afspraak",
+        }),
+      }).catch(() => {});
+      setOkMsg(
+        `Leadstatus gezet op “${leadStatusLabel[status] || status}”.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Afboeken mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -666,12 +808,101 @@ function AfspraakDetail({
         <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge kind="afspraak" value={current.status} />
+            {needsAction && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#C45A12] px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px]">
+                  i
+                </span>
+                Vervolg punt nodig
+              </span>
+            )}
             {mailed && magKlantMail && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-[11px] font-semibold text-green-dark">
                 Mail verstuurd
               </span>
             )}
           </div>
+
+          {needsAction && mode === "view" && (
+            <section className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF8F3] p-5 shadow-[0_1px_2px_rgba(196,90,18,0.06)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
+                Intern vervolg punt
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Fysieke afspraak is afgelopen. Kies de uitkomst, of plan een
+                intern vervolg punt in de agenda.
+              </p>
+
+              <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-muted">
+                Uitkomst afspraak
+                <select
+                  disabled={busy}
+                  value={
+                    current.leads?.status &&
+                    AFSPRAAK_UITKOMSTEN.includes(current.leads.status)
+                      ? current.leads.status
+                      : ""
+                  }
+                  onChange={(e) => {
+                    const next = e.target.value as LeadStatus;
+                    if (!next) return;
+                    void afboekLead(next);
+                  }}
+                  className={`mt-1 w-full cursor-pointer border bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-green disabled:opacity-60 ${
+                    current.leads?.status &&
+                    AFSPRAAK_UITKOMSTEN.includes(current.leads.status)
+                      ? statusTone("lead", current.leads.status)
+                      : "border-line text-ink"
+                  }`}
+                  aria-label="Uitkomst afspraak"
+                >
+                  <option value="">Kies uitkomst…</option>
+                  {AFSPRAAK_UITKOMSTEN.map((s) => (
+                    <option key={s} value={s}>
+                      {leadStatusLabel[s]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <form
+                onSubmit={(e) => void planVervolgPunt(e)}
+                className="mt-4 space-y-3 border-t border-[#C45A12]/20 pt-4"
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Of plan vervolg punt
+                </p>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Datum &amp; tijd
+                  <input
+                    type="datetime-local"
+                    required
+                    value={vervolgAt}
+                    onChange={(e) => setVervolgAt(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Notitie
+                  <textarea
+                    required
+                    rows={3}
+                    value={vervolgNotitie}
+                    onChange={(e) => setVervolgNotitie(e.target.value)}
+                    placeholder="Wat moet er gebeuren bij dit vervolg?"
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
+                >
+                  {busy ? "Bezig…" : "Vervolg punt plannen"}
+                </button>
+              </form>
+            </section>
+          )}
 
           <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -1118,6 +1349,7 @@ export function AgendaPanel({
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
+        if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
         if (a.status === "geannuleerd" || a.status === "voltooid") return false;
         if (new Date(a.start_at) < new Date()) return false;
         return true;
@@ -1125,7 +1357,7 @@ export function AgendaPanel({
     [afspraken, defaultAdviseurId]
   );
 
-  /** Afspraken in de zichtbare week (incl. geannuleerd, excl. voltooid) */
+  /** Afspraken in de zichtbare week (incl. geannuleerd én voltooid) */
   const weekAfspraken = useMemo(() => {
     const startKey = days[0].key;
     const endExclusive = format(
@@ -1134,10 +1366,10 @@ export function AgendaPanel({
     );
     return afspraken
       .filter((a) => {
-        if (a.status === "voltooid") return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
+        if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
         const key = dayKeyAmsterdam(a.start_at);
         return key >= startKey && key < endExclusive;
       })
@@ -1388,6 +1620,15 @@ export function AgendaPanel({
       </div>
 
       {isHuisbezoek && (
+        <ReistijdHint
+          adviseurId={adviseurId}
+          startAt={useCustomTime ? customStart : startAt}
+          lead={selectedLead}
+          afspraken={afspraken}
+        />
+      )}
+
+      {isHuisbezoek && (
         <>
           <JaNeeField
             label="Partner aanwezig?"
@@ -1617,6 +1858,7 @@ export function AgendaPanel({
                     <AfspraakChip
                       key={a.id}
                       afspraak={a}
+                      allAfspraken={afspraken}
                       variant="day"
                       onOpen={setSelectedAfspraak}
                     />
@@ -1687,6 +1929,7 @@ export function AgendaPanel({
                               <AfspraakChip
                                 key={a.id}
                                 afspraak={a}
+                                allAfspraken={afspraken}
                                 variant="week"
                                 onOpen={setSelectedAfspraak}
                               />
@@ -1706,12 +1949,20 @@ export function AgendaPanel({
       {selectedAfspraak && (
         <AfspraakDetail
           afspraak={selectedAfspraak}
+          allAfspraken={afspraken}
           onClose={() => setSelectedAfspraak(null)}
           onUpdated={(a) => {
             setSelectedAfspraak(a);
             setAfspraken((prev) =>
               prev.map((x) => (x.id === a.id ? a : x))
             );
+            const planned = new Date(a.start_at);
+            setWeekAnchor(planned);
+            setSelectedDayKey(dayKeyAmsterdam(planned));
+          }}
+          onCreated={(a) => {
+            setAfspraken((prev) => [...prev, a]);
+            void load();
             const planned = new Date(a.start_at);
             setWeekAnchor(planned);
             setSelectedDayKey(dayKeyAmsterdam(planned));

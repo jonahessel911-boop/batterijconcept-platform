@@ -14,6 +14,37 @@ function normalizeOmschrijving(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ");
 }
 
+/** Zichtbare kortingsregel (niet verborgen in productprijzen). */
+export function isKortingRegel(r: {
+  omschrijving: string;
+  prijs_ex_btw?: number | null;
+}): boolean {
+  const o = normalizeOmschrijving(r.omschrijving || "").trim();
+  return o === "korting" || o.startsWith("korting ");
+}
+
+/** Korting incl. btw (negatief bedrag, of 0). */
+export function kortingIncVanRegels(
+  regels: {
+    omschrijving: string;
+    aantal: number;
+    prijs_ex_btw: number;
+    btw_percentage?: number | null;
+    totaal_ex_btw?: number | null;
+  }[]
+): number {
+  let inc = 0;
+  for (const r of regels) {
+    if (!isKortingRegel(r)) continue;
+    const lineEx =
+      Number(r.totaal_ex_btw ?? Number(r.aantal) * Number(r.prijs_ex_btw)) || 0;
+    const pct = Number(r.btw_percentage ?? 21) || 21;
+    inc += lineEx * (1 + pct / 100);
+  }
+  const rounded = Math.round(inc * 100) / 100;
+  return rounded < 0 ? rounded : 0;
+}
+
 /** Alpha ESS 9,3 of 18,6 kWh (S5/T10). */
 export function isAlphaEssMetOmvormerRegel(
   text: string | null | undefined
@@ -57,12 +88,15 @@ function virtualRegel(
 /**
  * Vult ontbrekende standaardregels aan voor weergave/PDF
  * (omvormer bij 9,3/18,6 kWh + installatie + Warmtefonds).
+ * Kortingsregels worden weggelaten — die horen onder de prijs als − €.
  */
 export function offerteRegelsVoorWeergave(
   regels: OfferteRegel[],
   opts: { financieringVoorbehoud?: boolean | null } = {}
 ): OfferteRegel[] {
-  const sorted = [...regels].sort((a, b) => a.sort_order - b.sort_order);
+  const sorted = [...regels]
+    .filter((r) => !isKortingRegel(r))
+    .sort((a, b) => a.sort_order - b.sort_order);
   const out: OfferteRegel[] = [];
   const maxSort = sorted.reduce((m, r) => Math.max(m, r.sort_order), 0);
   let next = maxSort + 1;
@@ -75,9 +109,7 @@ export function offerteRegelsVoorWeergave(
     if (alreadyHasOmvormer || omvormerToegevoegd) continue;
     const label = omvormerOmschrijvingVoor(r.omschrijving);
     if (!label) continue;
-    out.push(
-      virtualRegel(label, next++)
-    );
+    out.push(virtualRegel(label, next++));
     // Zelfde aantal als batterijpakket
     out[out.length - 1].aantal = Math.max(1, Number(r.aantal) || 1);
     omvormerToegevoegd = true;

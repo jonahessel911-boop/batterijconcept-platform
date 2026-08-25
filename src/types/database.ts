@@ -9,9 +9,22 @@ export type LeadStatus =
   | "niet_gekwalificeerd"
   | "geen_interesse"
   | "geen_contact"
-  | "deal";
+  | "deal"
+  | "sale_financiering"
+  | "sale_eigen_middelen"
+  | "deur_niet_open"
+  | "afspraak_afgezegd_klant"
+  | "huurwoning"
+  | "foutief_nummer"
+  | "gegevens_niet_overeen";
 
-export type AfspraakSoort = "nieuw" | "bel" | "vervolg_fysiek" | "vervolg_tel";
+export type AfspraakSoort =
+  | "nieuw"
+  | "bel"
+  | "warme_bel"
+  | "vervolg_fysiek"
+  | "vervolg_tel"
+  | "vervolg_punt";
 
 export type Prioriteit = "laag" | "normaal" | "hoog" | "urgent";
 export type OfferteStatus =
@@ -101,6 +114,7 @@ export interface Afspraak {
     | "toevoeging"
     | "straat"
     | "plaats"
+    | "status"
   > | null;
   adviseurs?: Pick<Adviseur, "naam" | "email"> | null;
 }
@@ -134,6 +148,25 @@ export interface Lead {
   created_at: string;
   updated_at: string;
   adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
+}
+
+export type LeadEventSoort =
+  | "status"
+  | "bel"
+  | "afspraak"
+  | "terugbel"
+  | "notitie"
+  | "contact"
+  | "overig";
+
+export interface LeadEvent {
+  id: string;
+  lead_id: string;
+  soort: LeadEventSoort | string;
+  titel: string;
+  detail: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface Product {
