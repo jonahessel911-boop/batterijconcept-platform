@@ -313,20 +313,20 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                     {formatEuro(offerte.btw_bedrag)}
                   </span>
                 </div>
-                <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] bg-wash px-3 py-2.5 text-sm font-semibold">
+                {kortingInc < 0 && (
+                  <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] bg-wash px-3 py-2.5 text-sm font-semibold">
+                    <span className="text-green-deeper">Korting</span>
+                    <span className="tabular-nums text-green-deeper">
+                      {formatEuro(kortingInc)}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2.5 text-sm font-semibold">
                   <span className="text-green-deeper">Totaal incl. BTW</span>
                   <span className="tabular-nums text-green-deeper">
                     {formatEuro(offerte.totaal_inc_btw)}
                   </span>
                 </div>
-                {kortingInc < 0 && (
-                  <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
-                    <span className="text-muted">Korting</span>
-                    <span className="tabular-nums text-ink">
-                      {formatEuro(kortingInc)}
-                    </span>
-                  </div>
-                )}
               </div>
 
               <div className="relative z-10 mt-10 rounded-2xl border border-[#e2e8e4] bg-wash/80 p-5">

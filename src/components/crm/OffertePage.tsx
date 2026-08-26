@@ -720,20 +720,20 @@ export function OffertePage() {
               {formatEuro(offerte.btw_bedrag)}
             </span>
           </p>
+          {kortingInc < 0 && (
+            <p className="font-semibold text-green-deeper">
+              Korting{" "}
+              <span className="ml-4 inline-block w-28">
+                {formatEuro(kortingInc)}
+              </span>
+            </p>
+          )}
           <p className="font-display text-lg font-semibold text-green-deeper">
             Totaal{" "}
             <span className="ml-4 inline-block w-28">
               {formatEuro(offerte.totaal_inc_btw)}
             </span>
           </p>
-          {kortingInc < 0 && (
-            <p className="text-muted">
-              Korting{" "}
-              <span className="ml-4 inline-block w-28 text-ink">
-                {formatEuro(kortingInc)}
-              </span>
-            </p>
-          )}
         </div>
             </>
           );

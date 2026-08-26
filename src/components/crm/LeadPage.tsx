@@ -14,7 +14,7 @@ import type {
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateTimeNl } from "@/lib/format";
-import { leadStatusLabel, statusTone } from "@/lib/labels";
+import { statusTone } from "@/lib/labels";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 import { geenContactPogingLabel } from "@/lib/bel-queue";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
@@ -301,7 +301,7 @@ export function LeadPage() {
     }
   }
 
-  if (loading) {
+  if (loading && !lead) {
     return (
       <DetailShell activeTab="leads">
         <p className="py-20 text-center text-sm text-muted">Lead laden…</p>
@@ -371,7 +371,7 @@ export function LeadPage() {
               {lead.bron ? ` · via ${lead.bron}` : ""}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <Link
               href={`/advies/${lead.id}`}
               className="bg-green px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white hover:bg-green-dark sm:text-xs sm:normal-case sm:tracking-normal"
@@ -393,7 +393,7 @@ export function LeadPage() {
               onChange={(e) =>
                 void updateAdviseur(e.target.value ? e.target.value : null)
               }
-              className="cursor-pointer border border-line bg-white px-2.5 py-1.5 text-[11px] outline-none focus:border-green"
+              className="max-w-[10rem] cursor-pointer border border-line bg-white px-2.5 py-1.5 text-[11px] outline-none focus:border-green"
               aria-label="Koppel adviseur"
             >
               <option value="">Geen adviseur</option>
@@ -413,7 +413,7 @@ export function LeadPage() {
                 }
                 void updateStatus(next);
               }}
-              className={`cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+              className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
               aria-label="Lead status"
             >
               <LeadStatusSelectOptions />
@@ -501,37 +501,42 @@ export function LeadPage() {
           </div>
         )}
 
-        <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-          <section>
-            <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Basis info
-            </h2>
-            <dl className="mt-2 divide-y divide-line border-y border-line">
-              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
-                <dt className="font-semibold text-muted">Contact</dt>
-                <dd className="text-ink">
-                  <LeadContactEditor
-                    lead={lead}
-                    onSaved={(patch) =>
-                      setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                    }
-                  />
-                </dd>
+        <div className="mt-6 grid items-start gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+          <section className="min-w-0 space-y-6">
+            <div>
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Contact
+              </h2>
+              <div className="mt-2 border-y border-line py-3">
+                <LeadContactEditor
+                  lead={lead}
+                  onSaved={(patch) =>
+                    setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                  }
+                />
               </div>
-              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
-                <dt className="font-semibold text-muted">Adres</dt>
-                <dd className="text-ink">
-                  <LeadAdresEditor
-                    lead={lead}
-                    onSaved={(patch) =>
-                      setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                    }
-                  />
-                </dd>
+            </div>
+
+            <div>
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Adres
+              </h2>
+              <div className="mt-2 border-y border-line py-3">
+                <LeadAdresEditor
+                  lead={lead}
+                  onSaved={(patch) =>
+                    setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                  }
+                />
               </div>
-              <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+            </div>
+
+            <dl className="divide-y divide-line border-y border-line">
+              <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-3 text-sm sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
                 <dt className="font-semibold text-muted">Adviseur</dt>
-                <dd className={lead.adviseur_id ? "text-orange" : "text-ink"}>
+                <dd
+                  className={`min-w-0 break-words ${lead.adviseur_id ? "text-orange" : "text-ink"}`}
+                >
                   {lead.adviseurs?.naam || "Niet gekoppeld"}
                 </dd>
               </div>
@@ -541,9 +546,9 @@ export function LeadPage() {
                 lead.utm_medium ||
                 lead.utm_campaign ||
                 lead.utm_source) && (
-                <div className="grid grid-cols-[8rem_1fr] gap-4 py-3 text-sm">
+                <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-3 text-sm sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
                   <dt className="font-semibold text-muted">Bron / ads</dt>
-                  <dd className="space-y-1 text-ink">
+                  <dd className="min-w-0 space-y-1 break-words text-ink">
                     {lead.lander && (
                       <p>
                         <span className="text-muted">Lander: </span>
@@ -575,7 +580,7 @@ export function LeadPage() {
             </dl>
           </section>
 
-          <section>
+          <section className="min-w-0">
             <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
               Geplande afspraken
             </h2>

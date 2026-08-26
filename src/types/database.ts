@@ -82,6 +82,8 @@ export interface Adviseur {
   actief: boolean;
   werktijd_start: string;
   werktijd_eind: string;
+  /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
+  start_adres?: string | null;
 }
 
 export interface Afspraak {

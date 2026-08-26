@@ -819,22 +819,22 @@ export function MaakOfferteModal({
                   )}
                 </span>
               </p>
+              {useKorting &&
+                kortingInc > 0 &&
+                kortingZichtbaar === "zichtbaar" && (
+                  <p className="text-sm font-semibold text-green-deeper">
+                    Korting{" "}
+                    <span className="ml-2 inline-block min-w-[6rem] tabular-nums">
+                      {formatEuro(-kortingInc)}
+                    </span>
+                  </p>
+                )}
               <p className="font-display text-lg font-semibold text-green-deeper">
                 Totaal incl. btw{" "}
                 <span className="ml-2 tabular-nums">
                   {formatEuro(totaalInc)}
                 </span>
               </p>
-              {useKorting &&
-                kortingInc > 0 &&
-                kortingZichtbaar === "zichtbaar" && (
-                  <p className="text-sm text-muted">
-                    Korting{" "}
-                    <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
-                      {formatEuro(-kortingInc)}
-                    </span>
-                  </p>
-                )}
             </div>
 
             {error && (

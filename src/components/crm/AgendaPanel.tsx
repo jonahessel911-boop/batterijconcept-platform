@@ -522,6 +522,7 @@ function AfspraakDetail({
   const [annuleerNotitie, setAnnuleerNotitie] = useState("");
   const [vervolgAt, setVervolgAt] = useState("");
   const [vervolgNotitie, setVervolgNotitie] = useState("");
+  const [uitkomst, setUitkomst] = useState<LeadStatus | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -554,6 +555,7 @@ function AfspraakDetail({
     setAnnuleerNotitie("");
     setVervolgAt("");
     setVervolgNotitie("");
+    setUitkomst("");
   }, [afspraak]);
 
   useEffect(() => {
@@ -699,12 +701,20 @@ function AfspraakDetail({
     setError(null);
     setOkMsg(null);
     try {
+      if (!uitkomst) throw new Error("Kies een uitkomst");
       if (!vervolgAt) throw new Error("Kies datum en tijd");
       const parsed = new Date(vervolgAt);
       if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
       const noteText = vervolgNotitie.trim();
       if (!noteText) throw new Error("Vul een notitie in");
       if (!current.adviseur_id) throw new Error("Geen adviseur op deze afspraak");
+
+      const sb = getSupabaseBrowser();
+      const { error: statusErr } = await sb
+        .from("leads")
+        .update({ status: uitkomst })
+        .eq("id", current.lead_id);
+      if (statusErr) throw statusErr;
 
       const res = await fetch("/api/afspraken", {
         method: "POST",
@@ -719,50 +729,35 @@ function AfspraakDetail({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Vervolg punt opslaan mislukt");
-      if (data.afspraak) onCreated(data.afspraak as Afspraak);
-      setVervolgAt("");
-      setVervolgNotitie("");
-      setOkMsg("Vervolg punt gepland in de agenda (intern).");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Fout");
-    } finally {
-      setBusy(false);
-    }
-  }
 
-  async function afboekLead(status: LeadStatus) {
-    setBusy(true);
-    setError(null);
-    setOkMsg(null);
-    try {
-      const sb = getSupabaseBrowser();
-      const { error: err } = await sb
-        .from("leads")
-        .update({ status })
-        .eq("id", current.lead_id);
-      if (err) throw err;
       const next: Afspraak = {
         ...current,
         leads: current.leads
-          ? { ...current.leads, status }
+          ? { ...current.leads, status: uitkomst }
           : current.leads,
       };
       setCurrent(next);
       onUpdated(next);
+      if (data.afspraak) onCreated(data.afspraak as Afspraak);
+
       void fetch(`/api/leads/${current.lead_id}/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
-          titel: `Status → ${leadStatusLabel[status] || status}`,
-          detail: "Via actiepunten na afspraak",
+          titel: `Status → ${leadStatusLabel[uitkomst] || uitkomst}`,
+          detail: "Via actiepunten na afspraak + vervolg punt",
         }),
       }).catch(() => {});
+
+      setVervolgAt("");
+      setVervolgNotitie("");
+      setUitkomst("");
       setOkMsg(
-        `Leadstatus gezet op “${leadStatusLabel[status] || status}”.`
+        `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
       );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Afboeken mislukt");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
     } finally {
       setBusy(false);
     }
@@ -829,49 +824,40 @@ function AfspraakDetail({
                 Intern vervolg punt
               </p>
               <p className="mt-1 text-sm text-muted">
-                Fysieke afspraak is afgelopen. Kies de uitkomst, of plan een
-                intern vervolg punt in de agenda.
+                Fysieke afspraak is afgelopen. Kies de uitkomst, plan het
+                vervolg (datum &amp; tijd) en voeg een notitie toe. Pas daarna
+                opslaan.
               </p>
-
-              <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-muted">
-                Uitkomst afspraak
-                <select
-                  disabled={busy}
-                  value={
-                    current.leads?.status &&
-                    AFSPRAAK_UITKOMSTEN.includes(current.leads.status)
-                      ? current.leads.status
-                      : ""
-                  }
-                  onChange={(e) => {
-                    const next = e.target.value as LeadStatus;
-                    if (!next) return;
-                    void afboekLead(next);
-                  }}
-                  className={`mt-1 w-full cursor-pointer border bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-green disabled:opacity-60 ${
-                    current.leads?.status &&
-                    AFSPRAAK_UITKOMSTEN.includes(current.leads.status)
-                      ? statusTone("lead", current.leads.status)
-                      : "border-line text-ink"
-                  }`}
-                  aria-label="Uitkomst afspraak"
-                >
-                  <option value="">Kies uitkomst…</option>
-                  {AFSPRAAK_UITKOMSTEN.map((s) => (
-                    <option key={s} value={s}>
-                      {leadStatusLabel[s]}
-                    </option>
-                  ))}
-                </select>
-              </label>
 
               <form
                 onSubmit={(e) => void planVervolgPunt(e)}
-                className="mt-4 space-y-3 border-t border-[#C45A12]/20 pt-4"
+                className="mt-4 space-y-3"
               >
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  Of plan vervolg punt
-                </p>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Uitkomst afspraak
+                  <select
+                    required
+                    disabled={busy}
+                    value={uitkomst}
+                    onChange={(e) =>
+                      setUitkomst((e.target.value as LeadStatus) || "")
+                    }
+                    className={`mt-1 w-full cursor-pointer border bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-green disabled:opacity-60 ${
+                      uitkomst
+                        ? statusTone("lead", uitkomst)
+                        : "border-line text-ink"
+                    }`}
+                    aria-label="Uitkomst afspraak"
+                  >
+                    <option value="">Kies uitkomst…</option>
+                    {AFSPRAAK_UITKOMSTEN.map((s) => (
+                      <option key={s} value={s}>
+                        {leadStatusLabel[s]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
                 <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                   Datum &amp; tijd
                   <input
@@ -895,10 +881,15 @@ function AfspraakDetail({
                 </label>
                 <button
                   type="submit"
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    !uitkomst ||
+                    !vervolgAt ||
+                    !vervolgNotitie.trim()
+                  }
                   className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
                 >
-                  {busy ? "Bezig…" : "Vervolg punt plannen"}
+                  {busy ? "Bezig…" : "Opslaan"}
                 </button>
               </form>
             </section>
@@ -1625,6 +1616,12 @@ export function AgendaPanel({
           startAt={useCustomTime ? customStart : startAt}
           lead={selectedLead}
           afspraken={afspraken}
+          startAdres={
+            adviseurs.find((a) => a.id === adviseurId)?.start_adres || null
+          }
+          startAdresLabel={
+            adviseurs.find((a) => a.id === adviseurId)?.naam || null
+          }
         />
       )}
 

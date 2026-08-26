@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let adminClient: SupabaseClient | null = null;
+let browserClient: SupabaseClient | null = null;
 
 /** Service-role client voor webhook & server-side writes (bypass RLS). */
 export function getSupabaseAdmin(): SupabaseClient {
@@ -23,6 +24,8 @@ export function getSupabaseAdmin(): SupabaseClient {
 }
 
 export function getSupabaseBrowser(): SupabaseClient {
+  if (browserClient) return browserClient;
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -32,7 +35,8 @@ export function getSupabaseBrowser(): SupabaseClient {
     );
   }
 
-  return createClient(url, key);
+  browserClient = createClient(url, key);
+  return browserClient;
 }
 
 export function hasSupabaseConfig(): boolean {

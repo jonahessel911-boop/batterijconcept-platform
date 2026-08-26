@@ -276,18 +276,19 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
       label: "21% BTW",
       value: formatEuro(Number(offerte.btw_bedrag)),
     },
-    {
-      label: "Totaal incl. BTW",
-      value: formatEuro(Number(offerte.totaal_inc_btw)),
-      bold: true,
-    },
   ];
   if (kortingInc < 0) {
     totalRows.push({
       label: "Korting",
       value: formatEuro(kortingInc),
+      bold: true,
     });
   }
+  totalRows.push({
+    label: "Totaal incl. BTW",
+    value: formatEuro(Number(offerte.totaal_inc_btw)),
+    bold: true,
+  });
 
   for (const row of totalRows) {
     doc.setDrawColor(213, 221, 216);

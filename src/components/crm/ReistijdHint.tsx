@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead } from "@/types/database";
-import { adresRegel } from "@/lib/format";
+import { AMSTERDAM_TZ, adresRegel } from "@/lib/format";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 
 type AdresLead = Pick<
@@ -29,13 +30,18 @@ function resolvePrevLead(
   return allLeads?.find((l) => l.id === prev.lead_id) || null;
 }
 
-/** Toont reistijd van vorige fysieke afspraak → nieuwe lead. */
+/**
+ * Reistijd diezelfde dag: vorige fysieke afspraak → lead,
+ * of vanaf startadres adviseur als er die dag nog geen afspraak is.
+ */
 export function ReistijdHint({
   adviseurId,
   startAt,
   lead,
   afspraken,
   allLeads,
+  startAdres,
+  startAdresLabel,
 }: {
   adviseurId: string;
   startAt: string;
@@ -44,8 +50,10 @@ export function ReistijdHint({
     "straat" | "huisnummer" | "toevoeging" | "postcode" | "plaats"
   > | null;
   afspraken: Afspraak[];
-  /** Fallback als afspraken geen nested leads hebben (bijv. BelPanel). */
   allLeads?: AdresLead[];
+  /** Vertrekadres adviseur (Instellingen). */
+  startAdres?: string | null;
+  startAdresLabel?: string | null;
 }) {
   const [text, setText] = useState<string | null>(null);
 
@@ -61,12 +69,15 @@ export function ReistijdHint({
       return;
     }
 
+    const dayKey = formatInTimeZone(startAt, AMSTERDAM_TZ, "yyyy-MM-dd");
+
     const prev = [...afspraken]
       .filter(
         (a) =>
           a.adviseur_id === adviseurId &&
           afspraakBlokkeertAgenda(a.soort) &&
           a.status !== "geannuleerd" &&
+          formatInTimeZone(a.start_at, AMSTERDAM_TZ, "yyyy-MM-dd") === dayKey &&
           new Date(a.end_at || a.start_at).getTime() <= startMs
       )
       .sort(
@@ -75,16 +86,24 @@ export function ReistijdHint({
           new Date(a.end_at || a.start_at).getTime()
       )[0];
 
-    if (!prev) {
-      setText(null);
-      return;
-    }
+    let from = "";
+    let label = "";
 
-    const prevLead = resolvePrevLead(prev, allLeads);
-    const from = prevLead ? adresRegel(prevLead) : "";
-    if (!from || from === "—") {
-      setText(null);
-      return;
+    if (prev) {
+      const prevLead = resolvePrevLead(prev, allLeads);
+      from = prevLead ? adresRegel(prevLead) : "";
+      label = prevLead?.naam || "vorige afspraak";
+      if (!from || from === "—") {
+        setText(null);
+        return;
+      }
+    } else {
+      from = (startAdres || "").trim();
+      if (!from || from === "—") {
+        setText(null);
+        return;
+      }
+      label = startAdresLabel?.trim() || "startpunt";
     }
 
     let cancelled = false;
@@ -98,8 +117,11 @@ export function ReistijdHint({
           setText(null);
           return;
         }
+        const prefix = prev
+          ? `Reistijd vanaf vorige afspraak (${label})`
+          : `Reistijd vanaf startpunt (${label})`;
         setText(
-          `Reistijd vanaf vorige afspraak (${prevLead?.naam || "vorige"}): ${data.durationText}${
+          `${prefix}: ${data.durationText}${
             data.distanceText ? ` · ${data.distanceText}` : ""
           }`
         );
@@ -110,7 +132,15 @@ export function ReistijdHint({
     return () => {
       cancelled = true;
     };
-  }, [adviseurId, startAt, lead, afspraken, allLeads]);
+  }, [
+    adviseurId,
+    startAt,
+    lead,
+    afspraken,
+    allLeads,
+    startAdres,
+    startAdresLabel,
+  ]);
 
   if (!text) return null;
   return (

@@ -17,6 +17,8 @@ import type { Adviseur } from "@/types/database";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, created_at, updated_at";
+const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
 
 function stripHash(row: Record<string, unknown>): Adviseur {
@@ -41,7 +43,20 @@ export async function GET(req: NextRequest) {
       query = query.eq("actief", true);
     }
 
-    const { data: adviseurs, error } = await query;
+    let { data: adviseurs, error } = await query;
+    if (
+      error &&
+      (error.code === "42703" || error.message?.includes("start_adres"))
+    ) {
+      let retry = sb
+        .from("adviseurs")
+        .select(ADVISEUR_PUBLIC_FALLBACK)
+        .order("naam");
+      if (!includeInactive) retry = retry.eq("actief", true);
+      const second = await retry;
+      adviseurs = (second.data || null) as typeof adviseurs;
+      error = second.error;
+    }
     if (error) throw error;
 
     if (!adviseurId) {
@@ -191,6 +206,7 @@ export async function PATCH(req: NextRequest) {
     email?: string | null;
     telefoon?: string | null;
     actief?: boolean;
+    start_adres?: string | null;
     resend_invite?: boolean;
     password?: string;
   };
@@ -305,17 +321,43 @@ export async function PATCH(req: NextRequest) {
     if (typeof body.actief === "boolean") {
       patch.actief = body.actief;
     }
+    if (body.start_adres !== undefined) {
+      patch.start_adres = body.start_adres?.trim() || null;
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
     }
 
-    const { data, error } = await sb
+    let { data, error } = await sb
       .from("adviseurs")
       .update(patch)
       .eq("id", body.id)
       .select(ADVISEUR_PUBLIC)
       .single();
+
+    if (
+      error &&
+      (error.code === "42703" || error.message?.includes("start_adres"))
+    ) {
+      if (patch.start_adres !== undefined) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-startadres.sql uit in Supabase.",
+          },
+          { status: 503 }
+        );
+      }
+      const retry = await sb
+        .from("adviseurs")
+        .update(patch)
+        .eq("id", body.id)
+        .select(ADVISEUR_PUBLIC_FALLBACK)
+        .single();
+      data = retry.data as typeof data;
+      error = retry.error;
+    }
 
     if (error || !data) {
       return NextResponse.json(

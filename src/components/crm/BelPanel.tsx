@@ -21,6 +21,7 @@ import {
   sortBelQueue,
 } from "@/lib/bel-queue";
 import { leadStatusLabel } from "@/lib/labels";
+import { FastDirectionButton } from "./FastDirectionButton";
 import { ReistijdHint } from "./ReistijdHint";
 
 async function clientLogLeadEvent(
@@ -1080,12 +1081,46 @@ export function BelPanel({
                 </div>
               )}
             </div>
+            {adviseurId && !useCustomTime && (
+              <FastDirectionButton
+                key={`${current.id}-${adviseurId}`}
+                adviseurId={adviseurId}
+                lead={current}
+                afspraken={afspraken}
+                allLeads={leads}
+                startAdres={
+                  planAdviseurs.find((a) => a.id === adviseurId)?.start_adres ||
+                  null
+                }
+                startAdresLabel={
+                  planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
+                }
+                freeSlots={slots
+                  .filter((s) => !s.busy)
+                  .map((s) => ({
+                    start_at: s.start_at,
+                    end_at: s.end_at,
+                  }))}
+                onSelectSlot={(iso) => {
+                  setUseCustomTime(false);
+                  setCustomStart("");
+                  setStartAt(iso);
+                }}
+              />
+            )}
             <ReistijdHint
               adviseurId={adviseurId}
               startAt={useCustomTime ? customStart : startAt}
               lead={current}
               afspraken={afspraken}
               allLeads={leads}
+              startAdres={
+                planAdviseurs.find((a) => a.id === adviseurId)?.start_adres ||
+                null
+              }
+              startAdresLabel={
+                planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
+              }
             />
             <JaNeeField
               label="Partner aanwezig?"

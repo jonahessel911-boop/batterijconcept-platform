@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { buildRapportageTree } from "@/lib/rapportage";
+import {
+  buildAttributionTree,
+  buildRapportageTree,
+  type RapportageLead,
+} from "@/lib/rapportage";
 
 export const runtime = "nodejs";
 
@@ -14,7 +18,11 @@ export async function GET(req: NextRequest) {
 
     const [leadsRes, afsprakenRes, offertesRes, projectenRes, facturenRes] =
       await Promise.all([
-        sb.from("leads").select("id, created_at, status, adviseur_id"),
+        sb
+          .from("leads")
+          .select(
+            "id, created_at, status, adviseur_id, lander, campaign_name, utm_campaign"
+          ),
         sb
           .from("afspraken")
           .select("id, lead_id, adviseur_id, start_at, created_at, status, soort"),
@@ -35,6 +43,27 @@ export async function GET(req: NextRequest) {
             "id, lead_id, status, bedrag_ex_btw, betaald_op, factuurdatum, leads(adviseur_id)"
           ),
       ]);
+
+    let leads: RapportageLead[] = (leadsRes.data || []) as RapportageLead[];
+    if (leadsRes.error) {
+      if (
+        leadsRes.error.code === "42703" ||
+        leadsRes.error.message?.includes("lander") ||
+        leadsRes.error.message?.includes("campaign_name")
+      ) {
+        const retry = await sb
+          .from("leads")
+          .select("id, created_at, status, adviseur_id, utm_campaign");
+        if (retry.error) throw retry.error;
+        leads = (retry.data || []).map((l) => ({
+          ...(l as RapportageLead),
+          lander: null,
+          campaign_name: null,
+        }));
+      } else {
+        throw leadsRes.error;
+      }
+    }
 
     const projectenRaw = projectenRes.data || [];
     const projecten = projectenRaw.map((p) => {
@@ -106,7 +135,6 @@ export async function GET(req: NextRequest) {
       }
     );
 
-    if (leadsRes.error) throw leadsRes.error;
     let afsprakenData: {
       id: string;
       lead_id: string;
@@ -140,18 +168,18 @@ export async function GET(req: NextRequest) {
     }
     if (offertesRes.error) throw offertesRes.error;
 
-    const tree = buildRapportageTree(
-      {
-        leads: leadsRes.data || [],
-        afspraken: afsprakenData,
-        offertes,
-        projecten: projectenSafe,
-        facturen,
-      },
-      adviseurId
-    );
+    const raw = {
+      leads,
+      afspraken: afsprakenData,
+      offertes,
+      projecten: projectenSafe,
+      facturen,
+    };
 
-    return NextResponse.json({ tree });
+    const tree = buildRapportageTree(raw, adviseurId);
+    const attribution = buildAttributionTree(raw, adviseurId);
+
+    return NextResponse.json({ tree, attribution });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Rapportage laden mislukt") },

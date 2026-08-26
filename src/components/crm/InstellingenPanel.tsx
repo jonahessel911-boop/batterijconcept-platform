@@ -334,6 +334,21 @@ export function InstellingenPanel({
                     placeholder="Telefoon"
                     aria-label="Telefoon"
                   />
+                  <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Startadres (reistijd)
+                    <input
+                      defaultValue={a.start_adres || ""}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim() || null;
+                        if (v !== (a.start_adres || null)) {
+                          void saveRow(a, { start_adres: v });
+                        }
+                      }}
+                      className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                      placeholder="Bijv. Alfred Nobellaan 68, 3731 DW De Bilt"
+                      aria-label="Startadres"
+                    />
+                  </label>
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                     <span
                       className={
@@ -386,6 +401,7 @@ export function InstellingenPanel({
                     <th>Naam</th>
                     <th>E-mail</th>
                     <th>Telefoon</th>
+                    <th>Startadres</th>
                     <th>Status</th>
                     <th></th>
                   </tr>
@@ -463,6 +479,20 @@ function PasswordRow({
               const v = e.target.value.trim() || null;
               if (v !== a.telefoon) void saveRow(a, { telefoon: v });
             }}
+            className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
+          />
+        </td>
+        <td className="min-w-[14rem]">
+          <input
+            defaultValue={a.start_adres || ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== (a.start_adres || null)) {
+                void saveRow(a, { start_adres: v });
+              }
+            }}
+            placeholder="Vertrekadres…"
+            title="Startpunt voor reistijd / eerste afspraak van de dag"
             className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
           />
         </td>

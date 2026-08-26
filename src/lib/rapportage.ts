@@ -167,8 +167,18 @@ function factuurBetaalIso(f: {
   return raw;
 }
 
+export type RapportageLead = {
+  id: string;
+  created_at: string;
+  status: string;
+  adviseur_id: string | null;
+  lander?: string | null;
+  campaign_name?: string | null;
+  utm_campaign?: string | null;
+};
+
 export type RapportageRaw = {
-  leads: { id: string; created_at: string; status: string; adviseur_id: string | null }[];
+  leads: RapportageLead[];
   afspraken: {
     id: string;
     lead_id: string;
@@ -207,6 +217,193 @@ export type RapportageRaw = {
     adviseur_id: string | null;
   }[];
 };
+
+/** Compacte metrics voor lander/campaign-attributie (cohort). */
+export type AttributionMetrics = {
+  leads: number;
+  /** Unieke leads met ≥1 niet-geannuleerde fysieke afspraak. */
+  afspraken: number;
+  /** Ondertekende offertes van leads in deze groep. */
+  deals: number;
+  conversieAfspraak: number;
+  conversieDeal: number;
+};
+
+export type AttributionNode = {
+  key: string;
+  level: "lander" | "campaign";
+  label: string;
+  metrics: AttributionMetrics;
+  children?: AttributionNode[];
+};
+
+const GEEN_LANDER = "(geen lander)";
+const GEEN_CAMPAIGN = "(geen campaign)";
+
+function normalizeAttr(value: string | null | undefined, fallback: string): string {
+  const t = (value || "").trim();
+  return t || fallback;
+}
+
+function leadCampaign(lead: RapportageLead): string {
+  return normalizeAttr(
+    lead.campaign_name || lead.utm_campaign,
+    GEEN_CAMPAIGN
+  );
+}
+
+function leadLander(lead: RapportageLead): string {
+  return normalizeAttr(lead.lander, GEEN_LANDER);
+}
+
+function emptyAttribution(): AttributionMetrics {
+  return {
+    leads: 0,
+    afspraken: 0,
+    deals: 0,
+    conversieAfspraak: 0,
+    conversieDeal: 0,
+  };
+}
+
+function finalizeAttribution(m: AttributionMetrics): AttributionMetrics {
+  return {
+    ...m,
+    conversieAfspraak:
+      m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
+    conversieDeal:
+      m.leads > 0 ? Math.round((m.deals / m.leads) * 1000) / 10 : 0,
+  };
+}
+
+/**
+ * Cohort-attributie: lander → campaign.
+ * Leads in de groep; afspraken = unieke leads met netto fysieke afspraak;
+ * deals = ondertekende offertes van die leads.
+ */
+export function buildAttributionTree(
+  raw: RapportageRaw,
+  adviseurId: string | null
+): AttributionNode[] {
+  const leads = adviseurId
+    ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
+    : raw.leads;
+  const leadIds = new Set(leads.map((l) => l.id));
+
+  const afspraakLeadIds = new Set<string>();
+  for (const a of raw.afspraken) {
+    if (!leadIds.has(a.lead_id)) continue;
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
+    afspraakLeadIds.add(a.lead_id);
+  }
+
+  const signed = raw.offertes.filter(
+    (o) =>
+      o.status === "ondertekend" &&
+      o.ondertekend_op &&
+      leadIds.has(o.lead_id)
+  );
+  const dealCounts = new Map<string, number>();
+  for (const o of signed) {
+    dealCounts.set(o.lead_id, (dealCounts.get(o.lead_id) || 0) + 1);
+  }
+
+  type Bucket = {
+    leadIds: string[];
+    afspraakLeads: Set<string>;
+    dealLeads: Set<string>;
+    deals: number;
+  };
+
+  const byLander = new Map<string, Map<string, Bucket>>();
+
+  for (const lead of leads) {
+    const lander = leadLander(lead);
+    const campaign = leadCampaign(lead);
+    let campaigns = byLander.get(lander);
+    if (!campaigns) {
+      campaigns = new Map();
+      byLander.set(lander, campaigns);
+    }
+    let bucket = campaigns.get(campaign);
+    if (!bucket) {
+      bucket = {
+        leadIds: [],
+        afspraakLeads: new Set(),
+        dealLeads: new Set(),
+        deals: 0,
+      };
+      campaigns.set(campaign, bucket);
+    }
+    bucket.leadIds.push(lead.id);
+    if (afspraakLeadIds.has(lead.id)) bucket.afspraakLeads.add(lead.id);
+    const nDeals = dealCounts.get(lead.id) || 0;
+    if (nDeals > 0) {
+      bucket.dealLeads.add(lead.id);
+      bucket.deals += nDeals;
+    }
+  }
+
+  function metricsFromBucket(b: Bucket): AttributionMetrics {
+    const m = emptyAttribution();
+    m.leads = b.leadIds.length;
+    m.afspraken = b.afspraakLeads.size;
+    m.deals = b.deals;
+    const out = finalizeAttribution(m);
+    out.conversieDeal =
+      b.leadIds.length > 0
+        ? Math.round((b.dealLeads.size / b.leadIds.length) * 1000) / 10
+        : 0;
+    return out;
+  }
+
+  const landers = [...byLander.entries()].sort((a, b) => {
+    const leadsA = [...a[1].values()].reduce((s, x) => s + x.leadIds.length, 0);
+    const leadsB = [...b[1].values()].reduce((s, x) => s + x.leadIds.length, 0);
+    if (leadsB !== leadsA) return leadsB - leadsA;
+    return a[0].localeCompare(b[0], "nl");
+  });
+
+  return landers.map(([lander, campaigns]) => {
+    const campaignEntries = [...campaigns.entries()].sort((a, b) => {
+      if (b[1].leadIds.length !== a[1].leadIds.length) {
+        return b[1].leadIds.length - a[1].leadIds.length;
+      }
+      return a[0].localeCompare(b[0], "nl");
+    });
+
+    const children: AttributionNode[] = campaignEntries.map(
+      ([campaign, bucket]) => ({
+        key: `campaign:${lander}::${campaign}`,
+        level: "campaign" as const,
+        label: campaign,
+        metrics: metricsFromBucket(bucket),
+      })
+    );
+
+    const landerBucket: Bucket = {
+      leadIds: [],
+      afspraakLeads: new Set(),
+      dealLeads: new Set(),
+      deals: 0,
+    };
+    for (const [, b] of campaignEntries) {
+      landerBucket.leadIds.push(...b.leadIds);
+      for (const id of b.afspraakLeads) landerBucket.afspraakLeads.add(id);
+      for (const id of b.dealLeads) landerBucket.dealLeads.add(id);
+      landerBucket.deals += b.deals;
+    }
+
+    return {
+      key: `lander:${lander}`,
+      level: "lander" as const,
+      label: lander,
+      metrics: metricsFromBucket(landerBucket),
+      children,
+    };
+  });
+}
 
 /** Tijdstip waarop de afspraak is ingepland (beller-prestatie), niet de afspraakdatum. */
 function afspraakIngeplandAt(a: {
