@@ -13,8 +13,8 @@ export const AANBETALING_MODUS_OPTIES: {
 }[] = [
   {
     value: "restant",
-    label: "Restant € 8.500",
-    hint: "Aanbetaling = totaal incl. btw − € 8.500 (Warmtefonds).",
+    label: "Restant max. € 8.500",
+    hint: "Aanbetaling = order incl. − Warmtefonds-deel (max. € 8.500, nooit meer dan order excl. btw).",
   },
   {
     value: "btw",
@@ -32,11 +32,25 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Warmtefonds-restant: vast plafond € 8.500, maar nooit hoger dan order excl. btw
+ * (je kunt geen groter Warmtefonds-deel hebben dan de order zonder btw).
+ */
+export function warmtefondsRestantIncBtw(orderExBtw: number): number {
+  return round2(
+    Math.max(0, Math.min(RESTANT_VAST_INC_BTW, round2(orderExBtw)))
+  );
+}
+
 export function parseEuroInput(raw: string): number {
   return Number(String(raw).replace(/\s/g, "").replace(",", ".")) || 0;
 }
 
-function splitIncToExBtw(inc: number): { ex: number; btw: number; inc: number } {
+export function splitIncToExBtw(inc: number): {
+  ex: number;
+  btw: number;
+  inc: number;
+} {
   const bedragIncBtw = round2(Math.max(0, inc));
   const bedragExBtw = round2(
     bedragIncBtw / (1 + AANBETALING_BTW_PERCENTAGE / 100)
@@ -46,6 +60,68 @@ function splitIncToExBtw(inc: number): { ex: number; btw: number; inc: number } 
     btw: round2(bedragIncBtw - bedragExBtw),
     inc: bedragIncBtw,
   };
+}
+
+export function isAanbetalingFactuurOmschrijving(
+  omschrijving: string | null | undefined
+): boolean {
+  return /aanbetaling|btw-factuur/i.test(omschrijving || "");
+}
+
+export function isRestantFactuurOmschrijving(
+  omschrijving: string | null | undefined
+): boolean {
+  return /restantfactuur|eindfactuur|restant bij/i.test(omschrijving || "");
+}
+
+/** Order incl. − al gefactureerd (excl. vervallen). Optioneel: negeer restantregels (bij herberekenen concept). */
+export function nogTeFacturerenRestant(opts: {
+  orderIncBtw: number;
+  facturen: {
+    status: string;
+    bedrag_inc_btw: number;
+    omschrijving?: string | null;
+  }[];
+  /** true = bestaande restantfactuur niet meerekenen (voor bijwerken concept) */
+  excludeRestant?: boolean;
+}): number {
+  const orderIncBtw = round2(opts.orderIncBtw);
+  let gefactureerd = 0;
+  for (const f of opts.facturen) {
+    if (f.status === "vervallen") continue;
+    if (opts.excludeRestant && isRestantFactuurOmschrijving(f.omschrijving)) {
+      continue;
+    }
+    gefactureerd = round2(gefactureerd + (Number(f.bedrag_inc_btw) || 0));
+  }
+  return round2(Math.max(0, orderIncBtw - gefactureerd));
+}
+
+/**
+ * Bedrag voor restantfactuur.
+ * Warmtefonds: Warmtefonds-deel (max € 8.500, capped op order excl.),
+ * nooit hoger dan wat nog open staat na bestaande facturen.
+ */
+export function restantFactuurBedrag(opts: {
+  orderIncBtw: number;
+  orderExBtw?: number | null;
+  warmtefonds?: boolean | null;
+  facturen: {
+    status: string;
+    bedrag_inc_btw: number;
+    omschrijving?: string | null;
+  }[];
+  excludeRestant?: boolean;
+}): number {
+  const open = nogTeFacturerenRestant({
+    orderIncBtw: opts.orderIncBtw,
+    facturen: opts.facturen,
+    excludeRestant: opts.excludeRestant,
+  });
+  if (!opts.warmtefonds) return open;
+  const orderEx = round2(Number(opts.orderExBtw) || 0);
+  if (orderEx <= 0) return open;
+  return round2(Math.min(open, warmtefondsRestantIncBtw(orderEx)));
 }
 
 export type Aanbetaling = {
@@ -104,9 +180,8 @@ export function aanbetalingVanOrder(opts: {
       const raw = round2(Number(opts.handmatigIncBtw) || 0);
       bedragIncBtw = round2(Math.min(Math.max(0, raw), orderIncBtw));
     } else {
-      bedragIncBtw = round2(
-        Math.max(0, orderIncBtw - RESTANT_VAST_INC_BTW)
-      );
+      const restant = warmtefondsRestantIncBtw(orderExBtw);
+      bedragIncBtw = round2(Math.max(0, orderIncBtw - restant));
     }
   }
 

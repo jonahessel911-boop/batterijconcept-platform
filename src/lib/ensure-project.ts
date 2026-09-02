@@ -99,13 +99,14 @@ export async function ensureProjectForOfferte(
     project_nummer: nummer as string,
     status: "schouw_inplannen",
     titel,
-    notities: `Automatisch aangemaakt na ondertekening van ${opts.offerteNummer}.`,
+    notities: `Aangemaakt na afronden backoffice-actie voor ${opts.offerteNummer}.`,
     projectkosten: STANDAARD_INSTALLATIEKOSTEN,
     aanbetaling_te_innen_inc: aanbetalingTeInnen,
     backoffice_notitie: backofficeNotitie,
     installateur_notitie: installateurNotitie,
     backoffice_notitie_door: backofficeNotitieDoor,
     installateur_notitie_door: installateurNotitieDoor,
+    backoffice_afgerond_at: new Date().toISOString(),
   };
   if (partnerId) {
     insertRow.installatie_partner_id = partnerId;
@@ -125,6 +126,7 @@ export async function ensureProjectForOfferte(
       error.message?.includes("aanbetaling_te_innen_inc") ||
       error.message?.includes("backoffice_notitie") ||
       error.message?.includes("installateur_notitie") ||
+      error.message?.includes("backoffice_afgerond_at") ||
       error.code === "42703")
   ) {
     delete insertRow.installatie_partner_id;
@@ -133,6 +135,7 @@ export async function ensureProjectForOfferte(
     delete insertRow.installateur_notitie;
     delete insertRow.backoffice_notitie_door;
     delete insertRow.installateur_notitie_door;
+    delete insertRow.backoffice_afgerond_at;
     const retry = await sb
       .from("projecten")
       .insert(insertRow)

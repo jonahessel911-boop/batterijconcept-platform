@@ -31,16 +31,34 @@ export async function GET(
     }
 
     const sb = getSupabaseAdmin();
-    const { data: order, error } = await sb
+    let { data: order, error } = await sb
       .from("projecten")
       .select(
-        `id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities,
-         monteur, startdatum, opleverdatum, created_at, offerte_id,
-         leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats)`
+        `id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
+         installateur_notitie, installateur_notitie_door,
+         monteur, startdatum, opleverdatum, created_at,
+         leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats)`
       )
       .eq("id", projectId)
       .eq("installatie_partner_id", partner.id)
       .single();
+
+    if (
+      error &&
+      (error.message?.includes("installateur_notitie") ||
+        error.code === "42703")
+    ) {
+      ({ data: order, error } = await sb
+        .from("projecten")
+        .select(
+          `id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
+           monteur, startdatum, opleverdatum, created_at,
+           leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats)`
+        )
+        .eq("id", projectId)
+        .eq("installatie_partner_id", partner.id)
+        .single());
+    }
 
     if (error || !order) {
       return NextResponse.json(
@@ -49,22 +67,13 @@ export async function GET(
       );
     }
 
-    const [{ data: fotos }, offerteRes] = await Promise.all([
-      sb
-        .from("project_fotos")
-        .select("id, project_id, storage_path, bestandsnaam, omschrijving, created_at")
-        .eq("project_id", projectId)
-        .order("created_at", { ascending: true }),
-      order.offerte_id
-        ? sb
-            .from("offertes")
-            .select(
-              "offerte_nummer, titel, status, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, intro_tekst, offerte_regels(omschrijving, aantal, prijs_ex_btw, totaal_ex_btw, sort_order)"
-            )
-            .eq("id", order.offerte_id)
-            .single()
-        : Promise.resolve({ data: null }),
-    ]);
+    const { data: fotos } = await sb
+      .from("project_fotos")
+      .select(
+        "id, project_id, storage_path, bestandsnaam, omschrijving, created_at"
+      )
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: true });
 
     const paths = (fotos || []).map((f) => f.storage_path);
     let urlMap = new Map<string, string>();
@@ -84,21 +93,10 @@ export async function GET(
       url: urlMap.get(f.storage_path) || null,
     }));
 
-    const offerte = offerteRes.data
-      ? {
-          ...offerteRes.data,
-          offerte_regels: (
-            (offerteRes.data as { offerte_regels?: { sort_order: number }[] })
-              .offerte_regels || []
-          ).sort((a, b) => a.sort_order - b.sort_order),
-        }
-      : null;
-
     return NextResponse.json({
       partner: { id: partner.id, naam: partner.naam },
       order,
       fotos: fotosWithUrl,
-      offerte,
     });
   } catch (e) {
     return NextResponse.json(

@@ -8,9 +8,14 @@ import type {
   RapportageMetrics,
   RapportageNode,
 } from "@/lib/rapportage";
+import type {
+  FinancialDashboardData,
+  FinancialDateRange,
+} from "@/lib/financial-dashboard";
 import { formatEuro } from "@/lib/format";
+import { FinancialDashboard } from "./FinancialDashboard";
 
-type ViewMode = "periode" | "attributie";
+type ViewMode = "periode" | "attributie" | "financial";
 
 function formatCompact(n: number): string {
   const abs = Math.abs(n);
@@ -274,8 +279,13 @@ export function RapportagePanel({
 }) {
   const [adviseurId, setAdviseurId] = useState(defaultAdviseurId || "");
   const [view, setView] = useState<ViewMode>("periode");
+  const [financialRange, setFinancialRange] =
+    useState<FinancialDateRange>("last_30_days");
   const [tree, setTree] = useState<RapportageNode[]>([]);
   const [attribution, setAttribution] = useState<AttributionNode[]>([]);
+  const [financial, setFinancial] = useState<FinancialDashboardData | null>(
+    null
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -284,20 +294,22 @@ export function RapportagePanel({
     setLoading(true);
     setError(null);
     try {
-      const qs = adviseurId
-        ? `?adviseur_id=${encodeURIComponent(adviseurId)}`
-        : "";
+      const params = new URLSearchParams();
+      if (adviseurId) params.set("adviseur_id", adviseurId);
+      params.set("financial_range", financialRange);
+      const qs = params.toString() ? `?${params.toString()}` : "";
       const res = await fetch(`/api/rapportage${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       setTree(data.tree || []);
       setAttribution(data.attribution || []);
+      setFinancial(data.financial || null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
       setLoading(false);
     }
-  }, [adviseurId]);
+  }, [adviseurId, financialRange]);
 
   useEffect(() => {
     void load();
@@ -317,8 +329,21 @@ export function RapportagePanel({
 
   const headers =
     view === "periode" ? PERIODE_HEADERS : ATTRIBUTION_HEADERS;
-  const rows =
-    view === "periode" ? tree : attribution;
+  const rows = view === "periode" ? tree : attribution;
+
+  const viewTitle =
+    view === "periode"
+      ? "Periode overzicht"
+      : view === "attributie"
+        ? "Lander & campaign"
+        : "Financial Dashboard";
+
+  const viewDescription =
+    view === "periode"
+      ? "Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto en Lead→afspraak op het moment dat de afspraak is ingepland (niet lead-aanmaakdatum of bezoekdatum)."
+      : view === "attributie"
+        ? "Lander → campaign · cohort: van de leads uit deze bron, hoeveel kregen een afspraak en hoeveel deals (ondertekende offertes). Campaign valt terug op utm_campaign als campaign_name leeg is."
+        : "Omzet, winst, marge, ROI en CAC — met vergelijking t.o.v. de vorige periode.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -327,17 +352,11 @@ export function RapportagePanel({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="font-display text-base font-semibold text-ink">
-                {view === "periode"
-                  ? "Periode overzicht"
-                  : "Lander & campaign"}
+                {viewTitle}
               </p>
-              <p className="mt-0.5 text-sm text-muted">
-                {view === "periode"
-                  ? "Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto en Lead→afspraak op het moment dat de afspraak is ingepland (niet lead-aanmaakdatum of bezoekdatum)."
-                  : "Lander → campaign · cohort: van de leads uit deze bron, hoeveel kregen een afspraak en hoeveel deals (ondertekende offertes). Campaign valt terug op utm_campaign als campaign_name leeg is."}
-              </p>
+              <p className="mt-0.5 text-sm text-muted">{viewDescription}</p>
             </div>
-            <div className="flex shrink-0 gap-1 border border-line p-0.5">
+            <div className="flex shrink-0 flex-wrap gap-1 border border-line p-0.5">
               <button
                 type="button"
                 onClick={() => {
@@ -367,6 +386,21 @@ export function RapportagePanel({
                 ].join(" ")}
               >
                 Lander / campaign
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setView("financial");
+                  setOpen(new Set());
+                }}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold transition",
+                  view === "financial"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Financial Dashboard
               </button>
             </div>
           </div>
@@ -416,7 +450,15 @@ export function RapportagePanel({
           </p>
         )}
 
-        {loading ? (
+        {view === "financial" ? (
+          <FinancialDashboard
+            data={financial}
+            range={financialRange}
+            onRangeChange={setFinancialRange}
+            loading={loading}
+            adviseurs={adviseurs}
+          />
+        ) : loading ? (
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">

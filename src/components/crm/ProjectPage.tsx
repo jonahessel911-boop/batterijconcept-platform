@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import type { Factuur, Offerte, Project, ProjectStatus, ServiceVerzoek } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 import {
   aanbetalingVanOrder,
+  factuurIsBetaald,
+  isRestantFactuurOmschrijving,
   openstaandOpOrder,
+  restantFactuurBedrag,
 } from "@/lib/aanbetaling";
 import { AanbetalingSamenvatting } from "./AanbetalingInstelling";
 import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
@@ -21,6 +24,10 @@ import {
 import { StatusBadge } from "./StatusBadge";
 import { ProjectServiceSection } from "./ProjectServiceSection";
 import { ProjectSchouwSection } from "./ProjectSchouwSection";
+import {
+  backofficeHref,
+  parseBoView,
+} from "./BackofficePanel";
 import { Breadcrumb, DetailShell, NotFoundState } from "./DetailChrome";
 
 type ProjectTab = "activiteit" | "schouw" | "betaling";
@@ -67,6 +74,15 @@ function SidebarField({
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const backView = parseBoView(searchParams.get("from"));
+  const backHref = backofficeHref(backView);
+  const backLabel =
+    backView === "agenda"
+      ? "Terug naar agenda"
+      : backView === "orders"
+        ? "Terug naar projecten"
+        : "Terug naar acties";
   const [project, setProject] = useState<Project | null>(null);
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -80,6 +96,10 @@ export function ProjectPage() {
   const [kostenSaving, setKostenSaving] = useState(false);
   const [tab, setTab] = useState<ProjectTab>("activiteit");
   const [aboutOpen, setAboutOpen] = useState(true);
+  const [restantBusy, setRestantBusy] = useState(false);
+  const [restantError, setRestantError] = useState<string | null>(null);
+  const [factuurBusyId, setFactuurBusyId] = useState<string | null>(null);
+  const [factuurError, setFactuurError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,7 +145,11 @@ export function ProjectPage() {
           sb
             .from("facturen")
             .select("*, leads(naam, lead_number)")
-            .eq("project_id", id),
+            .or(
+              proj.offerte_id
+                ? `project_id.eq.${id},offerte_id.eq.${proj.offerte_id}`
+                : `project_id.eq.${id}`
+            ),
           sb
             .from("service_verzoeken")
             .select("*")
@@ -134,7 +158,16 @@ export function ProjectPage() {
         ]);
 
         setOfferte((o.data as Offerte) || null);
-        setFacturen((f.data as Factuur[]) || []);
+        const rawFacturen = (f.data as Factuur[]) || [];
+        // Dedup bij overlap project_id + offerte_id
+        const seen = new Set<string>();
+        setFacturen(
+          rawFacturen.filter((x) => {
+            if (seen.has(x.id)) return false;
+            seen.add(x.id);
+            return true;
+          })
+        );
         if (sv && "error" in sv && sv.error) {
           setServiceVerzoeken([]);
         } else {
@@ -201,6 +234,68 @@ export function ProjectPage() {
     }
   }
 
+  async function maakRestantFactuur() {
+    if (!offerte?.id) return;
+    setRestantBusy(true);
+    setRestantError(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerte.id}/factuur`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ soort: "restant" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Aanmaken mislukt");
+      if (data.skipped) {
+        setRestantError(data.reason || "Geen restant te factureren");
+        return;
+      }
+      await load();
+      if (data.factuur?.id) {
+        window.location.href = `/facturen/${data.factuur.id}`;
+      }
+    } catch (e) {
+      setRestantError(e instanceof Error ? e.message : "Aanmaken mislukt");
+    } finally {
+      setRestantBusy(false);
+    }
+  }
+
+  async function markFactuurBetaald(f: Factuur) {
+    if (
+      !confirm(`Factuur ${f.factuur_nummer} markeren als betaald?`)
+    ) {
+      return;
+    }
+    setFactuurBusyId(f.id);
+    setFactuurError(null);
+    try {
+      const res = await fetch(`/api/facturen/${f.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "betaald",
+          betaald_op: new Date().toISOString().slice(0, 10),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Markeren als betaald mislukt");
+      if (data.factuur) {
+        setFacturen((prev) =>
+          prev.map((x) => (x.id === f.id ? (data.factuur as Factuur) : x))
+        );
+      } else {
+        await load();
+      }
+    } catch (e) {
+      setFactuurError(
+        e instanceof Error ? e.message : "Markeren als betaald mislukt"
+      );
+    } finally {
+      setFactuurBusyId(null);
+    }
+  }
+
   const aanbetaling = offerte
     ? aanbetalingVanOrder({
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
@@ -217,6 +312,26 @@ export function ProjectPage() {
         facturen,
       })
     : null;
+  const restantTeFactureren = offerte
+    ? restantFactuurBedrag({
+        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
+        orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+        warmtefonds: Boolean(offerte.financiering_voorbehoud),
+        facturen,
+        excludeRestant: true,
+      })
+    : 0;
+  const openRestantNaFacturen = offerte
+    ? restantFactuurBedrag({
+        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
+        orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+        warmtefonds: Boolean(offerte.financiering_voorbehoud),
+        facturen,
+      })
+    : 0;
+  const bestaandeRestant = facturen.find((f) =>
+    isRestantFactuurOmschrijving(f.omschrijving)
+  );
 
   if (loading) {
     return (
@@ -230,8 +345,8 @@ export function ProjectPage() {
     return (
       <NotFoundState
         title="Project niet gevonden"
-        backHref="/?tab=projecten"
-        backLabel="Terug naar backoffice"
+        backHref={backHref}
+        backLabel={backLabel}
         activeTab="projecten"
       />
     );
@@ -328,7 +443,25 @@ export function ProjectPage() {
       key: `backoffice-done-${project.id}`,
       at: project.backoffice_afgerond_at,
       kind: "event",
-      title: "Backoffice afgerond",
+      title: "Backoffice-actie afgerond",
+    });
+  }
+  if (project.financiering_geschakeld_at) {
+    feedItems.push({
+      key: `financiering-${project.id}`,
+      at: project.financiering_geschakeld_at,
+      kind: "event",
+      title: "Financieringsman geschakeld",
+      body: "Warmtefonds",
+    });
+  }
+  if (project.bel_schouw_aanbetaling_at) {
+    feedItems.push({
+      key: `bel-schouw-${project.id}`,
+      at: project.bel_schouw_aanbetaling_at,
+      kind: "event",
+      title: "Klant gebeld voor schouw",
+      body: formatProjectSchouwWeek(project) || undefined,
     });
   }
   if (project.backoffice_notitie) {
@@ -366,12 +499,22 @@ export function ProjectPage() {
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="projecten">
-      <Breadcrumb
-        items={[
-          { label: "Backoffice", href: "/?tab=projecten" },
-          { label: project.project_nummer },
-        ]}
-      />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 [&>nav]:mb-0">
+          <Breadcrumb
+            items={[
+              { label: "Backoffice", href: backHref },
+              { label: project.project_nummer },
+            ]}
+          />
+        </div>
+        <Link
+          href={backHref}
+          className="inline-flex shrink-0 items-center gap-1.5 border border-line bg-white px-3 py-1.5 text-sm font-semibold text-ink hover:border-green/40 hover:text-green-dark"
+        >
+          ← Terug
+        </Link>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[17rem_1fr] xl:grid-cols-[19rem_1fr]">
         {/* Linker sidebar — HubSpot-stijl */}
@@ -664,7 +807,12 @@ export function ProjectPage() {
                         {formatEuro(aanbetaling?.restantIncBtw || 0)}
                       </span>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="flex justify-between">
+                      <span className="text-muted">Betaalroute</span>
+                      <span className="font-medium">Eigen middelen</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-muted">Reeds betaald</span>
                     <span className="font-medium">
@@ -683,7 +831,7 @@ export function ProjectPage() {
                       {formatEuro(financieel?.openstaand || 0)}
                     </span>
                   </div>
-                  {offerte?.financiering_voorbehoud ? (
+                  {offerte ? (
                     <div className="pt-1">
                       <AanbetalingSamenvatting
                         modus={aanbetaling?.modus ?? "restant"}
@@ -691,6 +839,9 @@ export function ProjectPage() {
                         subtotaalExBtw={Number(offerte.subtotaal_ex_btw) || 0}
                         btwBedrag={Number(offerte.btw_bedrag) || 0}
                         totaalIncBtw={Number(offerte.totaal_inc_btw) || 0}
+                        financieringVoorbehoud={Boolean(
+                          offerte.financiering_voorbehoud
+                        )}
                       />
                       <Link
                         href={`/offertes/${offerte.id}`}
@@ -703,9 +854,44 @@ export function ProjectPage() {
                 </div>
 
                 <div className="mt-8 border-t border-line pt-6">
-                  <h3 className="text-sm font-semibold text-ink">
-                    Facturen ({facturen.length})
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-ink">
+                      Facturen ({facturen.length})
+                    </h3>
+                    {offerte?.status === "ondertekend" &&
+                    (openRestantNaFacturen >= 0.01 ||
+                      bestaandeRestant?.status === "concept") ? (
+                      <button
+                        type="button"
+                        disabled={restantBusy}
+                        onClick={() => void maakRestantFactuur()}
+                        className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                      >
+                        {restantBusy
+                          ? "…"
+                          : bestaandeRestant?.status === "concept"
+                            ? `Concept restant · ${formatEuro(restantTeFactureren)}`
+                            : `Restantfactuur · ${formatEuro(
+                                openRestantNaFacturen >= 0.01
+                                  ? openRestantNaFacturen
+                                  : restantTeFactureren
+                              )}`}
+                      </button>
+                    ) : bestaandeRestant ? (
+                      <Link
+                        href={`/facturen/${bestaandeRestant.id}`}
+                        className="text-xs font-semibold text-green-dark hover:underline"
+                      >
+                        Restantfactuur {bestaandeRestant.factuur_nummer}
+                      </Link>
+                    ) : null}
+                  </div>
+                  {restantError ? (
+                    <p className="mt-2 text-xs text-[#C45A12]">{restantError}</p>
+                  ) : null}
+                  {factuurError ? (
+                    <p className="mt-2 text-xs text-[#C45A12]">{factuurError}</p>
+                  ) : null}
                   {facturen.length === 0 ? (
                     <p className="mt-3 text-sm text-muted">Nog geen facturen.</p>
                   ) : (
@@ -716,26 +902,59 @@ export function ProjectPage() {
                           <th>Status</th>
                           <th>Bedrag</th>
                           <th>Datum</th>
+                          <th>Actie</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {facturen.map((f) => (
-                          <tr key={f.id}>
-                            <td>
-                              <Link
-                                href={`/facturen/${f.id}`}
-                                className="font-mono text-xs font-semibold text-orange hover:underline"
-                              >
-                                {f.factuur_nummer}
-                              </Link>
-                            </td>
-                            <td>
-                              <StatusBadge kind="factuur" value={f.status} />
-                            </td>
-                            <td className="tabular-nums">{formatEuro(f.bedrag_inc_btw)}</td>
-                            <td className="text-muted">{formatDateShort(f.factuurdatum)}</td>
-                          </tr>
-                        ))}
+                        {facturen.map((f) => {
+                          const paid = factuurIsBetaald(f.status, f.betaald_op);
+                          const canMarkPaid =
+                            !paid && f.status !== "vervallen";
+                          return (
+                            <tr key={f.id}>
+                              <td>
+                                <Link
+                                  href={`/facturen/${f.id}`}
+                                  className="font-mono text-xs font-semibold text-orange hover:underline"
+                                >
+                                  {f.factuur_nummer}
+                                </Link>
+                                {isRestantFactuurOmschrijving(f.omschrijving) ? (
+                                  <span className="ml-1.5 text-[10px] font-medium text-muted">
+                                    restant
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td>
+                                <StatusBadge kind="factuur" value={f.status} />
+                              </td>
+                              <td className="tabular-nums">
+                                {formatEuro(f.bedrag_inc_btw)}
+                              </td>
+                              <td className="text-muted">
+                                {formatDateShort(f.factuurdatum)}
+                              </td>
+                              <td>
+                                {canMarkPaid ? (
+                                  <button
+                                    type="button"
+                                    disabled={factuurBusyId === f.id}
+                                    onClick={() => void markFactuurBetaald(f)}
+                                    className="bg-green px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                                  >
+                                    {factuurBusyId === f.id ? "…" : "Betaald"}
+                                  </button>
+                                ) : paid ? (
+                                  <span className="text-[11px] text-muted">
+                                    {formatDateShort(f.betaald_op) || "—"}
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-muted">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

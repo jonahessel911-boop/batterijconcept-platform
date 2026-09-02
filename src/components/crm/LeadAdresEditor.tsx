@@ -26,6 +26,11 @@ function fromLead(lead: Pick<
   };
 }
 
+const fieldLabel =
+  "block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted";
+const fieldInput =
+  "mt-1.5 w-full border border-line bg-wash px-3 py-2.5 text-sm text-ink outline-none transition focus:border-green focus:bg-white";
+
 export function LeadAdresEditor({
   lead,
   onSaved,
@@ -134,86 +139,87 @@ export function LeadAdresEditor({
     }
   }
 
-  const inputClass =
-    "mt-1 w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-green";
-
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-[1fr_72px_56px] gap-2">
-        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+    <div className="space-y-4">
+      <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(4.5rem,0.55fr)_minmax(4rem,0.45fr)_auto] items-end gap-2">
+        <label className={fieldLabel}>
           Postcode
           <input
             value={draft.postcode}
             onChange={(e) => setField("postcode", e.target.value.toUpperCase())}
             placeholder="1234 AB"
-            className={inputClass}
+            className={fieldInput}
             autoComplete="postal-code"
           />
         </label>
-        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <label className={fieldLabel}>
           Nr
           <input
             value={draft.huisnummer}
             onChange={(e) => setField("huisnummer", e.target.value)}
-            className={inputClass}
+            className={fieldInput}
             autoComplete="off"
           />
         </label>
-        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <label className={fieldLabel}>
           Toev.
           <input
             value={draft.toevoeging}
             onChange={(e) => setField("toevoeging", e.target.value)}
             placeholder="A"
-            className={inputClass}
+            className={fieldInput}
             autoComplete="off"
           />
         </label>
+        <button
+          type="button"
+          disabled={
+            lookupBusy || !draft.postcode.trim() || !draft.huisnummer.trim()
+          }
+          onClick={() => void lookupAdres()}
+          className="mb-0 h-[42px] shrink-0 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+        >
+          {lookupBusy ? "…" : "Ophalen"}
+        </button>
       </div>
 
-      <button
-        type="button"
-        disabled={lookupBusy || !draft.postcode.trim() || !draft.huisnummer.trim()}
-        onClick={() => void lookupAdres()}
-        className="w-full border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-      >
-        {lookupBusy ? "Adres ophalen…" : "Adres ophalen"}
-      </button>
-
-      <div className="grid grid-cols-2 gap-2">
-        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className={fieldLabel}>
           Straat
           <input
             value={draft.straat}
             onChange={(e) => setField("straat", e.target.value)}
-            className={inputClass}
+            className={fieldInput}
             autoComplete="address-line1"
           />
         </label>
-        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <label className={fieldLabel}>
           Plaats
           <input
             value={draft.plaats}
             onChange={(e) => setField("plaats", e.target.value)}
-            className={inputClass}
+            className={fieldInput}
             autoComplete="address-level2"
           />
         </label>
       </div>
 
-      {error && (
-        <p className="text-xs text-[#C45A12]">{error}</p>
-      )}
+      {error && <p className="text-xs text-[#C45A12]">{error}</p>}
       {okMsg && !error && (
         <p className="text-xs text-green-dark">{okMsg}</p>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="button"
           disabled={saving || !dirty}
           onClick={() => void save()}
-          className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+          className={[
+            "px-4 py-2 text-xs font-semibold transition",
+            dirty
+              ? "bg-orange text-white hover:bg-[#e0651c]"
+              : "cursor-default border border-line bg-wash text-muted",
+          ].join(" ")}
         >
           {saving ? "Opslaan…" : "Adres opslaan"}
         </button>
@@ -226,7 +232,7 @@ export function LeadAdresEditor({
               setError(null);
               setOkMsg(null);
             }}
-            className="border border-line bg-white px-3 py-1.5 text-xs font-medium text-muted hover:bg-wash"
+            className="border border-line bg-white px-3 py-2 text-xs font-medium text-muted hover:bg-wash"
           >
             Annuleren
           </button>

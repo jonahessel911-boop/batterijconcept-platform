@@ -16,6 +16,7 @@ import type {
   AfspraakSoort,
   Lead,
   LeadStatus,
+  Offerte,
 } from "@/types/database";
 import {
   AMSTERDAM_TZ,
@@ -31,13 +32,36 @@ import {
   afspraakSoortLabel,
   afspraakStuurtMail,
   afspraakZichtbaarInAgenda,
+  isSaleUitkomst,
   needsVervolgPunt,
   normalizeAfspraakSoort,
+  uitkomstVereistVervolgPunt,
 } from "@/lib/afspraak-soort";
-import { AFSPRAAK_UITKOMSTEN, leadStatusLabel, statusTone } from "@/lib/labels";
+import {
+  AFSPRAAK_UITKOMSTEN,
+  afspraakAgendaAccent,
+  leadStatusLabel,
+  statusTone,
+} from "@/lib/labels";
+import {
+  aanbetalingVanOrder,
+  normalizeAanbetalingModus,
+  parseEuroInput,
+} from "@/lib/aanbetaling";
+import {
+  agendaWeekJumpOptions,
+  parseSchouwWeekValue,
+  schouwWeekFromDate,
+  schouwWeekToMondayIso,
+  schouwWeekValue,
+} from "@/lib/schouw-week";
 import { getSupabaseBrowser } from "@/lib/supabase";
 import { LeadZoekVeld } from "./LeadZoekVeld";
 import { ReistijdHint } from "./ReistijdHint";
+import {
+  BackofficeActieForm,
+  type BackofficeActieFormValues,
+} from "./BackofficeActieForm";
 
 type AgendaDay = { key: string; date: Date };
 
@@ -233,36 +257,48 @@ function wazeUrl(query: string): string {
   return `https://waze.com/ul?q=${encodeURIComponent(query)}&navigate=yes`;
 }
 
-function statusAccent(afspraak: Afspraak): string {
-  const status = afspraak.status;
-  if (status === "geannuleerd") return "border-l-[#9aa39c] bg-[#f3f5f4]";
-  if (status === "verzet") return "border-l-[#C45A12] bg-[#FFF8F3]";
-  if (status === "voltooid") return "border-l-[#5a635c] bg-[#f5f7f6]";
-  if (!afspraakBlokkeertAgenda(afspraak.soort)) {
-    return "border-l-[#1A4A6E] bg-[#E8F0F6]";
-  }
-  return "border-l-green bg-green-soft/70";
-}
-
 function AfspraakChip({
   afspraak,
   allAfspraken,
+  leadStatus,
   variant = "week",
   onOpen,
 }: {
   afspraak: Afspraak;
   allAfspraken: Afspraak[];
+  /** Lead-afboekcode (uitkomst); fallback via afspraak.leads?.status */
+  leadStatus?: string | null;
   variant?: "week" | "day";
   onOpen: (a: Afspraak) => void;
 }) {
   const cancelled = afspraak.status === "geannuleerd";
   const done = afspraak.status === "voltooid";
   const needsAction = needsVervolgPunt(afspraak, allAfspraken);
-  const muted = cancelled || done;
+  const afboek =
+    leadStatus ||
+    (typeof afspraak.leads === "object" && afspraak.leads && "status" in afspraak.leads
+      ? (afspraak.leads as { status?: string | null }).status
+      : null) ||
+    null;
+  const accent = afspraakAgendaAccent(
+    afspraak.status,
+    normalizeAfspraakSoort(afspraak.soort),
+    afboek
+  );
   const naam = afspraak.leads?.naam || "—";
   const soortLabel =
     afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)];
-  const statusNote = cancelled ? "Geannuleerd" : done ? "Voltooid" : null;
+  const afboekLabel =
+    done && afboek && leadStatusLabel[afboek as LeadStatus]
+      ? leadStatusLabel[afboek as LeadStatus]
+      : null;
+  const statusNote = cancelled
+    ? "Geannuleerd"
+    : afboekLabel
+      ? afboekLabel
+      : done
+        ? "Voltooid"
+        : null;
 
   if (variant === "day") {
     return (
@@ -271,30 +307,20 @@ function AfspraakChip({
         onClick={() => onOpen(afspraak)}
         className={[
           "flex w-full items-stretch gap-0 overflow-hidden rounded-xl border border-line text-left transition",
-          "hover:border-green/35 hover:shadow-[0_4px_16px_rgba(13,92,50,0.08)]",
+          accent.bg,
+          "hover:brightness-[0.98] hover:shadow-[0_4px_16px_rgba(13,92,50,0.08)]",
           "active:scale-[0.99]",
-          muted ? "opacity-70" : "",
           needsAction ? "ring-1 ring-[#C45A12]/40" : "",
         ].join(" ")}
       >
-        <span
-          className={[
-            "w-1.5 shrink-0",
-            afspraak.status === "geannuleerd"
-              ? "bg-[#9aa39c]"
-              : afspraak.status === "voltooid"
-                ? "bg-[#5a635c]"
-                : afspraak.status === "verzet"
-                  ? "bg-[#C45A12]"
-                  : "bg-green",
-          ].join(" ")}
-        />
-        <span className="flex min-w-0 flex-1 items-center gap-3 bg-white px-3.5 py-3">
+        <span className={["w-1.5 shrink-0", accent.bar].join(" ")} />
+        <span className="flex min-w-0 flex-1 items-center gap-3 px-3.5 py-3">
           <span className="shrink-0">
             <span
               className={[
-                "block font-display text-lg font-semibold tabular-nums leading-none text-ink",
-                cancelled ? "line-through text-muted" : done ? "text-muted" : "",
+                "block font-display text-lg font-semibold tabular-nums leading-none",
+                accent.time,
+                cancelled ? "line-through" : "",
               ].join(" ")}
             >
               {formatTimeNl(afspraak.start_at)}
@@ -308,26 +334,22 @@ function AfspraakChip({
               {formatTimeNl(afspraak.end_at)}
             </span>
           </span>
-          <span className="min-w-0 flex-1 border-l border-line pl-3">
+          <span className="min-w-0 flex-1 border-l border-line/80 pl-3">
             <span className="flex items-center gap-2">
               <span
                 className={[
                   "block truncate text-sm font-semibold text-ink",
-                  cancelled
-                    ? "line-through text-muted"
-                    : done
-                      ? "text-muted"
-                      : "",
+                  cancelled ? "line-through" : "",
                 ].join(" ")}
               >
                 {naam}
               </span>
               {needsAction && (
                 <span
-                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold text-white"
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold leading-none text-white"
                   title="Vervolg punt nodig"
                 >
-                  i
+                  I
                 </span>
               )}
             </span>
@@ -335,7 +357,7 @@ function AfspraakChip({
               {[
                 statusNote,
                 soortLabel,
-                !muted ? afspraak.adviseurs?.naam || null : null,
+                afspraak.adviseurs?.naam || null,
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -361,54 +383,49 @@ function AfspraakChip({
         .filter(Boolean)
         .join(" · ")}
       className={[
-        "group relative w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left transition",
-        statusAccent(afspraak),
+        "group relative flex w-full items-stretch overflow-hidden rounded-lg border border-line/70 text-left transition",
+        accent.bg,
         "hover:brightness-[0.98] hover:shadow-sm",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-green",
-        muted ? "opacity-75" : "",
         needsAction ? "ring-1 ring-[#C45A12]/35" : "",
       ].join(" ")}
     >
-      {needsAction && (
+      <span className={["w-1 shrink-0", accent.bar].join(" ")} aria-hidden />
+      <span className="min-w-0 flex-1 px-2 py-1.5">
+        {needsAction && (
+          <span
+            className="absolute right-1 top-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold leading-none text-white shadow-sm"
+            aria-label="Vervolg punt nodig"
+          >
+            I
+          </span>
+        )}
         <span
-          className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#C45A12] text-[9px] font-bold leading-none text-white"
-          aria-label="Vervolg punt nodig"
+          className={[
+            "block text-[11px] font-bold tabular-nums leading-none",
+            accent.time,
+            cancelled ? "line-through" : "",
+          ].join(" ")}
         >
-          i
+          {formatTimeNl(afspraak.start_at)}
         </span>
-      )}
-      <span
-        className={[
-          "block text-[11px] font-bold tabular-nums leading-none",
-          cancelled
-            ? "text-muted line-through"
-            : done
-              ? "text-muted"
-              : "text-green-dark",
-        ].join(" ")}
-      >
-        {formatTimeNl(afspraak.start_at)}
-      </span>
-      <span
-        className={[
-          "mt-1 block truncate pr-4 text-[12px] font-semibold leading-tight",
-          cancelled
-            ? "text-muted line-through"
-            : done
-              ? "text-muted"
-              : "text-ink",
-        ].join(" ")}
-      >
-        {naam}
-      </span>
-      <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
-        {[
-          statusNote,
-          soortLabel,
-          afspraak.adviseurs?.naam || null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
+        <span
+          className={[
+            "mt-1 block truncate pr-4 text-[12px] font-semibold leading-tight text-ink",
+            cancelled ? "line-through" : "",
+          ].join(" ")}
+        >
+          {naam}
+        </span>
+        <span className="mt-0.5 block truncate text-[10px] font-medium text-muted">
+          {[
+            statusNote,
+            soortLabel,
+            afspraak.adviseurs?.naam || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
       </span>
     </button>
   );
@@ -526,6 +543,15 @@ function AfspraakDetail({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [saleOfferte, setSaleOfferte] = useState<Offerte | null>(null);
+  const [saleOfferteLoading, setSaleOfferteLoading] = useState(false);
+  const [sessionNaam, setSessionNaam] = useState<string | null>(null);
+  const [boValues, setBoValues] = useState<BackofficeActieFormValues>({
+    aanbetalingModus: "restant",
+    aanbetalingHandmatig: "",
+    backofficeNotitie: "",
+    installateurNotitie: "",
+  });
 
   const note = appointmentNote(current);
   const mailed = Boolean(current.bevestiging_verstuurd);
@@ -556,7 +582,81 @@ function AfspraakDetail({
     setVervolgAt("");
     setVervolgNotitie("");
     setUitkomst("");
+    setSaleOfferte(null);
+    setBoValues({
+      aanbetalingModus: "restant",
+      aanbetalingHandmatig: "",
+      backofficeNotitie: "",
+      installateurNotitie: "",
+    });
   }, [afspraak]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const res = await fetch("/api/auth/login");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.adviseur?.naam) {
+          setSessionNaam(data.adviseur.naam as string);
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSaleUitkomst(uitkomst) || !current.lead_id) {
+      setSaleOfferte(null);
+      setSaleOfferteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSaleOfferteLoading(true);
+    queueMicrotask(async () => {
+      try {
+        const sb = getSupabaseBrowser();
+        const { data } = await sb
+          .from("offertes")
+          .select(
+            "*, leads(naam, adviseur_id, adviseurs(id, naam))"
+          )
+          .eq("lead_id", current.lead_id)
+          .eq("status", "ondertekend")
+          .order("ondertekend_op", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (cancelled) return;
+        if (!data) {
+          setSaleOfferte(null);
+          return;
+        }
+        const o = data as Offerte;
+        setSaleOfferte(o);
+        setBoValues({
+          aanbetalingModus: normalizeAanbetalingModus(o.aanbetaling_modus),
+          aanbetalingHandmatig:
+            o.aanbetaling_bedrag_inc != null
+              ? String(o.aanbetaling_bedrag_inc)
+              : "",
+          backofficeNotitie: o.backoffice_notitie || "",
+          installateurNotitie: o.installateur_notitie || "",
+        });
+      } catch {
+        if (!cancelled) setSaleOfferte(null);
+      } finally {
+        if (!cancelled) setSaleOfferteLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [uitkomst, current.lead_id]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -702,12 +802,63 @@ function AfspraakDetail({
     setOkMsg(null);
     try {
       if (!uitkomst) throw new Error("Kies een uitkomst");
-      if (!vervolgAt) throw new Error("Kies datum en tijd");
-      const parsed = new Date(vervolgAt);
-      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
+      const isSale = isSaleUitkomst(uitkomst);
       const noteText = vervolgNotitie.trim();
-      if (!noteText) throw new Error("Vul een notitie in");
+      if (!isSale && !noteText) throw new Error("Vul een notitie in");
       if (!current.adviseur_id) throw new Error("Geen adviseur op deze afspraak");
+
+      const needsVervolg = uitkomstVereistVervolgPunt(uitkomst);
+      let parsed: Date | null = null;
+      if (needsVervolg) {
+        if (!vervolgAt) throw new Error("Kies datum en tijd voor het vervolg");
+        parsed = new Date(vervolgAt);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("Ongeldige datum/tijd");
+        }
+      }
+
+      if (isSale) {
+        if (!saleOfferte) {
+          throw new Error(
+            "Geen ondertekende offerte gevonden voor deze lead — rond eerst de offerte af."
+          );
+        }
+        const warmtefonds = uitkomst === "sale_financiering";
+        const preview = aanbetalingVanOrder({
+          subtotaalExBtw: Number(saleOfferte.subtotaal_ex_btw) || 0,
+          btwBedrag: Number(saleOfferte.btw_bedrag) || 0,
+          totaalIncBtw: Number(saleOfferte.totaal_inc_btw) || 0,
+          modus: boValues.aanbetalingModus,
+          handmatigIncBtw: parseEuroInput(boValues.aanbetalingHandmatig),
+          financieringVoorbehoud: warmtefonds,
+        });
+        const res = await fetch(`/api/offertes/${saleOfferte.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actie_required: false,
+            financiering_voorbehoud: warmtefonds,
+            aanbetaling_modus: warmtefonds ? boValues.aanbetalingModus : null,
+            aanbetaling_bedrag_inc:
+              warmtefonds && boValues.aanbetalingModus === "handmatig"
+                ? parseEuroInput(boValues.aanbetalingHandmatig)
+                : null,
+            aanbetaling_te_innen_inc: preview.bedragIncBtw,
+            backoffice_notitie: boValues.backofficeNotitie || null,
+            installateur_notitie: boValues.installateurNotitie || null,
+            backoffice_notitie_door: boValues.backofficeNotitie.trim()
+              ? sessionNaam || saleOfferte.backoffice_notitie_door || null
+              : null,
+            installateur_notitie_door: boValues.installateurNotitie.trim()
+              ? sessionNaam || saleOfferte.installateur_notitie_door || null
+              : null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Backoffice-actie afronden mislukt");
+        }
+      }
 
       const sb = getSupabaseBrowser();
       const { error: statusErr } = await sb
@@ -715,20 +866,45 @@ function AfspraakDetail({
         .update({ status: uitkomst })
         .eq("id", current.lead_id);
       if (statusErr) throw statusErr;
+      const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
+      fireMetaCapiSync(current.lead_id);
 
-      const res = await fetch("/api/afspraken", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lead_id: current.lead_id,
-          adviseur_id: current.adviseur_id,
-          start_at: parsed.toISOString(),
-          notities: noteText,
-          soort: "vervolg_punt",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Vervolg punt opslaan mislukt");
+      if (needsVervolg && parsed) {
+        const res = await fetch("/api/afspraken", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lead_id: current.lead_id,
+            adviseur_id: current.adviseur_id,
+            start_at: parsed.toISOString(),
+            notities: noteText,
+            soort: "vervolg_punt",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Vervolg punt opslaan mislukt");
+        }
+        if (data.afspraak) onCreated(data.afspraak as Afspraak);
+      } else if (!isSale) {
+        // Eindstatus: notitie op lead bewaren
+        const { data: leadRow } = await sb
+          .from("leads")
+          .select("notities")
+          .eq("id", current.lead_id)
+          .maybeSingle();
+        const stamp = new Date().toLocaleString("nl-NL", {
+          timeZone: "Europe/Amsterdam",
+        });
+        const line = `[${stamp}] Uitkomst afspraak: ${leadStatusLabel[uitkomst] || uitkomst} — ${noteText}`;
+        const prev = (leadRow?.notities || "").trim();
+        await sb
+          .from("leads")
+          .update({
+            notities: prev ? `${prev}\n${line}` : line,
+          })
+          .eq("id", current.lead_id);
+      }
 
       const next: Afspraak = {
         ...current,
@@ -738,7 +914,6 @@ function AfspraakDetail({
       };
       setCurrent(next);
       onUpdated(next);
-      if (data.afspraak) onCreated(data.afspraak as Afspraak);
 
       void fetch(`/api/leads/${current.lead_id}/events`, {
         method: "POST",
@@ -746,15 +921,24 @@ function AfspraakDetail({
         body: JSON.stringify({
           soort: "status",
           titel: `Status → ${leadStatusLabel[uitkomst] || uitkomst}`,
-          detail: "Via actiepunten na afspraak + vervolg punt",
+          detail: isSale
+            ? "Via actiepunten na afspraak + backoffice afgerond"
+            : needsVervolg
+              ? "Via actiepunten na afspraak + vervolg punt"
+              : "Via actiepunten na afspraak (eindstatus)",
         }),
       }).catch(() => {});
 
       setVervolgAt("");
       setVervolgNotitie("");
       setUitkomst("");
+      setSaleOfferte(null);
       setOkMsg(
-        `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
+        isSale
+          ? `Sale opgeslagen en backoffice-actie afgerond.`
+          : needsVervolg
+            ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
+            : `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen.`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -821,12 +1005,14 @@ function AfspraakDetail({
           {needsAction && mode === "view" && (
             <section className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF8F3] p-5 shadow-[0_1px_2px_rgba(196,90,18,0.06)]">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
-                Intern vervolg punt
+                {isSaleUitkomst(uitkomst)
+                  ? "Actie vereist"
+                  : "Uitkomst afspraak"}
               </p>
               <p className="mt-1 text-sm text-muted">
-                Fysieke afspraak is afgelopen. Kies de uitkomst, plan het
-                vervolg (datum &amp; tijd) en voeg een notitie toe. Pas daarna
-                opslaan.
+                {isSaleUitkomst(uitkomst)
+                  ? "Sale geselecteerd — vul hieronder de backoffice in en rond de actie af."
+                  : "Fysieke afspraak is klaar. Kies of het een sale/deal is of niet. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie."}
               </p>
 
               <form
@@ -858,38 +1044,106 @@ function AfspraakDetail({
                   </select>
                 </label>
 
-                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                  Datum &amp; tijd
-                  <input
-                    type="datetime-local"
-                    required
-                    value={vervolgAt}
-                    onChange={(e) => setVervolgAt(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                  />
-                </label>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                  Notitie
-                  <textarea
-                    required
-                    rows={3}
-                    value={vervolgNotitie}
-                    onChange={(e) => setVervolgNotitie(e.target.value)}
-                    placeholder="Wat moet er gebeuren bij dit vervolg?"
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                  />
-                </label>
+                {isSaleUitkomst(uitkomst) ? (
+                  saleOfferteLoading ? (
+                    <p className="text-sm text-muted">Offerte laden…</p>
+                  ) : !saleOfferte ? (
+                    <p className="rounded-lg border border-[#C45A12]/30 bg-white px-3 py-3 text-sm text-[#C45A12]">
+                      Geen ondertekende offerte voor deze lead. Rond eerst een
+                      offerte af, daarna kun je de backoffice hier invullen.
+                    </p>
+                  ) : (
+                    <div className="rounded-xl border border-line bg-white p-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
+                        Backoffice invullen
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        Offerte {saleOfferte.offerte_nummer} · Betaalroute:{" "}
+                        <span className="font-semibold text-ink">
+                          {uitkomst === "sale_financiering"
+                            ? "Warmtefonds"
+                            : "Eigen middelen"}
+                        </span>
+                      </p>
+                      <div className="mt-3">
+                        <BackofficeActieForm
+                          compact
+                          subtotaalExBtw={
+                            Number(saleOfferte.subtotaal_ex_btw) || 0
+                          }
+                          btwBedrag={Number(saleOfferte.btw_bedrag) || 0}
+                          totaalIncBtw={Number(saleOfferte.totaal_inc_btw) || 0}
+                          financieringVoorbehoud={
+                            uitkomst === "sale_financiering"
+                          }
+                          adviseurNaam={(() => {
+                            const l = Array.isArray(saleOfferte.leads)
+                              ? saleOfferte.leads[0]
+                              : saleOfferte.leads;
+                            const adv = l?.adviseurs;
+                            const naam = Array.isArray(adv)
+                              ? adv[0]?.naam
+                              : adv?.naam;
+                            return naam || null;
+                          })()}
+                          sessionNaam={sessionNaam}
+                          values={boValues}
+                          onChange={(patch) =>
+                            setBoValues((prev) => ({ ...prev, ...patch }))
+                          }
+                          disabled={busy}
+                        />
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  <>
+                    {uitkomstVereistVervolgPunt(uitkomst) && (
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                        Datum &amp; tijd
+                        <input
+                          type="datetime-local"
+                          required
+                          value={vervolgAt}
+                          onChange={(e) => setVervolgAt(e.target.value)}
+                          className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                        />
+                      </label>
+                    )}
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                      Notitie
+                      <textarea
+                        required
+                        rows={3}
+                        value={vervolgNotitie}
+                        onChange={(e) => setVervolgNotitie(e.target.value)}
+                        placeholder={
+                          uitkomstVereistVervolgPunt(uitkomst)
+                            ? "Wat moet er gebeuren bij dit vervolg?"
+                            : "Korte toelichting bij de uitkomst…"
+                        }
+                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                      />
+                    </label>
+                  </>
+                )}
                 <button
                   type="submit"
                   disabled={
                     busy ||
                     !uitkomst ||
-                    !vervolgAt ||
-                    !vervolgNotitie.trim()
+                    (isSaleUitkomst(uitkomst)
+                      ? !saleOfferte || saleOfferteLoading
+                      : !vervolgNotitie.trim() ||
+                        (uitkomstVereistVervolgPunt(uitkomst) && !vervolgAt))
                   }
                   className="min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
                 >
-                  {busy ? "Bezig…" : "Opslaan"}
+                  {busy
+                    ? "Bezig…"
+                    : isSaleUitkomst(uitkomst)
+                      ? "Actie afronden"
+                      : "Opslaan"}
                 </button>
               </form>
             </section>
@@ -1239,12 +1493,14 @@ function AfspraakDetail({
 
 export function AgendaPanel({
   leads,
+  afspraken: afsprakenProp,
   defaultAdviseurId,
 }: {
   leads: Lead[];
+  afspraken?: Afspraak[];
   defaultAdviseurId?: string;
 }) {
-  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>(afsprakenProp || []);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
     []
@@ -1252,7 +1508,7 @@ export function AgendaPanel({
   const [blocks, setBlocks] = useState<
     { start_at: string; end_at: string; busy?: boolean }[]
   >([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!(afsprakenProp && afsprakenProp.length > 0));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -1278,8 +1534,50 @@ export function AgendaPanel({
   const [selectedDayKey, setSelectedDayKey] = useState(() =>
     dayKeyAmsterdam(new Date())
   );
+  const [calendarView, setCalendarView] = useState<"dag" | "week">("week");
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("bc_agenda_view");
+      if (v === "dag" || v === "week") setCalendarView(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (afsprakenProp) setAfspraken(afsprakenProp);
+  }, [afsprakenProp]);
+
+  function changeCalendarView(next: "dag" | "week") {
+    setCalendarView(next);
+    try {
+      localStorage.setItem("bc_agenda_view", next);
+    } catch {
+      /* ignore */
+    }
+  }
 
   const days = useMemo(() => weekDaysFrom(weekAnchor), [weekAnchor]);
+
+  const leadStatusById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const l of leads) {
+      if (l.id && l.status) map.set(l.id, l.status);
+    }
+    return map;
+  }, [leads]);
+
+  function resolveLeadStatus(a: Afspraak): string | null {
+    if (a.lead_id && leadStatusById.has(a.lead_id)) {
+      return leadStatusById.get(a.lead_id) || null;
+    }
+    const joined = a.leads;
+    if (joined && typeof joined === "object" && "status" in joined) {
+      return (joined as { status?: string | null }).status || null;
+    }
+    return null;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1289,29 +1587,34 @@ export function AgendaPanel({
         fetch("/api/afspraken").then((r) => r.json()),
         fetch("/api/adviseurs").then((r) => r.json()),
       ]);
-      if (a.error) throw new Error(a.error);
-      if (adv.error) throw new Error(adv.error);
-      setAfspraken(a.afspraken || []);
-      setAdviseurs(adv.adviseurs || []);
-      const planAdviseurs = ((adv.adviseurs || []) as Adviseur[]).filter(
-        (a) => !isAdminAdviseur(a)
-      );
-      setAdviseurId((prev) => {
-        if (prev && planAdviseurs.some((a) => a.id === prev)) return prev;
-        if (
-          defaultAdviseurId &&
-          planAdviseurs.some((a) => a.id === defaultAdviseurId)
-        ) {
-          return defaultAdviseurId;
-        }
-        return planAdviseurs[0]?.id || "";
-      });
+      // Afspraken: API of parent-prop; adviseurs-fout mag agenda niet leegmaken
+      if (!a.error) {
+        setAfspraken(a.afspraken || []);
+      } else if (!afsprakenProp?.length) {
+        throw new Error(a.error);
+      }
+      if (!adv.error) {
+        setAdviseurs(adv.adviseurs || []);
+        const planAdviseurs = ((adv.adviseurs || []) as Adviseur[]).filter(
+          (x) => !isAdminAdviseur(x)
+        );
+        setAdviseurId((prev) => {
+          if (prev && planAdviseurs.some((x) => x.id === prev)) return prev;
+          if (
+            defaultAdviseurId &&
+            planAdviseurs.some((x) => x.id === defaultAdviseurId)
+          ) {
+            return defaultAdviseurId;
+          }
+          return planAdviseurs[0]?.id || "";
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
       setLoading(false);
     }
-  }, [defaultAdviseurId]);
+  }, [defaultAdviseurId, afsprakenProp]);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => void load());
@@ -1412,6 +1715,53 @@ export function AgendaPanel({
     const now = new Date();
     setWeekAnchor(now);
     setSelectedDayKey(dayKeyAmsterdam(now));
+  }
+
+  function goPrev() {
+    if (calendarView === "dag") {
+      const cur = selectedDay.date;
+      const prev = addDays(cur, -1);
+      setSelectedDayKey(dayKeyAmsterdam(prev));
+      setWeekAnchor(prev);
+      return;
+    }
+    setWeekAnchor((d) => addWeeks(d, -1));
+  }
+
+  function goNext() {
+    if (calendarView === "dag") {
+      const cur = selectedDay.date;
+      const next = addDays(cur, 1);
+      setSelectedDayKey(dayKeyAmsterdam(next));
+      setWeekAnchor(next);
+      return;
+    }
+    setWeekAnchor((d) => addWeeks(d, 1));
+  }
+
+  const currentWeekValue = useMemo(() => {
+    const w = schouwWeekFromDate(weekAnchor);
+    return schouwWeekValue(w.jaar, w.week);
+  }, [weekAnchor]);
+
+  const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
+
+  function goToWeek(value: string) {
+    const parsed = parseSchouwWeekValue(value);
+    if (!parsed) return;
+    try {
+      const monday = new Date(schouwWeekToMondayIso(parsed.jaar, parsed.week));
+      setWeekAnchor(monday);
+      setSelectedDayKey(dayKeyAmsterdam(monday));
+      setCalendarView("week");
+      try {
+        localStorage.setItem("bc_agenda_view", "week");
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   const planSoort: AfspraakSoort | null =
@@ -1735,23 +2085,23 @@ export function AgendaPanel({
           {formOpen && <div className="mt-4">{planSidebar}</div>}
         </div>
 
-        {/* Week navigatie */}
+        {/* Navigatie */}
         <div className="sticky top-0 z-10 border-b border-line bg-white/95 px-3 py-3 backdrop-blur sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setWeekAnchor((d) => addWeeks(d, -1))}
+                onClick={goPrev}
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink hover:bg-wash"
-                aria-label="Vorige week"
+                aria-label={calendarView === "dag" ? "Vorige dag" : "Vorige week"}
               >
                 ‹
               </button>
               <button
                 type="button"
-                onClick={() => setWeekAnchor((d) => addWeeks(d, 1))}
+                onClick={goNext}
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink hover:bg-wash"
-                aria-label="Volgende week"
+                aria-label={calendarView === "dag" ? "Volgende dag" : "Volgende week"}
               >
                 ›
               </button>
@@ -1762,22 +2112,78 @@ export function AgendaPanel({
               >
                 Vandaag
               </button>
+              <label className="ml-1 flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Week
+                </span>
+                <select
+                  value={currentWeekValue}
+                  onChange={(e) => goToWeek(e.target.value)}
+                  className="min-h-9 max-w-[10rem] cursor-pointer rounded-lg border border-line bg-white px-2 text-xs font-semibold tabular-nums text-ink outline-none focus:border-green sm:max-w-[14rem]"
+                  aria-label="Ga naar weeknummer"
+                >
+                  {weekJumpOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      W{o.week} · {o.jaar}
+                      {o.value === currentWeekValue ? " (nu)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="ml-1 flex rounded-lg border border-line p-0.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => changeCalendarView("dag")}
+                  className={[
+                    "rounded-md px-2.5 py-1.5",
+                    calendarView === "dag"
+                      ? "bg-green text-white"
+                      : "text-muted hover:text-ink",
+                  ].join(" ")}
+                >
+                  Dag
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeCalendarView("week")}
+                  className={[
+                    "rounded-md px-2.5 py-1.5",
+                    calendarView === "week"
+                      ? "bg-green text-white"
+                      : "text-muted hover:text-ink",
+                  ].join(" ")}
+                >
+                  Week
+                </button>
+              </div>
             </div>
             <div className="min-w-0 text-right">
               <p className="truncate font-display text-sm font-semibold capitalize text-ink sm:text-base">
-                {formatWeekRange(days)}
+                {calendarView === "dag"
+                  ? `${formatDayLabel(selectedDay.date)} ${formatDayNum(selectedDay.date)} ${format(selectedDay.date, "MMMM yyyy", { locale: nl })}`
+                  : formatWeekRange(days)}
               </p>
               <p className="text-[11px] capitalize text-muted">
-                {formatMonthYear(days[0].date)}
-                {upcoming.length > 0
-                  ? ` · ${upcoming.length} aankomend`
-                  : ""}
+                {calendarView === "dag"
+                  ? selectedDayAfspraken.length === 0
+                    ? "Geen afspraken"
+                    : `${selectedDayAfspraken.length} afspraak${selectedDayAfspraken.length === 1 ? "" : "en"}`
+                  : `${formatMonthYear(days[0].date)}${
+                      upcoming.length > 0
+                        ? ` · ${upcoming.length} aankomend`
+                        : ""
+                    }`}
               </p>
             </div>
           </div>
 
-          {/* Dag-strip (mobiel + tablet) */}
-          <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] md:hidden [&::-webkit-scrollbar]:hidden">
+          {/* Dag-strip: in dagweergave altijd; in week alleen mobiel (desktop heeft kolomkoppen) */}
+          <div
+            className={[
+              "mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              calendarView === "week" ? "md:hidden" : "",
+            ].join(" ")}
+          >
             {days.map((day) => {
               const count = byDay.get(day.key)?.length ?? 0;
               const isToday = day.key === todayKey;
@@ -1788,7 +2194,7 @@ export function AgendaPanel({
                   type="button"
                   onClick={() => setSelectedDayKey(day.key)}
                   className={[
-                    "flex min-w-[3.25rem] flex-col items-center rounded-xl px-2 py-2 transition",
+                    "flex min-w-[3.25rem] flex-1 flex-col items-center rounded-xl px-2 py-2 transition sm:min-w-0",
                     selected
                       ? "bg-green text-white"
                       : isToday
@@ -1825,9 +2231,30 @@ export function AgendaPanel({
 
         {loading ? (
           <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
+        ) : calendarView === "dag" ? (
+          <div className="px-3 py-4 sm:px-5">
+            {selectedDayAfspraken.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-line bg-wash/60 px-4 py-10 text-center text-sm text-muted">
+                Geen afspraken op deze dag
+              </div>
+            ) : (
+              <div className="mx-auto max-w-2xl space-y-2.5">
+                {selectedDayAfspraken.map((a) => (
+                  <AfspraakChip
+                    key={a.id}
+                    afspraak={a}
+                    allAfspraken={afspraken}
+                    leadStatus={resolveLeadStatus(a)}
+                    variant="day"
+                    onOpen={setSelectedAfspraak}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
           <>
-            {/* Mobiel: geselecteerde dag */}
+            {/* Mobiel week: geselecteerde dag */}
             <div className="px-3 py-4 md:hidden">
               <div className="mb-3 flex items-baseline justify-between gap-2">
                 <h3 className="font-display text-base font-semibold capitalize text-ink">
@@ -1856,6 +2283,7 @@ export function AgendaPanel({
                       key={a.id}
                       afspraak={a}
                       allAfspraken={afspraken}
+                      leadStatus={resolveLeadStatus(a)}
                       variant="day"
                       onOpen={setSelectedAfspraak}
                     />
@@ -1871,18 +2299,25 @@ export function AgendaPanel({
                   {days.map((day) => {
                     const isToday = day.key === todayKey;
                     const count = byDay.get(day.key)?.length ?? 0;
+                    const selected = day.key === selectedDayKey;
                     return (
-                      <div
+                      <button
                         key={day.key}
+                        type="button"
+                        onClick={() => setSelectedDayKey(day.key)}
                         className={[
-                          "border-r border-line px-1.5 py-3 last:border-r-0 sm:px-2",
-                          isToday ? "bg-green-soft/50" : "",
+                          "border-r border-line px-1.5 py-3 text-left last:border-r-0 sm:px-2",
+                          selected
+                            ? "bg-green-soft"
+                            : isToday
+                              ? "bg-green-soft/50"
+                              : "hover:bg-wash",
                         ].join(" ")}
                       >
                         <p
                           className={[
                             "text-[10px] font-semibold uppercase tracking-wide",
-                            isToday ? "text-green" : "text-muted",
+                            isToday || selected ? "text-green" : "text-muted",
                           ].join(" ")}
                         >
                           {formatDayShort(day.date)}
@@ -1900,7 +2335,7 @@ export function AgendaPanel({
                         <p className="mt-1 text-[10px] text-muted">
                           {count > 0 ? `${count}×` : "—"}
                         </p>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1927,6 +2362,7 @@ export function AgendaPanel({
                                 key={a.id}
                                 afspraak={a}
                                 allAfspraken={afspraken}
+                                leadStatus={resolveLeadStatus(a)}
                                 variant="week"
                                 onOpen={setSelectedAfspraak}
                               />

@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
-import {
-  installatieKlantEmail,
-  installatiePartnerEmail,
-} from "@/lib/email/templates";
-import { adresRegel } from "@/lib/format";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/projecten/[id]/installatie
- * Plant installatie in, mailt klant + installatiepartner.
+ * Plant installatie in. Geen e-mails.
  */
 export async function POST(
   req: NextRequest,
@@ -50,9 +44,7 @@ export async function POST(
 
     const { data: project, error: projErr } = await sb
       .from("projecten")
-      .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats)"
-      )
+      .select("id, installatie_partner_id")
       .eq("id", id)
       .single();
 
@@ -74,7 +66,7 @@ export async function POST(
 
     const { data: partner, error: partnerErr } = await sb
       .from("installatie_partners")
-      .select("id, naam, email, telefoon, portal_token, actief")
+      .select("id, naam, actief")
       .eq("id", partnerId)
       .single();
 
@@ -95,10 +87,12 @@ export async function POST(
         monteur: partner.naam,
         status: "installatie_gepland",
         installatie_herinnering_verstuurd: false,
+        installatie_mail_klant_verstuurd: false,
+        installatie_mail_partner_verstuurd: false,
       })
       .eq("id", id)
       .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon)"
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
       )
       .single();
 
@@ -112,81 +106,9 @@ export async function POST(
       );
     }
 
-    const lead = Array.isArray(updated.leads)
-      ? updated.leads[0]
-      : updated.leads;
-    const adres = lead ? adresRegel(lead) : null;
-    const portalUrl = `${appBaseUrl()}/installatie/${partner.portal_token}`;
-
-    const combinedNotes = [
-      installatieNotities,
-      project.installateur_notitie?.trim(),
-      lead?.notities?.trim(),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    let klantMail: { ok: boolean; error?: string } = {
-      ok: false,
-      error: "Geen klant-e-mail",
-    };
-    let partnerMail: { ok: boolean; error?: string } = {
-      ok: false,
-      error: "Geen partner-e-mail",
-    };
-
-    if (lead?.email?.trim()) {
-      klantMail = await sendEmail({
-        to: lead.email.trim(),
-        subject: "Installatie gepland — Batterijconcept",
-        html: installatieKlantEmail({
-          naam: lead.naam || "klant",
-          installatieAt,
-          adres: adres !== "—" ? adres : null,
-          projectNummer: updated.project_nummer,
-        }),
-        tag: "installatie-klant",
-      });
-    }
-
-    if (partner.email?.trim()) {
-      partnerMail = await sendEmail({
-        to: partner.email.trim(),
-        subject: `Nieuwe installatie: ${lead?.naam || updated.project_nummer}`,
-        html: installatiePartnerEmail({
-          partnerNaam: partner.naam,
-          klantNaam: lead?.naam || "Klant",
-          installatieAt,
-          adres: adres !== "—" ? adres : null,
-          telefoon: lead?.telefoon,
-          email: lead?.email,
-          projectNummer: updated.project_nummer,
-          notities: combinedNotes || null,
-          portalUrl,
-        }),
-        tag: "installatie-partner",
-      });
-    }
-
-    await sb
-      .from("projecten")
-      .update({
-        installatie_mail_klant_verstuurd: klantMail.ok,
-        installatie_mail_partner_verstuurd: partnerMail.ok,
-      })
-      .eq("id", id);
-
     return NextResponse.json({
-      project: {
-        ...updated,
-        installatie_mail_klant_verstuurd: klantMail.ok,
-        installatie_mail_partner_verstuurd: partnerMail.ok,
-      },
-      mails: {
-        klant: klantMail,
-        partner: partnerMail,
-      },
-      portal_url: portalUrl,
+      project: updated,
+      mails: { klant: { ok: false, skipped: true }, partner: { ok: false, skipped: true } },
     });
   } catch (e) {
     return NextResponse.json(

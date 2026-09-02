@@ -208,20 +208,23 @@ export function FastDirectionButton({
                   )}
                 </p>
                 <p className="mt-1 leading-relaxed opacity-90">{opt.reason}</p>
-                {(opt.fromDurationText || opt.toDurationText) && (
-                  <p className="mt-1 text-[11px] opacity-80">
-                    {[
-                      opt.fromLabel && opt.fromDurationText
-                        ? `${opt.fromLabel} → hier: ${opt.fromDurationText}`
-                        : null,
-                      opt.toLabel && opt.toDurationText
-                        ? `hier → ${opt.toLabel}: ${opt.toDurationText}`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                )}
+                <div className="mt-1.5 space-y-0.5 text-[11px] opacity-90">
+                  {opt.fromDurationText && (
+                    <p>
+                      {opt.fromDepot
+                        ? "Startlocatie → deze afspraak"
+                        : `${opt.fromLabel || "vorige"} → hier`}
+                      : {opt.fromDurationText}
+                      {opt.fromDistanceText ? ` · ${opt.fromDistanceText}` : ""}
+                    </p>
+                  )}
+                  {opt.toDurationText && (
+                    <p>
+                      hier → {opt.toLabel || "volgende"}: {opt.toDurationText}
+                      {opt.toDistanceText ? ` · ${opt.toDistanceText}` : ""}
+                    </p>
+                  )}
+                </div>
                 {opt.mapsUrl && (
                   <a
                     href={opt.mapsUrl}

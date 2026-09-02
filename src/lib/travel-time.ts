@@ -89,11 +89,15 @@ export async function geocodeAddress(
 async function googleDistanceMatrix(
   origins: string[],
   destinations: string[]
-): Promise<Map<string, number> | null> {
+): Promise<{
+  durationMap: Map<string, number>;
+  distanceMap: Map<string, number>;
+} | null> {
   const key = mapsKey();
   if (!key) return null;
 
   const durationMap = new Map<string, number>();
+  const distanceMap = new Map<string, number>();
   const chunkSize = 10;
 
   try {
@@ -118,6 +122,7 @@ async function googleDistanceMatrix(
             elements?: {
               status?: string;
               duration?: { value?: number };
+              distance?: { value?: number };
             }[];
           }[];
         };
@@ -128,25 +133,29 @@ async function googleDistanceMatrix(
           const row = data.rows?.[r]?.elements || [];
           for (let c = 0; c < dChunk.length; c++) {
             const el = row[c];
+            const mapKey = `${oChunk[r]}|||${dChunk[c]}`;
             if (el?.status === "OK" && el.duration?.value != null) {
-              durationMap.set(
-                `${oChunk[r]}|||${dChunk[c]}`,
-                el.duration.value
-              );
+              durationMap.set(mapKey, el.duration.value);
+            }
+            if (el?.status === "OK" && el.distance?.value != null) {
+              distanceMap.set(mapKey, el.distance.value);
             }
           }
         }
       }
     }
-    return durationMap;
+    return { durationMap, distanceMap };
   } catch {
     return null;
   }
 }
 
-async function osrmDurationMatrix(
+async function osrmTableMatrix(
   points: LatLng[]
-): Promise<number[][] | null> {
+): Promise<{
+  durations: number[][];
+  distances: number[][];
+} | null> {
   if (points.length < 2) return null;
   try {
     const coords = points.map((p) => `${p.lon},${p.lat}`).join(";");
@@ -159,18 +168,23 @@ async function osrmDurationMatrix(
     const data = (await res.json()) as {
       code?: string;
       durations?: (number | null)[][];
+      distances?: (number | null)[][];
     };
     if (data.code !== "Ok" || !data.durations) return null;
-    return data.durations.map((row) =>
+    const durations = data.durations.map((row) =>
       row.map((v) => (v == null || Number.isNaN(v) ? -1 : Math.round(v)))
     );
+    const distances = (data.distances || []).map((row) =>
+      row.map((v) => (v == null || Number.isNaN(v) ? -1 : Math.round(v)))
+    );
+    return { durations, distances };
   } catch {
     return null;
   }
 }
 
 /**
- * Bouw duration-map tussen adressen.
+ * Bouw duration- + distance-map tussen adressen.
  * 1) Google Distance Matrix (als key dat mag)
  * 2) Geocoding (werkt bij jullie) + OSRM rijtijden
  * 3) Geocoding + hemelsbreed-schatting
@@ -179,17 +193,23 @@ export async function buildDurationMap(
   addresses: string[]
 ): Promise<{
   durationMap: Map<string, number>;
+  distanceMap: Map<string, number>;
   provider: "google" | "osrm" | "estimate";
 }> {
   const unique = [...new Set(addresses.map((a) => a.trim()).filter(Boolean))];
   const durationMap = new Map<string, number>();
+  const distanceMap = new Map<string, number>();
   if (unique.length < 2) {
-    return { durationMap, provider: "estimate" };
+    return { durationMap, distanceMap, provider: "estimate" };
   }
 
   const google = await googleDistanceMatrix(unique, unique);
-  if (google && google.size > 0) {
-    return { durationMap: google, provider: "google" };
+  if (google && google.durationMap.size > 0) {
+    return {
+      durationMap: google.durationMap,
+      distanceMap: google.distanceMap,
+      provider: "google",
+    };
   }
 
   const coords: (LatLng | null)[] = await Promise.all(
@@ -205,44 +225,39 @@ export async function buildDurationMap(
   }
 
   if (validPts.length >= 2) {
-    const osrm = await osrmDurationMatrix(validPts);
+    const osrm = await osrmTableMatrix(validPts);
     if (osrm) {
       for (let i = 0; i < validIdx.length; i++) {
         for (let j = 0; j < validIdx.length; j++) {
-          const sec = osrm[i]?.[j];
-          if (sec != null && sec >= 0) {
-            durationMap.set(
-              `${unique[validIdx[i]]}|||${unique[validIdx[j]]}`,
-              sec
-            );
-          }
+          const sec = osrm.durations[i]?.[j];
+          const mapKey = `${unique[validIdx[i]]}|||${unique[validIdx[j]]}`;
+          if (sec != null && sec >= 0) durationMap.set(mapKey, sec);
+          const dist = osrm.distances[i]?.[j];
+          if (dist != null && dist >= 0) distanceMap.set(mapKey, dist);
         }
       }
       if (durationMap.size > 0) {
-        return { durationMap, provider: "osrm" };
+        return { durationMap, distanceMap, provider: "osrm" };
       }
     }
 
     for (let i = 0; i < validIdx.length; i++) {
       for (let j = 0; j < validIdx.length; j++) {
+        const mapKey = `${unique[validIdx[i]]}|||${unique[validIdx[j]]}`;
         if (i === j) {
-          durationMap.set(
-            `${unique[validIdx[i]]}|||${unique[validIdx[j]]}`,
-            0
-          );
+          durationMap.set(mapKey, 0);
+          distanceMap.set(mapKey, 0);
           continue;
         }
         const est = estimateDriveSec(validPts[i], validPts[j]);
-        durationMap.set(
-          `${unique[validIdx[i]]}|||${unique[validIdx[j]]}`,
-          est.durationSec
-        );
+        durationMap.set(mapKey, est.durationSec);
+        distanceMap.set(mapKey, est.distanceM);
       }
     }
-    return { durationMap, provider: "estimate" };
+    return { durationMap, distanceMap, provider: "estimate" };
   }
 
-  return { durationMap, provider: "estimate" };
+  return { durationMap, distanceMap, provider: "estimate" };
 }
 
 /** Eén leg from → to, met fallbacks. */
@@ -260,18 +275,16 @@ export async function travelTimeBetween(
     };
   }
 
-  const { durationMap, provider } = await buildDurationMap([from, to]);
+  const { durationMap, distanceMap, provider } = await buildDurationMap([
+    from,
+    to,
+  ]);
   const sec = durationMap.get(`${from}|||${to}`);
   if (sec == null) {
     throw new Error("Geen reistijd gevonden");
   }
 
-  let distanceM: number | null = null;
-  if (provider !== "google") {
-    const a = await geocodeAddress(from);
-    const b = await geocodeAddress(to);
-    if (a && b) distanceM = estimateDriveSec(a, b).distanceM;
-  }
+  const distanceM = distanceMap.get(`${from}|||${to}`) ?? null;
 
   return {
     durationSec: sec,

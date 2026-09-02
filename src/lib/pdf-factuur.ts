@@ -146,12 +146,14 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   // —— Tabel header ——
   const col = {
     oms: margin,
-    aantal: margin + 95,
-    prijs: margin + 115,
-    btw: margin + 140,
+    aantal: margin + 92,
+    prijs: margin + 112,
+    btw: margin + 138,
     bedrag: pageW - margin,
   };
   const tableW = pageW - margin * 2;
+  /** Ruimte voor omschrijving vóór AANTAL (padding meegerekend). */
+  const omsMaxW = col.aantal - col.oms - 8;
 
   doc.setDrawColor(...LINE);
   doc.setLineWidth(0.3);
@@ -174,12 +176,15 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
       : "Aanbetaling");
   const bedragEx = Number(factuur.bedrag_ex_btw);
   const bedragInc = Number(factuur.bedrag_inc_btw);
-  const omsLines = doc.splitTextToSize(oms, 88);
 
-  doc.setDrawColor(...LINE);
-  doc.rect(margin, y, tableW, Math.max(10, omsLines.length * 4 + 6));
+  // Font vóór split zetten — anders wrapt jsPDF te breed (overlap met PRIJS)
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
+  const omsLines = doc.splitTextToSize(oms, omsMaxW) as string[];
+  const rowH = Math.max(10, omsLines.length * 4.2 + 6);
+
+  doc.setDrawColor(...LINE);
+  doc.rect(margin, y, tableW, rowH);
   doc.setTextColor(...CHARCOAL);
   doc.text(omsLines, col.oms + 2, y + 6);
   doc.text("1", col.aantal, y + 6.5, { align: "right" });
@@ -188,7 +193,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.text(formatEuroPdf(bedragEx), col.bedrag - 2, y + 6.5, {
     align: "right",
   });
-  y += Math.max(14, omsLines.length * 4 + 10);
+  y += Math.max(14, rowH + 4);
 
   if (offerte?.offerte_nummer) {
     doc.setFontSize(8);
@@ -202,14 +207,27 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const totalsW = 72;
 
   if (co.iban) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text("Betalen", margin, y + 4);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...CHARCOAL);
-    const pay = doc.splitTextToSize(
-      `Mededeling betaling: ${factuur.factuur_nummer} op deze rekening ${co.iban}`,
-      95
-    );
-    doc.text(pay, margin, y + 4);
+    const ref =
+      offerte?.offerte_nummer?.trim() ||
+      factuur.factuur_nummer;
+    const payLines = [
+      `IBAN: ${co.iban}`,
+      `T.n.v. ${co.accountName || "BatterijConcept"}`,
+      `Omschrijving: ${ref}`,
+      `Betaaltermijn: 3 dagen (uiterlijk ${formatDateShort(factuur.vervaldatum) || "—"})`,
+    ];
+    let py = y + 9;
+    for (const line of payLines) {
+      doc.text(line, margin, py);
+      py += 4;
+    }
   }
 
   // Excl
@@ -268,11 +286,17 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
     co.vestigingsnummer ? `Vestigingsnr: ${co.vestigingsnummer}` : null,
     co.iban ? `IBAN nr: ${co.iban}` : null,
     co.telefoon,
-  ].filter(Boolean);
-  doc.text(footerParts.join("  |  "), pageW / 2, pageH - 12, {
-    align: "center",
-  });
-  doc.text("Pagina: 1 / 1", pageW - margin, pageH - 12, { align: "right" });
+  ].filter(Boolean) as string[];
+  const pageLabel = "Pagina: 1 / 1";
+  const pageLabelW = doc.getTextWidth(pageLabel);
+  const footerMaxW = pageW - margin * 2 - pageLabelW - 6;
+  const footerLines = doc.splitTextToSize(
+    footerParts.join("  |  "),
+    footerMaxW
+  ) as string[];
+  let fy = pageH - 12 - Math.max(0, footerLines.length - 1) * 3.2;
+  doc.text(footerLines, margin, fy);
+  doc.text(pageLabel, pageW - margin, pageH - 12, { align: "right" });
 
   return doc.output("blob");
 }

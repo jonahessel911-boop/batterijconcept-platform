@@ -19,14 +19,16 @@ export function TabNav({
   active,
   onChange,
   counts,
+  tabs = CRM_TABS,
 }: {
   active: CrmTab;
   onChange: (tab: CrmTab) => void;
   counts?: Partial<Record<CrmTab, number>>;
+  tabs?: { id: CrmTab; label: string }[];
 }) {
   return (
     <nav className="hidden gap-0 border-b border-line px-5 md:flex">
-      {CRM_TABS.map((tab) => {
+      {tabs.map((tab) => {
         const isActive = active === tab.id;
         return (
           <button

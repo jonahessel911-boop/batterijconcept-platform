@@ -149,6 +149,8 @@ export async function POST(req: NextRequest) {
     }
 
     await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
+    const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+    queueLeadMetaCapi(body.lead_id);
 
     const { appBaseUrl } = await import("@/lib/email/postmark");
     const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;

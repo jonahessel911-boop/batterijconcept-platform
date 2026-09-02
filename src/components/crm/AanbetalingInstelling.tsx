@@ -15,13 +15,24 @@ export function AanbetalingSamenvatting({
   subtotaalExBtw,
   btwBedrag,
   totaalIncBtw,
+  financieringVoorbehoud = true,
 }: {
   modus: AanbetalingModus;
   handmatigIncBtw?: number;
   subtotaalExBtw: number;
   btwBedrag: number;
   totaalIncBtw: number;
+  financieringVoorbehoud?: boolean;
 }) {
+  if (!financieringVoorbehoud) {
+    return (
+      <p className="text-xs text-muted">
+        Eigen middelen · order{" "}
+        <span className="tabular-nums text-ink">{formatEuro(totaalIncBtw)}</span>
+      </p>
+    );
+  }
+
   const opt = AANBETALING_MODUS_OPTIES.find((o) => o.value === modus);
   const preview = aanbetalingVanOrder({
     subtotaalExBtw,
@@ -50,6 +61,7 @@ export function AanbetalingInstelling({
   subtotaalExBtw,
   btwBedrag,
   totaalIncBtw,
+  financieringVoorbehoud = true,
 }: {
   modus: AanbetalingModus;
   onModusChange: (m: AanbetalingModus) => void;
@@ -58,22 +70,60 @@ export function AanbetalingInstelling({
   subtotaalExBtw: number;
   btwBedrag: number;
   totaalIncBtw: number;
+  financieringVoorbehoud?: boolean;
 }) {
   const name = useId();
+  const warmtefonds = Boolean(financieringVoorbehoud);
   const preview = aanbetalingVanOrder({
     subtotaalExBtw,
     btwBedrag,
     totaalIncBtw,
     modus,
     handmatigIncBtw: parseEuroInput(handmatig),
-    financieringVoorbehoud: true,
+    financieringVoorbehoud: warmtefonds,
   });
+
+  if (!warmtefonds) {
+    return (
+      <div className="space-y-3 border border-line bg-white px-3 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Betaalroute
+          </p>
+          <span className="rounded-md bg-wash px-2 py-0.5 text-[11px] font-semibold text-ink">
+            Eigen middelen
+          </span>
+        </div>
+        <p className="text-xs text-muted">
+          Geen voorbehoud financiering Warmtefonds op deze offerte. De klant
+          betaalt met eigen middelen — er is geen Warmtefonds-aanbetaling.
+        </p>
+        <div className="space-y-1 border-t border-line pt-3 text-sm">
+          <p className="flex justify-between gap-3 text-muted">
+            Orderbedrag incl. btw
+            <span className="tabular-nums font-medium text-ink">
+              {formatEuro(totaalIncBtw)}
+            </span>
+          </p>
+          <p className="flex justify-between gap-3 text-muted">
+            Aanbetaling Warmtefonds
+            <span className="tabular-nums text-ink">{formatEuro(0)}</span>
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 border border-line bg-white px-3 py-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-        Aanbetaling Warmtefonds
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Aanbetaling Warmtefonds
+        </p>
+        <span className="rounded-md bg-green-soft px-2 py-0.5 text-[11px] font-semibold text-green-dark">
+          Warmtefonds
+        </span>
+      </div>
       <p className="text-xs text-muted">
         Aanbetaling = totaal incl. btw − Warmtefonds-deel.
       </p>

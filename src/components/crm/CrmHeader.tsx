@@ -14,8 +14,10 @@ export function CrmHeader({
   activeTab,
   onTabChange,
   tabCounts,
+  tabs,
   userName,
   onLogout,
+  showBekijkAls = true,
 }: {
   onRefresh?: () => void;
   loading?: boolean;
@@ -25,11 +27,14 @@ export function CrmHeader({
   activeTab?: CrmTab;
   onTabChange?: (tab: CrmTab) => void;
   tabCounts?: Partial<Record<CrmTab, number>>;
+  tabs?: { id: CrmTab; label: string }[];
   userName?: string;
   onLogout?: () => void;
+  showBekijkAls?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const showNav = Boolean(onTabChange && activeTab);
+  const navTabs = tabs || CRM_TABS;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -86,7 +91,7 @@ export function CrmHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          {adviseurs && onAdviseurChange && (
+          {showBekijkAls && adviseurs && onAdviseurChange && (
             <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/50">
               <span className="hidden sm:inline">Bekijk als</span>
               <select
@@ -146,7 +151,7 @@ export function CrmHeader({
             aria-label="Hoofdmenu"
           >
             <ul className="mx-auto max-w-[1440px] py-1">
-              {CRM_TABS.map((tab) => {
+              {navTabs.map((tab) => {
                 const isActive = activeTab === tab.id;
                 return (
                   <li key={tab.id}>

@@ -3,31 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { OfferteRegel, Project, ProjectFoto } from "@/types/database";
+import type { Project, ProjectFoto } from "@/types/database";
 import { projectStatusLabel } from "@/lib/labels";
-import {
-  adresRegel,
-  formatDateTimeLongNl,
-  formatEuro,
-} from "@/lib/format";
+import { adresRegel, formatDateTimeLongNl } from "@/lib/format";
 import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 
 type OrderDetail = Project & {
   leads?: Project["leads"];
-};
-
-type OfferteSummary = {
-  offerte_nummer: string;
-  titel: string | null;
-  status: string;
-  subtotaal_ex_btw: number;
-  btw_bedrag: number;
-  totaal_inc_btw: number;
-  intro_tekst: string | null;
-  offerte_regels?: Pick<
-    OfferteRegel,
-    "omschrijving" | "aantal" | "prijs_ex_btw" | "totaal_ex_btw" | "sort_order"
-  >[];
 };
 
 export function InstallatieOrderDetailPage() {
@@ -37,7 +19,6 @@ export function InstallatieOrderDetailPage() {
   }>();
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
-  const [offerte, setOfferte] = useState<OfferteSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -54,7 +35,6 @@ export function InstallatieOrderDetailPage() {
       if (!res.ok) throw new Error(data.error || "Niet gevonden");
       setOrder(data.order);
       setFotos(data.fotos || []);
-      setOfferte(data.offerte);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -283,61 +263,19 @@ export function InstallatieOrderDetailPage() {
           )}
         </section>
 
-        {(lead?.notities?.trim() || order.notities?.trim()) && (
+        {order.installateur_notitie?.trim() && (
           <section className="border border-line bg-white p-5">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Notities
+              Notitie voor installateur
             </p>
-            {lead?.notities?.trim() && (
-              <div className="mt-3">
-                <p className="text-[11px] font-semibold text-muted">Lead</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                  {lead.notities}
-                </p>
-              </div>
-            )}
-            {order.notities?.trim() && (
-              <div className="mt-3">
-                <p className="text-[11px] font-semibold text-muted">Project</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                  {order.notities}
-                </p>
-              </div>
-            )}
-          </section>
-        )}
-
-        {offerte && (
-          <section className="border border-line bg-white p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Offerte
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+              {order.installateur_notitie}
             </p>
-            <p className="mt-1 font-mono text-sm font-semibold text-ink">
-              {offerte.offerte_nummer}
-            </p>
-            {offerte.titel && (
-              <p className="text-sm text-muted">{offerte.titel}</p>
+            {order.installateur_notitie_door?.trim() && (
+              <p className="mt-2 text-[11px] text-muted">
+                — {order.installateur_notitie_door}
+              </p>
             )}
-            {offerte.offerte_regels && offerte.offerte_regels.length > 0 && (
-              <ul className="mt-3 space-y-2 border-t border-line pt-3">
-                {offerte.offerte_regels.map((r, i) => (
-                  <li
-                    key={i}
-                    className="flex justify-between gap-3 text-sm text-ink"
-                  >
-                    <span>
-                      {r.aantal}× {r.omschrijving}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-muted">
-                      {formatEuro(r.totaal_ex_btw)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="mt-3 text-right text-sm font-semibold text-ink">
-              Totaal incl. btw {formatEuro(offerte.totaal_inc_btw)}
-            </p>
           </section>
         )}
       </main>

@@ -4,8 +4,8 @@ import { buildSignedOffertePdf } from "@/lib/pdf-offerte";
 import { adresRegel } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
 import { offerteOndertekendEmail } from "@/lib/email/templates";
-import { ensureProjectForOfferte } from "@/lib/ensure-project";
 import { ensureBtwDraftFactuur } from "@/lib/ensure-btw-factuur";
+// Project pas na backoffice-actie afronden (niet bij ondertekenen)
 
 export const runtime = "nodejs";
 
@@ -151,27 +151,13 @@ export async function POST(
       .update({ status: "deal" })
       .eq("id", offerte.lead_id);
 
+    const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+    queueLeadMetaCapi(offerte.lead_id);
+
     const klantNaam = body.naam.trim() || offerte.leads?.naam || "klant";
 
-    // Project starten in status Schouw inplannen
-    let projectMeta: {
-      id: string;
-      project_nummer: string;
-      created: boolean;
-    } | null = null;
-    try {
-      projectMeta = await ensureProjectForOfferte(supabase, {
-        offerteId: offerte.id,
-        leadId: offerte.lead_id,
-        offerteNummer: offerte.offerte_nummer,
-        titel: offerte.titel,
-        klantNaam: offerte.leads?.naam || klantNaam,
-      });
-    } catch (projErr) {
-      console.error("Project na ondertekening:", projErr);
-    }
-
-    // Concept BTW-factuur (draft, niet mailen)
+    // Concept BTW-factuur (draft, niet mailen). Project volgt pas na
+    // “Actie afronden” op de ondertekende offerte.
     let factuurMeta: {
       id: string;
       factuur_nummer: string;
@@ -181,7 +167,7 @@ export async function POST(
       factuurMeta = await ensureBtwDraftFactuur(supabase, {
         offerteId: offerte.id,
         leadId: offerte.lead_id,
-        projectId: projectMeta?.id || null,
+        projectId: null,
         offerteNummer: offerte.offerte_nummer,
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
@@ -232,8 +218,8 @@ export async function POST(
       offerte_nummer: offerte.offerte_nummer,
       filename,
       pdf_base64: pdfBytes.toString("base64"),
-      project_id: projectMeta?.id ?? null,
-      project_nummer: projectMeta?.project_nummer ?? null,
+      project_id: null,
+      project_nummer: null,
       factuur_id: factuurMeta?.id ?? null,
       factuur_nummer: factuurMeta?.factuur_nummer ?? null,
     });

@@ -25,7 +25,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
             <button
               type="button"
               className="w-full text-left"
-              onClick={() => router.push(`/projecten/${p.id}`)}
+              onClick={() => router.push(`/projecten/${p.id}?from=orders`)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -71,7 +71,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
               <tr
                 key={p.id}
                 className="cursor-pointer"
-                onClick={() => router.push(`/projecten/${p.id}`)}
+                onClick={() => router.push(`/projecten/${p.id}?from=orders`)}
               >
                 <td className="font-mono text-[11px] font-semibold text-green-dark whitespace-nowrap">
                   {p.project_nummer}

@@ -17,6 +17,7 @@ import { formatDateTimeNl } from "@/lib/format";
 import { statusTone } from "@/lib/labels";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 import { geenContactPogingLabel } from "@/lib/bel-queue";
+import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { OffertesTable } from "./OffertesTable";
 import { ProjectenTable } from "./ProjectenTable";
@@ -25,6 +26,7 @@ import { MaakOfferteModal } from "./MaakOfferteModal";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
 import { LeadTimeline } from "./LeadTimeline";
+import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
 import {
   BackLink,
   Breadcrumb,
@@ -51,9 +53,9 @@ export function LeadPage() {
   const [notFound, setNotFound] = useState(false);
   const [maakOfferteOpen, setMaakOfferteOpen] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [notitiesDraft, setNotitiesDraft] = useState("");
-  const [editingNotities, setEditingNotities] = useState(false);
-  const [savingNotities, setSavingNotities] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [timelineTick, setTimelineTick] = useState(0);
   const [terugbelDraft, setTerugbelDraft] = useState("");
   const [savingTerugbel, setSavingTerugbel] = useState(false);
   const [kwalReden, setKwalReden] = useState("");
@@ -145,7 +147,7 @@ export function LeadPage() {
             ? { id: linked.id, naam: linked.naam }
             : null,
         });
-        setNotitiesDraft(leadData.notities || "");
+        setNoteDraft("");
         setTerugbelDraft(leadData.terugbel_notitie || "");
         setOffertes((o.data as Offerte[]) || []);
         setProjecten((p.data as Project[]) || []);
@@ -202,6 +204,8 @@ export function LeadPage() {
           detail: extraNotitie?.trim() || null,
         }),
       }).catch(() => {});
+      const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
+      fireMetaCapiSync(lead.id);
     } catch {
       setLead({ ...lead, status: prev, notities: prevNotes });
     }
@@ -265,8 +269,42 @@ export function LeadPage() {
         }
         throw error;
       }
+      if (!actief) {
+        const openBel = afspraken.filter(
+          (a) =>
+            (a.status === "gepland" ||
+              a.status === "bevestigd" ||
+              a.status === "verzet") &&
+            (normalizeAfspraakSoort(a.soort) === "bel" ||
+              normalizeAfspraakSoort(a.soort) === "warme_bel")
+        );
+        for (const a of openBel) {
+          await sb.from("afspraken").update({ status: "voltooid" }).eq("id", a.id);
+        }
+        if (openBel.length > 0) {
+          setAfspraken((prev) =>
+            prev.map((a) =>
+              openBel.some((o) => o.id === a.id)
+                ? { ...a, status: "voltooid" }
+                : a
+            )
+          );
+        }
+      }
       setLead({ ...lead, ...patch });
       if (!actief) setTerugbelDraft("");
+      setTimelineTick((t) => t + 1);
+      void fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "terugbel",
+          titel: actief
+            ? "Terugbelnotitie gezet"
+            : "Terugbellen afgevinkt",
+          detail: actief ? note : null,
+        }),
+      }).catch(() => {});
       setOkMsg(
         actief
           ? "Terugbelnotitie gezet — lead staat gemarkeerd om terug te bellen."
@@ -279,25 +317,30 @@ export function LeadPage() {
     }
   }
 
-  async function saveNotities() {
+  async function addNotitie() {
     if (!lead) return;
-    const next = notitiesDraft.trim() || null;
-    if ((lead.notities || null) === next) return;
-    setSavingNotities(true);
+    const text = noteDraft.trim();
+    if (!text) return;
+    setSavingNote(true);
     try {
-      const sb = getSupabaseBrowser();
-      const { error } = await sb
-        .from("leads")
-        .update({ notities: next })
-        .eq("id", lead.id);
-      if (error) throw error;
-      setLead({ ...lead, notities: next });
-      setEditingNotities(false);
-      setOkMsg("Notitie opgeslagen.");
-    } catch {
-      setOkMsg(null);
+      const res = await fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "notitie",
+          titel: "Notitie",
+          detail: text,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      setNoteDraft("");
+      setTimelineTick((t) => t + 1);
+      setOkMsg("Notitie toegevoegd.");
+    } catch (e) {
+      setOkMsg(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
-      setSavingNotities(false);
+      setSavingNote(false);
     }
   }
 
@@ -340,10 +383,10 @@ export function LeadPage() {
         items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
       />
 
-      <section className="border border-line bg-white p-4 sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
-          <div>
-            <p className="font-mono text-xs font-semibold text-green-dark">
+      <section className="border border-line bg-white">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line px-4 py-5 sm:px-6">
+          <div className="min-w-0">
+            <p className="font-mono text-[11px] font-semibold tracking-wide text-green-dark">
               {lead.lead_number}
             </p>
             <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-green-deeper sm:text-3xl">
@@ -352,15 +395,15 @@ export function LeadPage() {
             {(lead.terugbellen ||
               lead.status === "geen_contact" ||
               (lead.belpogingen ?? 0) > 0) && (
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-2.5 flex flex-wrap gap-2">
                 {lead.terugbellen && (
-                  <span className="inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
+                  <span className="inline-flex items-center border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
                     Terugbellen
                   </span>
                 )}
                 {(lead.status === "geen_contact" ||
                   (lead.belpogingen ?? 0) > 0) && (
-                  <span className="inline-flex items-center rounded-full border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  <span className="inline-flex items-center border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
                     {geenContactPogingLabel(lead.belpogingen ?? 0)}
                   </span>
                 )}
@@ -374,7 +417,7 @@ export function LeadPage() {
           <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
             <Link
               href={`/advies/${lead.id}`}
-              className="bg-green px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white hover:bg-green-dark sm:text-xs sm:normal-case sm:tracking-normal"
+              className="bg-green px-3.5 py-2 text-xs font-semibold text-white hover:bg-green-dark"
             >
               Start adviesproces
             </Link>
@@ -384,7 +427,7 @@ export function LeadPage() {
                 setSection("offertes");
                 setMaakOfferteOpen(true);
               }}
-              className="bg-orange px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white hover:bg-[#e0651c] sm:text-xs sm:normal-case sm:tracking-normal"
+              className="bg-orange px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#e0651c]"
             >
               Maak offerte
             </button>
@@ -393,7 +436,7 @@ export function LeadPage() {
               onChange={(e) =>
                 void updateAdviseur(e.target.value ? e.target.value : null)
               }
-              className="max-w-[10rem] cursor-pointer border border-line bg-white px-2.5 py-1.5 text-[11px] outline-none focus:border-green"
+              className="max-w-[10rem] cursor-pointer border border-line bg-white px-2.5 py-2 text-xs outline-none focus:border-green"
               aria-label="Koppel adviseur"
             >
               <option value="">Geen adviseur</option>
@@ -413,7 +456,7 @@ export function LeadPage() {
                 }
                 void updateStatus(next);
               }}
-              className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+              className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
               aria-label="Lead status"
             >
               <LeadStatusSelectOptions />
@@ -422,7 +465,7 @@ export function LeadPage() {
         </div>
 
         {lead.status === "na_afspraak" && (
-          <div className="mt-6 border border-[#C45A12]/25 bg-[#FFF0E6] px-4 py-4">
+          <div className="mx-4 mt-5 border border-[#C45A12]/25 bg-[#FFF0E6] px-4 py-4 sm:mx-6">
             <p className="text-xs font-semibold uppercase tracking-wide text-[#C45A12]">
               Uitkomst afspraak
             </p>
@@ -462,7 +505,7 @@ export function LeadPage() {
         )}
 
         {showKwalForm && (
-          <div className="mt-4 border border-line bg-wash px-4 py-4">
+          <div className="mx-4 mt-4 border border-line bg-wash px-4 py-4 sm:mx-6">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Reden niet gekwalificeerd
             </p>
@@ -501,13 +544,13 @@ export function LeadPage() {
           </div>
         )}
 
-        <div className="mt-6 grid items-start gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-          <section className="min-w-0 space-y-6">
-            <div>
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+        <div className="grid items-stretch gap-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-0 border-b border-line lg:border-b-0 lg:border-r">
+            <div className="border-b border-line px-4 py-5 sm:px-6">
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
                 Contact
               </h2>
-              <div className="mt-2 border-y border-line py-3">
+              <div className="mt-4">
                 <LeadContactEditor
                   lead={lead}
                   onSaved={(patch) =>
@@ -517,11 +560,11 @@ export function LeadPage() {
               </div>
             </div>
 
-            <div>
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            <div className="border-b border-line px-4 py-5 sm:px-6">
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
                 Adres
               </h2>
-              <div className="mt-2 border-y border-line py-3">
+              <div className="mt-4">
                 <LeadAdresEditor
                   lead={lead}
                   onSaved={(patch) =>
@@ -531,41 +574,36 @@ export function LeadPage() {
               </div>
             </div>
 
-            <dl className="divide-y divide-line border-y border-line">
-              <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-3 text-sm sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
-                <dt className="font-semibold text-muted">Adviseur</dt>
-                <dd
-                  className={`min-w-0 break-words ${lead.adviseur_id ? "text-orange" : "text-ink"}`}
+            <div className="grid gap-0 sm:grid-cols-2">
+              <div className="border-b border-line px-4 py-4 sm:border-b-0 sm:border-r sm:px-6 sm:py-5">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                  Adviseur
+                </p>
+                <p
+                  className={`mt-1.5 text-sm font-medium ${lead.adviseur_id ? "text-orange" : "text-ink"}`}
                 >
                   {lead.adviseurs?.naam || "Niet gekoppeld"}
-                </dd>
+                </p>
               </div>
-              {(lead.lander ||
-                lead.campaign_name ||
-                lead.ad_name ||
-                lead.utm_medium ||
-                lead.utm_campaign ||
-                lead.utm_source) && (
-                <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-3 text-sm sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
-                  <dt className="font-semibold text-muted">Bron / ads</dt>
-                  <dd className="min-w-0 space-y-1 break-words text-ink">
-                    {lead.lander && (
-                      <p>
-                        <span className="text-muted">Lander: </span>
-                        {lead.lander}
-                      </p>
-                    )}
+              <div className="px-4 py-4 sm:px-6 sm:py-5">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                  Bron / ads
+                </p>
+                {(lead.lander ||
+                  lead.campaign_name ||
+                  lead.ad_name ||
+                  lead.utm_medium ||
+                  lead.utm_campaign ||
+                  lead.utm_source) ? (
+                  <div className="mt-1.5 space-y-0.5 text-sm text-ink">
+                    {lead.lander && <p>{lead.lander}</p>}
                     {(lead.campaign_name || lead.utm_campaign) && (
-                      <p>
-                        <span className="text-muted">Campaign: </span>
+                      <p className="text-muted">
                         {lead.campaign_name || lead.utm_campaign}
                       </p>
                     )}
                     {lead.ad_name && (
-                      <p>
-                        <span className="text-muted">Ad: </span>
-                        {lead.ad_name}
-                      </p>
+                      <p className="text-xs text-muted">{lead.ad_name}</p>
                     )}
                     {(lead.utm_source || lead.utm_medium) && (
                       <p className="text-xs text-muted">
@@ -574,58 +612,122 @@ export function LeadPage() {
                           .join(" · ")}
                       </p>
                     )}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          </section>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 text-sm text-muted">—</p>
+                )}
+              </div>
+            </div>
+          </div>
 
-          <section className="min-w-0">
-            <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Geplande afspraken
-            </h2>
+          <aside className="flex min-w-0 flex-col bg-wash/40 px-4 py-5 sm:px-6">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Geplande afspraken
+              </h2>
+              {afspraken.length > 0 && (
+                <span className="text-[11px] tabular-nums text-muted">
+                  {afspraken.length}
+                </span>
+              )}
+            </div>
             {afspraken.length === 0 ? (
-              <p className="mt-2 border-y border-line py-4 text-sm text-muted">
-                Geen geplande afspraken.
-              </p>
+              <div className="mt-4 flex flex-1 flex-col gap-3">
+                <div className="border border-dashed border-line bg-white px-4 py-6 text-center">
+                  <p className="text-sm font-medium text-ink">Nog geen afspraken</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Plan hieronder direct in — bevestigingsmail gaat mee.
+                  </p>
+                </div>
+                <LeadAfspraakPlannen
+                  lead={lead}
+                  adviseurs={adviseurs}
+                  onPlanned={() => {
+                    setOkMsg("Afspraak gepland.");
+                    setTimelineTick((t) => t + 1);
+                    void load();
+                  }}
+                />
+              </div>
             ) : (
-              <ul className="mt-2 divide-y divide-line border-y border-line">
-                {afspraken.map((afspraak) => (
-                  <li
-                    key={afspraak.id}
-                    className="flex flex-wrap items-center justify-between gap-3 py-3"
-                  >
-                    <div>
+              <div className="mt-4 flex flex-1 flex-col gap-3">
+                <ul className="divide-y divide-line border border-line bg-white">
+                  {afspraken.map((afspraak) => (
+                    <li key={afspraak.id} className="px-3.5 py-3">
                       <p className="text-sm font-semibold text-ink">
                         {formatDateTimeNl(afspraak.start_at)}
                       </p>
-                      <p className="text-xs text-muted">
+                      <p className="mt-0.5 text-xs text-muted">
                         {statusLabel[afspraak.status]}
                         {afspraak.soort ? ` · ${afspraak.soort}` : ""}
                       </p>
-                    </div>
-                    {afspraak.notities?.trim() && (
-                      <p className="text-xs text-muted">{afspraak.notities}</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      {afspraak.notities?.trim() && (
+                        <p className="mt-1 text-xs text-muted">
+                          {afspraak.notities}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <LeadAfspraakPlannen
+                  lead={lead}
+                  adviseurs={adviseurs}
+                  onPlanned={() => {
+                    setOkMsg("Afspraak gepland.");
+                    setTimelineTick((t) => t + 1);
+                    void load();
+                  }}
+                />
+              </div>
             )}
-          </section>
+          </aside>
         </div>
 
-        <div className="mt-8">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+        <div className="border-t border-line px-4 py-5 sm:px-6">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Notitie toevoegen
+          </h2>
+          <textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            rows={3}
+            placeholder="Schrijf een notitie…"
+            className="mt-3 w-full border border-line bg-wash px-3 py-2.5 text-sm leading-relaxed text-ink outline-none transition focus:border-green focus:bg-white"
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void addNotitie()}
+              disabled={savingNote || !noteDraft.trim()}
+              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+            >
+              {savingNote ? "Opslaan…" : "Notitie toevoegen"}
+            </button>
+          </div>
+          {lead.notities?.trim() && (
+            <div className="mt-4 border border-line bg-wash/30 px-3.5 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Intake / vaste info
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                {lead.notities}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-line px-4 py-5 sm:px-6">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
             Geschiedenis
           </h2>
-          <div className="mt-3 border border-line bg-white px-4 py-4">
-            <LeadTimeline leadId={lead.id} />
+          <div className="mt-3 border border-line bg-wash/30 px-4 py-4">
+            <LeadTimeline leadId={lead.id} refreshKey={timelineTick} />
           </div>
         </div>
 
-        <div className="mt-6 border-t border-line pt-5">
+        <div className="border-t border-line px-4 py-5 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
               Terugbellen
             </p>
             <p className="text-[11px] text-muted">
@@ -633,7 +735,7 @@ export function LeadPage() {
             </p>
           </div>
           {lead.terugbellen && lead.terugbel_notitie?.trim() && (
-            <div className="mt-2 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3 text-sm leading-relaxed text-ink">
+            <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3 text-sm leading-relaxed text-ink">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
                 Terugbelnotitie
               </p>
@@ -645,7 +747,7 @@ export function LeadPage() {
             onChange={(e) => setTerugbelDraft(e.target.value)}
             rows={3}
             placeholder="Bijv. niet opgenomen, bel morgenavond terug…"
-            className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
+            className="mt-3 w-full border border-line bg-wash px-3 py-2.5 text-sm leading-relaxed text-ink outline-none transition focus:border-green focus:bg-white"
           />
           <div className="mt-2 flex flex-wrap justify-end gap-2">
             {lead.terugbellen && (
@@ -671,72 +773,6 @@ export function LeadPage() {
                   : "Zet terugbellen"}
             </button>
           </div>
-        </div>
-
-        <div className="mt-5 border-t border-line pt-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setEditingNotities((v) => !v)}
-              className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:text-green-dark"
-            >
-              <span>Notities</span>
-              <svg
-                viewBox="0 0 24 24"
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                aria-hidden
-              >
-                <path d="M4 20h4l10-10-4-4L4 16v4Z" />
-                <path d="m12 6 4 4" />
-              </svg>
-            </button>
-            <p className="text-[11px] text-muted">
-              Zichtbaar bij afspraken in de agenda
-            </p>
-          </div>
-          {!editingNotities ? (
-            <div className="mt-2 min-h-24 border-y border-line py-3 text-sm leading-relaxed text-ink">
-              {lead.notities?.trim() || (
-                <span className="text-muted">Nog geen notities. Klik op het potlood om te bewerken.</span>
-              )}
-            </div>
-          ) : (
-            <>
-              <textarea
-                value={notitiesDraft}
-                onChange={(e) => setNotitiesDraft(e.target.value)}
-                rows={4}
-                placeholder="Bijv. zonnepanelen aanwezig, bel vooraf, sleutel bij buren…"
-                className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm leading-relaxed text-ink outline-none focus:border-green"
-              />
-              <div className="mt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNotitiesDraft(lead.notities || "");
-                    setEditingNotities(false);
-                  }}
-                  className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash"
-                >
-                  Annuleren
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveNotities()}
-                  disabled={
-                    savingNotities ||
-                    (lead.notities || "") === (notitiesDraft.trim() || "")
-                  }
-                  className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-                >
-                  {savingNotities ? "Opslaan…" : "Notitie opslaan"}
-                </button>
-              </div>
-            </>
-          )}
         </div>
       </section>
 

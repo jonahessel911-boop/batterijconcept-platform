@@ -379,7 +379,7 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                     />
                     <span>
                       Ik ga akkoord dat Batterijconcept mij mag benaderen voor
-                      verdere correspondentie voor zijn bestelling
+                      verdere correspondentie
                     </span>
                   </label>
                 </div>

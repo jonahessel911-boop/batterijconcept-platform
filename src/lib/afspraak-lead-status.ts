@@ -68,6 +68,8 @@ export async function syncLeadNaAfspraak(
     const next = leadStatusVoorAfspraakSoort(remaining[0].soort);
     if (lead.status !== next) {
       await sb.from("leads").update({ status: next }).eq("id", leadId);
+      const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+      queueLeadMetaCapi(leadId);
     }
     return;
   }
@@ -98,6 +100,8 @@ export async function syncLeadNaAfspraak(
       ) {
         await sb.from("leads").update({ status: nextStatus }).eq("id", leadId);
       }
+      const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+      queueLeadMetaCapi(leadId);
       return;
     }
   }

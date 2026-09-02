@@ -21,24 +21,39 @@ export const afspraakSoortLabel: Record<AfspraakSoort, string> = {
 
 const ACTIEF = new Set(["gepland", "bevestigd", "verzet"]);
 
-/** Leadstatussen waarbij geen vervolg punt meer nodig is. */
+/** Leadstatussen waarbij geen vervolg punt meer nodig is (eindstatus / afgeboekt).
+ *  Let op: `deal` hoort hier NIET bij — die komt automatisch bij ondertekenen.
+ *  Sale wél: die kies je pas als uitkomst; daarna volgt backoffice-actie i.p.v. vervolg.
+ */
 export const VERVOLG_PUNT_VRIJGESTELD = new Set<LeadStatus>([
-  "vervolg_fysiek",
-  "vervolg_tel",
   "vervolg_geen_contact",
-  "sale_financiering",
-  "sale_eigen_middelen",
   "offerte_afgewezen",
   "geen_interesse",
   "niet_gekwalificeerd",
   "deur_niet_open",
   "afspraak_afgezegd_klant",
   "geen_contact",
-  "deal",
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
+  "sale_financiering",
+  "sale_eigen_middelen",
 ]);
+
+export function isSaleUitkomst(
+  status: LeadStatus | "" | null | undefined
+): status is "sale_financiering" | "sale_eigen_middelen" {
+  return status === "sale_financiering" || status === "sale_eigen_middelen";
+}
+
+/** Sale → backoffice-formulier; eindstatus → alleen notitie; overig → vervolg plannen. */
+export function uitkomstVereistVervolgPunt(
+  status: LeadStatus | "" | null | undefined
+): boolean {
+  if (!status) return true;
+  if (isSaleUitkomst(status)) return false;
+  return !VERVOLG_PUNT_VRIJGESTELD.has(status);
+}
 
 export function normalizeAfspraakSoort(
   value: string | null | undefined
@@ -124,21 +139,22 @@ export function leadHadFysiekeAfspraak(
 }
 
 /**
- * Mag deze afspraak in de agenda-week? Koude terugbels (vóór huisbezoek)
- * horen alleen in Bellen, niet in de agenda.
+ * Mag deze afspraak in de agenda-week?
+ * Terugbel / warme terugbel alleen in Bellen — niet in de agenda.
  */
 export function afspraakZichtbaarInAgenda(
   afspraak: Afspraak,
-  allAfspraken: Afspraak[]
+  _allAfspraken: Afspraak[]
 ): boolean {
   const s = normalizeAfspraakSoort(afspraak.soort);
-  if (s === "bel" || s === "warme_bel") {
-    return leadHadFysiekeAfspraak(allAfspraken, afspraak.lead_id);
-  }
+  if (s === "bel" || s === "warme_bel") return false;
   return true;
 }
 
-/** Openstaand vervolg (punt / tel / fysiek / terugbel) voor deze lead. */
+/**
+ * Openstaand vervolg ná een fysiek bezoek.
+ * Alleen echte vervolgen (punt/tel/fysiek/warme bel) — koude terugbel telt niet.
+ */
 export function hasOpenVervolgVoorLead(
   afspraken: Afspraak[],
   leadId: string,
@@ -151,7 +167,6 @@ export function hasOpenVervolgVoorLead(
     const s = normalizeAfspraakSoort(a.soort);
     if (
       s !== "vervolg_punt" &&
-      s !== "bel" &&
       s !== "warme_bel" &&
       s !== "vervolg_tel" &&
       s !== "vervolg_fysiek"

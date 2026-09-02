@@ -25,7 +25,8 @@ export function companyInfo() {
     kvk: process.env.COMPANY_KVK || "42141855",
     vestigingsnummer:
       process.env.COMPANY_VESTIGINGSNUMMER || "000066465834",
-    iban: process.env.COMPANY_IBAN || "",
+    iban: process.env.COMPANY_IBAN || "NL48 BUNQ 2209 5579 33",
+    accountName: process.env.COMPANY_ACCOUNT_NAME || "BatterijConcept",
     email: process.env.COMPANY_EMAIL || "info@batterijconcept.nl",
     factuurEmail:
       process.env.COMPANY_INVOICE_EMAIL || "info@batterijconcept.nl",

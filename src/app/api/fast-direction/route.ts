@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
     }
 
     const addresses = uniqueAddresses(targetAddress, stops, depotAddress);
-    const { durationMap, provider } = await buildDurationMap(addresses);
+    const { durationMap, distanceMap, provider } =
+      await buildDurationMap(addresses);
 
     if (addresses.length >= 2 && durationMap.size === 0) {
       return NextResponse.json(
@@ -68,6 +69,10 @@ export async function POST(req: NextRequest) {
         durationSecBetween: (from, to) => {
           if (from === to) return 0;
           return durationMap.get(`${from}|||${to}`) ?? null;
+        },
+        distanceMBetween: (from, to) => {
+          if (from === to) return 0;
+          return distanceMap.get(`${from}|||${to}`) ?? null;
         },
       },
       3

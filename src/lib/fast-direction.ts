@@ -20,12 +20,16 @@ export type FastDirectionSuggestion = {
   feasible: boolean;
   reason: string;
   dayKey: string;
+  /** Eerste afspraak die dag (vanaf startadres adviseur). */
+  fromDepot: boolean;
   fromLabel: string | null;
   toLabel: string | null;
   fromDurationSec: number | null;
   toDurationSec: number | null;
   fromDurationText: string | null;
   toDurationText: string | null;
+  fromDistanceText: string | null;
+  toDistanceText: string | null;
   mapsUrl: string | null;
 };
 
@@ -40,6 +44,14 @@ function formatDurationNl(sec: number): string {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m ? `${h} u ${m} min.` : `${h} u`;
+}
+
+function formatDistanceNl(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  return `${km.toLocaleString("nl-NL", {
+    maximumFractionDigits: km >= 10 ? 0 : 1,
+  })} km`;
 }
 
 function gapSec(fromEndIso: string, toStartIso: string): number {
@@ -81,6 +93,7 @@ export function pickTopFastDirectionSlots(
     depotAddress?: string | null;
     depotLabel?: string | null;
     durationSecBetween: (from: string, to: string) => number | null;
+    distanceMBetween?: (from: string, to: string) => number | null;
   },
   limit = 3
 ): FastDirectionSuggestion[] {
@@ -89,7 +102,8 @@ export function pickTopFastDirectionSlots(
 
   const depot = (opts.depotAddress || "").trim();
   const hasDepot = Boolean(depot && depot !== "—");
-  const depotLabel = opts.depotLabel?.trim() || "startpunt";
+  const depotName = opts.depotLabel?.trim() || "adviseur";
+  const depotLabel = `Startlocatie (${depotName})`;
 
   const stopsByDay = new Map<string, FastDirectionStop[]>();
   for (const s of opts.stops) {
@@ -140,13 +154,15 @@ export function pickTopFastDirectionSlots(
 
     let fromDurationSec: number | null = null;
     let toDurationSec: number | null = null;
+    let fromDistanceM: number | null = null;
+    let toDistanceM: number | null = null;
     let feasible = true;
     let scoreSec = 0;
-    /** Bonus: past tussen twee afspraken die dag → betere fit. */
     let insertBonus = 0;
 
     if (prev) {
       fromDurationSec = opts.durationSecBetween(prev.address, target);
+      fromDistanceM = opts.distanceMBetween?.(prev.address, target) ?? null;
       if (fromDurationSec == null) {
         scoreSec += 3 * 60 * 60;
         feasible = false;
@@ -161,6 +177,7 @@ export function pickTopFastDirectionSlots(
 
     if (next) {
       toDurationSec = opts.durationSecBetween(target, next.address);
+      toDistanceM = opts.distanceMBetween?.(target, next.address) ?? null;
       if (toDurationSec == null) {
         scoreSec += 3 * 60 * 60;
         feasible = false;
@@ -172,7 +189,7 @@ export function pickTopFastDirectionSlots(
     }
 
     if (prevStop && next) {
-      insertBonus = -15 * 60; // voorkeur voor gat tussen bestaande stops
+      insertBonus = -15 * 60;
     } else if (prevStop || next) {
       insertBonus = -5 * 60;
     }
@@ -188,31 +205,38 @@ export function pickTopFastDirectionSlots(
       next?.address,
     ].filter(Boolean) as string[];
 
+    const fromDistPart =
+      fromDistanceM != null ? ` · ${formatDistanceNl(fromDistanceM)}` : "";
+    const toDistPart =
+      toDistanceM != null ? ` · ${formatDistanceNl(toDistanceM)}` : "";
+
     let reason: string;
     if (fromDepot && !next) {
       reason =
         fromDurationSec != null
-          ? `Eerste afspraak die dag vanaf ${depotLabel} · ${formatDurationNl(fromDurationSec)} rijden.`
-          : `Eerste afspraak die dag vanaf ${depotLabel}.`;
+          ? `Eerste afspraak die dag · ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie.`
+          : `Eerste afspraak die dag vanaf startlocatie.`;
     } else if (fromDepot && next) {
-      reason = feasible
-        ? `Vanaf ${depotLabel}, vóór ${next.label || "volgende"} (samen ${formatDurationNl(scoreSec)} rijden).`
-        : `Vanaf ${depotLabel} vóór ${next.label || "volgende"}, maar krap op reistijd.`;
+      reason =
+        fromDurationSec != null
+          ? `Eerste die dag: ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie, daarna ${formatDurationNl(toDurationSec || 0)} naar ${next.label || "volgende"}.`
+          : `Eerste die dag vanaf startlocatie, vóór ${next.label || "volgende"}.`;
     } else if (!prev && !next) {
       reason =
-        "Geen andere fysieke afspraken die dag — vroegste vrije slot.";
+        "Geen andere fysieke afspraken die dag — vroegste vrije slot. (Geen startadres ingesteld.)";
     } else if (prev && next) {
       reason = feasible
         ? `Past tussen ${prev.label || "vorige"} en ${next.label || "volgende"} (samen ${formatDurationNl(scoreSec)} rijden).`
         : `Tussen ${prev.label || "vorige"} en ${next.label || "volgende"}, maar krap op reistijd.`;
     } else if (prev) {
       reason = feasible
-        ? `Na ${prev.label || "vorige afspraak"} · ${formatDurationNl(fromDurationSec || 0)} rijden.`
+        ? `Na ${prev.label || "vorige afspraak"} · ${formatDurationNl(fromDurationSec || 0)}${fromDistPart} rijden.`
         : `Na ${prev.label || "vorige afspraak"}, maar reistijd past niet in de pauze.`;
     } else {
+      // Geen startadres, wel latere afspraak die dag
       reason = feasible
-        ? `Voor ${next!.label || "volgende afspraak"} · ${formatDurationNl(toDurationSec || 0)} rijden.`
-        : `Voor ${next!.label || "volgende afspraak"}, maar reistijd past niet in de pauze.`;
+        ? `Voor ${next!.label || "volgende afspraak"} · ${formatDurationNl(toDurationSec || 0)}${toDistPart} rijden. (Geen startadres — stel in onder Instellingen.)`
+        : `Voor ${next!.label || "volgende afspraak"}, maar krap op reistijd.`;
     }
 
     const fitScore = scoreSec + insertBonus;
@@ -224,6 +248,7 @@ export function pickTopFastDirectionSlots(
       feasible,
       reason,
       dayKey: day,
+      fromDepot,
       fromLabel: prev?.label || null,
       toLabel: next?.label || null,
       fromDurationSec,
@@ -232,8 +257,11 @@ export function pickTopFastDirectionSlots(
         fromDurationSec != null ? formatDurationNl(fromDurationSec) : null,
       toDurationText:
         toDurationSec != null ? formatDurationNl(toDurationSec) : null,
+      fromDistanceText:
+        fromDistanceM != null ? formatDistanceNl(fromDistanceM) : null,
+      toDistanceText:
+        toDistanceM != null ? formatDistanceNl(toDistanceM) : null,
       mapsUrl: googleMapsMultiStopUrl(mapsParts),
-      // Binnen de dag: feasible → beste fit → vroegste tijdstip
       dayFitKey:
         (feasible ? 0 : 1_000_000_000) +
         fitScore +
@@ -241,14 +269,12 @@ export function pickTopFastDirectionSlots(
     });
   }
 
-  // Per dag: beste passend slot
   const bestByDay = new Map<string, Scored>();
   for (const s of scored) {
     const cur = bestByDay.get(s.dayKey);
     if (!cur || s.dayFitKey < cur.dayFitKey) bestByDay.set(s.dayKey, s);
   }
 
-  // Dagen: vroeger eerst (wo > do), bij gelijke dag al gekozen
   const ranked = [...bestByDay.values()].sort((a, b) => {
     if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
     return a.dayFitKey - b.dayFitKey;

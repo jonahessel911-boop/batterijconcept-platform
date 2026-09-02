@@ -99,8 +99,8 @@ export function activeBelAfspraak(
 }
 
 /**
- * Terugbel-afspraak die bovenaan de bellijst hoort: vanaf de Amsterdam-dag
- * van het geplande moment tot afgevinkt/afgehandeld (ook als die dag al voorbij is).
+ * Terugbel-afspraak die als chip bovenaan Bellen hoort (niet in de belwachtrij):
+ * vanaf de Amsterdam-dag van het geplande moment tot afgevinkt/afgehandeld.
  */
 export function isTerugbelDue(
   afspraak: Afspraak,

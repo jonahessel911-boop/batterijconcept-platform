@@ -17,6 +17,7 @@ export type SessionPayload = {
   adviseurId: string;
   naam: string;
   email: string;
+  rol: string;
   exp: number;
 };
 
@@ -69,9 +70,13 @@ export async function createSessionToken(data: {
   adviseurId: string;
   naam: string;
   email: string;
+  rol?: string;
 }): Promise<string> {
   const payload: SessionPayload = {
-    ...data,
+    adviseurId: data.adviseurId,
+    naam: data.naam,
+    email: data.email,
+    rol: data.rol || "adviseur",
     exp: Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000,
   };
   const payloadB64 = toBase64Url(
@@ -103,6 +108,7 @@ export async function verifySessionToken(
     if (!payload.adviseurId || !payload.exp || payload.exp < Date.now()) {
       return null;
     }
+    if (!payload.rol) payload.rol = "adviseur";
     return payload;
   } catch {
     return null;

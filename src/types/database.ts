@@ -74,6 +74,12 @@ export type AfspraakStatus =
   | "geannuleerd"
   | "voltooid";
 
+export type GebruikerRol =
+  | "adviseur"
+  | "backoffice"
+  | "admin"
+  | "installateur";
+
 export interface Adviseur {
   id: string;
   naam: string;
@@ -84,6 +90,8 @@ export interface Adviseur {
   werktijd_eind: string;
   /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
   start_adres?: string | null;
+  /** CRM-rol */
+  rol?: GebruikerRol | null;
 }
 
 export interface Afspraak {
@@ -153,6 +161,13 @@ export interface Lead {
   laatst_gebeld_at?: string | null;
   belpogingen_vandaag?: number;
   adviseur_id: string | null;
+  /** Meta CAPI events al verstuurd (QualifiedLead, Schedule, Purchase). */
+  capi_events_sent?: string[] | null;
+  meta_fbc?: string | null;
+  meta_fbp?: string | null;
+  meta_client_ip?: string | null;
+  meta_user_agent?: string | null;
+  meta_event_source_url?: string | null;
   created_at: string;
   updated_at: string;
   adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
@@ -298,6 +313,10 @@ export interface Project {
   backoffice_notitie_door?: string | null;
   installateur_notitie_door?: string | null;
   backoffice_afgerond_at?: string | null;
+  /** Backoffice heeft klant gebeld voor schouw (+ aanbetaling). */
+  bel_schouw_aanbetaling_at?: string | null;
+  /** Backoffice heeft met financieringsman geschakeld (Warmtefonds). */
+  financiering_geschakeld_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -319,6 +338,13 @@ export interface Project {
   installatie_partners?: Pick<
     InstallatiePartner,
     "id" | "naam" | "email" | "telefoon"
+  > | null;
+  offertes?: Pick<
+    Offerte,
+    | "id"
+    | "offerte_nummer"
+    | "financiering_voorbehoud"
+    | "aanbetaling_te_innen_inc"
   > | null;
 }
 
@@ -391,7 +417,11 @@ export interface Factuur {
   notities: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "email" | "lead_number" | "adviseur_id"> | null;
+  leads?: Pick<
+    Lead,
+    "naam" | "email" | "telefoon" | "lead_number" | "adviseur_id"
+  > | null;
+  offertes?: Pick<Offerte, "id" | "offerte_nummer"> | null;
 }
 
 export interface WebhookLeadPayload {
@@ -415,13 +445,14 @@ export interface WebhookLeadPayload {
   /** Landing page — aliases: `Lander` */
   lander?: string;
   Lander?: string;
-  /** Campagnenaam — aliases: `Campaign_name`, `campaign` */
+  /** Campagnenaam — aliases: `Campaign_name`, `campaign`, `utm_campaign` */
   campaign_name?: string;
   Campaign_name?: string;
   campaign?: string;
-  /** Advertentienaam — aliases: `Ad_name` */
+  /** Advertentienaam — aliases: `Ad_name`, `ad`, `utm_content` */
   ad_name?: string;
   Ad_name?: string;
+  ad?: string;
   bron?: string;
   /** Vrije tekst / formuliervelden — aliases: `notes`, `opmerkingen`, `bericht`, `message` */
   notities?: string;
@@ -429,6 +460,17 @@ export interface WebhookLeadPayload {
   opmerkingen?: string;
   bericht?: string;
   message?: string;
+  /** Meta click / browser IDs voor Conversions API */
+  fbc?: string;
+  fbp?: string;
+  _fbc?: string;
+  _fbp?: string;
+  meta_fbc?: string;
+  meta_fbp?: string;
+  fbclid?: string;
+  event_source_url?: string;
+  page_url?: string;
+  landing_url?: string;
 }
 
 export const BEDRIJFSWAARDEN = [

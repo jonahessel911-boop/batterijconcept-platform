@@ -375,7 +375,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
 
   const akkoordTeksten = [
     "Ik ga akkoord met de algemene voorwaarden",
-    "Ik ga akkoord dat Batterijconcept mij mag benaderen voor verdere correspondentie voor zijn bestelling",
+    "Ik ga akkoord dat Batterijconcept mij mag benaderen voor verdere correspondentie",
   ];
   const checkSize = 3.2;
   const checkX = margin + 5;

@@ -272,7 +272,11 @@ async function markVoltooideAfspraken(
       .from("leads")
       .update({ status: "na_afspraak" })
       .eq("id", a.lead_id);
-    if (!leadErr) naAfspraak += 1;
+    if (!leadErr) {
+      naAfspraak += 1;
+      const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+      queueLeadMetaCapi(a.lead_id);
+    }
   }
 
   return { voltooid, na_afspraak: naAfspraak };

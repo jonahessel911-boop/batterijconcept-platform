@@ -12,12 +12,12 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 const SLOT_MINUTES = 120;
 
 /**
- * Vijf afspraakblokken per dag (Europe/Amsterdam).
+ * Vier afspraakblokken per dag (Europe/Amsterdam).
  * 2 uur afspraak + 1 uur reistijd:
- * 10:00–12:00, 13:00–15:00, 16:00–18:00, 19:00–21:00, 22:00–00:00.
+ * 10:00–12:00, 13:00–15:00, 16:00–18:00, 19:00–21:00.
  */
 export const AFSPRAAK_DUUR_MINUTEN = SLOT_MINUTES;
-export const ADVISEUR_SLOT_HOURS = [10, 13, 16, 19, 22] as const;
+export const ADVISEUR_SLOT_HOURS = [10, 13, 16, 19] as const;
 
 export type BusySlot = { start_at: string; end_at: string };
 
@@ -31,22 +31,24 @@ function overlapsBusy(startUtc: Date, endUtc: Date, busy: BusySlot[]) {
   });
 }
 
-/** Alle dagblokken (vrij + bezet) voor de komende dagen. */
+/** Alle dagblokken (vrij + bezet) voor de komende dagen. Ma–za; zondag uitgesloten. */
 export function generateDayBlocks(opts: {
   daysAhead?: number;
   busy: BusySlot[];
   fromDate?: Date;
+  /** @deprecated Alleen nog voor backwards compat; zaterdag is standaard wél beschikbaar. */
   weekdaysOnly?: boolean;
 }): DayBlock[] {
   const daysAhead = opts.daysAhead ?? 21;
-  const weekdaysOnly = opts.weekdaysOnly ?? true;
   const from = opts.fromDate ?? new Date();
   const slots: DayBlock[] = [];
 
   for (let d = 1; d <= daysAhead; d++) {
     const dayLocal = toZonedTime(addDays(from, d), AMSTERDAM_TZ);
     const dow = dayLocal.getDay();
-    if (weekdaysOnly && (dow === 0 || dow === 6)) continue;
+    // Zondag nooit; zaterdag wél (tenzij weekdaysOnly expliciet true)
+    if (dow === 0) continue;
+    if (opts.weekdaysOnly === true && dow === 6) continue;
 
     const dayBase = setSeconds(
       setMinutes(setHours(startOfDay(dayLocal), 0), 0),
@@ -74,7 +76,7 @@ export function generateDayBlocks(opts: {
 }
 
 /**
- * Beschikbare slots: 5 blokken van 2 uur met 1 uur reistijd ertussen,
+ * Beschikbare slots: 4 blokken van 2 uur met 1 uur reistijd ertussen,
  * exclusief bezette afspraken.
  */
 export function generateAvailableSlots(opts: {
@@ -88,7 +90,7 @@ export function generateAvailableSlots(opts: {
     .map(({ start, end }) => ({ start, end }));
 }
 
-/** De 5 vaste blokken voor één dag (yyyy-MM-dd in Amsterdam). */
+/** De vaste blokken voor één dag (yyyy-MM-dd in Amsterdam). */
 export function blocksForDayKey(dayKey: string): { start: Date; end: Date }[] {
   return ADVISEUR_SLOT_HOURS.map((hour) => {
     const start = fromZonedTime(

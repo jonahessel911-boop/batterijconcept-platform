@@ -3,8 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { InstallatiePartner, Project, ProjectFoto } from "@/types/database";
 import {
+  isWarmtefondsProject,
+  recommendedSchouwWeekForProject,
+} from "@/lib/backoffice-acties";
+import { formatDateTimeNl } from "@/lib/format";
+import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
+import {
   formatProjectSchouwWeek,
+  isSchouwdagDefinitief,
+  isSchouwweekGepland,
   schouwWeekFromDate,
+  schouwWeekToMondayIso,
   schouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
@@ -26,7 +35,45 @@ function initialSchouwWeekValue(project: Project): string {
     const { jaar, week } = schouwWeekFromDate(project.schouw_at);
     return schouwWeekValue(jaar, week);
   }
-  return "";
+  const def = recommendedSchouwWeekForProject(project);
+  return schouwWeekValue(def.jaar, def.week);
+}
+
+function CheckRow({ done, label, detail }: { done: boolean; label: string; detail?: string | null }) {
+  return (
+    <li className="flex items-start gap-2.5 py-1.5">
+      <span
+        className={[
+          "mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+          done
+            ? "border-green bg-green text-white"
+            : "border-[#c5cdc8] bg-white text-transparent",
+        ].join(" ")}
+        aria-hidden
+      >
+        <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" fill="none">
+          <path
+            d="M3.5 8.5 6.5 11.5 12.5 4.5"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <div className="min-w-0">
+        <p className={["text-sm", done ? "font-medium text-ink" : "text-muted"].join(" ")}>
+          {label}
+          {done ? (
+            <span className="ml-1.5 text-[11px] font-semibold text-green-dark">✓</span>
+          ) : null}
+        </p>
+        {detail ? (
+          <p className="mt-0.5 text-xs text-muted">{detail}</p>
+        ) : null}
+      </div>
+    </li>
+  );
 }
 
 export function ProjectSchouwSection({
@@ -48,6 +95,11 @@ export function ProjectSchouwSection({
     project.installatie_partner_id || ""
   );
   const [notities, setNotities] = useState(project.schouw_notities || "");
+  const [schouwAtLocal, setSchouwAtLocal] = useState(
+    isSchouwdagDefinitief(project)
+      ? toDatetimeLocalValue(project.schouw_at)
+      : ""
+  );
   const [installatieAt, setInstallatieAt] = useState(
     toDatetimeLocalValue(project.installatie_at)
   );
@@ -59,6 +111,7 @@ export function ProjectSchouwSection({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
 
   const loadPartnersAndFotos = useCallback(async () => {
     try {
@@ -82,6 +135,11 @@ export function ProjectSchouwSection({
     setSchouwWeek(initialSchouwWeekValue(project));
     setPartnerId(project.installatie_partner_id || "");
     setNotities(project.schouw_notities || "");
+    setSchouwAtLocal(
+      isSchouwdagDefinitief(project)
+        ? toDatetimeLocalValue(project.schouw_at)
+        : ""
+    );
     setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
     setInstallatieNotities(project.installatie_notities || "");
   }, [
@@ -116,6 +174,29 @@ export function ProjectSchouwSection({
     return base;
   }, [weekOptions, schouwWeek]);
 
+  const weekGepland = isSchouwweekGepland(project);
+  const dagDefinitief = isSchouwdagDefinitief(project);
+  const installatieGepland = Boolean(project.installatie_at);
+  const installatieVoltooid = project.status === "installatie_voltooid";
+
+  const agendaAnchor = useMemo(() => {
+    if (project.schouw_at) return project.schouw_at;
+    if (project.schouw_jaar && project.schouw_week) {
+      try {
+        return schouwWeekToMondayIso(project.schouw_jaar, project.schouw_week);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (project.installatie_at) return project.installatie_at;
+    return null;
+  }, [
+    project.schouw_at,
+    project.schouw_jaar,
+    project.schouw_week,
+    project.installatie_at,
+  ]);
+
   async function planSchouw(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -127,27 +208,39 @@ export function ProjectSchouwSection({
       const opt = schouwSelectOptions.find((o) => o.value === schouwWeek);
       if (!opt) throw new Error("Ongeldige schouwweek");
 
+      const payload: Record<string, unknown> = {
+        schouw_jaar: opt.jaar,
+        schouw_week: opt.week,
+        installatie_partner_id: partnerId || null,
+        schouw_notities: notities || null,
+      };
+      if (schouwAtLocal.trim()) {
+        const parsed = new Date(schouwAtLocal);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("Ongeldige schouwdag");
+        }
+        payload.schouw_at = parsed.toISOString();
+        const derived = schouwWeekFromDate(parsed);
+        payload.schouw_jaar = derived.jaar;
+        payload.schouw_week = derived.week;
+      }
+
       const res = await fetch(`/api/projecten/${project.id}/schouw`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schouw_jaar: opt.jaar,
-          schouw_week: opt.week,
-          installatie_partner_id: partnerId,
-          schouw_notities: notities || null,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      const parts: string[] = ["Schouwweek ingepland."];
-      if (data.mails?.klant?.ok) parts.push("Mail naar klant verstuurd.");
-      else if (data.mails?.klant?.error)
-        parts.push(`Klantmail: ${data.mails.klant.error}`);
-      if (data.mails?.partner?.ok) parts.push("Mail naar partner verstuurd.");
-      else if (data.mails?.partner?.error)
-        parts.push(`Partnermail: ${data.mails.partner.error}`);
-      setOkMsg(parts.join(" "));
+      const mailOk = data.mails?.klant?.ok;
+      setOkMsg(
+        schouwAtLocal.trim()
+          ? "Schouwdag definitief gezet."
+          : mailOk
+            ? "Schouwweek ingepland — bevestiging naar klant verstuurd."
+            : "Schouwweek ingepland."
+      );
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -179,14 +272,28 @@ export function ProjectSchouwSection({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      const parts: string[] = ["Installatie ingepland."];
-      if (data.mails?.klant?.ok) parts.push("Mail naar klant verstuurd.");
-      else if (data.mails?.klant?.error)
-        parts.push(`Klantmail: ${data.mails.klant.error}`);
-      if (data.mails?.partner?.ok) parts.push("Mail naar partner verstuurd.");
-      else if (data.mails?.partner?.error)
-        parts.push(`Partnermail: ${data.mails.partner.error}`);
-      setOkMsg(parts.join(" "));
+      setOkMsg("Installatie ingepland.");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setInstallatieSaving(false);
+    }
+  }
+
+  async function markInstallatieVoltooid() {
+    setInstallatieSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "installatie_voltooid" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Status bijwerken mislukt");
+      setOkMsg("Installatie gemarkeerd als voltooid.");
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -230,151 +337,218 @@ export function ProjectSchouwSection({
     }
   }
 
-  const schouwLabel = formatProjectSchouwWeek(project);
-  const hasSchouw = Boolean(
-    project.schouw_week || project.schouw_at || project.schouw_jaar
-  );
-
   const body = (
     <>
-      <form onSubmit={planSchouw} className="space-y-4 px-1 py-2">
-        <p className="text-sm text-muted">
-          Kies een week. Ongeveer één week van tevoren stemmen we de exacte
-          datum en tijd met de klant af.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Schouwweek
-            <select
-              required
-              value={schouwWeek}
-              onChange={(e) => setSchouwWeek(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-            >
-              <option value="">Kies week…</option>
-              {schouwSelectOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Installatiepartner
-            <select
-              required
-              value={partnerId}
-              onChange={(e) => setPartnerId(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-            >
-              <option value="">Kies partner…</option>
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.naam}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+      <ul className="mb-5 border border-line bg-wash/40 px-3.5 py-2">
+        <CheckRow
+          done={weekGepland}
+          label="Schouwweek gepland"
+          detail={formatProjectSchouwWeek(project)}
+        />
+        <CheckRow
+          done={dagDefinitief}
+          label="Schouwdag definitief"
+          detail={
+            dagDefinitief && project.schouw_at
+              ? formatDateTimeNl(project.schouw_at)
+              : null
+          }
+        />
+        <CheckRow
+          done={installatieGepland}
+          label="Installatie gepland"
+          detail={
+            installatieGepland && project.installatie_at
+              ? formatDateTimeNl(project.installatie_at)
+              : null
+          }
+        />
+        <CheckRow done={installatieVoltooid} label="Installatie voltooid" />
+      </ul>
 
-        <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-          Schouw-notities
-          <textarea
-            value={notities}
-            onChange={(e) => setNotities(e.target.value)}
-            rows={3}
-            placeholder="Bijv. meterkast in garage, sleutel bij buren…"
-            className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-          />
-        </label>
+      <div className="mb-5 overflow-hidden border border-line">
+        <PlanningAgenda
+          key={agendaAnchor || "now"}
+          orders={[project]}
+          showPartner
+          initialWeekAnchor={agendaAnchor}
+        />
+      </div>
 
-        {partners.length === 0 && (
-          <p className="text-xs text-muted">
-            Voeg eerst een installatiepartner toe onder Instellingen.
-          </p>
-        )}
-
-        {error && (
-          <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-            {error}
-          </p>
-        )}
-        {okMsg && (
-          <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
-            {okMsg}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={saving || partners.length === 0}
-          className="bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
-        >
-          {saving
-            ? "Bezig…"
-            : hasSchouw
-              ? "Schouwweek bijwerken & opnieuw mailen"
-              : "Schouwweek inplannen & mailen"}
-        </button>
-      </form>
-
-      <form
-        onSubmit={planInstallatie}
-        className="mt-8 space-y-4 border-t border-line px-1 pt-6"
+      <button
+        type="button"
+        onClick={() => setPlanOpen((o) => !o)}
+        className="mb-3 text-xs font-semibold text-green-dark hover:underline"
       >
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Installatie plannen
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Installatiedatum
-            <input
-              type="datetime-local"
-              required
-              value={installatieAt}
-              onChange={(e) => setInstallatieAt(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-            />
-          </label>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Installatiepartner
-            <select
-              required
-              value={partnerId}
-              onChange={(e) => setPartnerId(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+        {planOpen ? "Plannen verbergen" : "Schouw / installatie plannen of wijzigen"}
+      </button>
+
+      {planOpen ? (
+        <>
+          <form onSubmit={planSchouw} className="space-y-4 px-1 py-2">
+            <p className="text-sm text-muted">
+              {isWarmtefondsProject(project)
+                ? "Sale met financiering: eerst een week (±5 wkn vooruit). Exacte dag ±1 week van tevoren. Bij inplannen krijgt de klant een bevestigingsmail."
+                : "Eigen middelen: schouw zo snel mogelijk. Je kunt meteen een exacte schouwdag zetten. Bij inplannen krijgt de klant een bevestigingsmail."}
+            </p>
+            {isWarmtefondsProject(project) ? (
+              <p className="text-sm text-muted">
+                We plannen ±5 weken vooruit zodat er ruimte is om het Warmtefonds
+                te regelen. Hierover wordt apart contact met de klant opgenomen.
+              </p>
+            ) : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Schouwweek
+                <select
+                  required
+                  value={schouwWeek}
+                  onChange={(e) => setSchouwWeek(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                >
+                  <option value="">Kies week…</option>
+                  {schouwSelectOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Exacte schouwdag (optioneel)
+                <input
+                  type="datetime-local"
+                  value={schouwAtLocal}
+                  onChange={(e) => setSchouwAtLocal(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Installatiepartner
+                <select
+                  required
+                  value={partnerId}
+                  onChange={(e) => setPartnerId(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                >
+                  <option value="">Kies partner…</option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Schouw-notities
+              <textarea
+                value={notities}
+                onChange={(e) => setNotities(e.target.value)}
+                rows={2}
+                placeholder="Bijv. meterkast in garage, sleutel bij buren…"
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
-              <option value="">Kies partner…</option>
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.naam}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-          Installatie-notities
-          <textarea
-            value={installatieNotities}
-            onChange={(e) => setInstallatieNotities(e.target.value)}
-            rows={2}
-            placeholder="Bijv. parkeerplek achterom, ladder nodig…"
-            className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={installatieSaving || partners.length === 0}
-          className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
-        >
-          {installatieSaving
-            ? "Bezig…"
-            : project.installatie_at
-              ? "Installatie bijwerken & opnieuw mailen"
-              : "Installatie inplannen & mailen"}
-        </button>
-      </form>
+              {saving
+                ? "Bezig…"
+                : schouwAtLocal.trim()
+                  ? "Schouwdag opslaan"
+                  : weekGepland
+                    ? "Schouwweek bijwerken"
+                    : "Schouwweek inplannen"}
+            </button>
+          </form>
+
+          <form
+            onSubmit={planInstallatie}
+            className="mt-6 space-y-4 border-t border-line px-1 pt-5"
+          >
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Installatie plannen
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Installatiedatum
+                <input
+                  type="datetime-local"
+                  required
+                  value={installatieAt}
+                  onChange={(e) => setInstallatieAt(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Installatiepartner
+                <select
+                  required
+                  value={partnerId}
+                  onChange={(e) => setPartnerId(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                >
+                  <option value="">Kies partner…</option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Installatie-notities
+              <textarea
+                value={installatieNotities}
+                onChange={(e) => setInstallatieNotities(e.target.value)}
+                rows={2}
+                placeholder="Bijv. parkeerplek achterom, ladder nodig…"
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="submit"
+                disabled={installatieSaving || partners.length === 0}
+                className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              >
+                {installatieSaving
+                  ? "Bezig…"
+                  : project.installatie_at
+                    ? "Installatie bijwerken"
+                    : "Installatie inplannen"}
+              </button>
+              {installatieGepland && !installatieVoltooid ? (
+                <button
+                  type="button"
+                  disabled={installatieSaving}
+                  onClick={() => void markInstallatieVoltooid()}
+                  className="border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                >
+                  Markeer voltooid
+                </button>
+              ) : null}
+            </div>
+          </form>
+        </>
+      ) : null}
+
+      {error && (
+        <p className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+          {error}
+        </p>
+      )}
+      {okMsg && (
+        <p className="mt-3 border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+          {okMsg}
+        </p>
+      )}
 
       <div className="mt-6 border-t border-line px-1 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -429,13 +603,10 @@ export function ProjectSchouwSection({
     </>
   );
 
-  if (embedded) return <div>{body}</div>;
+  if (embedded) return body;
 
   return (
-    <Panel
-      title="Schouw & installatie"
-      subtitle={schouwLabel || "Nog niet gepland"}
-    >
+    <Panel title="Schouw & installatie" subtitle={project.project_nummer}>
       {body}
     </Panel>
   );

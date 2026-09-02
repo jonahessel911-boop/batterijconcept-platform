@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { Adviseur, Afspraak, Lead, LeadStatus } from "@/types/database";
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
@@ -22,6 +23,7 @@ import {
 } from "@/lib/bel-queue";
 import { leadStatusLabel } from "@/lib/labels";
 import { FastDirectionButton } from "./FastDirectionButton";
+import { LeadTimeline } from "./LeadTimeline";
 import { ReistijdHint } from "./ReistijdHint";
 
 async function clientLogLeadEvent(
@@ -155,11 +157,11 @@ export function BelPanel({
   const [terugbelAt, setTerugbelAt] = useState("");
   const [terugbelNotitie, setTerugbelNotitie] = useState("");
   const [terugbelWarm, setTerugbelWarm] = useState(false);
-  const [leadNotitieDraft, setLeadNotitieDraft] = useState("");
-  const [editingLeadNotitie, setEditingLeadNotitie] = useState(false);
-  const [savingLeadNotitie, setSavingLeadNotitie] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   /** Leads die deze sessie al via Volgende zijn doorgeschoven. */
   const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
+  const [timelineTick, setTimelineTick] = useState(0);
 
   const planAdviseurs = useMemo(
     () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
@@ -200,17 +202,14 @@ export function BelPanel({
   }, [afspraken, leads]);
 
   /**
-   * Openstaande terugbel bovenaan, daarna rest.
-   * Uitgesteld geldt alleen voor de normale lijst — terugbel blijft bovenaan
-   * tot afgevinkt (niet weg na “Volgende” / plannen in dezelfde sessie).
+   * Alleen de normale bellijst. Openstaande terugbel-afspraken staan
+   * apart bovenaan (chip → lead), niet in de queue.
    */
   const queue = useMemo(() => {
-    const terugbelLeads = terugbelDue.map((t) => t.lead);
-    const terugbelIds = new Set(terugbelLeads.map((l) => l.id));
-    const rest = normalQueue.filter(
+    const terugbelIds = new Set(terugbelDue.map((t) => t.lead.id));
+    return normalQueue.filter(
       (l) => !terugbelIds.has(l.id) && !uitgesteldIds.has(l.id)
     );
-    return [...terugbelLeads, ...rest];
   }, [terugbelDue, normalQueue, uitgesteldIds]);
 
   const current = useMemo(() => {
@@ -264,9 +263,9 @@ export function BelPanel({
     setAndereOffertes(null);
     setTerugbelAt("");
     setTerugbelNotitie(current.terugbel_notitie || "");
-    setLeadNotitieDraft(current.notities || "");
-    setEditingLeadNotitie(false);
-    setSavingLeadNotitie(false);
+    setNoteDraft("");
+    setSavingNote(false);
+    setTimelineTick((t) => t + 1);
     const preferred = current.adviseur_id || defaultAdviseurId || "";
     const allowed = planAdviseurs.some((a) => a.id === preferred)
       ? preferred
@@ -340,28 +339,30 @@ export function BelPanel({
     }
   }
 
-  async function saveLeadNotitie() {
+  async function addLeadNotitie() {
     if (!current) return;
-    const next = leadNotitieDraft.trim() || null;
-    if ((current.notities || null) === next) {
-      setEditingLeadNotitie(false);
-      return;
-    }
-    setSavingLeadNotitie(true);
+    const text = noteDraft.trim();
+    if (!text) return;
+    setSavingNote(true);
     setError(null);
     try {
-      const sb = getSupabaseBrowser();
-      const { error: err } = await sb
-        .from("leads")
-        .update({ notities: next })
-        .eq("id", current.id);
-      if (err) throw err;
-      onLeadUpdated(current.id, { notities: next });
-      setEditingLeadNotitie(false);
+      const res = await fetch(`/api/leads/${current.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "notitie",
+          titel: "Notitie",
+          detail: text,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      setNoteDraft("");
+      setTimelineTick((t) => t + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
-      setSavingLeadNotitie(false);
+      setSavingNote(false);
     }
   }
 
@@ -444,6 +445,8 @@ export function BelPanel({
             ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}`
             : null,
       });
+      const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
+      fireMetaCapiSync(current.id);
       onNeedReload?.();
       goNextLead(current.id);
     } catch (e) {
@@ -575,14 +578,65 @@ export function BelPanel({
           Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min.
           {MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later
           terug. Na {MAX_BELPOGINGEN} keer geen contact vallen ze eruit.
-          Terugbel-afspraken staan bovenaan vanaf de geplande dag tot je ze
-          afvinkt.
+          Terugbel-afspraken verschijnen bovenaan als chip (klik → lead), niet
+          in deze belwachtrij.
         </p>
       </div>
     );
   }
 
-  if (!current) return null;
+  const terugbelBanner =
+    terugbelDue.length > 0 ? (
+      <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+          Terugbellen ({terugbelDue.length}) — bovenaan tot afgevinkt
+        </p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {terugbelDue.map(({ lead, afspraak, warm }) => (
+            <Link
+              key={afspraak.id}
+              href={`/leads/${lead.id}`}
+              className={[
+                "inline-flex max-w-full items-center gap-2 border px-2.5 py-1 text-left text-xs transition",
+                warm
+                  ? "border-[#C9A227]/50 bg-[#FFF8D6] text-[#8A6D00] hover:border-[#C9A227]"
+                  : "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "shrink-0 font-bold tabular-nums",
+                  warm ? "text-[#8A6D00]" : "text-[#C45A12]",
+                ].join(" ")}
+              >
+                {formatTimeNl(afspraak.start_at)}
+              </span>
+              <span className="truncate font-medium">
+                {warm ? "★ " : ""}
+                {lead.naam}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
+  if (!current) {
+    return (
+      <div>
+        {terugbelBanner}
+        <div className="px-6 py-14 text-center">
+          <p className="font-display text-lg font-semibold text-ink">
+            Geen leads in de bellijst
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted">
+            Openstaande terugbel-afspraken staan hierboven — klik om naar de
+            lead te gaan.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const pogingen = belpogingenOf(current);
   const pogingenVandaag = belpogingenVandaagOf(current);
@@ -592,63 +646,12 @@ export function BelPanel({
 
   return (
     <div>
-      {terugbelDue.length > 0 && (
-        <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-            Terugbellen ({terugbelDue.length}) — bovenaan tot afgevinkt
-          </p>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {terugbelDue.map(({ lead, afspraak, warm }) => {
-              const active = current?.id === lead.id;
-              return (
-                <button
-                  key={afspraak.id}
-                  type="button"
-                  onClick={() => {
-                    setCurrentId(lead.id);
-                    setNextMode(null);
-                    setError(null);
-                  }}
-                  className={[
-                    "inline-flex max-w-full items-center gap-2 border px-2.5 py-1 text-left text-xs",
-                    active
-                      ? warm
-                        ? "border-[#C9A227] bg-[#C9A227] text-white"
-                        : "border-[#C45A12] bg-[#C45A12] text-white"
-                      : warm
-                        ? "border-[#C9A227]/50 bg-[#FFF8D6] text-[#8A6D00] hover:border-[#C9A227]"
-                        : "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]",
-                  ].join(" ")}
-                >
-                  <span
-                    className={[
-                      "shrink-0 font-bold tabular-nums",
-                      active
-                        ? "text-white"
-                        : warm
-                          ? "text-[#8A6D00]"
-                          : "text-[#C45A12]",
-                    ].join(" ")}
-                  >
-                    {formatTimeNl(afspraak.start_at)}
-                  </span>
-                  <span className="truncate font-medium">
-                    {warm ? "★ " : ""}
-                    {lead.naam}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {terugbelBanner}
 
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {currentIsTerugbelDue
-            ? "Terugbel afspraak — bovenaan tot afgevinkt"
-            : `${position} van ${queue.length} in de bellijst`}
+          {`${position} van ${queue.length} in de bellijst`}
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -706,77 +709,35 @@ export function BelPanel({
           </div>
         )}
         <div className="mt-4 rounded-xl bg-wash px-3.5 py-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Lead-notitie
-            </p>
-            {!editingLeadNotitie ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setLeadNotitieDraft(current.notities || "");
-                  setEditingLeadNotitie(true);
-                }}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-green-dark hover:underline"
-                aria-label="Notitie bewerken"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  aria-hidden
-                >
-                  <path d="M4 20h4l10-10-4-4L4 16v4Z" />
-                  <path d="m12 6 4 4" />
-                </svg>
-                Bewerken
-              </button>
-            ) : null}
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Notitie toevoegen
+          </p>
+          <textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            rows={3}
+            placeholder="Schrijf een notitie…"
+            className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm leading-relaxed text-ink outline-none focus:border-green"
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              disabled={savingNote || !noteDraft.trim()}
+              onClick={() => void addLeadNotitie()}
+              className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+            >
+              {savingNote ? "Opslaan…" : "Notitie toevoegen"}
+            </button>
           </div>
-          {!editingLeadNotitie ? (
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-              {current.notities?.trim() || (
-                <span className="text-muted">
-                  Nog geen notitie. Klik op bewerken om er een toe te voegen.
-                </span>
-              )}
-            </p>
-          ) : (
-            <>
-              <textarea
-                value={leadNotitieDraft}
-                onChange={(e) => setLeadNotitieDraft(e.target.value)}
-                rows={5}
-                placeholder="Bijv. bel vooraf, meerdere offertes, sleutel bij buren…"
-                className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm leading-relaxed text-ink outline-none focus:border-green"
-              />
-              <div className="mt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={savingLeadNotitie}
-                  onClick={() => {
-                    setLeadNotitieDraft(current.notities || "");
-                    setEditingLeadNotitie(false);
-                  }}
-                  className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-white/80"
-                >
-                  Annuleren
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    savingLeadNotitie ||
-                    (current.notities || "") === (leadNotitieDraft.trim() || "")
-                  }
-                  onClick={() => void saveLeadNotitie()}
-                  className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                >
-                  {savingLeadNotitie ? "Opslaan…" : "Opslaan"}
-                </button>
-              </div>
-            </>
+          {current.notities?.trim() && (
+            <div className="mt-3 border-t border-line pt-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Intake / vaste info
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                {current.notities}
+              </p>
+            </div>
           )}
         </div>
 
@@ -791,6 +752,15 @@ export function BelPanel({
           {copied ? <CheckIcon /> : <CopyIcon />}
           {copied ? "Gekopieerd" : "Copy phone"}
         </button>
+
+        <div className="mt-6 border-t border-line pt-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Activiteit
+          </p>
+          <div className="mt-2 max-h-72 overflow-y-auto border border-line bg-wash/40 px-3 py-3">
+            <LeadTimeline leadId={current.id} refreshKey={timelineTick} />
+          </div>
+        </div>
       </section>
 
       <aside className="flex flex-col bg-wash/40 p-4 sm:p-5">
@@ -910,7 +880,7 @@ export function BelPanel({
               <p className="text-xs text-muted">
                 {terugbelWarm
                   ? "Prioriteit in de bellijst — bijv. klant pakt agenda erbij maar wil al een afspraak. Intern, geen mail."
-                  : "Alleen intern — de klant krijgt geen mail. De lead gaat uit de normale bellijst en staat bovenaan vanaf de geplande dag tot je afvinkt."}
+                  : "Alleen intern — de klant krijgt geen mail. De lead verdwijnt uit de belwachtrij; vanaf de geplande dag staat er bovenaan een chip (klik → lead) tot je afvinkt."}
               </p>
               <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                 Adviseur

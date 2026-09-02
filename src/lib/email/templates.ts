@@ -246,8 +246,23 @@ export function factuurVerzondenEmail(opts: {
   factuurNummer: string;
   bedrag: string;
   vervaldatum?: string | null;
+  iban?: string | null;
+  accountName?: string | null;
+  betalingskenmerk?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
+  const kenmerk = opts.betalingskenmerk || opts.factuurNummer;
+  const betalingHtml = opts.iban
+    ? emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Betalen</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">IBAN: <strong>${opts.iban}</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">T.n.v. <strong>${opts.accountName || "BatterijConcept"}</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">Omschrijving: <strong>${kenmerk}</strong></p>
+         <p style="margin:0;font-size:14px;">Betaaltermijn: <strong>3 dagen</strong>${
+           opts.vervaldatum ? ` (uiterlijk ${opts.vervaldatum})` : ""
+         }</p>`
+      )
+    : "";
   return emailLayout({
     title: `Factuur ${opts.factuurNummer}`,
     preheader: `Je factuur ${opts.factuurNummer} van Batterijconcept.`,
@@ -262,6 +277,7 @@ export function factuurVerzondenEmail(opts: {
          <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
          ${opts.vervaldatum ? `<p style="margin:0;font-size:15px;"><strong>Vervaldatum</strong><br />${opts.vervaldatum}</p>` : ""}`
       ),
+      betalingHtml,
       emailP(
         "Heb je vragen over deze factuur? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
       ),
@@ -270,19 +286,30 @@ export function factuurVerzondenEmail(opts: {
   });
 }
 
-/** Klant: schouw is ingepland (op weekniveau) */
+/** Klant: schouw is ingepland (week en/of exacte dag) */
 export function schouwKlantEmail(opts: {
   naam: string;
   schouwJaar: number;
   schouwWeek: number;
+  /** Exacte schouwdag/tijd — als gezet, bevestigen we die in de mail */
+  schouwAt?: string | Date | null;
   adres?: string | null;
   projectNummer?: string | null;
+  /** Warmtefonds / sale met financiering */
+  warmtefonds?: boolean;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
-  const when = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
+  const weekLabel = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
+  const exactAt = opts.schouwAt ? new Date(opts.schouwAt) : null;
+  const hasExact =
+    exactAt != null && !Number.isNaN(exactAt.getTime());
+  const exactLabel = hasExact ? formatDateTimeLongNl(exactAt!) : null;
+
   return emailLayout({
     title: "Schouw gepland — Batterijconcept",
-    preheader: `Je schouw staat gepland in ${when}.`,
+    preheader: hasExact
+      ? `Je schouw staat gepland op ${exactLabel}.`
+      : `Je schouw staat gepland in ${weekLabel}.`,
     bodyHtml: [
       emailH1("Schouw gepland"),
       emailP(`Hoi ${first},`),
@@ -290,12 +317,28 @@ export function schouwKlantEmail(opts: {
         "Goed nieuws: de schouw voor je thuisbatterij is ingepland. Onze installatiepartner komt bij je langs om de situatie ter plaatse te bekijken."
       ),
       emailBox(
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${when}</p>
+        hasExact
+          ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Schouw</strong><br />${exactLabel}</p>
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
+          : `<p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${weekLabel}</p>
          ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
          ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
       ),
+      hasExact
+        ? emailP(
+            "Noteer deze datum alvast. Mocht er iets wijzigen, dan nemen we contact met je op."
+          )
+        : emailP(
+            "We plannen eerst een <strong>week</strong> in. De exacte dag in die week stemmen we ongeveer <strong>één week van tevoren</strong> met je af — dan nemen we contact op."
+          ),
+      opts.warmtefonds && !hasExact
+        ? emailP(
+            "Omdat je kiest voor financiering via het Warmtefonds, plannen we de schouw ongeveer <strong>5 weken vooruit</strong>. Zo hebben we voldoende tijd om de Warmtefonds-aanvraag te regelen. Hierover wordt apart contact met je opgenomen."
+          )
+        : "",
       emailP(
-        "Ongeveer één week van tevoren nemen we contact met je op om de exacte datum en tijd af te stemmen. Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+        "Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
       ),
       emailMuted("Tot dan, team Batterijconcept"),
     ].join(""),
@@ -308,6 +351,7 @@ export function schouwPartnerEmail(opts: {
   klantNaam: string;
   schouwJaar: number;
   schouwWeek: number;
+  schouwAt?: string | Date | null;
   adres?: string | null;
   telefoon?: string | null;
   email?: string | null;
@@ -317,7 +361,11 @@ export function schouwPartnerEmail(opts: {
   portalUrl: string;
 }) {
   const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
-  const when = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
+  const weekLabel = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
+  const exactAt = opts.schouwAt ? new Date(opts.schouwAt) : null;
+  const hasExact =
+    exactAt != null && !Number.isNaN(exactAt.getTime());
+  const exactLabel = hasExact ? formatDateTimeLongNl(exactAt!) : null;
   const fotoCount = opts.fotoCount ?? 0;
   const fotoLabel =
     fotoCount === 0
@@ -327,16 +375,20 @@ export function schouwPartnerEmail(opts: {
         : `${fotoCount} foto's (zie bijlagen / portaal)`;
   return emailLayout({
     title: "Nieuwe schouw ingepland",
-    preheader: `Schouw bij ${opts.klantNaam} in ${when}.`,
+    preheader: hasExact
+      ? `Schouw bij ${opts.klantNaam} op ${exactLabel}.`
+      : `Schouw bij ${opts.klantNaam} in ${weekLabel}.`,
     bodyHtml: [
       emailH1("Nieuwe schouw ingepland"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Er is een nieuwe schouw voor je ingepland. Exacte dag en tijd volgt ongeveer één week van tevoren na contact met de klant. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
+        hasExact
+          ? "Er is een nieuwe schouw voor je ingepland met exacte datum/tijd. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
+          : "Er is een nieuwe schouw voor je ingepland. Exacte dag en tijd volgt ongeveer één week van tevoren na contact met de klant. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>
-         <p style="margin:0 0 8px;font-size:15px;"><strong>Schouwweek</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>${hasExact ? "Schouw" : "Schouwweek"}</strong><br />${hasExact ? exactLabel : weekLabel}</p>
          ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
          ${opts.telefoon ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${opts.telefoon}</p>` : ""}
          ${opts.email ? `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>` : ""}

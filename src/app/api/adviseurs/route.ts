@@ -13,12 +13,18 @@ import {
 } from "@/lib/auth-password";
 import { errMessage } from "@/lib/errors";
 import type { Adviseur } from "@/types/database";
+import {
+  GEBRUIKER_ROLLEN,
+  normalizeRol,
+} from "@/lib/rollen";
 
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, created_at, updated_at";
+const ADVISEUR_PUBLIC_MIN =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
 
 function stripHash(row: Record<string, unknown>): Adviseur {
@@ -46,16 +52,37 @@ export async function GET(req: NextRequest) {
     let { data: adviseurs, error } = await query;
     if (
       error &&
-      (error.code === "42703" || error.message?.includes("start_adres"))
+      (error.code === "42703" ||
+        error.message?.includes("start_adres") ||
+        error.message?.includes("rol"))
     ) {
       let retry = sb
         .from("adviseurs")
-        .select(ADVISEUR_PUBLIC_FALLBACK)
+        .select(
+          error.message?.includes("rol")
+            ? ADVISEUR_PUBLIC_FALLBACK
+            : ADVISEUR_PUBLIC_MIN
+        )
         .order("naam");
       if (!includeInactive) retry = retry.eq("actief", true);
       const second = await retry;
-      adviseurs = (second.data || null) as typeof adviseurs;
-      error = second.error;
+      if (
+        second.error &&
+        (second.error.code === "42703" ||
+          second.error.message?.includes("start_adres"))
+      ) {
+        let bare = sb
+          .from("adviseurs")
+          .select(ADVISEUR_PUBLIC_MIN)
+          .order("naam");
+        if (!includeInactive) bare = bare.eq("actief", true);
+        const third = await bare;
+        adviseurs = (third.data || null) as typeof adviseurs;
+        error = third.error;
+      } else {
+        adviseurs = (second.data || null) as typeof adviseurs;
+        error = second.error;
+      }
     }
     if (error) throw error;
 
@@ -98,7 +125,12 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/adviseurs — nieuw teamlid + welkomstmail met wachtwoord */
 export async function POST(req: NextRequest) {
-  let body: { naam?: string; email?: string; telefoon?: string };
+  let body: {
+    naam?: string;
+    email?: string;
+    telefoon?: string;
+    rol?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -107,6 +139,7 @@ export async function POST(req: NextRequest) {
 
   const naam = body.naam?.trim();
   const email = body.email?.trim().toLowerCase();
+  const rol = normalizeRol(body.rol);
   if (!naam) {
     return NextResponse.json({ error: "Naam is verplicht" }, { status: 400 });
   }
@@ -115,6 +148,9 @@ export async function POST(req: NextRequest) {
       { error: "E-mail is verplicht (voor login + welkomstmail)" },
       { status: 400 }
     );
+  }
+  if (!GEBRUIKER_ROLLEN.includes(rol)) {
+    return NextResponse.json({ error: "Ongeldige rol" }, { status: 400 });
   }
 
   try {
@@ -130,35 +166,46 @@ export async function POST(req: NextRequest) {
         telefoon: body.telefoon?.trim() || null,
         password_hash,
         actief: true,
+        rol,
       })
       .select(ADVISEUR_PUBLIC)
       .single();
 
-    // Kolom password_hash nog niet gemigreerd → opslaan zonder hash, mail wel sturen
+    // Kolom password_hash / rol nog niet gemigreerd
     if (
       insert.error &&
       (insert.error.message?.includes("password_hash") ||
+        insert.error.message?.includes("rol") ||
         insert.error.code === "42703")
     ) {
+      const fallback: Record<string, unknown> = {
+        naam,
+        email,
+        telefoon: body.telefoon?.trim() || null,
+        actief: true,
+        password_hash,
+      };
+      if (insert.error.message?.includes("rol")) {
+        // password ok, rol mist
+      } else {
+        delete fallback.password_hash;
+      }
       insert = await sb
         .from("adviseurs")
-        .insert({
-          naam,
-          email,
-          telefoon: body.telefoon?.trim() || null,
-          actief: true,
-        })
-        .select(ADVISEUR_PUBLIC)
+        .insert(fallback)
+        .select(ADVISEUR_PUBLIC_FALLBACK)
         .single();
 
-      return NextResponse.json(
-        {
-          error:
-            "Voer eerst supabase/migrate-adviseur-password.sql uit in Supabase, daarna opnieuw toevoegen.",
-          detail: insert.error?.message,
-        },
-        { status: 503 }
-      );
+      if (insert.error || !insert.data) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-adviseur-password.sql en migrate-rollen.sql uit in Supabase.",
+            detail: insert.error?.message,
+          },
+          { status: 503 }
+        );
+      }
     }
 
     if (insert.error || !insert.data) {
@@ -207,6 +254,7 @@ export async function PATCH(req: NextRequest) {
     telefoon?: string | null;
     actief?: boolean;
     start_adres?: string | null;
+    rol?: string;
     resend_invite?: boolean;
     password?: string;
   };
@@ -324,6 +372,13 @@ export async function PATCH(req: NextRequest) {
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;
     }
+    if (body.rol !== undefined) {
+      const r = normalizeRol(body.rol);
+      if (!GEBRUIKER_ROLLEN.includes(r)) {
+        return NextResponse.json({ error: "Ongeldige rol" }, { status: 400 });
+      }
+      patch.rol = r;
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -338,8 +393,18 @@ export async function PATCH(req: NextRequest) {
 
     if (
       error &&
-      (error.code === "42703" || error.message?.includes("start_adres"))
+      (error.code === "42703" ||
+        error.message?.includes("start_adres") ||
+        error.message?.includes("rol"))
     ) {
+      if (patch.rol !== undefined) {
+        return NextResponse.json(
+          {
+            error: "Voer eerst supabase/migrate-rollen.sql uit in Supabase.",
+          },
+          { status: 503 }
+        );
+      }
       if (patch.start_adres !== undefined) {
         return NextResponse.json(
           {

@@ -6,17 +6,24 @@ import {
   buildRapportageTree,
   type RapportageLead,
 } from "@/lib/rapportage";
+import {
+  buildFinancialDashboard,
+  parseFinancialRange,
+} from "@/lib/financial-dashboard";
 
 export const runtime = "nodejs";
 
-/** GET /api/rapportage?adviseur_id= */
+/** GET /api/rapportage?adviseur_id=&financial_range=last_30_days */
 export async function GET(req: NextRequest) {
   const adviseurId = req.nextUrl.searchParams.get("adviseur_id");
+  const financialRange = parseFinancialRange(
+    req.nextUrl.searchParams.get("financial_range")
+  );
 
   try {
     const sb = getSupabaseAdmin();
 
-    const [leadsRes, afsprakenRes, offertesRes, projectenRes, facturenRes] =
+    const [leadsRes, afsprakenRes, offertesRes, projectenRes, facturenRes, kostenRes] =
       await Promise.all([
         sb
           .from("leads")
@@ -42,6 +49,10 @@ export async function GET(req: NextRequest) {
           .select(
             "id, lead_id, status, bedrag_ex_btw, betaald_op, factuurdatum, leads(adviseur_id)"
           ),
+        sb
+          .from("rapportage_kosten")
+          .select("datum, soort, bedrag, adviseur_id")
+          .order("datum", { ascending: true }),
       ]);
 
     let leads: RapportageLead[] = (leadsRes.data || []) as RapportageLead[];
@@ -179,7 +190,21 @@ export async function GET(req: NextRequest) {
     const tree = buildRapportageTree(raw, adviseurId);
     const attribution = buildAttributionTree(raw, adviseurId);
 
-    return NextResponse.json({ tree, attribution });
+    const kosten = (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
+      datum: k.datum as string,
+      soort: k.soort as "ad_spend" | "sales",
+      bedrag: Number(k.bedrag) || 0,
+      adviseur_id: (k.adviseur_id as string | null) ?? null,
+    }));
+
+    const financial = buildFinancialDashboard(
+      raw,
+      kosten,
+      adviseurId,
+      financialRange
+    );
+
+    return NextResponse.json({ tree, attribution, financial });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Rapportage laden mislukt") },

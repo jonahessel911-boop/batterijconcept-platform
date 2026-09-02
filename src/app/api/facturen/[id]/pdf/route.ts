@@ -5,6 +5,13 @@ import { sendEmail } from "@/lib/email/postmark";
 import { factuurVerzondenEmail } from "@/lib/email/templates";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import { errMessage } from "@/lib/errors";
+import {
+  COMPANY_ACCOUNT_NAME,
+  COMPANY_IBAN_DISPLAY,
+  FACTUUR_BETAALTERMIJN_DAGEN,
+  amsterdamDatePlusDays,
+} from "@/lib/factuur-betaling";
+import { companyInfo } from "@/lib/pdf-brand";
 
 export const runtime = "nodejs";
 
@@ -121,21 +128,33 @@ export async function POST(
       totaal_inc_btw: number;
     } | null;
 
+    const vervaldatum = amsterdamDatePlusDays(
+      new Date(),
+      FACTUUR_BETAALTERMIJN_DAGEN
+    );
+    const factuurVoorPdf = {
+      ...factuur,
+      status: "verzonden" as const,
+      vervaldatum,
+    };
+
     const blob = await buildFactuurPdf({
-      factuur: { ...factuur, status: "verzonden" },
+      factuur: factuurVoorPdf,
       lead: factuur.leads,
       offerte,
     });
     const pdfBytes = Buffer.from(await blob.arrayBuffer());
     const filename = `${factuur.factuur_nummer}.pdf`;
 
+    const co = companyInfo();
     const html = factuurVerzondenEmail({
       naam: factuur.leads?.naam || "klant",
       factuurNummer: factuur.factuur_nummer,
       bedrag: formatEuro(factuur.bedrag_inc_btw),
-      vervaldatum: factuur.vervaldatum
-        ? formatDateShort(factuur.vervaldatum)
-        : null,
+      vervaldatum: formatDateShort(vervaldatum),
+      iban: co.iban || COMPANY_IBAN_DISPLAY,
+      accountName: co.accountName || COMPANY_ACCOUNT_NAME,
+      betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
     });
 
     const sent = await sendEmail({
@@ -161,9 +180,13 @@ export async function POST(
 
     const { data: updated, error: upErr } = await sb
       .from("facturen")
-      .update({ status: "verzonden" })
+      .update({
+        status: "verzonden",
+        factuurdatum: amsterdamDatePlusDays(new Date(), 0),
+        vervaldatum,
+      })
       .eq("id", id)
-      .select("*, leads(naam, lead_number)")
+      .select("*, leads(naam, email, telefoon, lead_number)")
       .single();
 
     if (upErr) {

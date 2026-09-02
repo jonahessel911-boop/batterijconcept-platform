@@ -84,6 +84,59 @@ export function formatProjectSchouwWeek(project: {
   return null;
 }
 
+/** Schouwweek staat gepland (week of placeholder-maandag). */
+export function isSchouwweekGepland(project: {
+  schouw_jaar?: number | null;
+  schouw_week?: number | null;
+  schouw_at?: string | null;
+}): boolean {
+  return Boolean(
+    project.schouw_week || project.schouw_jaar || project.schouw_at
+  );
+}
+
+/**
+ * Exacte schouwdag/tijd is gezet (niet alleen de week-placeholder op maandag 12:00).
+ */
+export function isSchouwdagDefinitief(project: {
+  schouw_jaar?: number | null;
+  schouw_week?: number | null;
+  schouw_at?: string | null;
+}): boolean {
+  if (!project.schouw_at) return false;
+  if (!project.schouw_jaar || !project.schouw_week) return true;
+  try {
+    const mondayIso = schouwWeekToMondayIso(
+      project.schouw_jaar,
+      project.schouw_week
+    );
+    return (
+      new Date(project.schouw_at).getTime() !== new Date(mondayIso).getTime()
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** Warmtefonds: ~5 weken vooruit (tijd voor aanvraag). Eigen middelen: z.s.m. */
+export const SCHOUW_WEEK_OFFSET_WARMTEFONDS = 5;
+export const SCHOUW_WEEK_OFFSET_EIGEN = 1;
+
+/** Standaard schouwweek: sale-/huidige moment + N ISO-weken. */
+export function defaultSchouwWeekAfterSale(
+  from: Date | string = new Date(),
+  offsetWeeks = SCHOUW_WEEK_OFFSET_WARMTEFONDS
+): SchouwWeek {
+  const base = typeof from === "string" ? new Date(from) : from;
+  return schouwWeekFromDate(addWeeks(base, offsetWeeks));
+}
+
+export function schouwWeekOffsetVoorSale(warmtefonds: boolean): number {
+  return warmtefonds
+    ? SCHOUW_WEEK_OFFSET_WARMTEFONDS
+    : SCHOUW_WEEK_OFFSET_EIGEN;
+}
+
 /** Opties vanaf huidige ISO-week, `count` weken vooruit. */
 export function upcomingSchouwWeekOptions(
   count = 60,
@@ -109,6 +162,15 @@ export function upcomingSchouwWeekOptions(
     }
   }
   return out;
+}
+
+/** Weekkiezer voor agenda: `past` weken terug + `future` vooruit. */
+export function agendaWeekJumpOptions(
+  past = 8,
+  future = 52,
+  from: Date = new Date()
+): { value: string; label: string; jaar: number; week: number }[] {
+  return upcomingSchouwWeekOptions(past + future, addWeeks(from, -past));
 }
 
 /**

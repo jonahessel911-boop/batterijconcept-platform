@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/offertes/[id]/project
- * Zorgt dat er een project bestaat voor een ondertekende offerte.
+ * Project pas na afronden backoffice-actie (actie_required = false).
  */
 export async function POST(
   _req: NextRequest,
@@ -18,7 +18,9 @@ export async function POST(
     const sb = getSupabaseAdmin();
     const { data: offerte, error } = await sb
       .from("offertes")
-      .select("id, lead_id, offerte_nummer, titel, status, leads(naam)")
+      .select(
+        "id, lead_id, offerte_nummer, titel, status, actie_required, leads(naam)"
+      )
       .eq("id", id)
       .single();
 
@@ -28,6 +30,15 @@ export async function POST(
     if (offerte.status !== "ondertekend") {
       return NextResponse.json(
         { error: "Alleen ondertekende offertes krijgen een project" },
+        { status: 409 }
+      );
+    }
+    if (offerte.actie_required !== false) {
+      return NextResponse.json(
+        {
+          error:
+            "Rond eerst de backoffice-actie af op de offerte voordat het project in de backoffice komt",
+        },
         { status: 409 }
       );
     }

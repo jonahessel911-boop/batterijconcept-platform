@@ -551,6 +551,8 @@ async function afterCreate(
       .from("leads")
       .update({ status: leadStatusVoorAfspraakSoort(soort) })
       .eq("id", body.lead_id);
+    const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+    queueLeadMetaCapi(body.lead_id);
   }
 
   if (soort === "bel" || soort === "warme_bel") {

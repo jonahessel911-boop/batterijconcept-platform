@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Adviseur } from "@/types/database";
+import {
+  GEBRUIKER_ROLLEN,
+  gebruikerRolLabel,
+  normalizeRol,
+  type GebruikerRol,
+} from "@/lib/rollen";
 
 export function InstellingenPanel({
   onAdviseursChange,
@@ -17,6 +23,7 @@ export function InstellingenPanel({
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
   const [telefoon, setTelefoon] = useState("");
+  const [rol, setRol] = useState<GebruikerRol>("adviseur");
 
   const [passwordForId, setPasswordForId] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -95,13 +102,14 @@ export function InstellingenPanel({
       const res = await fetch("/api/adviseurs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ naam, email, telefoon }),
+        body: JSON.stringify({ naam, email, telefoon, rol }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       setNaam("");
       setEmail("");
       setTelefoon("");
+      setRol("adviseur");
       setOkMsg(
         data.mail_sent
           ? `${data.adviseur.naam} is toegevoegd — welkomstmail met wachtwoord verstuurd.`
@@ -257,6 +265,24 @@ export function InstellingenPanel({
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
             />
           </label>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+            Rol
+            <select
+              value={rol}
+              onChange={(e) => setRol(normalizeRol(e.target.value))}
+              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+            >
+              {GEBRUIKER_ROLLEN.map((r) => (
+                <option key={r} value={r}>
+                  {gebruikerRolLabel[r]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-[11px] leading-relaxed text-muted">
+            Adviseur: eigen leads · Backoffice: leads/agenda/facturen · Admin:
+            alles · Installateur: installatieportaal
+          </p>
 
           {error && (
             <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
@@ -335,6 +361,25 @@ export function InstellingenPanel({
                     aria-label="Telefoon"
                   />
                   <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Rol
+                    <select
+                      value={normalizeRol(a.rol)}
+                      onChange={(e) =>
+                        void saveRow(a, {
+                          rol: normalizeRol(e.target.value),
+                        })
+                      }
+                      className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                      aria-label="Rol"
+                    >
+                      {GEBRUIKER_ROLLEN.map((r) => (
+                        <option key={r} value={r}>
+                          {gebruikerRolLabel[r]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
                     Startadres (reistijd)
                     <input
                       defaultValue={a.start_adres || ""}
@@ -401,6 +446,7 @@ export function InstellingenPanel({
                     <th>Naam</th>
                     <th>E-mail</th>
                     <th>Telefoon</th>
+                    <th>Rol</th>
                     <th>Startadres</th>
                     <th>Status</th>
                     <th></th>
@@ -481,6 +527,22 @@ function PasswordRow({
             }}
             className="w-full border border-transparent bg-transparent px-1 py-0.5 text-sm text-muted outline-none hover:border-line focus:border-green"
           />
+        </td>
+        <td>
+          <select
+            value={normalizeRol(a.rol)}
+            onChange={(e) =>
+              void saveRow(a, { rol: normalizeRol(e.target.value) })
+            }
+            className="cursor-pointer border border-line bg-white px-2 py-1 text-xs font-semibold text-ink outline-none focus:border-green"
+            aria-label="Rol"
+          >
+            {GEBRUIKER_ROLLEN.map((r) => (
+              <option key={r} value={r}>
+                {gebruikerRolLabel[r]}
+              </option>
+            ))}
+          </select>
         </td>
         <td className="min-w-[14rem]">
           <input

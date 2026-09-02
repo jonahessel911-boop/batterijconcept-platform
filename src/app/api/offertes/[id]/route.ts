@@ -143,7 +143,8 @@ export async function PATCH(
     }
 
     const offerte = update.data;
-    if (offerte.status === "ondertekend") {
+    // Pas na “Actie afronden” (actie_required = false) doorstromen naar backoffice
+    if (offerte.status === "ondertekend" && offerte.actie_required === false) {
       const leadJoin = (offerte as { leads?: { naam?: string | null } | null }).leads;
       const ensured = await ensureProjectForOfferte(sb, {
         offerteId: offerte.id,
@@ -191,12 +192,42 @@ export async function PATCH(
             .update(projectPatch)
             .eq("id", projectId);
         }
+
+        // Koppel bestaande concept-BTW-factuur aan het nieuwe project
+        await sb
+          .from("facturen")
+          .update({ project_id: projectId })
+          .eq("offerte_id", offerte.id)
+          .is("project_id", null);
       }
 
       await ensureBtwDraftFactuur(sb, {
         offerteId: offerte.id,
         leadId: offerte.lead_id,
         projectId,
+        offerteNummer: offerte.offerte_nummer,
+        btwBedrag: Number(offerte.btw_bedrag) || 0,
+        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
+        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
+        financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
+        aanbetalingModus: offerte.aanbetaling_modus,
+        aanbetalingBedragInc:
+          offerte.aanbetaling_bedrag_inc != null
+            ? Number(offerte.aanbetaling_bedrag_inc)
+            : null,
+      });
+    } else if (
+      offerte.status === "ondertekend" &&
+      (body.aanbetaling_modus != null ||
+        body.aanbetaling_bedrag_inc !== undefined ||
+        body.aanbetaling_te_innen_inc !== undefined ||
+        body.financiering_voorbehoud !== undefined)
+    ) {
+      // Tussentijdse wijzigingen: factuur bijwerken zonder project
+      await ensureBtwDraftFactuur(sb, {
+        offerteId: offerte.id,
+        leadId: offerte.lead_id,
+        projectId: null,
         offerteNummer: offerte.offerte_nummer,
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,

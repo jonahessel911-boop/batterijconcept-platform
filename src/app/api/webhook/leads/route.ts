@@ -178,11 +178,14 @@ export async function POST(req: NextRequest) {
       campaign_name: pickStr(
         body.campaign_name,
         typeof body.Campaign_name === "string" ? body.Campaign_name : null,
-        body.campaign
+        typeof body.campaign === "string" ? body.campaign : null,
+        typeof body.utm_campaign === "string" ? body.utm_campaign : null
       ),
       ad_name: pickStr(
         body.ad_name,
-        typeof body.Ad_name === "string" ? body.Ad_name : null
+        typeof body.Ad_name === "string" ? body.Ad_name : null,
+        typeof body.ad === "string" ? body.ad : null,
+        typeof body.utm_content === "string" ? body.utm_content : null
       ),
       bron: pickStr(body.bron) || "website",
       notities: pickStr(
@@ -194,11 +197,43 @@ export async function POST(req: NextRequest) {
       ),
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
+      meta_fbc: pickStr(
+        body.fbc,
+        typeof body._fbc === "string" ? body._fbc : null,
+        typeof body.meta_fbc === "string" ? body.meta_fbc : null
+      ),
+      meta_fbp: pickStr(
+        body.fbp,
+        typeof body._fbp === "string" ? body._fbp : null,
+        typeof body.meta_fbp === "string" ? body.meta_fbp : null
+      ),
+      meta_client_ip:
+        req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        req.headers.get("x-real-ip") ||
+        null,
+      meta_user_agent: req.headers.get("user-agent"),
+      meta_event_source_url: pickStr(
+        typeof body.event_source_url === "string"
+          ? body.event_source_url
+          : null,
+        typeof body.page_url === "string" ? body.page_url : null,
+        typeof body.landing_url === "string" ? body.landing_url : null,
+        body.lander,
+        typeof body.Lander === "string" ? body.Lander : null
+      ),
       // Standaard bij Admin tot iemand anders overneemt
       ...(adminId ? { adviseur_id: adminId } : {}),
       // created_at / updated_at: database default now()
       raw_payload: body,
     };
+
+    // fbclid → fbc cookie-formaat als fbc ontbreekt
+    const fbclid = pickStr(
+      typeof body.fbclid === "string" ? body.fbclid : null
+    );
+    if (!row.meta_fbc && fbclid) {
+      row.meta_fbc = `fb.1.${Date.now()}.${fbclid}`;
+    }
 
     let { data, error } = await supabase
       .from("leads")
@@ -207,6 +242,41 @@ export async function POST(req: NextRequest) {
         "id, lead_number, created_at, naam, email, straat, plaats, utm_source, lander, campaign_name, ad_name"
       )
       .single();
+
+    // Fallback als Meta CAPI-kolommen nog niet gemigreerd zijn
+    if (
+      error &&
+      (error.message?.includes("meta_") ||
+        error.message?.includes("capi_events") ||
+        error.code === "42703")
+    ) {
+      const {
+        meta_fbc: _fbc,
+        meta_fbp: _fbp,
+        meta_client_ip: _ip,
+        meta_user_agent: _ua,
+        meta_event_source_url: _url,
+        ...withoutMeta
+      } = row as typeof row & {
+        meta_fbc?: string | null;
+        meta_fbp?: string | null;
+        meta_client_ip?: string | null;
+        meta_user_agent?: string | null;
+        meta_event_source_url?: string | null;
+      };
+      void _fbc;
+      void _fbp;
+      void _ip;
+      void _ua;
+      void _url;
+      ({ data, error } = await supabase
+        .from("leads")
+        .insert(withoutMeta)
+        .select(
+          "id, lead_number, created_at, naam, email, straat, plaats, utm_source, lander, campaign_name, ad_name"
+        )
+        .single());
+    }
 
     // Fallback als adviseur_id-kolom nog niet gemigreerd is
     if (
@@ -287,6 +357,9 @@ export async function POST(req: NextRequest) {
         lead_id: data.id,
         lead_number: data.lead_number,
         created_at: data.created_at,
+        lander: data.lander ?? null,
+        campaign_name: data.campaign_name ?? null,
+        ad_name: data.ad_name ?? null,
       },
       { status: 201 }
     );
@@ -322,6 +395,14 @@ export async function GET() {
       lead_id: "uuid",
       lead_number: "BC-20260813-A1B2",
       created_at: "2026-08-13T11:00:00.000Z",
+      lander: "thuisbatterij-scan",
+      campaign_name: "Meta_NL_Augustus",
+      ad_name: "Video_besparing_v2",
+    },
+    notes: {
+      campaign_name:
+        "Aliases: campaign_name, Campaign_name, campaign, utm_campaign",
+      ad_name: "Aliases: ad_name, Ad_name, ad, utm_content",
     },
   });
 }

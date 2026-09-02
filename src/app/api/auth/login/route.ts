@@ -9,6 +9,8 @@ import {
 } from "@/lib/auth-session";
 import { hashPassword, verifyPassword } from "@/lib/auth-password";
 import { errMessage } from "@/lib/errors";
+import { normalizeRol } from "@/lib/rollen";
+import { isAdminAdviseur, isAdminEmail } from "@/lib/admin-adviseur";
 
 export const runtime = "nodejs";
 
@@ -26,28 +28,45 @@ async function findAdviseur(email: string) {
     email: string | null;
     actief: boolean;
     password_hash?: string | null;
+    rol?: string | null;
   };
 
   let rows: Row[] | null = null;
 
   const withHash = await sb
     .from("adviseurs")
-    .select("id, naam, email, password_hash, actief")
+    .select("id, naam, email, password_hash, actief, rol")
     .ilike("email", email)
     .limit(5);
 
   if (
     withHash.error &&
     (withHash.error.message?.includes("password_hash") ||
+      withHash.error.message?.includes("rol") ||
       withHash.error.code === "42703")
   ) {
     const plain = await sb
       .from("adviseurs")
-      .select("id, naam, email, actief")
+      .select("id, naam, email, actief, password_hash")
       .ilike("email", email)
       .limit(5);
-    if (plain.error) throw plain.error;
-    rows = plain.data as Row[];
+    if (
+      plain.error &&
+      (plain.error.message?.includes("password_hash") ||
+        plain.error.code === "42703")
+    ) {
+      const bare = await sb
+        .from("adviseurs")
+        .select("id, naam, email, actief")
+        .ilike("email", email)
+        .limit(5);
+      if (bare.error) throw bare.error;
+      rows = bare.data as Row[];
+    } else if (plain.error) {
+      throw plain.error;
+    } else {
+      rows = plain.data as Row[];
+    }
   } else if (withHash.error) {
     throw withHash.error;
   } else {
@@ -113,18 +132,21 @@ export async function POST(req: NextRequest) {
           telefoon: "085 800 1645",
           actief: true,
           password_hash: hashPassword(password),
+          rol: "admin",
         };
         let created = await sb
           .from("adviseurs")
           .insert(insertPayload)
-          .select("id, naam, email")
+          .select("id, naam, email, rol")
           .single();
         if (
           created.error &&
           (created.error.message?.includes("password_hash") ||
+            created.error.message?.includes("rol") ||
             created.error.code === "42703")
         ) {
           delete insertPayload.password_hash;
+          delete insertPayload.rol;
           created = await sb
             .from("adviseurs")
             .insert(insertPayload)
@@ -141,6 +163,7 @@ export async function POST(req: NextRequest) {
           adviseurId: created.data.id,
           naam: created.data.naam,
           email: created.data.email || BOOTSTRAP_EMAIL,
+          rol: "admin",
         });
         const res = NextResponse.json({
           ok: true,
@@ -148,6 +171,7 @@ export async function POST(req: NextRequest) {
             id: created.data.id,
             naam: created.data.naam,
             email: created.data.email,
+            rol: "admin",
           },
         });
         res.cookies.set(sessionCookieOptions(token));
@@ -164,10 +188,35 @@ export async function POST(req: NextRequest) {
       void ensureAdminPersisted(adviseur.id, password);
     }
 
+    const rol = normalizeRol(
+      adviseur.rol ||
+        (isAdminEmail(adviseur.email) ||
+        isAdminAdviseur(adviseur) ||
+        isBootstrap
+          ? "admin"
+          : "adviseur")
+    );
+
+    // Zorg dat bekende admins (o.a. jona@) ook in DB admin blijven
+    if (rol === "admin" && adviseur.rol !== "admin") {
+      void (async () => {
+        try {
+          const sb = getSupabaseAdmin();
+          await sb
+            .from("adviseurs")
+            .update({ rol: "admin", actief: true })
+            .eq("id", adviseur.id);
+        } catch {
+          /* kolom ontbreekt nog */
+        }
+      })();
+    }
+
     const token = await createSessionToken({
       adviseurId: adviseur.id,
       naam: adviseur.naam,
       email: adviseur.email || email,
+      rol,
     });
 
     const res = NextResponse.json({
@@ -176,6 +225,7 @@ export async function POST(req: NextRequest) {
         id: adviseur.id,
         naam: adviseur.naam,
         email: adviseur.email,
+        rol,
       },
     });
     res.cookies.set(sessionCookieOptions(token));
@@ -195,12 +245,70 @@ export async function GET(req: NextRequest) {
   if (!session) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
+
+  // Rol live uit DB (wijzigingen in Instellingen meteen actief)
+  let rol = normalizeRol(session.rol);
+  try {
+    const sb = getSupabaseAdmin();
+    let data: { rol?: string | null; naam?: string; email?: string | null } | null =
+      null;
+    const withRol = await sb
+      .from("adviseurs")
+      .select("rol, naam, email")
+      .eq("id", session.adviseurId)
+      .maybeSingle();
+    if (
+      withRol.error &&
+      (withRol.error.message?.includes("rol") || withRol.error.code === "42703")
+    ) {
+      const bare = await sb
+        .from("adviseurs")
+        .select("naam, email")
+        .eq("id", session.adviseurId)
+        .maybeSingle();
+      data = bare.data;
+    } else if (!withRol.error) {
+      data = withRol.data;
+    }
+    if (
+      data &&
+      (isAdminEmail(data.email) ||
+        isAdminAdviseur({
+          naam: data.naam || session.naam,
+          email: data.email ?? session.email,
+        }))
+    ) {
+      rol = "admin";
+    } else if (data?.rol) {
+      rol = normalizeRol(data.rol);
+    } else if (
+      isAdminEmail(session.email) ||
+      isAdminAdviseur({
+        naam: session.naam,
+        email: session.email,
+      })
+    ) {
+      rol = "admin";
+    }
+  } catch {
+    if (
+      isAdminEmail(session.email) ||
+      isAdminAdviseur({
+        naam: session.naam,
+        email: session.email,
+      })
+    ) {
+      rol = "admin";
+    }
+  }
+
   return NextResponse.json({
     authenticated: true,
     adviseur: {
       id: session.adviseurId,
       naam: session.naam,
       email: session.email,
+      rol,
     },
   });
 }

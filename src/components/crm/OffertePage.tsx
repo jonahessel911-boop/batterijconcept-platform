@@ -24,7 +24,10 @@ import {
   parseEuroInput,
   type AanbetalingModus,
 } from "@/lib/aanbetaling";
-import { AanbetalingInstelling } from "./AanbetalingInstelling";
+import {
+  BackofficeActieForm,
+  type BackofficeActieFormValues,
+} from "./BackofficeActieForm";
 import { StatusBadge } from "./StatusBadge";
 import {
   BackLink,
@@ -150,31 +153,7 @@ export function OffertePage() {
     };
   }, []);
 
-  // Bestaande ondertekende offertes zonder project → alsnog aanmaken
-  useEffect(() => {
-    if (!offerte || loading) return;
-    if (offerte.status !== "ondertekend") return;
-    if (projecten.length > 0) return;
-
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/offertes/${offerte.id}/project`, {
-          method: "POST",
-        });
-        if (!res.ok || cancelled) return;
-        await load();
-      } catch {
-        /* ignore */
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [offerte, projecten.length, loading, load]);
-
-  // Ondertekend zonder BTW-factuur → concept aanmaken
+  // Project wordt pas aangemaakt bij “Actie afronden” (niet bij openen)
   useEffect(() => {
     if (!offerte || loading) return;
     if (offerte.status !== "ondertekend") return;
@@ -226,13 +205,14 @@ export function OffertePage() {
     setActieSaving(true);
     setActieMsg(null);
     try {
+      const isWarmtefonds = Boolean(offerte.financiering_voorbehoud);
       const preview = aanbetalingVanOrder({
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
         modus: aanbetalingModus,
         handmatigIncBtw: parseEuroInput(aanbetalingHandmatig),
-        financieringVoorbehoud: true,
+        financieringVoorbehoud: isWarmtefonds,
       });
 
       const res = await fetch(`/api/offertes/${offerte.id}`, {
@@ -240,9 +220,9 @@ export function OffertePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actie_required: !markComplete,
-          aanbetaling_modus: aanbetalingModus,
+          aanbetaling_modus: isWarmtefonds ? aanbetalingModus : null,
           aanbetaling_bedrag_inc:
-            aanbetalingModus === "handmatig"
+            isWarmtefonds && aanbetalingModus === "handmatig"
               ? parseEuroInput(aanbetalingHandmatig)
               : null,
           aanbetaling_te_innen_inc: preview.bedragIncBtw,
@@ -530,6 +510,14 @@ export function OffertePage() {
                 <h3 className="mt-1 text-lg font-semibold text-ink">
                   Backoffice invullen
                 </h3>
+                <p className="mt-1 text-xs text-muted">
+                  Betaalroute:{" "}
+                  <span className="font-semibold text-ink">
+                    {offerte.financiering_voorbehoud
+                      ? "Warmtefonds"
+                      : "Eigen middelen"}
+                  </span>
+                </p>
               </div>
               <button
                 type="button"
@@ -541,12 +529,17 @@ export function OffertePage() {
               </button>
             </div>
 
-            <div className="mt-4 rounded-xl border border-line bg-wash px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                Adviseur van dit project
-              </p>
-              <p className="mt-1 text-sm font-semibold text-ink">
-                {(() => {
+            <div className="mt-4">
+              <BackofficeActieForm
+                compact
+                showFotoHint={projecten.length === 0}
+                subtotaalExBtw={Number(offerte.subtotaal_ex_btw) || 0}
+                btwBedrag={Number(offerte.btw_bedrag) || 0}
+                totaalIncBtw={Number(offerte.totaal_inc_btw) || 0}
+                financieringVoorbehoud={Boolean(
+                  offerte.financiering_voorbehoud
+                )}
+                adviseurNaam={(() => {
                   const lead = Array.isArray(offerte.leads)
                     ? offerte.leads[0]
                     : offerte.leads;
@@ -554,100 +547,84 @@ export function OffertePage() {
                   const naam = Array.isArray(adv) ? adv[0]?.naam : adv?.naam;
                   return naam || "Nog niet toegewezen";
                 })()}
-              </p>
-              {sessionNaam ? (
-                <p className="mt-1 text-xs text-muted">
-                  Notities worden opgeslagen als {sessionNaam}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="mt-4">
-              <AanbetalingInstelling
-                modus={aanbetalingModus}
-                onModusChange={setAanbetalingModus}
-                handmatig={aanbetalingHandmatig}
-                onHandmatigChange={setAanbetalingHandmatig}
-                subtotaalExBtw={Number(offerte.subtotaal_ex_btw) || 0}
-                btwBedrag={Number(offerte.btw_bedrag) || 0}
-                totaalIncBtw={Number(offerte.totaal_inc_btw) || 0}
+                sessionNaam={sessionNaam}
+                values={{
+                  aanbetalingModus,
+                  aanbetalingHandmatig,
+                  backofficeNotitie,
+                  installateurNotitie,
+                }}
+                onChange={(patch: Partial<BackofficeActieFormValues>) => {
+                  if (patch.aanbetalingModus != null) {
+                    setAanbetalingModus(patch.aanbetalingModus);
+                  }
+                  if (patch.aanbetalingHandmatig != null) {
+                    setAanbetalingHandmatig(patch.aanbetalingHandmatig);
+                  }
+                  if (patch.backofficeNotitie != null) {
+                    setBackofficeNotitie(patch.backofficeNotitie);
+                  }
+                  if (patch.installateurNotitie != null) {
+                    setInstallateurNotitie(patch.installateurNotitie);
+                  }
+                }}
+                disabled={actieSaving}
               />
             </div>
-
-            <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted">
-              Notitie voor backoffice
-              <textarea
-                value={backofficeNotitie}
-                onChange={(e) => setBackofficeNotitie(e.target.value)}
-                rows={3}
-                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              />
-            </label>
-            <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted">
-              Notitie voor installateur
-              <textarea
-                value={installateurNotitie}
-                onChange={(e) => setInstallateurNotitie(e.target.value)}
-                rows={3}
-                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              />
-            </label>
-            <div className="mt-3">
-              <label className="inline-flex cursor-pointer items-center border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash">
-                {uploadingFoto ? "Uploaden…" : "Foto's uploaden"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  disabled={uploadingFoto || projecten.length === 0}
-                  onChange={(e) => {
-                    const files = e.target.files;
-                    if (files && files.length > 0) void uploadInstallateurFotos(files);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-              {uploadProgress && (
-                <p className="mt-1 text-xs text-muted">{uploadProgress}</p>
-              )}
-              {projecten.length === 0 && (
-                <p className="mt-1 text-xs text-muted">
-                  Project wordt automatisch aangemaakt, herlaad daarna voor foto-upload.
-                </p>
-              )}
-              {projectFotos.length > 0 && (
-                <>
-                  <p className="mt-2 text-xs text-muted">
-                    {projectFotos.length} foto&apos;s gekoppeld aan project.
-                  </p>
-                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {projectFotos.map((foto) => (
-                      <a
-                        key={foto.id}
-                        href={foto.url || "#"}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="group relative block overflow-hidden border border-line bg-wash"
-                      >
-                        {foto.url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={foto.url}
-                            alt={foto.bestandsnaam || "Project foto"}
-                            className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
-                          />
-                        ) : (
-                          <div className="flex h-24 items-center justify-center text-xs text-muted">
-                            Geen preview
-                          </div>
-                        )}
-                      </a>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+            {projecten.length > 0 && (
+              <div className="mt-3">
+                <label className="inline-flex cursor-pointer items-center border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash">
+                  {uploadingFoto ? "Uploaden…" : "Foto's uploaden"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    disabled={uploadingFoto}
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files && files.length > 0)
+                        void uploadInstallateurFotos(files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {uploadProgress && (
+                  <p className="mt-1 text-xs text-muted">{uploadProgress}</p>
+                )}
+                {projectFotos.length > 0 && (
+                  <>
+                    <p className="mt-2 text-xs text-muted">
+                      {projectFotos.length} foto&apos;s gekoppeld aan project.
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {projectFotos.map((foto) => (
+                        <a
+                          key={foto.id}
+                          href={foto.url || "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="group relative block overflow-hidden border border-line bg-wash"
+                        >
+                          {foto.url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={foto.url}
+                              alt={foto.bestandsnaam || "Project foto"}
+                              className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
+                            />
+                          ) : (
+                            <div className="flex h-24 items-center justify-center text-xs text-muted">
+                              Geen preview
+                            </div>
+                          )}
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {actieMsg && <p className="mt-3 text-sm text-muted">{actieMsg}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
               <button
@@ -744,7 +721,9 @@ export function OffertePage() {
         <Panel title="Gekoppelde backoffice" subtitle={`${projecten.length}`}>
           {projecten.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted">
-              Geen backoffice items
+              {offerte.actie_required
+                ? "Nog niet in backoffice — rond eerst de actie af."
+                : "Geen backoffice items"}
             </p>
           ) : (
             <ul className="space-y-2 px-2">
