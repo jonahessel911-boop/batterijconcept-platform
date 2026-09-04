@@ -411,6 +411,7 @@ export interface Project {
     | "straat"
     | "plaats"
     | "adviseur_id"
+    | "status"
   > & {
     adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
   }) | null;

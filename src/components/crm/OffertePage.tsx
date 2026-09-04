@@ -82,7 +82,7 @@ export function OffertePage() {
         sb
           .from("offertes")
           .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats, adviseur_id, adviseurs(id, naam)), offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
+            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats, adviseur_id, adviseurs!adviseur_id(id, naam)), offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
           )
           .eq("id", id)
           .single(),

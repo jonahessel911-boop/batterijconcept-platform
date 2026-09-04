@@ -100,6 +100,11 @@ export function ProjectPage() {
   const [restantError, setRestantError] = useState<string | null>(null);
   const [factuurBusyId, setFactuurBusyId] = useState<string | null>(null);
   const [factuurError, setFactuurError] = useState<string | null>(null);
+  const [customBedrag, setCustomBedrag] = useState("");
+  const [customOmschrijving, setCustomOmschrijving] = useState("");
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const [customMsg, setCustomMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,7 +121,7 @@ export function ProjectPage() {
       const { data, error } = await sb
         .from("projecten")
         .select(
-          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, adviseurs(id, naam)), installatie_partners(id, naam, email, telefoon)"
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon)"
         )
         .eq("id", id)
         .single();
@@ -258,6 +263,40 @@ export function ProjectPage() {
       setRestantError(e instanceof Error ? e.message : "Aanmaken mislukt");
     } finally {
       setRestantBusy(false);
+    }
+  }
+
+  async function maakHandmatigeFactuur() {
+    if (!project?.id) return;
+    setCustomBusy(true);
+    setCustomError(null);
+    setCustomMsg(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}/factuur`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bedrag_inc_btw: customBedrag,
+          omschrijving: customOmschrijving.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Aanmaken mislukt");
+      setCustomBedrag("");
+      setCustomOmschrijving("");
+      setCustomMsg(
+        data.factuur?.factuur_nummer
+          ? `Concept ${data.factuur.factuur_nummer} aangemaakt`
+          : "Conceptfactuur aangemaakt"
+      );
+      await load();
+      if (data.factuur?.id) {
+        window.location.href = `/facturen/${data.factuur.id}`;
+      }
+    } catch (e) {
+      setCustomError(e instanceof Error ? e.message : "Aanmaken mislukt");
+    } finally {
+      setCustomBusy(false);
     }
   }
 
@@ -851,6 +890,55 @@ export function ProjectPage() {
                       </Link>
                     </div>
                   ) : null}
+                </div>
+
+                <div className="mt-8 border-t border-line pt-6">
+                  <h3 className="text-sm font-semibold text-ink">
+                    Factuur maken
+                  </h3>
+                  <p className="mt-1 text-xs text-muted">
+                    Stel zelf het bedrag in (incl. btw). Wordt als concept
+                    aangemaakt — daarna kun je versturen vanuit de factuur.
+                  </p>
+                  <div className="mt-3 max-w-md space-y-2.5">
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Bedrag incl. btw (€)
+                      <input
+                        type="number"
+                        min={0.01}
+                        step="0.01"
+                        inputMode="decimal"
+                        placeholder="bijv. 1571.01"
+                        value={customBedrag}
+                        onChange={(e) => setCustomBedrag(e.target.value)}
+                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                      />
+                    </label>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Omschrijving (optioneel)
+                      <input
+                        type="text"
+                        placeholder="bijv. Aanbetaling / restant / meerwerk"
+                        value={customOmschrijving}
+                        onChange={(e) => setCustomOmschrijving(e.target.value)}
+                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={customBusy || !customBedrag.trim()}
+                      onClick={() => void maakHandmatigeFactuur()}
+                      className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+                    >
+                      {customBusy ? "Aanmaken…" : "Conceptfactuur maken"}
+                    </button>
+                    {customError ? (
+                      <p className="text-xs text-[#C45A12]">{customError}</p>
+                    ) : null}
+                    {customMsg ? (
+                      <p className="text-xs text-green-dark">{customMsg}</p>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="mt-8 border-t border-line pt-6">

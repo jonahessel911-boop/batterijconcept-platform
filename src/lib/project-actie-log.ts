@@ -3,6 +3,7 @@ import {
   belSchouwActieTitel,
   isBelSchouwActieOpen,
   isSchakelFinancieringActieOpen,
+  isWarmtefondsSale,
 } from "@/lib/backoffice-acties";
 import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 
@@ -19,11 +20,12 @@ function warmtefondsVan(
   project: Project | null | undefined,
   offerte: Offerte | null | undefined
 ): boolean {
-  if (offerte?.financiering_voorbehoud != null) {
-    return Boolean(offerte.financiering_voorbehoud);
-  }
-  const join = project?.offertes;
-  return Boolean(join?.financiering_voorbehoud);
+  return isWarmtefondsSale({
+    leadStatus: project?.leads?.status,
+    financieringVoorbehoud:
+      offerte?.financiering_voorbehoud ??
+      project?.offertes?.financiering_voorbehoud,
+  });
 }
 
 /**

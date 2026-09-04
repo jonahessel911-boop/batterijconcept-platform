@@ -60,8 +60,26 @@ function projectOfferte(project: Project) {
   return (project as Project & ProjectOfferteJoin).offertes ?? null;
 }
 
+/**
+ * Warmtefonds vs eigen middelen.
+ * Lead-sale-status wint (sale_eigen_middelen / sale_financiering);
+ * anders offerte.financiering_voorbehoud.
+ */
+export function isWarmtefondsSale(opts: {
+  leadStatus?: string | null;
+  financieringVoorbehoud?: boolean | null;
+}): boolean {
+  if (opts.leadStatus === "sale_eigen_middelen") return false;
+  if (opts.leadStatus === "sale_financiering") return true;
+  return Boolean(opts.financieringVoorbehoud);
+}
+
 export function isWarmtefondsProject(project: Project): boolean {
-  return Boolean(projectOfferte(project)?.financiering_voorbehoud);
+  const leadStatus = project.leads?.status ?? null;
+  return isWarmtefondsSale({
+    leadStatus,
+    financieringVoorbehoud: projectOfferte(project)?.financiering_voorbehoud,
+  });
 }
 
 /** Aanbevolen schouwweek: +5 bij Warmtefonds, +1 bij eigen middelen. */

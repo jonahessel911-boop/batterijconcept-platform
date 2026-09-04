@@ -301,7 +301,7 @@ export function CrmShell() {
         sb
           .from("projecten")
           .select(
-            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
+            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status), installatie_partners(id, naam), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
           )
           .order("created_at", { ascending: false }),
         sb
@@ -544,6 +544,22 @@ export function CrmShell() {
         .update({ status, notities })
         .eq("id", leadId);
       if (err) throw err;
+      // Sale-type syncen naar offerte, zodat schouw-mail/UI geen Warmtefonds-tekst tonen bij eigen middelen
+      if (status === "sale_eigen_middelen" || status === "sale_financiering") {
+        const warmtefonds = status === "sale_financiering";
+        await sb
+          .from("offertes")
+          .update({ financiering_voorbehoud: warmtefonds })
+          .eq("lead_id", leadId)
+          .eq("status", "ondertekend");
+        setOffertes((prev) =>
+          prev.map((o) =>
+            o.lead_id === leadId && o.status === "ondertekend"
+              ? { ...o, financiering_voorbehoud: warmtefonds }
+              : o
+          )
+        );
+      }
     } catch (e) {
       setError(errMessage(e, "Status bijwerken mislukt"));
       void load();

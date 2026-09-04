@@ -9,6 +9,7 @@ import {
   schouwWeekFromDate,
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
+import { isWarmtefondsSale } from "@/lib/backoffice-acties";
 
 export const runtime = "nodejs";
 
@@ -202,7 +203,21 @@ export async function POST(
     const offerte = Array.isArray(updated.offertes)
       ? updated.offertes[0]
       : updated.offertes;
-    const warmtefonds = Boolean(offerte?.financiering_voorbehoud);
+
+    let leadStatus: string | null = null;
+    if (updated.lead_id) {
+      const { data: leadStatusRow } = await sb
+        .from("leads")
+        .select("status")
+        .eq("id", updated.lead_id)
+        .maybeSingle();
+      leadStatus = (leadStatusRow as { status?: string } | null)?.status || null;
+    }
+    // Eigen middelen → nooit Warmtefonds-tekst in de mail (ook als offerte-flag nog fout staat)
+    const warmtefonds = isWarmtefondsSale({
+      leadStatus,
+      financieringVoorbehoud: offerte?.financiering_voorbehoud,
+    });
     const adres = lead ? adresRegel(lead) : null;
     /** Alleen echte schouwdag (niet week-placeholder maandag 12:00) in de mail. */
     const mailSchouwAt = exactSchouwAt;

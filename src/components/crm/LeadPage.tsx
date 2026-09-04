@@ -88,7 +88,7 @@ export function LeadPage() {
         sb.from("leads").select("*").eq("id", id).single(),
         sb
           .from("afspraken")
-          .select("*, adviseurs(naam)")
+          .select("*, adviseurs!adviseur_id(naam)")
           .eq("lead_id", id)
           .order("start_at", { ascending: false })
           .limit(20),

@@ -625,7 +625,7 @@ export function AfspraakDetail({
         const { data } = await sb
           .from("offertes")
           .select(
-            "*, leads(naam, adviseur_id, adviseurs(id, naam))"
+            "*, leads(naam, adviseur_id, adviseurs!adviseur_id(id, naam))"
           )
           .eq("lead_id", current.lead_id)
           .eq("status", "ondertekend")
