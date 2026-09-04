@@ -171,9 +171,34 @@ export async function POST(
       );
     }
 
-    const lead = Array.isArray(updated.leads)
+    const leadRaw = Array.isArray(updated.leads)
       ? updated.leads[0]
       : updated.leads;
+    let lead = leadRaw as
+      | {
+          naam?: string | null;
+          email?: string | null;
+          telefoon?: string | null;
+          postcode?: string | null;
+          huisnummer?: string | null;
+          toevoeging?: string | null;
+          straat?: string | null;
+          plaats?: string | null;
+        }
+      | null;
+
+    // Zekerheid: haal e-mail opnieuw op als join leeg is
+    if (!lead?.email?.trim() && updated.lead_id) {
+      const { data: leadRow } = await sb
+        .from("leads")
+        .select(
+          "naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats"
+        )
+        .eq("id", updated.lead_id)
+        .maybeSingle();
+      if (leadRow) lead = leadRow;
+    }
+
     const offerte = Array.isArray(updated.offertes)
       ? updated.offertes[0]
       : updated.offertes;
@@ -193,6 +218,7 @@ export async function POST(
     const mailPatch: Record<string, boolean> = {};
 
     if (lead?.email?.trim()) {
+      const hasExactDay = Boolean(mailSchouwAt);
       const klantHtml = schouwKlantEmail({
         naam: lead.naam || "klant",
         schouwJaar,
@@ -204,16 +230,33 @@ export async function POST(
       });
       const sent = await sendEmail({
         to: lead.email.trim(),
-        subject: "Schouw gepland — Batterijconcept",
+        subject: hasExactDay
+          ? "Schouw gepland — Batterijconcept"
+          : "Schouwweek gepland — Batterijconcept",
         html: klantHtml,
-        tag: "schouw-klant",
+        tag: hasExactDay ? "schouw-klant-dag" : "schouw-klant-week",
       });
       mails.klant = sent.ok
         ? { ok: true }
         : { ok: false, error: sent.error || "Versturen mislukt" };
       if (sent.ok) mailPatch.schouw_mail_klant_verstuurd = true;
+      else {
+        console.error(
+          "Schouw klantmail mislukt:",
+          sent.error,
+          "project",
+          id,
+          "to",
+          lead.email
+        );
+      }
     } else {
-      mails.klant = { ok: false, skipped: true, error: "Geen e-mailadres" };
+      mails.klant = {
+        ok: false,
+        skipped: true,
+        error: "Geen e-mailadres op de lead",
+      };
+      console.warn("Schouw gepland zonder klantmail — geen e-mailadres", id);
     }
 
     if (partnerEmail?.trim() && partnerToken) {

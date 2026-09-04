@@ -1,10 +1,14 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Adviseur, Lead, LeadStatus } from "@/types/database";
 import { leadStatusLabel, statusTone } from "@/lib/labels";
 import { formatDateTimeNl } from "@/lib/format";
+import { isBellerRol, normalizeRol } from "@/lib/rollen";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
+
+const PAGE_SIZE = 20;
 
 function adresRegel(lead: Lead): string {
   const parts = [
@@ -16,6 +20,92 @@ function adresRegel(lead: Lead): string {
     [lead.postcode, lead.huisnummer, lead.toevoeging]
       .filter(Boolean)
       .join(" ") || "—"
+  );
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function PhoneCopyCell({ telefoon }: { telefoon: string | null }) {
+  const [copied, setCopied] = useState(false);
+
+  if (!telefoon?.trim()) {
+    return <span className="text-muted">—</span>;
+  }
+
+  async function copy(e: React.MouseEvent) {
+    e.stopPropagation();
+    const value = telefoon!.trim();
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const el = document.createElement("textarea");
+      el.value = value;
+      el.setAttribute("readonly", "");
+      el.style.position = "fixed";
+      el.style.left = "-9999px";
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span className="tabular-nums text-muted">{telefoon}</span>
+      <button
+        type="button"
+        onClick={(e) => void copy(e)}
+        className="inline-flex h-6 w-6 shrink-0 items-center justify-center text-muted hover:bg-wash hover:text-green-dark"
+        title={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
+        aria-label={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
+      >
+        {copied ? (
+          <CheckIcon className="text-green-dark" />
+        ) : (
+          <CopyIcon />
+        )}
+      </button>
+    </span>
   );
 }
 
@@ -46,11 +136,59 @@ function StatusFilter({
   );
 }
 
+function PaginationBar({
+  page,
+  pageCount,
+  total,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (total === 0) return null;
+  const from = (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(page * PAGE_SIZE, total);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3">
+      <p className="text-xs text-muted">
+        {from}–{to} van {total}
+      </p>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="min-h-8 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:bg-wash disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Vorige
+        </button>
+        <span className="px-1 text-xs tabular-nums text-muted">
+          {page} / {pageCount}
+        </span>
+        <button
+          type="button"
+          disabled={page >= pageCount}
+          onClick={() => onPageChange(page + 1)}
+          className="min-h-8 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:bg-wash disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Volgende
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function LeadsTable({
   leads,
+  adviseurs = [],
   statusFilter = "",
   onStatusFilterChange,
   onStatusChange,
+  onBellerChange,
+  showBellerColumn = false,
 }: {
   leads: Lead[];
   adviseurs?: Adviseur[];
@@ -58,14 +196,42 @@ export function LeadsTable({
   onStatusFilterChange?: (status: string) => void;
   onStatusChange?: (leadId: string, status: LeadStatus) => void;
   onAdviseurChange?: (leadId: string, adviseurId: string | null) => void;
+  onBellerChange?: (leadId: string, bellerId: string | null) => void;
+  showBellerColumn?: boolean;
 }) {
   const router = useRouter();
-  const rows = [...leads].sort((a, b) => {
-    const aFlag = a.terugbellen ? 1 : 0;
-    const bFlag = b.terugbellen ? 1 : 0;
-    if (aFlag !== bFlag) return bFlag - aFlag;
-    return 0;
-  });
+  const [page, setPage] = useState(1);
+  const bellers = useMemo(
+    () =>
+      adviseurs.filter((a) => a.actief && isBellerRol(normalizeRol(a.rol))),
+    [adviseurs]
+  );
+
+  const rows = useMemo(() => {
+    return [...leads].sort((a, b) => {
+      const aFlag = a.terugbellen ? 1 : 0;
+      const bFlag = b.terugbellen ? 1 : 0;
+      if (aFlag !== bFlag) return bFlag - aFlag;
+      return 0;
+    });
+  }, [leads]);
+
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, leads.length]);
+
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return rows.slice(start, start + PAGE_SIZE);
+  }, [rows, page]);
+
+  const colSpan = showBellerColumn ? 9 : 8;
 
   const empty = (
     <div className="px-5 py-14 text-center">
@@ -84,7 +250,6 @@ export function LeadsTable({
 
   return (
     <div>
-      {/* Mobiel: kaarten */}
       <div className="md:hidden">
         <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -100,7 +265,7 @@ export function LeadsTable({
           empty
         ) : (
           <ul className="divide-y divide-line">
-            {rows.map((lead) => (
+            {pageRows.map((lead) => (
               <li key={lead.id}>
                 <div
                   role="link"
@@ -119,34 +284,49 @@ export function LeadsTable({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="truncate font-display text-base font-semibold text-ink">
-                        {lead.naam}
-                      </p>
-                      <p className="mt-0.5 font-mono text-[11px] text-muted">
-                        {lead.lead_number}
+                      <p className="font-medium text-ink">{lead.naam}</p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        {adresRegel(lead)}
+                        {lead.plaats ? ` · ${lead.plaats}` : ""}
                       </p>
                     </div>
                     {lead.terugbellen && (
-                      <span className="shrink-0 border border-[#C45A12]/30 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                      <span className="shrink-0 rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
                         Terugbellen
                       </span>
                     )}
                   </div>
-                  {lead.telefoon && (
-                    <a
-                      href={`tel:${lead.telefoon}`}
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <PhoneCopyCell telefoon={lead.telefoon} />
+                  </div>
+                  {showBellerColumn && onBellerChange && (
+                    <div
                       onClick={(e) => e.stopPropagation()}
-                      className="text-sm font-semibold text-green-dark underline-offset-2 hover:underline"
+                      onKeyDown={(e) => e.stopPropagation()}
                     >
-                      {lead.telefoon}
-                    </a>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Beller
+                        <select
+                          value={lead.beller_id || ""}
+                          onChange={(e) =>
+                            onBellerChange(
+                              lead.id,
+                              e.target.value ? e.target.value : null
+                            )
+                          }
+                          className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-xs outline-none focus:border-green"
+                        >
+                          <option value="">Geen beller</option>
+                          {bellers.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.naam}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   )}
-                  <p className="text-sm text-muted">
-                    {adresRegel(lead)}
-                    {lead.plaats ? ` · ${lead.plaats}` : ""}
-                  </p>
                   <div
-                    className="pt-0.5"
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
@@ -173,106 +353,147 @@ export function LeadsTable({
             ))}
           </ul>
         )}
+        <PaginationBar
+          page={page}
+          pageCount={pageCount}
+          total={rows.length}
+          onPageChange={setPage}
+        />
       </div>
 
-      {/* Desktop: tabel */}
-      <div className="hidden overflow-x-auto md:block">
-        <table className="crm-table crm-table--compact">
-          <thead>
-            <tr>
-              <th>Binnengekomen</th>
-              <th>Naam</th>
-              <th>Lander</th>
-              <th>Adres</th>
-              <th>Woonplaats</th>
-              <th>Tel nr</th>
-              <th>Email</th>
-              <th>
-                <div className="flex items-center gap-2">
-                  <span>Status</span>
-                  <StatusFilter
-                    statusFilter={statusFilter}
-                    onStatusFilterChange={onStatusFilterChange}
-                  />
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {leads.length === 0 ? (
+      <div className="hidden md:block">
+        <div className="overflow-x-auto">
+          <table className="crm-table crm-table--compact">
+            <thead>
               <tr>
-                <td colSpan={8} className="!cursor-default">
-                  {empty}
-                </td>
+                <th>Binnengekomen</th>
+                <th>Naam</th>
+                <th>Lander</th>
+                <th>Adres</th>
+                <th>Woonplaats</th>
+                <th>Tel nr</th>
+                <th>Email</th>
+                {showBellerColumn && <th>Beller</th>}
+                <th>
+                  <div className="flex items-center gap-2">
+                    <span>Status</span>
+                    <StatusFilter
+                      statusFilter={statusFilter}
+                      onStatusFilterChange={onStatusFilterChange}
+                    />
+                  </div>
+                </th>
               </tr>
-            ) : (
-              rows.map((lead) => (
-                <tr
-                  key={lead.id}
-                  className={[
-                    "cursor-pointer",
-                    lead.terugbellen ? "bg-[#FFF8F3]" : "",
-                  ].join(" ")}
-                  onClick={() => router.push(`/leads/${lead.id}`)}
-                >
-                  <td className="whitespace-nowrap tabular-nums text-muted">
-                    {formatDateTimeNl(lead.created_at)}
-                  </td>
-                  <td>
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-medium whitespace-nowrap text-ink">
-                        {lead.naam}
-                      </span>
-                      {lead.terugbellen && (
-                        <span className="inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
-                          Terugbellen
-                        </span>
-                      )}
-                    </span>
-                    {lead.terugbellen && lead.terugbel_notitie?.trim() && (
-                      <p className="mt-0.5 max-w-[18rem] truncate text-[11px] text-[#C45A12]">
-                        {lead.terugbel_notitie}
-                      </p>
-                    )}
-                  </td>
-                  <td
-                    className="max-w-[10rem] truncate text-muted"
-                    title={lead.lander || undefined}
-                  >
-                    {lead.lander || "—"}
-                  </td>
-                  <td className="whitespace-nowrap text-muted">
-                    {adresRegel(lead)}
-                  </td>
-                  <td className="whitespace-nowrap text-muted">
-                    {lead.plaats || "—"}
-                  </td>
-                  <td className="whitespace-nowrap text-muted">
-                    {lead.telefoon || "—"}
-                  </td>
-                  <td className="whitespace-nowrap text-muted">
-                    {lead.email || "—"}
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <select
-                      value={lead.status}
-                      onChange={(e) =>
-                        onStatusChange?.(
-                          lead.id,
-                          e.target.value as LeadStatus
-                        )
-                      }
-                      className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
-                      aria-label="Lead status"
-                    >
-                      <LeadStatusSelectOptions />
-                    </select>
+            </thead>
+            <tbody>
+              {leads.length === 0 ? (
+                <tr>
+                  <td colSpan={colSpan} className="!cursor-default">
+                    {empty}
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                pageRows.map((lead) => (
+                  <tr
+                    key={lead.id}
+                    className={[
+                      "cursor-pointer",
+                      lead.terugbellen ? "bg-[#FFF8F3]" : "",
+                    ].join(" ")}
+                    onClick={() => router.push(`/leads/${lead.id}`)}
+                  >
+                    <td className="whitespace-nowrap tabular-nums text-muted">
+                      {formatDateTimeNl(lead.created_at)}
+                    </td>
+                    <td>
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium whitespace-nowrap text-ink">
+                          {lead.naam}
+                        </span>
+                        {lead.terugbellen && (
+                          <span className="inline-flex items-center rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                            Terugbellen
+                          </span>
+                        )}
+                      </span>
+                      {lead.terugbellen && lead.terugbel_notitie?.trim() && (
+                        <p className="mt-0.5 max-w-[18rem] truncate text-[11px] text-[#C45A12]">
+                          {lead.terugbel_notitie}
+                        </p>
+                      )}
+                    </td>
+                    <td
+                      className="max-w-[10rem] truncate text-muted"
+                      title={lead.lander || undefined}
+                    >
+                      {lead.lander || "—"}
+                    </td>
+                    <td className="whitespace-nowrap text-muted">
+                      {adresRegel(lead)}
+                    </td>
+                    <td className="whitespace-nowrap text-muted">
+                      {lead.plaats || "—"}
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <PhoneCopyCell telefoon={lead.telefoon} />
+                    </td>
+                    <td className="whitespace-nowrap text-muted">
+                      {lead.email || "—"}
+                    </td>
+                    {showBellerColumn && (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <select
+                          value={lead.beller_id || ""}
+                          onChange={(e) =>
+                            onBellerChange?.(
+                              lead.id,
+                              e.target.value ? e.target.value : null
+                            )
+                          }
+                          className="max-w-[9rem] cursor-pointer border border-line bg-white px-2 py-1 text-xs outline-none focus:border-green"
+                          aria-label="Beller toewijzen"
+                          title={
+                            bellers.length === 0
+                              ? "Maak eerst een medewerker met rol Beller"
+                              : "Wijs toe aan beller"
+                          }
+                        >
+                          <option value="">—</option>
+                          {bellers.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.naam}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    )}
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={lead.status}
+                        onChange={(e) =>
+                          onStatusChange?.(
+                            lead.id,
+                            e.target.value as LeadStatus
+                          )
+                        }
+                        className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+                        aria-label="Lead status"
+                      >
+                        <LeadStatusSelectOptions />
+                      </select>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <PaginationBar
+          page={page}
+          pageCount={pageCount}
+          total={rows.length}
+          onPageChange={setPage}
+        />
       </div>
     </div>
   );

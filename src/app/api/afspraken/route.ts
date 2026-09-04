@@ -20,6 +20,12 @@ import {
 } from "@/lib/afspraak-soort";
 import { logLeadEvent } from "@/lib/lead-events";
 import type { AfspraakSoort } from "@/types/database";
+import {
+  loadUnavailableWeekKeys,
+  weekKeyFromDate,
+  weekKeyString,
+  isSlotAfgeblokt,
+} from "@/lib/adviseur-beschikbaarheid";
 
 export const runtime = "nodejs";
 
@@ -451,6 +457,26 @@ export async function POST(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
+
+    const wk = weekKeyFromDate(start);
+    const unavailable = await loadUnavailableWeekKeys(sb, body.adviseur_id, [
+      wk.jaar,
+    ]);
+    if (unavailable.has(weekKeyString(wk.jaar, wk.week))) {
+      return NextResponse.json(
+        {
+          error: `Deze adviseur is niet beschikbaar in week ${wk.week} (${wk.jaar})`,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (await isSlotAfgeblokt(sb, body.adviseur_id, start)) {
+      return NextResponse.json(
+        { error: "Dit tijdsblok is afgeblokt voor deze adviseur" },
+        { status: 409 }
+      );
+    }
 
     if (afspraakBlokkeertAgenda(soort)) {
       const overlap = await hasBlockingOverlap(sb, {

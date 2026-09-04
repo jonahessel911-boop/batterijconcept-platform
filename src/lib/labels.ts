@@ -115,7 +115,10 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
   schouw_inplannen: "Schouw inplannen",
-  schouw_gepland: "Schouw gepland",
+  schouwweek_gepland: "Schouwweek gepland",
+  schouwdag_plannen: "Schouwdag plannen",
+  schouw_gepland: "Schouwdag gepland",
+  materiaal_inkopen: "Materiaal inkopen",
   btw_factuur_eruit: "BTW factuur eruit",
   product_ingekocht: "Product ingekocht",
   installatie_gepland: "Installatie gepland",
@@ -125,7 +128,10 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
   "schouw_inplannen",
+  "schouwweek_gepland",
+  "schouwdag_plannen",
   "schouw_gepland",
+  "materiaal_inkopen",
   "btw_factuur_eruit",
   "product_ingekocht",
   "installatie_gepland",
@@ -235,8 +241,14 @@ export function statusTone(
     const project: Record<string, string> = {
       schouw_inplannen:
         "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      schouwweek_gepland:
+        "border border-[#0F766E]/30 bg-[#F0FDFA] text-[#0F766E]",
+      schouwdag_plannen:
+        "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
       schouw_gepland:
         "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
+      materiaal_inkopen:
+        "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
       btw_factuur_eruit:
         "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
       product_ingekocht:

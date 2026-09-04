@@ -8,6 +8,11 @@ import { nl } from "date-fns/locale";
 import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import {
+  NL_PROVINCIES,
+  PROVINCIE_ONBEKEND,
+  provincieVanPostcode,
+} from "@/lib/postcode-provincie";
 
 const TZ = "Europe/Amsterdam";
 
@@ -175,6 +180,10 @@ export type RapportageLead = {
   lander?: string | null;
   campaign_name?: string | null;
   utm_campaign?: string | null;
+  ad_name?: string | null;
+  utm_content?: string | null;
+  postcode?: string | null;
+  plaats?: string | null;
 };
 
 export type RapportageRaw = {
@@ -231,7 +240,7 @@ export type AttributionMetrics = {
 
 export type AttributionNode = {
   key: string;
-  level: "lander" | "campaign";
+  level: "lander" | "campaign" | "ad";
   label: string;
   metrics: AttributionMetrics;
   children?: AttributionNode[];
@@ -239,6 +248,7 @@ export type AttributionNode = {
 
 const GEEN_LANDER = "(geen lander)";
 const GEEN_CAMPAIGN = "(geen campaign)";
+const GEEN_AD = "(geen ad)";
 
 function normalizeAttr(value: string | null | undefined, fallback: string): string {
   const t = (value || "").trim();
@@ -250,6 +260,10 @@ function leadCampaign(lead: RapportageLead): string {
     lead.campaign_name || lead.utm_campaign,
     GEEN_CAMPAIGN
   );
+}
+
+function leadAd(lead: RapportageLead): string {
+  return normalizeAttr(lead.ad_name || lead.utm_content, GEEN_AD);
 }
 
 function leadLander(lead: RapportageLead): string {
@@ -277,7 +291,7 @@ function finalizeAttribution(m: AttributionMetrics): AttributionMetrics {
 }
 
 /**
- * Cohort-attributie: lander → campaign.
+ * Cohort-attributie: lander → campaign → ad.
  * Leads in de groep; afspraken = unieke leads met netto fysieke afspraak;
  * deals = ondertekende offertes van die leads.
  */
@@ -316,33 +330,56 @@ export function buildAttributionTree(
     deals: number;
   };
 
-  const byLander = new Map<string, Map<string, Bucket>>();
+  function emptyBucket(): Bucket {
+    return {
+      leadIds: [],
+      afspraakLeads: new Set(),
+      dealLeads: new Set(),
+      deals: 0,
+    };
+  }
+
+  function addLeadToBucket(bucket: Bucket, leadId: string) {
+    bucket.leadIds.push(leadId);
+    if (afspraakLeadIds.has(leadId)) bucket.afspraakLeads.add(leadId);
+    const nDeals = dealCounts.get(leadId) || 0;
+    if (nDeals > 0) {
+      bucket.dealLeads.add(leadId);
+      bucket.deals += nDeals;
+    }
+  }
+
+  function mergeBucket(into: Bucket, from: Bucket) {
+    into.leadIds.push(...from.leadIds);
+    for (const id of from.afspraakLeads) into.afspraakLeads.add(id);
+    for (const id of from.dealLeads) into.dealLeads.add(id);
+    into.deals += from.deals;
+  }
+
+  // lander → campaign → ad
+  const byLander = new Map<string, Map<string, Map<string, Bucket>>>();
 
   for (const lead of leads) {
     const lander = leadLander(lead);
     const campaign = leadCampaign(lead);
+    const ad = leadAd(lead);
+
     let campaigns = byLander.get(lander);
     if (!campaigns) {
       campaigns = new Map();
       byLander.set(lander, campaigns);
     }
-    let bucket = campaigns.get(campaign);
+    let ads = campaigns.get(campaign);
+    if (!ads) {
+      ads = new Map();
+      campaigns.set(campaign, ads);
+    }
+    let bucket = ads.get(ad);
     if (!bucket) {
-      bucket = {
-        leadIds: [],
-        afspraakLeads: new Set(),
-        dealLeads: new Set(),
-        deals: 0,
-      };
-      campaigns.set(campaign, bucket);
+      bucket = emptyBucket();
+      ads.set(ad, bucket);
     }
-    bucket.leadIds.push(lead.id);
-    if (afspraakLeadIds.has(lead.id)) bucket.afspraakLeads.add(lead.id);
-    const nDeals = dealCounts.get(lead.id) || 0;
-    if (nDeals > 0) {
-      bucket.dealLeads.add(lead.id);
-      bucket.deals += nDeals;
-    }
+    addLeadToBucket(bucket, lead.id);
   }
 
   function metricsFromBucket(b: Bucket): AttributionMetrics {
@@ -358,42 +395,65 @@ export function buildAttributionTree(
     return out;
   }
 
+  function sortByLeads(
+    a: [string, { leadIds: string[] }],
+    b: [string, { leadIds: string[] }]
+  ) {
+    if (b[1].leadIds.length !== a[1].leadIds.length) {
+      return b[1].leadIds.length - a[1].leadIds.length;
+    }
+    return a[0].localeCompare(b[0], "nl");
+  }
+
   const landers = [...byLander.entries()].sort((a, b) => {
-    const leadsA = [...a[1].values()].reduce((s, x) => s + x.leadIds.length, 0);
-    const leadsB = [...b[1].values()].reduce((s, x) => s + x.leadIds.length, 0);
+    const leadsA = [...a[1].values()].reduce(
+      (s, ads) =>
+        s + [...ads.values()].reduce((t, x) => t + x.leadIds.length, 0),
+      0
+    );
+    const leadsB = [...b[1].values()].reduce(
+      (s, ads) =>
+        s + [...ads.values()].reduce((t, x) => t + x.leadIds.length, 0),
+      0
+    );
     if (leadsB !== leadsA) return leadsB - leadsA;
     return a[0].localeCompare(b[0], "nl");
   });
 
   return landers.map(([lander, campaigns]) => {
-    const campaignEntries = [...campaigns.entries()].sort((a, b) => {
-      if (b[1].leadIds.length !== a[1].leadIds.length) {
-        return b[1].leadIds.length - a[1].leadIds.length;
-      }
-      return a[0].localeCompare(b[0], "nl");
-    });
+    const campaignEntries = [...campaigns.entries()]
+      .map(([campaign, ads]) => {
+        const campaignBucket = emptyBucket();
+        for (const b of ads.values()) mergeBucket(campaignBucket, b);
+        return [campaign, ads, campaignBucket] as const;
+      })
+      .sort((a, b) => sortByLeads([a[0], a[2]], [b[0], b[2]]));
 
     const children: AttributionNode[] = campaignEntries.map(
-      ([campaign, bucket]) => ({
-        key: `campaign:${lander}::${campaign}`,
-        level: "campaign" as const,
-        label: campaign,
-        metrics: metricsFromBucket(bucket),
-      })
+      ([campaign, ads, campaignBucket]) => {
+        const adEntries = [...ads.entries()].sort(sortByLeads);
+        const hasRealAds = adEntries.some(([ad]) => ad !== GEEN_AD);
+        const adChildren: AttributionNode[] | undefined = hasRealAds
+          ? adEntries.map(([ad, bucket]) => ({
+              key: `ad:${lander}::${campaign}::${ad}`,
+              level: "ad" as const,
+              label: ad,
+              metrics: metricsFromBucket(bucket),
+            }))
+          : undefined;
+
+        return {
+          key: `campaign:${lander}::${campaign}`,
+          level: "campaign" as const,
+          label: campaign,
+          metrics: metricsFromBucket(campaignBucket),
+          children: adChildren,
+        };
+      }
     );
 
-    const landerBucket: Bucket = {
-      leadIds: [],
-      afspraakLeads: new Set(),
-      dealLeads: new Set(),
-      deals: 0,
-    };
-    for (const [, b] of campaignEntries) {
-      landerBucket.leadIds.push(...b.leadIds);
-      for (const id of b.afspraakLeads) landerBucket.afspraakLeads.add(id);
-      for (const id of b.dealLeads) landerBucket.dealLeads.add(id);
-      landerBucket.deals += b.deals;
-    }
+    const landerBucket = emptyBucket();
+    for (const [, , b] of campaignEntries) mergeBucket(landerBucket, b);
 
     return {
       key: `lander:${lander}`,
@@ -643,4 +703,97 @@ export function buildRapportageTree(
       children: months,
     };
   });
+}
+
+export type GeoRegionMetrics = {
+  key: string;
+  label: string;
+  leads: number;
+  afspraken: number;
+  deals: number;
+  omzet: number;
+  conversieAfspraak: number;
+  conversieDeal: number;
+};
+
+/**
+ * Aggregatie per provincie (via lead-postcode).
+ * Afspraken = unieke leads met netto fysieke afspraak; deals = ondertekende offertes.
+ */
+export function buildGeoBreakdown(
+  raw: RapportageRaw,
+  adviseurId: string | null
+): GeoRegionMetrics[] {
+  const leads = adviseurId
+    ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
+    : raw.leads;
+  const leadIds = new Set(leads.map((l) => l.id));
+
+  const afspraakLeadIds = new Set<string>();
+  for (const a of raw.afspraken) {
+    if (!leadIds.has(a.lead_id)) continue;
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
+    afspraakLeadIds.add(a.lead_id);
+  }
+
+  type Acc = {
+    leads: number;
+    afspraakLeads: Set<string>;
+    deals: number;
+    omzet: number;
+  };
+  const byProv = new Map<string, Acc>();
+
+  function ensure(key: string): Acc {
+    let a = byProv.get(key);
+    if (!a) {
+      a = { leads: 0, afspraakLeads: new Set(), deals: 0, omzet: 0 };
+      byProv.set(key, a);
+    }
+    return a;
+  }
+
+  for (const p of NL_PROVINCIES) ensure(p);
+
+  for (const l of leads) {
+    const prov = provincieVanPostcode(l.postcode);
+    const acc = ensure(prov);
+    acc.leads += 1;
+    if (afspraakLeadIds.has(l.id)) acc.afspraakLeads.add(l.id);
+  }
+
+  for (const o of raw.offertes) {
+    if (o.status !== "ondertekend" || !o.ondertekend_op) continue;
+    if (!leadIds.has(o.lead_id)) continue;
+    const lead = leads.find((l) => l.id === o.lead_id);
+    const prov = provincieVanPostcode(lead?.postcode);
+    const acc = ensure(prov);
+    acc.deals += 1;
+    acc.omzet += Number(o.subtotaal_ex_btw) || 0;
+  }
+
+  const rows: GeoRegionMetrics[] = [...byProv.entries()].map(([key, a]) => {
+    const afspraken = a.afspraakLeads.size;
+    return {
+      key,
+      label: key,
+      leads: a.leads,
+      afspraken,
+      deals: a.deals,
+      omzet: Math.round(a.omzet * 100) / 100,
+      conversieAfspraak:
+        a.leads > 0 ? Math.round((afspraken / a.leads) * 1000) / 10 : 0,
+      conversieDeal:
+        a.leads > 0 ? Math.round((a.deals / a.leads) * 1000) / 10 : 0,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a.key === PROVINCIE_ONBEKEND) return 1;
+    if (b.key === PROVINCIE_ONBEKEND) return -1;
+    return b.leads - a.leads || a.label.localeCompare(b.label, "nl");
+  });
+
+  return rows;
 }

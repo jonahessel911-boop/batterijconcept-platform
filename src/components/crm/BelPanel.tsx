@@ -8,6 +8,7 @@ import { nl } from "date-fns/locale";
 import { getSupabaseBrowser } from "@/lib/supabase";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import { isPlanbareAdviseur } from "@/lib/rollen";
 import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import {
   MAX_BELPOGINGEN,
@@ -164,7 +165,10 @@ export function BelPanel({
   const [timelineTick, setTimelineTick] = useState(0);
 
   const planAdviseurs = useMemo(
-    () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
+    () =>
+      adviseurs.filter(
+        (a) => a.actief && !isAdminAdviseur(a) && isPlanbareAdviseur(a)
+      ),
     [adviseurs]
   );
 

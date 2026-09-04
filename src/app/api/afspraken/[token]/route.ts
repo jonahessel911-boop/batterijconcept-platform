@@ -15,6 +15,19 @@ import {
   afspraakDuurMinuten,
   afspraakStuurtMail,
 } from "@/lib/afspraak-soort";
+import {
+  filterSlotsByAfblokkingen,
+  filterSlotsByBeschikbaarheid,
+  isSlotAfgeblokt,
+  loadAfblokkingen,
+  loadUnavailableWeekKeys,
+  weekKeyFromDate,
+  weekKeyString,
+  dayKeyAmsterdam,
+} from "@/lib/adviseur-beschikbaarheid";
+import { addDays, getISOWeekYear } from "date-fns";
+import { toZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 
 export const runtime = "nodejs";
 
@@ -44,12 +57,34 @@ export async function GET(
       afspraak.id
     );
 
-    const slots = generateAvailableSlots({
-      busy,
-    }).map((s) => ({
-      start_at: s.start.toISOString(),
-      end_at: s.end.toISOString(),
-    }));
+    const nowLocal = toZonedTime(new Date(), AMSTERDAM_TZ);
+    const y = getISOWeekYear(nowLocal);
+    const unavailable = await loadUnavailableWeekKeys(
+      sb,
+      afspraak.adviseur_id,
+      [y - 1, y, y + 1]
+    );
+    const van = dayKeyAmsterdam(new Date());
+    const tot = dayKeyAmsterdam(addDays(new Date(), 40));
+    const afgeblokt = await loadAfblokkingen(sb, {
+      adviseurIds: [afspraak.adviseur_id],
+      van,
+      tot,
+    });
+
+    const slots = filterSlotsByAfblokkingen(
+      filterSlotsByBeschikbaarheid(
+        generateAvailableSlots({
+          busy,
+        }).map((s) => ({
+          start_at: s.start.toISOString(),
+          end_at: s.end.toISOString(),
+        })),
+        unavailable
+      ),
+      afspraak.adviseur_id,
+      afgeblokt
+    );
 
     return NextResponse.json({ afspraak, slots });
   } catch (e) {
@@ -161,6 +196,28 @@ export async function POST(
         );
       }
       const start = new Date(body.start_at);
+      const wk = weekKeyFromDate(start);
+      const unavailable = await loadUnavailableWeekKeys(
+        sb,
+        afspraak.adviseur_id,
+        [wk.jaar]
+      );
+      if (unavailable.has(weekKeyString(wk.jaar, wk.week))) {
+        return NextResponse.json(
+          {
+            error: `De adviseur is niet beschikbaar in week ${wk.week}`,
+          },
+          { status: 409 }
+        );
+      }
+
+      if (await isSlotAfgeblokt(sb, afspraak.adviseur_id, start)) {
+        return NextResponse.json(
+          { error: "Dit tijdsblok is afgeblokt" },
+          { status: 409 }
+        );
+      }
+
       const bestaandeDuur = differenceInMinutes(
         new Date(afspraak.end_at),
         new Date(afspraak.start_at)

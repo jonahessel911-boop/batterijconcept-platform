@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Adviseur, CrmTab } from "@/types/database";
-import { CRM_TABS } from "./TabNav";
 
 export function CrmHeader({
   onRefresh,
@@ -34,7 +33,8 @@ export function CrmHeader({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const showNav = Boolean(onTabChange && activeTab);
-  const navTabs = tabs || CRM_TABS;
+  // Nooit alle CRM_TABS als fallback — alleen expliciet doorgegeven (rol-gefilterd) tabs
+  const navTabs = tabs ?? [];
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -106,6 +106,7 @@ export function CrmHeader({
                 {adviseurs.map((a) => (
                   <option key={a.id} value={a.id} className="text-ink">
                     {a.naam}
+                    {a.rol === "beller" ? " (beller)" : ""}
                   </option>
                 ))}
               </select>

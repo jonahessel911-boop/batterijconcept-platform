@@ -5,14 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { Factuur, Project } from "@/types/database";
 import { openBackofficeActies } from "@/lib/backoffice-acties";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
-import { ProjectenTable } from "./ProjectenTable";
+import { ProjectKanban } from "./ProjectKanban";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 
 export type BoView = "acties" | "orders" | "agenda";
 
 export function parseBoView(raw: string | null | undefined): BoView {
   if (raw === "orders" || raw === "agenda" || raw === "acties") return raw;
-  return "acties";
+  return "orders";
 }
 
 export function backofficeHref(view: BoView = "acties"): string {
@@ -59,7 +59,7 @@ export function BackofficePanel({
         ? actieCount === 0
           ? "Geen openstaande acties"
           : `${actieCount} openstaande ${actieCount === 1 ? "actie" : "acties"}`
-        : `${projecten.length} ${projecten.length === 1 ? "project" : "projecten"}`;
+        : `${projecten.length} ${projecten.length === 1 ? "project" : "projecten"} · sleep tussen kolommen`;
 
   return (
     <>
@@ -74,7 +74,7 @@ export function BackofficePanel({
           {(
             [
               { id: "acties", label: "Acties", count: actieCount },
-              { id: "orders", label: "Projecten" },
+              { id: "orders", label: "Kanban", count: projecten.length },
               { id: "agenda", label: "Agenda" },
             ] as const
           ).map((tab) => (
@@ -123,7 +123,10 @@ export function BackofficePanel({
           onFactuurUpdated={onFactuurUpdated}
         />
       ) : (
-        <ProjectenTable projecten={projecten} />
+        <ProjectKanban
+          projecten={projecten}
+          onProjectUpdated={onProjectUpdated}
+        />
       )}
     </>
   );

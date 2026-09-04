@@ -6,36 +6,52 @@ import { useParams, useRouter } from "next/navigation";
 import type {
   Adviseur,
   Afspraak,
-  Factuur,
   Lead,
   LeadStatus,
-  Offerte,
-  Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateTimeNl } from "@/lib/format";
 import { statusTone } from "@/lib/labels";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
-import { geenContactPogingLabel } from "@/lib/bel-queue";
-import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
-import { OffertesTable } from "./OffertesTable";
-import { ProjectenTable } from "./ProjectenTable";
-import { FacturenTable } from "./FacturenTable";
 import { MaakOfferteModal } from "./MaakOfferteModal";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
-import { LeadTimeline } from "./LeadTimeline";
 import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
+import { LeadActivityPanel } from "./LeadActivityPanel";
 import {
   BackLink,
   Breadcrumb,
   DetailShell,
   NotFoundState,
-  Panel,
 } from "./DetailChrome";
 
-type Section = "offertes" | "projecten" | "facturen";
+function PencilIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function adresRegel(lead: Lead): string {
+  const straat = [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
+    .filter(Boolean)
+    .join(" ");
+  const plaats = [lead.postcode, lead.plaats].filter(Boolean).join(" ");
+  return [straat, plaats].filter(Boolean).join(", ") || "—";
+}
 
 export function LeadPage() {
   const params = useParams<{ id: string }>();
@@ -43,28 +59,23 @@ export function LeadPage() {
   const router = useRouter();
 
   const [lead, setLead] = useState<Lead | null>(null);
-  const [offertes, setOffertes] = useState<Offerte[]>([]);
-  const [projecten, setProjecten] = useState<Project[]>([]);
-  const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
-  const [section, setSection] = useState<Section>("offertes");
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [maakOfferteOpen, setMaakOfferteOpen] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
-  const [timelineTick, setTimelineTick] = useState(0);
-  const [terugbelDraft, setTerugbelDraft] = useState("");
-  const [savingTerugbel, setSavingTerugbel] = useState(false);
+  const [editingGegevens, setEditingGegevens] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
   const [kwalReden, setKwalReden] = useState("");
   const [showKwalForm, setShowKwalForm] = useState(false);
+  const [activityKey, setActivityKey] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     setNotFound(false);
-
     if (!hasSupabaseConfig()) {
       setNotFound(true);
       setLoading(false);
@@ -73,33 +84,14 @@ export function LeadPage() {
 
     try {
       const sb = getSupabaseBrowser();
-      const [l, o, p, f, a, advRes] = await Promise.all([
+      const [l, a, advRes] = await Promise.all([
         sb.from("leads").select("*").eq("id", id).single(),
         sb
-          .from("offertes")
-          .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats)"
-          )
-          .eq("lead_id", id)
-          .order("created_at", { ascending: false }),
-        sb
-          .from("projecten")
-          .select("*, leads(naam, lead_number)")
-          .eq("lead_id", id)
-          .order("created_at", { ascending: false }),
-        sb
-          .from("facturen")
-          .select("*, leads(naam, lead_number)")
-          .eq("lead_id", id)
-          .order("created_at", { ascending: false }),
-        sb
           .from("afspraken")
-          .select("*")
+          .select("*, adviseurs(naam)")
           .eq("lead_id", id)
-          .in("status", ["gepland", "bevestigd"])
-          .gte("start_at", new Date().toISOString())
-          .order("start_at", { ascending: true })
-          .limit(8),
+          .order("start_at", { ascending: false })
+          .limit(20),
         fetch("/api/adviseurs").then((r) => r.json()),
       ]);
 
@@ -108,9 +100,8 @@ export function LeadPage() {
       } else {
         let leadData = l.data as Lead;
         const advList = (advRes.adviseurs as Adviseur[]) || [];
-        const linked = advList.find((a) => a.id === leadData.adviseur_id);
+        const linked = advList.find((x) => x.id === leadData.adviseur_id);
 
-        // Adres leeg + postcode/huisnr bekend → vul straat/plaats via API en sla op
         if (
           (!leadData.straat?.trim() || !leadData.plaats?.trim()) &&
           leadData.postcode?.trim() &&
@@ -131,7 +122,6 @@ export function LeadPage() {
               if (!leadData.straat?.trim() && pc.straat) patch.straat = pc.straat;
               if (!leadData.plaats?.trim() && pc.plaats) patch.plaats = pc.plaats;
               if (Object.keys(patch).length > 0) {
-                const sb = getSupabaseBrowser();
                 await sb.from("leads").update(patch).eq("id", leadData.id);
                 leadData = { ...leadData, ...patch };
               }
@@ -143,15 +133,9 @@ export function LeadPage() {
 
         setLead({
           ...leadData,
-          adviseurs: linked
-            ? { id: linked.id, naam: linked.naam }
-            : null,
+          adviseurs: linked ? { id: linked.id, naam: linked.naam } : null,
         });
         setNoteDraft("");
-        setTerugbelDraft(leadData.terugbel_notitie || "");
-        setOffertes((o.data as Offerte[]) || []);
-        setProjecten((p.data as Project[]) || []);
-        setFacturen((f.data as Factuur[]) || []);
         setAfspraken((a.data as Afspraak[]) || []);
         setAdviseurs(advList);
       }
@@ -163,16 +147,9 @@ export function LeadPage() {
   }, [id]);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      void load();
-    });
+    const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
   }, [load]);
-
-  function openSignLink(o: Offerte) {
-    if (!o.sign_token) return;
-    window.open(`/offerte/${o.sign_token}`, "_blank");
-  }
 
   async function updateStatus(status: LeadStatus, extraNotitie?: string) {
     if (!lead) return;
@@ -211,15 +188,6 @@ export function LeadPage() {
     }
   }
 
-  async function moveToCallcenter() {
-    if (!lead) return;
-    const reden = window.prompt("Notitie voor callcenter (verplicht):");
-    if (reden === null) return;
-    const note = reden.trim();
-    if (!note) return;
-    await updateStatus("vervolg_geen_contact", `Callcenter: ${note}`);
-  }
-
   async function updateAdviseur(adviseurId: string | null) {
     if (!lead) return;
     const prevId = lead.adviseur_id;
@@ -242,81 +210,6 @@ export function LeadPage() {
     }
   }
 
-  async function saveTerugbel(actief: boolean) {
-    if (!lead) return;
-    const note = terugbelDraft.trim() || null;
-    if (actief && !note) {
-      setOkMsg("Vul een terugbelnotitie in.");
-      return;
-    }
-    setSavingTerugbel(true);
-    try {
-      const sb = getSupabaseBrowser();
-      const patch = {
-        terugbellen: actief,
-        terugbel_notitie: actief ? note : null,
-      };
-      const { error } = await sb.from("leads").update(patch).eq("id", lead.id);
-      if (error) {
-        if (
-          error.message?.includes("terugbellen") ||
-          error.message?.includes("terugbel_notitie") ||
-          error.code === "42703"
-        ) {
-          throw new Error(
-            "Voer eerst supabase/migrate-lead-terugbellen.sql uit in Supabase."
-          );
-        }
-        throw error;
-      }
-      if (!actief) {
-        const openBel = afspraken.filter(
-          (a) =>
-            (a.status === "gepland" ||
-              a.status === "bevestigd" ||
-              a.status === "verzet") &&
-            (normalizeAfspraakSoort(a.soort) === "bel" ||
-              normalizeAfspraakSoort(a.soort) === "warme_bel")
-        );
-        for (const a of openBel) {
-          await sb.from("afspraken").update({ status: "voltooid" }).eq("id", a.id);
-        }
-        if (openBel.length > 0) {
-          setAfspraken((prev) =>
-            prev.map((a) =>
-              openBel.some((o) => o.id === a.id)
-                ? { ...a, status: "voltooid" }
-                : a
-            )
-          );
-        }
-      }
-      setLead({ ...lead, ...patch });
-      if (!actief) setTerugbelDraft("");
-      setTimelineTick((t) => t + 1);
-      void fetch(`/api/leads/${lead.id}/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          soort: "terugbel",
-          titel: actief
-            ? "Terugbelnotitie gezet"
-            : "Terugbellen afgevinkt",
-          detail: actief ? note : null,
-        }),
-      }).catch(() => {});
-      setOkMsg(
-        actief
-          ? "Terugbelnotitie gezet — lead staat gemarkeerd om terug te bellen."
-          : "Terugbellen afgevinkt."
-      );
-    } catch (e) {
-      setOkMsg(e instanceof Error ? e.message : "Opslaan mislukt");
-    } finally {
-      setSavingTerugbel(false);
-    }
-  }
-
   async function addNotitie() {
     if (!lead) return;
     const text = noteDraft.trim();
@@ -334,9 +227,15 @@ export function LeadPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+
+      // Ook op lead.notities zetten zodat het meteen zichtbaar blijft
+      const merged = appendLeadNotitie(lead.notities, text);
+      const sb = getSupabaseBrowser();
+      await sb.from("leads").update({ notities: merged }).eq("id", lead.id);
+      setLead({ ...lead, notities: merged });
       setNoteDraft("");
-      setTimelineTick((t) => t + 1);
-      setOkMsg("Notitie toegevoegd.");
+      setOkMsg("Notitie opgeslagen.");
+      setActivityKey((k) => k + 1);
     } catch (e) {
       setOkMsg(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
@@ -363,19 +262,20 @@ export function LeadPage() {
     );
   }
 
-  const sections: { id: Section; label: string; count: number }[] = [
-    { id: "offertes", label: "Offertes", count: offertes.length },
-    { id: "projecten", label: "Backoffice", count: projecten.length },
-    { id: "facturen", label: "Facturen", count: facturen.length },
-  ];
-
-  const statusLabel: Record<Afspraak["status"], string> = {
-    gepland: "Gepland",
-    bevestigd: "Bevestigd",
-    verzet: "Verzet",
-    voltooid: "Voltooid",
-    geannuleerd: "Geannuleerd",
-  };
+  const upcoming = afspraken.filter(
+    (a) =>
+      new Date(a.start_at) >= new Date() &&
+      a.status !== "geannuleerd" &&
+      a.status !== "voltooid"
+  );
+  const past = afspraken.filter(
+    (a) =>
+      !(
+        new Date(a.start_at) >= new Date() &&
+        a.status !== "geannuleerd" &&
+        a.status !== "voltooid"
+      )
+  );
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="leads">
@@ -383,69 +283,27 @@ export function LeadPage() {
         items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
       />
 
+      {okMsg && (
+        <div className="mb-4 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
+          {okMsg}
+        </div>
+      )}
+
+      {/* Header */}
       <section className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line px-4 py-5 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-5 sm:px-6">
           <div className="min-w-0">
-            <p className="font-mono text-[11px] font-semibold tracking-wide text-green-dark">
+            <p className="font-mono text-[11px] font-semibold text-muted">
               {lead.lead_number}
             </p>
-            <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-green-deeper sm:text-3xl">
+            <h1 className="mt-1 font-display text-2xl font-semibold text-ink sm:text-3xl">
               {lead.naam}
             </h1>
-            {(lead.terugbellen ||
-              lead.status === "geen_contact" ||
-              (lead.belpogingen ?? 0) > 0) && (
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                {lead.terugbellen && (
-                  <span className="inline-flex items-center border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
-                    Terugbellen
-                  </span>
-                )}
-                {(lead.status === "geen_contact" ||
-                  (lead.belpogingen ?? 0) > 0) && (
-                  <span className="inline-flex items-center border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
-                    {geenContactPogingLabel(lead.belpogingen ?? 0)}
-                  </span>
-                )}
-              </div>
-            )}
-            <p className="mt-2 text-sm text-muted">
-              Aangemaakt {formatDateTimeNl(lead.created_at)}
-              {lead.bron ? ` · via ${lead.bron}` : ""}
+            <p className="mt-1 text-sm text-muted">
+              {lead.adviseurs?.naam || "Geen adviseur"}
             </p>
           </div>
-          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-            <Link
-              href={`/advies/${lead.id}`}
-              className="bg-green px-3.5 py-2 text-xs font-semibold text-white hover:bg-green-dark"
-            >
-              Start adviesproces
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                setSection("offertes");
-                setMaakOfferteOpen(true);
-              }}
-              className="bg-orange px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#e0651c]"
-            >
-              Maak offerte
-            </button>
-            <select
-              value={lead.adviseur_id || ""}
-              onChange={(e) =>
-                void updateAdviseur(e.target.value ? e.target.value : null)
-              }
-              className="max-w-[10rem] cursor-pointer border border-line bg-white px-2.5 py-2 text-xs outline-none focus:border-green"
-              aria-label="Koppel adviseur"
-            >
-              <option value="">Geen adviseur</option>
-              {adviseurs.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.naam}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={lead.status}
               onChange={(e) => {
@@ -457,64 +315,30 @@ export function LeadPage() {
                 void updateStatus(next);
               }}
               className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
-              aria-label="Lead status"
             >
               <LeadStatusSelectOptions />
             </select>
+            <button
+              type="button"
+              onClick={() => setMaakOfferteOpen(true)}
+              className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+            >
+              Maak offerte
+            </button>
           </div>
         </div>
 
-        {lead.status === "na_afspraak" && (
-          <div className="mx-4 mt-5 border border-[#C45A12]/25 bg-[#FFF0E6] px-4 py-4 sm:mx-6">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#C45A12]">
-              Uitkomst afspraak
-            </p>
-            <p className="mt-1 text-sm text-ink">
-              Kies wat er na het bezoek volgt. Vervolg plan je in de agenda.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Link
-                href="/?tab=agenda"
-                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
-              >
-                Vervolg afspraak (agenda)
-              </Link>
-              <button
-                type="button"
-                onClick={() => void updateStatus("offerte_afgewezen")}
-                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
-              >
-                Offerte afgewezen
-              </button>
-              <button
-                type="button"
-                onClick={() => void moveToCallcenter()}
-                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
-              >
-                Callcenter
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowKwalForm(true)}
-                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:border-green/50"
-              >
-                Niet goed gekwalificeerd
-              </button>
-            </div>
-          </div>
-        )}
-
         {showKwalForm && (
-          <div className="mx-4 mt-4 border border-line bg-wash px-4 py-4 sm:mx-6">
+          <div className="border-t border-line bg-wash px-4 py-4 sm:px-6">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Reden niet gekwalificeerd
             </p>
             <textarea
               value={kwalReden}
               onChange={(e) => setKwalReden(e.target.value)}
-              rows={3}
-              placeholder="Waarom is deze lead niet goed gekwalificeerd?"
-              className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              rows={2}
+              className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+              placeholder="Waarom?"
             />
             <div className="mt-2 flex gap-2">
               <button
@@ -526,7 +350,7 @@ export function LeadPage() {
                     `Niet gekwalificeerd: ${kwalReden.trim()}`
                   )
                 }
-                className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
+                className="bg-orange px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
               >
                 Opslaan
               </button>
@@ -536,298 +360,224 @@ export function LeadPage() {
                   setShowKwalForm(false);
                   setKwalReden("");
                 }}
-                className="border border-line px-3 py-2 text-xs font-semibold text-muted hover:bg-white"
+                className="border border-line px-3 py-2 text-xs font-semibold text-muted"
               >
                 Annuleren
               </button>
             </div>
           </div>
         )}
+      </section>
 
-        <div className="grid items-stretch gap-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-          <div className="min-w-0 space-y-0 border-b border-line lg:border-b-0 lg:border-r">
-            <div className="border-b border-line px-4 py-5 sm:px-6">
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-                Contact
-              </h2>
-              <div className="mt-4">
-                <LeadContactEditor
-                  lead={lead}
-                  onSaved={(patch) =>
-                    setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="border-b border-line px-4 py-5 sm:px-6">
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-                Adres
-              </h2>
-              <div className="mt-4">
-                <LeadAdresEditor
-                  lead={lead}
-                  onSaved={(patch) =>
-                    setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-0 sm:grid-cols-2">
-              <div className="border-b border-line px-4 py-4 sm:border-b-0 sm:border-r sm:px-6 sm:py-5">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-                  Adviseur
-                </p>
-                <p
-                  className={`mt-1.5 text-sm font-medium ${lead.adviseur_id ? "text-orange" : "text-ink"}`}
-                >
-                  {lead.adviseurs?.naam || "Niet gekoppeld"}
-                </p>
-              </div>
-              <div className="px-4 py-4 sm:px-6 sm:py-5">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-                  Bron / ads
-                </p>
-                {(lead.lander ||
-                  lead.campaign_name ||
-                  lead.ad_name ||
-                  lead.utm_medium ||
-                  lead.utm_campaign ||
-                  lead.utm_source) ? (
-                  <div className="mt-1.5 space-y-0.5 text-sm text-ink">
-                    {lead.lander && <p>{lead.lander}</p>}
-                    {(lead.campaign_name || lead.utm_campaign) && (
-                      <p className="text-muted">
-                        {lead.campaign_name || lead.utm_campaign}
-                      </p>
-                    )}
-                    {lead.ad_name && (
-                      <p className="text-xs text-muted">{lead.ad_name}</p>
-                    )}
-                    {(lead.utm_source || lead.utm_medium) && (
-                      <p className="text-xs text-muted">
-                        {[lead.utm_source, lead.utm_medium]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="mt-1.5 text-sm text-muted">—</p>
-                )}
-              </div>
-            </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        {/* Gegevens */}
+        <section className="border border-line bg-white">
+          <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Gegevens
+            </h2>
+            <button
+              type="button"
+              onClick={() => setEditingGegevens((v) => !v)}
+              className="inline-flex items-center gap-1.5 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+              title={editingGegevens ? "Sluiten" : "Bewerken"}
+            >
+              <PencilIcon />
+              {editingGegevens ? "Klaar" : "Bewerken"}
+            </button>
           </div>
 
-          <aside className="flex min-w-0 flex-col bg-wash/40 px-4 py-5 sm:px-6">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-                Geplande afspraken
-              </h2>
-              {afspraken.length > 0 && (
-                <span className="text-[11px] tabular-nums text-muted">
-                  {afspraken.length}
-                </span>
-              )}
+          {editingGegevens ? (
+            <div className="space-y-5 px-4 py-4 sm:px-5">
+              <LeadContactEditor
+                lead={lead}
+                onSaved={(patch) =>
+                  setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                }
+              />
+              <LeadAdresEditor
+                lead={lead}
+                onSaved={(patch) =>
+                  setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+                }
+              />
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Adviseur
+                <select
+                  value={lead.adviseur_id || ""}
+                  onChange={(e) =>
+                    void updateAdviseur(e.target.value ? e.target.value : null)
+                  }
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Geen adviseur</option>
+                  {adviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-            {afspraken.length === 0 ? (
-              <div className="mt-4 flex flex-1 flex-col gap-3">
-                <div className="border border-dashed border-line bg-white px-4 py-6 text-center">
-                  <p className="text-sm font-medium text-ink">Nog geen afspraken</p>
-                  <p className="mt-1 text-xs text-muted">
-                    Plan hieronder direct in — bevestigingsmail gaat mee.
+          ) : (
+            <div className="space-y-4 px-4 py-4 sm:px-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Telefoon
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-ink">
+                    {lead.telefoon ? (
+                      <a href={`tel:${lead.telefoon}`} className="hover:underline">
+                        {lead.telefoon}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
                   </p>
                 </div>
-                <LeadAfspraakPlannen
-                  lead={lead}
-                  adviseurs={adviseurs}
-                  onPlanned={() => {
-                    setOkMsg("Afspraak gepland.");
-                    setTimelineTick((t) => t + 1);
-                    void load();
-                  }}
-                />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    E-mail
+                  </p>
+                  <p className="mt-1 truncate text-sm font-medium text-ink">
+                    {lead.email ? (
+                      <a href={`mailto:${lead.email}`} className="hover:underline">
+                        {lead.email}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </p>
+                </div>
               </div>
-            ) : (
-              <div className="mt-4 flex flex-1 flex-col gap-3">
-                <ul className="divide-y divide-line border border-line bg-white">
-                  {afspraken.map((afspraak) => (
-                    <li key={afspraak.id} className="px-3.5 py-3">
-                      <p className="text-sm font-semibold text-ink">
-                        {formatDateTimeNl(afspraak.start_at)}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted">
-                        {statusLabel[afspraak.status]}
-                        {afspraak.soort ? ` · ${afspraak.soort}` : ""}
-                      </p>
-                      {afspraak.notities?.trim() && (
-                        <p className="mt-1 text-xs text-muted">
-                          {afspraak.notities}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Adres
+                </p>
+                <p className="mt-1 text-sm font-medium text-ink">
+                  {adresRegel(lead)}
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Afspraken */}
+        <section className="border border-line bg-white">
+          <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Afspraken
+            </h2>
+            <button
+              type="button"
+              onClick={() => setPlanOpen((v) => !v)}
+              className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+            >
+              {planOpen ? "Sluiten" : "+ Plannen"}
+            </button>
+          </div>
+
+          <div className="px-4 py-4 sm:px-5">
+            {planOpen && (
+              <div className="mb-4 border border-line bg-wash/40 p-3">
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
                   onPlanned={() => {
                     setOkMsg("Afspraak gepland.");
-                    setTimelineTick((t) => t + 1);
+                    setPlanOpen(false);
+                    setActivityKey((k) => k + 1);
                     void load();
                   }}
                 />
               </div>
             )}
-          </aside>
-        </div>
 
-        <div className="border-t border-line px-4 py-5 sm:px-6">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Notitie toevoegen
+            {upcoming.length === 0 && past.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted">
+                Nog geen afspraken met deze klant.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {upcoming.map((a) => (
+                  <li
+                    key={a.id}
+                    className="border border-green/25 bg-green-soft/40 px-3 py-2.5"
+                  >
+                    <p className="text-sm font-semibold text-ink">
+                      {formatDateTimeNl(a.start_at)}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
+                      {a.adviseurs?.naam ? ` · ${a.adviseurs.naam}` : ""}
+                      {" · "}
+                      {a.status}
+                    </p>
+                  </li>
+                ))}
+                {past.slice(0, 4).map((a) => (
+                  <li key={a.id} className="border border-line px-3 py-2.5">
+                    <p className="text-sm font-medium text-ink">
+                      {formatDateTimeNl(a.start_at)}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
+                      {" · "}
+                      {a.status}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+      </div>
+
+      {/* Notities */}
+      <section className="mt-4 border border-line bg-white">
+        <div className="border-b border-line px-4 py-3 sm:px-5">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Notities
           </h2>
+        </div>
+        <div className="px-4 py-4 sm:px-5">
+          {lead.notities?.trim() && (
+            <div className="mb-4 whitespace-pre-wrap border border-line bg-wash/30 px-3.5 py-3 text-sm leading-relaxed text-ink">
+              {lead.notities}
+            </div>
+          )}
           <textarea
             value={noteDraft}
             onChange={(e) => setNoteDraft(e.target.value)}
             rows={3}
-            placeholder="Schrijf een notitie…"
-            className="mt-3 w-full border border-line bg-wash px-3 py-2.5 text-sm leading-relaxed text-ink outline-none transition focus:border-green focus:bg-white"
+            placeholder="Nieuwe notitie…"
+            className="w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
           />
           <div className="mt-2 flex justify-end">
             <button
               type="button"
               onClick={() => void addNotitie()}
               disabled={savingNote || !noteDraft.trim()}
-              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+              className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
             >
-              {savingNote ? "Opslaan…" : "Notitie toevoegen"}
-            </button>
-          </div>
-          {lead.notities?.trim() && (
-            <div className="mt-4 border border-line bg-wash/30 px-3.5 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Intake / vaste info
-              </p>
-              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {lead.notities}
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div className="border-t border-line px-4 py-5 sm:px-6">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Geschiedenis
-          </h2>
-          <div className="mt-3 border border-line bg-wash/30 px-4 py-4">
-            <LeadTimeline leadId={lead.id} refreshKey={timelineTick} />
-          </div>
-        </div>
-
-        <div className="border-t border-line px-4 py-5 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-              Terugbellen
-            </p>
-            <p className="text-[11px] text-muted">
-              Zichtbaar in de leadlijst tot je het afvinkt
-            </p>
-          </div>
-          {lead.terugbellen && lead.terugbel_notitie?.trim() && (
-            <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3 text-sm leading-relaxed text-ink">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-                Terugbelnotitie
-              </p>
-              <p className="mt-1 whitespace-pre-wrap">{lead.terugbel_notitie}</p>
-            </div>
-          )}
-          <textarea
-            value={terugbelDraft}
-            onChange={(e) => setTerugbelDraft(e.target.value)}
-            rows={3}
-            placeholder="Bijv. niet opgenomen, bel morgenavond terug…"
-            className="mt-3 w-full border border-line bg-wash px-3 py-2.5 text-sm leading-relaxed text-ink outline-none transition focus:border-green focus:bg-white"
-          />
-          <div className="mt-2 flex flex-wrap justify-end gap-2">
-            {lead.terugbellen && (
-              <button
-                type="button"
-                onClick={() => void saveTerugbel(false)}
-                disabled={savingTerugbel}
-                className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash disabled:opacity-50"
-              >
-                Afgevinkt — gebeld
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => void saveTerugbel(true)}
-              disabled={savingTerugbel || !terugbelDraft.trim()}
-              className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-            >
-              {savingTerugbel
-                ? "Opslaan…"
-                : lead.terugbellen
-                  ? "Notitie bijwerken"
-                  : "Zet terugbellen"}
+              {savingNote ? "Opslaan…" : "Notitie opslaan"}
             </button>
           </div>
         </div>
       </section>
 
-      {okMsg && (
-        <div className="mb-4 border border-green/30 bg-green-soft px-4 py-3 text-sm text-green-dark">
-          {okMsg}
-        </div>
-      )}
+      <LeadActivityPanel leadId={lead.id} refreshKey={activityKey} />
 
-      <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-3">
-        {sections.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => setSection(s.id)}
-            className={[
-              "border px-2 py-3 text-left transition sm:px-4 sm:py-3.5",
-              section === s.id
-                ? "border-green bg-green-soft"
-                : "border-line bg-white hover:border-green/40",
-            ].join(" ")}
-          >
-            <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted sm:text-[10px]">
-              {s.label}
-            </p>
-            <p className="mt-1 font-display text-xl font-semibold tabular-nums text-green-deeper sm:text-2xl">
-              {s.count}
-            </p>
-          </button>
-        ))}
+      <div className="mt-4 flex flex-wrap gap-3">
+        <BackLink href="/" label="Alle leads" />
+        <Link
+          href={`/advies/${lead.id}`}
+          className="text-sm font-medium text-green-dark underline-offset-2 hover:underline"
+        >
+          Start adviesproces →
+        </Link>
       </div>
-
-      <Panel
-        title={sections.find((s) => s.id === section)?.label || ""}
-        subtitle={`Gekoppeld aan ${lead.lead_number}`}
-      >
-        {section === "offertes" && (
-          <>
-            <div className="flex justify-end border-b border-line px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setMaakOfferteOpen(true)}
-                className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
-              >
-                Maak offerte
-              </button>
-            </div>
-            <OffertesTable offertes={offertes} onOpenSign={openSignLink} />
-          </>
-        )}
-        {section === "projecten" && <ProjectenTable projecten={projecten} />}
-        {section === "facturen" && <FacturenTable facturen={facturen} />}
-      </Panel>
-
-      <BackLink href="/" label="Alle leads" />
 
       <MaakOfferteModal
         open={maakOfferteOpen}
@@ -836,6 +586,7 @@ export function LeadPage() {
         onClose={() => setMaakOfferteOpen(false)}
         onCreated={(offerteId) => {
           setMaakOfferteOpen(false);
+          setActivityKey((k) => k + 1);
           router.push(`/offertes/${offerteId}`);
         }}
       />

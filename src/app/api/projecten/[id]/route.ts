@@ -23,6 +23,8 @@ export async function PATCH(
     financiering_geschakeld_at?: string | null;
     schouw_jaar?: number | null;
     schouw_week?: number | null;
+    leveradres?: string | null;
+    materiaal_checks?: Record<string, boolean> | null;
   };
   try {
     body = await req.json();
@@ -99,6 +101,15 @@ export async function PATCH(
         );
       }
     }
+  }
+  if (body.leveradres !== undefined) {
+    patch.leveradres = body.leveradres?.trim() || null;
+  }
+  if (body.materiaal_checks !== undefined) {
+    patch.materiaal_checks =
+      body.materiaal_checks && typeof body.materiaal_checks === "object"
+        ? body.materiaal_checks
+        : {};
   }
 
   if (Object.keys(patch).length === 0) {

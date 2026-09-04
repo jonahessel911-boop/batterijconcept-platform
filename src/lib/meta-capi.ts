@@ -1,8 +1,7 @@
 import { createHash } from "crypto";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import {
-  metaCapiEventsForLevel,
-  metaCapiLevelForStatus,
+  metaCapiEventsForStatus,
   type MetaCapiEventName,
 } from "@/lib/meta-capi-config";
 import type { LeadStatus } from "@/types/database";
@@ -261,8 +260,7 @@ export async function syncLeadMetaCapi(
 
   const row = lead as LeadCapiRow;
   const status = (opts?.forceStatus || row.status) as LeadStatus;
-  const level = metaCapiLevelForStatus(status);
-  const needed = metaCapiEventsForLevel(level);
+  const needed = metaCapiEventsForStatus(status);
   const already = new Set(
     (row.capi_events_sent || []).filter(Boolean) as MetaCapiEventName[]
   );
@@ -272,7 +270,10 @@ export async function syncLeadMetaCapi(
     return {
       ok: true,
       skipped: true,
-      reason: level === 0 ? "Status stuurt geen CAPI-events" : "Alles al verstuurd",
+      reason:
+        needed.length === 0
+          ? "Status stuurt geen CAPI-events"
+          : "Alles al verstuurd",
       sent: [],
       already: [...already],
     };

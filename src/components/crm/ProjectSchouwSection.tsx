@@ -234,13 +234,32 @@ export function ProjectSchouwSection({
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
       const mailOk = data.mails?.klant?.ok;
-      setOkMsg(
-        schouwAtLocal.trim()
-          ? "Schouwdag definitief gezet."
-          : mailOk
-            ? "Schouwweek ingepland — bevestiging naar klant verstuurd."
+      const mailSkipped = data.mails?.klant?.skipped;
+      const mailErr = data.mails?.klant?.error as string | undefined;
+      if (mailOk) {
+        setOkMsg(
+          schouwAtLocal.trim()
+            ? "Schouwdag gezet — bevestiging naar klant verstuurd."
+            : "Schouwweek ingepland — bevestiging naar klant verstuurd."
+        );
+      } else if (mailSkipped) {
+        setOkMsg(
+          schouwAtLocal.trim()
+            ? "Schouwdag gezet."
             : "Schouwweek ingepland."
-      );
+        );
+        setError(
+          mailErr ||
+            "Geen bevestigingsmail: vul een e-mailadres in bij de lead."
+        );
+      } else {
+        setOkMsg(
+          schouwAtLocal.trim()
+            ? "Schouwdag gezet."
+            : "Schouwweek ingepland."
+        );
+        setError(mailErr || "Bevestigingsmail naar klant is mislukt.");
+      }
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");

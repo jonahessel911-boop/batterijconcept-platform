@@ -8,8 +8,44 @@ import {
   parseEuroInput,
   type AanbetalingModus,
 } from "@/lib/aanbetaling";
+import type { OfferteRegel } from "@/types/database";
 
 export const runtime = "nodejs";
+
+/** GET /api/offertes/[id] — offerte + regels (o.a. materiaalinkoop) */
+export async function GET(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  try {
+    const sb = getSupabaseAdmin();
+    const { data, error } = await sb
+      .from("offertes")
+      .select(
+        "id, offerte_nummer, status, lead_id, installatie_partner_id, offerte_regels(*), installatie_partners(id, naam, email, telefoon)"
+      )
+      .eq("id", id)
+      .single();
+    if (error || !data) {
+      return NextResponse.json(
+        { error: "Offerte niet gevonden" },
+        { status: 404 }
+      );
+    }
+    const regels = ((data as { offerte_regels?: OfferteRegel[] }).offerte_regels ||
+      []) as OfferteRegel[];
+    regels.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    return NextResponse.json({
+      offerte: { ...data, offerte_regels: regels },
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Fout") },
+      { status: 500 }
+    );
+  }
+}
 
 /** PATCH /api/offertes/[id] — aanbetaling bij Warmtefonds */
 export async function PATCH(

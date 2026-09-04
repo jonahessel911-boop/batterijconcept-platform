@@ -35,7 +35,10 @@ export type OfferteStatus =
   | "afgewezen";
 export type ProjectStatus =
   | "schouw_inplannen"
+  | "schouwweek_gepland"
+  | "schouwdag_plannen"
   | "schouw_gepland"
+  | "materiaal_inkopen"
   | "btw_factuur_eruit"
   | "product_ingekocht"
   | "installatie_gepland"
@@ -78,7 +81,8 @@ export type GebruikerRol =
   | "adviseur"
   | "backoffice"
   | "admin"
-  | "installateur";
+  | "installateur"
+  | "beller";
 
 export interface Adviseur {
   id: string;
@@ -92,6 +96,73 @@ export interface Adviseur {
   start_adres?: string | null;
   /** CRM-rol */
   rol?: GebruikerRol | null;
+  /** Commissie over omzet excl. btw (%) — saleskosten in Financial Dashboard */
+  commissie_pct?: number | null;
+  /** ZZP factuurgegevens */
+  bedrijfsnaam?: string | null;
+  kvk_nummer?: string | null;
+  btw_nummer?: string | null;
+  factuur_adres?: string | null;
+  factuur_postcode?: string | null;
+  factuur_plaats?: string | null;
+  iban?: string | null;
+  /** Max bedrag per creditfactuur (excl. btw); null = geen limiet */
+  max_factuur_bedrag?: number | null;
+}
+
+export type AdviseurCreditFactuurStatus =
+  | "concept"
+  | "goedgekeurd"
+  | "betaald"
+  | "geannuleerd";
+
+export interface AdviseurCreditFactuur {
+  id: string;
+  adviseur_id: string;
+  factuur_nummer: string;
+  status: AdviseurCreditFactuurStatus;
+  week_jaar: number;
+  week_nummer: number;
+  periode_van: string;
+  periode_tot: string;
+  aantal_aanbetalingen: number;
+  bedrag_ex_btw: number;
+  btw_bedrag: number;
+  bedrag_inc_btw: number;
+  max_bedrag_toegepast?: number | null;
+  factuurdatum: string;
+  betaald_op: string | null;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
+  regels?: AdviseurCreditFactuurRegel[];
+}
+
+export interface AdviseurCreditFactuurRegel {
+  id: string;
+  creditfactuur_id: string;
+  factuur_id: string;
+  lead_id: string | null;
+  bedrag: number;
+  omschrijving: string | null;
+  factuur_nummer?: string | null;
+  lead_naam?: string | null;
+}
+
+export interface AdviseurBeschikbaarheid {
+  adviseur_id: string;
+  jaar: number;
+  week: number;
+  beschikbaar: boolean;
+  notitie?: string | null;
+}
+
+/** Geblokkeerd vast tijdsblok (10 / 13 / 16 / 19) per dag. */
+export interface AdviseurAfblokkering {
+  id?: string;
+  adviseur_id: string;
+  dag: string;
+  slot_hour: 10 | 13 | 16 | 19;
 }
 
 export interface Afspraak {
@@ -161,6 +232,8 @@ export interface Lead {
   laatst_gebeld_at?: string | null;
   belpogingen_vandaag?: number;
   adviseur_id: string | null;
+  /** Toegewezen beller (CRM-rol beller). */
+  beller_id?: string | null;
   /** Meta CAPI events al verstuurd (QualifiedLead, Schedule, Purchase). */
   capi_events_sent?: string[] | null;
   meta_fbc?: string | null;
@@ -171,6 +244,8 @@ export interface Lead {
   created_at: string;
   updated_at: string;
   adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
+  /** Join: toegewezen beller */
+  bellers?: Pick<Adviseur, "id" | "naam"> | null;
 }
 
 export type LeadEventSoort =
@@ -317,6 +392,10 @@ export interface Project {
   bel_schouw_aanbetaling_at?: string | null;
   /** Backoffice heeft met financieringsman geschakeld (Warmtefonds). */
   financiering_geschakeld_at?: string | null;
+  /** Afleveradres voor materiaalinkoop. */
+  leveradres?: string | null;
+  /** Offerte-regel id → afgevinkt bij inkopen. */
+  materiaal_checks?: Record<string, boolean> | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -414,6 +493,8 @@ export interface Factuur {
   factuurdatum: string;
   vervaldatum: string | null;
   betaald_op: string | null;
+  /** bunq Payment id bij auto-match */
+  bunq_payment_id?: number | null;
   notities: string | null;
   created_at: string;
   updated_at: string;

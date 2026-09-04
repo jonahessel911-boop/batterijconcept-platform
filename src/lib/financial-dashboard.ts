@@ -12,6 +12,9 @@ import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import type { RapportageRaw } from "@/lib/rapportage";
 
+/** Adviseur commissie-% map: adviseur_id → percentage (0-100) */
+export type CommissieMap = Map<string, number>;
+
 const TZ = "Europe/Amsterdam";
 
 export type FinancialDateRange =
@@ -324,7 +327,8 @@ function computePeriodSlice(
   kosten: RapportageKostenRow[],
   adviseurId: string | null,
   start: Date,
-  end: Date
+  end: Date,
+  commissieMap?: CommissieMap
 ): { slice: PeriodSlice; leadsForConversie: number } {
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
@@ -365,11 +369,23 @@ function computePeriodSlice(
   for (const o of signed) {
     if (!inRange(o.ondertekend_op!, start, end)) continue;
     slice.deals += 1;
-    slice.omzet += Number(o.subtotaal_ex_btw) || 0;
+    const omzet = Number(o.subtotaal_ex_btw) || 0;
+    slice.omzet += omzet;
     const project = projecten.find((p) => p.offerte_id === o.id);
     const pk = Number(project?.projectkosten) || 0;
     slice.projectkosten += pk > 0 ? pk : STANDAARD_INSTALLATIEKOSTEN;
     slice.inkoop += hardwareKostenVoorRegels(o.regels || []).totaal;
+
+    // Commissie als saleskosten
+    if (commissieMap) {
+      const advId = o.adviseur_id || project?.adviseur_id;
+      if (advId) {
+        const pct = commissieMap.get(advId) ?? 0;
+        if (pct > 0) {
+          slice.salesKosten += round2((omzet * pct) / 100);
+        }
+      }
+    }
   }
 
   for (const f of facturen) {
@@ -393,7 +409,8 @@ function buildDailySeries(
   kosten: RapportageKostenRow[],
   adviseurId: string | null,
   start: Date,
-  end: Date
+  end: Date,
+  commissieMap?: CommissieMap
 ): FinancialDayPoint[] {
   const out: FinancialDayPoint[] = [];
   let cursor = amsStartOfDay(start);
@@ -410,7 +427,8 @@ function buildDailySeries(
       kosten,
       adviseurId,
       cursor,
-      dayEnd
+      dayEnd,
+      commissieMap
     );
     const totaleKosten =
       slice.inkoop +
@@ -550,7 +568,8 @@ function buildBreakdowns(
   raw: RapportageRaw,
   adviseurId: string | null,
   start: Date,
-  end: Date
+  end: Date,
+  commissieMap?: CommissieMap
 ): { byLander: FinancialBreakdownRow[]; byAdviseur: FinancialBreakdownRow[] } {
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
@@ -634,10 +653,18 @@ function buildBreakdowns(
     }
   }
 
-  function toRows(map: Map<string, Acc>): FinancialBreakdownRow[] {
+  function toRows(
+    map: Map<string, Acc>,
+    withCommissie: boolean
+  ): FinancialBreakdownRow[] {
     return [...map.entries()]
       .map(([key, a]) => {
-        const winst = a.omzet - a.inkoop - a.projectkosten;
+        let commissie = 0;
+        if (withCommissie && commissieMap && key !== "(geen adviseur)") {
+          const pct = commissieMap.get(key) ?? 0;
+          if (pct > 0) commissie = round2((a.omzet * pct) / 100);
+        }
+        const winst = a.omzet - a.inkoop - a.projectkosten - commissie;
         return {
           key,
           label: key,
@@ -656,7 +683,10 @@ function buildBreakdowns(
       .slice(0, 12);
   }
 
-  return { byLander: toRows(byLander), byAdviseur: toRows(byAdv) };
+  return {
+    byLander: toRows(byLander, false),
+    byAdviseur: toRows(byAdv, true),
+  };
 }
 
 export function buildFinancialDashboard(
@@ -664,20 +694,22 @@ export function buildFinancialDashboard(
   kosten: RapportageKostenRow[],
   adviseurId: string | null,
   range: FinancialDateRange,
-  now = new Date()
+  now = new Date(),
+  commissieMap?: CommissieMap
 ): FinancialDashboardData {
   const { start, end, previousStart, previousEnd } = resolveFinancialRange(
     range,
     now
   );
 
-  const current = computePeriodSlice(raw, kosten, adviseurId, start, end);
+  const current = computePeriodSlice(raw, kosten, adviseurId, start, end, commissieMap);
   const previous = computePeriodSlice(
     raw,
     kosten,
     adviseurId,
     previousStart,
-    previousEnd
+    previousEnd,
+    commissieMap
   );
 
   const totals = finalizeTotals(current.slice, current.leadsForConversie);
@@ -685,12 +717,13 @@ export function buildFinancialDashboard(
     previous.slice,
     previous.leadsForConversie
   );
-  const series = buildDailySeries(raw, kosten, adviseurId, start, end);
+  const series = buildDailySeries(raw, kosten, adviseurId, start, end, commissieMap);
   const { byLander, byAdviseur } = buildBreakdowns(
     raw,
     adviseurId,
     start,
-    end
+    end,
+    commissieMap
   );
 
   return {

@@ -495,7 +495,14 @@ export function BackofficeActiesList({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Schouw opslaan mislukt");
       if (data.project) onProjectUpdated?.(data.project as Project);
-      if (data.mails?.klant?.ok === false && !data.mails?.klant?.skipped) {
+      if (data.mails?.klant?.ok) {
+        // ok — klantmail verstuurd
+      } else if (data.mails?.klant?.skipped) {
+        setError(
+          data.mails.klant.error ||
+            "Schouw gezet, maar geen klantmail (geen e-mailadres op de lead)"
+        );
+      } else if (data.mails?.klant?.ok === false) {
         setError(
           data.mails.klant.error ||
             "Schouw gezet, maar mail naar klant mislukt"

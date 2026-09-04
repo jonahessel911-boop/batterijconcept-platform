@@ -2,6 +2,7 @@ import type { CrmTab } from "@/types/database";
 
 export const GEBRUIKER_ROLLEN = [
   "adviseur",
+  "beller",
   "backoffice",
   "admin",
   "installateur",
@@ -11,6 +12,7 @@ export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
 
 export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   adviseur: "Adviseur",
+  beller: "Beller",
   backoffice: "Backoffice",
   admin: "Admin",
   installateur: "Installateur",
@@ -19,6 +21,7 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
   if (
     value === "adviseur" ||
+    value === "beller" ||
     value === "backoffice" ||
     value === "admin" ||
     value === "installateur"
@@ -33,6 +36,8 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
   switch (rol) {
     case "adviseur":
       return ["leads", "agenda", "offertes"];
+    case "beller":
+      return ["bellen"];
     case "backoffice":
       return ["leads", "agenda", "projecten", "facturen"];
     case "installateur":
@@ -44,7 +49,6 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "bellen",
         "agenda",
         "offertes",
-        "instroom",
         "projecten",
         "facturen",
         "rapportage",
@@ -59,7 +63,11 @@ export function magTab(rol: GebruikerRol, tab: CrmTab): boolean {
 
 /** Alleen eigen leads (geen “Bekijk als”). */
 export function alleenEigenLeads(rol: GebruikerRol): boolean {
-  return rol === "adviseur";
+  return rol === "adviseur" || rol === "beller";
+}
+
+export function isBellerRol(rol: GebruikerRol | string | null | undefined): boolean {
+  return normalizeRol(rol) === "beller";
 }
 
 /** Mag team / rollen beheren. */
@@ -80,6 +88,20 @@ export function agendaIsInstallatie(rol: GebruikerRol): boolean {
   return rol === "backoffice";
 }
 
+/** Sales-adviseurs die afspraken kunnen krijgen (geen beller/admin/installateur). */
+export function isPlanbareAdviseur(a: {
+  actief?: boolean;
+  rol?: string | null;
+  naam: string;
+  email?: string | null;
+}): boolean {
+  if (a.actief === false) return false;
+  const rol = normalizeRol(a.rol);
+  if (rol === "beller" || rol === "installateur") return false;
+  // systeem-Admin catch-all uitsluiten gebeurt elders via isAdminAdviseur
+  return rol === "adviseur" || rol === "admin" || rol === "backoffice";
+}
+
 /** Alleen cijfers — voor telefoonzoek. */
 export function digitsOnly(value: string | null | undefined): string {
   return (value || "").replace(/\D/g, "");
@@ -98,7 +120,6 @@ export function telefoonMatch(
   const phone = digitsOnly(telefoon);
   if (!phone) return false;
   if (phone.includes(q)) return true;
-  // +31 6 … ↔ 06 …
   const asLocal = phone.startsWith("31") ? `0${phone.slice(2)}` : phone;
   const asIntl = phone.startsWith("0") ? `31${phone.slice(1)}` : phone;
   return asLocal.includes(q) || asIntl.includes(q);

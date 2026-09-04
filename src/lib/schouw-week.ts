@@ -196,3 +196,19 @@ export function isOneWeekBeforeSchouwWeek(
   );
   return mondayKey === targetKey;
 }
+
+/**
+ * Schouwdag plannen: vanaf 7 dagen vóór de schouwweek-maandag tot einde van die week.
+ */
+export function isInSchouwdagPlannenWindow(
+  jaar: number,
+  week: number,
+  now: Date = new Date()
+): boolean {
+  const mondayIso = schouwWeekToMondayIso(jaar, week);
+  const monday = toZonedTime(new Date(mondayIso), AMSTERDAM_TZ);
+  const sunday = endOfISOWeek(monday);
+  const nowZ = toZonedTime(now, AMSTERDAM_TZ);
+  const windowStart = addDays(monday, -7);
+  return nowZ >= windowStart && nowZ <= sunday;
+}

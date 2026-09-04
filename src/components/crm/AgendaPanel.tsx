@@ -12,6 +12,7 @@ import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import type {
   Adviseur,
+  AdviseurBeschikbaarheid,
   Afspraak,
   AfspraakSoort,
   Lead,
@@ -512,7 +513,7 @@ function FooterAction({
   );
 }
 
-function AfspraakDetail({
+export function AfspraakDetail({
   afspraak,
   allAfspraken,
   onClose,
@@ -1744,6 +1745,124 @@ export function AgendaPanel({
     return schouwWeekValue(w.jaar, w.week);
   }, [weekAnchor]);
 
+  const currentWeekParsed = useMemo(
+    () => schouwWeekFromDate(weekAnchor),
+    [weekAnchor]
+  );
+
+  // Beschikbaarheid geldt altijd voor “deze agenda-adviseur”:
+  // - verkoper: eigen id (defaultAdviseurId)
+  // - admin met filter: die gefilterde adviseur
+  // - admin zonder filter: de geselecteerde plan-adviseur
+  const beschikbaarheidAdviseurId = defaultAdviseurId || adviseurId;
+  const beschikbaarheidAdviseurNaam =
+    adviseurs.find((a) => a.id === beschikbaarheidAdviseurId)?.naam || null;
+
+  const [beschikbaarMap, setBeschikbaarMap] = useState<Map<string, boolean>>(
+    new Map()
+  );
+  const [beschikbaarLoading, setBeschikbaarLoading] = useState(false);
+  const [beschikbaarHint, setBeschikbaarHint] = useState<string | null>(null);
+
+  const beschikbaarKey = useCallback(
+    (jaar: number, week: number) => `${jaar}-W${String(week).padStart(2, "0")}`,
+    []
+  );
+
+  const currentBeschikbaar = useMemo(() => {
+    const k = beschikbaarKey(currentWeekParsed.jaar, currentWeekParsed.week);
+    const v = beschikbaarMap.get(k);
+    return v === undefined ? true : v;
+  }, [beschikbaarMap, currentWeekParsed, beschikbaarKey]);
+
+  useEffect(() => {
+    if (!beschikbaarheidAdviseurId) return;
+    let cancelled = false;
+    const y = currentWeekParsed.jaar;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/adviseurs/beschikbaarheid?adviseur_id=${beschikbaarheidAdviseurId}&jaren=${y - 1},${y},${y + 1}`
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.migration_required) {
+          setBeschikbaarHint(
+            "Beschikbaarheid: run eerst migrate-adviseur-beschikbaarheid.sql in Supabase."
+          );
+        }
+        const map = new Map<string, boolean>();
+        for (const item of data.items || []) {
+          map.set(
+            beschikbaarKey(item.jaar, item.week),
+            item.beschikbaar !== false
+          );
+        }
+        setBeschikbaarMap(map);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    beschikbaarheidAdviseurId,
+    currentWeekParsed.jaar,
+    beschikbaarKey,
+  ]);
+
+  async function toggleBeschikbaar() {
+    if (!beschikbaarheidAdviseurId) {
+      setError("Selecteer eerst een adviseur om beschikbaarheid in te stellen.");
+      return;
+    }
+    setBeschikbaarLoading(true);
+    setError(null);
+    setOkMsg(null);
+    const { jaar, week } = currentWeekParsed;
+    const next = !currentBeschikbaar;
+    try {
+      const res = await fetch("/api/adviseurs/beschikbaarheid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adviseur_id: beschikbaarheidAdviseurId,
+          jaar,
+          week,
+          beschikbaar: next,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Beschikbaarheid opslaan mislukt");
+      }
+      setBeschikbaarMap((prev) => {
+        const copy = new Map(prev);
+        copy.set(beschikbaarKey(jaar, week), next);
+        return copy;
+      });
+      setOkMsg(
+        data.message ||
+          (next
+            ? `Week ${week}: beschikbaar`
+            : `Week ${week}: niet beschikbaar`)
+      );
+      setBeschikbaarHint(null);
+      // Slots opnieuw laden zodat geblokkeerde weken verdwijnen
+      if (adviseurId === beschikbaarheidAdviseurId) {
+        const slotRes = await fetch(`/api/adviseurs?adviseur_id=${adviseurId}`);
+        const slotData = await slotRes.json();
+        setSlots(slotData.slots || []);
+        setBlocks(slotData.blocks || []);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Beschikbaarheid opslaan mislukt");
+    } finally {
+      setBeschikbaarLoading(false);
+    }
+  }
+
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
 
   function goToWeek(value: string) {
@@ -1799,6 +1918,16 @@ export function AgendaPanel({
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
       if (!pickedLead?.id) throw new Error("Kies een lead");
+      {
+        const slotWeek = schouwWeekFromDate(resolvedStart);
+        const key = beschikbaarKey(slotWeek.jaar, slotWeek.week);
+        const open = beschikbaarMap.get(key);
+        if (open === false) {
+          throw new Error(
+            `Week ${slotWeek.week} is geblokkeerd voor deze adviseur — zet eerst beschikbaarheid aan`
+          );
+        }
+      }
       if (isHuisbezoek && partnerAanwezig === null) {
         throw new Error("Beantwoord: Partner aanwezig?");
       }
@@ -2156,6 +2285,38 @@ export function AgendaPanel({
                   Week
                 </button>
               </div>
+              {/* Beschikbaarheid toggle */}
+              <button
+                type="button"
+                disabled={beschikbaarLoading || !beschikbaarheidAdviseurId}
+                onClick={() => void toggleBeschikbaar()}
+                className={[
+                  "ml-2 flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors",
+                  currentBeschikbaar
+                    ? "border-green/30 bg-green/10 text-green"
+                    : "border-red-300 bg-red-50 text-red-600",
+                  beschikbaarLoading || !beschikbaarheidAdviseurId
+                    ? "opacity-60"
+                    : "",
+                ].join(" ")}
+                title={
+                  !beschikbaarheidAdviseurId
+                    ? "Selecteer eerst een adviseur"
+                    : currentBeschikbaar
+                      ? `Week ${currentWeekParsed.week}: beschikbaar — klik om te blokkeren`
+                      : `Week ${currentWeekParsed.week}: geblokkeerd — klik om beschikbaar te zetten`
+                }
+              >
+                <span
+                  className={[
+                    "inline-block h-2.5 w-2.5 rounded-full",
+                    currentBeschikbaar ? "bg-green" : "bg-red-500",
+                  ].join(" ")}
+                />
+                {currentBeschikbaar
+                  ? `W${currentWeekParsed.week} beschikbaar`
+                  : `W${currentWeekParsed.week} geblokkeerd`}
+              </button>
             </div>
             <div className="min-w-0 text-right">
               <p className="truncate font-display text-sm font-semibold capitalize text-ink sm:text-base">
@@ -2176,6 +2337,33 @@ export function AgendaPanel({
               </p>
             </div>
           </div>
+
+          {(beschikbaarHint || !currentBeschikbaar) && (
+            <div
+              className={[
+                "mt-3 border px-3 py-2 text-xs",
+                !currentBeschikbaar
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
+              ].join(" ")}
+            >
+              {!currentBeschikbaar ? (
+                <>
+                  <strong>
+                    Week {currentWeekParsed.week}
+                    {beschikbaarheidAdviseurNaam
+                      ? ` · ${beschikbaarheidAdviseurNaam}`
+                      : ""}
+                  </strong>{" "}
+                  is geblokkeerd. Er kunnen geen nieuwe afspraken in deze week
+                  worden gepland. Klik op de knop hierboven om weer beschikbaar
+                  te zetten.
+                </>
+              ) : (
+                beschikbaarHint
+              )}
+            </div>
+          )}
 
           {/* Dag-strip: in dagweergave altijd; in week alleen mobiel (desktop heeft kolomkoppen) */}
           <div

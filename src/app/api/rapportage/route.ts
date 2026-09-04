@@ -3,12 +3,14 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
   buildAttributionTree,
+  buildGeoBreakdown,
   buildRapportageTree,
   type RapportageLead,
 } from "@/lib/rapportage";
 import {
   buildFinancialDashboard,
   parseFinancialRange,
+  type CommissieMap,
 } from "@/lib/financial-dashboard";
 
 export const runtime = "nodejs";
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
         sb
           .from("leads")
           .select(
-            "id, created_at, status, adviseur_id, lander, campaign_name, utm_campaign"
+            "id, created_at, status, adviseur_id, lander, campaign_name, utm_campaign, ad_name, utm_content, postcode, plaats"
           ),
         sb
           .from("afspraken")
@@ -60,17 +62,36 @@ export async function GET(req: NextRequest) {
       if (
         leadsRes.error.code === "42703" ||
         leadsRes.error.message?.includes("lander") ||
-        leadsRes.error.message?.includes("campaign_name")
+        leadsRes.error.message?.includes("campaign_name") ||
+        leadsRes.error.message?.includes("ad_name")
       ) {
         const retry = await sb
           .from("leads")
-          .select("id, created_at, status, adviseur_id, utm_campaign");
-        if (retry.error) throw retry.error;
-        leads = (retry.data || []).map((l) => ({
-          ...(l as RapportageLead),
-          lander: null,
-          campaign_name: null,
-        }));
+          .select(
+            "id, created_at, status, adviseur_id, utm_campaign, utm_content, postcode, plaats"
+          );
+        if (retry.error) {
+          const retryBasic = await sb
+            .from("leads")
+            .select(
+              "id, created_at, status, adviseur_id, utm_campaign, postcode, plaats"
+            );
+          if (retryBasic.error) throw retryBasic.error;
+          leads = (retryBasic.data || []).map((l) => ({
+            ...(l as RapportageLead),
+            lander: null,
+            campaign_name: null,
+            ad_name: null,
+            utm_content: null,
+          }));
+        } else {
+          leads = (retry.data || []).map((l) => ({
+            ...(l as RapportageLead),
+            lander: null,
+            campaign_name: null,
+            ad_name: null,
+          }));
+        }
       } else {
         throw leadsRes.error;
       }
@@ -189,6 +210,7 @@ export async function GET(req: NextRequest) {
 
     const tree = buildRapportageTree(raw, adviseurId);
     const attribution = buildAttributionTree(raw, adviseurId);
+    const geo = buildGeoBreakdown(raw, adviseurId);
 
     const kosten = (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
       datum: k.datum as string,
@@ -197,14 +219,31 @@ export async function GET(req: NextRequest) {
       adviseur_id: (k.adviseur_id as string | null) ?? null,
     }));
 
+    // Commissie-% per adviseur ophalen
+    let commissieMap: CommissieMap | undefined;
+    {
+      const { data: advRows } = await sb
+        .from("adviseurs")
+        .select("id, commissie_pct");
+      if (advRows) {
+        commissieMap = new Map<string, number>();
+        for (const row of advRows) {
+          const pct = Number((row as Record<string, unknown>).commissie_pct) || 0;
+          if (pct > 0) commissieMap.set(row.id, pct);
+        }
+      }
+    }
+
     const financial = buildFinancialDashboard(
       raw,
       kosten,
       adviseurId,
-      financialRange
+      financialRange,
+      undefined,
+      commissieMap
     );
 
-    return NextResponse.json({ tree, attribution, financial });
+    return NextResponse.json({ tree, attribution, financial, geo });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Rapportage laden mislukt") },

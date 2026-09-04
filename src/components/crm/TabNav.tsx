@@ -19,7 +19,7 @@ export function TabNav({
   active,
   onChange,
   counts,
-  tabs = CRM_TABS,
+  tabs = [],
 }: {
   active: CrmTab;
   onChange: (tab: CrmTab) => void;

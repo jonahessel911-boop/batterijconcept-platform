@@ -22,10 +22,9 @@ import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
-import { AgendaPanel } from "./AgendaPanel";
+import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
-import { InstallatiePartnersPanel } from "./InstallatiePartnersPanel";
 import { InstroomPanel } from "./InstroomPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
@@ -36,6 +35,7 @@ import { openBackofficeActies } from "@/lib/backoffice-acties";
 import {
   agendaIsInstallatie,
   alleenEigenLeads,
+  isBellerRol,
   magBekijkAls,
   magTab,
   normalizeRol,
@@ -102,12 +102,14 @@ export function CrmShell() {
     email: string;
     rol: GebruikerRol;
   } | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const orphanBackfillDone = useRef(false);
 
-  const userRol: GebruikerRol = sessionUser
+  // Nooit "admin" als fallback — tot sessie bekend is: geen tabs tonen
+  const userRol: GebruikerRol | null = sessionUser
     ? normalizeRol(sessionUser.rol)
-    : "admin";
-  const visibleTabIds = tabsVoorRol(userRol);
+    : null;
+  const visibleTabIds = userRol ? tabsVoorRol(userRol) : [];
   const visibleTabs = CRM_TABS.filter((t) => visibleTabIds.includes(t.id));
 
   useEffect(() => {
@@ -115,7 +117,10 @@ export function CrmShell() {
     queueMicrotask(async () => {
       try {
         const res = await fetch("/api/auth/login");
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) setSessionReady(true);
+          return;
+        }
         const data = await res.json();
         if (!cancelled && data.adviseur) {
           setSessionUser({
@@ -127,6 +132,8 @@ export function CrmShell() {
         }
       } catch {
         /* ignore */
+      } finally {
+        if (!cancelled) setSessionReady(true);
       }
     });
     return () => {
@@ -136,7 +143,7 @@ export function CrmShell() {
 
   // Rol: ongeldige tab → eerste toegestane tab
   useEffect(() => {
-    if (!sessionUser) return;
+    if (!sessionUser || !userRol) return;
     if (magTab(userRol, tab)) return;
     const first = visibleTabIds[0];
     if (!first) return;
@@ -200,14 +207,14 @@ export function CrmShell() {
 
   // Adviseur: altijd eigen leads
   useEffect(() => {
-    if (!sessionUser || !alleenEigenLeads(userRol)) return;
+    if (!sessionUser || !userRol || !alleenEigenLeads(userRol)) return;
     if (adviseurFilter === sessionUser.id) return;
     changeAdviseurFilter(sessionUser.id);
   }, [sessionUser, userRol, adviseurFilter]);
 
   // Admin/backoffice: ongeldige “Bekijk als”-filter (stale localStorage) → iedereen
   useEffect(() => {
-    if (alleenEigenLeads(userRol)) return;
+    if (!userRol || alleenEigenLeads(userRol)) return;
     if (!adviseurFilter) return;
     if (adviseurs.length === 0) return;
     if (adviseurs.some((a) => a.id === adviseurFilter)) return;
@@ -216,15 +223,15 @@ export function CrmShell() {
 
   // Admin: bij rol-wissel niet blijven hangen op oude eigen-filter uit localStorage
   useEffect(() => {
-    if (!sessionUser) return;
+    if (!sessionUser || !userRol) return;
     if (alleenEigenLeads(userRol)) return;
     if (adviseurFilter === sessionUser.id && magBekijkAls(userRol)) {
-      // Was waarschijnlijk vastgezet als adviseur; admin moet standaard alles zien
       changeAdviseurFilter("");
     }
   }, [sessionUser, userRol]);
 
   function changeTab(next: CrmTab) {
+    if (!userRol || !magTab(userRol, next)) return;
     const params = new URLSearchParams(searchParams.toString());
     if (next === "leads") params.delete("tab");
     else params.set("tab", next);
@@ -331,11 +338,20 @@ export function CrmShell() {
   }, [load]);
 
   const scopedLeads = useMemo(() => {
+    if (!userRol) return [];
+    // Beller: alleen leads die aan hen zijn toegewezen
+    if (isBellerRol(userRol) && sessionUser?.id) {
+      return leads.filter((l) => l.beller_id === sessionUser.id);
+    }
     // Adviseur: strikt alleen eigen leads
     if (alleenEigenLeads(userRol) && sessionUser?.id) {
       return leads.filter((l) => l.adviseur_id === sessionUser.id);
     }
     if (!adviseurFilter) return leads;
+    const selected = adviseurs.find((a) => a.id === adviseurFilter);
+    if (selected && isBellerRol(selected.rol)) {
+      return leads.filter((l) => l.beller_id === adviseurFilter);
+    }
     const adminId = findAdminAdviseurId(adviseurs);
     // Admin-view: ook nog niet gekoppelde leads (tot backfill klaar is)
     if (adminId && adviseurFilter === adminId) {
@@ -568,6 +584,37 @@ export function CrmShell() {
     }
   }
 
+  async function updateLeadBeller(leadId: string, bellerId: string | null) {
+    const bel = adviseurs.find((a) => a.id === bellerId) || null;
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === leadId
+          ? {
+              ...l,
+              beller_id: bellerId,
+              bellers: bel ? { id: bel.id, naam: bel.naam } : null,
+            }
+          : l
+      )
+    );
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update({ beller_id: bellerId })
+        .eq("id", leadId);
+      if (err) throw err;
+    } catch (e) {
+      const msg = errMessage(e, "Beller toewijzen mislukt");
+      setError(
+        msg.includes("beller_id") || msg.includes("42703")
+          ? "Voer eerst supabase/migrate-beller-rol.sql uit in Supabase (SQL Editor)."
+          : msg
+      );
+      void load();
+    }
+  }
+
   const filterLabel =
     adviseurs.find((a) => a.id === adviseurFilter)?.naam || null;
 
@@ -580,13 +627,15 @@ export function CrmShell() {
     },
     bellen: {
       title: "Bellen",
-      sub: "Bel, plan in, daarna Volgende en kies de status",
+      sub: userRol && isBellerRol(userRol)
+        ? "Alleen leads die aan jou zijn toegewezen"
+        : "Bel, plan in, daarna Volgende en kies de status",
     },
     agenda: {
-      title: agendaIsInstallatie(userRol)
+      title: userRol && agendaIsInstallatie(userRol)
         ? "Agenda installatie"
         : "Agenda",
-      sub: agendaIsInstallatie(userRol)
+      sub: userRol && agendaIsInstallatie(userRol)
         ? "Schouwen en installaties"
         : filterLabel
           ? `Agenda van ${filterLabel}`
@@ -622,7 +671,7 @@ export function CrmShell() {
     },
     instellingen: {
       title: "Instellingen",
-      sub: "Teamleden, installatiepartners en portaal",
+      sub: "Medewerkers en installatiepartners",
     },
   };
 
@@ -638,7 +687,7 @@ export function CrmShell() {
         onTabChange={changeTab}
         tabCounts={counts}
         tabs={visibleTabs}
-        showBekijkAls={magBekijkAls(userRol)}
+        showBekijkAls={Boolean(userRol && magBekijkAls(userRol))}
         userName={sessionUser?.naam}
         onLogout={() => {
           void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
@@ -709,8 +758,14 @@ export function CrmShell() {
             tabs={visibleTabs}
           />
           <div className="flex-1 overflow-auto">
-            {loading && tab !== "instellingen" ? (
+            {!sessionReady || !userRol ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
+            ) : loading && tab !== "instellingen" ? (
+              <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
+            ) : !magTab(userRol, tab) ? (
+              <p className="px-6 py-14 text-center text-sm text-muted">
+                Geen toegang tot dit menu.
+              </p>
             ) : (
               <>
                 {tab === "leads" && (
@@ -721,9 +776,13 @@ export function CrmShell() {
                     onStatusFilterChange={changeStatusFilter}
                     onStatusChange={updateLeadStatus}
                     onAdviseurChange={updateLeadAdviseur}
+                    onBellerChange={
+                      userRol === "admin" ? updateLeadBeller : undefined
+                    }
+                    showBellerColumn={userRol === "admin"}
                   />
                 )}
-                {tab === "bellen" && magTab(userRol, "bellen") && (
+                {tab === "bellen" && (
                   <BelPanel
                     leads={scopedLeads}
                     afspraken={afspraken}
@@ -731,9 +790,11 @@ export function CrmShell() {
                     appointmentLeadIds={appointmentLeadIds}
                     cancelledAppointmentLeadIds={cancelledOutOfBelIds}
                     defaultAdviseurId={
-                      alleenEigenLeads(userRol)
-                        ? sessionUser?.id
-                        : adviseurFilter || undefined
+                      isBellerRol(userRol)
+                        ? undefined
+                        : alleenEigenLeads(userRol)
+                          ? sessionUser?.id
+                          : adviseurFilter || undefined
                     }
                     onLeadUpdated={(id, patch) => {
                       setLeads((prev) =>
@@ -801,10 +862,7 @@ export function CrmShell() {
                   />
                 )}
                 {tab === "instellingen" && (
-                  <div>
-                    <InstellingenPanel onAdviseursChange={loadAdviseurs} />
-                    <InstallatiePartnersPanel />
-                  </div>
+                  <InstellingenPanel onAdviseursChange={loadAdviseurs} />
                 )}
               </>
             )}

@@ -7,6 +7,14 @@
     {
       "path": "/api/cron/project-herinneringen",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/meta-ad-spend",
+      "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/bunq-payments",
+      "schedule": "15 * * * *"
     }
   ]
 }

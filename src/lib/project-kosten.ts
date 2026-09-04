@@ -1,10 +1,23 @@
-/** Standaard installatiekosten per project (excl. btw). */
-export const STANDAARD_INSTALLATIEKOSTEN = 675;
+/**
+ * Project-/hardwarekosten.
+ * Defaults blijven beschikbaar; live cijfers komen uit producten (Inkoop-tab).
+ */
+import {
+  DEFAULT_INSTALLATIE_STANDAARD,
+  DEFAULT_BATTERIJ_PER_MODULE,
+  DEFAULT_OMVORMER,
+  inkoopKostenVoorRegels,
+  type HardwareKosten as InkoopHardware,
+  type ProductInkoop,
+} from "@/lib/inkoop";
 
-/** Inkoop Alpha ESS 9,3 kWh (excl. btw). */
+/** @deprecated Gebruik inkoop_instellingen.installatie_standaard */
+export const STANDAARD_INSTALLATIEKOSTEN = DEFAULT_INSTALLATIE_STANDAARD;
+
+/** @deprecated Gebruik product.inkoop_* */
 export const KOSTEN_ALPHA_ESS_93 = {
-  batterij: 1499.73,
-  omvormer: 1089.62,
+  batterij: DEFAULT_BATTERIJ_PER_MODULE,
+  omvormer: DEFAULT_OMVORMER,
 } as const;
 
 export type HardwareKosten = {
@@ -27,6 +40,10 @@ export function isAlphaEss93(text: string | null | undefined): boolean {
   return sku || (t.includes("alpha ess") && kwh);
 }
 
+/**
+ * Legacy fallback zonder productcatalogus.
+ * Met producten: geef `producten` mee via `hardwareKostenVoorRegelsMetProducten`.
+ */
 export function hardwareKostenVoorRegels(
   regels: { omschrijving?: string | null; aantal?: number | null }[]
 ): HardwareKosten {
@@ -42,5 +59,23 @@ export function hardwareKostenVoorRegels(
     omvormer,
     totaal: round2(batterij + omvormer),
     aantal,
+  };
+}
+
+/** Inkoop uit productcatalogus (batterij + omvormer + warmtefonds). */
+export function hardwareKostenVoorRegelsMetProducten(
+  regels: { omschrijving?: string | null; aantal?: number | null }[],
+  producten: ProductInkoop[]
+): HardwareKosten {
+  if (!producten.length) return hardwareKostenVoorRegels(regels);
+  const k: InkoopHardware = inkoopKostenVoorRegels(regels, producten, {
+    includeWarmtefonds: true,
+  });
+  if (k.aantal === 0) return hardwareKostenVoorRegels(regels);
+  return {
+    batterij: k.batterij,
+    omvormer: round2(k.omvormer + k.warmtefonds),
+    totaal: k.hardware,
+    aantal: k.aantal,
   };
 }

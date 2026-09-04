@@ -5,6 +5,7 @@ import type { Adviseur } from "@/types/database";
 import type {
   AttributionMetrics,
   AttributionNode,
+  GeoRegionMetrics,
   RapportageMetrics,
   RapportageNode,
 } from "@/lib/rapportage";
@@ -14,8 +15,10 @@ import type {
 } from "@/lib/financial-dashboard";
 import { formatEuro } from "@/lib/format";
 import { FinancialDashboard } from "./FinancialDashboard";
+import { RapportageMap } from "./RapportageMap";
+import { ManagementDashboard } from "./management/ManagementDashboard";
 
-type ViewMode = "periode" | "attributie" | "financial";
+type ViewMode = "management" | "periode" | "attributie" | "financial" | "map";
 
 function formatCompact(n: number): string {
   const abs = Math.abs(n);
@@ -106,6 +109,298 @@ function AttributionCells({
   );
 }
 
+type AttrLevel = "lander" | "campaign" | "ad";
+
+type FlatAttrRow = {
+  key: string;
+  lander: string;
+  campaign?: string;
+  ad?: string;
+  metrics: AttributionMetrics;
+  unknown: boolean;
+};
+
+function isUnknownLabel(label: string): boolean {
+  return (
+    label.startsWith("(geen ") ||
+    label === "Onbekend" ||
+    label.toLowerCase() === "unknown"
+  );
+}
+
+/** Lange Meta-IDs inkorten; leesbare namen intact laten. */
+function formatAttrLabel(raw: string): { display: string; title: string } {
+  const label = raw.trim();
+  if (isUnknownLabel(label)) {
+    return { display: "Onbekend", title: label };
+  }
+  // Pure numeric Meta ID
+  if (/^\d{10,}$/.test(label)) {
+    return {
+      display: `…${label.slice(-6)}`,
+      title: label,
+    };
+  }
+  if (label.length > 42) {
+    return {
+      display: `${label.slice(0, 38)}…`,
+      title: label,
+    };
+  }
+  return { display: label, title: label };
+}
+
+function flattenAttribution(
+  tree: AttributionNode[],
+  level: AttrLevel
+): FlatAttrRow[] {
+  const rows: FlatAttrRow[] = [];
+
+  for (const lander of tree) {
+    if (level === "lander") {
+      rows.push({
+        key: lander.key,
+        lander: lander.label,
+        metrics: lander.metrics,
+        unknown: isUnknownLabel(lander.label),
+      });
+      continue;
+    }
+
+    for (const campaign of lander.children || []) {
+      if (level === "campaign") {
+        rows.push({
+          key: campaign.key,
+          lander: lander.label,
+          campaign: campaign.label,
+          metrics: campaign.metrics,
+          unknown:
+            isUnknownLabel(lander.label) && isUnknownLabel(campaign.label),
+        });
+        continue;
+      }
+
+      const ads = campaign.children;
+      if (!ads?.length) {
+        rows.push({
+          key: `${campaign.key}::geen-ad`,
+          lander: lander.label,
+          campaign: campaign.label,
+          ad: "(geen ad)",
+          metrics: campaign.metrics,
+          unknown: true,
+        });
+        continue;
+      }
+      for (const ad of ads) {
+        rows.push({
+          key: ad.key,
+          lander: lander.label,
+          campaign: campaign.label,
+          ad: ad.label,
+          metrics: ad.metrics,
+          unknown: isUnknownLabel(ad.label),
+        });
+      }
+    }
+  }
+
+  rows.sort((a, b) => {
+    if (a.unknown !== b.unknown) return a.unknown ? 1 : -1;
+    if (b.metrics.leads !== a.metrics.leads) {
+      return b.metrics.leads - a.metrics.leads;
+    }
+    return a.key.localeCompare(b.key, "nl");
+  });
+
+  return rows;
+}
+
+function sumAttributionMetrics(rows: FlatAttrRow[]): AttributionMetrics {
+  const leads = rows.reduce((s, r) => s + r.metrics.leads, 0);
+  const afspraken = rows.reduce((s, r) => s + r.metrics.afspraken, 0);
+  const deals = rows.reduce((s, r) => s + r.metrics.deals, 0);
+  return {
+    leads,
+    afspraken,
+    deals,
+    conversieAfspraak:
+      leads > 0 ? Math.round((afspraken / leads) * 1000) / 10 : 0,
+    conversieDeal: leads > 0 ? Math.round((deals / leads) * 1000) / 10 : 0,
+  };
+}
+
+function AttributionOverview({ tree }: { tree: AttributionNode[] }) {
+  const [level, setLevel] = useState<AttrLevel>("lander");
+  const rows = flattenAttribution(tree, level);
+  const totals = sumAttributionMetrics(
+    level === "lander" ? rows : flattenAttribution(tree, "lander")
+  );
+
+  const levelButtons: { id: AttrLevel; label: string }[] = [
+    { id: "lander", label: "Lander" },
+    { id: "campaign", label: "Campaign" },
+    { id: "ad", label: "Ad" },
+  ];
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+            Weergave
+          </p>
+          <div className="mt-1.5 flex gap-1 border border-line p-0.5">
+            {levelButtons.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => setLevel(b.id)}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold transition",
+                  level === b.id
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-4 text-right">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Leads
+            </p>
+            <p className="font-display text-lg font-semibold tabular-nums text-ink">
+              {totals.leads.toLocaleString("nl-NL")}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Afspraken
+            </p>
+            <p className="font-display text-lg font-semibold tabular-nums text-ink">
+              {totals.afspraken.toLocaleString("nl-NL")}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Deals
+            </p>
+            <p className="font-display text-lg font-semibold tabular-nums text-ink">
+              {totals.deals.toLocaleString("nl-NL")}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Lead → deal
+            </p>
+            <p className="font-display text-lg font-semibold tabular-nums text-ink">
+              {totals.conversieDeal.toLocaleString("nl-NL", {
+                maximumFractionDigits: 1,
+              })}
+              %
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] border-collapse">
+          <thead>
+            <tr className="border-b border-line bg-[#fafbfa] text-left">
+              <th className="px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Lander
+              </th>
+              {(level === "campaign" || level === "ad") && (
+                <th className="px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Campaign
+                </th>
+              )}
+              {level === "ad" && (
+                <th className="px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Ad
+                </th>
+              )}
+              {["Leads", "Afspraken", "Deals", "Lead → afspr.", "Lead → deal"].map(
+                (h) => (
+                  <th
+                    key={h}
+                    className="px-2 py-2.5 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted"
+                  >
+                    {h}
+                  </th>
+                )
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={level === "ad" ? 8 : level === "campaign" ? 7 : 6}
+                  className="px-4 py-10 text-center text-sm text-muted"
+                >
+                  Nog geen attributie-data.
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => {
+                const lander = formatAttrLabel(row.lander);
+                const campaign = row.campaign
+                  ? formatAttrLabel(row.campaign)
+                  : null;
+                const ad = row.ad ? formatAttrLabel(row.ad) : null;
+                return (
+                  <tr
+                    key={row.key}
+                    className={[
+                      "border-b border-line",
+                      row.unknown ? "bg-[#fafbfa] text-muted" : "bg-white",
+                    ].join(" ")}
+                  >
+                    <td className="max-w-[10rem] px-3 py-2.5">
+                      <span
+                        className="block truncate text-[13px] font-semibold text-ink"
+                        title={lander.title}
+                      >
+                        {lander.display}
+                      </span>
+                    </td>
+                    {campaign && (
+                      <td className="max-w-[16rem] px-3 py-2.5">
+                        <span
+                          className="block truncate text-[13px] text-ink"
+                          title={campaign.title}
+                        >
+                          {campaign.display}
+                        </span>
+                      </td>
+                    )}
+                    {ad && (
+                      <td className="max-w-[12rem] px-3 py-2.5">
+                        <span
+                          className="block truncate text-[13px] text-ink"
+                          title={ad.title}
+                        >
+                          {ad.display}
+                        </span>
+                      </td>
+                    )}
+                    <AttributionCells m={row.metrics} />
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function Row({
   node,
   depth,
@@ -175,76 +470,6 @@ function Row({
   );
 }
 
-function AttributionRow({
-  node,
-  depth,
-  open,
-  toggle,
-}: {
-  node: AttributionNode;
-  depth: number;
-  open: Set<string>;
-  toggle: (key: string) => void;
-}) {
-  const hasChildren = Boolean(node.children?.length);
-  const isOpen = open.has(node.key);
-  const pad = 8 + depth * 16;
-
-  return (
-    <>
-      <tr
-        className={[
-          "border-b border-line",
-          hasChildren ? "cursor-pointer hover:bg-[#f7faf8]" : "",
-          depth === 0 ? "bg-[#fafbfa]" : "bg-white",
-        ].join(" ")}
-        onClick={() => hasChildren && toggle(node.key)}
-      >
-        <td className="px-2 py-2.5 text-left">
-          <div
-            className="flex items-center gap-1.5"
-            style={{ paddingLeft: pad }}
-          >
-            {hasChildren ? (
-              <span className="inline-block w-3 text-[10px] text-muted">
-                {isOpen ? "▾" : "▸"}
-              </span>
-            ) : (
-              <span className="inline-block w-3" />
-            )}
-            <span
-              className={[
-                "text-[13px]",
-                depth === 0 ? "font-semibold text-ink" : "text-ink",
-              ].join(" ")}
-            >
-              {node.label}
-            </span>
-            {depth === 0 && hasChildren && (
-              <span className="ml-1.5 text-[10px] text-muted">
-                {node.children!.length} campaign
-                {node.children!.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </div>
-        </td>
-        <AttributionCells m={node.metrics} bold={depth === 0} />
-      </tr>
-      {hasChildren &&
-        isOpen &&
-        node.children!.map((child) => (
-          <AttributionRow
-            key={child.key}
-            node={child}
-            depth={depth + 1}
-            open={open}
-            toggle={toggle}
-          />
-        ))}
-    </>
-  );
-}
-
 const PERIODE_HEADERS = [
   "Periode",
   "Leads",
@@ -261,15 +486,6 @@ const PERIODE_HEADERS = [
   "Winst",
 ] as const;
 
-const ATTRIBUTION_HEADERS = [
-  "Lander / campaign",
-  "Leads",
-  "Afspraken",
-  "Deals",
-  "Lead → afspr.",
-  "Lead → deal",
-] as const;
-
 export function RapportagePanel({
   adviseurs,
   defaultAdviseurId,
@@ -278,7 +494,7 @@ export function RapportagePanel({
   defaultAdviseurId?: string;
 }) {
   const [adviseurId, setAdviseurId] = useState(defaultAdviseurId || "");
-  const [view, setView] = useState<ViewMode>("periode");
+  const [view, setView] = useState<ViewMode>("management");
   const [financialRange, setFinancialRange] =
     useState<FinancialDateRange>("last_30_days");
   const [tree, setTree] = useState<RapportageNode[]>([]);
@@ -286,8 +502,11 @@ export function RapportagePanel({
   const [financial, setFinancial] = useState<FinancialDashboardData | null>(
     null
   );
+  const [geo, setGeo] = useState<GeoRegionMetrics[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncingMeta, setSyncingMeta] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [metaMsg, setMetaMsg] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
@@ -304,6 +523,7 @@ export function RapportagePanel({
       setTree(data.tree || []);
       setAttribution(data.attribution || []);
       setFinancial(data.financial || null);
+      setGeo(data.geo || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -314,6 +534,33 @@ export function RapportagePanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function syncAllMetaAdSpend() {
+    setSyncingMeta(true);
+    setMetaMsg(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/meta/ad-spend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_sync: true,
+          chunk_days: 90,
+          time_increment: "7",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.errors?.[0] || "Sync mislukt");
+      setMetaMsg(
+        `Meta ad spend gesynchroniseerd: ${data.upserted || 0} perioden (${data.since} t/m ${data.until}).`
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Meta sync mislukt");
+    } finally {
+      setSyncingMeta(false);
+    }
+  }
 
   function toggle(key: string) {
     setOpen((prev) => {
@@ -327,23 +574,29 @@ export function RapportagePanel({
   const selectedNaam =
     adviseurs.find((a) => a.id === adviseurId)?.naam || null;
 
-  const headers =
-    view === "periode" ? PERIODE_HEADERS : ATTRIBUTION_HEADERS;
-  const rows = view === "periode" ? tree : attribution;
+  const headers = PERIODE_HEADERS;
 
   const viewTitle =
-    view === "periode"
-      ? "Periode overzicht"
-      : view === "attributie"
-        ? "Lander & campaign"
-        : "Financial Dashboard";
+    view === "management"
+      ? "Managementdashboard"
+      : view === "periode"
+        ? "Periode overzicht"
+        : view === "attributie"
+          ? "Bronnen"
+          : view === "map"
+            ? "Kaart"
+            : "Financial Dashboard";
 
   const viewDescription =
-    view === "periode"
-      ? "Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto en Lead→afspraak op het moment dat de afspraak is ingepland (niet lead-aanmaakdatum of bezoekdatum)."
-      : view === "attributie"
-        ? "Lander → campaign · cohort: van de leads uit deze bron, hoeveel kregen een afspraak en hoeveel deals (ondertekende offertes). Campaign valt terug op utm_campaign als campaign_name leeg is."
-        : "Omzet, winst, marge, ROI en CAC — met vergelijking t.o.v. de vorige periode.";
+    view === "management"
+      ? "Directie, marketing, sales, orders en finance — echte data, filters en forecasts."
+      : view === "periode"
+        ? "Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto en Lead→afspraak op het moment dat de afspraak is ingepland (niet lead-aanmaakdatum of bezoekdatum)."
+        : view === "attributie"
+          ? "Cohort per lander, campaign of ad: leads → afspraken → deals. Wissel van weergave om dieper te kijken — geen geneste boom meer."
+          : view === "map"
+            ? "Klik op een provincie om leads, afspraken en deals per gebied te zien (op basis van postcode)."
+            : "Omzet, winst, marge, ROI en CAC — met vergelijking t.o.v. de vorige periode.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -357,6 +610,21 @@ export function RapportagePanel({
               <p className="mt-0.5 text-sm text-muted">{viewDescription}</p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-1 border border-line p-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setView("management");
+                  setOpen(new Set());
+                }}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold transition",
+                  view === "management"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Dashboard
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -385,7 +653,22 @@ export function RapportagePanel({
                     : "bg-white text-muted hover:bg-wash",
                 ].join(" ")}
               >
-                Lander / campaign
+                Bronnen
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setView("map");
+                  setOpen(new Set());
+                }}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold transition",
+                  view === "map"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Kaart
               </button>
               <button
                 type="button"
@@ -400,11 +683,13 @@ export function RapportagePanel({
                     : "bg-white text-muted hover:bg-wash",
                 ].join(" ")}
               >
-                Financial Dashboard
+                Financial
               </button>
             </div>
           </div>
 
+          {view !== "management" && (
+            <>
           <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
             Verkoopmedewerker
           </p>
@@ -442,6 +727,35 @@ export function RapportagePanel({
           <p className="mt-2 text-sm text-muted">
             Toont: {selectedNaam ? selectedNaam : "Alle medewerkers"}
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void syncAllMetaAdSpend()}
+              disabled={syncingMeta}
+              className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              title="Haalt historische Meta ad spend op in week-blokken om API-calls laag te houden."
+            >
+              {syncingMeta ? "Meta sync bezig…" : "Haal alle Meta ad spend op"}
+            </button>
+            {metaMsg && <p className="text-xs text-green-dark">{metaMsg}</p>}
+          </div>
+            </>
+          )}
+          {view === "management" && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void syncAllMetaAdSpend()}
+                disabled={syncingMeta}
+                className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                {syncingMeta
+                  ? "Meta sync bezig…"
+                  : "Haal alle Meta ad spend op"}
+              </button>
+              {metaMsg && <p className="text-xs text-green-dark">{metaMsg}</p>}
+            </div>
+          )}
         </div>
 
         {error && (
@@ -450,7 +764,9 @@ export function RapportagePanel({
           </p>
         )}
 
-        {view === "financial" ? (
+        {view === "management" ? (
+          <ManagementDashboard />
+        ) : view === "financial" ? (
           <FinancialDashboard
             data={financial}
             range={financialRange}
@@ -458,16 +774,23 @@ export function RapportagePanel({
             loading={loading}
             adviseurs={adviseurs}
           />
+        ) : view === "map" ? (
+          loading ? (
+            <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
+          ) : (
+            <RapportageMap regions={geo} />
+          )
+        ) : view === "attributie" ? (
+          loading ? (
+            <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
+          ) : (
+            <AttributionOverview tree={attribution} />
+          )
         ) : loading ? (
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
           <div className="overflow-x-auto">
-            <table
-              className={[
-                "w-full border-collapse",
-                view === "periode" ? "min-w-[1100px]" : "min-w-[640px]",
-              ].join(" ")}
-            >
+            <table className="w-full min-w-[1100px] border-collapse">
               <thead>
                 <tr className="border-b border-line bg-[#fafbfa] text-left">
                   {headers.map((h) => (
@@ -475,9 +798,7 @@ export function RapportagePanel({
                       key={h}
                       className={[
                         "px-2 py-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted",
-                        h === "Periode" || h === "Lander / campaign"
-                          ? "text-left"
-                          : "text-right",
+                        h === "Periode" ? "text-left" : "text-right",
                       ].join(" ")}
                     >
                       {h}
@@ -486,30 +807,18 @@ export function RapportagePanel({
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 ? (
+                {tree.length === 0 ? (
                   <tr>
                     <td
                       colSpan={headers.length}
                       className="px-4 py-10 text-center text-sm text-muted"
                     >
-                      {view === "periode"
-                        ? "Nog geen data in deze periode."
-                        : "Nog geen leads met lander/campaign-data."}
+                      Nog geen data in deze periode.
                     </td>
                   </tr>
-                ) : view === "periode" ? (
+                ) : (
                   tree.map((node) => (
                     <Row
-                      key={node.key}
-                      node={node}
-                      depth={0}
-                      open={open}
-                      toggle={toggle}
-                    />
-                  ))
-                ) : (
-                  attribution.map((node) => (
-                    <AttributionRow
                       key={node.key}
                       node={node}
                       depth={0}

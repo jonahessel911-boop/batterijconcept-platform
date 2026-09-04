@@ -17,13 +17,26 @@ import {
   GEBRUIKER_ROLLEN,
   normalizeRol,
 } from "@/lib/rollen";
+import {
+  afblokKey,
+  dayKeyAmsterdam,
+  filterSlotsByAfblokkingen,
+  filterSlotsByBeschikbaarheid,
+  isDateUnavailable,
+  loadAfblokkingen,
+  loadUnavailableWeekKeys,
+  nearestSlotHour,
+} from "@/lib/adviseur-beschikbaarheid";
+import { addDays, getISOWeekYear } from "date-fns";
+import { toZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, created_at, updated_at";
 const ADVISEUR_PUBLIC_MIN =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
 
@@ -54,22 +67,24 @@ export async function GET(req: NextRequest) {
       error &&
       (error.code === "42703" ||
         error.message?.includes("start_adres") ||
-        error.message?.includes("rol"))
+        error.message?.includes("rol") ||
+        error.message?.includes("commissie_pct") ||
+        error.message?.includes("bedrijfsnaam") ||
+        error.message?.includes("kvk_nummer") ||
+        error.message?.includes("max_factuur_bedrag"))
     ) {
       let retry = sb
         .from("adviseurs")
-        .select(
-          error.message?.includes("rol")
-            ? ADVISEUR_PUBLIC_FALLBACK
-            : ADVISEUR_PUBLIC_MIN
-        )
+        .select(ADVISEUR_PUBLIC_FALLBACK)
         .order("naam");
       if (!includeInactive) retry = retry.eq("actief", true);
       const second = await retry;
       if (
         second.error &&
         (second.error.code === "42703" ||
-          second.error.message?.includes("start_adres"))
+          second.error.message?.includes("start_adres") ||
+          second.error.message?.includes("commissie_pct") ||
+          second.error.message?.includes("rol"))
       ) {
         let bare = sb
           .from("adviseurs")
@@ -96,13 +111,13 @@ export async function GET(req: NextRequest) {
     }
 
     const busyRows = await blockingBusySlots(sb, adviseurId);
-    const slots = generateAvailableSlots({
+    const rawSlots = generateAvailableSlots({
       busy: busyRows,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
     }));
-    const blocks = generateDayBlocks({
+    const rawBlocks = generateDayBlocks({
       busy: busyRows,
     }).map((s) => ({
       start_at: s.start.toISOString(),
@@ -110,10 +125,51 @@ export async function GET(req: NextRequest) {
       busy: s.busy,
     }));
 
+    const nowLocal = toZonedTime(new Date(), AMSTERDAM_TZ);
+    const y = getISOWeekYear(nowLocal);
+    const unavailable = await loadUnavailableWeekKeys(sb, adviseurId, [
+      y - 1,
+      y,
+      y + 1,
+    ]);
+    const van = dayKeyAmsterdam(new Date());
+    const tot = dayKeyAmsterdam(addDays(new Date(), 40));
+    const afgeblokt = await loadAfblokkingen(sb, {
+      adviseurIds: [adviseurId],
+      van,
+      tot,
+    });
+    const slots = filterSlotsByAfblokkingen(
+      filterSlotsByBeschikbaarheid(rawSlots, unavailable),
+      adviseurId,
+      afgeblokt
+    );
+    const blocks = filterSlotsByAfblokkingen(
+      filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
+      adviseurId,
+      afgeblokt
+    ).map((b) => {
+      const blocked = afgeblokt.has(
+        afblokKey(
+          adviseurId,
+          dayKeyAmsterdam(b.start_at),
+          nearestSlotHour(b.start_at)
+        )
+      );
+      return {
+        ...b,
+        busy:
+          b.busy ||
+          blocked ||
+          isDateUnavailable(new Date(b.start_at), unavailable),
+      };
+    });
+
     return NextResponse.json({
       adviseurs: adviseurs || [],
       slots,
       blocks,
+      unavailable_weeks: [...unavailable],
     });
   } catch (e) {
     return NextResponse.json(
@@ -255,6 +311,15 @@ export async function PATCH(req: NextRequest) {
     actief?: boolean;
     start_adres?: string | null;
     rol?: string;
+    commissie_pct?: number | null;
+    bedrijfsnaam?: string | null;
+    kvk_nummer?: string | null;
+    btw_nummer?: string | null;
+    factuur_adres?: string | null;
+    factuur_postcode?: string | null;
+    factuur_plaats?: string | null;
+    iban?: string | null;
+    max_factuur_bedrag?: number | null;
     resend_invite?: boolean;
     password?: string;
   };
@@ -379,6 +444,46 @@ export async function PATCH(req: NextRequest) {
       }
       patch.rol = r;
     }
+    if (body.commissie_pct !== undefined) {
+      const pct = Number(body.commissie_pct) || 0;
+      if (pct < 0 || pct > 100) {
+        return NextResponse.json(
+          { error: "Commissie moet tussen 0 en 100% zijn" },
+          { status: 400 }
+        );
+      }
+      patch.commissie_pct = Math.round(pct * 100) / 100;
+    }
+
+    const zzpFields = [
+      "bedrijfsnaam",
+      "kvk_nummer",
+      "btw_nummer",
+      "factuur_adres",
+      "factuur_postcode",
+      "factuur_plaats",
+      "iban",
+    ] as const;
+    for (const key of zzpFields) {
+      if (body[key] !== undefined) {
+        const v = body[key];
+        patch[key] = typeof v === "string" ? v.trim() || null : null;
+      }
+    }
+    if (body.max_factuur_bedrag !== undefined) {
+      if (body.max_factuur_bedrag === null || body.max_factuur_bedrag === ("" as unknown)) {
+        patch.max_factuur_bedrag = null;
+      } else {
+        const max = Number(body.max_factuur_bedrag);
+        if (!Number.isFinite(max) || max < 0) {
+          return NextResponse.json(
+            { error: "Max factuurbedrag ongeldig" },
+            { status: 400 }
+          );
+        }
+        patch.max_factuur_bedrag = Math.round(max * 100) / 100;
+      }
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -395,8 +500,39 @@ export async function PATCH(req: NextRequest) {
       error &&
       (error.code === "42703" ||
         error.message?.includes("start_adres") ||
-        error.message?.includes("rol"))
+        error.message?.includes("rol") ||
+        error.message?.includes("commissie_pct") ||
+        error.message?.includes("bedrijfsnaam") ||
+        error.message?.includes("kvk_nummer") ||
+        error.message?.includes("max_factuur_bedrag"))
     ) {
+      if (
+        patch.bedrijfsnaam !== undefined ||
+        patch.kvk_nummer !== undefined ||
+        patch.btw_nummer !== undefined ||
+        patch.factuur_adres !== undefined ||
+        patch.factuur_postcode !== undefined ||
+        patch.factuur_plaats !== undefined ||
+        patch.iban !== undefined ||
+        patch.max_factuur_bedrag !== undefined
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-creditfacturen.sql uit in Supabase.",
+          },
+          { status: 503 }
+        );
+      }
+      if (patch.commissie_pct !== undefined) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-beschikbaarheid.sql uit in Supabase.",
+          },
+          { status: 503 }
+        );
+      }
       if (patch.rol !== undefined) {
         return NextResponse.json(
           {

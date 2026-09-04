@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CrmTab } from "@/types/database";
+import { magTab } from "@/lib/rollen";
+import { useCrmSession } from "@/hooks/useCrmSession";
 import { CrmHeader } from "./CrmHeader";
 import { TabNav } from "./TabNav";
 
@@ -19,8 +21,12 @@ export function DetailShell({
   activeTab?: CrmTab;
 }) {
   const router = useRouter();
+  const { session, ready, rol, visibleTabs } = useCrmSession();
 
   function changeTab(tab: CrmTab) {
+    // Nooit naar een tab navigeren die deze rol niet mag
+    if (rol && !magTab(rol, tab)) return;
+    if (!rol) return;
     if (tab === "leads") router.push("/");
     else router.push(`/?tab=${tab}`);
   }
@@ -43,10 +49,21 @@ export function DetailShell({
         activeTab={activeTab}
         onTabChange={changeTab}
         onLogout={logout}
+        tabs={visibleTabs}
+        userName={session?.naam}
+        showBekijkAls={false}
       />
       <div className="border-b border-line bg-white">
         <div className="mx-auto max-w-[1440px]">
-          <TabNav active={activeTab} onChange={changeTab} />
+          {ready && visibleTabs.length > 0 ? (
+            <TabNav
+              active={activeTab}
+              onChange={changeTab}
+              tabs={visibleTabs}
+            />
+          ) : (
+            <div className="hidden h-11 md:block" aria-hidden />
+          )}
         </div>
       </div>
       <main className="mx-auto max-w-[1440px] px-3 py-4 sm:px-6 sm:py-8">
