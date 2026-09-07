@@ -185,6 +185,63 @@ export async function POST(
 
       await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
+      // Klant-annulering fysieke afspraak → status + backoffice-actie herplannen
+      if (
+        afspraak.lead_id &&
+        afspraakBlokkeertAgenda(afspraak.soort)
+      ) {
+        const nowIso = new Date().toISOString();
+        const { data: remaining } = await sb
+          .from("afspraken")
+          .select("id")
+          .eq("lead_id", afspraak.lead_id)
+          .neq("status", "geannuleerd")
+          .neq("status", "voltooid")
+          .gt("start_at", nowIso)
+          .limit(1);
+        if (!remaining?.length) {
+          const { data: leadRow } = await sb
+            .from("leads")
+            .select("status")
+            .eq("id", afspraak.lead_id)
+            .maybeSingle();
+          const protectedStatus = new Set([
+            "deal",
+            "sale_financiering",
+            "sale_eigen_middelen",
+            "geen_interesse",
+            "offerte_afgewezen",
+            "niet_gekwalificeerd",
+          ]);
+          if (leadRow && !protectedStatus.has(leadRow.status)) {
+            const upd = await sb
+              .from("leads")
+              .update({
+                status: "afspraak_afgezegd_klant",
+                terugbellen: false,
+                terugbel_notitie: null,
+              })
+              .eq("id", afspraak.lead_id);
+            if (
+              upd.error &&
+              (upd.error.message?.includes("terugbel") ||
+                upd.error.code === "42703")
+            ) {
+              await sb
+                .from("leads")
+                .update({ status: "afspraak_afgezegd_klant" })
+                .eq("id", afspraak.lead_id);
+            }
+            try {
+              const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
+              queueLeadMetaCapi(afspraak.lead_id as string);
+            } catch {
+              /* optioneel */
+            }
+          }
+        }
+      }
+
       return NextResponse.json({ ok: true, status: "geannuleerd" });
     }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   fetchMetaAdSpend,
+  META_LEAD_CAMPAIGN_ID,
   metaAdsSpendConfigured,
   syncMetaAdSpendBackfill,
   syncMetaAdSpend,
@@ -11,12 +12,14 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/meta/ad-spend
- * Status + optionele preview van Meta ad spend (nog niet wegschrijven).
+ * Status + optionele preview van Meta lead-campagne ad spend (nog niet wegschrijven).
  *
  * Query:
  *   since=YYYY-MM-DD&until=YYYY-MM-DD
  *   level=account|campaign|ad  (default account)
  *   preview=1                  — haal data op als credentials gezet zijn
+ *
+ * Filter: standaard alleen META_LEAD_CAMPAIGN_ID (default 120249296331970109).
  */
 export async function GET(req: NextRequest) {
   const cfg = metaAdsSpendConfigured();
@@ -37,18 +40,24 @@ export async function GET(req: NextRequest) {
         META_AD_ACCOUNT_ID: "Ad account (act_… of alleen cijfers)",
         META_ADS_ACCESS_TOKEN:
           "System user / user token met ads_read (valt terug op META_CAPI_ACCESS_TOKEN)",
+        META_LEAD_CAMPAIGN_ID:
+          "Optioneel; default 120249296331970109 (lead-campagne filter)",
       },
-      hint: "Voeg ?preview=1 toe om spend op te halen zonder te syncen. POST om naar rapportage_kosten te schrijven.",
+      campaignId: META_LEAD_CAMPAIGN_ID,
+      hint: "Voeg ?preview=1 toe om spend op te halen zonder te syncen. POST om naar rapportage_kosten te schrijven. Alleen lead-campagne.",
     });
   }
 
   const result = await fetchMetaAdSpend({ since, until, level });
-  return NextResponse.json(result, { status: result.ok ? 200 : 400 });
+  return NextResponse.json(
+    { ...result, campaignId: META_LEAD_CAMPAIGN_ID },
+    { status: result.ok ? 200 : 400 }
+  );
 }
 
 /**
  * POST /api/meta/ad-spend
- * Sync Meta account-spend → rapportage_kosten (soort=ad_spend).
+ * Sync Meta lead-campagne spend → rapportage_kosten (soort=ad_spend).
  *
  * Body/query:
  *   since, until, dry_run
@@ -115,9 +124,9 @@ export async function POST(req: NextRequest) {
       since: since || autoSince!,
       until: until || autoUntil,
       dryRun,
-      chunkDays: body.chunk_days || 90,
-      timeIncrement: body.time_increment || "7",
-      maxChunks: 30,
+      chunkDays: body.chunk_days || 45,
+      timeIncrement: "1",
+      maxChunks: 60,
     });
     return NextResponse.json(result, { status: result.ok ? 200 : 400 });
   }

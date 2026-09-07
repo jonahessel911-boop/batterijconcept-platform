@@ -34,14 +34,13 @@ export type OfferteStatus =
   | "verlopen"
   | "afgewezen";
 export type ProjectStatus =
-  | "schouw_inplannen"
-  | "schouwweek_gepland"
-  | "schouwdag_plannen"
-  | "schouw_gepland"
-  | "materiaal_inkopen"
-  | "btw_factuur_eruit"
-  | "product_ingekocht"
-  | "installatie_gepland"
+  | "schouw_aanbetaling"
+  | "aanbetaling_betaald"
+  | "schouw_in_afwachting"
+  | "schouw_voltooid"
+  | "restfactuur_verstuurd"
+  | "restfactuur_betaald"
+  | "materiaal_installatie"
   | "installatie_voltooid"
   | "service";
 export type FactuurStatus =
@@ -388,6 +387,10 @@ export interface Project {
   backoffice_notitie_door?: string | null;
   installateur_notitie_door?: string | null;
   backoffice_afgerond_at?: string | null;
+  /** Afdeling verantwoordelijk (Backoffice, Planning, Installatie, …). */
+  afdeling?: string | null;
+  /** Medewerker verantwoordelijk voor dit project. */
+  verantwoordelijke_id?: string | null;
   /** Backoffice heeft klant gebeld voor schouw (+ aanbetaling). */
   bel_schouw_aanbetaling_at?: string | null;
   /** Backoffice heeft met financieringsman geschakeld (Warmtefonds). */
@@ -419,6 +422,7 @@ export interface Project {
     InstallatiePartner,
     "id" | "naam" | "email" | "telefoon"
   > | null;
+  verantwoordelijke?: Pick<Adviseur, "id" | "naam" | "email"> | null;
   offertes?: Pick<
     Offerte,
     | "id"
@@ -464,6 +468,29 @@ export interface ProjectFoto {
   url?: string | null;
 }
 
+export type ProjectTaakStatus = "todo" | "doing" | "done";
+
+export interface ProjectTaak {
+  id: string;
+  project_id: string;
+  titel: string;
+  status: ProjectTaakStatus;
+  afdeling: string;
+  verantwoordelijke_id: string | null;
+  due_at: string | null;
+  auto_key: string | null;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
+  verantwoordelijke?: Pick<Adviseur, "id" | "naam" | "email"> | null;
+  projecten?: Pick<
+    Project,
+    "id" | "project_nummer" | "titel" | "status" | "lead_id"
+  > & {
+    leads?: Pick<Lead, "naam" | "plaats" | "telefoon"> | null;
+  } | null;
+}
+
 export interface ServiceVerzoek {
   id: string;
   project_id: string;
@@ -497,6 +524,8 @@ export interface Factuur {
   /** bunq Payment id bij auto-match */
   bunq_payment_id?: number | null;
   notities: string | null;
+  /** Gezet = creditfactuur bij deze oorspronkelijke factuur. */
+  credit_van_factuur_id?: string | null;
   created_at: string;
   updated_at: string;
   leads?: Pick<
@@ -504,6 +533,8 @@ export interface Factuur {
     "naam" | "email" | "telefoon" | "lead_number" | "adviseur_id"
   > | null;
   offertes?: Pick<Offerte, "id" | "offerte_nummer"> | null;
+  /** Join: oorspronkelijke factuur bij credit */
+  credit_van?: Pick<Factuur, "id" | "factuur_nummer"> | null;
 }
 
 export interface WebhookLeadPayload {

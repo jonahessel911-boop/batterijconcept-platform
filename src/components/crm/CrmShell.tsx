@@ -503,8 +503,12 @@ export function CrmShell() {
   );
 
   const backofficeActieCount = useMemo(
-    () => openBackofficeActies(scopedProjecten, scopedFacturen).length,
-    [scopedProjecten, scopedFacturen]
+    () =>
+      openBackofficeActies(scopedProjecten, scopedFacturen, new Date(), {
+        leads: scopedLeads,
+        afspraken,
+      }).length,
+    [scopedProjecten, scopedFacturen, scopedLeads, afspraken]
   );
 
   const counts = {
@@ -827,6 +831,13 @@ export function CrmShell() {
                         orders={scopedProjecten}
                         showPartner
                         linkHref={(event) => `/projecten/${event.order.id}`}
+                        onOrderUpdated={(project) => {
+                          setProjecten((prev) =>
+                            prev.map((p) =>
+                              p.id === project.id ? { ...p, ...project } : p
+                            )
+                          );
+                        }}
                       />
                     </div>
                   ) : (
@@ -852,6 +863,9 @@ export function CrmShell() {
                   <BackofficePanel
                     projecten={scopedProjecten}
                     facturen={scopedFacturen}
+                    adviseurs={adviseurs}
+                    leads={scopedLeads}
+                    afspraken={afspraken}
                     onProjectUpdated={(project) => {
                       setProjecten((prev) =>
                         prev.map((p) =>

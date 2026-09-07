@@ -7,6 +7,7 @@
 import { addDays, differenceInCalendarDays } from "date-fns";
 import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import {
   STANDAARD_INSTALLATIEKOSTEN,
   hardwareKostenVoorRegels,
@@ -25,6 +26,7 @@ import type {
   MgmtMetaStatus,
   MgmtPipelinePhase,
   MgmtRisicoOmzet,
+  MgmtSalesPeriodCompare,
   ManagementDashboardData,
   SignalTone,
   DrilldownRef,
@@ -118,6 +120,7 @@ export type MgmtKosten = {
 export type MgmtMetaRow = {
   datum: string;
   level: string;
+  campaign_id?: string | null;
   campaign_name: string | null;
   adset_name: string | null;
   ad_name: string | null;
@@ -141,7 +144,13 @@ export type MgmtRaw = {
   kosten: MgmtKosten[];
   metaSpend: MgmtMetaRow[];
   beschikbaarheid: MgmtBeschikbaarheid[];
-  adviseurs: { id: string; naam: string; actief: boolean; commissie_pct?: number | null }[];
+  adviseurs: {
+    id: string;
+    naam: string;
+    actief: boolean;
+    commissie_pct?: number | null;
+    rol?: string | null;
+  }[];
   installateurs: { id: string; naam: string }[];
 };
 
@@ -333,7 +342,18 @@ function computeAgg(
   agg.afsprakenBevestigd = afspraken.filter(
     (a) => a.status === "bevestigd" || a.status === "voltooid"
   ).length;
-  const uitgevoerd = afspraken.filter((a) => a.status === "voltooid");
+
+  // Voltooid = afgeboekt én geweest: filter op bezoekdatum (start_at), niet inplandatum.
+  // Anders vallen gelopen afspraken die vorige maand zijn gepland buiten de periode.
+  const nowMs = Date.now();
+  const uitgevoerd = raw.afspraken.filter((a) => {
+    if (!afspraakBlokkeertAgenda(a.soort)) return false;
+    if (a.status !== "voltooid") return false;
+    if (filters.adviseurId && a.adviseur_id !== filters.adviseurId) return false;
+    if (!leadOk(a.lead_id)) return false;
+    if (!inIsoRange(a.start_at, start, end)) return false;
+    return new Date(a.start_at).getTime() <= nowMs;
+  });
   agg.afsprakenUitgevoerd = uitgevoerd.length;
   agg.afsprakenUitgevoerdIds = uitgevoerd.map((a) => a.id);
   agg.noShows = afspraken.filter(
@@ -425,6 +445,22 @@ function computeAgg(
     } else if (k.soort === "sales") {
       if (filters.adviseurId && k.adviseur_id !== filters.adviseurId) continue;
       if (inDateStrRange(k.datum, start, end)) agg.salesKosten += Number(k.bedrag) || 0;
+    }
+  }
+
+  // Lead-campagne detail heeft voorrang (voorkomt oude account-totalen in rapportage_kosten).
+  if (!filters.adviseurId) {
+    let metaLeadSpend = 0;
+    let metaLeadRows = 0;
+    for (const m of raw.metaSpend) {
+      if (m.level !== "campaign") continue;
+      if (m.campaign_id !== META_LEAD_CAMPAIGN_ID) continue;
+      if (!inDateStrRange(m.datum, start, end)) continue;
+      metaLeadSpend += Number(m.spend) || 0;
+      metaLeadRows += 1;
+    }
+    if (metaLeadRows > 0) {
+      agg.adSpend = Math.round(metaLeadSpend * 100) / 100;
     }
   }
 
@@ -627,7 +663,7 @@ function buildForecast(
   const missing: string[] = [];
   if (!gemOrderwaarde) missing.push("Gemiddelde orderwaarde (geen deals in lookback)");
   if (!appointmentToSale)
-    missing.push("Afspraak→sale conversie (geen uitgevoerde afspraken)");
+    missing.push("Afspraak→sale conversie (geen afspraken gelopen of deals)");
   if (!showRate) missing.push("Show-rate");
   if (!leadToAppointment) missing.push("Lead→afspraak conversie");
   if (cpl == null) missing.push("CPL (Meta ad spend of leads ontbreken)");
@@ -732,8 +768,18 @@ function campaignRowsFrom(
     if (!inIsoRange(a.created_at || a.start_at, start, end)) continue;
     const row = map.get(k)!;
     row.afspraak += 1;
-    if (a.status === "voltooid") row.uitgevoerd += 1;
     if (a.status === "geannuleerd") row.cancelled += 1;
+  }
+
+  const nowMsCamp = Date.now();
+  for (const a of raw.afspraken) {
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status !== "voltooid") continue;
+    if (new Date(a.start_at).getTime() > nowMsCamp) continue;
+    const k = leadKey.get(a.lead_id);
+    if (!k || !map.has(k)) continue;
+    if (!inIsoRange(a.start_at, start, end)) continue;
+    map.get(k)!.uitgevoerd += 1;
   }
 
   const projectByOfferte = new Map(
@@ -1040,7 +1086,12 @@ function buildSales(
   cpl: number | null,
   teamLeadToAppt: number | null
 ): ManagementDashboardData["sales"] {
-  const adviseurs = raw.adviseurs.filter((a) => a.actief);
+  const adviseurs = raw.adviseurs.filter((a) => {
+    if (!a.actief) return false;
+    const rol = (a.rol || "adviseur").toLowerCase();
+    // Salesrol: adviseur (niet beller/installateur/backoffice-only)
+    return rol === "adviseur";
+  });
   const scores: MgmtAdviseurScore[] = [];
 
   const now = new Date();
@@ -1061,6 +1112,7 @@ function buildSales(
     const fAdv: MgmtFilters = { ...filters, adviseurId: adv.id };
     const agg = computeAgg(raw, fAdv, start, end, instellingen, commissieMap);
     const showRate = safeDiv(agg.afsprakenUitgevoerd, agg.afsprakenNetto);
+    // Sale = ondertekende offerte; closing t.o.v. afspraken gelopen (voltooid)
     const closing = safeDiv(agg.deals, agg.afsprakenUitgevoerd);
     const leadToSale = safeDiv(agg.deals, agg.leads);
     const gemOrder = safeDiv(agg.omzetGetekend, agg.deals);
@@ -1765,8 +1817,9 @@ export function buildManagementDashboard(
       format: "money",
       target: null,
       deltaPct: deltaPct(agg.adSpend, prev.adSpend),
-      definition: "Som rapportage_kosten soort=ad_spend (Meta sync).",
-      missing: agg.adSpend === 0 ? "Geen Meta spend in periode — sync of check env" : null,
+      definition:
+        "Alleen Meta lead-campagne (dagelijkse Insights op campaign-id).",
+      missing: agg.adSpend === 0 ? "Geen Meta lead-campagne spend in periode — sync opnieuw" : null,
       drilldown: emptyDrill("Ad spend"),
     }),
     kpi({
@@ -1864,7 +1917,8 @@ export function buildManagementDashboard(
       format: "percent",
       target: instellingen.doel_closing_rate,
       deltaPct: null,
-      definition: "Deals / uitgevoerde afspraken.",
+      definition:
+        "Getekende offertes (sale) / afspraken gelopen (status voltooid).",
       drilldown: { kind: "deals", ids: agg.dealIds, title: "Deals" },
     }),
     kpi({
@@ -1961,6 +2015,68 @@ export function buildManagementDashboard(
     campaignRows: metaCampaignCount,
   };
 
+  // Sales vergelijking: huidige periode vs even lange periode ervoor
+  const TARGET_L2A = 0.25; // 1/4 lead → appointment
+  const salesAdviseursActief = raw.adviseurs.filter((a) => {
+    if (!a.actief) return false;
+    const rol = (a.rol || "adviseur").toLowerCase();
+    return rol === "adviseur";
+  });
+  const adviseurCount = filters.adviseurId
+    ? 1
+    : Math.max(salesAdviseursActief.length, 0);
+  const periodDays = Math.max(
+    1,
+    differenceInCalendarDays(period.end, period.start) + 1
+  );
+  const slotsPerWeek = instellingen.slots_per_adviseur_per_week || 20;
+  // 80 leads/week per adviseur bij 20 slots & 25% L2A
+  const leadsNodigPerWeekPerAdviseur = ceilInt(slotsPerWeek / TARGET_L2A);
+  const leadsNodigPerDag =
+    adviseurCount <= 0
+      ? 0
+      : Math.round(
+          ((leadsNodigPerWeekPerAdviseur * adviseurCount) / 7) * 10
+        ) / 10;
+  const slotsDoel = Math.round(
+    adviseurCount * slotsPerWeek * (periodDays / 7)
+  );
+  const leadsNodigDoel =
+    Math.round(leadsNodigPerDag * periodDays * 10) / 10;
+
+  const compareSlice = (a: typeof agg): MgmtSalesPeriodCompare["current"] => {
+    const l2a = safeDiv(a.afsprakenBruto, a.leads);
+    const a2s = safeDiv(a.deals, a.afsprakenUitgevoerd);
+    const leadsPerDay = a.leads / periodDays;
+    return {
+      leads: a.leads,
+      afsprakenGepland: a.afsprakenBruto,
+      afsprakenVoltooid: a.afsprakenUitgevoerd,
+      deals: a.deals,
+      leadToAppt: l2a != null ? round2(l2a * 100) : null,
+      conversieVoltooidSale: a2s != null ? round2(a2s * 100) : null,
+      orderwaarde: round2(a.omzetGetekend),
+      adSpend: round2(a.adSpend),
+      leadsVsNodig:
+        leadsNodigPerDag > 0
+          ? round2((leadsPerDay / leadsNodigPerDag) * 100)
+          : null,
+    };
+  };
+
+  const salesCompare: MgmtSalesPeriodCompare = {
+    targetLeadToAppt: TARGET_L2A,
+    adviseurCount,
+    slotsPerAdviseurPerWeek: slotsPerWeek,
+    leadsNodigPerWeekPerAdviseur,
+    leadsNodigPerDag,
+    periodDays,
+    slotsDoel,
+    leadsNodigDoel,
+    current: compareSlice(agg),
+    previous: compareSlice(prev),
+  };
+
   const leadbronnen = [
     ...new Set(
       raw.leads.map((l) => (l.lander || "").trim() || "Onbekend").filter(Boolean)
@@ -2004,6 +2120,7 @@ export function buildManagementDashboard(
     },
     instellingen,
     meta,
+    salesCompare,
     directie: { kpis: directieKpis, alerts, forecast },
     marketing: {
       kpis: marketingKpis,

@@ -52,19 +52,32 @@ function amsYmd(d: Date) {
 export type RapportageMetrics = {
   leads: number;
   /**
-   * Unieke leads van niet-geannuleerde fysieke afspraken die in deze
-   * periode zijn ingepland (afspraak.created_at). Basis Lead → afspraak.
+   * Cohort: unieke leads die in deze periode zijn binnengekomen én
+   * (ooit) een netto fysieke afspraak hebben. Basis Lead → afspraak.
    */
   afspraken: number;
-  /** Fysieke afspraken ingepland in de periode (op created_at), incl. geannuleerd. */
+  /** Operationeel: fysieke afspraken ingepland in de periode (created_at), incl. geannuleerd. */
   brutoAfspraken: number;
-  /** Ingeplande afspraken die niet geannuleerd zijn. */
+  /**
+   * Operationeel: afspraken die in de periode plaatsvonden én zijn afgeboekt
+   * (status voltooid). Geen toekomstige/openstaande afspraken.
+   */
   nettoAfspraken: number;
+  /** Geannuleerd in de periode (op inplandatum). */
+  geannuleerdAfspraken: number;
   /** Geannuleerd ÷ bruto, in procenten. */
   uitvalPct: number;
+  /**
+   * Cohort: unieke leads uit deze periode met een ondertekende offerte
+   * (ongeacht wanneer getekend). Basis Lead → deal.
+   */
   deals: number;
+  /** Activiteit: ondertekende offertes in de periode (voor Afspraak → sale). */
+  dealsInPeriode: number;
   conversieAfspraak: number;
   conversieDeal: number;
+  /** Voltooide afspraken → getekende deals in de periode. */
+  conversieAfspraakSale: number;
   omzetExBtw: number;
   projectkosten: number;
   inkoop: number;
@@ -90,10 +103,13 @@ export function emptyMetrics(): RapportageMetrics {
     afspraken: 0,
     brutoAfspraken: 0,
     nettoAfspraken: 0,
+    geannuleerdAfspraken: 0,
     uitvalPct: 0,
     deals: 0,
+    dealsInPeriode: 0,
     conversieAfspraak: 0,
     conversieDeal: 0,
+    conversieAfspraakSale: 0,
     omzetExBtw: 0,
     projectkosten: 0,
     inkoop: 0,
@@ -118,11 +134,13 @@ export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
       m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
     conversieDeal:
       m.leads > 0 ? Math.round((m.deals / m.leads) * 1000) / 10 : 0,
+    conversieAfspraakSale:
+      m.nettoAfspraken > 0
+        ? Math.round((m.dealsInPeriode / m.nettoAfspraken) * 1000) / 10
+        : 0,
     uitvalPct:
       m.brutoAfspraken > 0
-        ? Math.round(
-            ((m.brutoAfspraken - m.nettoAfspraken) / m.brutoAfspraken) * 1000
-          ) / 10
+        ? Math.round((m.geannuleerdAfspraken / m.brutoAfspraken) * 1000) / 10
         : 0,
   };
 }
@@ -137,10 +155,13 @@ function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetri
     afspraken: a.afspraken + b.afspraken,
     brutoAfspraken: a.brutoAfspraken + b.brutoAfspraken,
     nettoAfspraken: a.nettoAfspraken + b.nettoAfspraken,
+    geannuleerdAfspraken: a.geannuleerdAfspraken + b.geannuleerdAfspraken,
     uitvalPct: 0,
     deals: a.deals + b.deals,
+    dealsInPeriode: a.dealsInPeriode + b.dealsInPeriode,
     conversieAfspraak: 0,
     conversieDeal: 0,
+    conversieAfspraakSale: 0,
     omzetExBtw: a.omzetExBtw + b.omzetExBtw,
     projectkosten: a.projectkosten + b.projectkosten,
     inkoop: a.inkoop + b.inkoop,
@@ -386,13 +407,8 @@ export function buildAttributionTree(
     const m = emptyAttribution();
     m.leads = b.leadIds.length;
     m.afspraken = b.afspraakLeads.size;
-    m.deals = b.deals;
-    const out = finalizeAttribution(m);
-    out.conversieDeal =
-      b.leadIds.length > 0
-        ? Math.round((b.dealLeads.size / b.leadIds.length) * 1000) / 10
-        : 0;
-    return out;
+    m.deals = b.dealLeads.size;
+    return finalizeAttribution(m);
   }
 
   function sortByLeads(
@@ -540,26 +556,44 @@ export function buildRapportageTree(
       m.leads += 1;
       periodLeadIds.push(l.id);
     }
+    const periodLeadSet = new Set(periodLeadIds);
 
-    // Volume + Lead→afspraak: moment dat de afspraak is INGEPLAND
-    const afspraakLeads = new Set<string>();
+    // Operationeel volume: afspraken die in deze periode zijn INGEPLAND
     for (const a of afspraken) {
       if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
       m.brutoAfspraken += 1;
-      if (a.status !== "geannuleerd") {
-        m.nettoAfspraken += 1;
-        afspraakLeads.add(a.lead_id);
+      if (a.status === "geannuleerd") {
+        m.geannuleerdAfspraken += 1;
       }
     }
-    m.afspraken = afspraakLeads.size;
 
-    const cohortDeals = periodLeadIds.filter((id) =>
+    // Voltooid = afgeboekt én geweest (bezoekdatum in periode, niet toekomst).
+    for (const a of afspraken) {
+      if (a.status !== "voltooid") continue;
+      if (!inRange(a.start_at, start, end)) continue;
+      if (new Date(a.start_at).getTime() > now.getTime()) continue;
+      m.nettoAfspraken += 1;
+    }
+
+    // Cohort-funnel: van de leads die in deze periode binnenkwamen
+    const cohortAfspraak = new Set<string>();
+    for (const a of afspraken) {
+      if (!periodLeadSet.has(a.lead_id)) continue;
+      if (a.status === "geannuleerd") continue;
+      cohortAfspraak.add(a.lead_id);
+    }
+    m.afspraken = cohortAfspraak.size;
+
+    const cohortDealLeads = periodLeadIds.filter((id) =>
       leadsMetDeal.has(id)
     ).length;
+    // Deals-kolom = unieke cohort-leads met ondertekende offerte (past bij Lead → deal %)
+    m.deals = cohortDealLeads;
 
+    // Omzet/kosten: activiteit in de periode (getekend in deze periode)
     for (const o of signed) {
       if (!inRange(o.ondertekend_op!, start, end)) continue;
-      m.deals += 1;
+      m.dealsInPeriode += 1;
       m.omzetExBtw += Number(o.subtotaal_ex_btw) || 0;
       const project = projecten.find((p) => p.offerte_id === o.id);
       const kosten = Number(project?.projectkosten) || 0;
@@ -573,12 +607,7 @@ export function buildRapportageTree(
       m.betaaldeOmzet += Number(f.bedrag_ex_btw) || 0;
     }
 
-    const out = finalizeMetrics(m);
-    out.conversieDeal =
-      m.leads > 0
-        ? Math.round((cohortDeals / m.leads) * 1000) / 10
-        : 0;
-    return out;
+    return finalizeMetrics(m);
   }
 
   return yearList.map((year) => {
@@ -740,6 +769,7 @@ export function buildGeoBreakdown(
   type Acc = {
     leads: number;
     afspraakLeads: Set<string>;
+    dealLeads: Set<string>;
     deals: number;
     omzet: number;
   };
@@ -748,7 +778,13 @@ export function buildGeoBreakdown(
   function ensure(key: string): Acc {
     let a = byProv.get(key);
     if (!a) {
-      a = { leads: 0, afspraakLeads: new Set(), deals: 0, omzet: 0 };
+      a = {
+        leads: 0,
+        afspraakLeads: new Set(),
+        dealLeads: new Set(),
+        deals: 0,
+        omzet: 0,
+      };
       byProv.set(key, a);
     }
     return a;
@@ -769,23 +805,25 @@ export function buildGeoBreakdown(
     const lead = leads.find((l) => l.id === o.lead_id);
     const prov = provincieVanPostcode(lead?.postcode);
     const acc = ensure(prov);
+    acc.dealLeads.add(o.lead_id);
     acc.deals += 1;
     acc.omzet += Number(o.subtotaal_ex_btw) || 0;
   }
 
   const rows: GeoRegionMetrics[] = [...byProv.entries()].map(([key, a]) => {
     const afspraken = a.afspraakLeads.size;
+    const dealLeads = a.dealLeads.size;
     return {
       key,
       label: key,
       leads: a.leads,
       afspraken,
-      deals: a.deals,
+      deals: dealLeads,
       omzet: Math.round(a.omzet * 100) / 100,
       conversieAfspraak:
         a.leads > 0 ? Math.round((afspraken / a.leads) * 1000) / 10 : 0,
       conversieDeal:
-        a.leads > 0 ? Math.round((a.deals / a.leads) * 1000) / 10 : 0,
+        a.leads > 0 ? Math.round((dealLeads / a.leads) * 1000) / 10 : 0,
     };
   });
 

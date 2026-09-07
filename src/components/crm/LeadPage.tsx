@@ -13,7 +13,11 @@ import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateTimeNl } from "@/lib/format";
 import { statusTone } from "@/lib/labels";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
-import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import {
+  afspraakSoortLabel,
+  isTerugbelSoort,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { MaakOfferteModal } from "./MaakOfferteModal";
 import { LeadAdresEditor } from "./LeadAdresEditor";
@@ -26,6 +30,12 @@ import {
   DetailShell,
   NotFoundState,
 } from "./DetailChrome";
+
+const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
+
+function isActieveTerugbel(a: Afspraak): boolean {
+  return ACTIEVE_AFSPRAAK.has(a.status) && isTerugbelSoort(a.soort);
+}
 
 function PencilIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
@@ -72,6 +82,9 @@ export function LeadPage() {
   const [kwalReden, setKwalReden] = useState("");
   const [showKwalForm, setShowKwalForm] = useState(false);
   const [activityKey, setActivityKey] = useState(0);
+  const [completingAfspraakId, setCompletingAfspraakId] = useState<string | null>(
+    null
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -243,6 +256,103 @@ export function LeadPage() {
     }
   }
 
+  /** Terugbel-afspraak afvinken + lead-vlag wissen (zelfde flow als Bellen). */
+  async function voltooiTerugbel(afspraakId: string) {
+    if (!lead) return;
+    setCompletingAfspraakId(afspraakId);
+    setOkMsg(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: afErr } = await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .eq("id", afspraakId);
+      if (afErr) throw afErr;
+
+      const otherOpen = afspraken.some(
+        (a) => a.id !== afspraakId && isActieveTerugbel(a)
+      );
+      const patch: Partial<Lead> = otherOpen
+        ? {}
+        : { terugbellen: false, terugbel_notitie: null };
+      if (Object.keys(patch).length > 0) {
+        const { error: leadErr } = await sb
+          .from("leads")
+          .update(patch)
+          .eq("id", lead.id);
+        if (leadErr) throw leadErr;
+        setLead({ ...lead, ...patch });
+      }
+
+      setAfspraken((prev) =>
+        prev.map((a) =>
+          a.id === afspraakId ? { ...a, status: "voltooid" } : a
+        )
+      );
+      void fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "terugbel",
+          titel: "Terugbelafspraak voltooid",
+          detail: null,
+        }),
+      }).catch(() => {});
+      setOkMsg("Terugbelafspraak gemarkeerd als voltooid.");
+      setActivityKey((k) => k + 1);
+    } catch (e) {
+      setOkMsg(
+        e instanceof Error ? e.message : "Voltooien van terugbel mislukt"
+      );
+    } finally {
+      setCompletingAfspraakId(null);
+    }
+  }
+
+  /** Alleen de terugbellen-vlag wissen (als er geen openstaande terugbel meer is). */
+  async function wisTerugbelVlag() {
+    if (!lead) return;
+    setCompletingAfspraakId("flag");
+    setOkMsg(null);
+    try {
+      const open = afspraken.filter(isActieveTerugbel);
+      const sb = getSupabaseBrowser();
+      for (const a of open) {
+        const { error } = await sb
+          .from("afspraken")
+          .update({ status: "voltooid" })
+          .eq("id", a.id);
+        if (error) throw error;
+      }
+      const { error: leadErr } = await sb
+        .from("leads")
+        .update({ terugbellen: false, terugbel_notitie: null })
+        .eq("id", lead.id);
+      if (leadErr) throw leadErr;
+      setLead({ ...lead, terugbellen: false, terugbel_notitie: null });
+      setAfspraken((prev) =>
+        prev.map((a) =>
+          isActieveTerugbel(a) ? { ...a, status: "voltooid" } : a
+        )
+      );
+      void fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "terugbel",
+          titel: "Terugbelafspraak voltooid",
+          detail: null,
+        }),
+      }).catch(() => {});
+      setOkMsg("Terugbellen afgevinkt.");
+      setActivityKey((k) => k + 1);
+    } catch (e) {
+      setOkMsg(e instanceof Error ? e.message : "Afvinken mislukt");
+    } finally {
+      setCompletingAfspraakId(null);
+    }
+  }
+
   if (loading && !lead) {
     return (
       <DetailShell activeTab="leads">
@@ -276,6 +386,52 @@ export function LeadPage() {
         a.status !== "voltooid"
       )
   );
+  const openTerugbel = afspraken.filter(isActieveTerugbel);
+  const showTerugbelBanner = Boolean(lead.terugbellen) || openTerugbel.length > 0;
+
+  function afspraakRow(a: Afspraak, variant: "upcoming" | "past") {
+    const terugbel = isActieveTerugbel(a);
+    return (
+      <li
+        key={a.id}
+        className={
+          variant === "upcoming"
+            ? "flex flex-wrap items-center justify-between gap-2 border border-green/25 bg-green-soft/40 px-3 py-2.5"
+            : "flex flex-wrap items-center justify-between gap-2 border border-line px-3 py-2.5"
+        }
+      >
+        <div className="min-w-0">
+          <p
+            className={
+              variant === "upcoming"
+                ? "text-sm font-semibold text-ink"
+                : "text-sm font-medium text-ink"
+            }
+          >
+            {formatDateTimeNl(a.start_at)}
+          </p>
+          <p className="mt-0.5 text-xs text-muted">
+            {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
+            {variant === "upcoming" && a.adviseurs?.naam
+              ? ` · ${a.adviseurs.naam}`
+              : ""}
+            {" · "}
+            {a.status}
+          </p>
+        </div>
+        {terugbel && (
+          <button
+            type="button"
+            disabled={completingAfspraakId !== null}
+            onClick={() => void voltooiTerugbel(a.id)}
+            className="shrink-0 border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
+          >
+            {completingAfspraakId === a.id ? "Bezig…" : "Markeer voltooid"}
+          </button>
+        )}
+      </li>
+    );
+  }
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="leads">
@@ -286,6 +442,35 @@ export function LeadPage() {
       {okMsg && (
         <div className="mb-4 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
           {okMsg}
+        </div>
+      )}
+
+      {showTerugbelBanner && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#C45A12]">
+              Openstaande terugbelafspraak
+            </p>
+            {lead.terugbel_notitie?.trim() ? (
+              <p className="mt-0.5 text-xs text-[#C45A12]/90">
+                {lead.terugbel_notitie}
+              </p>
+            ) : openTerugbel[0] ? (
+              <p className="mt-0.5 text-xs text-[#C45A12]/90">
+                Gepland: {formatDateTimeNl(openTerugbel[0].start_at)}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            disabled={completingAfspraakId !== null}
+            onClick={() => void wisTerugbelVlag()}
+            className="shrink-0 bg-[#C45A12] px-3 py-2 text-xs font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-50"
+          >
+            {completingAfspraakId === "flag"
+              ? "Bezig…"
+              : "Markeer als voltooid"}
+          </button>
         </div>
       )}
 
@@ -500,34 +685,8 @@ export function LeadPage() {
               </p>
             ) : (
               <ul className="space-y-2">
-                {upcoming.map((a) => (
-                  <li
-                    key={a.id}
-                    className="border border-green/25 bg-green-soft/40 px-3 py-2.5"
-                  >
-                    <p className="text-sm font-semibold text-ink">
-                      {formatDateTimeNl(a.start_at)}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted">
-                      {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
-                      {a.adviseurs?.naam ? ` · ${a.adviseurs.naam}` : ""}
-                      {" · "}
-                      {a.status}
-                    </p>
-                  </li>
-                ))}
-                {past.slice(0, 4).map((a) => (
-                  <li key={a.id} className="border border-line px-3 py-2.5">
-                    <p className="text-sm font-medium text-ink">
-                      {formatDateTimeNl(a.start_at)}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted">
-                      {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
-                      {" · "}
-                      {a.status}
-                    </p>
-                  </li>
-                ))}
+                {upcoming.map((a) => afspraakRow(a, "upcoming"))}
+                {past.slice(0, 4).map((a) => afspraakRow(a, "past"))}
               </ul>
             )}
           </div>

@@ -391,6 +391,7 @@ export function ProjectSchouwSection({
           orders={[project]}
           showPartner
           initialWeekAnchor={agendaAnchor}
+          onOrderUpdated={() => onChanged()}
         />
       </div>
 

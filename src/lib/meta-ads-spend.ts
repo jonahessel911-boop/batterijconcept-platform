@@ -6,11 +6,16 @@ const GRAPH_VERSION = "v21.0";
 const TZ = "Europe/Amsterdam";
 const META_BRON_NOTE = "meta_ads_sync";
 
+/** Alleen deze Meta lead-campagne telt mee voor ad spend (sales dashboard / CPL / CPS). */
+export const META_LEAD_CAMPAIGN_ID =
+  process.env.META_LEAD_CAMPAIGN_ID?.trim() || "120249296331970109";
+
 export type MetaAdSpendDay = {
   date: string;
   spend: number;
   impressions?: number;
   clicks?: number;
+  campaign_id?: string | null;
   campaign_name?: string | null;
   ad_name?: string | null;
 };
@@ -82,6 +87,7 @@ type GraphInsightRow = {
   spend?: string;
   impressions?: string;
   clicks?: string;
+  campaign_id?: string;
   campaign_name?: string;
   ad_name?: string;
 };
@@ -104,14 +110,17 @@ async function graphGet(url: string): Promise<GraphInsightsResponse> {
 }
 
 /**
- * Haalt dagelijkse account-spend op via Insights API.
- * level: account (default) | campaign | ad — campaign/ad voor breakdown-preview.
+ * Haalt dagelijkse spend op via Insights API.
+ * Standaard: rechtstreeks vanaf META_LEAD_CAMPAIGN_ID (betrouwbaarder dan account-filter).
+ * Zet campaignId=null voor heel ad-account.
  */
 export async function fetchMetaAdSpend(options?: {
   since?: string;
   until?: string;
   level?: "account" | "campaign" | "ad";
   timeIncrement?: "1" | "7" | "monthly";
+  /** Default: META_LEAD_CAMPAIGN_ID. Zet null voor hele account. */
+  campaignId?: string | null;
 }): Promise<MetaAdSpendFetchResult> {
   const cfg = metaAdsSpendConfigured();
   const range = {
@@ -133,26 +142,40 @@ export async function fetchMetaAdSpend(options?: {
   }
 
   const token = adsAccessToken()!;
-  const level = options?.level || "account";
+  const breakdown = options?.level || "campaign";
   const timeIncrement = options?.timeIncrement || "1";
+  const campaignId =
+    options?.campaignId === undefined
+      ? META_LEAD_CAMPAIGN_ID
+      : options.campaignId;
+
+  // Lead-campagne: query campaign node (niet account + filter — die was te ruim).
+  const objectId = campaignId || cfg.accountId;
   const fields =
-    level === "ad"
-      ? "spend,impressions,clicks,campaign_name,ad_name"
-      : level === "campaign"
-        ? "spend,impressions,clicks,campaign_name"
-        : "spend,impressions,clicks";
+    breakdown === "ad"
+      ? "spend,impressions,clicks,campaign_id,campaign_name,ad_name"
+      : campaignId
+        ? "spend,impressions,clicks,campaign_id,campaign_name"
+        : breakdown === "campaign"
+          ? "spend,impressions,clicks,campaign_id,campaign_name"
+          : "spend,impressions,clicks";
 
   const params = new URLSearchParams({
     fields,
-    level,
     time_increment: timeIncrement,
     time_range: JSON.stringify({ since: range.since, until: range.until }),
     limit: "500",
     access_token: token,
   });
 
+  if (!campaignId && breakdown !== "account") {
+    params.set("level", breakdown);
+  } else if (campaignId && breakdown === "ad") {
+    params.set("level", "ad");
+  }
+
   let nextUrl: string | null =
-    `https://graph.facebook.com/${GRAPH_VERSION}/${cfg.accountId}/insights?${params}`;
+    `https://graph.facebook.com/${GRAPH_VERSION}/${objectId}/insights?${params}`;
 
   const days: MetaAdSpendDay[] = [];
 
@@ -169,6 +192,7 @@ export async function fetchMetaAdSpend(options?: {
           spend: Math.round(spend * 100) / 100,
           impressions: row.impressions ? Number(row.impressions) : undefined,
           clicks: row.clicks ? Number(row.clicks) : undefined,
+          campaign_id: row.campaign_id || campaignId || null,
           campaign_name: row.campaign_name || null,
           ad_name: row.ad_name || null,
         });
@@ -212,8 +236,8 @@ function aggregateByDate(days: MetaAdSpendDay[]): Map<string, number> {
 }
 
 /**
- * Haalt account-spend op en schrijft naar rapportage_kosten (soort=ad_spend).
- * Bedrijfsspend: adviseur_id = null. Overscrijft bestaande Meta-sync rijen per dag.
+ * Haalt lead-campagne spend op (dagelijks) en schrijft naar rapportage_kosten.
+ * Vervangt bestaande Meta-sync rijen in de periode (voorkomt week-bucket dubbeltelling).
  */
 export async function syncMetaAdSpend(options?: {
   since?: string;
@@ -221,11 +245,13 @@ export async function syncMetaAdSpend(options?: {
   dryRun?: boolean;
   timeIncrement?: "1" | "7" | "monthly";
 }): Promise<MetaAdSpendSyncResult> {
+  // Altijd dagsplitsing — week-buckets (7) gaven opgeblazen totalen in het dashboard.
   const fetched = await fetchMetaAdSpend({
     since: options?.since,
     until: options?.until,
-    level: "account",
-    timeIncrement: options?.timeIncrement || "1",
+    level: "campaign",
+    timeIncrement: "1",
+    campaignId: META_LEAD_CAMPAIGN_ID,
   });
 
   if (!fetched.ok) {
@@ -249,49 +275,32 @@ export async function syncMetaAdSpend(options?: {
   }
 
   const sb = getSupabaseAdmin();
+  const notities = `${META_BRON_NOTE}:campaign:${META_LEAD_CAMPAIGN_ID}`;
+
+  // Wis alle bedrijfs-ad_spend in periode (oude account-totalen / week-buckets).
+  const { error: delErr } = await sb
+    .from("rapportage_kosten")
+    .delete()
+    .eq("soort", "ad_spend")
+    .is("adviseur_id", null)
+    .gte("datum", fetched.since)
+    .lte("datum", fetched.until);
+
+  if (delErr) {
+    return { ...fetched, upserted: 0, ok: false, error: delErr.message };
+  }
+
   let upserted = 0;
-
   for (const [datum, bedrag] of byDate) {
-    const { data: existing, error: selErr } = await sb
-      .from("rapportage_kosten")
-      .select("id")
-      .eq("datum", datum)
-      .eq("soort", "ad_spend")
-      .is("adviseur_id", null)
-      .limit(1)
-      .maybeSingle();
-
-    if (selErr) {
-      return {
-        ...fetched,
-        upserted,
-        ok: false,
-        error: selErr.message,
-      };
-    }
-
-    if (existing?.id) {
-      const { error } = await sb
-        .from("rapportage_kosten")
-        .update({
-          bedrag,
-          notities: META_BRON_NOTE,
-        })
-        .eq("id", existing.id);
-      if (error) {
-        return { ...fetched, upserted, ok: false, error: error.message };
-      }
-    } else {
-      const { error } = await sb.from("rapportage_kosten").insert({
-        datum,
-        soort: "ad_spend",
-        bedrag,
-        adviseur_id: null,
-        notities: META_BRON_NOTE,
-      });
-      if (error) {
-        return { ...fetched, upserted, ok: false, error: error.message };
-      }
+    const { error } = await sb.from("rapportage_kosten").insert({
+      datum,
+      soort: "ad_spend",
+      bedrag,
+      adviseur_id: null,
+      notities,
+    });
+    if (error) {
+      return { ...fetched, upserted, ok: false, error: error.message };
     }
     upserted += 1;
   }
@@ -306,7 +315,7 @@ export async function syncMetaAdSpend(options?: {
   return { ...fetched, upserted };
 }
 
-/** Schrijf campaign-level spend naar meta_ad_spend (aparte tabel, geen dubbeltelling in totals). */
+/** Schrijf campaign-level spend naar meta_ad_spend (lead-campagne only). */
 export async function syncMetaAdSpendCampaignDetail(options?: {
   since?: string;
   until?: string;
@@ -316,23 +325,23 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
     until: options?.until,
     level: "campaign",
     timeIncrement: "1",
+    campaignId: META_LEAD_CAMPAIGN_ID,
   });
   if (!fetched.ok) return { upserted: 0, error: fetched.error };
 
   const sb = getSupabaseAdmin();
+
+  // Oude rijen (andere campagnes / foute campaign_id=naam) wissen in periode.
+  await sb
+    .from("meta_ad_spend")
+    .delete()
+    .eq("level", "campaign")
+    .gte("datum", fetched.since)
+    .lte("datum", fetched.until);
+
   let upserted = 0;
   for (const day of fetched.days) {
-    const campaignId = day.campaign_name || "unknown";
-    const { data: existing } = await sb
-      .from("meta_ad_spend")
-      .select("id")
-      .eq("datum", day.date)
-      .eq("level", "campaign")
-      .eq("campaign_id", campaignId)
-      .eq("adset_id", "")
-      .eq("ad_id", "")
-      .maybeSingle();
-
+    const campaignId = day.campaign_id || META_LEAD_CAMPAIGN_ID;
     const row = {
       datum: day.date,
       level: "campaign" as const,
@@ -346,9 +355,7 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
       synced_at: new Date().toISOString(),
     };
 
-    const { error } = existing?.id
-      ? await sb.from("meta_ad_spend").update(row).eq("id", existing.id)
-      : await sb.from("meta_ad_spend").insert(row);
+    const { error } = await sb.from("meta_ad_spend").insert(row);
 
     if (error) {
       return { upserted, error: error.message };
@@ -433,7 +440,8 @@ export async function syncMetaAdSpendBackfill(options: {
 
   const chunkDays = Math.max(14, options.chunkDays || 90);
   const maxChunks = Math.max(1, options.maxChunks || 30);
-  const timeIncrement = options.timeIncrement || "7";
+  // Altijd dagsplitsing — week-buckets blazen periode-totalen op.
+  const timeIncrement = "1" as const;
   let cursor = parseYmdAsUtc(options.since);
   const end = parseYmdAsUtc(options.until);
 

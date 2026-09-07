@@ -20,6 +20,8 @@ function parsePeriod(v: string | null): MgmtPeriodPreset {
     "last_week",
     "this_month",
     "last_month",
+    "last_7_days",
+    "last_14_days",
     "last_30_days",
     "this_quarter",
     "this_year",
@@ -102,14 +104,14 @@ export async function GET(req: NextRequest) {
       sb
         .from("meta_ad_spend")
         .select(
-          "datum, level, campaign_name, adset_name, ad_name, spend"
+          "datum, level, campaign_id, campaign_name, adset_name, ad_name, spend"
         ),
       sb
         .from("adviseur_beschikbaarheid")
         .select("adviseur_id, jaar, week, beschikbaar"),
       sb
         .from("adviseurs")
-        .select("id, naam, actief, commissie_pct"),
+        .select("id, naam, actief, commissie_pct, rol"),
       sb.from("installatie_partners").select("id, naam"),
       sb
         .from("dashboard_instellingen")
@@ -251,6 +253,7 @@ export async function GET(req: NextRequest) {
     const metaSpend = (metaRes.error ? [] : metaRes.data || []).map((m) => ({
       datum: m.datum as string,
       level: m.level as string,
+      campaign_id: (m.campaign_id as string) || null,
       campaign_name: (m.campaign_name as string) || null,
       adset_name: (m.adset_name as string) || null,
       ad_name: (m.ad_name as string) || null,
@@ -270,7 +273,9 @@ export async function GET(req: NextRequest) {
       id: a.id as string,
       naam: a.naam as string,
       actief: Boolean(a.actief),
-      commissie_pct: Number((a as { commissie_pct?: number }).commissie_pct) || 0,
+      commissie_pct:
+        Number((a as { commissie_pct?: number }).commissie_pct) || 0,
+      rol: ((a as { rol?: string | null }).rol as string | null) || "adviseur",
     }));
 
     const installateurs = (partnersRes.error ? [] : partnersRes.data || []).map(

@@ -1,75 +1,50 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import type { Factuur, Offerte, Project, ProjectStatus, ServiceVerzoek } from "@/types/database";
+import type {
+  Adviseur,
+  Project,
+  ProjectFoto,
+  ProjectStatus,
+  ProjectTaak,
+} from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
-import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
-import { formatProjectSchouwWeek } from "@/lib/schouw-week";
+import { formatDateShort, formatDateTimeNl } from "@/lib/format";
+import { appendLeadNotitie } from "@/lib/lead-notitie";
+import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import {
-  aanbetalingVanOrder,
-  factuurIsBetaald,
-  isRestantFactuurOmschrijving,
-  openstaandOpOrder,
-  restantFactuurBedrag,
-} from "@/lib/aanbetaling";
-import { AanbetalingSamenvatting } from "./AanbetalingInstelling";
-import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
-import {
-  PROJECT_STATUSES,
-  projectStatusLabel,
-  statusTone,
-} from "@/lib/labels";
-import { StatusBadge } from "./StatusBadge";
-import { ProjectServiceSection } from "./ProjectServiceSection";
-import { ProjectSchouwSection } from "./ProjectSchouwSection";
+  formatProjectSchouwWeek,
+  isSchouwdagDefinitief,
+  schouwWeekEerder,
+  schouwWeekFromDate,
+} from "@/lib/schouw-week";
 import {
   backofficeHref,
   parseBoView,
 } from "./BackofficePanel";
+import { ProjectStatusPath } from "./ProjectStatusPath";
+import { ProjectFinancieelSection } from "./ProjectFinancieelSection";
+import { ProjectAgendaAfspraakSection } from "./ProjectAgendaAfspraakSection";
 import { Breadcrumb, DetailShell, NotFoundState } from "./DetailChrome";
-
-type ProjectTab = "activiteit" | "schouw" | "betaling";
 
 type FeedItem = {
   key: string;
   at: string;
-  kind: "note" | "event";
   title: string;
   body?: string;
-  author?: string;
 };
 
-function monthLabel(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleDateString("nl-NL", { month: "long", year: "numeric" });
-}
-
-function groupFeedByMonth(items: FeedItem[]) {
-  const groups: { month: string; items: FeedItem[] }[] = [];
-  for (const item of items) {
-    const month = monthLabel(item.at);
-    const last = groups[groups.length - 1];
-    if (last?.month === month) last.items.push(item);
-    else groups.push({ month, items: [item] });
-  }
-  return groups;
-}
-
-function SidebarField({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="py-2.5">
-      <p className="text-[11px] font-medium text-muted">{label}</p>
-      <div className="mt-0.5 text-sm text-ink">{children}</div>
-    </div>
-  );
+function adresRegel(lead: Project["leads"]): string {
+  if (!lead) return "—";
+  const l = Array.isArray(lead) ? lead[0] : lead;
+  if (!l) return "—";
+  const straat = [l.straat, [l.huisnummer, l.toevoeging].filter(Boolean).join("")]
+    .filter(Boolean)
+    .join(" ");
+  const plaats = [l.postcode, l.plaats].filter(Boolean).join(" ");
+  return [straat, plaats].filter(Boolean).join(", ") || "—";
 }
 
 export function ProjectPage() {
@@ -77,48 +52,38 @@ export function ProjectPage() {
   const searchParams = useSearchParams();
   const backView = parseBoView(searchParams.get("from"));
   const backHref = backofficeHref(backView);
-  const backLabel =
-    backView === "agenda"
-      ? "Terug naar agenda"
-      : backView === "orders"
-        ? "Terug naar projecten"
-        : "Terug naar acties";
+
   const [project, setProject] = useState<Project | null>(null);
-  const [offerte, setOfferte] = useState<Offerte | null>(null);
-  const [facturen, setFacturen] = useState<Factuur[]>([]);
-  const [serviceVerzoeken, setServiceVerzoeken] = useState<ServiceVerzoek[]>(
-    []
-  );
+  const [fotos, setFotos] = useState<ProjectFoto[]>([]);
+  const [taken, setTaken] = useState<ProjectTaak[]>([]);
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
-  const [kostenInput, setKostenInput] = useState("");
-  const [kostenSaving, setKostenSaving] = useState(false);
-  const [tab, setTab] = useState<ProjectTab>("activiteit");
-  const [aboutOpen, setAboutOpen] = useState(true);
-  const [restantBusy, setRestantBusy] = useState(false);
-  const [restantError, setRestantError] = useState<string | null>(null);
-  const [factuurBusyId, setFactuurBusyId] = useState<string | null>(null);
-  const [factuurError, setFactuurError] = useState<string | null>(null);
-  const [customBedrag, setCustomBedrag] = useState("");
-  const [customOmschrijving, setCustomOmschrijving] = useState("");
-  const [customBusy, setCustomBusy] = useState(false);
-  const [customError, setCustomError] = useState<string | null>(null);
-  const [customMsg, setCustomMsg] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteBusy, setNoteBusy] = useState(false);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const [newTaakOpen, setNewTaakOpen] = useState(false);
+  const [newTitel, setNewTitel] = useState("");
+  const [newAfdeling, setNewAfdeling] = useState("");
+  const [newPersonId, setNewPersonId] = useState("");
+  const [newDue, setNewDue] = useState("");
+  const [creatingTaak, setCreatingTaak] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setNotFound(false);
-
     if (!hasSupabaseConfig()) {
       setNotFound(true);
       setLoading(false);
       return;
     }
-
     try {
       const sb = getSupabaseBrowser();
-      const { data, error } = await sb
+      const { data, error: err } = await sb
         .from("projecten")
         .select(
           "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon)"
@@ -126,61 +91,25 @@ export function ProjectPage() {
         .eq("id", id)
         .single();
 
-      if (error || !data) {
+      if (err || !data) {
         setNotFound(true);
       } else {
-        const proj = data as Project;
-        setProject(proj);
-        setKostenInput(
-          proj.projectkosten != null && Number(proj.projectkosten) !== 0
-            ? String(proj.projectkosten)
-            : String(STANDAARD_INSTALLATIEKOSTEN)
-        );
-
-        const [o, f, sv] = await Promise.all([
-          proj.offerte_id
-            ? sb
-                .from("offertes")
-                .select(
-                  "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), offerte_regels(omschrijving, aantal)"
-                )
-                .eq("id", proj.offerte_id)
-                .single()
-            : Promise.resolve({ data: null }),
+        setProject(data as Project);
+        const [fotoRes, takenRes, advRes] = await Promise.all([
+          fetch(`/api/projecten/${id}/fotos`),
+          fetch(`/api/taken?project_id=${id}&open=0`),
           sb
-            .from("facturen")
-            .select("*, leads(naam, lead_number)")
-            .or(
-              proj.offerte_id
-                ? `project_id.eq.${id},offerte_id.eq.${proj.offerte_id}`
-                : `project_id.eq.${id}`
-            ),
-          sb
-            .from("service_verzoeken")
-            .select("*")
-            .eq("project_id", id)
-            .order("created_at", { ascending: false }),
+            .from("adviseurs")
+            .select("id, naam, email, actief")
+            .order("naam"),
         ]);
-
-        setOfferte((o.data as Offerte) || null);
-        const rawFacturen = (f.data as Factuur[]) || [];
-        // Dedup bij overlap project_id + offerte_id
-        const seen = new Set<string>();
-        setFacturen(
-          rawFacturen.filter((x) => {
-            if (seen.has(x.id)) return false;
-            seen.add(x.id);
-            return true;
-          })
+        const fotoData = await fotoRes.json().catch(() => ({}));
+        const takenData = await takenRes.json().catch(() => ({}));
+        setFotos((fotoData.fotos as ProjectFoto[]) || []);
+        setTaken((takenData.taken as ProjectTaak[]) || []);
+        setAdviseurs(
+          ((advRes.data as Adviseur[]) || []).filter((a) => a.actief !== false)
         );
-        if (sv && "error" in sv && sv.error) {
-          setServiceVerzoeken([]);
-        } else {
-          setServiceVerzoeken(
-            ((sv as { data: ServiceVerzoek[] | null }).data as ServiceVerzoek[]) ||
-              []
-          );
-        }
       }
     } catch {
       setNotFound(true);
@@ -196,9 +125,10 @@ export function ProjectPage() {
 
   async function updateStatus(status: ProjectStatus) {
     if (!project) return;
+    setStatusSaving(true);
+    setError(null);
     const prev = project.status;
     setProject({ ...project, status });
-    setStatusSaving(true);
     try {
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
@@ -206,173 +136,113 @@ export function ProjectPage() {
         body: JSON.stringify({ status }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Status bijwerken mislukt");
-      if (data.project) setProject(data.project as Project);
-    } catch {
-      setProject({ ...project, status: prev });
+      if (!res.ok) throw new Error((data as { error?: string }).error);
+      const updated = (data as { project?: Project }).project;
+      if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      setOkMsg("Status bijgewerkt.");
+      // Auto-taken herladen
+      const takenRes = await fetch(`/api/taken?project_id=${project.id}&open=0`);
+      const takenData = await takenRes.json().catch(() => ({}));
+      if (takenRes.ok) setTaken((takenData.taken as ProjectTaak[]) || []);
+    } catch (e) {
+      setProject((p) => (p ? { ...p, status: prev } : p));
+      setError(e instanceof Error ? e.message : "Status bijwerken mislukt");
     } finally {
       setStatusSaving(false);
     }
   }
 
-  async function saveProjectkosten() {
+  async function createTaak() {
     if (!project) return;
-    const value = Number(kostenInput.replace(",", "."));
-    if (Number.isNaN(value) || value < 0) return;
-    setKostenSaving(true);
+    if (!newTitel.trim() || !newAfdeling || !newPersonId || !newDue) {
+      setError("Vul titel, afdeling, persoon en due date in.");
+      return;
+    }
+    setCreatingTaak(true);
+    setError(null);
     try {
+      const due = new Date(`${newDue}T17:00:00`);
+      const res = await fetch("/api/taken", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: project.id,
+          titel: newTitel.trim(),
+          afdeling: newAfdeling,
+          verantwoordelijke_id: newPersonId,
+          due_at: due.toISOString(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Taak aanmaken mislukt"
+        );
+      }
+      const taak = data.taak as ProjectTaak;
+      setTaken((prev) => [taak, ...prev]);
+      setNewTaakOpen(false);
+      setNewTitel("");
+      setNewAfdeling("");
+      setNewPersonId("");
+      setNewDue("");
+      setOkMsg("Taak aangemaakt.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Taak aanmaken mislukt");
+    } finally {
+      setCreatingTaak(false);
+    }
+  }
+
+  async function addNotitie() {
+    if (!project) return;
+    const text = noteDraft.trim();
+    if (!text) return;
+    setNoteBusy(true);
+    setError(null);
+    try {
+      const merged = appendLeadNotitie(project.notities, text);
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectkosten: value }),
+        body: JSON.stringify({ notities: merged }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-      if (data.project) {
-        setProject(data.project as Project);
-        setKostenInput(String(data.project.projectkosten ?? value));
-      }
-    } catch {
-      /* ignore */
+      if (!res.ok) throw new Error((data as { error?: string }).error);
+      const updated = (data as { project?: Project }).project;
+      if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      else setProject({ ...project, notities: merged });
+      setNoteDraft("");
+      setOkMsg("Notitie opgeslagen.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
-      setKostenSaving(false);
+      setNoteBusy(false);
     }
   }
 
-  async function maakRestantFactuur() {
-    if (!offerte?.id) return;
-    setRestantBusy(true);
-    setRestantError(null);
+  async function uploadFoto(file: File) {
+    if (!project) return;
+    setUploading(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/offertes/${offerte.id}/factuur`, {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/projecten/${project.id}/fotos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ soort: "restant" }),
+        body: form,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Aanmaken mislukt");
-      if (data.skipped) {
-        setRestantError(data.reason || "Geen restant te factureren");
-        return;
-      }
-      await load();
-      if (data.factuur?.id) {
-        window.location.href = `/facturen/${data.factuur.id}`;
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      setFotos((prev) => [...prev, data.foto as ProjectFoto]);
     } catch (e) {
-      setRestantError(e instanceof Error ? e.message : "Aanmaken mislukt");
+      setError(e instanceof Error ? e.message : "Upload mislukt");
     } finally {
-      setRestantBusy(false);
+      setUploading(false);
     }
   }
 
-  async function maakHandmatigeFactuur() {
-    if (!project?.id) return;
-    setCustomBusy(true);
-    setCustomError(null);
-    setCustomMsg(null);
-    try {
-      const res = await fetch(`/api/projecten/${project.id}/factuur`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bedrag_inc_btw: customBedrag,
-          omschrijving: customOmschrijving.trim() || undefined,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Aanmaken mislukt");
-      setCustomBedrag("");
-      setCustomOmschrijving("");
-      setCustomMsg(
-        data.factuur?.factuur_nummer
-          ? `Concept ${data.factuur.factuur_nummer} aangemaakt`
-          : "Conceptfactuur aangemaakt"
-      );
-      await load();
-      if (data.factuur?.id) {
-        window.location.href = `/facturen/${data.factuur.id}`;
-      }
-    } catch (e) {
-      setCustomError(e instanceof Error ? e.message : "Aanmaken mislukt");
-    } finally {
-      setCustomBusy(false);
-    }
-  }
-
-  async function markFactuurBetaald(f: Factuur) {
-    if (
-      !confirm(`Factuur ${f.factuur_nummer} markeren als betaald?`)
-    ) {
-      return;
-    }
-    setFactuurBusyId(f.id);
-    setFactuurError(null);
-    try {
-      const res = await fetch(`/api/facturen/${f.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "betaald",
-          betaald_op: new Date().toISOString().slice(0, 10),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Markeren als betaald mislukt");
-      if (data.factuur) {
-        setFacturen((prev) =>
-          prev.map((x) => (x.id === f.id ? (data.factuur as Factuur) : x))
-        );
-      } else {
-        await load();
-      }
-    } catch (e) {
-      setFactuurError(
-        e instanceof Error ? e.message : "Markeren als betaald mislukt"
-      );
-    } finally {
-      setFactuurBusyId(null);
-    }
-  }
-
-  const aanbetaling = offerte
-    ? aanbetalingVanOrder({
-        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        btwBedrag: Number(offerte.btw_bedrag) || 0,
-        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        modus: offerte.aanbetaling_modus,
-        handmatigIncBtw: Number(offerte.aanbetaling_bedrag_inc) || 0,
-        financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
-      })
-    : null;
-  const financieel = offerte
-    ? openstaandOpOrder({
-        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        facturen,
-      })
-    : null;
-  const restantTeFactureren = offerte
-    ? restantFactuurBedrag({
-        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        warmtefonds: Boolean(offerte.financiering_voorbehoud),
-        facturen,
-        excludeRestant: true,
-      })
-    : 0;
-  const openRestantNaFacturen = offerte
-    ? restantFactuurBedrag({
-        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        warmtefonds: Boolean(offerte.financiering_voorbehoud),
-        facturen,
-      })
-    : 0;
-  const bestaandeRestant = facturen.find((f) =>
-    isRestantFactuurOmschrijving(f.omschrijving)
-  );
-
-  if (loading) {
+  if (loading && !project) {
     return (
       <DetailShell activeTab="projecten">
         <p className="py-20 text-center text-sm text-muted">Project laden…</p>
@@ -385,672 +255,562 @@ export function ProjectPage() {
       <NotFoundState
         title="Project niet gevonden"
         backHref={backHref}
-        backLabel={backLabel}
+        backLabel="Terug naar backoffice"
         activeTab="projecten"
       />
     );
   }
 
-  const klantAdres = [
-    project.leads?.straat,
-    [project.leads?.huisnummer, project.leads?.toevoeging]
-      .filter(Boolean)
-      .join(" "),
-    [project.leads?.postcode, project.leads?.plaats]
-      .filter(Boolean)
-      .join(" "),
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const lead = Array.isArray(project.leads) ? project.leads[0] : project.leads;
+  const klantNaam = lead?.naam || project.titel || "Klant";
+  const partner =
+    project.installatie_partners ||
+    (project.monteur ? { naam: project.monteur } : null);
 
-  const batterijRegel =
-    offerte?.offerte_regels?.find((r) => /batterij/i.test(r.omschrijving)) || null;
-  const omvormerRegel =
-    offerte?.offerte_regels?.find((r) => /omvormer/i.test(r.omschrijving)) || null;
+  const schouwWeekInfo = (() => {
+    if (project.schouw_jaar && project.schouw_week) {
+      return { jaar: project.schouw_jaar, week: project.schouw_week };
+    }
+    if (project.schouw_at) {
+      return schouwWeekFromDate(project.schouw_at);
+    }
+    return null;
+  })();
 
-  const klantNaam = project.leads?.naam || project.titel || "Klant";
-  const initial = klantNaam.charAt(0).toUpperCase();
+  const schouwDagDefinitief = isSchouwdagDefinitief(project);
 
-  const feedItems: FeedItem[] = [
+  const schouwPlanHint = (() => {
+    if (!schouwWeekInfo || schouwDagDefinitief) return null;
+    const earlier = schouwWeekEerder(schouwWeekInfo.jaar, schouwWeekInfo.week);
+    return `In week ${earlier.week}: schouwdag + schouwdatum inplannen`;
+  })();
+
+  const schouwValuePrimary = schouwWeekInfo
+    ? `WEEK ${schouwWeekInfo.week}`
+    : null;
+
+  const schouwValueSecondary = (() => {
+    if (!schouwWeekInfo) return null;
+    if (schouwDagDefinitief && project.schouw_at) {
+      return formatDateTimeNl(project.schouw_at);
+    }
+    return schouwPlanHint;
+  })();
+
+  const installatieLabel = project.installatie_at
+    ? formatDateTimeNl(project.installatie_at)
+    : null;
+
+  const partnerLabel = partner
+    ? [
+        "naam" in partner && partner.naam ? partner.naam : null,
+        "telefoon" in partner && partner.telefoon ? partner.telefoon : null,
+        "email" in partner && partner.email ? partner.email : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+
+  const openTaken = taken.filter((t) => t.status !== "done");
+
+  const feed: FeedItem[] = [
     {
-      key: `project-created-${project.id}`,
+      key: "created",
       at: project.created_at,
-      kind: "event",
-      title: "Backoffice aangemaakt",
+      title: "Project aangemaakt",
       body: project.project_nummer,
     },
-    ...facturen.map((f) => ({
-      key: `factuur-${f.id}`,
-      at: f.factuurdatum || f.created_at!,
-      kind: "event" as const,
-      title: "Factuur gekoppeld",
-      body: `${f.factuur_nummer} · ${formatEuro(f.bedrag_inc_btw)}`,
-    })),
-    ...serviceVerzoeken.map((v) => ({
-      key: `service-${v.id}`,
-      at: v.created_at!,
-      kind: "event" as const,
-      title: "Serviceverzoek",
-      body: v.onderwerp || v.omschrijving || "Nieuw serviceverzoek",
-    })),
   ];
-
-  if (offerte?.ondertekend_op) {
-    feedItems.push({
-      key: `offerte-signed-${offerte.id}`,
-      at: offerte.ondertekend_op,
-      kind: "event",
-      title: "Offerte ondertekend",
-      body:
-        offerte.ondertekend_naam && offerte.offerte_nummer
-          ? `${offerte.ondertekend_naam} · ${offerte.offerte_nummer}`
-          : offerte.offerte_nummer || undefined,
+  if (project.bel_schouw_aanbetaling_at) {
+    feed.push({
+      key: "bel",
+      at: project.bel_schouw_aanbetaling_at,
+      title: "Klant gebeld voor schouw",
     });
   }
   if (project.schouw_at || project.schouw_week) {
-    feedItems.push({
-      key: `project-schouw-${project.id}`,
+    feed.push({
+      key: "schouw",
       at: project.schouw_at || project.created_at,
-      kind: "event",
-      title: "Schouwweek gepland",
-      body:
-        formatProjectSchouwWeek(project) ||
-        project.monteur ||
-        project.installatie_partners?.naam ||
-        undefined,
+      title: schouwWeekInfo
+        ? `Schouw week gepland ✅ WEEK ${schouwWeekInfo.week}`
+        : "Schouw week gepland",
+      body: schouwValueSecondary
+        ? `(${schouwValueSecondary})`
+        : formatProjectSchouwWeek(project) || undefined,
     });
   }
   if (project.installatie_at) {
-    feedItems.push({
-      key: `project-installatie-${project.id}`,
+    feed.push({
+      key: "installatie",
       at: project.installatie_at,
-      kind: "event",
       title: "Installatie gepland",
-      body: project.monteur || project.installatie_partners?.naam || undefined,
+      body: project.installatie_partners?.naam || project.monteur || undefined,
     });
   }
-  if (project.opleverdatum) {
-    feedItems.push({
-      key: `project-oplevering-${project.id}`,
-      at: project.opleverdatum,
-      kind: "event",
-      title: "Oplevering gepland",
-    });
-  }
-  if (project.backoffice_afgerond_at) {
-    feedItems.push({
-      key: `backoffice-done-${project.id}`,
-      at: project.backoffice_afgerond_at,
-      kind: "event",
-      title: "Backoffice-actie afgerond",
-    });
-  }
-  if (project.financiering_geschakeld_at) {
-    feedItems.push({
-      key: `financiering-${project.id}`,
-      at: project.financiering_geschakeld_at,
-      kind: "event",
-      title: "Financieringsman geschakeld",
-      body: "Warmtefonds",
-    });
-  }
-  if (project.bel_schouw_aanbetaling_at) {
-    feedItems.push({
-      key: `bel-schouw-${project.id}`,
-      at: project.bel_schouw_aanbetaling_at,
-      kind: "event",
-      title: "Klant gebeld voor schouw",
-      body: formatProjectSchouwWeek(project) || undefined,
-    });
-  }
-  if (project.backoffice_notitie) {
-    feedItems.push({
-      key: "note-backoffice",
+  if (project.notities?.trim()) {
+    feed.push({
+      key: "notes",
       at: project.updated_at || project.created_at,
-      kind: "note",
-      title: "Notitie backoffice",
-      body: project.backoffice_notitie,
-      author: project.backoffice_notitie_door || "Backoffice",
+      title: "Notities",
+      body: project.notities,
     });
   }
-  if (project.installateur_notitie) {
-    feedItems.push({
-      key: "note-installateur",
-      at: project.updated_at || project.created_at,
-      kind: "note",
-      title: "Notitie installateur",
-      body: project.installateur_notitie,
-      author: project.installateur_notitie_door || "Installateur",
-    });
-  }
-
-  feedItems.sort(
-    (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
-  );
-
-  const feedGroups = groupFeedByMonth(feedItems);
-
-  const tabs: { id: ProjectTab; label: string }[] = [
-    { id: "activiteit", label: "Activiteit" },
-    { id: "schouw", label: "Schouw & installatie" },
-    { id: "betaling", label: "Betaling" },
-  ];
+  feed.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="projecten">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 [&>nav]:mb-0">
-          <Breadcrumb
-            items={[
-              { label: "Backoffice", href: backHref },
-              { label: project.project_nummer },
-            ]}
-          />
-        </div>
+        <Breadcrumb
+          items={[
+            { label: "Backoffice", href: backHref },
+            { label: project.project_nummer },
+          ]}
+        />
         <Link
           href={backHref}
-          className="inline-flex shrink-0 items-center gap-1.5 border border-line bg-white px-3 py-1.5 text-sm font-semibold text-ink hover:border-green/40 hover:text-green-dark"
+          className="border border-line bg-white px-3 py-1.5 text-sm font-semibold text-ink hover:border-green/40"
         >
           ← Terug
         </Link>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[17rem_1fr] xl:grid-cols-[19rem_1fr]">
-        {/* Linker sidebar — HubSpot-stijl */}
-        <aside className="rounded-lg border border-line bg-white">
-          <div className="border-b border-line px-4 py-5 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-green/10 text-xl font-semibold text-green-dark">
-              {initial}
+      {okMsg ? (
+        <div className="mb-4 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
+          {okMsg}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="mb-4 border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
+          {error}
+        </div>
+      ) : null}
+
+      {/* Header + status path */}
+      <section className="border border-line bg-white">
+        <div className="px-4 py-5 sm:px-6">
+          <p className="font-mono text-[11px] font-semibold text-muted">
+            {project.project_nummer}
+          </p>
+          <h1 className="mt-1 font-display text-2xl font-semibold text-ink sm:text-3xl">
+            {klantNaam}
+          </h1>
+          <p className="mt-1 text-sm text-muted">
+            {[adresRegel(project.leads), lead?.telefoon, lead?.email]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </div>
+        <div className="border-t border-line px-3 py-3 sm:px-4">
+          <ProjectStatusPath
+            status={project.status}
+            disabled={statusSaving}
+            onChange={(s) => void updateStatus(s)}
+          />
+          <p className="mt-2 text-[11px] text-muted">
+            Klik op een stap om de status te wijzigen.
+          </p>
+        </div>
+      </section>
+
+      {/* Taken voor dit project */}
+      <section className="mt-4 border border-line bg-white">
+        <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Taken ({openTaken.length} open)
+          </h2>
+          <button
+            type="button"
+            onClick={() => setNewTaakOpen((v) => !v)}
+            className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c]"
+          >
+            {newTaakOpen ? "Sluiten" : "+ Taak"}
+          </button>
+        </div>
+
+        {newTaakOpen ? (
+          <div className="space-y-3 border-b border-line bg-wash/40 px-4 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Nieuwe taak
+            </p>
+            <label className="block text-[10px] font-semibold uppercase text-muted">
+              Titel
+              <input
+                value={newTitel}
+                onChange={(e) => setNewTitel(e.target.value)}
+                placeholder="Wat moet er gebeuren?"
+                className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-[10px] font-semibold uppercase text-muted">
+                Afdeling
+                <select
+                  value={newAfdeling}
+                  onChange={(e) => setNewAfdeling(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Kies…</option>
+                  {PROJECT_AFDELINGEN.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-[10px] font-semibold uppercase text-muted">
+                Verantwoordelijke
+                <select
+                  value={newPersonId}
+                  onChange={(e) => setNewPersonId(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                >
+                  <option value="">👤 Kies persoon…</option>
+                  {adviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      👤 {a.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-[10px] font-semibold uppercase text-muted">
+                Due date
+                <input
+                  type="date"
+                  value={newDue}
+                  onChange={(e) => setNewDue(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
             </div>
-            <p className="mt-3 font-mono text-xs text-muted">{project.project_nummer}</p>
-            <h2 className="mt-1 font-display text-lg font-semibold text-ink">{klantNaam}</h2>
-            {project.leads?.email ? (
-              <a
-                href={`mailto:${project.leads.email}`}
-                className="mt-1 inline-block text-sm text-green-dark hover:underline"
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={creatingTaak}
+                onClick={() => void createTaak()}
+                className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
               >
-                {project.leads.email}
-              </a>
-            ) : null}
-            {project.leads?.telefoon ? (
-              <a
-                href={`tel:${project.leads.telefoon}`}
-                className="mt-0.5 block text-sm text-muted hover:text-ink"
-              >
-                {project.leads.telefoon}
-              </a>
-            ) : null}
-            <div className="mt-4 flex justify-center gap-2">
+                {creatingTaak ? "Bezig…" : "Taak aanmaken"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {taken.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-muted">
+            Nog geen taken. Maak er zelf een aan met + Taak, of wijzig de
+            projectstatus voor automatische taken.
+          </p>
+        ) : (
+          <ul className="divide-y divide-line">
+            {taken.map((t) => {
+              const person = Array.isArray(t.verantwoordelijke)
+                ? t.verantwoordelijke[0]
+                : t.verantwoordelijke;
+              return (
+                <li
+                  key={t.id}
+                  className={[
+                    "flex flex-wrap items-start justify-between gap-3 px-4 py-3",
+                    t.status === "done" ? "opacity-50" : "",
+                  ].join(" ")}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink">{t.titel}</p>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {t.afdeling}
+                      {t.due_at ? ` · Due ${formatDateShort(t.due_at)}` : ""}
+                      {t.auto_key ? " · Auto" : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    {person ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span aria-hidden>👤</span>
+                        {person.naam}
+                      </span>
+                    ) : (
+                      <span className="text-[#C45A12]">👤 Niet toegewezen</span>
+                    )}
+                    <span className="rounded-full bg-wash px-2 py-0.5 font-semibold uppercase tracking-wide text-muted">
+                      {t.status === "todo"
+                        ? "Te doen"
+                        : t.status === "doing"
+                          ? "Bezig"
+                          : "Klaar"}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* Notitie-cards verkoper */}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <section className="border border-line bg-white px-4 py-4">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#1A4A6E]">
+            Notitie backoffice
+          </h2>
+          {project.backoffice_notitie_door?.trim() ? (
+            <p className="mt-1 text-[11px] text-muted">
+              {project.backoffice_notitie_door}
+            </p>
+          ) : null}
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">
+            {project.backoffice_notitie?.trim() || "—"}
+          </p>
+        </section>
+        <section className="border border-line bg-white px-4 py-4">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#C45A12]">
+            Notitie installateur
+          </h2>
+          {project.installateur_notitie_door?.trim() ? (
+            <p className="mt-1 text-[11px] text-muted">
+              {project.installateur_notitie_door}
+            </p>
+          ) : null}
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink">
+            {project.installateur_notitie?.trim() || "—"}
+          </p>
+        </section>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        {/* Activiteit + notities toevoegen */}
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Activiteit
+            </h2>
+          </div>
+          <div className="px-4 py-4">
+            {feed.length === 0 ? (
+              <p className="text-sm text-muted">Nog geen activiteit.</p>
+            ) : (
+              <ul className="space-y-3">
+                {feed.map((item) => (
+                  <li key={item.key} className="border-l-2 border-green/40 pl-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      {formatDateTimeNl(item.at)}
+                    </p>
+                    <p className="mt-0.5 text-sm font-semibold text-ink">
+                      {item.title}
+                    </p>
+                    {item.body ? (
+                      <p className="mt-0.5 whitespace-pre-wrap text-xs text-muted">
+                        {item.body}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-5 border-t border-line pt-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Notitie toevoegen
+              </p>
+              <textarea
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                rows={3}
+                placeholder="Nieuwe notitie…"
+                className="mt-2 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+              />
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  disabled={noteBusy || !noteDraft.trim()}
+                  onClick={() => void addNotitie()}
+                  className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+                >
+                  {noteBusy ? "Opslaan…" : "Notitie opslaan"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Klantgegevens + agenda + foto's */}
+        <div className="space-y-4">
+          <section className="border border-line bg-white">
+            <div className="border-b border-line px-4 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Klantgegevens
+              </h2>
+            </div>
+            <dl className="divide-y divide-line px-4">
+              {(
+                [
+                  ["Naam", klantNaam],
+                  ["Telefoon", lead?.telefoon || "—"],
+                  ["E-mail", lead?.email || "—"],
+                  ["Adres", adresRegel(project.leads)],
+                  ["Installateur", partnerLabel || "Nog niet gekoppeld"],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="flex justify-between gap-3 py-2.5">
+                  <dt className="shrink-0 text-xs text-muted">{label}</dt>
+                  <dd className="max-w-[65%] text-right text-sm font-medium text-ink">
+                    {label === "Telefoon" && lead?.telefoon ? (
+                      <a
+                        href={`tel:${lead.telefoon}`}
+                        className="text-green-dark hover:underline"
+                      >
+                        {value}
+                      </a>
+                    ) : label === "E-mail" && lead?.email ? (
+                      <a
+                        href={`mailto:${lead.email}`}
+                        className="text-green-dark hover:underline"
+                      >
+                        {value}
+                      </a>
+                    ) : label === "Installateur" &&
+                      partner &&
+                      "telefoon" in partner &&
+                      partner.telefoon ? (
+                      <span>
+                        <span className="block">{partner.naam}</span>
+                        <a
+                          href={`tel:${partner.telefoon}`}
+                          className="text-xs font-normal text-green-dark hover:underline"
+                        >
+                          {partner.telefoon}
+                        </a>
+                        {"email" in partner && partner.email ? (
+                          <a
+                            href={`mailto:${partner.email}`}
+                            className="mt-0.5 block text-xs font-normal text-green-dark hover:underline"
+                          >
+                            {partner.email}
+                          </a>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span
+                        className={
+                          value.startsWith("Nog niet")
+                            ? "font-normal text-muted"
+                            : undefined
+                        }
+                      >
+                        {value}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              ))}
+              <div className="flex justify-between gap-3 py-2.5">
+                <dt className="shrink-0 text-xs text-muted">
+                  Schouw week gepland {schouwValuePrimary ? "✅" : ""}
+                </dt>
+                <dd className="max-w-[65%] text-right text-sm font-medium text-ink">
+                  {schouwValuePrimary ? (
+                    <span className="block">
+                      <span>{schouwValuePrimary}</span>
+                      {schouwValueSecondary ? (
+                        <span className="mt-0.5 block text-xs font-normal text-muted">
+                          ({schouwValueSecondary})
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="font-normal text-muted">
+                      Nog niet gepland
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3 py-2.5">
+                <dt className="shrink-0 text-xs text-muted">
+                  Installatie gepland
+                </dt>
+                <dd className="max-w-[65%] text-right text-sm font-medium text-ink">
+                  <span
+                    className={
+                      !installatieLabel
+                        ? "font-normal text-muted"
+                        : undefined
+                    }
+                  >
+                    {installatieLabel || "Nog niet gepland"}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+            <div className="flex flex-wrap gap-2 border-t border-line px-4 py-3">
               <Link
                 href={`/leads/${project.lead_id}`}
-                className="rounded border border-line px-3 py-1.5 text-xs font-medium text-muted hover:border-green/40 hover:text-green-dark"
+                className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
               >
-                Lead
+                Open lead
               </Link>
-              {offerte ? (
+              {project.offerte_id ? (
                 <Link
-                  href={`/offertes/${offerte.id}`}
-                  className="rounded border border-line px-3 py-1.5 text-xs font-medium text-muted hover:border-green/40 hover:text-green-dark"
+                  href={`/offertes/${project.offerte_id}`}
+                  className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
                 >
-                  Offerte
+                  Open offerte
                 </Link>
               ) : null}
             </div>
-          </div>
+          </section>
 
-          <div className="px-4 py-3">
-            <button
-              type="button"
-              onClick={() => setAboutOpen((v) => !v)}
-              className="flex w-full items-center justify-between text-left text-sm font-semibold text-ink"
-            >
-              Over dit project
-              <span className="text-muted">{aboutOpen ? "−" : "+"}</span>
-            </button>
-            {aboutOpen ? (
-              <div className="mt-1 divide-y divide-line">
-                <SidebarField label="Adviseur">
-                  {(() => {
-                    const lead = Array.isArray(project.leads)
-                      ? project.leads[0]
-                      : project.leads;
-                    const adv = lead?.adviseurs;
-                    const naam = Array.isArray(adv) ? adv[0]?.naam : adv?.naam;
-                    return naam || "—";
-                  })()}
-                </SidebarField>
-                <SidebarField label="Status">
-                  <select
-                    value={project.status}
-                    disabled={statusSaving}
-                    onChange={(e) => updateStatus(e.target.value as ProjectStatus)}
-                    className={`w-full cursor-pointer border bg-white px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green disabled:opacity-60 ${statusTone("project", project.status)}`}
-                    aria-label="Projectstatus"
-                  >
-                    {PROJECT_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {projectStatusLabel[s]}
-                      </option>
-                    ))}
-                  </select>
-                </SidebarField>
-                <SidebarField label="Offerte">
-                  {offerte ? (
-                    <Link
-                      href={`/offertes/${offerte.id}`}
-                      className="font-semibold text-green-dark hover:underline"
-                    >
-                      {offerte.offerte_nummer}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </SidebarField>
-                <SidebarField label="Installatiepartner">
-                  {project.installatie_partners?.naam || project.monteur || "—"}
-                </SidebarField>
-                <SidebarField label="Schouwweek">
-                  {formatProjectSchouwWeek(project) || "Nog niet gepland"}
-                </SidebarField>
-                <SidebarField label="Installatie">
-                  {project.installatie_at
-                    ? formatDateTimeNl(project.installatie_at)
-                    : "Nog niet gepland"}
-                </SidebarField>
-                <SidebarField label="Opleverdatum">
-                  {formatDateShort(project.opleverdatum)}
-                </SidebarField>
-                <SidebarField label="Openstaand">
-                  <span className="font-semibold text-[#C45A12]">
-                    {formatEuro(financieel?.openstaand || 0)}
-                  </span>
-                </SidebarField>
-              </div>
-            ) : null}
-          </div>
-        </aside>
+          <ProjectFinancieelSection
+            projectId={project.id}
+            leadEmail={lead?.email}
+          />
 
-        {/* Rechter kolom — hoofdcontent */}
-        <div className="min-w-0">
-          <header className="mb-5">
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-green-deeper sm:text-3xl">
-              {klantNaam}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {[klantAdres, project.leads?.telefoon, project.leads?.email]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-            {(batterijRegel || omvormerRegel) && (
-              <p className="mt-2 text-sm text-ink">
-                {[
-                  batterijRegel
-                    ? `${batterijRegel.omschrijving}${batterijRegel.aantal > 1 ? ` (${batterijRegel.aantal}x)` : ""}`
-                    : null,
-                  omvormerRegel
-                    ? `${omvormerRegel.omschrijving}${omvormerRegel.aantal > 1 ? ` (${omvormerRegel.aantal}x)` : ""}`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm">
-              <span>
-                <span className="text-muted">Order </span>
-                <span className="font-medium">{formatEuro(financieel?.orderIncBtw || 0)}</span>
-              </span>
-              <span>
-                <span className="text-muted">Betaald </span>
-                <span className="font-medium">{formatEuro(financieel?.reedsBetaald || 0)}</span>
-              </span>
-              <span>
-                <span className="text-muted">Openstaand </span>
-                <span className="font-semibold text-[#C45A12]">
-                  {formatEuro(financieel?.openstaand || 0)}
-                </span>
-              </span>
-            </div>
-          </header>
-
-          <div className="border-b border-line">
-            <nav className="-mb-px flex gap-6 overflow-x-auto">
-              {tabs.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTab(t.id)}
-                  className={`shrink-0 border-b-2 pb-2.5 text-sm font-medium transition ${
-                    tab === t.id
-                      ? "border-green-dark text-green-deeper"
-                      : "border-transparent text-muted hover:text-ink"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </nav>
-          </div>
-
-          <div className="mt-4 rounded-lg border border-line bg-white">
-            {tab === "activiteit" && (
-              <div>
-                {feedGroups.length === 0 ? (
-                  <p className="px-5 py-8 text-sm text-muted">Nog geen activiteit.</p>
-                ) : (
-                  feedGroups.map((group) => (
-                    <section key={group.month}>
-                      <h3 className="border-b border-line bg-[#fafafa] px-5 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                        {group.month}
-                      </h3>
-                      <ul>
-                        {group.items.map((item) => (
-                          <li
-                            key={item.key}
-                            className="border-b border-line px-5 py-4 last:border-b-0"
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <p className="text-sm">
-                                <span className="font-semibold text-green-dark">
-                                  {item.kind === "note"
-                                    ? item.author || "Notitie"
-                                    : item.title}
-                                </span>
-                                {item.kind === "note" ? (
-                                  <span className="text-muted"> · {item.title}</span>
-                                ) : null}
-                              </p>
-                              <time className="shrink-0 text-xs text-muted">
-                                {formatDateTimeNl(item.at)}
-                              </time>
-                            </div>
-                            {item.body ? (
-                              <p className="mt-2 whitespace-pre-wrap text-sm text-ink">
-                                {item.body}
-                              </p>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ))
-                )}
-
-                <details className="border-t border-line">
-                  <summary className="cursor-pointer list-none px-5 py-3 text-sm font-semibold text-ink marker:content-none">
-                    Serviceverzoeken ({serviceVerzoeken.length})
-                  </summary>
-                  <div className="border-t border-line px-4 pb-4">
-                    <ProjectServiceSection
-                      project={project}
-                      verzoeken={serviceVerzoeken}
-                      onChanged={() => void load()}
-                    />
-                  </div>
-                </details>
-              </div>
-            )}
-
-            {tab === "schouw" && (
-              <div className="p-5">
-                <div className="mb-5 max-w-sm">
-                  <p className="text-[11px] font-medium text-muted">
-                    Installatiekosten (ex btw)
-                  </p>
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={kostenInput}
-                      onChange={(e) => setKostenInput(e.target.value)}
-                      className="w-full border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-green"
-                    />
-                    <button
-                      type="button"
-                      disabled={kostenSaving}
-                      onClick={saveProjectkosten}
-                      className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                    >
-                      {kostenSaving ? "…" : "Opslaan"}
-                    </button>
-                  </div>
-                </div>
-                <ProjectSchouwSection
-                  project={project}
-                  embedded
-                  onChanged={() => void load()}
+          <section className="border border-line bg-white">
+            <div className="flex items-center justify-between border-b border-line px-4 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Foto&apos;s ({fotos.length})
+              </h2>
+              <label className="cursor-pointer border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash">
+                {uploading ? "Bezig…" : "+ Upload"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadFoto(file);
+                    e.target.value = "";
+                  }}
                 />
-              </div>
-            )}
-
-            {tab === "betaling" && (
-              <div className="p-5">
-                <div className="max-w-md space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted">Orderbedrag</span>
-                    <span className="font-medium">
-                      {formatEuro(financieel?.orderIncBtw || 0)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted">Aanbetaling</span>
-                    <span className="font-medium">
-                      {formatEuro(aanbetaling?.bedragIncBtw || 0)}
-                    </span>
-                  </div>
-                  {offerte?.financiering_voorbehoud ? (
-                    <div className="flex justify-between">
-                      <span className="text-muted">Warmtefonds</span>
-                      <span className="font-medium">
-                        {formatEuro(aanbetaling?.restantIncBtw || 0)}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex justify-between">
-                      <span className="text-muted">Betaalroute</span>
-                      <span className="font-medium">Eigen middelen</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-muted">Reeds betaald</span>
-                    <span className="font-medium">
-                      {formatEuro(financieel?.reedsBetaald || 0)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between border-t border-line pt-3">
-                    <span className="text-muted">Aanbetaling te innen</span>
-                    <span className="font-medium">
-                      {formatEuro(Number(project.aanbetaling_te_innen_inc || 0))}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-medium">Openstaand</span>
-                    <span className="text-lg font-semibold text-[#C45A12]">
-                      {formatEuro(financieel?.openstaand || 0)}
-                    </span>
-                  </div>
-                  {offerte ? (
-                    <div className="pt-1">
-                      <AanbetalingSamenvatting
-                        modus={aanbetaling?.modus ?? "restant"}
-                        handmatigIncBtw={Number(offerte.aanbetaling_bedrag_inc) || 0}
-                        subtotaalExBtw={Number(offerte.subtotaal_ex_btw) || 0}
-                        btwBedrag={Number(offerte.btw_bedrag) || 0}
-                        totaalIncBtw={Number(offerte.totaal_inc_btw) || 0}
-                        financieringVoorbehoud={Boolean(
-                          offerte.financiering_voorbehoud
-                        )}
+              </label>
+            </div>
+            <div className="px-4 py-4">
+              {fotos.length === 0 ? (
+                <p className="text-sm text-muted">Nog geen foto&apos;s.</p>
+              ) : (
+                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {fotos.map((f) => (
+                    <li key={f.id} className="overflow-hidden border border-line">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={f.url || undefined}
+                        alt={f.bestandsnaam || "Foto"}
+                        className="aspect-square w-full object-cover"
                       />
-                      <Link
-                        href={`/offertes/${offerte.id}`}
-                        className="mt-1 inline-block text-xs text-green-dark hover:underline"
-                      >
-                        Instelling via offerte
-                      </Link>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="mt-8 border-t border-line pt-6">
-                  <h3 className="text-sm font-semibold text-ink">
-                    Factuur maken
-                  </h3>
-                  <p className="mt-1 text-xs text-muted">
-                    Stel zelf het bedrag in (incl. btw). Wordt als concept
-                    aangemaakt — daarna kun je versturen vanuit de factuur.
-                  </p>
-                  <div className="mt-3 max-w-md space-y-2.5">
-                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      Bedrag incl. btw (€)
-                      <input
-                        type="number"
-                        min={0.01}
-                        step="0.01"
-                        inputMode="decimal"
-                        placeholder="bijv. 1571.01"
-                        value={customBedrag}
-                        onChange={(e) => setCustomBedrag(e.target.value)}
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                      />
-                    </label>
-                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      Omschrijving (optioneel)
-                      <input
-                        type="text"
-                        placeholder="bijv. Aanbetaling / restant / meerwerk"
-                        value={customOmschrijving}
-                        onChange={(e) => setCustomOmschrijving(e.target.value)}
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      disabled={customBusy || !customBedrag.trim()}
-                      onClick={() => void maakHandmatigeFactuur()}
-                      className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-                    >
-                      {customBusy ? "Aanmaken…" : "Conceptfactuur maken"}
-                    </button>
-                    {customError ? (
-                      <p className="text-xs text-[#C45A12]">{customError}</p>
-                    ) : null}
-                    {customMsg ? (
-                      <p className="text-xs text-green-dark">{customMsg}</p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="mt-8 border-t border-line pt-6">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-ink">
-                      Facturen ({facturen.length})
-                    </h3>
-                    {offerte?.status === "ondertekend" &&
-                    (openRestantNaFacturen >= 0.01 ||
-                      bestaandeRestant?.status === "concept") ? (
-                      <button
-                        type="button"
-                        disabled={restantBusy}
-                        onClick={() => void maakRestantFactuur()}
-                        className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                      >
-                        {restantBusy
-                          ? "…"
-                          : bestaandeRestant?.status === "concept"
-                            ? `Concept restant · ${formatEuro(restantTeFactureren)}`
-                            : `Restantfactuur · ${formatEuro(
-                                openRestantNaFacturen >= 0.01
-                                  ? openRestantNaFacturen
-                                  : restantTeFactureren
-                              )}`}
-                      </button>
-                    ) : bestaandeRestant ? (
-                      <Link
-                        href={`/facturen/${bestaandeRestant.id}`}
-                        className="text-xs font-semibold text-green-dark hover:underline"
-                      >
-                        Restantfactuur {bestaandeRestant.factuur_nummer}
-                      </Link>
-                    ) : null}
-                  </div>
-                  {restantError ? (
-                    <p className="mt-2 text-xs text-[#C45A12]">{restantError}</p>
-                  ) : null}
-                  {factuurError ? (
-                    <p className="mt-2 text-xs text-[#C45A12]">{factuurError}</p>
-                  ) : null}
-                  {facturen.length === 0 ? (
-                    <p className="mt-3 text-sm text-muted">Nog geen facturen.</p>
-                  ) : (
-                    <table className="crm-table mt-3">
-                      <thead>
-                        <tr>
-                          <th>Factuur</th>
-                          <th>Status</th>
-                          <th>Bedrag</th>
-                          <th>Datum</th>
-                          <th>Actie</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {facturen.map((f) => {
-                          const paid = factuurIsBetaald(f.status, f.betaald_op);
-                          const canMarkPaid =
-                            !paid && f.status !== "vervallen";
-                          return (
-                            <tr key={f.id}>
-                              <td>
-                                <Link
-                                  href={`/facturen/${f.id}`}
-                                  className="font-mono text-xs font-semibold text-orange hover:underline"
-                                >
-                                  {f.factuur_nummer}
-                                </Link>
-                                {isRestantFactuurOmschrijving(f.omschrijving) ? (
-                                  <span className="ml-1.5 text-[10px] font-medium text-muted">
-                                    restant
-                                  </span>
-                                ) : null}
-                              </td>
-                              <td>
-                                <StatusBadge kind="factuur" value={f.status} />
-                              </td>
-                              <td className="tabular-nums">
-                                {formatEuro(f.bedrag_inc_btw)}
-                              </td>
-                              <td className="text-muted">
-                                {formatDateShort(f.factuurdatum)}
-                              </td>
-                              <td>
-                                {canMarkPaid ? (
-                                  <button
-                                    type="button"
-                                    disabled={factuurBusyId === f.id}
-                                    onClick={() => void markFactuurBetaald(f)}
-                                    className="bg-green px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                                  >
-                                    {factuurBusyId === f.id ? "…" : "Betaald"}
-                                  </button>
-                                ) : paid ? (
-                                  <span className="text-[11px] text-muted">
-                                    {formatDateShort(f.betaald_op) || "—"}
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] text-muted">—</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <ProjectAgendaAfspraakSection
+          project={project}
+          onChanged={() => void load()}
+        />
       </div>
     </DetailShell>
   );

@@ -214,22 +214,25 @@ export function resolveFinancialRange(
   range: FinancialDateRange,
   now = new Date()
 ): { start: Date; end: Date; previousStart: Date; previousEnd: Date } {
-  const end = amsEndOfDay(now);
   const z = toZonedTime(now, TZ);
   let start: Date;
+  let end = amsEndOfDay(now);
 
   switch (range) {
     case "this_week":
       start = amsStartOfDay(startOfWeek(z, { weekStartsOn: 1 }));
       break;
     case "last_7_days":
-      start = amsStartOfDay(addDays(z, -6));
+      // Gelijk aan Meta: N dagen t/m gisteren
+      end = amsEndOfDay(addDays(z, -1));
+      start = amsStartOfDay(addDays(z, -7));
       break;
     case "this_month":
       start = amsStartOfDay(startOfMonth(z));
       break;
     case "last_30_days":
-      start = amsStartOfDay(addDays(z, -29));
+      end = amsEndOfDay(addDays(z, -1));
+      start = amsStartOfDay(addDays(z, -30));
       break;
     case "this_year":
       start = amsStartOfDay(startOfYear(z));
@@ -278,7 +281,9 @@ function emptySlice(): PeriodSlice {
 
 function finalizeTotals(
   slice: PeriodSlice,
-  leadsForConversie: number
+  leadsForConversie: number,
+  cohortAfspraken: number,
+  cohortDeals: number
 ): FinancialTotals {
   const totaleKosten =
     slice.inkoop + slice.projectkosten + slice.adSpend + slice.salesKosten;
@@ -299,11 +304,11 @@ function finalizeTotals(
     nettoAfspraken: slice.nettoAfspraken,
     conversieAfspraak:
       leadsForConversie > 0
-        ? round2((slice.nettoAfspraken / leadsForConversie) * 100)
+        ? round2((cohortAfspraken / leadsForConversie) * 100)
         : 0,
     conversieDeal:
       leadsForConversie > 0
-        ? round2((slice.deals / leadsForConversie) * 100)
+        ? round2((cohortDeals / leadsForConversie) * 100)
         : 0,
     margePct:
       slice.omzet > 0 ? round2((winst / slice.omzet) * 100) : 0,
@@ -329,7 +334,7 @@ function computePeriodSlice(
   start: Date,
   end: Date,
   commissieMap?: CommissieMap
-): { slice: PeriodSlice; leadsForConversie: number } {
+): { slice: PeriodSlice; leadsForConversie: number; cohortAfspraken: number; cohortDeals: number } {
   const leads = adviseurId
     ? raw.leads.filter((l) => l.adviseur_id === adviseurId)
     : raw.leads;
@@ -350,21 +355,31 @@ function computePeriodSlice(
   const signed = offertes.filter(
     (o) => o.status === "ondertekend" && o.ondertekend_op
   );
+  const leadsMetDeal = new Set(signed.map((o) => o.lead_id));
 
   const slice = emptySlice();
-  let leadsForConversie = 0;
+  const periodLeadIds: string[] = [];
 
   for (const l of leads) {
     if (!inRange(l.created_at, start, end)) continue;
     slice.leads += 1;
-    leadsForConversie += 1;
+    periodLeadIds.push(l.id);
   }
+  const periodLeadSet = new Set(periodLeadIds);
 
   for (const a of afspraken) {
     if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
     slice.brutoAfspraken += 1;
     if (a.status !== "geannuleerd") slice.nettoAfspraken += 1;
   }
+
+  const cohortAfspraak = new Set<string>();
+  for (const a of afspraken) {
+    if (!periodLeadSet.has(a.lead_id)) continue;
+    if (a.status === "geannuleerd") continue;
+    cohortAfspraak.add(a.lead_id);
+  }
+  const cohortDeals = periodLeadIds.filter((id) => leadsMetDeal.has(id)).length;
 
   for (const o of signed) {
     if (!inRange(o.ondertekend_op!, start, end)) continue;
@@ -401,7 +416,12 @@ function computePeriodSlice(
     else slice.salesKosten += k.bedrag;
   }
 
-  return { slice, leadsForConversie };
+  return {
+    slice,
+    leadsForConversie: periodLeadIds.length,
+    cohortAfspraken: cohortAfspraak.size,
+    cohortDeals,
+  };
 }
 
 function buildDailySeries(
@@ -580,13 +600,20 @@ function buildBreakdowns(
     if (!leadMap.has(a.lead_id)) continue;
     if (!afspraakBlokkeertAgenda(a.soort)) continue;
     if (a.status === "geannuleerd") continue;
-    if (!inRange(afspraakIngeplandAt(a), start, end)) continue;
     afspraakLeadIds.add(a.lead_id);
+  }
+
+  const dealLeadIds = new Set<string>();
+  for (const o of raw.offertes) {
+    if (o.status !== "ondertekend" || !o.ondertekend_op) continue;
+    if (!leadMap.has(o.lead_id)) continue;
+    dealLeadIds.add(o.lead_id);
   }
 
   type Acc = {
     leads: Set<string>;
     afspraken: Set<string>;
+    dealLeads: Set<string>;
     deals: number;
     omzet: number;
     inkoop: number;
@@ -601,6 +628,7 @@ function buildBreakdowns(
       a = {
         leads: new Set(),
         afspraken: new Set(),
+        dealLeads: new Set(),
         deals: 0,
         omzet: 0,
         inkoop: 0,
@@ -615,11 +643,17 @@ function buildBreakdowns(
     if (!inRange(l.created_at, start, end)) continue;
     const lander = (l.lander || "").trim() || "(geen lander)";
     const adv = l.adviseur_id || "(geen adviseur)";
-    ensure(byLander, lander).leads.add(l.id);
-    ensure(byAdv, adv).leads.add(l.id);
-    if (afspraakLeadIds.has(l.id)) {
-      ensure(byLander, lander).afspraken.add(l.id);
-      ensure(byAdv, adv).afspraken.add(l.id);
+    for (const [map, key] of [
+      [byLander, lander] as const,
+      [byAdv, adv] as const,
+    ]) {
+      const acc = ensure(map, key);
+      acc.leads.add(l.id);
+      if (afspraakLeadIds.has(l.id)) acc.afspraken.add(l.id);
+      if (dealLeadIds.has(l.id)) {
+        acc.dealLeads.add(l.id);
+        acc.deals += 1;
+      }
     }
   }
 
@@ -646,7 +680,6 @@ function buildBreakdowns(
       [byAdv, adv] as const,
     ]) {
       const acc = ensure(map, key);
-      acc.deals += 1;
       acc.omzet += omzet;
       acc.inkoop += inkoop;
       acc.projectkosten += pk > 0 ? pk : STANDAARD_INSTALLATIEKOSTEN;
@@ -670,12 +703,12 @@ function buildBreakdowns(
           label: key,
           leads: a.leads.size,
           afspraken: a.afspraken.size,
-          deals: a.deals,
+          deals: a.dealLeads.size,
           omzet: round2(a.omzet),
           winst: round2(winst),
           conversieDeal:
             a.leads.size > 0
-              ? round2((a.deals / a.leads.size) * 100)
+              ? round2((a.dealLeads.size / a.leads.size) * 100)
               : 0,
         };
       })
@@ -712,10 +745,17 @@ export function buildFinancialDashboard(
     commissieMap
   );
 
-  const totals = finalizeTotals(current.slice, current.leadsForConversie);
+  const totals = finalizeTotals(
+    current.slice,
+    current.leadsForConversie,
+    current.cohortAfspraken,
+    current.cohortDeals
+  );
   const previousTotals = finalizeTotals(
     previous.slice,
-    previous.leadsForConversie
+    previous.leadsForConversie,
+    previous.cohortAfspraken,
+    previous.cohortDeals
   );
   const series = buildDailySeries(raw, kosten, adviseurId, start, end, commissieMap);
   const { byLander, byAdviseur } = buildBreakdowns(

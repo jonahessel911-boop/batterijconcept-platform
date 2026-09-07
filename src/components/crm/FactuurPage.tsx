@@ -51,6 +51,17 @@ export function FactuurPage() {
         setNotFound(true);
       } else {
         const fac = data as Factuur;
+        // Optioneel: credit-koppeling ophalen als kolom bestaat
+        if (fac.credit_van_factuur_id) {
+          const { data: creditVan } = await sb
+            .from("facturen")
+            .select("id, factuur_nummer")
+            .eq("id", fac.credit_van_factuur_id)
+            .maybeSingle();
+          if (creditVan) {
+            fac.credit_van = creditVan as Factuur["credit_van"];
+          }
+        }
         setFactuur(fac);
         if (fac.betaald_op) {
           setBetaaldOp(fac.betaald_op.slice(0, 10));
@@ -193,6 +204,11 @@ export function FactuurPage() {
 
   const isDraft = factuur.status === "concept";
   const isPaid = factuur.status === "betaald";
+  const creditVanRaw = factuur.credit_van;
+  const creditVan = Array.isArray(creditVanRaw)
+    ? creditVanRaw[0]
+    : creditVanRaw;
+  const isCredit = Boolean(factuur.credit_van_factuur_id);
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="facturen">
@@ -210,11 +226,20 @@ export function FactuurPage() {
               {factuur.factuur_nummer}
             </p>
             <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight text-green-deeper sm:text-4xl">
-              {factuur.omschrijving || "Factuur"}
+              {isCredit
+                ? `Creditfactuur${
+                    creditVan?.factuur_nummer
+                      ? ` (${creditVan.factuur_nummer})`
+                      : ""
+                  }`
+                : factuur.omschrijving || "Factuur"}
             </h1>
             <p className="mt-2 text-sm text-muted">
               Aangemaakt {formatDateTimeNl(factuur.created_at)}
               {isDraft ? " · Concept (nog niet verzonden)" : ""}
+              {isCredit && creditVan?.factuur_nummer
+                ? ` · CREDIT FACTUUR (${creditVan.factuur_nummer})`
+                : ""}
             </p>
           </div>
           <StatusBadge kind="factuur" value={factuur.status} />
@@ -246,7 +271,7 @@ export function FactuurPage() {
                 ? "Verstuur naar klant"
                 : "Opnieuw versturen"}
           </button>
-          {!isPaid ? (
+          {!isPaid && !isCredit ? (
             <>
               <input
                 type="date"
@@ -264,6 +289,11 @@ export function FactuurPage() {
                 {busy === "paid" ? "Opslaan…" : "Markeer als betaald"}
               </button>
             </>
+          ) : null}
+          {isCredit ? (
+            <p className="w-full text-sm text-muted">
+              Creditfactuur — er hoeft niets te worden betaald.
+            </p>
           ) : null}
         </div>
 

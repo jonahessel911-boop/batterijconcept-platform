@@ -1,8 +1,9 @@
 import { addDays } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
-import type { Factuur, Project } from "@/types/database";
+import type { Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { factuurIsOverdue, vervaldatumEndOfDay } from "@/lib/factuur-betaling";
+import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import {
   defaultSchouwWeekAfterSale,
   formatSchouwWeekLabel,
@@ -13,7 +14,8 @@ import {
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
   | "schakel_financiering"
-  | "nabellen_factuur";
+  | "nabellen_factuur"
+  | "herplan_afspraak";
 
 /** Financieringsman Warmtefonds — bel/WhatsApp bij Warmtefonds-sale. */
 export const FINANCIERINGSMAN_TEL = "+31 6 58824298";
@@ -136,9 +138,14 @@ export function belSchouwDeadline(instroomAt: Date | string): Date {
 export function isBelSchouwActieOpen(project: Project): boolean {
   // Pas dicht na volledige stap 1 (factuur + schouwweek)
   if (project.bel_schouw_aanbetaling_at) return false;
+  const s = project.status as string;
   return (
-    project.status === "schouw_inplannen" ||
-    project.status === "schouw_gepland"
+    s === "schouw_aanbetaling" ||
+    s === "aanbetaling_betaald" ||
+    s === "schouw_in_afwachting" ||
+    // legacy
+    s === "schouw_inplannen" ||
+    s === "schouw_gepland"
   );
 }
 
@@ -297,17 +304,117 @@ export function openNabellenFactuurActies(
   return items;
 }
 
+const HERPLAN_SKIP_STATUS = new Set([
+  "deal",
+  "sale_financiering",
+  "sale_eigen_middelen",
+  "geen_interesse",
+  "offerte_afgewezen",
+  "niet_gekwalificeerd",
+]);
+
+/**
+ * Klant heeft huisbezoek geannuleerd → opnieuw inplannen.
+ * Bron: leadstatus `afspraak_afgezegd_klant`, of geannuleerde fysieke
+ * afspraak met “Annulering (klant)” zonder nieuwe actieve afspraak.
+ */
+export function openHerplanAfspraakActies(
+  leads: Pick<Lead, "id" | "naam" | "telefoon" | "plaats" | "status">[],
+  afspraken: Pick<
+    Afspraak,
+    "id" | "lead_id" | "start_at" | "status" | "soort" | "notities"
+  >[] = [],
+  now = new Date()
+): BackofficeActie[] {
+  const nowMs = now.getTime();
+  const hasFutureActive = new Set<string>();
+  for (const a of afspraken) {
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd" || a.status === "voltooid") continue;
+    if (new Date(a.start_at).getTime() <= nowMs) continue;
+    hasFutureActive.add(a.lead_id);
+  }
+
+  const cancelledByKlant = new Map<string, (typeof afspraken)[0]>();
+  for (const a of afspraken) {
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status !== "geannuleerd") continue;
+    const note = (a.notities || "").toLowerCase();
+    if (!note.includes("annulering (klant)")) continue;
+    const prev = cancelledByKlant.get(a.lead_id);
+    if (
+      !prev ||
+      new Date(a.start_at).getTime() > new Date(prev.start_at).getTime()
+    ) {
+      cancelledByKlant.set(a.lead_id, a);
+    }
+  }
+
+  const items: BackofficeActie[] = [];
+  for (const lead of leads) {
+    if (HERPLAN_SKIP_STATUS.has(lead.status)) continue;
+    if (hasFutureActive.has(lead.id)) continue;
+
+    const fromStatus = lead.status === "afspraak_afgezegd_klant";
+    const cancelled = cancelledByKlant.get(lead.id);
+    if (!fromStatus && !cancelled) continue;
+
+    const startAt = cancelled?.start_at || now.toISOString();
+    const deadlineAt = belSchouwDeadline(startAt);
+    items.push({
+      id: `herplan-afspraak-${lead.id}`,
+      soort: "herplan_afspraak",
+      titel: "Afspraak opnieuw inplannen",
+      detail: cancelled
+        ? `Klant heeft afspraak geannuleerd (${new Date(cancelled.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}). Plan een nieuw moment.`
+        : "Klant heeft de afspraak afgezegd. Plan een nieuw huisbezoek.",
+      deadlineAt: deadlineAt.toISOString(),
+      overdue: deadlineAt.getTime() < nowMs,
+      leadId: lead.id,
+      leadNaam: lead.naam || "—",
+      telefoon: lead.telefoon || null,
+      plaats: lead.plaats || null,
+      href: `/?tab=leads&lead=${lead.id}`,
+    });
+  }
+  return items;
+}
+
 export function openBackofficeActies(
   projecten: Project[],
   facturen: Factuur[] = [],
-  now = new Date()
+  now = new Date(),
+  opts?: {
+    leads?: Pick<Lead, "id" | "naam" | "telefoon" | "plaats" | "status">[];
+    afspraken?: Pick<
+      Afspraak,
+      "id" | "lead_id" | "start_at" | "status" | "soort" | "notities"
+    >[];
+  }
 ): BackofficeActie[] {
   return [
+    ...openHerplanAfspraakActies(
+      opts?.leads || [],
+      opts?.afspraken || [],
+      now
+    ),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBelSchouwActies(projecten, now),
     ...openNabellenFactuurActies(facturen, now),
   ].sort(
     (a, b) =>
       new Date(a.deadlineAt).getTime() - new Date(b.deadlineAt).getTime()
+  );
+}
+
+/** Openstaande acties voor één project (incl. factuur-nabellen op dezelfde lead). */
+export function openActiesVoorProject(
+  project: Project,
+  facturen: Factuur[] = [],
+  now = new Date()
+): BackofficeActie[] {
+  const relatedFacturen = facturen.filter((f) => f.lead_id === project.lead_id);
+  return openBackofficeActies([project], relatedFacturen, now).filter(
+    (a) => a.projectId === project.id || a.leadId === project.lead_id
   );
 }

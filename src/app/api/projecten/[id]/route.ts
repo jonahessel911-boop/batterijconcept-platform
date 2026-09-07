@@ -25,6 +25,11 @@ export async function PATCH(
     schouw_week?: number | null;
     leveradres?: string | null;
     materiaal_checks?: Record<string, boolean> | null;
+    notities?: string | null;
+    backoffice_notitie?: string | null;
+    installateur_notitie?: string | null;
+    afdeling?: string | null;
+    verantwoordelijke_id?: string | null;
   };
   try {
     body = await req.json();
@@ -111,6 +116,15 @@ export async function PATCH(
         ? body.materiaal_checks
         : {};
   }
+  if (body.notities !== undefined) {
+    patch.notities = body.notities?.trim() || null;
+  }
+  if (body.backoffice_notitie !== undefined) {
+    patch.backoffice_notitie = body.backoffice_notitie?.trim() || null;
+  }
+  if (body.installateur_notitie !== undefined) {
+    patch.installateur_notitie = body.installateur_notitie?.trim() || null;
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -164,6 +178,13 @@ export async function PATCH(
         },
         { status: 500 }
       );
+    }
+
+    if (body.status) {
+      const { syncAutoTakenVoorProject } = await import(
+        "@/lib/sync-auto-taken"
+      );
+      await syncAutoTakenVoorProject(sb, id, body.status);
     }
 
     return NextResponse.json({ project: data });

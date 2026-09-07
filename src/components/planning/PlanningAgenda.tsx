@@ -95,12 +95,18 @@ export function PlanningAgenda({
   linkHref,
   showPartner = false,
   initialWeekAnchor,
+  onOrderUpdated,
+  allowDeleteSchouw = true,
 }: {
   orders: PlanningOrder[];
   linkHref?: (event: PlanningEvent) => string | undefined;
   showPartner?: boolean;
   /** Startweek (bijv. schouwweek van dit project). */
   initialWeekAnchor?: Date | string | null;
+  /** Na verwijderen/bijwerken van een order (bijv. schouw gewist). */
+  onOrderUpdated?: (order: PlanningOrder) => void;
+  /** Schouw uit agenda kunnen verwijderen (geen klantmail). */
+  allowDeleteSchouw?: boolean;
 }) {
   const todayKey = useMemo(() => dayKeyAmsterdam(new Date()), []);
   const [weekAnchor, setWeekAnchor] = useState(() =>
@@ -113,7 +119,12 @@ export function PlanningAgenda({
   );
   const [filter, setFilter] = useState<PlanningFilter>("totaal");
   const [calendarView, setCalendarView] = useState<"dag" | "week">("week");
-
+  const [selectedEvent, setSelectedEvent] = useState<PlanningEvent | null>(
+    null
+  );
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionOk, setActionOk] = useState<string | null>(null);
   useEffect(() => {
     try {
       const v = localStorage.getItem("bc_planning_agenda_view");
@@ -140,6 +151,13 @@ export function PlanningAgenda({
         : allEvents.filter((e) => e.kind === filter),
     [allEvents, filter]
   );
+
+  useEffect(() => {
+    if (!selectedEvent) return;
+    if (!allEvents.some((e) => e.key === selectedEvent.key)) {
+      setSelectedEvent(null);
+    }
+  }, [allEvents, selectedEvent]);
 
   const days = useMemo(() => weekDaysFrom(weekAnchor), [weekAnchor]);
 
@@ -243,12 +261,54 @@ export function PlanningAgenda({
     }
   }
 
+  async function deleteSchouw(event: PlanningEvent) {
+    if (event.kind !== "schouw") return;
+    const ok = window.confirm(
+      "Schouw uit de agenda verwijderen? De klant krijgt geen mail."
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setActionError(null);
+    setActionOk(null);
+    try {
+      const res = await fetch(`/api/projecten/${event.order.id}/schouw`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      const updated = (data as { project?: PlanningOrder }).project;
+      if (updated) onOrderUpdated?.(updated);
+      setSelectedEvent(null);
+      setActionOk("Schouw verwijderd uit de agenda. Geen mail verstuurd.");
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function openEvent(event: PlanningEvent) {
+    setSelectedEvent(event);
+    setActionError(null);
+    setActionOk(null);
+  }
+
   function EventCard({ event }: { event: PlanningEvent }) {
     const lead = leadOf(event.order);
     const style = KIND_STYLE[event.kind];
-    const href = linkHref?.(event);
-    const inner = (
-      <>
+    const selected = selectedEvent?.key === event.key;
+    return (
+      <button
+        type="button"
+        onClick={() => openEvent(event)}
+        className={`block w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left hover:shadow-sm ${style.border} ${style.bg} ${
+          selected ? "ring-2 ring-green/40" : ""
+        }`}
+      >
         <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
           {KIND_LABEL[event.kind]}
         </span>
@@ -270,19 +330,8 @@ export function PlanningAgenda({
             {event.order.installatie_partners.naam}
           </span>
         ) : null}
-      </>
+      </button>
     );
-
-    const className = `block rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 hover:shadow-sm ${style.border} ${style.bg}`;
-
-    if (href) {
-      return (
-        <Link href={href} className={className}>
-          {inner}
-        </Link>
-      );
-    }
-    return <div className={className}>{inner}</div>;
   }
 
   function DayList() {
@@ -297,10 +346,18 @@ export function PlanningAgenda({
       <div className="space-y-2">
         {selectedList.map((event) => {
           const lead = leadOf(event.order);
-          const href = linkHref?.(event);
           const style = KIND_STYLE[event.kind];
-          const content = (
-            <>
+          const selected = selectedEvent?.key === event.key;
+          return (
+            <button
+              key={event.key}
+              type="button"
+              onClick={() => openEvent(event)}
+              className={[
+                "block w-full border px-3 py-3 text-left hover:border-green/40",
+                selected ? "border-green bg-green-soft/30" : "border-line",
+              ].join(" ")}
+            >
               <p className="text-[10px] font-semibold uppercase text-muted">
                 {KIND_LABEL[event.kind]}
               </p>
@@ -313,25 +370,19 @@ export function PlanningAgenda({
               <p className="mt-0.5 text-xs text-muted">
                 {lead ? adresRegel(lead) : "—"}
               </p>
-            </>
-          );
-          return href ? (
-            <Link
-              key={event.key}
-              href={href}
-              className="block border border-line px-3 py-3 hover:border-green/40"
-            >
-              {content}
-            </Link>
-          ) : (
-            <div key={event.key} className="border border-line px-3 py-3">
-              {content}
-            </div>
+            </button>
           );
         })}
       </div>
     );
   }
+
+  const detailLead = selectedEvent
+    ? leadOf(selectedEvent.order)
+    : null;
+  const detailHref = selectedEvent
+    ? linkHref?.(selectedEvent)
+    : undefined;
 
   return (
     <div className="overflow-hidden border border-line bg-white">
@@ -427,6 +478,83 @@ export function PlanningAgenda({
           </button>
         </div>
       </div>
+
+      {(actionOk || actionError) && (
+        <div
+          className={[
+            "border-b px-3 py-2.5 text-sm sm:px-4",
+            actionError
+              ? "border-red-200 bg-red-50 text-red-800"
+              : "border-green/30 bg-green-soft text-green-dark",
+          ].join(" ")}
+        >
+          {actionError || actionOk}
+        </div>
+      )}
+
+      {selectedEvent && (
+        <div className="border-b border-line bg-wash/40 px-3 py-3 sm:px-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                {KIND_LABEL[selectedEvent.kind]}
+              </p>
+              <p className="mt-0.5 font-semibold text-ink">
+                {detailLead?.naam || selectedEvent.order.project_nummer}
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                {formatInTimeZone(
+                  selectedEvent.at,
+                  AMSTERDAM_TZ,
+                  "EEEE d MMMM yyyy · HH:mm",
+                  { locale: nl }
+                )}
+                {showPartner && selectedEvent.order.installatie_partners?.naam
+                  ? ` · ${selectedEvent.order.installatie_partners.naam}`
+                  : ""}
+              </p>
+              {detailLead ? (
+                <p className="mt-0.5 text-xs text-muted">
+                  {adresRegel(detailLead)}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {detailHref ? (
+                <Link
+                  href={detailHref}
+                  className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                >
+                  Open project
+                </Link>
+              ) : null}
+              {allowDeleteSchouw && selectedEvent.kind === "schouw" ? (
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void deleteSchouw(selectedEvent)}
+                  className="border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {deleting ? "Bezig…" : "Verwijderen"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setSelectedEvent(null)}
+                className="px-2 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+              >
+                Sluiten
+              </button>
+            </div>
+          </div>
+          {allowDeleteSchouw && selectedEvent.kind === "schouw" ? (
+            <p className="mt-2 text-[11px] text-muted">
+              Verwijderen haalt de schouw uit de agenda. De klant krijgt geen
+              mail.
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {/* Dag-strip: in dagweergave altijd; in week alleen mobiel (desktop heeft kolomkoppen) */}
       <div

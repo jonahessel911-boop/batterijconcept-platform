@@ -22,6 +22,8 @@ export type MgmtPeriodPreset =
   | "last_week"
   | "this_month"
   | "last_month"
+  | "last_7_days"
+  | "last_14_days"
   | "last_30_days"
   | "this_quarter"
   | "this_year"
@@ -73,6 +75,8 @@ export const PERIOD_PRESET_LABELS: Record<MgmtPeriodPreset, string> = {
   last_week: "Vorige week",
   this_month: "Deze maand",
   last_month: "Vorige maand",
+  last_7_days: "Afgelopen 7 dagen",
+  last_14_days: "Afgelopen 14 dagen",
   last_30_days: "Afgelopen 30 dagen",
   this_quarter: "Dit kwartaal",
   this_year: "Dit jaar",
@@ -109,9 +113,22 @@ export function resolveMgmtPeriod(
       end = amsEndOfDay(endOfMonth(prev));
       break;
     }
-    case "last_30_days":
-      start = amsStartOfDay(addDays(z, -29));
+    case "last_7_days": {
+      end = amsEndOfDay(addDays(z, -1));
+      start = amsStartOfDay(addDays(z, -7));
       break;
+    }
+    case "last_14_days": {
+      // Gelijk aan Meta Ads: N dagen t/m gisteren (vandaag telt niet mee).
+      end = amsEndOfDay(addDays(z, -1));
+      start = amsStartOfDay(addDays(z, -14));
+      break;
+    }
+    case "last_30_days": {
+      end = amsEndOfDay(addDays(z, -1));
+      start = amsStartOfDay(addDays(z, -30));
+      break;
+    }
     case "this_quarter":
       start = amsStartOfDay(startOfQuarter(z));
       end = amsEndOfDay(
@@ -138,13 +155,26 @@ export function resolveMgmtPeriod(
   const previousEnd = amsEndOfDay(addDays(start, -1));
   const previousStart = amsStartOfDay(addDays(previousEnd, -(days - 1)));
 
+  const previousLabel =
+    filters.period === "last_7_days"
+      ? "7 dagen ervoor"
+      : filters.period === "last_14_days"
+        ? "14 dagen ervoor"
+        : filters.period === "last_30_days"
+          ? "30 dagen ervoor"
+          : filters.period === "this_week" || filters.period === "last_week"
+            ? "Week ervoor"
+            : filters.period === "this_month" || filters.period === "last_month"
+              ? "Maand ervoor"
+              : "Vorige vergelijkbare periode";
+
   return {
     start,
     end,
     previousStart,
     previousEnd,
     label: PERIOD_PRESET_LABELS[filters.period] || "Periode",
-    previousLabel: "Vorige vergelijkbare periode",
+    previousLabel,
   };
 }
 
@@ -247,7 +277,7 @@ export const DEFAULT_INSTELLINGEN: DashboardInstellingen = {
   doel_lead_to_appointment: 35,
   doel_show_rate: 80,
   doel_closing_rate: 25,
-  slots_per_adviseur_per_week: 24,
+  slots_per_adviseur_per_week: 20, // 4 afspraken/dag × 5 werkdagen
   installaties_per_week: 20,
   standaard_inkoop: null,
   standaard_installatie: 675,

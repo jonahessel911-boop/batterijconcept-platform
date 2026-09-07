@@ -54,14 +54,13 @@ const KIND_LABEL: Record<ActivityKind, string> = {
 };
 
 const PROJECT_STATUS_LABEL: Record<string, string> = {
-  schouw_inplannen: "Schouw inplannen",
-  schouwweek_gepland: "Schouwweek gepland",
-  schouwdag_plannen: "Schouwdag plannen",
-  schouw_gepland: "Schouwdag gepland",
-  materiaal_inkopen: "Materiaal inkopen",
-  btw_factuur_eruit: "BTW-factuur eruit",
-  product_ingekocht: "Product ingekocht",
-  installatie_gepland: "Installatie gepland",
+  schouw_aanbetaling: "Schouw + aanbetaling",
+  aanbetaling_betaald: "Aanbetaling betaald",
+  schouw_in_afwachting: "Schouw in afwachting",
+  schouw_voltooid: "Schouw voltooid",
+  restfactuur_verstuurd: "Restfactuur verstuurd",
+  restfactuur_betaald: "Restfactuur betaald",
+  materiaal_installatie: "Materiaal + installatie plannen",
   installatie_voltooid: "Installatie voltooid",
   service: "Service / nazorg",
 };
@@ -196,7 +195,7 @@ function buildFromEntities(opts: {
       });
     }
 
-    if (p.installatie_at || p.status === "installatie_gepland") {
+    if (p.installatie_at || p.status === "materiaal_installatie") {
       items.push({
         id: `inst-${p.id}`,
         at: p.installatie_at || p.updated_at || p.created_at,

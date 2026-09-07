@@ -25,14 +25,13 @@ import {
 } from "@/lib/schouw-week";
 
 const COLUMN_ACCENT: Record<ProjectStatus, string> = {
-  schouw_inplannen: "#1A4A6E",
-  schouwweek_gepland: "#0F766E",
-  schouwdag_plannen: "#CA8A04",
-  schouw_gepland: "#1565C0",
-  materiaal_inkopen: "#7C3AED",
-  btw_factuur_eruit: "#C9A227",
-  product_ingekocht: "#0D7A6F",
-  installatie_gepland: "#C45A12",
+  schouw_aanbetaling: "#1A4A6E",
+  aanbetaling_betaald: "#0D7A6F",
+  schouw_in_afwachting: "#CA8A04",
+  schouw_voltooid: "#1565C0",
+  restfactuur_verstuurd: "#C45A12",
+  restfactuur_betaald: "#C9A227",
+  materiaal_installatie: "#7C3AED",
   installatie_voltooid: "#0D5C32",
   service: "#00695C",
 };
@@ -83,46 +82,16 @@ export function ProjectKanban({
     const map = new Map<ProjectStatus, Project[]>();
     for (const s of PROJECT_STATUSES) map.set(s, []);
     for (const p of projecten) {
-      const list = map.get(p.status) || map.get("schouw_inplannen")!;
+      const list = map.get(p.status) || map.get("schouw_aanbetaling")!;
       list.push(p);
     }
     return map;
   }, [projecten]);
 
-  // Auto: schouwweek_gepland → schouwdag_plannen vanaf 7 dagen vóór schouwweek
+  // Legacy auto-promote uitgeschakeld (nieuwe pipeline)
   useEffect(() => {
-    const candidates = projecten.filter(
-      (p) =>
-        p.status === "schouwweek_gepland" &&
-        p.schouw_jaar &&
-        p.schouw_week &&
-        isInSchouwdagPlannenWindow(p.schouw_jaar, p.schouw_week) &&
-        !autoPromoted.current.has(p.id)
-    );
-    if (!candidates.length) return;
-    let cancelled = false;
-    (async () => {
-      for (const p of candidates) {
-        autoPromoted.current.add(p.id);
-        try {
-          const res = await fetch(`/api/projecten/${p.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "schouwdag_plannen" }),
-          });
-          const data = await res.json();
-          if (!cancelled && res.ok && data.project) {
-            onProjectUpdated?.(data.project as Project);
-          }
-        } catch {
-          autoPromoted.current.delete(p.id);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projecten, onProjectUpdated]);
+    /* no-op */
+  }, []);
 
   async function patchStatus(project: Project, status: ProjectStatus) {
     setBusy(true);
@@ -149,21 +118,6 @@ export function ProjectKanban({
     setDragId(null);
     setOverStatus(null);
     if (!project || project.status === status) return;
-
-    if (status === "schouwweek_gepland") {
-      setPending({ type: "schouwweek", project });
-      return;
-    }
-    if (status === "schouw_gepland") {
-      setPending({ type: "schouwdag", project });
-      return;
-    }
-    if (status === "materiaal_inkopen") {
-      void patchStatus(project, status).then(() => {
-        setPending({ type: "materiaal", project: { ...project, status } });
-      });
-      return;
-    }
     void patchStatus(project, status);
   }
 
@@ -286,8 +240,8 @@ export function ProjectKanban({
                         {(p.schouw_jaar && p.schouw_week) || p.schouw_at ? (
                           <p className="mt-1 text-[10px] font-medium text-[#1A4A6E]">
                             {p.schouw_at &&
-                            p.status !== "schouwweek_gepland" &&
-                            p.status !== "schouwdag_plannen"
+                            p.status !== "schouw_aanbetaling" &&
+                            p.status !== "aanbetaling_betaald"
                               ? formatDateTimeNl(p.schouw_at)
                               : formatProjectSchouwWeek(p)}
                           </p>
@@ -298,7 +252,7 @@ export function ProjectKanban({
                           </p>
                         ) : null}
                       </button>
-                      {status === "materiaal_inkopen" && (
+                      {status === "materiaal_installatie" && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -332,7 +286,7 @@ export function ProjectKanban({
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  status: "schouwweek_gepland",
+                  status: "schouw_aanbetaling",
                   schouw_jaar: jaar,
                   schouw_week: week,
                 }),

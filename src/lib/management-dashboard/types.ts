@@ -223,11 +223,51 @@ export type ResolvedPeriodJson = {
   previousLabel: string;
 };
 
+/** Huidige vs vorige periode — sales dashboard vergelijkingen. */
+export type MgmtSalesPeriodCompare = {
+  /** Doel L2A voor capaciteitsberekening (0.25 = 1/4). */
+  targetLeadToAppt: number;
+  adviseurCount: number;
+  slotsPerAdviseurPerWeek: number;
+  /** Leads/week per adviseur = slots/week ÷ L2A (bij 20 slots & 25% → 80). */
+  leadsNodigPerWeekPerAdviseur: number;
+  /** Daggemiddelde nodig: (80 × adviseurs) / 7. */
+  leadsNodigPerDag: number;
+  periodDays: number;
+  slotsDoel: number;
+  /** Totaal leads nodig over de hele periode (daggemiddelde × dagen). */
+  leadsNodigDoel: number;
+  current: {
+    leads: number;
+    afsprakenGepland: number;
+    afsprakenVoltooid: number;
+    deals: number;
+    leadToAppt: number | null;
+    conversieVoltooidSale: number | null;
+    orderwaarde: number;
+    adSpend: number;
+    /** Actual leads/dag t.o.v. leadsNodigPerDag. */
+    leadsVsNodig: number | null;
+  };
+  previous: {
+    leads: number;
+    afsprakenGepland: number;
+    afsprakenVoltooid: number;
+    deals: number;
+    leadToAppt: number | null;
+    conversieVoltooidSale: number | null;
+    orderwaarde: number;
+    adSpend: number;
+    leadsVsNodig: number | null;
+  };
+};
+
 export type ManagementDashboardData = {
   filters: MgmtFilters;
   period: ResolvedPeriodJson;
   instellingen: DashboardInstellingen;
   meta: MgmtMetaStatus;
+  salesCompare: MgmtSalesPeriodCompare;
   directie: {
     kpis: MgmtKpi[];
     alerts: MgmtAlert[];

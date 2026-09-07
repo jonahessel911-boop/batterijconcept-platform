@@ -1,42 +1,45 @@
 "use client";
 
-import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Factuur, Project } from "@/types/database";
-import { openBackofficeActies } from "@/lib/backoffice-acties";
+import type { Adviseur, Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
-import { ProjectKanban } from "./ProjectKanban";
 import { BackofficeActiesList } from "./BackofficeActiesList";
+import { BackofficeTable } from "./BackofficeTable";
 
-export type BoView = "acties" | "orders" | "agenda";
+export type BoView = "orders" | "agenda" | "acties";
 
 export function parseBoView(raw: string | null | undefined): BoView {
-  if (raw === "orders" || raw === "agenda" || raw === "acties") return raw;
+  if (raw === "agenda") return "agenda";
+  if (raw === "acties") return "acties";
   return "orders";
 }
 
-export function backofficeHref(view: BoView = "acties"): string {
-  return `/?tab=projecten&bo=${view}`;
+export function backofficeHref(view: BoView = "orders"): string {
+  const bo =
+    view === "agenda" ? "agenda" : view === "acties" ? "acties" : "orders";
+  return `/?tab=projecten&bo=${bo}`;
 }
 
 export function BackofficePanel({
   projecten,
+  adviseurs = [],
   facturen = [],
+  leads = [],
+  afspraken = [],
   onProjectUpdated,
   onFactuurUpdated,
 }: {
   projecten: Project[];
+  adviseurs?: Adviseur[];
   facturen?: Factuur[];
+  leads?: Lead[];
+  afspraken?: Afspraak[];
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const view = parseBoView(searchParams.get("bo"));
-  const actieCount = useMemo(
-    () => openBackofficeActies(projecten, facturen).length,
-    [projecten, facturen]
-  );
 
   function setView(next: BoView) {
     const params = new URLSearchParams(searchParams.toString());
@@ -47,63 +50,63 @@ export function BackofficePanel({
 
   const title =
     view === "agenda"
-      ? "Agenda installateur"
+      ? "Agenda"
       : view === "acties"
         ? "Acties"
-        : "Backoffice";
-
-  const subtitle =
+        : "Projecten";
+  const sub =
     view === "agenda"
-      ? "Schouw en installatie in één agenda"
+      ? "Schouw en installatie"
       : view === "acties"
-        ? actieCount === 0
-          ? "Geen openstaande acties"
-          : `${actieCount} openstaande ${actieCount === 1 ? "actie" : "acties"}`
-        : `${projecten.length} ${projecten.length === 1 ? "project" : "projecten"} · sleep tussen kolommen`;
+        ? "Herplannen, schouw, financiering en facturen"
+        : `${projecten.length} projecten in de backoffice`;
 
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3 px-5 pt-5">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3 px-5 pt-5">
         <div>
           <h2 className="font-display text-lg font-semibold text-ink">
             {title}
           </h2>
-          <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
+          <p className="mt-0.5 text-sm text-muted">{sub}</p>
         </div>
-        <div className="flex flex-wrap rounded-full border border-line bg-white p-1 text-sm font-semibold">
-          {(
-            [
-              { id: "acties", label: "Acties", count: actieCount },
-              { id: "orders", label: "Kanban", count: projecten.length },
-              { id: "agenda", label: "Agenda" },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setView(tab.id)}
-              className={[
-                "rounded-full px-4 py-1.5",
-                view === tab.id
-                  ? "bg-green text-white"
-                  : "text-muted hover:text-ink",
-              ].join(" ")}
-            >
-              {tab.label}
-              {"count" in tab && typeof tab.count === "number" ? (
-                <span
-                  className={[
-                    "ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center px-1 text-[10px] tabular-nums",
-                    view === tab.id
-                      ? "bg-white/20 text-white"
-                      : "bg-[#eef1ef] text-muted",
-                  ].join(" ")}
-                >
-                  {tab.count}
-                </span>
-              ) : null}
-            </button>
-          ))}
+        <div className="flex border border-line bg-white p-0.5 text-sm font-semibold">
+          <button
+            type="button"
+            onClick={() => setView("orders")}
+            className={[
+              "px-4 py-1.5",
+              view === "orders"
+                ? "bg-green text-white"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
+          >
+            Projecten
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("acties")}
+            className={[
+              "px-4 py-1.5",
+              view === "acties"
+                ? "bg-green text-white"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
+          >
+            Acties
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("agenda")}
+            className={[
+              "px-4 py-1.5",
+              view === "agenda"
+                ? "bg-green text-white"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
+          >
+            Agenda
+          </button>
         </div>
       </div>
 
@@ -113,18 +116,22 @@ export function BackofficePanel({
             orders={projecten}
             showPartner
             linkHref={(event) => `/projecten/${event.order.id}?from=agenda`}
+            onOrderUpdated={onProjectUpdated}
           />
         </div>
       ) : view === "acties" ? (
         <BackofficeActiesList
           projecten={projecten}
           facturen={facturen}
+          leads={leads}
+          afspraken={afspraken}
           onProjectUpdated={onProjectUpdated}
           onFactuurUpdated={onFactuurUpdated}
         />
       ) : (
-        <ProjectKanban
+        <BackofficeTable
           projecten={projecten}
+          adviseurs={adviseurs}
           onProjectUpdated={onProjectUpdated}
         />
       )}

@@ -114,30 +114,65 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 };
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
-  schouw_inplannen: "Schouw inplannen",
-  schouwweek_gepland: "Schouwweek gepland",
-  schouwdag_plannen: "Schouwdag plannen",
-  schouw_gepland: "Schouwdag gepland",
-  materiaal_inkopen: "Materiaal inkopen",
-  btw_factuur_eruit: "BTW factuur eruit",
-  product_ingekocht: "Product ingekocht",
-  installatie_gepland: "Installatie gepland",
+  schouw_aanbetaling: "Schouw + aanbetaling",
+  aanbetaling_betaald: "Aanbetaling betaald",
+  schouw_in_afwachting: "Schouw in afwachting",
+  schouw_voltooid: "Schouw voltooid",
+  restfactuur_verstuurd: "Restfactuur verstuurd",
+  restfactuur_betaald: "Restfactuur betaald",
+  materiaal_installatie: "Materiaal + installatie plannen",
   installatie_voltooid: "Installatie voltooid",
   service: "Service",
 };
 
-export const PROJECT_STATUSES: ProjectStatus[] = [
-  "schouw_inplannen",
-  "schouwweek_gepland",
-  "schouwdag_plannen",
-  "schouw_gepland",
-  "materiaal_inkopen",
-  "btw_factuur_eruit",
-  "product_ingekocht",
-  "installatie_gepland",
+/** Klikbare pipeline in backoffice (zonder service). */
+export const PROJECT_PIPELINE: ProjectStatus[] = [
+  "schouw_aanbetaling",
+  "aanbetaling_betaald",
+  "schouw_in_afwachting",
+  "schouw_voltooid",
+  "restfactuur_verstuurd",
+  "restfactuur_betaald",
+  "materiaal_installatie",
   "installatie_voltooid",
+];
+
+export const PROJECT_STATUSES: ProjectStatus[] = [
+  ...PROJECT_PIPELINE,
   "service",
 ];
+
+/** Oude statussen → nieuwe pipeline (voor data vóór migrate). */
+export function normalizeProjectStatus(
+  status: string | null | undefined
+): ProjectStatus {
+  switch (status) {
+    case "schouw_aanbetaling":
+    case "aanbetaling_betaald":
+    case "schouw_in_afwachting":
+    case "schouw_voltooid":
+    case "restfactuur_verstuurd":
+    case "restfactuur_betaald":
+    case "materiaal_installatie":
+    case "installatie_voltooid":
+    case "service":
+      return status;
+    case "schouw_inplannen":
+    case "schouwweek_gepland":
+    case "schouwdag_plannen":
+      return "schouw_aanbetaling";
+    case "schouw_gepland":
+      return "schouw_in_afwachting";
+    case "btw_factuur_eruit":
+      return "restfactuur_verstuurd";
+    case "materiaal_inkopen":
+    case "product_ingekocht":
+    case "installatie_gepland":
+      return "materiaal_installatie";
+    default:
+      return "schouw_aanbetaling";
+  }
+}
 
 export const serviceVerzoekStatusLabel: Record<ServiceVerzoekStatus, string> = {
   open: "Open",
@@ -239,6 +274,23 @@ export function statusTone(
 
   if (kind === "project") {
     const project: Record<string, string> = {
+      schouw_aanbetaling:
+        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      aanbetaling_betaald:
+        "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
+      schouw_in_afwachting:
+        "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
+      schouw_voltooid:
+        "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
+      restfactuur_verstuurd:
+        "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
+      restfactuur_betaald:
+        "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
+      materiaal_installatie:
+        "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
+      installatie_voltooid:
+        "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
+      service: "border border-[#00695C]/30 bg-[#E0F2F1] text-[#00695C]",
       schouw_inplannen:
         "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
       schouwweek_gepland:
@@ -255,9 +307,6 @@ export function statusTone(
         "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
       installatie_gepland:
         "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
-      installatie_voltooid:
-        "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
-      service: "border border-[#00695C]/30 bg-[#E0F2F1] text-[#00695C]",
     };
     return (
       project[value] ||

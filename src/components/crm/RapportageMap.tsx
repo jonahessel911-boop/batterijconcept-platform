@@ -111,8 +111,8 @@ export function RapportageMap({ regions }: Props) {
                           transition: "fill 0.12s",
                         },
                         hover: {
-                          fill: isActive ? "#f37021" : "#f37021aa",
-                          stroke: "#c45a12",
+                          fill: isActive ? "#f37021" : "#6aa87a",
+                          stroke: "#1f6b3a",
                           strokeWidth: 1.4,
                           outline: "none",
                           cursor: "pointer",

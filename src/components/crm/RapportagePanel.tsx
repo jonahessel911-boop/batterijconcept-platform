@@ -16,7 +16,7 @@ import type {
 import { formatEuro } from "@/lib/format";
 import { FinancialDashboard } from "./FinancialDashboard";
 import { RapportageMap } from "./RapportageMap";
-import { ManagementDashboard } from "./management/ManagementDashboard";
+import { SalesKpiDashboard } from "./SalesKpiDashboard";
 
 type ViewMode = "management" | "periode" | "attributie" | "financial" | "map";
 
@@ -82,6 +82,7 @@ function MetricsCells({
       <MetricCell value={m.deals} bold={bold} />
       <MetricCell value={m.conversieAfspraak} bold={bold} suffix="%" />
       <MetricCell value={m.conversieDeal} bold={bold} suffix="%" />
+      <MetricCell value={m.conversieAfspraakSale} bold={bold} suffix="%" />
       <MetricCell value={m.omzet} money bold={bold} />
       <MetricCell value={m.betaaldeOmzet} money bold={bold} />
       <MetricCell value={m.projectkosten} money bold={bold} />
@@ -474,11 +475,12 @@ const PERIODE_HEADERS = [
   "Periode",
   "Leads",
   "Ingepland",
-  "Netto",
+  "Voltooid",
   "% uitval",
   "Deals",
   "Lead → afspr.",
   "Lead → deal",
+  "Afspraak → sale",
   "Omzet",
   "Betaalde omzet",
   "Installatiekosten",
@@ -545,8 +547,8 @@ export function RapportagePanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           full_sync: true,
-          chunk_days: 90,
-          time_increment: "7",
+          chunk_days: 45,
+          time_increment: "1",
         }),
       });
       const data = await res.json();
@@ -591,7 +593,7 @@ export function RapportagePanel({
     view === "management"
       ? "Directie, marketing, sales, orders en finance — echte data, filters en forecasts."
       : view === "periode"
-        ? "Jaar → maand → week → dag · klik om uit te klappen. Ingepland/netto en Lead→afspraak op het moment dat de afspraak is ingepland (niet lead-aanmaakdatum of bezoekdatum)."
+        ? "Jaar → maand → week → dag · klik om uit te klappen. Deals + Lead→afspraak/deal = cohort. Voltooid = afgeboekte afspraken die al geweest zijn (geen toekomst). Afspraak→sale = getekende deals ÷ voltooid in de periode."
         : view === "attributie"
           ? "Cohort per lander, campaign of ad: leads → afspraken → deals. Wissel van weergave om dieper te kijken — geen geneste boom meer."
           : view === "map"
@@ -733,7 +735,7 @@ export function RapportagePanel({
               onClick={() => void syncAllMetaAdSpend()}
               disabled={syncingMeta}
               className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
-              title="Haalt historische Meta ad spend op in week-blokken om API-calls laag te houden."
+              title="Haalt historische Meta lead-campagne ad spend op (120249296331970109) in week-blokken."
             >
               {syncingMeta ? "Meta sync bezig…" : "Haal alle Meta ad spend op"}
             </button>
@@ -765,7 +767,7 @@ export function RapportagePanel({
         )}
 
         {view === "management" ? (
-          <ManagementDashboard />
+          <SalesKpiDashboard />
         ) : view === "financial" ? (
           <FinancialDashboard
             data={financial}

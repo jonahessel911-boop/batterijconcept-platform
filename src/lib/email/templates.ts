@@ -249,9 +249,41 @@ export function factuurVerzondenEmail(opts: {
   iban?: string | null;
   accountName?: string | null;
   betalingskenmerk?: string | null;
+  /** Creditfactuur: andere tekst, geen betaalblok. */
+  isCredit?: boolean;
+  creditVanNummer?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const kenmerk = opts.betalingskenmerk || opts.factuurNummer;
+  const isCredit = Boolean(opts.isCredit);
+  const creditLabel = opts.creditVanNummer
+    ? `CREDIT FACTUUR (${opts.creditVanNummer})`
+    : "CREDIT FACTUUR";
+
+  if (isCredit) {
+    return emailLayout({
+      title: `Creditfactuur ${opts.factuurNummer}`,
+      preheader: `Je creditfactuur ${opts.factuurNummer} van Batterijconcept.`,
+      bodyHtml: [
+        emailH1(`Creditfactuur ${opts.factuurNummer}`),
+        emailP(`Hoi ${first},`),
+        emailP(
+          "Hierbij ontvang je een creditfactuur van Batterijconcept. In de bijlage vind je de PDF."
+        ),
+        emailBox(
+          `<p style="margin:0 0 8px;font-size:15px;"><strong>${creditLabel}</strong></p>
+           <p style="margin:0 0 8px;font-size:15px;"><strong>Creditfactuur</strong><br />${opts.factuurNummer}</p>
+           <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
+           <p style="margin:0;font-size:14px;">Er hoeft niets te worden betaald op dit document.</p>`
+        ),
+        emailP(
+          "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
+        ),
+        emailMuted("Met vriendelijke groet, team Batterijconcept"),
+      ].join(""),
+    });
+  }
+
   const betalingHtml = opts.iban
     ? emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Betalen</strong></p>

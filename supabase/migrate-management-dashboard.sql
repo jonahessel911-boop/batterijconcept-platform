@@ -15,7 +15,7 @@ create table if not exists public.dashboard_instellingen (
   doel_show_rate              numeric(6,2) not null default 80,
   doel_closing_rate           numeric(6,2) not null default 25,
   -- Capaciteit defaults
-  slots_per_adviseur_per_week integer not null default 24,
+  slots_per_adviseur_per_week integer not null default 20,
   installaties_per_week       integer not null default 20,
   -- Standaardkosten
   standaard_inkoop            numeric(12,2),

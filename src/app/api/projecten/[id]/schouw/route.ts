@@ -144,7 +144,7 @@ export async function POST(
       schouw_mail_partner_verstuurd: false,
       installatie_partner_id: partnerId,
       monteur: partnerNaam,
-      status: "schouw_gepland",
+      status: "schouw_in_afwachting",
     };
 
     const { data: updated, error: updateErr } = await sb
@@ -305,10 +305,105 @@ export async function POST(
       await sb.from("projecten").update(mailPatch).eq("id", id);
     }
 
+    const { syncAutoTakenVoorProject } = await import(
+      "@/lib/sync-auto-taken"
+    );
+    await syncAutoTakenVoorProject(
+      sb,
+      id,
+      (updated.status as string) || "schouw_in_afwachting"
+    );
+
     return NextResponse.json({
       project: { ...updated, ...mailPatch },
       mails,
     });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Fout") },
+      { status: 500 }
+    );
+  }
+}
+
+const SCHOUW_PLAN_STATUS = new Set([
+  "schouw_aanbetaling",
+  "aanbetaling_betaald",
+  "schouw_in_afwachting",
+  "schouw_voltooid",
+  // legacy
+  "schouw_inplannen",
+  "schouwweek_gepland",
+  "schouwdag_plannen",
+  "schouw_gepland",
+]);
+
+/**
+ * DELETE /api/projecten/[id]/schouw
+ * Haalt schouw uit de agenda. Geen mail naar klant of partner.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+
+  try {
+    const sb = getSupabaseAdmin();
+    const { data: project, error: projErr } = await sb
+      .from("projecten")
+      .select(
+        "id, status, schouw_at, schouw_jaar, schouw_week"
+      )
+      .eq("id", id)
+      .single();
+
+    if (projErr || !project) {
+      return NextResponse.json(
+        { error: "Project niet gevonden" },
+        { status: 404 }
+      );
+    }
+
+    if (!project.schouw_at && !project.schouw_jaar && !project.schouw_week) {
+      return NextResponse.json(
+        { error: "Geen schouw gepland om te verwijderen" },
+        { status: 400 }
+      );
+    }
+
+    const patch: Record<string, unknown> = {
+      schouw_at: null,
+      schouw_jaar: null,
+      schouw_week: null,
+      schouw_herinnering_verstuurd: false,
+      schouw_mail_klant_verstuurd: false,
+      schouw_mail_partner_verstuurd: false,
+    };
+    if (SCHOUW_PLAN_STATUS.has(project.status)) {
+      patch.status = "schouw_aanbetaling";
+    }
+
+    const { data: updated, error: updateErr } = await sb
+      .from("projecten")
+      .update(patch)
+      .eq("id", id)
+      .select(
+        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+      )
+      .single();
+
+    if (updateErr || !updated) {
+      return NextResponse.json(
+        {
+          error: "Schouw verwijderen mislukt",
+          detail: updateErr?.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ project: updated, mailed: false });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

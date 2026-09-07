@@ -84,6 +84,33 @@ export function formatProjectSchouwWeek(project: {
   return null;
 }
 
+/** ISO-week één week vóór de schouwweek (voor inplannen schouwdag). */
+export function schouwWeekEerder(
+  jaar: number,
+  week: number
+): SchouwWeek {
+  const mondayIso = schouwWeekToMondayIso(jaar, week);
+  const earlier = addWeeks(toZonedTime(new Date(mondayIso), AMSTERDAM_TZ), -1);
+  return {
+    jaar: getISOWeekYear(earlier),
+    week: getISOWeek(earlier),
+  };
+}
+
+/** Due-datum: maandag 17:00 van de week vóór de schouwweek. */
+export function dueAtVoorSchouwdagInplan(
+  jaar: number,
+  week: number
+): string {
+  const prev = schouwWeekEerder(jaar, week);
+  const mondayIso = schouwWeekToMondayIso(prev.jaar, prev.week);
+  const monday = toZonedTime(new Date(mondayIso), AMSTERDAM_TZ);
+  const y = monday.getFullYear();
+  const m = monday.getMonth();
+  const d = monday.getDate();
+  return fromZonedTime(new Date(y, m, d, 17, 0, 0), AMSTERDAM_TZ).toISOString();
+}
+
 /** Schouwweek staat gepland (week of placeholder-maandag). */
 export function isSchouwweekGepland(project: {
   schouw_jaar?: number | null;

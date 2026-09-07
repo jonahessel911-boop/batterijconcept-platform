@@ -97,7 +97,7 @@ export async function ensureProjectForOfferte(
     lead_id: opts.leadId,
     offerte_id: opts.offerteId,
     project_nummer: nummer as string,
-    status: "schouw_inplannen",
+    status: "schouw_aanbetaling",
     titel,
     notities: `Aangemaakt na afronden backoffice-actie voor ${opts.offerteNummer}.`,
     projectkosten: STANDAARD_INSTALLATIEKOSTEN,
@@ -148,6 +148,13 @@ export async function ensureProjectForOfferte(
   if (error || !created) {
     console.error("Project aanmaken:", error);
     return null;
+  }
+
+  try {
+    const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
+    await syncAutoTakenVoorProject(sb, created.id, "schouw_aanbetaling");
+  } catch (e) {
+    console.error("Auto-taken na project:", e);
   }
 
   return {

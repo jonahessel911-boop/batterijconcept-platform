@@ -251,6 +251,21 @@ async function markVoltooideAfspraken(
     if (upErr) continue;
     voltooid += 1;
 
+    // Geen openstaande terugbel meer → vlag op lead wissen (blijft anders op leads-lijst staan)
+    const { data: remainingBel } = await sb
+      .from("afspraken")
+      .select("id")
+      .eq("lead_id", a.lead_id)
+      .in("soort", ["bel", "warme_bel"])
+      .in("status", ["gepland", "bevestigd", "verzet"])
+      .limit(1);
+    if (!remainingBel?.length) {
+      await sb
+        .from("leads")
+        .update({ terugbellen: false, terugbel_notitie: null })
+        .eq("id", a.lead_id);
+    }
+
     const { data: remaining } = await sb
       .from("afspraken")
       .select("id")

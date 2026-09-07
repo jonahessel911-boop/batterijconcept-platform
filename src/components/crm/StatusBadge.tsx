@@ -6,6 +6,7 @@ import {
   projectStatusLabel,
   factuurStatusLabel,
   afspraakStatusLabel,
+  normalizeProjectStatus,
 } from "@/lib/labels";
 
 export function StatusBadge({
@@ -28,11 +29,13 @@ export function StatusBadge({
               ? afspraakStatusLabel
               : prioriteitLabel;
 
-  const label = (labels as Record<string, string>)[value] ?? value;
+  const resolved =
+    kind === "project" ? normalizeProjectStatus(value) : value;
+  const label = (labels as Record<string, string>)[resolved] ?? value;
 
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${statusTone(kind, value)}`}
+      className={`inline-flex items-center px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${statusTone(kind, resolved)}`}
     >
       {label}
     </span>

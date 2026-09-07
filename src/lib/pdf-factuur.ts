@@ -26,6 +26,8 @@ type PdfInput = {
     Offerte,
     "offerte_nummer" | "subtotaal_ex_btw" | "btw_bedrag" | "totaal_inc_btw"
   > | null;
+  /** Factuurnummer van de oorspronkelijke factuur (bij credit). */
+  creditVanNummer?: string | null;
 };
 
 const { green: GREEN, dark: DARK, orange: ORANGE, charcoal: CHARCOAL, muted: MUTED, line: LINE, grayRow: GRAY } =
@@ -37,6 +39,11 @@ const { green: GREEN, dark: DARK, orange: ORANGE, charcoal: CHARCOAL, muted: MUT
  */
 export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const { factuur, lead, offerte } = input;
+  const creditVan =
+    input.creditVanNummer?.trim() ||
+    factuur.credit_van?.factuur_nummer?.trim() ||
+    null;
+  const isCredit = Boolean(factuur.credit_van_factuur_id || creditVan);
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -89,11 +96,28 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
   doc.setTextColor(...DARK);
-  doc.text(`Factuur ${factuur.factuur_nummer}`, margin, y);
+  if (isCredit) {
+    doc.text(`Creditfactuur ${factuur.factuur_nummer}`, margin, y);
+    y += 7;
+    doc.setFontSize(10);
+    doc.setTextColor(...ORANGE);
+    doc.text(
+      creditVan
+        ? `CREDIT FACTUUR (${creditVan})`
+        : "CREDIT FACTUUR",
+      margin,
+      y
+    );
+    y += 3;
+  } else {
+    doc.text(`Factuur ${factuur.factuur_nummer}`, margin, y);
+  }
   if (factuur.status === "concept") {
     doc.setFontSize(9);
     doc.setTextColor(...ORANGE);
-    doc.text("CONCEPT", pageW - margin, y, { align: "right" });
+    doc.text("CONCEPT", pageW - margin, isCredit ? y - 3 : y, {
+      align: "right",
+    });
   }
   y += 10;
 
@@ -171,9 +195,11 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   // —— Regel(s) ——
   const oms =
     factuur.omschrijving ||
-    (offerte
-      ? `Aanbetaling bij ${offerte.offerte_nummer}`
-      : "Aanbetaling");
+    (isCredit && creditVan
+      ? `Creditfactuur bij ${creditVan}`
+      : offerte
+        ? `Aanbetaling bij ${offerte.offerte_nummer}`
+        : "Aanbetaling");
   const bedragEx = Number(factuur.bedrag_ex_btw);
   const bedragInc = Number(factuur.bedrag_inc_btw);
 
@@ -206,7 +232,26 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const totalsX = pageW - margin - 72;
   const totalsW = 72;
 
-  if (co.iban) {
+  if (isCredit) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text("Credit", margin, y + 4);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...CHARCOAL);
+    const creditLines = [
+      creditVan
+        ? `Deze creditfactuur hoort bij factuur ${creditVan}.`
+        : "Dit is een creditfactuur.",
+      "Er hoeft niets te worden betaald op dit document.",
+    ];
+    let py = y + 9;
+    for (const line of creditLines) {
+      doc.text(line, margin, py);
+      py += 4;
+    }
+  } else if (co.iban) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(...MUTED);

@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { Factuur, InstallatiePartner, Project } from "@/types/database";
+import type {
+  Afspraak,
+  Factuur,
+  InstallatiePartner,
+  Lead,
+  Project,
+} from "@/types/database";
 import {
   FINANCIERINGSMAN_TEL,
   FINANCIERINGSMAN_TEL_HREF,
@@ -21,13 +27,18 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 
-type SectionId = "warmtefonds" | "stap1" | "factuur";
+type SectionId = "herplan" | "warmtefonds" | "stap1" | "factuur";
 
 type TaskRow = {
   key: string;
   section: SectionId;
   actie: BackofficeActie;
-  kind: "financiering" | "factuur_versturen" | "schouw_week" | "nabellen";
+  kind:
+    | "herplan"
+    | "financiering"
+    | "factuur_versturen"
+    | "schouw_week"
+    | "nabellen";
   titel: string;
   klant: string;
   meta?: string;
@@ -40,6 +51,10 @@ const SECTION_META: Record<
   SectionId,
   { label: string; accent: string }
 > = {
+  herplan: {
+    label: "Afspraak herplannen",
+    accent: "bg-[#FFF0E6] text-[#C45A12]",
+  },
   warmtefonds: {
     label: "Warmtefonds",
     accent: "bg-[#E8F0F6] text-[#1A4A6E]",
@@ -56,6 +71,10 @@ const SECTION_META: Record<
 
 const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
   {
+    herplan: {
+      label: "Herplan",
+      className: "bg-[#FFF0E6] text-[#C45A12]",
+    },
     financiering: {
       label: "Financiering",
       className: "bg-[#E8F0F6] text-[#1A4A6E]",
@@ -181,6 +200,21 @@ function buildTaskRows(
 ): TaskRow[] {
   const rows: TaskRow[] = [];
   for (const actie of acties) {
+    if (actie.soort === "herplan_afspraak") {
+      rows.push({
+        key: `${actie.id}-herplan`,
+        section: "herplan",
+        actie,
+        kind: "herplan",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.plaats || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
     if (actie.soort === "schakel_financiering") {
       rows.push({
         key: `${actie.id}-fin`,
@@ -257,17 +291,25 @@ function buildTaskRows(
 export function BackofficeActiesList({
   projecten,
   facturen = [],
+  leads = [],
+  afspraken = [],
   onProjectUpdated,
   onFactuurUpdated,
 }: {
   projecten: Project[];
   facturen?: Factuur[];
+  leads?: Lead[];
+  afspraken?: Afspraak[];
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
 }) {
   const acties = useMemo(
-    () => openBackofficeActies(projecten, facturen),
-    [projecten, facturen]
+    () =>
+      openBackofficeActies(projecten, facturen, new Date(), {
+        leads,
+        afspraken,
+      }),
+    [projecten, facturen, leads, afspraken]
   );
   const rows = useMemo(
     () => buildTaskRows(acties, facturen),
@@ -276,6 +318,7 @@ export function BackofficeActiesList({
   const weekOptions = useMemo(() => upcomingSchouwWeekOptions(40), []);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
+    herplan: true,
     warmtefonds: true,
     stap1: true,
     factuur: true,
@@ -310,7 +353,7 @@ export function BackofficeActiesList({
   const defaultPartnerId = partners.length === 1 ? partners[0].id : "";
 
   const sections = useMemo(() => {
-    const order: SectionId[] = ["warmtefonds", "stap1", "factuur"];
+    const order: SectionId[] = ["herplan", "warmtefonds", "stap1", "factuur"];
     return order
       .map((id) => ({
         id,
@@ -904,6 +947,13 @@ export function BackofficeActiesList({
                                   className="text-[11px] font-semibold text-green-dark hover:underline"
                                 >
                                   Factuur
+                                </Link>
+                              ) : row.kind === "herplan" ? (
+                                <Link
+                                  href={`/?tab=leads&lead=${actie.leadId}`}
+                                  className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"
+                                >
+                                  Lead herplannen
                                 </Link>
                               ) : null}
                             </div>
