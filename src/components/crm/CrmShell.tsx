@@ -880,6 +880,11 @@ export function CrmShell() {
                         )
                       );
                     }}
+                    onLeadUpdated={(id, patch) => {
+                      setLeads((prev) =>
+                        prev.map((l) => (l.id === id ? { ...l, ...patch } : l))
+                      );
+                    }}
                   />
                 )}
                 {tab === "facturen" && (

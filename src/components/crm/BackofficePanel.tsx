@@ -28,6 +28,7 @@ export function BackofficePanel({
   afspraken = [],
   onProjectUpdated,
   onFactuurUpdated,
+  onLeadUpdated,
 }: {
   projecten: Project[];
   adviseurs?: Adviseur[];
@@ -36,6 +37,7 @@ export function BackofficePanel({
   afspraken?: Afspraak[];
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
+  onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -127,6 +129,7 @@ export function BackofficePanel({
           afspraken={afspraken}
           onProjectUpdated={onProjectUpdated}
           onFactuurUpdated={onFactuurUpdated}
+          onLeadUpdated={onLeadUpdated}
         />
       ) : (
         <BackofficeTable

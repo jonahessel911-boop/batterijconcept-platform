@@ -20,6 +20,9 @@ import {
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
+import { appendLeadNotitie } from "@/lib/lead-notitie";
+import { leadStatusLabel } from "@/lib/labels";
+import { getSupabaseBrowser } from "@/lib/supabase";
 import {
   formatSchouwWeekLabel,
   schouwWeekFromDate,
@@ -295,6 +298,7 @@ export function BackofficeActiesList({
   afspraken = [],
   onProjectUpdated,
   onFactuurUpdated,
+  onLeadUpdated,
 }: {
   projecten: Project[];
   facturen?: Factuur[];
@@ -302,6 +306,7 @@ export function BackofficeActiesList({
   afspraken?: Afspraak[];
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
+  onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
 }) {
   const acties = useMemo(
     () =>
@@ -366,6 +371,49 @@ export function BackofficeActiesList({
 
   function toggleSection(id: SectionId) {
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  async function definitiefAnnuleren(actie: BackofficeActie) {
+    if (
+      !window.confirm(
+        `${actie.leadNaam}: afspraak definitief annuleren?\n\nDe lead wordt gemarkeerd als geen interesse (geen nieuwe afspraak).`
+      )
+    ) {
+      return;
+    }
+    const lead = leads.find((l) => l.id === actie.leadId);
+    const notities = appendLeadNotitie(
+      lead?.notities,
+      "Afspraak definitief geannuleerd: klant wil geen nieuwe afspraak."
+    );
+    const patch: Partial<Lead> = {
+      status: "geen_interesse",
+      notities,
+    };
+    setBusyId(actie.id);
+    setError(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update(patch)
+        .eq("id", actie.leadId);
+      if (err) throw err;
+      onLeadUpdated?.(actie.leadId, patch);
+      void fetch(`/api/leads/${actie.leadId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "status",
+          titel: `Status → ${leadStatusLabel.geen_interesse}`,
+          detail: "Afspraak definitief geannuleerd vanuit backoffice-acties",
+        }),
+      }).catch(() => undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Annuleren mislukt");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function patchProject(
@@ -949,12 +997,24 @@ export function BackofficeActiesList({
                                   Factuur
                                 </Link>
                               ) : row.kind === "herplan" ? (
-                                <Link
-                                  href={`/?tab=leads&lead=${actie.leadId}`}
-                                  className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"
-                                >
-                                  Lead herplannen
-                                </Link>
+                                <>
+                                  <Link
+                                    href={`/?tab=leads&lead=${actie.leadId}`}
+                                    className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"
+                                  >
+                                    Lead herplannen
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    disabled={busyId === actie.id}
+                                    onClick={() =>
+                                      void definitiefAnnuleren(actie)
+                                    }
+                                    className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                  >
+                                    Definitief annuleren
+                                  </button>
+                                </>
                               ) : null}
                             </div>
                             {row.kind === "schouw_week" &&

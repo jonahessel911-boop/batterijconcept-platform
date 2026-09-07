@@ -7,7 +7,7 @@ import {
 } from "@/lib/afspraak-soort";
 
 export const MAX_BELPOGINGEN = 7;
-export const MAX_BELPOGINGEN_PER_DAG = 2;
+export const MAX_BELPOGINGEN_PER_DAG = 1;
 /** Minimale pauze tussen twee belpogingen op dezelfde dag (uren, Amsterdam). */
 export const MIN_UREN_TUSSEN_BELPOGINGEN = 3;
 
