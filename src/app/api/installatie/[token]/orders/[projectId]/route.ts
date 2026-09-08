@@ -241,7 +241,8 @@ export async function PATCH(
         .eq("installatie_partner_id", partner.id)
         .select(ORDER_SELECT_FALLBACK)
         .single();
-      order = retry.data;
+      // Fallback select mist optionele joins/kolommen — widen voor TS
+      order = retry.data as typeof order;
       error = retry.error;
     }
 
