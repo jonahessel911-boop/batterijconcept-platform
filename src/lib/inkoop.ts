@@ -8,6 +8,10 @@ export const DEFAULT_BATTERIJ_PER_MODULE = 1499.73;
 export const DEFAULT_OMVORMER = 1089.62;
 export const MODULE_KWH = 9.3;
 
+/** Standaard G3-accessoires (ex. btw). */
+export const DEFAULT_BASEPLATE_EX_BTW = 60;
+export const DEFAULT_KOPPELKABEL_EX_BTW = 29.45;
+
 export type InkoopInstellingen = {
   installatie_standaard: number;
   warmtefonds_aanvraag: number;

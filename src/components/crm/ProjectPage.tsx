@@ -12,7 +12,7 @@ import type {
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl } from "@/lib/format";
-import { appendLeadNotitie } from "@/lib/lead-notitie";
+import { appendStampedNotitie, parseProjectNotitieEntries } from "@/lib/lead-notitie";
 import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import {
   formatProjectSchouwWeek,
@@ -26,14 +26,21 @@ import {
 } from "./BackofficePanel";
 import { ProjectStatusPath } from "./ProjectStatusPath";
 import { ProjectFinancieelSection } from "./ProjectFinancieelSection";
+import { ProjectInkoopSection } from "./ProjectInkoopSection";
 import { ProjectAgendaAfspraakSection } from "./ProjectAgendaAfspraakSection";
 import { Breadcrumb, DetailShell, NotFoundState } from "./DetailChrome";
+import {
+  isSchouwFormulier,
+  SCHOUW_FORMULIER_OMSCHRIJVING,
+} from "@/lib/project-documenten";
 
 type FeedItem = {
   key: string;
   at: string;
   title: string;
   body?: string;
+  /** Notitie: inhoud is het hoofdbericht (groot). */
+  kind?: "note" | "event";
 };
 
 function adresRegel(lead: Project["leads"]): string {
@@ -65,6 +72,7 @@ export function ProjectPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadingSchouw, setUploadingSchouw] = useState(false);
 
   const [newTaakOpen, setNewTaakOpen] = useState(false);
   const [newTitel, setNewTitel] = useState("");
@@ -98,18 +106,17 @@ export function ProjectPage() {
         const [fotoRes, takenRes, advRes] = await Promise.all([
           fetch(`/api/projecten/${id}/fotos`),
           fetch(`/api/taken?project_id=${id}&open=0`),
-          sb
-            .from("adviseurs")
-            .select("id, naam, email, actief")
-            .order("naam"),
+          fetch("/api/adviseurs"),
         ]);
         const fotoData = await fotoRes.json().catch(() => ({}));
         const takenData = await takenRes.json().catch(() => ({}));
+        const advData = await advRes.json().catch(() => ({}));
         setFotos((fotoData.fotos as ProjectFoto[]) || []);
         setTaken((takenData.taken as ProjectTaak[]) || []);
-        setAdviseurs(
-          ((advRes.data as Adviseur[]) || []).filter((a) => a.actief !== false)
+        const list = ((advData.adviseurs as Adviseur[]) || []).filter(
+          (a) => a.actief !== false
         );
+        setAdviseurs(list);
       }
     } catch {
       setNotFound(true);
@@ -194,6 +201,53 @@ export function ProjectPage() {
     }
   }
 
+  async function assignTaak(
+    taakId: string,
+    verantwoordelijkeId: string | null
+  ) {
+    setError(null);
+    const prev = taken;
+    const person =
+      adviseurs.find((a) => a.id === verantwoordelijkeId) || null;
+    setTaken((list) =>
+      list.map((t) =>
+        t.id === taakId
+          ? {
+              ...t,
+              verantwoordelijke_id: verantwoordelijkeId,
+              verantwoordelijke: person
+                ? { id: person.id, naam: person.naam, email: person.email }
+                : null,
+            }
+          : t
+      )
+    );
+    try {
+      const res = await fetch(`/api/taken/${taakId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          verantwoordelijke_id: verantwoordelijkeId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Toewijzen mislukt"
+        );
+      }
+      const updated = data.taak as ProjectTaak | undefined;
+      if (updated) {
+        setTaken((list) =>
+          list.map((t) => (t.id === updated.id ? updated : t))
+        );
+      }
+    } catch (e) {
+      setTaken(prev);
+      setError(e instanceof Error ? e.message : "Toewijzen mislukt");
+    }
+  }
+
   async function addNotitie() {
     if (!project) return;
     const text = noteDraft.trim();
@@ -201,7 +255,7 @@ export function ProjectPage() {
     setNoteBusy(true);
     setError(null);
     try {
-      const merged = appendLeadNotitie(project.notities, text);
+      const merged = appendStampedNotitie(project.notities, text);
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -213,7 +267,7 @@ export function ProjectPage() {
       if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
       else setProject({ ...project, notities: merged });
       setNoteDraft("");
-      setOkMsg("Notitie opgeslagen.");
+      setOkMsg("Notitie toegevoegd aan activiteit.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
@@ -242,6 +296,52 @@ export function ProjectPage() {
     }
   }
 
+  async function uploadSchouwFormulier(file: File) {
+    if (!project) return;
+    setUploadingSchouw(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("omschrijving", SCHOUW_FORMULIER_OMSCHRIJVING);
+      form.append("allow_pdf", "1");
+      const res = await fetch(`/api/projecten/${project.id}/fotos`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      setFotos((prev) => [...prev, data.foto as ProjectFoto]);
+      setOkMsg("Schouw formulier geüpload.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Upload mislukt");
+    } finally {
+      setUploadingSchouw(false);
+    }
+  }
+
+  async function deleteFoto(fotoId: string) {
+    if (!project) return;
+    if (!confirm("Bestand verwijderen?")) return;
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/fotos?foto_id=${encodeURIComponent(fotoId)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      setFotos((prev) => prev.filter((f) => f.id !== fotoId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    }
+  }
+
   if (loading && !project) {
     return (
       <DetailShell activeTab="projecten">
@@ -262,6 +362,12 @@ export function ProjectPage() {
   }
 
   const lead = Array.isArray(project.leads) ? project.leads[0] : project.leads;
+  const schouwFormulieren = fotos.filter((f) =>
+    isSchouwFormulier(f.omschrijving)
+  );
+  const normaleFotos = fotos.filter(
+    (f) => !isSchouwFormulier(f.omschrijving)
+  );
   const klantNaam = lead?.naam || project.titel || "Klant";
   const partner =
     project.installatie_partners ||
@@ -346,16 +452,22 @@ export function ProjectPage() {
       at: project.installatie_at,
       title: "Installatie gepland",
       body: project.installatie_partners?.naam || project.monteur || undefined,
+      kind: "event",
     });
   }
-  if (project.notities?.trim()) {
+  const noteEntries = parseProjectNotitieEntries(
+    project.notities,
+    project.updated_at || project.created_at
+  );
+  noteEntries.forEach((n, i) => {
     feed.push({
-      key: "notes",
-      at: project.updated_at || project.created_at,
-      title: "Notities",
-      body: project.notities,
+      key: `note-${n.at}-${i}`,
+      at: n.at,
+      title: n.text,
+      body: "Notitie",
+      kind: "note",
     });
-  }
+  });
   feed.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
   return (
@@ -465,12 +577,18 @@ export function ProjectPage() {
                   onChange={(e) => setNewPersonId(e.target.value)}
                   className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
                 >
-                  <option value="">👤 Kies persoon…</option>
-                  {adviseurs.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      👤 {a.naam}
+                  <option value="">Kies persoon…</option>
+                  {adviseurs.length === 0 ? (
+                    <option value="" disabled>
+                      Geen mensen geladen
                     </option>
-                  ))}
+                  ) : (
+                    adviseurs.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.naam}
+                      </option>
+                    ))
+                  )}
                 </select>
               </label>
               <label className="block text-[10px] font-semibold uppercase text-muted">
@@ -523,15 +641,28 @@ export function ProjectPage() {
                       {t.auto_key ? " · Auto" : ""}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    {person ? (
-                      <span className="inline-flex items-center gap-1">
-                        <span aria-hidden>👤</span>
-                        {person.naam}
-                      </span>
-                    ) : (
-                      <span className="text-[#C45A12]">👤 Niet toegewezen</span>
-                    )}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <label className="sr-only" htmlFor={`taak-person-${t.id}`}>
+                      Verantwoordelijke
+                    </label>
+                    <select
+                      id={`taak-person-${t.id}`}
+                      value={person?.id || ""}
+                      onChange={(e) =>
+                        void assignTaak(t.id, e.target.value || null)
+                      }
+                      className={[
+                        "max-w-[11rem] border border-line bg-white px-2 py-1 text-xs outline-none focus:border-green",
+                        person ? "text-ink" : "text-[#C45A12]",
+                      ].join(" ")}
+                    >
+                      <option value="">Niet toegewezen</option>
+                      {adviseurs.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.naam}
+                        </option>
+                      ))}
+                    </select>
                     <span className="rounded-full bg-wash px-2 py-0.5 font-semibold uppercase tracking-wide text-muted">
                       {t.status === "todo"
                         ? "Te doen"
@@ -589,20 +720,37 @@ export function ProjectPage() {
             {feed.length === 0 ? (
               <p className="text-sm text-muted">Nog geen activiteit.</p>
             ) : (
-              <ul className="space-y-3">
+              <ul className="space-y-4">
                 {feed.map((item) => (
-                  <li key={item.key} className="border-l-2 border-green/40 pl-3">
+                  <li
+                    key={item.key}
+                    className={[
+                      "border-l-2 pl-3",
+                      item.kind === "note"
+                        ? "border-orange bg-[#FFF8F3] py-2.5 pr-3"
+                        : "border-green/40",
+                    ].join(" ")}
+                  >
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                       {formatDateTimeNl(item.at)}
+                      {item.kind === "note" ? " · Notitie" : ""}
                     </p>
-                    <p className="mt-0.5 text-sm font-semibold text-ink">
-                      {item.title}
-                    </p>
-                    {item.body ? (
-                      <p className="mt-0.5 whitespace-pre-wrap text-xs text-muted">
-                        {item.body}
+                    {item.kind === "note" ? (
+                      <p className="mt-1 whitespace-pre-wrap text-base font-semibold leading-snug text-ink">
+                        {item.title}
                       </p>
-                    ) : null}
+                    ) : (
+                      <>
+                        <p className="mt-0.5 text-sm font-semibold text-ink">
+                          {item.title}
+                        </p>
+                        {item.body ? (
+                          <p className="mt-0.5 whitespace-pre-wrap text-xs text-muted">
+                            {item.body}
+                          </p>
+                        ) : null}
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -764,10 +912,87 @@ export function ProjectPage() {
             leadEmail={lead?.email}
           />
 
+          <ProjectInkoopSection
+            project={project}
+            onProjectUpdated={(p) => setProject(p)}
+          />
+
           <section className="border border-line bg-white">
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
               <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-                Foto&apos;s ({fotos.length})
+                Schouw formulier ({schouwFormulieren.length})
+              </h2>
+              <label className="cursor-pointer border border-line bg-wash px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-white">
+                {uploadingSchouw ? "Bezig…" : "Schouw formulier"}
+                <input
+                  type="file"
+                  accept="image/*,application/pdf,.pdf"
+                  className="hidden"
+                  disabled={uploadingSchouw}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadSchouwFormulier(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            <div className="px-4 py-4">
+              {schouwFormulieren.length === 0 ? (
+                <p className="text-sm text-muted">
+                  Nog geen schouw formulier geüpload voor deze klant.
+                </p>
+              ) : (
+                <ul className="divide-y divide-line border border-line">
+                  {schouwFormulieren.map((f) => {
+                    const isPdf =
+                      /\.pdf$/i.test(f.bestandsnaam || "") ||
+                      /\.pdf$/i.test(f.storage_path || "");
+                    return (
+                      <li
+                        key={f.id}
+                        className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-ink">
+                            {f.bestandsnaam || "Schouw formulier"}
+                          </p>
+                          <p className="text-[11px] text-muted">
+                            {formatDateShort(f.created_at)}
+                            {isPdf ? " · PDF" : " · Afbeelding"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {f.url ? (
+                            <a
+                              href={f.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="border border-line px-2 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                            >
+                              Openen
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => void deleteFoto(f.id)}
+                            className="border border-line px-2 py-1 text-xs font-semibold text-[#C45A12] hover:bg-wash"
+                          >
+                            Verwijder
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </section>
+
+          <section className="border border-line bg-white">
+            <div className="flex items-center justify-between border-b border-line px-4 py-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Foto&apos;s ({normaleFotos.length})
               </h2>
               <label className="cursor-pointer border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash">
                 {uploading ? "Bezig…" : "+ Upload"}
@@ -785,11 +1010,11 @@ export function ProjectPage() {
               </label>
             </div>
             <div className="px-4 py-4">
-              {fotos.length === 0 ? (
+              {normaleFotos.length === 0 ? (
                 <p className="text-sm text-muted">Nog geen foto&apos;s.</p>
               ) : (
                 <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {fotos.map((f) => (
+                  {normaleFotos.map((f) => (
                     <li key={f.id} className="overflow-hidden border border-line">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img

@@ -451,7 +451,7 @@ export function installatieKlantEmail(opts: {
       emailH1("Installatie gepland"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Goed nieuws: de installatie van je thuisbatterij is ingepland. Onze installatiepartner komt bij je langs."
+        "Goed nieuws: de installatie van je thuisbatterij is ingepland. Onze installateur komt bij je langs."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>

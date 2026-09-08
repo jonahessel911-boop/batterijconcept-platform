@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { uploadProjectFotoFile } from "@/lib/project-fotos";
+import { isSchouwFormulier } from "@/lib/project-documenten";
 
 export const runtime = "nodejs";
 
@@ -71,6 +72,10 @@ export async function POST(
     const form = await req.formData();
     const file = form.get("file");
     const omschrijving = String(form.get("omschrijving") || "").trim() || null;
+    const allowPdf =
+      form.get("allow_pdf") === "1" ||
+      form.get("allow_pdf") === "true" ||
+      isSchouwFormulier(omschrijving);
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -79,7 +84,9 @@ export async function POST(
       );
     }
 
-    const result = await uploadProjectFotoFile(sb, id, file, omschrijving);
+    const result = await uploadProjectFotoFile(sb, id, file, omschrijving, {
+      allowPdf,
+    });
     if ("error" in result) {
       return NextResponse.json(
         { error: result.error, detail: result.detail },

@@ -1,68 +1,38 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import type { Project } from "@/types/database";
-import { projectStatusLabel } from "@/lib/labels";
-import {
-  adresRegel,
-  formatDateTimeNl,
-} from "@/lib/format";
-import {
-  formatProjectSchouwWeek,
-  isSchouwdagDefinitief,
-  isSchouwweekGepland,
-} from "@/lib/schouw-week";
-import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
+import { useParams, useRouter } from "next/navigation";
+import type { Project, ProjectStatus } from "@/types/database";
+import { adresRegel, formatDateTimeNl } from "@/lib/format";
+import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 
 type OrderRow = Project & {
   leads?: Project["leads"];
+};
+
+const INSTALLER_STATUS_LABEL: Partial<Record<ProjectStatus, string>> = {
+  schouw_in_afwachting: "Schouw gepland",
+  schouw_voltooid: "Schouw voltooid",
+  materiaal_installatie: "Installatie gepland",
 };
 
 function leadOf(o: OrderRow) {
   return Array.isArray(o.leads) ? o.leads[0] : o.leads;
 }
 
-/** Eerste relevante datum voor sortering (dichtbij → ver). */
-function orderSortAt(o: OrderRow): number {
-  const times = [o.schouw_at, o.installatie_at]
-    .filter(Boolean)
-    .map((d) => new Date(d as string).getTime())
-    .filter((t) => !Number.isNaN(t));
-  if (times.length === 0) return Number.MAX_SAFE_INTEGER;
-  return Math.min(...times);
-}
-
-function CheckMini({ done }: { done: boolean }) {
-  return (
-    <span
-      className={[
-        "inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border",
-        done
-          ? "border-green bg-green text-white"
-          : "border-[#c5cdc8] bg-white text-transparent",
-      ].join(" ")}
-      aria-hidden
-    >
-      <svg viewBox="0 0 16 16" className="h-2 w-2" fill="none">
-        <path
-          d="M3.5 8.5 6.5 11.5 12.5 4.5"
-          stroke="currentColor"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
+function installerStatusLabel(o: OrderRow): string {
+  if (INSTALLER_STATUS_LABEL[o.status]) {
+    return INSTALLER_STATUS_LABEL[o.status]!;
+  }
+  if (o.installatie_at) return "Installatie gepland";
+  if (o.schouw_at || o.schouw_week) return "Schouw gepland";
+  return "—";
 }
 
 export function InstallatieOrdersPage() {
   const { token } = useParams<{ token: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") === "agenda" ? "agenda" : "orders";
 
   const [partnerNaam, setPartnerNaam] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -90,20 +60,6 @@ export function InstallatieOrdersPage() {
     return () => cancelAnimationFrame(id);
   }, [load]);
 
-  const toekomstigeOpdrachten = useMemo(() => {
-    return [...orders]
-      .filter((o) => o.status !== "installatie_voltooid")
-      .sort((a, b) => orderSortAt(a) - orderSortAt(b));
-  }, [orders]);
-
-  function setTab(next: "orders" | "agenda") {
-    const url =
-      next === "agenda"
-        ? `/installatie/${token}?tab=agenda`
-        : `/installatie/${token}`;
-    router.replace(url);
-  }
-
   return (
     <div className="min-h-screen bg-wash">
       <header className="border-b border-line bg-green-dark px-4 py-5 sm:px-6">
@@ -129,116 +85,17 @@ export function InstallatieOrdersPage() {
           </p>
         ) : (
           <>
-            <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-ink">
-                  {tab === "agenda" ? "Agenda" : "Orders"}
-                </h2>
-                <p className="mt-0.5 text-sm text-muted">
-                  {orders.length}{" "}
-                  {orders.length === 1 ? "order" : "orders"} gekoppeld
-                </p>
-              </div>
-              <div className="flex rounded-full border border-line bg-white p-1 text-sm font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setTab("orders")}
-                  className={[
-                    "rounded-full px-4 py-1.5",
-                    tab === "orders"
-                      ? "bg-green text-white"
-                      : "text-muted hover:text-ink",
-                  ].join(" ")}
-                >
-                  Orders
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTab("agenda")}
-                  className={[
-                    "rounded-full px-4 py-1.5",
-                    tab === "agenda"
-                      ? "bg-green text-white"
-                      : "text-muted hover:text-ink",
-                  ].join(" ")}
-                >
-                  Agenda
-                </button>
-              </div>
+            <div className="mb-5">
+              <h2 className="font-display text-lg font-semibold text-ink">
+                Orders
+              </h2>
+              <p className="mt-0.5 text-sm text-muted">
+                {orders.length}{" "}
+                {orders.length === 1 ? "order" : "orders"} gekoppeld
+              </p>
             </div>
 
-            {tab === "agenda" ? (
-              <>
-                <PlanningAgenda
-                  orders={orders}
-                  linkHref={(event) =>
-                    `/installatie/${token}/orders/${event.order.id}`
-                  }
-                />
-
-                <section className="mt-8">
-                  <h3 className="font-display text-base font-semibold text-ink">
-                    Toekomstige opdrachten
-                  </h3>
-                  <p className="mt-0.5 text-sm text-muted">
-                    Dichtbij eerst · daarna verder weg
-                  </p>
-                  {toekomstigeOpdrachten.length === 0 ? (
-                    <p className="mt-4 border border-line bg-white px-4 py-8 text-center text-sm text-muted">
-                      Geen openstaande opdrachten.
-                    </p>
-                  ) : (
-                    <ul className="mt-4 divide-y divide-line border border-line bg-white">
-                      {toekomstigeOpdrachten.map((o) => {
-                        const lead = leadOf(o);
-                        const weekDone = isSchouwweekGepland(o);
-                        const dagDone = isSchouwdagDefinitief(o);
-                        const instDone = Boolean(o.installatie_at);
-                        return (
-                          <li key={o.id}>
-                            <Link
-                              href={`/installatie/${token}/orders/${o.id}`}
-                              className="flex flex-col gap-2 px-4 py-3.5 transition hover:bg-wash sm:flex-row sm:items-center sm:justify-between"
-                            >
-                              <div className="min-w-0">
-                                <p className="font-medium text-ink">
-                                  {lead?.naam || o.titel || "—"}
-                                </p>
-                                <p className="mt-0.5 font-mono text-[11px] text-green-dark">
-                                  {o.project_nummer}
-                                </p>
-                                <p className="mt-0.5 truncate text-xs text-muted">
-                                  {lead ? adresRegel(lead) : "—"}
-                                </p>
-                              </div>
-                              <div className="shrink-0 space-y-1 text-xs sm:text-right">
-                                <p className="tabular-nums text-muted">
-                                  {formatProjectSchouwWeek(o) ||
-                                    (o.installatie_at
-                                      ? formatDateTimeNl(o.installatie_at)
-                                      : "Nog geen datum")}
-                                </p>
-                                <div className="flex flex-wrap gap-x-3 gap-y-1 sm:justify-end">
-                                  <span className="inline-flex items-center gap-1 text-muted">
-                                    <CheckMini done={weekDone} /> Schouwweek
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 text-muted">
-                                    <CheckMini done={dagDone} /> Schouwdag
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 text-muted">
-                                    <CheckMini done={instDone} /> Installatie
-                                  </span>
-                                </div>
-                              </div>
-                            </Link>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </section>
-              </>
-            ) : orders.length === 0 ? (
+            {orders.length === 0 ? (
               <p className="border border-line bg-white px-4 py-10 text-center text-sm text-muted">
                 Nog geen orders. Zodra Batterijconcept een schouw inplant,
                 verschijnt die hier.
@@ -288,7 +145,7 @@ export function InstallatieOrdersPage() {
                               : "—"}
                           </td>
                           <td className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide text-muted">
-                            {projectStatusLabel[o.status] || o.status}
+                            {installerStatusLabel(o)}
                           </td>
                           <td className="whitespace-nowrap text-muted">
                             {lead?.telefoon ? (

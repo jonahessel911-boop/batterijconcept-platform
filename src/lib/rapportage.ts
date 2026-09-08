@@ -226,7 +226,12 @@ export type RapportageRaw = {
     ondertekend_op: string | null;
     created_at: string;
     subtotaal_ex_btw: number;
+    btw_bedrag?: number | null;
+    totaal_inc_btw?: number | null;
+    financiering_voorbehoud?: boolean | null;
     adviseur_id: string | null;
+    offerte_nummer?: string | null;
+    lead_naam?: string | null;
     regels?: { omschrijving?: string | null; aantal?: number | null }[];
   }[];
   projecten: {
@@ -236,15 +241,23 @@ export type RapportageRaw = {
     created_at: string;
     projectkosten: number;
     adviseur_id: string | null;
+    installatie_at?: string | null;
+    status?: string | null;
+    project_nummer?: string | null;
   }[];
   facturen: {
     id: string;
     lead_id: string;
+    offerte_id?: string | null;
     status: string;
     bedrag_ex_btw: number;
+    btw_bedrag?: number | null;
+    bedrag_inc_btw?: number | null;
     betaald_op: string | null;
     factuurdatum: string;
     adviseur_id: string | null;
+    factuur_nummer?: string | null;
+    omschrijving?: string | null;
   }[];
 };
 

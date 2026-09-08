@@ -23,6 +23,14 @@ import {
   parseSchouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
+import { buildProjectBetalingCash } from "@/lib/project-betaling-cash";
+import {
+  buildInkoopChecklist,
+  inkoopChecklistTotaalExBtw,
+  isInkoopItemBesteld,
+} from "@/lib/project-inkoop-checklist";
+import type { ProductInkoop } from "@/lib/inkoop";
+import type { Factuur, Offerte } from "@/types/database";
 
 const COLUMN_ACCENT: Record<ProjectStatus, string> = {
   schouw_aanbetaling: "#1A4A6E",
@@ -532,6 +540,13 @@ function MateriaalModal({
   onUpdated: (p: Project) => void;
 }) {
   const [regels, setRegels] = useState<OfferteRegel[]>([]);
+  const [offerteMeta, setOfferteMeta] = useState<{
+    subtotaal_ex_btw: number;
+    btw_bedrag: number;
+    totaal_inc_btw: number;
+  } | null>(null);
+  const [producten, setProducten] = useState<ProductInkoop[]>([]);
+  const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [checks, setChecks] = useState<Record<string, boolean>>(
     () => project.materiaal_checks || {}
   );
@@ -543,15 +558,49 @@ function MateriaalModal({
   const offerteId = project.offerte_id || project.offertes?.id;
 
   useEffect(() => {
-    if (!offerteId) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/offertes/${offerteId}`);
-        const data = await res.json();
-        if (!cancelled) {
-          setRegels((data.offerte?.offerte_regels || []) as OfferteRegel[]);
+        const [offRes, inkRes, facRes] = await Promise.all([
+          offerteId
+            ? fetch(`/api/offertes/${offerteId}`)
+            : Promise.resolve(null),
+          fetch("/api/inkoop"),
+          fetch(`/api/projecten/${project.id}/facturen`),
+        ]);
+        if (cancelled) return;
+        if (offRes) {
+          const data = await offRes.json();
+          const o = data.offerte as Offerte | undefined;
+          const regelsList = (o?.offerte_regels || []) as OfferteRegel[];
+          setRegels(regelsList);
+          if (o) {
+            let ex = Number(o.subtotaal_ex_btw) || 0;
+            let btw = Number(o.btw_bedrag) || 0;
+            let inc = Number(o.totaal_inc_btw) || 0;
+            if (!(ex > 0)) {
+              ex = Math.round(
+                regelsList.reduce(
+                  (s, r) => s + (Number(r.totaal_ex_btw) || 0),
+                  0
+                ) * 100
+              ) / 100;
+            }
+            if (!(inc > 0) && ex > 0) {
+              if (!(btw > 0)) btw = Math.round(ex * 0.21 * 100) / 100;
+              inc = Math.round((ex + btw) * 100) / 100;
+            }
+            setOfferteMeta({
+              subtotaal_ex_btw: ex,
+              btw_bedrag: btw,
+              totaal_inc_btw: inc,
+            });
+          }
         }
+        const ink = await inkRes.json().catch(() => ({}));
+        setProducten((ink.producten as ProductInkoop[]) || []);
+        const fac = await facRes.json().catch(() => ({}));
+        setFacturen((fac.facturen as Factuur[]) || []);
       } catch {
         /* ignore */
       }
@@ -559,7 +608,38 @@ function MateriaalModal({
     return () => {
       cancelled = true;
     };
-  }, [offerteId]);
+  }, [offerteId, project.id]);
+
+  const items = useMemo(
+    () =>
+      buildInkoopChecklist(
+        regels.map((r) => ({
+          id: r.id,
+          omschrijving: r.omschrijving,
+          aantal: r.aantal,
+          product_id: r.product_id,
+        })),
+        producten
+      ),
+    [regels, producten]
+  );
+
+  const inkoopTotaal = useMemo(
+    () => inkoopChecklistTotaalExBtw(items),
+    [items]
+  );
+
+  const cash = useMemo(
+    () =>
+      buildProjectBetalingCash({
+        orderExBtw: offerteMeta?.subtotaal_ex_btw || 0,
+        orderBtw: offerteMeta?.btw_bedrag,
+        orderIncBtw: offerteMeta?.totaal_inc_btw,
+        facturen,
+        inkoopExBtw: inkoopTotaal,
+      }),
+    [offerteMeta, facturen, inkoopTotaal]
+  );
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -611,6 +691,39 @@ function MateriaalModal({
         )}
       </div>
 
+      {offerteMeta && offerteMeta.totaal_inc_btw > 0 ? (
+        <div className="mt-4">
+          <div className="flex justify-between text-sm">
+            <span className="font-semibold text-ink">
+              Betaald {formatEuro(cash.ontvangenIncBtw)} van{" "}
+              {formatEuro(cash.orderIncBtw)}
+            </span>
+            <span className="font-semibold tabular-nums">
+              {cash.betaaldPct.toFixed(0)}%
+            </span>
+          </div>
+          <div className="mt-2 h-2 w-full overflow-hidden bg-wash">
+            <div
+              className={
+                cash.volledigBetaald ? "h-full bg-green" : "h-full bg-orange"
+              }
+              style={{ width: `${Math.min(100, cash.betaaldPct)}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-muted">
+            Inkoop:{" "}
+            {cash.inkoopUnlocked ? (
+              <span className="font-semibold text-green">vrijgegeven</span>
+            ) : (
+              <span className="font-semibold text-orange">geblokkeerd</span>
+            )}
+            {" · "}
+            btw-reserve {formatEuro(cash.btwReserve)} · vrij{" "}
+            {formatEuro(cash.vrijBesteedbaar)}
+          </p>
+        </div>
+      ) : null}
+
       <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted">
         Leveradres
         <textarea
@@ -622,35 +735,54 @@ function MateriaalModal({
       </label>
 
       <p className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted">
-        Producten
+        Producten ({formatEuro(inkoopTotaal)} ex. btw)
       </p>
+      {!cash.inkoopUnlocked ? (
+        <p className="mt-2 text-xs text-muted">
+          Vinkjes zijn pas actief als de order 100% betaald is.
+        </p>
+      ) : null}
       <ul className="mt-2 divide-y divide-line border border-line">
-        {regels.length === 0 ? (
-          <li className="px-3 py-4 text-sm text-muted">
-            Geen regels geladen…
+        {items.length === 0 ? (
+          <li className="px-3 py-2 text-sm text-muted">
+            Geen inkoopproducten…
           </li>
         ) : (
-          regels.map((r) => (
-            <li key={r.id} className="flex items-start gap-3 px-3 py-2.5">
-              <input
-                type="checkbox"
-                checked={Boolean(checks[r.id])}
-                onChange={(e) =>
-                  setChecks((prev) => ({
-                    ...prev,
-                    [r.id]: e.target.checked,
-                  }))
-                }
-                className="mt-1"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-ink">{r.omschrijving}</p>
-                <p className="text-xs text-muted">
-                  {r.aantal}× · {formatEuro(r.totaal_ex_btw)}
-                </p>
-              </div>
-            </li>
-          ))
+          items.map((item) => {
+            const besteld = isInkoopItemBesteld(item, checks);
+            return (
+              <li key={item.key}>
+                <label
+                  className={[
+                    "flex items-center gap-2 px-2.5 py-1.5",
+                    !cash.inkoopUnlocked
+                      ? "cursor-not-allowed opacity-55"
+                      : "cursor-pointer hover:bg-wash",
+                  ].join(" ")}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-ink">{item.label}</p>
+                    <p className="text-[11px] text-muted">
+                      {formatEuro(item.inkoopExBtw)} ex. btw
+                      {item.sku ? ` · ${item.sku}` : ""}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={besteld}
+                    disabled={!cash.inkoopUnlocked}
+                    onChange={(e) =>
+                      setChecks((prev) => ({
+                        ...prev,
+                        [item.key]: e.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4 shrink-0"
+                  />
+                </label>
+              </li>
+            );
+          })
         )}
       </ul>
 

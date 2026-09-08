@@ -6,7 +6,7 @@ import {
   isWarmtefondsProject,
   recommendedSchouwWeekForProject,
 } from "@/lib/backoffice-acties";
-import { formatDateTimeNl } from "@/lib/format";
+import { formatDateShort, formatDateTimeNl } from "@/lib/format";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import {
   formatProjectSchouwWeek,
@@ -18,6 +18,10 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 import { Panel } from "./DetailChrome";
+import {
+  isSchouwFormulier,
+  SCHOUW_FORMULIER_OMSCHRIJVING,
+} from "@/lib/project-documenten";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -109,6 +113,7 @@ export function ProjectSchouwSection({
   const [saving, setSaving] = useState(false);
   const [installatieSaving, setInstallatieSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingSchouw, setUploadingSchouw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
@@ -341,8 +346,32 @@ export function ProjectSchouwSection({
     }
   }
 
+  async function uploadSchouwFormulier(file: File) {
+    setUploadingSchouw(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("omschrijving", SCHOUW_FORMULIER_OMSCHRIJVING);
+      form.append("allow_pdf", "1");
+      const res = await fetch(`/api/projecten/${project.id}/fotos`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      setFotos((prev) => [...prev, data.foto]);
+      setOkMsg("Schouw formulier geüpload.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload mislukt");
+    } finally {
+      setUploadingSchouw(false);
+    }
+  }
+
   async function deleteFoto(fotoId: string) {
-    if (!confirm("Foto verwijderen?")) return;
+    if (!confirm("Bestand verwijderen?")) return;
     try {
       const res = await fetch(
         `/api/projecten/${project.id}/fotos?foto_id=${encodeURIComponent(fotoId)}`,
@@ -355,6 +384,13 @@ export function ProjectSchouwSection({
       setError(err instanceof Error ? err.message : "Fout");
     }
   }
+
+  const schouwFormulieren = fotos.filter((f) =>
+    isSchouwFormulier(f.omschrijving)
+  );
+  const normaleFotos = fotos.filter(
+    (f) => !isSchouwFormulier(f.omschrijving)
+  );
 
   const body = (
     <>
@@ -573,7 +609,71 @@ export function ProjectSchouwSection({
       <div className="mt-6 border-t border-line px-1 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Foto&apos;s ({fotos.length})
+            Schouw formulier ({schouwFormulieren.length})
+          </p>
+          <label className="cursor-pointer text-xs font-semibold text-green-dark underline-offset-2 hover:underline">
+            {uploadingSchouw ? "Uploaden…" : "Schouw formulier"}
+            <input
+              type="file"
+              accept="image/*,application/pdf,.pdf"
+              className="hidden"
+              disabled={uploadingSchouw}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void uploadSchouwFormulier(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+        {schouwFormulieren.length === 0 ? (
+          <p className="mt-2 text-sm text-muted">
+            Nog geen schouw formulier geüpload.
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-line border border-line">
+            {schouwFormulieren.map((f) => (
+              <li
+                key={f.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-ink">
+                    {f.bestandsnaam || "Schouw formulier"}
+                  </p>
+                  <p className="text-[11px] text-muted">
+                    {formatDateShort(f.created_at)}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {f.url ? (
+                    <a
+                      href={f.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-semibold text-green-dark underline-offset-2 hover:underline"
+                    >
+                      Openen
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void deleteFoto(f.id)}
+                    className="text-xs font-semibold text-[#C45A12]"
+                  >
+                    Verwijder
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-6 border-t border-line px-1 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Foto&apos;s ({normaleFotos.length})
           </p>
           <label className="cursor-pointer text-xs font-semibold text-green-dark underline-offset-2 hover:underline">
             {uploading ? "Uploaden…" : "Foto toevoegen"}
@@ -590,11 +690,11 @@ export function ProjectSchouwSection({
             />
           </label>
         </div>
-        {fotos.length === 0 ? (
+        {normaleFotos.length === 0 ? (
           <p className="mt-3 text-sm text-muted">Nog geen foto&apos;s.</p>
         ) : (
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {fotos.map((f) => (
+            {normaleFotos.map((f) => (
               <div key={f.id} className="group relative border border-line bg-wash">
                 {f.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
