@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDays,
   addWeeks,
@@ -9,7 +9,13 @@ import {
 } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import type { Adviseur, Afspraak, AfspraakSoort, Lead } from "@/types/database";
+import type {
+  Adviseur,
+  Afspraak,
+  AfspraakSoort,
+  Lead,
+  LeadStatus,
+} from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { isPlanbareAdviseur } from "@/lib/rollen";
@@ -28,6 +34,7 @@ import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
 import { afblokKey } from "@/lib/adviseur-beschikbaarheid";
 import { LeadZoekVeld } from "./LeadZoekVeld";
 import { AfspraakDetail } from "./AgendaPanel";
+import { LeadsTable } from "./LeadsTable";
 
 /** Vaste afspraakblokken: 10:00, 13:00, 16:00, 19:00 */
 const SLOT_ROWS: { label: string; hour: number; minute: number }[] =
@@ -279,13 +286,19 @@ export function AgendaPanel({
   leads,
   afspraken: afsprakenProp,
   defaultAdviseurId,
+  adviseurs: adviseursProp = [],
+  onStatusChange,
+  onBellerChange,
 }: {
   leads: Lead[];
   afspraken?: Afspraak[];
   defaultAdviseurId?: string;
+  adviseurs?: Adviseur[];
+  onStatusChange?: (leadId: string, status: LeadStatus) => void;
+  onBellerChange?: (leadId: string, bellerId: string | null) => void;
 }) {
   const [afspraken, setAfspraken] = useState<Afspraak[]>(afsprakenProp || []);
-  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>(adviseursProp);
   const [loading, setLoading] = useState(!(afsprakenProp && afsprakenProp.length));
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -294,6 +307,9 @@ export function AgendaPanel({
     dayKeyAmsterdam(new Date())
   );
   const [calendarView, setCalendarView] = useState<"dag" | "week">("week");
+  const [mainView, setMainView] = useState<"agenda" | "leads">("agenda");
+  const slideRef = useRef<HTMLDivElement>(null);
+  const ignoreScrollSync = useRef(false);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [adviseurMenuOpen, setAdviseurMenuOpen] = useState(false);
   const [beschikbaarMap, setBeschikbaarMap] = useState<Map<string, boolean>>(
@@ -310,15 +326,17 @@ export function AgendaPanel({
   const [saving, setSaving] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
 
+  const todayKey = dayKeyAmsterdam(new Date());
+
   const days = useMemo(() => weekDaysFrom(weekAnchor), [weekAnchor]);
   const visibleDays = useMemo(() => {
     if (calendarView === "week") return days;
     const hit =
       days.find((d) => d.key === selectedDayKey) ||
-      days.find((d) => d.key === dayKeyAmsterdam(new Date())) ||
+      days.find((d) => d.key === todayKey) ||
       days[0];
     return [hit];
-  }, [calendarView, days, selectedDayKey]);
+  }, [calendarView, days, selectedDayKey, todayKey]);
 
   const weekInfo = useMemo(() => schouwWeekFromDate(weekAnchor), [weekAnchor]);
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
@@ -339,6 +357,45 @@ export function AgendaPanel({
     return list.filter((a) => !hiddenIds.has(a.id));
   }, [planAdviseurs, defaultAdviseurId, hiddenIds]);
 
+  /** Leads met een zichtbare agenda-afspraak vandaag (op starttijd). */
+  const leadsVandaag = useMemo(() => {
+    const visibleAdvIds = new Set(visibleAdviseurs.map((a) => a.id));
+    const todays = afspraken
+      .filter((a) => {
+        if (a.status === "geannuleerd") return false;
+        if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
+        if (dayKeyAmsterdam(a.start_at) !== todayKey) return false;
+        if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
+          return false;
+        }
+        if (visibleAdvIds.size > 0 && !visibleAdvIds.has(a.adviseur_id)) {
+          return false;
+        }
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+      );
+
+    const byId = new Map(leads.map((l) => [l.id, l]));
+    const seen = new Set<string>();
+    const out: Lead[] = [];
+    for (const a of todays) {
+      if (seen.has(a.lead_id)) continue;
+      seen.add(a.lead_id);
+      const lead = byId.get(a.lead_id);
+      if (lead) out.push(lead);
+    }
+    return out;
+  }, [
+    afspraken,
+    leads,
+    todayKey,
+    defaultAdviseurId,
+    visibleAdviseurs,
+  ]);
+
   const leadStatusById = useMemo(() => {
     const m = new Map<string, string>();
     for (const l of leads) if (l.id && l.status) m.set(l.id, l.status);
@@ -350,6 +407,39 @@ export function AgendaPanel({
     for (const a of adviseurs) m.set(a.id, a.naam);
     return m;
   }, [adviseurs]);
+
+  function scrollToView(view: "agenda" | "leads") {
+    const el = slideRef.current;
+    if (!el) return;
+    ignoreScrollSync.current = true;
+    const idx = view === "agenda" ? 0 : 1;
+    el.scrollTo({ left: idx * el.clientWidth, behavior: "smooth" });
+    window.setTimeout(() => {
+      ignoreScrollSync.current = false;
+    }, 350);
+  }
+
+  function selectMainView(view: "agenda" | "leads") {
+    setMainView(view);
+    scrollToView(view);
+  }
+
+  useEffect(() => {
+    const el = slideRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (ignoreScrollSync.current) return;
+      const w = el.clientWidth || 1;
+      const idx = Math.round(el.scrollLeft / w);
+      setMainView(idx <= 0 ? "agenda" : "leads");
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (adviseursProp.length) setAdviseurs(adviseursProp);
+  }, [adviseursProp]);
 
   /** Volgorde van vervolg-afspraken per lead. */
   const vervolgIndexByAfspraak = useMemo(() => {
@@ -557,16 +647,50 @@ export function AgendaPanel({
   }
 
   const weekTitle = `Week ${weekInfo.week} — ${format(days[0].date, "d MMM.", { locale: nl })} t/m ${format(days[6].date, "d MMM. yyyy", { locale: nl })}`;
+  const leadsTitle = `Leads vandaag · ${formatInTimeZone(new Date(), AMSTERDAM_TZ, "EEEE d MMMM", { locale: nl })}`;
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col bg-white">
       {/* Header */}
       <div className="border-b border-line px-4 py-3 sm:px-5">
+        <div className="mb-3 flex w-fit rounded-lg border border-line p-0.5 text-xs font-semibold">
+          <button
+            type="button"
+            onClick={() => selectMainView("agenda")}
+            className={[
+              "rounded-md px-3 py-1.5",
+              mainView === "agenda"
+                ? "bg-green text-white"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
+          >
+            Agenda
+          </button>
+          <button
+            type="button"
+            onClick={() => selectMainView("leads")}
+            className={[
+              "rounded-md px-3 py-1.5",
+              mainView === "leads"
+                ? "bg-green text-white"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
+          >
+            Leads vandaag
+            {leadsVandaag.length > 0 ? (
+              <span className="ml-1.5 tabular-nums opacity-80">
+                ({leadsVandaag.length})
+              </span>
+            ) : null}
+          </button>
+        </div>
+
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="font-display text-xl font-semibold text-ink sm:text-2xl">
-              {weekTitle}
+              {mainView === "leads" ? leadsTitle : weekTitle}
             </h1>
+            {mainView === "agenda" ? (
             <div className="mt-2 flex max-w-4xl flex-wrap gap-x-3 gap-y-1">
               {LEGEND.map((l) => (
                 <span
@@ -581,8 +705,15 @@ export function AgendaPanel({
                 </span>
               ))}
             </div>
+            ) : (
+              <p className="mt-1 text-sm text-muted">
+                Leads met een afspraak op de agenda vandaag — swipe of wissel van
+                tab.
+              </p>
+            )}
           </div>
 
+          {mainView === "agenda" ? (
           <div className="flex flex-wrap items-center gap-1.5">
             <div className="flex rounded-lg border border-line p-0.5 text-xs font-semibold">
               <button
@@ -723,6 +854,7 @@ export function AgendaPanel({
               </div>
             )}
           </div>
+          ) : null}
         </div>
 
         {(error || okMsg) && (
@@ -741,8 +873,12 @@ export function AgendaPanel({
         )}
       </div>
 
-      {/* Grid */}
-      <div className="min-h-0 flex-1 overflow-auto">
+      {/* Swipebaar: Agenda | Leads vandaag */}
+      <div
+        ref={slideRef}
+        className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth"
+      >
+        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-auto">
         {loading ? (
           <p className="p-8 text-center text-sm text-muted">Laden…</p>
         ) : visibleAdviseurs.length === 0 ? (
@@ -848,6 +984,29 @@ export function AgendaPanel({
             ))}
           </div>
         )}
+        </div>
+
+        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-auto">
+          {leadsVandaag.length === 0 ? (
+            <div className="px-5 py-14 text-center">
+              <p className="font-display text-base font-semibold text-ink">
+                Geen leads vandaag op de agenda
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Zodra er huisbezoeken of vervolgafspraken voor vandaag staan,
+                zie je ze hier in de leadtabel.
+              </p>
+            </div>
+          ) : (
+            <LeadsTable
+              leads={leadsVandaag}
+              adviseurs={adviseurs}
+              onStatusChange={onStatusChange}
+              onBellerChange={onBellerChange}
+              showBellerColumn={Boolean(onBellerChange)}
+            />
+          )}
+        </div>
       </div>
 
       {/* Detail drawer — zelfde als oude agenda */}

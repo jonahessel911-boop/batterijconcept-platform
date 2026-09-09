@@ -26,6 +26,7 @@ export function BackofficePanel({
   facturen = [],
   leads = [],
   afspraken = [],
+  adviseurId = null,
   onProjectUpdated,
   onFactuurUpdated,
   onLeadUpdated,
@@ -35,6 +36,7 @@ export function BackofficePanel({
   facturen?: Factuur[];
   leads?: Lead[];
   afspraken?: Afspraak[];
+  adviseurId?: string | null;
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
   onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
@@ -127,6 +129,7 @@ export function BackofficePanel({
           facturen={facturen}
           leads={leads}
           afspraken={afspraken}
+          adviseurId={adviseurId}
           onProjectUpdated={onProjectUpdated}
           onFactuurUpdated={onFactuurUpdated}
           onLeadUpdated={onLeadUpdated}

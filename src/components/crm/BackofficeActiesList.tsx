@@ -19,6 +19,7 @@ import {
   saleMomentVanProject,
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
+import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { leadStatusLabel } from "@/lib/labels";
@@ -296,6 +297,7 @@ export function BackofficeActiesList({
   facturen = [],
   leads = [],
   afspraken = [],
+  adviseurId = null,
   onProjectUpdated,
   onFactuurUpdated,
   onLeadUpdated,
@@ -304,6 +306,8 @@ export function BackofficeActiesList({
   facturen?: Factuur[];
   leads?: Lead[];
   afspraken?: Afspraak[];
+  /** Ingelogde medewerker (voor actie-voltooiingslog). */
+  adviseurId?: string | null;
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
   onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
@@ -460,16 +464,36 @@ export function BackofficeActiesList({
     const factuurDone =
       opts.factuurDone || !needsFactuur || sent.length > 0 || drafts.length === 0;
     if (schouwDone && factuurDone && actie.projectId) {
+      const completedAt = new Date().toISOString();
       await patchProject(actie, {
-        bel_schouw_aanbetaling_at: new Date().toISOString(),
+        bel_schouw_aanbetaling_at: completedAt,
+      });
+      void logBackofficeActieEvent({
+        soort: "bel_schouw_aanbetaling",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
       });
     }
   }
 
   async function markFinancieringGeschakeld(actie: BackofficeActie) {
-    await patchProject(actie, {
-      financiering_geschakeld_at: new Date().toISOString(),
+    const completedAt = new Date().toISOString();
+    const project = await patchProject(actie, {
+      financiering_geschakeld_at: completedAt,
     });
+    if (project) {
+      void logBackofficeActieEvent({
+        soort: "schakel_financiering",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
+      });
+    }
   }
 
   async function markFactuurBetaald(actie: BackofficeActie) {
@@ -480,17 +504,27 @@ export function BackofficeActiesList({
     setBusyId(actie.id);
     setError(null);
     try {
+      const completedAt = new Date().toISOString();
       const res = await fetch(`/api/facturen/${actie.factuurId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: "betaald",
-          betaald_op: new Date().toISOString().slice(0, 10),
+          betaald_op: completedAt.slice(0, 10),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Markeren als betaald mislukt");
       if (data.factuur) onFactuurUpdated?.(data.factuur as Factuur);
+      void logBackofficeActieEvent({
+        soort: "nabellen_factuur",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        factuurId: actie.factuurId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Markeren mislukt");
     } finally {
@@ -750,6 +784,15 @@ export function BackofficeActiesList({
                                     </span>
                                   ) : null}
                                 </p>
+                                {row.kind === "herplan" &&
+                                actie.annuleringsReden?.trim() ? (
+                                  <p className="mt-1 max-w-md text-xs leading-snug text-ink">
+                                    <span className="font-semibold text-muted">
+                                      Reden:{" "}
+                                    </span>
+                                    {actie.annuleringsReden.trim()}
+                                  </p>
+                                ) : null}
                                 <SaleNotities actie={actie} projecten={projecten} />
                                 {isOpen && row.kind === "financiering" ? (
                                   <div className="mt-2 space-y-0.5 rounded border border-line bg-wash/50 px-2 py-1.5 text-[11px] text-muted">

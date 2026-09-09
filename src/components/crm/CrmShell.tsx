@@ -845,10 +845,15 @@ export function CrmShell() {
                       key={adviseurFilter || "all"}
                       leads={scopedLeads}
                       afspraken={afspraken}
+                      adviseurs={adviseurs}
                       defaultAdviseurId={
                         alleenEigenLeads(userRol)
                           ? sessionUser?.id
                           : adviseurFilter || undefined
+                      }
+                      onStatusChange={updateLeadStatus}
+                      onBellerChange={
+                        userRol === "admin" ? updateLeadBeller : undefined
                       }
                     />
                   ))}
@@ -866,6 +871,7 @@ export function CrmShell() {
                     adviseurs={adviseurs}
                     leads={scopedLeads}
                     afspraken={afspraken}
+                    adviseurId={sessionUser?.id || null}
                     onProjectUpdated={(project) => {
                       setProjecten((prev) =>
                         prev.map((p) =>

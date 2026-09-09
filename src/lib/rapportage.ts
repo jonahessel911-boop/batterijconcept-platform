@@ -83,6 +83,8 @@ export type RapportageMetrics = {
   inkoop: number;
   omzet: number;
   betaaldeOmzet: number;
+  /** Facturen op factuurdatum in de periode (excl. concept/vervallen), ex btw. */
+  gefactureerdeOmzet: number;
   winst: number;
 };
 
@@ -115,6 +117,7 @@ export function emptyMetrics(): RapportageMetrics {
     inkoop: 0,
     omzet: 0,
     betaaldeOmzet: 0,
+    gefactureerdeOmzet: 0,
     winst: 0,
   };
 }
@@ -129,6 +132,7 @@ export function finalizeMetrics(m: RapportageMetrics): RapportageMetrics {
     inkoop: round2(m.inkoop),
     omzet,
     betaaldeOmzet: round2(m.betaaldeOmzet),
+    gefactureerdeOmzet: round2(m.gefactureerdeOmzet),
     winst,
     conversieAfspraak:
       m.leads > 0 ? Math.round((m.afspraken / m.leads) * 1000) / 10 : 0,
@@ -167,6 +171,7 @@ function addMetrics(a: RapportageMetrics, b: RapportageMetrics): RapportageMetri
     inkoop: a.inkoop + b.inkoop,
     omzet: 0,
     betaaldeOmzet: a.betaaldeOmzet + b.betaaldeOmzet,
+    gefactureerdeOmzet: a.gefactureerdeOmzet + b.gefactureerdeOmzet,
     winst: 0,
   };
 }
@@ -191,6 +196,21 @@ function factuurBetaalIso(f: {
   if (!raw) return null;
   if (raw.length <= 10) return `${raw}T12:00:00+02:00`;
   return raw;
+}
+
+/** Factuurdatum in periode (excl. concept/vervallen) → gefactureerde omzet. */
+function factuurFactuurdatumInRange(
+  f: { status: string; factuurdatum: string },
+  start: Date,
+  end: Date
+): boolean {
+  if (f.status === "concept" || f.status === "vervallen") return false;
+  if (!f.factuurdatum) return false;
+  const iso =
+    f.factuurdatum.length <= 10
+      ? `${f.factuurdatum}T12:00:00+02:00`
+      : f.factuurdatum;
+  return inRange(iso, start, end);
 }
 
 export type RapportageLead = {
@@ -551,8 +571,13 @@ export function buildRapportageTree(
   }
   for (const f of facturen) {
     const iso = factuurBetaalIso(f);
-    if (!iso) continue;
-    years.set(Number(formatInTimeZone(iso, TZ, "yyyy")), true);
+    if (iso) {
+      years.set(Number(formatInTimeZone(iso, TZ, "yyyy")), true);
+    }
+    if (f.status !== "concept" && f.status !== "vervallen" && f.factuurdatum) {
+      const y = Number(f.factuurdatum.slice(0, 4));
+      if (Number.isFinite(y)) years.set(y, true);
+    }
   }
   years.set(nowParts.y, true);
 
@@ -615,6 +640,9 @@ export function buildRapportageTree(
       m.inkoop += hardwareKostenVoorRegels(o.regels || []).totaal;
     }
     for (const f of facturen) {
+      if (factuurFactuurdatumInRange(f, start, end)) {
+        m.gefactureerdeOmzet += Number(f.bedrag_ex_btw) || 0;
+      }
       const iso = factuurBetaalIso(f);
       if (!iso || !inRange(iso, start, end)) continue;
       m.betaaldeOmzet += Number(f.bedrag_ex_btw) || 0;

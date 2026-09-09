@@ -411,11 +411,25 @@ export function BelPanel({
         terugbellen: false,
         terugbel_notitie: null,
       };
+      if (!current.eerste_gebeld_at) {
+        patch.eerste_gebeld_at = now;
+      }
       const sb = getSupabaseBrowser();
       let { error: err } = await sb
         .from("leads")
         .update(patch)
         .eq("id", current.id);
+      if (
+        err &&
+        (err.message?.includes("eerste_gebeld_at") || err.code === "42703")
+      ) {
+        const { eerste_gebeld_at: _, ...withoutFirst } = patch;
+        const retryFirst = await sb
+          .from("leads")
+          .update(withoutFirst)
+          .eq("id", current.id);
+        err = retryFirst.error;
+      }
       if (
         err &&
         (err.message?.includes("belpogingen_vandaag") || err.code === "42703")
@@ -552,6 +566,9 @@ export function BelPanel({
         terugbel_notitie: note,
         laatst_gebeld_at: now,
       };
+      if (!current.eerste_gebeld_at) {
+        leadPatch.eerste_gebeld_at = now;
+      }
       await sb.from("leads").update(leadPatch).eq("id", current.id);
 
       onLeadUpdated(current.id, leadPatch);

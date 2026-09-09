@@ -283,6 +283,7 @@ export function SalesKpiDashboard() {
           ? cur.adSpend / cur.afsprakenGepland
           : null,
       betaaldeOmzet: data.finance.betaaldeOmzet,
+      gefactureerdeOmzet: data.finance.gefactureerdeOmzet,
     };
   }, [data]);
 
@@ -414,10 +415,24 @@ export function SalesKpiDashboard() {
         />
         <div className="border border-line bg-white px-4 py-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Gefactureerde omzet
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink">
+            {money(derived.gefactureerdeOmzet)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted">
+            Op factuurdatum in periode · ex btw
+          </p>
+        </div>
+        <div className="border border-line bg-white px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
             Betaalde omzet
           </p>
           <p className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink">
             {money(derived.betaaldeOmzet)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted">
+            Op betaaldatum in periode · ex btw
           </p>
         </div>
         <div className="border border-line bg-white px-4 py-3">

@@ -229,6 +229,8 @@ export interface Lead {
   terugbel_notitie?: string | null;
   belpogingen?: number;
   laatst_gebeld_at?: string | null;
+  /** Eerste belpoging (TTFC); blijft staan na latere pogingen. */
+  eerste_gebeld_at?: string | null;
   belpogingen_vandaag?: number;
   adviseur_id: string | null;
   /** Toegewezen beller (CRM-rol beller). */
@@ -489,6 +491,27 @@ export interface ProjectTaak {
   > & {
     leads?: Pick<Lead, "naam" | "plaats" | "telefoon"> | null;
   } | null;
+}
+
+export type BackofficeActieEventSoort =
+  | "bel_schouw_aanbetaling"
+  | "schakel_financiering"
+  | "nabellen_factuur"
+  | "herplan_afspraak";
+
+export interface BackofficeActieEvent {
+  id: string;
+  soort: BackofficeActieEventSoort;
+  lead_id: string | null;
+  project_id: string | null;
+  factuur_id: string | null;
+  adviseur_id: string | null;
+  deadline_at: string | null;
+  completed_at: string;
+  on_time: boolean | null;
+  meta?: Record<string, unknown> | null;
+  created_at: string;
+  adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
 }
 
 export interface ServiceVerzoek {

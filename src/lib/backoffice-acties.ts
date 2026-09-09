@@ -4,6 +4,7 @@ import type { Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { factuurIsOverdue, vervaldatumEndOfDay } from "@/lib/factuur-betaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { annuleringsNotitieFromAfspraak } from "@/lib/bel-queue";
 import {
   defaultSchouwWeekAfterSale,
   formatSchouwWeekLabel,
@@ -46,6 +47,8 @@ export type BackofficeActie = {
   schouwWeekLabel?: string;
   /** Alleen bij bel-schouw / schakel-financiering */
   project?: Project;
+  /** Annuleringsreden (herplan_afspraak), uit afspraak-notities */
+  annuleringsReden?: string | null;
 };
 
 type ProjectOfferteJoin = {
@@ -336,9 +339,17 @@ export function openHerplanAfspraakActies(
   }
 
   const cancelledByKlant = new Map<string, (typeof afspraken)[0]>();
+  const latestCancelled = new Map<string, (typeof afspraken)[0]>();
   for (const a of afspraken) {
     if (!afspraakBlokkeertAgenda(a.soort)) continue;
     if (a.status !== "geannuleerd") continue;
+    const prevLatest = latestCancelled.get(a.lead_id);
+    if (
+      !prevLatest ||
+      new Date(a.start_at).getTime() > new Date(prevLatest.start_at).getTime()
+    ) {
+      latestCancelled.set(a.lead_id, a);
+    }
     const note = (a.notities || "").toLowerCase();
     if (!note.includes("annulering (klant)")) continue;
     const prev = cancelledByKlant.get(a.lead_id);
@@ -356,11 +367,14 @@ export function openHerplanAfspraakActies(
     if (hasFutureActive.has(lead.id)) continue;
 
     const fromStatus = lead.status === "afspraak_afgezegd_klant";
-    const cancelled = cancelledByKlant.get(lead.id);
-    if (!fromStatus && !cancelled) continue;
+    const cancelled =
+      cancelledByKlant.get(lead.id) ||
+      (fromStatus ? latestCancelled.get(lead.id) : undefined);
+    if (!fromStatus && !cancelledByKlant.has(lead.id)) continue;
 
     const startAt = cancelled?.start_at || now.toISOString();
     const deadlineAt = belSchouwDeadline(startAt);
+    const reden = annuleringsNotitieFromAfspraak(cancelled);
     items.push({
       id: `herplan-afspraak-${lead.id}`,
       soort: "herplan_afspraak",
@@ -375,6 +389,7 @@ export function openHerplanAfspraakActies(
       telefoon: lead.telefoon || null,
       plaats: lead.plaats || null,
       href: `/?tab=leads&lead=${lead.id}`,
+      annuleringsReden: reden,
     });
   }
   return items;
