@@ -22,6 +22,7 @@ import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
+import { DrivePanel } from "./DrivePanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
@@ -54,6 +55,7 @@ const VALID_TABS: CrmTab[] = [
   "instroom",
   "projecten",
   "facturen",
+  "drive",
   "rapportage",
   "instellingen",
 ];
@@ -685,6 +687,10 @@ export function CrmShell() {
         ? `Facturen van ${filterLabel}`
         : "Betalingen en openstaande posten",
     },
+    drive: {
+      title: "Drive",
+      sub: "Mappen en PDF’s voor het team",
+    },
     rapportage: {
       title: "Rapportage",
       sub: "Omzet, kosten en winst per periode",
@@ -896,6 +902,7 @@ export function CrmShell() {
                 {tab === "facturen" && (
                   <FacturenTable facturen={scopedFacturen} />
                 )}
+                {tab === "drive" && <DrivePanel />}
                 {tab === "rapportage" && (
                   <RapportagePanel
                     adviseurs={adviseurs}

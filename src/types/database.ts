@@ -66,6 +66,7 @@ export type CrmTab =
   | "instroom"
   | "projecten"
   | "facturen"
+  | "drive"
   | "rapportage"
   | "instellingen";
 

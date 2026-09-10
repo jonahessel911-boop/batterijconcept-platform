@@ -198,7 +198,7 @@ ${brandHeader("Thuisbatterij-advies")}
 <tr>
   <td style="padding:8px 32px 0 32px;" class="px">
     <p style="margin:0 0 16px 0;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:${BODY};">
-      Het gesprek duurt 45-60 minuten. We bespreken samen:
+      Het gesprek duurt 90 minuten. We bespreken samen:
     </p>
     <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
       <tr><td style="padding:6px 0;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;color:${BODY};"><span style="color:${GREEN};font-weight:700;">→</span>&nbsp;&nbsp;Je huidige energieverbruik en zonnepanelen</td></tr>
