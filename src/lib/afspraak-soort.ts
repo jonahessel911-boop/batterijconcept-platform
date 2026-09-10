@@ -184,13 +184,17 @@ export function hasOpenVervolgVoorLead(
 export function needsVervolgPunt(
   afspraak: Afspraak,
   allAfspraken: Afspraak[],
-  now = new Date()
+  now = new Date(),
+  leadStatusOverride?: string | null
 ): boolean {
   if (!afspraakBlokkeertAgenda(afspraak.soort)) return false;
   if (afspraak.status === "geannuleerd") return false;
   if (!afspraakIsAfgelopen(afspraak, now)) return false;
-  const leadStatus = afspraak.leads?.status;
-  if (leadStatus && VERVOLG_PUNT_VRIJGESTELD.has(leadStatus)) return false;
+  const leadStatus =
+    leadStatusOverride ?? afspraak.leads?.status ?? null;
+  if (leadStatus && VERVOLG_PUNT_VRIJGESTELD.has(leadStatus as LeadStatus)) {
+    return false;
+  }
   if (hasOpenVervolgVoorLead(allAfspraken, afspraak.lead_id, afspraak.start_at)) {
     return false;
   }

@@ -798,6 +798,7 @@ export function CrmShell() {
                   <LeadsTable
                     leads={filteredLeads}
                     adviseurs={adviseurs}
+                    afspraken={afspraken}
                     statusFilter={statusFilter}
                     onStatusFilterChange={changeStatusFilter}
                     onStatusChange={updateLeadStatus}

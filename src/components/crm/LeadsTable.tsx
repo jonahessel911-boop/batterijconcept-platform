@@ -2,13 +2,49 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Adviseur, Lead, LeadStatus } from "@/types/database";
+import type { Adviseur, Afspraak, Lead, LeadStatus } from "@/types/database";
 import { leadStatusLabel, statusTone } from "@/lib/labels";
 import { formatDateTimeNl } from "@/lib/format";
 import { isBellerRol, normalizeRol } from "@/lib/rollen";
+import {
+  afspraakSoortLabel,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 
 const PAGE_SIZE = 20;
+const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
+
+/** Eerstvolgende actieve afspraak voor een lead (of null). */
+export function nextAfspraakForLead(
+  afspraken: Afspraak[],
+  leadId: string,
+  now = Date.now()
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) => a.lead_id === leadId && ACTIEVE_AFSPRAAK.has(a.status)
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    );
+  if (list.length === 0) return null;
+  const upcoming = list.find((a) => new Date(a.start_at).getTime() >= now);
+  return upcoming || list[list.length - 1] || null;
+}
+
+function afspraakSamenvatting(
+  a: Afspraak,
+  adviseurNaam?: string | null
+): { when: string; soort: string; adviseur: string | null } {
+  const soort = afspraakSoortLabel[normalizeAfspraakSoort(a.soort)] || "Afspraak";
+  return {
+    when: formatDateTimeNl(a.start_at),
+    soort,
+    adviseur: adviseurNaam?.trim() || null,
+  };
+}
 
 function adresRegel(lead: Lead): string {
   const parts = [
@@ -184,6 +220,7 @@ function PaginationBar({
 export function LeadsTable({
   leads,
   adviseurs = [],
+  afspraken = [],
   statusFilter = "",
   onStatusFilterChange,
   onStatusChange,
@@ -192,6 +229,7 @@ export function LeadsTable({
 }: {
   leads: Lead[];
   adviseurs?: Adviseur[];
+  afspraken?: Afspraak[];
   statusFilter?: LeadStatus | "";
   onStatusFilterChange?: (status: string) => void;
   onStatusChange?: (leadId: string, status: LeadStatus) => void;
@@ -206,6 +244,27 @@ export function LeadsTable({
       adviseurs.filter((a) => a.actief && isBellerRol(normalizeRol(a.rol))),
     [adviseurs]
   );
+
+  const adviseurNaamById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of adviseurs) m.set(a.id, a.naam);
+    return m;
+  }, [adviseurs]);
+
+  const afspraakByLeadId = useMemo(() => {
+    const m = new Map<string, Afspraak>();
+    const now = Date.now();
+    const seen = new Set<string>();
+    for (const a of afspraken) {
+      if (!ACTIEVE_AFSPRAAK.has(a.status)) continue;
+      seen.add(a.lead_id);
+    }
+    for (const leadId of seen) {
+      const next = nextAfspraakForLead(afspraken, leadId, now);
+      if (next) m.set(leadId, next);
+    }
+    return m;
+  }, [afspraken]);
 
   const rows = useMemo(() => {
     return [...leads].sort((a, b) => {
@@ -231,7 +290,7 @@ export function LeadsTable({
     return rows.slice(start, start + PAGE_SIZE);
   }, [rows, page]);
 
-  const colSpan = showBellerColumn ? 9 : 8;
+  const colSpan = showBellerColumn ? 10 : 9;
 
   const empty = (
     <div className="px-5 py-14 text-center">
@@ -299,6 +358,26 @@ export function LeadsTable({
                   <div onClick={(e) => e.stopPropagation()}>
                     <PhoneCopyCell telefoon={lead.telefoon} />
                   </div>
+                  {(() => {
+                    const a = afspraakByLeadId.get(lead.id);
+                    if (!a) return null;
+                    const s = afspraakSamenvatting(
+                      a,
+                      adviseurNaamById.get(a.adviseur_id)
+                    );
+                    return (
+                      <p className="text-[12px] text-ink">
+                        <span className="font-semibold tabular-nums">
+                          {s.when}
+                        </span>
+                        <span className="text-muted">
+                          {" "}
+                          · {s.soort}
+                          {s.adviseur ? ` · ${s.adviseur}` : ""}
+                        </span>
+                      </p>
+                    );
+                  })()}
                   {showBellerColumn && onBellerChange && (
                     <div
                       onClick={(e) => e.stopPropagation()}
@@ -373,6 +452,7 @@ export function LeadsTable({
                 <th>Woonplaats</th>
                 <th>Tel nr</th>
                 <th>Email</th>
+                <th>Afspraak</th>
                 {showBellerColumn && <th>Beller</th>}
                 <th>
                   <div className="flex items-center gap-2">
@@ -439,6 +519,29 @@ export function LeadsTable({
                     </td>
                     <td className="whitespace-nowrap text-muted">
                       {lead.email || "—"}
+                    </td>
+                    <td className="min-w-[9rem]">
+                      {(() => {
+                        const a = afspraakByLeadId.get(lead.id);
+                        if (!a) {
+                          return <span className="text-muted">—</span>;
+                        }
+                        const s = afspraakSamenvatting(
+                          a,
+                          adviseurNaamById.get(a.adviseur_id)
+                        );
+                        return (
+                          <div className="leading-snug">
+                            <p className="whitespace-nowrap font-medium tabular-nums text-ink">
+                              {s.when}
+                            </p>
+                            <p className="truncate text-[11px] text-muted">
+                              {s.soort}
+                              {s.adviseur ? ` · ${s.adviseur}` : ""}
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </td>
                     {showBellerColumn && (
                       <td onClick={(e) => e.stopPropagation()}>

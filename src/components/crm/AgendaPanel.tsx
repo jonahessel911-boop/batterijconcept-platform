@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   addDays,
@@ -553,6 +553,8 @@ export function AfspraakDetail({
     backofficeNotitie: "",
     installateurNotitie: "",
   });
+  const actionSectionRef = useRef<HTMLElement | null>(null);
+  const saleFormRef = useRef<HTMLDivElement | null>(null);
 
   const note = appointmentNote(current);
   const mailed = Boolean(current.bevestiging_verstuurd);
@@ -560,7 +562,12 @@ export function AfspraakDetail({
   const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
-  const needsAction = needsVervolgPunt(current, allAfspraken);
+  const needsAction = needsVervolgPunt(
+    current,
+    allAfspraken,
+    new Date(),
+    current.leads?.status
+  );
   const straatNr = lead
     ? [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
         .filter(Boolean)
@@ -593,6 +600,16 @@ export function AfspraakDetail({
   }, [afspraak]);
 
   useEffect(() => {
+    if (!needsAction || mode !== "view") return;
+    window.requestAnimationFrame(() => {
+      actionSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    });
+  }, [needsAction, mode, current.id]);
+
+  useEffect(() => {
     let cancelled = false;
     queueMicrotask(async () => {
       try {
@@ -619,6 +636,13 @@ export function AfspraakDetail({
     }
     let cancelled = false;
     setSaleOfferteLoading(true);
+    // Direct naar backoffice-blok scrollen zodra Sale gekozen is
+    window.requestAnimationFrame(() => {
+      saleFormRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    });
     queueMicrotask(async () => {
       try {
         const sb = getSupabaseBrowser();
@@ -647,6 +671,12 @@ export function AfspraakDetail({
               : "",
           backofficeNotitie: o.backoffice_notitie || "",
           installateurNotitie: o.installateur_notitie || "",
+        });
+        window.requestAnimationFrame(() => {
+          saleFormRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+          });
         });
       } catch {
         if (!cancelled) setSaleOfferte(null);
@@ -1004,7 +1034,10 @@ export function AfspraakDetail({
           </div>
 
           {needsAction && mode === "view" && (
-            <section className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF8F3] p-5 shadow-[0_1px_2px_rgba(196,90,18,0.06)]">
+            <section
+              ref={actionSectionRef}
+              className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF8F3] p-5 shadow-[0_1px_2px_rgba(196,90,18,0.06)]"
+            >
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
                 {isSaleUitkomst(uitkomst)
                   ? "Actie vereist"
@@ -1026,9 +1059,18 @@ export function AfspraakDetail({
                     required
                     disabled={busy}
                     value={uitkomst}
-                    onChange={(e) =>
-                      setUitkomst((e.target.value as LeadStatus) || "")
-                    }
+                    onChange={(e) => {
+                      const next = (e.target.value as LeadStatus) || "";
+                      setUitkomst(next);
+                      if (isSaleUitkomst(next)) {
+                        window.requestAnimationFrame(() => {
+                          saleFormRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "nearest",
+                          });
+                        });
+                      }
+                    }}
                     className={`mt-1 w-full cursor-pointer border bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-green disabled:opacity-60 ${
                       uitkomst
                         ? statusTone("lead", uitkomst)
@@ -1046,15 +1088,19 @@ export function AfspraakDetail({
                 </label>
 
                 {isSaleUitkomst(uitkomst) ? (
-                  saleOfferteLoading ? (
+                  <div
+                    ref={saleFormRef}
+                    className="rounded-xl border-2 border-[#C45A12]/40 bg-white p-4 shadow-sm"
+                  >
+                  {saleOfferteLoading ? (
                     <p className="text-sm text-muted">Offerte laden…</p>
                   ) : !saleOfferte ? (
-                    <p className="rounded-lg border border-[#C45A12]/30 bg-white px-3 py-3 text-sm text-[#C45A12]">
+                    <p className="rounded-lg border border-[#C45A12]/30 bg-[#FFF8F3] px-3 py-3 text-sm text-[#C45A12]">
                       Geen ondertekende offerte voor deze lead. Rond eerst een
                       offerte af, daarna kun je de backoffice hier invullen.
                     </p>
                   ) : (
-                    <div className="rounded-xl border border-line bg-white p-4">
+                    <div>
                       <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
                         Backoffice invullen
                       </p>
@@ -1096,7 +1142,8 @@ export function AfspraakDetail({
                         />
                       </div>
                     </div>
-                  )
+                  )}
+                  </div>
                 ) : (
                   <>
                     {uitkomstVereistVervolgPunt(uitkomst) && (

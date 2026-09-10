@@ -21,6 +21,7 @@ import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { isPlanbareAdviseur } from "@/lib/rollen";
 import {
   afspraakZichtbaarInAgenda,
+  needsVervolgPunt,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
 import {
@@ -115,7 +116,8 @@ type StickerMeta = {
 function stickerMeta(
   a: Afspraak,
   leadStatus: string | null,
-  vervolgIndex: number
+  vervolgIndex: number,
+  needsCheckout: boolean
 ): StickerMeta {
   const soort = normalizeAfspraakSoort(a.soort);
   let badge = "Nieuw";
@@ -201,6 +203,19 @@ function stickerMeta(
     // keep planned look unless explicitly something else
   }
 
+  // Past visit not yet checked out → amber “niet tijdig afgeboekt”
+  if (
+    needsCheckout &&
+    a.status !== "geannuleerd" &&
+    a.status !== "voltooid" &&
+    statusLabel === "Afspraak ingepland"
+  ) {
+    statusLabel = "Doorgegaan niet tijdig afgeboekt";
+    statusColor = "#CA8A04";
+    tint = "#FFFBEB";
+    border = "#FCD34D";
+  }
+
   return { badge, badgeClass, statusLabel, statusColor, tint, border };
 }
 
@@ -208,14 +223,16 @@ function StickerCard({
   a,
   leadStatus,
   vervolgIndex,
+  needsCheckout,
   onClick,
 }: {
   a: Afspraak;
   leadStatus: string | null;
   vervolgIndex: number;
+  needsCheckout: boolean;
   onClick: () => void;
 }) {
-  const meta = stickerMeta(a, leadStatus, vervolgIndex);
+  const meta = stickerMeta(a, leadStatus, vervolgIndex, needsCheckout);
   const naam = a.leads?.naam || "Onbekend";
   const plaats = a.leads?.plaats || a.leads?.postcode || "—";
   const tijd = formatTimeNl(a.start_at);
@@ -231,7 +248,7 @@ function StickerCard({
     <button
       type="button"
       onClick={onClick}
-      title={`${meta.badge} · ${typeLabel} · ${meta.statusLabel} · ${naam} · ${plaats} · ${tijd}`}
+      title={`${needsCheckout ? "Nog niet afgeboekt · " : ""}${meta.badge} · ${typeLabel} · ${meta.statusLabel} · ${naam} · ${plaats} · ${tijd}`}
       className="w-full rounded-md border px-1.5 py-1 text-left transition hover:brightness-[0.98]"
       style={{
         background: meta.tint,
@@ -246,6 +263,14 @@ function StickerCard({
         >
           {meta.badge}
         </span>
+        {needsCheckout ? (
+          <span
+            className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[8px] font-bold leading-none text-white"
+            title="Nog niet afgeboekt"
+          >
+            I
+          </span>
+        ) : null}
         <span className="inline-flex shrink-0 items-center gap-0.5 text-[9px] font-medium text-[#4B5563]">
           <span
             className="inline-block h-1 w-1 rounded-full"
@@ -944,24 +969,33 @@ export function AgendaPanel({
                             <GeblokkeerdCell />
                           ) : items.length > 0 ? (
                             <div className="space-y-1">
-                              {items.map((a) => (
-                                <StickerCard
-                                  key={a.id}
-                                  a={a}
-                                  leadStatus={
-                                    leadStatusById.get(a.lead_id) ||
-                                    a.leads?.status ||
-                                    null
-                                  }
-                                  vervolgIndex={
-                                    vervolgIndexByAfspraak.get(a.id) || 1
-                                  }
-                                  onClick={() => {
-                                    setSelected(a);
-                                    setPlanOpen(false);
-                                  }}
-                                />
-                              ))}
+                              {items.map((a) => {
+                                const ls =
+                                  leadStatusById.get(a.lead_id) ||
+                                  a.leads?.status ||
+                                  null;
+                                const needsCheckout = needsVervolgPunt(
+                                  a,
+                                  afspraken,
+                                  new Date(),
+                                  ls
+                                );
+                                return (
+                                  <StickerCard
+                                    key={a.id}
+                                    a={a}
+                                    leadStatus={ls}
+                                    needsCheckout={needsCheckout}
+                                    vervolgIndex={
+                                      vervolgIndexByAfspraak.get(a.id) || 1
+                                    }
+                                    onClick={() => {
+                                      setSelected(a);
+                                      setPlanOpen(false);
+                                    }}
+                                  />
+                                );
+                              })}
                             </div>
                           ) : (
                             <button
@@ -1001,6 +1035,7 @@ export function AgendaPanel({
             <LeadsTable
               leads={leadsVandaag}
               adviseurs={adviseurs}
+              afspraken={afspraken}
               onStatusChange={onStatusChange}
               onBellerChange={onBellerChange}
               showBellerColumn={Boolean(onBellerChange)}
