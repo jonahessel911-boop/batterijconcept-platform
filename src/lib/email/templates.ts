@@ -39,6 +39,74 @@ export function leadThankYouEmail(opts: { naam: string }) {
   });
 }
 
+/** Eerste belpoging geen contact — we hebben je geprobeerd te bereiken. */
+export function geenContactPoging1Email(opts: { naam: string }) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: "We hebben je geprobeerd te bereiken",
+    preheader:
+      "Thuisbatterij zonder eigen investering — reageer op deze mail voor een afspraak.",
+    bodyHtml: [
+      emailH1("We hebben je geprobeerd te bereiken"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "We hebben je vandaag geprobeerd te bereiken in verband met een <strong>thuisbatterij zonder eigen investering</strong> — en de mogelijkheden die daarbij horen voor jouw situatie."
+      ),
+      emailP(
+        "Met een thuisbatterij kun je meer van je eigen zonnestroom gebruiken, pieken afvlakken en je energiekosten verlagen. Of dit rendabel is — en of je in aanmerking komt zonder eigen investering — rekenen we graag samen met je door."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:#0D5C32;">Reageer op deze e-mail</p>
+         <p style="margin:0;font-size:15px;line-height:1.55;color:#1A1F1C;">
+           Antwoord kort onder deze mail (bijv. met een dagdeel dat je bereikbaar bent).
+           Dan plannen we een afspraak in, zodat een adviseur berekent of een batterij rendabel is
+           en of je in aanmerking komt voor een batterij <strong>zonder eigen investering</strong>.
+         </p>`
+      ),
+      emailP(
+        "Liever bellen? Bel ons op <strong>085 800 1645</strong> — we helpen je graag verder."
+      ),
+      emailMuted(
+        "Geen interesse meer? Laat het ons even weten via een reply, dan nemen we je uit onze belplanning."
+      ),
+    ].join(""),
+  });
+}
+
+/** Derde belpoging geen contact — nog interesse? */
+export function geenContactPoging3Email(opts: { naam: string }) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: "Heeft u nog interesse in een batterij zonder eigen investering?",
+    preheader:
+      "Laatste check — reageer op deze mail voor een vrijblijvende berekening aan huis.",
+    bodyHtml: [
+      emailH1(
+        "Heeft u nog interesse in een batterij zonder eigen investering?"
+      ),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "We hebben je inmiddels een paar keer geprobeerd te bereiken. Misschien kwam het niet uit — daarom deze korte check."
+      ),
+      emailP(
+        "<strong>Heeft u nog interesse in een thuisbatterij zonder eigen investering?</strong> Dan kijken we graag of dit in jouw situatie past en wat het oplevert."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:#0D5C32;">Reageer op deze e-mail</p>
+         <p style="margin:0;font-size:15px;line-height:1.55;color:#1A1F1C;">
+           Antwoord onder deze mail als je nog interesse hebt.
+           Dan maken we een afspraak, zodat een adviseur berekent of een batterij rendabel is
+           en of u in aanmerking komt voor een batterij <strong>zonder eigen investering</strong>.
+         </p>`
+      ),
+      emailP(
+        "Of bel direct: <strong>085 800 1645</strong>. Geen interesse meer? Een korte reply is genoeg — dan stoppen we met bellen."
+      ),
+      emailMuted("BatterijConcept · Vrijblijvend advies · Geen verplichtingen."),
+    ].join(""),
+  });
+}
+
 export function afspraakBevestigingEmail(opts: {
   naam: string;
   startAt: string | Date;

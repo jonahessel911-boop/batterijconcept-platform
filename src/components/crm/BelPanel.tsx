@@ -463,6 +463,19 @@ export function BelPanel({
             ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}`
             : null,
       });
+      if (
+        status === "geen_contact" &&
+        (pogingen === 1 || pogingen === 3) &&
+        current.email?.trim()
+      ) {
+        void fetch(`/api/leads/${current.id}/geen-contact-mail`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poging: pogingen }),
+        }).catch(() => {
+          /* non-blocking */
+        });
+      }
       const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
       fireMetaCapiSync(current.id);
       onNeedReload?.();
