@@ -10,7 +10,7 @@ create index if not exists leads_bel_queue_idx
   on public.leads (status, belpogingen, laatst_gebeld_at);
 
 comment on column public.leads.belpogingen is
-  'Aantal belpogingen zonder contact; bij 7 uit de bellijst';
+  'Aantal belpogingen zonder contact; bij 5 uit de bellijst';
 comment on column public.leads.laatst_gebeld_at is
   'Laatste belpoging vanuit het belsysteem';
 comment on column public.leads.belpogingen_vandaag is

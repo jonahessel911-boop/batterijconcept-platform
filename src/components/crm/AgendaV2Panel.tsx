@@ -1039,6 +1039,7 @@ export function AgendaPanel({
               onStatusChange={onStatusChange}
               onBellerChange={onBellerChange}
               showBellerColumn={Boolean(onBellerChange)}
+              showAfspraakTijdFirst
             />
           )}
         </div>

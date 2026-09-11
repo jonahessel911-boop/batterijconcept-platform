@@ -476,6 +476,13 @@ export function BelPanel({
           /* non-blocking */
         });
       }
+      if (status === "foutief_nummer" && current.email?.trim()) {
+        void fetch(`/api/leads/${current.id}/foutief-nummer-mail`, {
+          method: "POST",
+        }).catch(() => {
+          /* non-blocking */
+        });
+      }
       const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
       fireMetaCapiSync(current.id);
       onNeedReload?.();

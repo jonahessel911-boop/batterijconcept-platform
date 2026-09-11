@@ -107,6 +107,56 @@ export function geenContactPoging3Email(opts: { naam: string }) {
   });
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Beluitkomst: telefoonnummer klopt niet — reageren voor afspraak. */
+export function foutiefNummerEmail(opts: {
+  naam: string;
+  telefoon?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const tel = (opts.telefoon || "").trim();
+  const telHtml = tel
+    ? `<strong>${escapeHtml(tel)}</strong>`
+    : "het bij ons bekende telefoonnummer";
+
+  return emailLayout({
+    title: "Het ingevulde telefoonnummer is onjuist",
+    preheader:
+      "We konden je niet bereiken op het opgegeven nummer — reageer op deze mail voor een afspraak.",
+    bodyHtml: [
+      emailH1("Het ingevulde telefoonnummer is onjuist"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        `We hebben geprobeerd je te bereiken, maar ${telHtml} blijkt <strong>onjuist of niet bereikbaar</strong>.`
+      ),
+      emailP(
+        "Daardoor kunnen we je helaas niet telefonisch te woord staan over de mogelijkheden van een thuisbatterij zonder eigen investering."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:#0D5C32;">Wil je toch een afspraak inplannen?</p>
+         <p style="margin:0;font-size:15px;line-height:1.55;color:#1A1F1C;">
+           Reageer op deze e-mail met een <strong>juist telefoonnummer</strong> en/of een dagdeel waarop je bereikbaar bent.
+           Dan plannen we graag een afspraak in, zodat een adviseur berekent of een batterij rendabel is
+           en of je in aanmerking komt voor een batterij <strong>zonder eigen investering</strong>.
+         </p>`
+      ),
+      emailP(
+        "Je kunt ook bellen naar <strong>085 800 1645</strong> — we helpen je graag verder."
+      ),
+      emailMuted(
+        "Geen interesse meer? Een korte reply is genoeg, dan nemen we je uit onze planning."
+      ),
+    ].join(""),
+  });
+}
+
 export function afspraakBevestigingEmail(opts: {
   naam: string;
   startAt: string | Date;

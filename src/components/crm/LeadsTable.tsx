@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Adviseur, Afspraak, Lead, LeadStatus } from "@/types/database";
 import { leadStatusLabel, statusTone } from "@/lib/labels";
-import { formatDateTimeNl } from "@/lib/format";
+import { formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import { isBellerRol, normalizeRol } from "@/lib/rollen";
 import {
   afspraakSoortLabel,
@@ -226,6 +226,8 @@ export function LeadsTable({
   onStatusChange,
   onBellerChange,
   showBellerColumn = false,
+  /** Agenda “Leads vandaag”: toon afspraaktijd als eerste kolom. */
+  showAfspraakTijdFirst = false,
 }: {
   leads: Lead[];
   adviseurs?: Adviseur[];
@@ -236,6 +238,7 @@ export function LeadsTable({
   onAdviseurChange?: (leadId: string, adviseurId: string | null) => void;
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
   showBellerColumn?: boolean;
+  showAfspraakTijdFirst?: boolean;
 }) {
   const router = useRouter();
   const [page, setPage] = useState(1);
@@ -290,7 +293,8 @@ export function LeadsTable({
     return rows.slice(start, start + PAGE_SIZE);
   }, [rows, page]);
 
-  const colSpan = showBellerColumn ? 10 : 9;
+  const colSpan =
+    (showBellerColumn ? 10 : 9) + (showAfspraakTijdFirst ? 1 : 0);
 
   const empty = (
     <div className="px-5 py-14 text-center">
@@ -343,6 +347,16 @@ export function LeadsTable({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
+                      {showAfspraakTijdFirst &&
+                        (() => {
+                          const a = afspraakByLeadId.get(lead.id);
+                          if (!a) return null;
+                          return (
+                            <p className="mb-0.5 text-sm font-semibold tabular-nums text-green">
+                              {formatTimeNl(a.start_at)}
+                            </p>
+                          );
+                        })()}
                       <p className="font-medium text-ink">{lead.naam}</p>
                       <p className="mt-0.5 text-xs text-muted">
                         {adresRegel(lead)}
@@ -445,6 +459,7 @@ export function LeadsTable({
           <table className="crm-table crm-table--compact">
             <thead>
               <tr>
+                {showAfspraakTijdFirst && <th>Tijd</th>}
                 <th>Binnengekomen</th>
                 <th>Naam</th>
                 <th>Lander</th>
@@ -482,6 +497,14 @@ export function LeadsTable({
                     ].join(" ")}
                     onClick={() => router.push(`/leads/${lead.id}`)}
                   >
+                    {showAfspraakTijdFirst && (
+                      <td className="whitespace-nowrap font-semibold tabular-nums text-ink">
+                        {(() => {
+                          const a = afspraakByLeadId.get(lead.id);
+                          return a ? formatTimeNl(a.start_at) : "—";
+                        })()}
+                      </td>
+                    )}
                     <td className="whitespace-nowrap tabular-nums text-muted">
                       {formatDateTimeNl(lead.created_at)}
                     </td>
