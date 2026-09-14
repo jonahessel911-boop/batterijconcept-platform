@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import type { Factuur, Offerte, Project } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
@@ -17,12 +17,15 @@ import {
 
 export function FactuurPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [factuur, setFactuur] = useState<Factuur | null>(null);
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [busy, setBusy] = useState<"pdf" | "send" | "paid" | null>(null);
+  const [busy, setBusy] = useState<"pdf" | "send" | "paid" | "delete" | null>(
+    null
+  );
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [betaaldOp, setBetaaldOp] = useState(() =>
@@ -183,6 +186,31 @@ export function FactuurPage() {
     }
   }
 
+  async function removeFactuur() {
+    if (!factuur) return;
+    if (
+      !confirm(
+        `Factuur ${factuur.factuur_nummer} definitief verwijderen?\n\nDit kan niet ongedaan worden.`
+      )
+    ) {
+      return;
+    }
+    setBusy("delete");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      router.push("/?tab=facturen");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="facturen">
@@ -295,6 +323,14 @@ export function FactuurPage() {
               Creditfactuur — er hoeft niets te worden betaald.
             </p>
           ) : null}
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void removeFactuur()}
+            className="border border-[#D32F2F]/40 bg-white px-4 py-2 text-sm font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
+          >
+            {busy === "delete" ? "Verwijderen…" : "Verwijderen"}
+          </button>
         </div>
 
         {msg && (

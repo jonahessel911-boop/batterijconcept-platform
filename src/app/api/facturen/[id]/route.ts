@@ -74,3 +74,77 @@ export async function PATCH(
     );
   }
 }
+
+/** DELETE /api/facturen/[id] — factuur hard verwijderen */
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  try {
+    const sb = getSupabaseAdmin();
+
+    const { data: factuur, error: loadErr } = await sb
+      .from("facturen")
+      .select("id, factuur_nummer, status")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (loadErr) throw loadErr;
+    if (!factuur) {
+      return NextResponse.json({ error: "Factuur niet gevonden" }, { status: 404 });
+    }
+
+    // Gekoppeld aan adviseur-creditfactuur → FK restrict
+    const { data: creditRegel, error: creditErr } = await sb
+      .from("adviseur_creditfactuur_regels")
+      .select("id")
+      .eq("factuur_id", id)
+      .maybeSingle();
+
+    if (creditErr && creditErr.code !== "42P01") {
+      throw creditErr;
+    }
+    if (creditRegel) {
+      return NextResponse.json(
+        {
+          error:
+            "Deze factuur zit in een adviseur-creditfactuur en kan niet worden verwijderd. Maak eerst die creditregel ongedaan.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const { error } = await sb.from("facturen").delete().eq("id", id);
+    if (error) {
+      const msg = error.message || "";
+      if (
+        error.code === "23503" ||
+        /foreign key|violates foreign key/i.test(msg)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Factuur is gekoppeld aan andere gegevens en kan niet worden verwijderd.",
+            detail: msg,
+          },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Verwijderen mislukt", detail: msg },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      factuur_nummer: factuur.factuur_nummer,
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Verwijderen mislukt") },
+      { status: 500 }
+    );
+  }
+}
