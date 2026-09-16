@@ -1,7 +1,11 @@
 import { jsPDF } from "jspdf";
 import type { Factuur, Lead, Offerte } from "@/types/database";
 import { formatDateShort } from "@/lib/format";
-import { factuurBetaaltermijnDagen } from "@/lib/factuur-betaling";
+import {
+  FACTUUR_BEDRIJFSADRES_OP_PDF,
+  factuurBetaaltermijnDagen,
+  factuurHeeftAdresGegevensOpPdf,
+} from "@/lib/factuur-betaling";
 import {
   PDF_COLORS,
   companyInfo,
@@ -50,6 +54,14 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 16;
   const co = companyInfo();
+  if (factuurHeeftAdresGegevensOpPdf(factuur.notities)) {
+    co.adres = FACTUUR_BEDRIJFSADRES_OP_PDF.straat;
+    co.postcodePlaats = FACTUUR_BEDRIJFSADRES_OP_PDF.postcodePlaats;
+  } else {
+    // Adresregels alleen als aangekruist bij aanmaken
+    co.adres = "";
+    co.postcodePlaats = "";
+  }
   let y = 14;
 
   // —— Logo linksboven ——

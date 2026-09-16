@@ -88,3 +88,32 @@ export function factuurIsOverdue(opts: {
 export function betalingsOmschrijving(offerteNummer?: string | null): string {
   return (offerteNummer || "").trim() || "";
 }
+
+/** Marker in factuur.notities: toon Alfred Nobellaan als bedrijfsadres op PDF. */
+export const FACTUUR_ADRES_OP_PDF_MARKER = "[[adres_gegevens_op_factuur]]";
+
+export const FACTUUR_BEDRIJFSADRES_OP_PDF = {
+  straat: "Alfred Nobellaan 68",
+  postcodePlaats: "3731DW De Bilt",
+} as const;
+
+export function factuurHeeftAdresGegevensOpPdf(
+  notities?: string | null
+): boolean {
+  return Boolean(notities?.includes(FACTUUR_ADRES_OP_PDF_MARKER));
+}
+
+export function withFactuurAdresOpPdfMarker(
+  notities: string,
+  enabled: boolean
+): string {
+  const cleaned = notities
+    .replaceAll(FACTUUR_ADRES_OP_PDF_MARKER, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!enabled) return cleaned;
+  return cleaned
+    ? `${cleaned}\n${FACTUUR_ADRES_OP_PDF_MARKER}`
+    : FACTUUR_ADRES_OP_PDF_MARKER;
+}
+

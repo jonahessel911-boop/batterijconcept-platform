@@ -6,6 +6,7 @@ import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
   parseBetaaltermijnDagen,
+  withFactuurAdresOpPdfMarker,
 } from "@/lib/factuur-betaling";
 
 export const runtime = "nodejs";
@@ -25,6 +26,7 @@ export async function POST(
     omschrijving?: string | null;
     credit_van_factuur_id?: string | null;
     betaaltermijn_dagen?: number | string | null;
+    adres_gegevens_op_factuur?: boolean;
   };
   try {
     body = await req.json();
@@ -149,9 +151,13 @@ export async function POST(
         .eq("id", project.offerte_id || "")
         .maybeSingle()).data?.offerte_nummer || project.project_nummer;
 
-    const notities = creditVan
+    const notitiesBase = creditVan
       ? `CREDIT FACTUUR (${creditVan.factuur_nummer}). Betreft ${project.project_nummer}. Er hoeft niets te worden betaald.`
       : `Betreft ${project.project_nummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${ref}.`;
+    const notities = withFactuurAdresOpPdfMarker(
+      notitiesBase,
+      Boolean(body.adres_gegevens_op_factuur) && !creditVan
+    );
 
     const insertRow: Record<string, unknown> = {
       lead_id: project.lead_id,

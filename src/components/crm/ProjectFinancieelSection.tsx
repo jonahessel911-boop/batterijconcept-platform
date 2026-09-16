@@ -33,6 +33,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
   const [betaaltermijnDagen, setBetaaltermijnDagen] = useState(
     String(FACTUUR_BETAALTERMIJN_DAGEN)
   );
+  const [adresOpFactuur, setAdresOpFactuur] = useState(false);
 
   const [creditForId, setCreditForId] = useState<string | null>(null);
   const [creditBedrag, setCreditBedrag] = useState("");
@@ -74,6 +75,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
           bedrag_inc_btw: bedrag,
           omschrijving: omschrijving.trim() || undefined,
           betaaltermijn_dagen: betaaltermijnDagen.trim() || undefined,
+          adres_gegevens_op_factuur: adresOpFactuur || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -85,6 +87,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
       setBedrag("");
       setOmschrijving("");
       setBetaaltermijnDagen(String(FACTUUR_BETAALTERMIJN_DAGEN));
+      setAdresOpFactuur(false);
       setShowCreate(false);
       setMsg("Conceptfactuur aangemaakt.");
       await load();
@@ -323,6 +326,21 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                 Bepaalt de vervaldatum op de factuur (standaard{" "}
                 {FACTUUR_BETAALTERMIJN_DAGEN} dagen).
               </p>
+              <label className="flex cursor-pointer items-start gap-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={adresOpFactuur}
+                  onChange={(e) => setAdresOpFactuur(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-semibold">Adres gegevens op factuur</span>
+                  <span className="mt-0.5 block text-muted">
+                    Alfred Nobellaan 68, 3731DW De Bilt als bedrijfsadres op de
+                    PDF
+                  </span>
+                </span>
+              </label>
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"
