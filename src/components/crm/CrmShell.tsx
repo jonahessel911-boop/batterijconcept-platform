@@ -27,6 +27,8 @@ import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { InstroomPanel } from "./InstroomPanel";
+import { AiPanel } from "./AiPanel";
+import { AdminTargetsPanel } from "./AdminTargetsPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
 import { cancelledAppointmentLeadIds, inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
@@ -57,6 +59,8 @@ const VALID_TABS: CrmTab[] = [
   "facturen",
   "drive",
   "rapportage",
+  "admin",
+  "ai",
   "instellingen",
 ];
 
@@ -695,6 +699,14 @@ export function CrmShell() {
       title: "Rapportage",
       sub: "Omzet, kosten en winst per periode",
     },
+    admin: {
+      title: "Admin",
+      sub: "Standaard- en persoonsdoelen voor adviseurs, bellers en installatiepartners",
+    },
+    ai: {
+      title: "AI interface",
+      sub: "Vraag alles over je CRM-data — typ of praat via Whisper",
+    },
     instellingen: {
       title: "Instellingen",
       sub: "Medewerkers en installatiepartners",
@@ -786,7 +798,7 @@ export function CrmShell() {
           <div className="flex-1 overflow-auto">
             {!sessionReady || !userRol ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
-            ) : loading && tab !== "instellingen" ? (
+            ) : loading && tab !== "instellingen" && tab !== "ai" && tab !== "admin" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : !magTab(userRol, tab) ? (
               <p className="px-6 py-14 text-center text-sm text-muted">
@@ -910,6 +922,8 @@ export function CrmShell() {
                     defaultAdviseurId={adviseurFilter || undefined}
                   />
                 )}
+                {tab === "admin" && <AdminTargetsPanel />}
+                {tab === "ai" && <AiPanel />}
                 {tab === "instellingen" && (
                   <InstellingenPanel onAdviseursChange={loadAdviseurs} />
                 )}

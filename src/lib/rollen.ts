@@ -53,6 +53,8 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "facturen",
         "drive",
         "rapportage",
+        "admin",
+        "ai",
         "instellingen",
       ];
   }

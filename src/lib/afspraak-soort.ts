@@ -200,3 +200,39 @@ export function needsVervolgPunt(
   }
   return true;
 }
+
+/**
+ * Echt afgeboekt in de agenda (= geen oranje “I” meer).
+ * Cron-`voltooid` zonder uitkomst telt NIET — adviseur moet uitkomst
+ * kiezen of een vervolg plannen.
+ */
+export function isAfgeboekteFysiekeAfspraak(
+  afspraak: {
+    id: string;
+    lead_id: string;
+    status: string;
+    soort: string | null;
+    start_at: string;
+    end_at?: string | null;
+  },
+  allAfspraken: {
+    id: string;
+    lead_id: string;
+    status: string;
+    soort: string | null;
+    start_at: string;
+    end_at?: string | null;
+  }[],
+  leadStatus: string | null | undefined,
+  now = new Date()
+): boolean {
+  if (!afspraakBlokkeertAgenda(afspraak.soort)) return false;
+  if (afspraak.status === "geannuleerd") return false;
+  if (!afspraakIsAfgelopen(afspraak as Afspraak, now)) return false;
+  return !needsVervolgPunt(
+    afspraak as Afspraak,
+    allAfspraken as Afspraak[],
+    now,
+    leadStatus
+  );
+}

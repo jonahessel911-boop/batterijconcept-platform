@@ -377,6 +377,50 @@ export function BackofficeActiesList({
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
+  async function voltooiHerplan(actie: BackofficeActie) {
+    const lead = leads.find((l) => l.id === actie.leadId);
+    const completedAt = new Date().toISOString();
+    const notities = appendLeadNotitie(
+      lead?.notities,
+      "Herplan-actie voltooid."
+    );
+    const patch: Partial<Lead> = {
+      status: "nieuw",
+      notities,
+    };
+    setBusyId(actie.id);
+    setError(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: err } = await sb
+        .from("leads")
+        .update(patch)
+        .eq("id", actie.leadId);
+      if (err) throw err;
+      onLeadUpdated?.(actie.leadId, patch);
+      void logBackofficeActieEvent({
+        soort: "herplan_afspraak",
+        leadId: actie.leadId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
+      });
+      void fetch(`/api/leads/${actie.leadId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "status",
+          titel: `Status → ${leadStatusLabel.nieuw}`,
+          detail: "Herplan-actie voltooid vanuit backoffice-acties",
+        }),
+      }).catch(() => undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Voltooien mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function definitiefAnnuleren(actie: BackofficeActie) {
     if (
       !window.confirm(
@@ -1041,6 +1085,16 @@ export function BackofficeActiesList({
                                 </Link>
                               ) : row.kind === "herplan" ? (
                                 <>
+                                  <button
+                                    type="button"
+                                    disabled={busyId === actie.id}
+                                    onClick={() => void voltooiHerplan(actie)}
+                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                  >
+                                    {busyId === actie.id
+                                      ? "Bezig…"
+                                      : "Voltooien"}
+                                  </button>
                                   <Link
                                     href={`/?tab=leads&lead=${actie.leadId}`}
                                     className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"

@@ -18,9 +18,11 @@ import { FinancialDashboard } from "./FinancialDashboard";
 import { RapportageMap } from "./RapportageMap";
 import { SalesKpiDashboard } from "./SalesKpiDashboard";
 import { BackofficeKpiDashboard } from "./BackofficeKpiDashboard";
+import { DashboardV2 } from "./DashboardV2";
 
 type ViewMode =
   | "management"
+  | "dashboard_v2"
   | "backoffice"
   | "periode"
   | "attributie"
@@ -590,28 +592,32 @@ export function RapportagePanel({
   const viewTitle =
     view === "management"
       ? "Managementdashboard"
-      : view === "backoffice"
-        ? "Backoffice rapportage"
-        : view === "periode"
-          ? "Periode overzicht"
-          : view === "attributie"
-            ? "Bronnen"
-            : view === "map"
-              ? "Kaart"
-              : "Financial Dashboard";
+      : view === "dashboard_v2"
+        ? "Dashboard v2"
+        : view === "backoffice"
+          ? "Backoffice rapportage"
+          : view === "periode"
+            ? "Periode overzicht"
+            : view === "attributie"
+              ? "Bronnen"
+              : view === "map"
+                ? "Kaart"
+                : "Financial Dashboard";
 
   const viewDescription =
     view === "management"
       ? "Directie, marketing, sales, orders en finance — echte data, filters en forecasts."
-      : view === "backoffice"
-        ? "Time to first contact (werktijd), acties/taken per medewerker, schouw- en aanbetaling-SLA."
-        : view === "periode"
-          ? "Jaar → maand → week → dag · klik om uit te klappen. Deals + Lead→afspraak/deal = cohort. Voltooid = afgeboekte afspraken die al geweest zijn (geen toekomst). Afspraak→sale = getekende deals ÷ voltooid in de periode."
-          : view === "attributie"
-            ? "Cohort per lander, campaign of ad: leads → afspraken → deals. Wissel van weergave om dieper te kijken — geen geneste boom meer."
-            : view === "map"
-              ? "Klik op een provincie om leads, afspraken en deals per gebied te zien (op basis van postcode)."
-              : "Omzet, winst, marge, ROI en CAC — met vergelijking t.o.v. de vorige periode.";
+      : view === "dashboard_v2"
+        ? "Stand vs doel: waar staan we, en wat moet er nog bij om het ingestelde doel te halen."
+        : view === "backoffice"
+          ? "Time to first contact (werktijd), acties/taken per medewerker, schouw- en aanbetaling-SLA."
+          : view === "periode"
+            ? "Jaar → maand → week → dag · klik om uit te klappen. Deals + Lead→afspraak/deal = cohort. Voltooid = afgeboekte afspraken die al geweest zijn (geen toekomst). Afspraak→sale = getekende deals ÷ voltooid in de periode."
+            : view === "attributie"
+              ? "Cohort per lander, campaign of ad: leads → afspraken → deals. Wissel van weergave om dieper te kijken — geen geneste boom meer."
+              : view === "map"
+                ? "Klik op een provincie om leads, afspraken en deals per gebied te zien (op basis van postcode)."
+                : "Omzet, winst, marge, ROI en CAC — met vergelijking t.o.v. de vorige periode.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -639,6 +645,21 @@ export function RapportagePanel({
                 ].join(" ")}
               >
                 Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setView("dashboard_v2");
+                  setOpen(new Set());
+                }}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold transition",
+                  view === "dashboard_v2"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Dashboard v2
               </button>
               <button
                 type="button"
@@ -718,7 +739,9 @@ export function RapportagePanel({
             </div>
           </div>
 
-          {view !== "management" && view !== "backoffice" && (
+          {view !== "management" &&
+            view !== "dashboard_v2" &&
+            view !== "backoffice" && (
             <>
           <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
             Verkoopmedewerker
@@ -796,6 +819,10 @@ export function RapportagePanel({
 
         {view === "management" ? (
           <SalesKpiDashboard />
+        ) : view === "dashboard_v2" ? (
+          <div className="bg-wash/40 px-4 py-5 sm:px-5">
+            <DashboardV2 />
+          </div>
         ) : view === "backoffice" ? (
           <BackofficeKpiDashboard />
         ) : view === "financial" ? (

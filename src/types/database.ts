@@ -68,6 +68,8 @@ export type CrmTab =
   | "facturen"
   | "drive"
   | "rapportage"
+  | "admin"
+  | "ai"
   | "instellingen";
 
 export type AfspraakStatus =

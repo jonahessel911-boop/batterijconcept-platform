@@ -8,8 +8,8 @@ import { errMessage } from "@/lib/errors";
 import {
   COMPANY_ACCOUNT_NAME,
   COMPANY_IBAN_DISPLAY,
-  FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
+  factuurBetaaltermijnDagen,
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
@@ -144,10 +144,11 @@ export async function POST(
     const isCredit = Boolean(factuur.credit_van_factuur_id);
     const creditVanNummer = creditVan?.factuur_nummer || null;
 
-    const vervaldatum = amsterdamDatePlusDays(
-      new Date(),
-      FACTUUR_BETAALTERMIJN_DAGEN
-    );
+    const betaaltermijnDagen = factuurBetaaltermijnDagen({
+      factuurdatum: factuur.factuurdatum,
+      vervaldatum: factuur.vervaldatum,
+    });
+    const vervaldatum = amsterdamDatePlusDays(new Date(), betaaltermijnDagen);
     const factuurVoorPdf = {
       ...factuur,
       status: "verzonden" as const,

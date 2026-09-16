@@ -417,11 +417,17 @@ function afboekAgendaAccent(
   switch (leadStatus) {
     case "sale_financiering":
     case "sale_eigen_middelen":
-    case "deal":
       return {
         bar: "bg-[#1B7A3E]",
         bg: "bg-[#DFF5E7]",
         time: "text-[#145C2E]",
+      };
+    case "deal":
+      // Getekend, uitkomst (financiering/eigen) nog open
+      return {
+        bar: "bg-[#CA8A04]",
+        bg: "bg-[#FFFBEB]",
+        time: "text-[#A16207]",
       };
     case "geen_interesse":
     case "offerte_afgewezen":

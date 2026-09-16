@@ -56,6 +56,7 @@ const LEGEND: LegendItem[] = [
   { color: "#7C3AED", label: "Verplaatsen" },
   { color: "#0F766E", label: "Doorgegaan + Vervolg" },
   { color: "#DB2777", label: "Doorgegaan + Sale" },
+  { color: "#CA8A04", label: "Deal getekend" },
   { color: "#DC2626", label: "Niet goed gekwalificeerd" },
   { color: "#CA8A04", label: "Doorgegaan niet tijdig afgeboekt" },
   { color: "#6B7280", label: "Doorgegaan + Negatief" },
@@ -152,11 +153,17 @@ function stickerMeta(
     border = "#FECACA";
   } else if (a.status === "voltooid" || leadStatus) {
     const ls = leadStatus || "";
-    if (ls === "sale_financiering" || ls === "sale_eigen_middelen" || ls === "deal") {
+    if (ls === "sale_financiering" || ls === "sale_eigen_middelen") {
       statusLabel = "Doorgegaan + Sale";
       statusColor = "#DB2777";
       tint = "#FDF2F8";
       border = "#F9A8D4";
+    } else if (ls === "deal") {
+      // Offerte getekend, maar uitkomst (financiering/eigen) nog niet afgerond
+      statusLabel = "Deal getekend";
+      statusColor = "#CA8A04";
+      tint = "#FFFBEB";
+      border = "#FCD34D";
     } else if (ls === "vervolg_fysiek" || ls === "vervolg_tel") {
       statusLabel = "Doorgegaan + Vervolg";
       statusColor = "#0F766E";

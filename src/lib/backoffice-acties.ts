@@ -307,19 +307,10 @@ export function openNabellenFactuurActies(
   return items;
 }
 
-const HERPLAN_SKIP_STATUS = new Set([
-  "deal",
-  "sale_financiering",
-  "sale_eigen_middelen",
-  "geen_interesse",
-  "offerte_afgewezen",
-  "niet_gekwalificeerd",
-]);
-
 /**
  * Klant heeft huisbezoek geannuleerd → opnieuw inplannen.
- * Bron: leadstatus `afspraak_afgezegd_klant`, of geannuleerde fysieke
- * afspraak met “Annulering (klant)” zonder nieuwe actieve afspraak.
+ * Bron: leadstatus `afspraak_afgezegd_klant` (zonder nieuwe actieve afspraak).
+ * Voltooien → status `nieuw`; definitief annuleren → `geen_interesse`.
  */
 export function openHerplanAfspraakActies(
   leads: Pick<Lead, "id" | "naam" | "telefoon" | "plaats" | "status">[],
@@ -363,15 +354,13 @@ export function openHerplanAfspraakActies(
 
   const items: BackofficeActie[] = [];
   for (const lead of leads) {
-    if (HERPLAN_SKIP_STATUS.has(lead.status)) continue;
+    // Alleen status afspraak_afgezegd_klant → taak open.
+    // Voltooien zet status op nieuw; definitief annuleren op geen_interesse.
+    if (lead.status !== "afspraak_afgezegd_klant") continue;
     if (hasFutureActive.has(lead.id)) continue;
 
-    const fromStatus = lead.status === "afspraak_afgezegd_klant";
     const cancelled =
-      cancelledByKlant.get(lead.id) ||
-      (fromStatus ? latestCancelled.get(lead.id) : undefined);
-    if (!fromStatus && !cancelledByKlant.has(lead.id)) continue;
-
+      cancelledByKlant.get(lead.id) || latestCancelled.get(lead.id);
     const startAt = cancelled?.start_at || now.toISOString();
     const deadlineAt = belSchouwDeadline(startAt);
     const reden = annuleringsNotitieFromAfspraak(cancelled);

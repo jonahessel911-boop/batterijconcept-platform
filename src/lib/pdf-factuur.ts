@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import type { Factuur, Lead, Offerte } from "@/types/database";
 import { formatDateShort } from "@/lib/format";
+import { factuurBetaaltermijnDagen } from "@/lib/factuur-betaling";
 import {
   PDF_COLORS,
   companyInfo,
@@ -262,11 +263,15 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
     const ref =
       offerte?.offerte_nummer?.trim() ||
       factuur.factuur_nummer;
+    const dagen = factuurBetaaltermijnDagen({
+      factuurdatum: factuur.factuurdatum,
+      vervaldatum: factuur.vervaldatum,
+    });
     const payLines = [
       `IBAN: ${co.iban}`,
       `T.n.v. ${co.accountName || "BatterijConcept"}`,
       `Omschrijving: ${ref}`,
-      `Betaaltermijn: 3 dagen (uiterlijk ${formatDateShort(factuur.vervaldatum) || "—"})`,
+      `Betaaltermijn: ${dagen} ${dagen === 1 ? "dag" : "dagen"} (uiterlijk ${formatDateShort(factuur.vervaldatum) || "—"})`,
     ];
     let py = y + 9;
     for (const line of payLines) {

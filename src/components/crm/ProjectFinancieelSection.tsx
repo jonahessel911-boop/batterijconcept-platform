@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Factuur } from "@/types/database";
 import { formatDateShort, formatEuro } from "@/lib/format";
+import { FACTUUR_BETAALTERMIJN_DAGEN } from "@/lib/factuur-betaling";
 import { StatusBadge } from "./StatusBadge";
 
 function creditVanLabel(f: Factuur): string | null {
@@ -29,6 +30,9 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [bedrag, setBedrag] = useState("");
   const [omschrijving, setOmschrijving] = useState("");
+  const [betaaltermijnDagen, setBetaaltermijnDagen] = useState(
+    String(FACTUUR_BETAALTERMIJN_DAGEN)
+  );
 
   const [creditForId, setCreditForId] = useState<string | null>(null);
   const [creditBedrag, setCreditBedrag] = useState("");
@@ -69,6 +73,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
         body: JSON.stringify({
           bedrag_inc_btw: bedrag,
           omschrijving: omschrijving.trim() || undefined,
+          betaaltermijn_dagen: betaaltermijnDagen.trim() || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -79,6 +84,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
       }
       setBedrag("");
       setOmschrijving("");
+      setBetaaltermijnDagen(String(FACTUUR_BETAALTERMIJN_DAGEN));
       setShowCreate(false);
       setMsg("Conceptfactuur aangemaakt.");
       await load();
@@ -300,6 +306,23 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                   className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
                 />
               </label>
+              <label className="block text-xs text-muted">
+                Betaaltermijn (dagen)
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={365}
+                  value={betaaltermijnDagen}
+                  onChange={(e) => setBetaaltermijnDagen(e.target.value)}
+                  placeholder={String(FACTUUR_BETAALTERMIJN_DAGEN)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <p className="text-[11px] text-muted">
+                Bepaalt de vervaldatum op de factuur (standaard{" "}
+                {FACTUUR_BETAALTERMIJN_DAGEN} dagen).
+              </p>
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"

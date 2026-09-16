@@ -568,6 +568,21 @@ export function AfspraakDetail({
     new Date(),
     current.leads?.status
   );
+  const leadStatusNow = current.leads?.status || null;
+  const dealNogAfboeken = leadStatusNow === "deal" && needsAction;
+  const actionBadgeLabel = dealNogAfboeken
+    ? "Uitkomst nodig"
+    : "Vervolg punt nodig";
+  const actionIntro = dealNogAfboeken
+    ? "Offerte is getekend (deal). Kies sale met financiering of eigen middelen om de afspraak af te boeken."
+    : isSaleUitkomst(uitkomst)
+      ? "Sale geselecteerd — vul hieronder de backoffice in en rond de actie af."
+      : "Fysieke afspraak is klaar. Kies of het een sale/deal is of niet. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie.";
+  const actionTitle = isSaleUitkomst(uitkomst)
+    ? "Actie vereist"
+    : dealNogAfboeken
+      ? "Sale afronden"
+      : "Uitkomst afspraak";
   const straatNr = lead
     ? [lead.straat, [lead.huisnummer, lead.toevoeging].filter(Boolean).join("")]
         .filter(Boolean)
@@ -897,6 +912,14 @@ export function AfspraakDetail({
         .update({ status: uitkomst })
         .eq("id", current.lead_id);
       if (statusErr) throw statusErr;
+
+      // Afspraak echt afboeken (anders blijft oranje “I” / telt niet in dashboard)
+      const { error: afspraakErr } = await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .eq("id", current.id);
+      if (afspraakErr) throw afspraakErr;
+
       const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
       fireMetaCapiSync(current.lead_id);
 
@@ -939,6 +962,7 @@ export function AfspraakDetail({
 
       const next: Afspraak = {
         ...current,
+        status: "voltooid",
         leads: current.leads
           ? { ...current.leads, status: uitkomst }
           : current.leads,
@@ -1023,7 +1047,7 @@ export function AfspraakDetail({
                 <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px]">
                   i
                 </span>
-                Vervolg punt nodig
+                {actionBadgeLabel}
               </span>
             )}
             {mailed && magKlantMail && (
@@ -1039,15 +1063,9 @@ export function AfspraakDetail({
               className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF8F3] p-5 shadow-[0_1px_2px_rgba(196,90,18,0.06)]"
             >
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
-                {isSaleUitkomst(uitkomst)
-                  ? "Actie vereist"
-                  : "Uitkomst afspraak"}
+                {actionTitle}
               </p>
-              <p className="mt-1 text-sm text-muted">
-                {isSaleUitkomst(uitkomst)
-                  ? "Sale geselecteerd — vul hieronder de backoffice in en rond de actie af."
-                  : "Fysieke afspraak is klaar. Kies of het een sale/deal is of niet. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie."}
-              </p>
+              <p className="mt-1 text-sm text-muted">{actionIntro}</p>
 
               <form
                 onSubmit={(e) => void planVervolgPunt(e)}
@@ -1079,7 +1097,10 @@ export function AfspraakDetail({
                     aria-label="Uitkomst afspraak"
                   >
                     <option value="">Kies uitkomst…</option>
-                    {AFSPRAAK_UITKOMSTEN.map((s) => (
+                    {(dealNogAfboeken
+                      ? AFSPRAAK_UITKOMSTEN.filter((s) => isSaleUitkomst(s))
+                      : AFSPRAAK_UITKOMSTEN
+                    ).map((s) => (
                       <option key={s} value={s}>
                         {leadStatusLabel[s]}
                       </option>

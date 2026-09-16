@@ -40,6 +40,51 @@ const ADVISEUR_PUBLIC_FALLBACK =
 const ADVISEUR_PUBLIC_MIN =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
 
+type SbError = { code?: string; message?: string } | null;
+
+/** Ontbrekende kolom (Postgres 42703 of PostgREST schema-cache). */
+function isMissingColumn(error: SbError, column: string): boolean {
+  if (!error?.message) return false;
+  const msg = error.message;
+  const mentions =
+    msg.includes(`'${column}'`) ||
+    msg.includes(`"${column}"`) ||
+    new RegExp(`\\b${column}\\b`).test(msg);
+  if (!mentions) return false;
+  return (
+    error.code === "42703" ||
+    /does not exist/i.test(msg) ||
+    /schema cache/i.test(msg) ||
+    /could not find/i.test(msg)
+  );
+}
+
+function isRolCheckViolation(error: SbError): boolean {
+  if (!error) return false;
+  return (
+    error.code === "23514" ||
+    (error.message?.includes("adviseurs_rol_check") ?? false)
+  );
+}
+
+function isSchemaCompatError(error: SbError): boolean {
+  if (!error) return false;
+  if (error.code === "42703" || error.code === "23514") return true;
+  const msg = error.message || "";
+  return (
+    /does not exist/i.test(msg) ||
+    /schema cache/i.test(msg) ||
+    /could not find/i.test(msg) ||
+    msg.includes("adviseurs_rol_check") ||
+    msg.includes("start_adres") ||
+    msg.includes("commissie_pct") ||
+    msg.includes("bedrijfsnaam") ||
+    msg.includes("kvk_nummer") ||
+    msg.includes("max_factuur_bedrag") ||
+    isMissingColumn(error, "rol")
+  );
+}
+
 function stripHash(row: Record<string, unknown>): Adviseur {
   const copy = { ...row };
   delete copy.password_hash;
@@ -496,68 +541,125 @@ export async function PATCH(req: NextRequest) {
       .select(ADVISEUR_PUBLIC)
       .single();
 
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("start_adres") ||
-        error.message?.includes("rol") ||
-        error.message?.includes("commissie_pct") ||
-        error.message?.includes("bedrijfsnaam") ||
-        error.message?.includes("kvk_nummer") ||
-        error.message?.includes("max_factuur_bedrag"))
-    ) {
+    if (error && isSchemaCompatError(error)) {
+      if (isRolCheckViolation(error)) {
+        return NextResponse.json(
+          {
+            error:
+              "Deze rol is nog niet toegestaan in de database. Voer supabase/migrate-beller-rol.sql uit (of opnieuw migrate-rollen.sql).",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (isMissingColumn(error, "rol") && patch.rol !== undefined) {
+        return NextResponse.json(
+          {
+            error: "Voer eerst supabase/migrate-rollen.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      const creditKeys = [
+        "bedrijfsnaam",
+        "kvk_nummer",
+        "btw_nummer",
+        "factuur_adres",
+        "factuur_postcode",
+        "factuur_plaats",
+        "iban",
+        "max_factuur_bedrag",
+      ] as const;
+      const wantsCredit = creditKeys.some((k) => patch[k] !== undefined);
       if (
-        patch.bedrijfsnaam !== undefined ||
-        patch.kvk_nummer !== undefined ||
-        patch.btw_nummer !== undefined ||
-        patch.factuur_adres !== undefined ||
-        patch.factuur_postcode !== undefined ||
-        patch.factuur_plaats !== undefined ||
-        patch.iban !== undefined ||
-        patch.max_factuur_bedrag !== undefined
+        wantsCredit &&
+        creditKeys.some((k) => isMissingColumn(error, k))
       ) {
         return NextResponse.json(
           {
             error:
               "Voer eerst supabase/migrate-adviseur-creditfacturen.sql uit in Supabase.",
+            detail: error.message,
           },
           { status: 503 }
         );
       }
-      if (patch.commissie_pct !== undefined) {
+
+      if (
+        patch.commissie_pct !== undefined &&
+        isMissingColumn(error, "commissie_pct")
+      ) {
         return NextResponse.json(
           {
             error:
               "Voer eerst supabase/migrate-adviseur-beschikbaarheid.sql uit in Supabase.",
+            detail: error.message,
           },
           { status: 503 }
         );
       }
-      if (patch.rol !== undefined) {
-        return NextResponse.json(
-          {
-            error: "Voer eerst supabase/migrate-rollen.sql uit in Supabase.",
-          },
-          { status: 503 }
-        );
-      }
-      if (patch.start_adres !== undefined) {
+
+      if (
+        patch.start_adres !== undefined &&
+        isMissingColumn(error, "start_adres")
+      ) {
         return NextResponse.json(
           {
             error:
               "Voer eerst supabase/migrate-adviseur-startadres.sql uit in Supabase.",
+            detail: error.message,
           },
           { status: 503 }
         );
       }
+
+      // Update ok / select faalt op optionele kolommen → retry met smaller select.
+      // Strip ook optionele patch-velden die nog niet bestaan.
+      const slimPatch = { ...patch };
+      for (const k of creditKeys) delete slimPatch[k];
+      if (isMissingColumn(error, "commissie_pct")) {
+        delete slimPatch.commissie_pct;
+      }
+      if (isMissingColumn(error, "start_adres")) {
+        delete slimPatch.start_adres;
+      }
+      if (isMissingColumn(error, "rol")) {
+        delete slimPatch.rol;
+      }
+
       const retry = await sb
         .from("adviseurs")
-        .update(patch)
+        .update(slimPatch)
         .eq("id", body.id)
         .select(ADVISEUR_PUBLIC_FALLBACK)
         .single();
-      data = retry.data as typeof data;
-      error = retry.error;
+
+      if (
+        retry.error &&
+        (isMissingColumn(retry.error, "start_adres") ||
+          isMissingColumn(retry.error, "rol") ||
+          isMissingColumn(retry.error, "commissie_pct") ||
+          retry.error.code === "42703")
+      ) {
+        const minPatch = { ...slimPatch };
+        delete minPatch.start_adres;
+        delete minPatch.rol;
+        delete minPatch.commissie_pct;
+        const bare = await sb
+          .from("adviseurs")
+          .update(minPatch)
+          .eq("id", body.id)
+          .select(ADVISEUR_PUBLIC_MIN)
+          .single();
+        data = bare.data as typeof data;
+        error = bare.error;
+      } else {
+        data = retry.data as typeof data;
+        error = retry.error;
+      }
     }
 
     if (error || !data) {

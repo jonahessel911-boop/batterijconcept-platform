@@ -5,13 +5,14 @@ import { splitIncToExBtw } from "@/lib/aanbetaling";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
+  parseBetaaltermijnDagen,
 } from "@/lib/factuur-betaling";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/projecten/[id]/factuur
- * Handmatige conceptfactuur: { bedrag_inc_btw, omschrijving? }
+ * Handmatige conceptfactuur: { bedrag_inc_btw, omschrijving?, betaaltermijn_dagen? }
  * Creditfactuur: { credit_van_factuur_id, bedrag_inc_btw?, omschrijving? }
  */
 export async function POST(
@@ -23,6 +24,7 @@ export async function POST(
     bedrag_inc_btw?: number | string;
     omschrijving?: string | null;
     credit_van_factuur_id?: string | null;
+    betaaltermijn_dagen?: number | string | null;
   };
   try {
     body = await req.json();
@@ -118,13 +120,17 @@ export async function POST(
         ? `Creditfactuur bij ${creditVan.factuur_nummer}`
         : "Factuur Batterijconcept");
 
+    const betaaltermijnDagen = creditVan
+      ? FACTUUR_BETAALTERMIJN_DAGEN
+      : parseBetaaltermijnDagen(
+          body.betaaltermijn_dagen,
+          FACTUUR_BETAALTERMIJN_DAGEN
+        );
+
     const split = splitIncToExBtw(bedragRaw);
     const today = new Date();
     const factuurdatum = amsterdamDatePlusDays(today, 0);
-    const vervaldatum = amsterdamDatePlusDays(
-      today,
-      FACTUUR_BETAALTERMIJN_DAGEN
-    );
+    const vervaldatum = amsterdamDatePlusDays(today, betaaltermijnDagen);
 
     const { data: nummer, error: numErr } = await sb.rpc(
       "generate_factuur_nummer"

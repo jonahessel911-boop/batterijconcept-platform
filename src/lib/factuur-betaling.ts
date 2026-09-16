@@ -1,4 +1,4 @@
-import { addDays } from "date-fns";
+import { addDays, differenceInCalendarDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
@@ -8,6 +8,46 @@ export const FACTUUR_BETAALTERMIJN_DAGEN = 3;
 export const COMPANY_IBAN_DISPLAY = "NL48 BUNQ 2209 5579 33";
 export const COMPANY_IBAN_COMPACT = "NL48BUNQ2209557933";
 export const COMPANY_ACCOUNT_NAME = "BatterijConcept";
+
+/** Parse gebruikersinvoer (dagen); fallback bij leeg/ongeldig. */
+export function parseBetaaltermijnDagen(
+  raw: unknown,
+  fallback = FACTUUR_BETAALTERMIJN_DAGEN
+): number {
+  if (raw == null || raw === "") return fallback;
+  const n =
+    typeof raw === "string"
+      ? Number(raw.trim().replace(",", "."))
+      : Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  const days = Math.round(n);
+  if (days < 0 || days > 365) return fallback;
+  return days;
+}
+
+/**
+ * Betaaltermijn in dagen afleiden uit factuurdatum → vervaldatum.
+ * Gebruikt voor PDF-tekst en herberekenen bij versturen.
+ */
+export function factuurBetaaltermijnDagen(opts: {
+  factuurdatum?: string | null;
+  vervaldatum?: string | null;
+  fallback?: number;
+}): number {
+  const fallback = opts.fallback ?? FACTUUR_BETAALTERMIJN_DAGEN;
+  if (!opts.factuurdatum || !opts.vervaldatum) return fallback;
+  const start = toZonedTime(
+    new Date(`${opts.factuurdatum.slice(0, 10)}T12:00:00`),
+    AMSTERDAM_TZ
+  );
+  const end = toZonedTime(
+    new Date(`${opts.vervaldatum.slice(0, 10)}T12:00:00`),
+    AMSTERDAM_TZ
+  );
+  const days = differenceInCalendarDays(end, start);
+  if (!Number.isFinite(days) || days < 0 || days > 365) return fallback;
+  return days;
+}
 
 /** Vandaag (Amsterdam) + N dagen als YYYY-MM-DD. */
 export function amsterdamDatePlusDays(
