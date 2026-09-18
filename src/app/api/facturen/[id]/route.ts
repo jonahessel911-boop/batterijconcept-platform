@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import { splitIncToExBtw } from "@/lib/aanbetaling";
+import {
+  FACTUUR_BETAALTERMIJN_DAGEN,
+  amsterdamDatePlusDays,
+  parseBetaaltermijnDagen,
+} from "@/lib/factuur-betaling";
 import type { FactuurStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -17,41 +23,114 @@ function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** PATCH /api/facturen/[id] — status / betaaldatum bijwerken */
+function parseBedragInc(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const n =
+    typeof raw === "string"
+      ? Number(raw.trim().replace(/\s/g, "").replace(",", "."))
+      : Number(raw);
+  if (!Number.isFinite(n) || n < 0.01) return null;
+  return n;
+}
+
+/** PATCH /api/facturen/[id] — status / betaaldatum / concept-bewerken */
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  let body: { status?: FactuurStatus; betaald_op?: string | null };
+  let body: {
+    status?: FactuurStatus;
+    betaald_op?: string | null;
+    bedrag_inc_btw?: number | string | null;
+    omschrijving?: string | null;
+    betaaltermijn_dagen?: number | string | null;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  const patch: Record<string, unknown> = {};
-
-  if (body.status != null) {
-    if (!FACTUUR_STATUSES.includes(body.status)) {
-      return NextResponse.json({ error: "Ongeldige status" }, { status: 400 });
-    }
-    patch.status = body.status;
-    if (body.status === "betaald") {
-      patch.betaald_op = body.betaald_op?.trim() || todayIsoDate();
-    } else if (body.status !== "deels_betaald") {
-      patch.betaald_op = null;
-    }
-  } else if (body.betaald_op !== undefined) {
-    patch.betaald_op = body.betaald_op?.trim() || null;
-  }
-
-  if (Object.keys(patch).length === 0) {
-    return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
-  }
+  const wantsEdit =
+    body.bedrag_inc_btw !== undefined ||
+    body.omschrijving !== undefined ||
+    body.betaaltermijn_dagen !== undefined;
 
   try {
     const sb = getSupabaseAdmin();
+
+    const { data: current, error: loadErr } = await sb
+      .from("facturen")
+      .select("id, status, factuurdatum")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (loadErr) throw loadErr;
+    if (!current) {
+      return NextResponse.json({ error: "Factuur niet gevonden" }, { status: 404 });
+    }
+
+    const patch: Record<string, unknown> = {};
+
+    if (wantsEdit) {
+      if (current.status !== "concept") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen kunnen worden bewerkt" },
+          { status: 400 }
+        );
+      }
+
+      if (body.bedrag_inc_btw !== undefined) {
+        const bedrag = parseBedragInc(body.bedrag_inc_btw);
+        if (bedrag == null) {
+          return NextResponse.json(
+            { error: "Vul een geldig bedrag incl. btw in (minimaal €0,01)" },
+            { status: 400 }
+          );
+        }
+        const split = splitIncToExBtw(bedrag);
+        patch.bedrag_inc_btw = split.inc;
+        patch.bedrag_ex_btw = split.ex;
+        patch.btw_bedrag = split.btw;
+      }
+
+      if (body.omschrijving !== undefined) {
+        const oms = body.omschrijving?.trim() || null;
+        patch.omschrijving = oms;
+      }
+
+      if (body.betaaltermijn_dagen !== undefined) {
+        const dagen = parseBetaaltermijnDagen(
+          body.betaaltermijn_dagen,
+          FACTUUR_BETAALTERMIJN_DAGEN
+        );
+        const base = current.factuurdatum || todayIsoDate();
+        patch.vervaldatum = amsterdamDatePlusDays(base, dagen);
+      }
+    }
+
+    if (body.status != null) {
+      if (!FACTUUR_STATUSES.includes(body.status)) {
+        return NextResponse.json({ error: "Ongeldige status" }, { status: 400 });
+      }
+      patch.status = body.status;
+      if (body.status === "betaald") {
+        patch.betaald_op = body.betaald_op?.trim() || todayIsoDate();
+      } else if (body.status !== "deels_betaald") {
+        patch.betaald_op = null;
+      }
+    } else if (body.betaald_op !== undefined) {
+      patch.betaald_op = body.betaald_op?.trim() || null;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json(
+        { error: "Niets om bij te werken" },
+        { status: 400 }
+      );
+    }
+
     const { data, error } = await sb
       .from("facturen")
       .update(patch)

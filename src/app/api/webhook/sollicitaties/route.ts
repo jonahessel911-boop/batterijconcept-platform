@@ -91,6 +91,13 @@ export async function POST(req: NextRequest) {
         naam,
         email: pickStr(body.email, body.mail),
         telefoon: pickStr(body.telefoon, body.phone, body.mobiel),
+        functie: pickStr(
+          body.functie,
+          body.function,
+          body.role,
+          body.vacature,
+          body.job
+        ),
         status,
         notitie,
         bron: pickStr(body.bron, body.source) || "webhook",
@@ -139,10 +146,10 @@ export async function POST(req: NextRequest) {
 
       const html = emailLayout({
         title: `Nieuwe sollicitatie: ${data.naam}`,
-        preheader: "Er is een nieuwe kandidaat binnengekomen in Instroom.",
+        preheader: "Er is een nieuwe kandidaat binnengekomen in Recruitment.",
         bodyHtml: [
           emailH1("Nieuwe sollicitatie"),
-          emailP("Er is een nieuwe sollicitatie binnengekomen in de Instroom-tab."),
+          emailP("Er is een nieuwe sollicitatie binnengekomen in de Recruitment-tab."),
           emailBox(detailBlok),
           emailMuted("Dit is een interne melding van het Batterijconcept CRM."),
         ].join(""),

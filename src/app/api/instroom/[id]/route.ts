@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import {
+  parseSollicitatieStatus,
+  SOLLICITATIE_STATUSES,
+} from "@/lib/sollicitatie";
 import type { SollicitatieStatus } from "@/types/database";
 
 export const runtime = "nodejs";
-
-const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
-  "nieuw",
-  "gescreend",
-  "gesprek",
-  "aangenomen",
-  "afgewezen",
-];
 
 function pickStr(v: unknown) {
   if (typeof v !== "string") return null;
@@ -30,6 +26,7 @@ export async function PATCH(
       naam?: string | null;
       email?: string | null;
       telefoon?: string | null;
+      functie?: string | null;
       status?: SollicitatieStatus;
       notitie?: string | null;
     } = {};
@@ -37,10 +34,11 @@ export async function PATCH(
     if ("naam" in body) patch.naam = pickStr(body.naam);
     if ("email" in body) patch.email = pickStr(body.email);
     if ("telefoon" in body) patch.telefoon = pickStr(body.telefoon);
+    if ("functie" in body) patch.functie = pickStr(body.functie);
     if ("notitie" in body) patch.notitie = pickStr(body.notitie);
     if ("status" in body) {
-      const status = pickStr(body.status) as SollicitatieStatus | null;
-      if (!status || !SOLLICITATIE_STATUSES.includes(status)) {
+      const status = parseSollicitatieStatus(body.status);
+      if (!SOLLICITATIE_STATUSES.includes(status)) {
         return NextResponse.json({ error: "Ongeldige status" }, { status: 400 });
       }
       patch.status = status;

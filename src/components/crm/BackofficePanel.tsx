@@ -129,6 +129,7 @@ export function BackofficePanel({
           facturen={facturen}
           leads={leads}
           afspraken={afspraken}
+          adviseurs={adviseurs}
           adviseurId={adviseurId}
           onProjectUpdated={onProjectUpdated}
           onFactuurUpdated={onFactuurUpdated}

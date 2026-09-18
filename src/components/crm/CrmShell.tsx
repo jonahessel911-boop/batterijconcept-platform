@@ -26,8 +26,7 @@ import { DrivePanel } from "./DrivePanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
-import { InstroomPanel } from "./InstroomPanel";
-import { AiPanel } from "./AiPanel";
+import { RecruitmentPanel } from "./RecruitmentPanel";
 import { AdminTargetsPanel } from "./AdminTargetsPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
@@ -674,8 +673,8 @@ export function CrmShell() {
         : "Verstuurde en ondertekende offertes",
     },
     instroom: {
-      title: "Instroom",
-      sub: "Sollicitaties, status, notities en bestanden",
+      title: "Recruitment",
+      sub: "Kandidaten slepen tussen statussen · filter op functie",
     },
     projecten: {
       title: "Backoffice",
@@ -705,7 +704,7 @@ export function CrmShell() {
     },
     ai: {
       title: "AI interface",
-      sub: "Vraag alles over je CRM-data — typ of praat via Whisper",
+      sub: "Verborgen",
     },
     instellingen: {
       title: "Instellingen",
@@ -798,7 +797,11 @@ export function CrmShell() {
           <div className="flex-1 overflow-auto">
             {!sessionReady || !userRol ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
-            ) : loading && tab !== "instellingen" && tab !== "ai" && tab !== "admin" ? (
+            ) : loading &&
+              tab !== "instellingen" &&
+              tab !== "ai" &&
+              tab !== "admin" &&
+              tab !== "instroom" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : !magTab(userRol, tab) ? (
               <p className="px-6 py-14 text-center text-sm text-muted">
@@ -882,7 +885,7 @@ export function CrmShell() {
                     onOpenSign={openSignLink}
                   />
                 )}
-                {tab === "instroom" && <InstroomPanel />}
+                {tab === "instroom" && <RecruitmentPanel />}
                 {tab === "projecten" && (
                   <BackofficePanel
                     projecten={scopedProjecten}
@@ -923,7 +926,6 @@ export function CrmShell() {
                   />
                 )}
                 {tab === "admin" && <AdminTargetsPanel />}
-                {tab === "ai" && <AiPanel />}
                 {tab === "instellingen" && (
                   <InstellingenPanel onAdviseursChange={loadAdviseurs} />
                 )}

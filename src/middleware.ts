@@ -8,6 +8,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith("/installatie/")) return true;
   if (pathname.startsWith("/api/webhook/")) return true;
   if (pathname.startsWith("/api/cron/")) return true;
+  if (pathname.startsWith("/api/v1")) return true;
   if (pathname.startsWith("/api/auth/login")) return true;
 
   if (

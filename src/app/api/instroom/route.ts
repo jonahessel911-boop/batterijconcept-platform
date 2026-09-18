@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
         naam,
         email: pickStr(body.email),
         telefoon: pickStr(body.telefoon),
+        functie: pickStr(body.functie),
         bron: pickStr(body.bron) || "crm",
         status,
         notitie: pickStr(body.notitie),

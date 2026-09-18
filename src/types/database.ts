@@ -53,10 +53,9 @@ export type FactuurStatus =
 export type ServiceVerzoekStatus = "open" | "afgehandeld";
 export type SollicitatieStatus =
   | "nieuw"
-  | "gescreend"
-  | "gesprek"
-  | "aangenomen"
-  | "afgewezen";
+  | "diskwalificatie"
+  | "gesprek_gepland"
+  | "aangenomen";
 
 export type CrmTab =
   | "leads"
@@ -453,6 +452,7 @@ export interface Sollicitatie {
   naam: string;
   email: string | null;
   telefoon: string | null;
+  functie: string | null;
   bron: string | null;
   status: SollicitatieStatus;
   notitie: string | null;

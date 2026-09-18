@@ -6,10 +6,9 @@ import { formatDateTimeNl } from "@/lib/format";
 
 const STATUS_OPTIONS: Array<{ value: SollicitatieStatus; label: string }> = [
   { value: "nieuw", label: "Nieuw" },
-  { value: "gescreend", label: "Gescreend" },
-  { value: "gesprek", label: "Gesprek" },
+  { value: "diskwalificatie", label: "Diskwalificatie" },
+  { value: "gesprek_gepland", label: "Gesprek gepland" },
   { value: "aangenomen", label: "Aangenomen" },
-  { value: "afgewezen", label: "Afgewezen" },
 ];
 
 export function InstroomPanel() {

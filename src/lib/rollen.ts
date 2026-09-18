@@ -49,12 +49,12 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "bellen",
         "agenda",
         "offertes",
+        "instroom",
         "projecten",
         "facturen",
         "drive",
         "rapportage",
         "admin",
-        "ai",
         "instellingen",
       ];
   }

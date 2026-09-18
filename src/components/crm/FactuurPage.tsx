@@ -5,6 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import type { Factuur, Offerte, Project } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import {
+  FACTUUR_BETAALTERMIJN_DAGEN,
+  factuurBetaaltermijnDagen,
+} from "@/lib/factuur-betaling";
 import { StatusBadge } from "./StatusBadge";
 import {
   BackLink,
@@ -23,13 +27,18 @@ export function FactuurPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [busy, setBusy] = useState<"pdf" | "send" | "paid" | "delete" | null>(
-    null
-  );
+  const [busy, setBusy] = useState<
+    "pdf" | "send" | "paid" | "delete" | "save" | null
+  >(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [betaaldOp, setBetaaldOp] = useState(() =>
     new Date().toISOString().slice(0, 10)
+  );
+  const [editBedrag, setEditBedrag] = useState("");
+  const [editOmschrijving, setEditOmschrijving] = useState("");
+  const [editBetaaltermijn, setEditBetaaltermijn] = useState(
+    String(FACTUUR_BETAALTERMIJN_DAGEN)
   );
 
   const load = useCallback(async () => {
@@ -66,6 +75,21 @@ export function FactuurPage() {
           }
         }
         setFactuur(fac);
+        setEditBedrag(
+          Number(fac.bedrag_inc_btw).toLocaleString("nl-NL", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })
+        );
+        setEditOmschrijving(fac.omschrijving || "");
+        setEditBetaaltermijn(
+          String(
+            factuurBetaaltermijnDagen({
+              factuurdatum: fac.factuurdatum,
+              vervaldatum: fac.vervaldatum,
+            })
+          )
+        );
         if (fac.betaald_op) {
           setBetaaldOp(fac.betaald_op.slice(0, 10));
         }
@@ -93,6 +117,52 @@ export function FactuurPage() {
     const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
   }, [load]);
+
+  async function saveConcept() {
+    if (!factuur || factuur.status !== "concept") return;
+    setBusy("save");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bedrag_inc_btw: editBedrag,
+          omschrijving: editOmschrijving.trim() || null,
+          betaaltermijn_dagen: editBetaaltermijn.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      const updated = data.factuur as Factuur;
+      setFactuur(updated);
+      setEditBedrag(
+        Number(updated.bedrag_inc_btw).toLocaleString("nl-NL", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      );
+      setEditOmschrijving(updated.omschrijving || "");
+      setEditBetaaltermijn(
+        String(
+          factuurBetaaltermijnDagen({
+            factuurdatum: updated.factuurdatum,
+            vervaldatum: updated.vervaldatum,
+          })
+        )
+      );
+      setMsg("Concept bijgewerkt.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function downloadPdf() {
     if (!factuur) return;
@@ -339,6 +409,55 @@ export function FactuurPage() {
         {error && (
           <p className="mt-3 text-sm font-medium text-[#C45A12]">{error}</p>
         )}
+
+        {isDraft ? (
+          <div className="mt-6 space-y-3 border border-line bg-wash px-4 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Concept bewerken
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="block text-xs text-muted">
+                Bedrag incl. btw (€)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={editBedrag}
+                  onChange={(e) => setEditBedrag(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-xs text-muted sm:col-span-2 lg:col-span-1">
+                Omschrijving
+                <input
+                  type="text"
+                  value={editOmschrijving}
+                  onChange={(e) => setEditOmschrijving(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-xs text-muted">
+                Betaaltermijn (dagen)
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={365}
+                  value={editBetaaltermijn}
+                  onChange={(e) => setEditBetaaltermijn(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              disabled={busy !== null || !editBedrag.trim()}
+              onClick={() => void saveConcept()}
+              className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+            >
+              {busy === "save" ? "Opslaan…" : "Wijzigingen opslaan"}
+            </button>
+          </div>
+        ) : null}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <InfoTile

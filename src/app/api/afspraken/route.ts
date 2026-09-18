@@ -12,20 +12,9 @@ import { hasBlockingOverlap } from "@/lib/afspraak-busy";
 import {
   afspraakBlokkeertAgenda,
   afspraakDuurMinuten,
-  afspraakSoortLabel,
   afspraakStuurtMail,
-  isInterneAfspraakSoort,
-  leadStatusVoorAfspraakSoort,
-  normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
-import { logLeadEvent } from "@/lib/lead-events";
-import type { AfspraakSoort } from "@/types/database";
-import {
-  loadUnavailableWeekKeys,
-  weekKeyFromDate,
-  weekKeyString,
-  isSlotAfgeblokt,
-} from "@/lib/adviseur-beschikbaarheid";
+import { planAfspraak } from "@/lib/plan-afspraak";
 
 export const runtime = "nodejs";
 
@@ -388,9 +377,6 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-const AFSPRAAK_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)";
-
 /** POST — nieuwe afspraak plannen */
 export async function POST(req: NextRequest) {
   let body: {
@@ -408,251 +394,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  if (!body.lead_id || !body.adviseur_id || !body.start_at) {
-    return NextResponse.json(
-      { error: "lead_id, adviseur_id en start_at zijn verplicht" },
-      { status: 400 }
-    );
-  }
-
-  const soort = normalizeAfspraakSoort(body.soort);
-  const isHuisbezoek = soort === "nieuw";
-
-  if (
-    isHuisbezoek &&
-    (typeof body.partner_aanwezig !== "boolean" ||
-      typeof body.andere_offertes_gehad !== "boolean")
-  ) {
-    return NextResponse.json(
-      {
-        error:
-          "Partner aanwezig en andere offertes gehad zijn verplicht (ja/nee)",
-      },
-      { status: 400 }
-    );
-  }
-
-  const start = new Date(body.start_at);
-  if (Number.isNaN(start.getTime())) {
-    return NextResponse.json({ error: "Ongeldige start_at" }, { status: 400 });
-  }
-  const end = addMinutes(start, afspraakDuurMinuten(soort));
-
-  const magMailen = afspraakStuurtMail(soort);
-  const insertRow = {
-    lead_id: body.lead_id,
-    adviseur_id: body.adviseur_id,
-    start_at: start.toISOString(),
-    end_at: end.toISOString(),
-    status: "bevestigd" as const,
-    soort,
-    notities: body.notities || null,
-    partner_aanwezig: isHuisbezoek ? body.partner_aanwezig : null,
-    andere_offertes_gehad: isHuisbezoek ? body.andere_offertes_gehad : null,
-    // Bel / vervolg: vlaggen aan zodat de herinnerings-cron nooit mailt
-    bevestiging_verstuurd: !magMailen,
-    herinnering_verstuurd: !magMailen,
-    opwarm_verstuurd: !magMailen,
-  };
-
   try {
     const sb = getSupabaseAdmin();
-
-    const wk = weekKeyFromDate(start);
-    const unavailable = await loadUnavailableWeekKeys(sb, body.adviseur_id, [
-      wk.jaar,
-    ]);
-    if (unavailable.has(weekKeyString(wk.jaar, wk.week))) {
+    const result = await planAfspraak(sb, body);
+    if (!result.ok) {
       return NextResponse.json(
-        {
-          error: `Deze adviseur is niet beschikbaar in week ${wk.week} (${wk.jaar})`,
-        },
-        { status: 409 }
+        { error: result.error, detail: result.detail },
+        { status: result.status }
       );
     }
-
-    if (await isSlotAfgeblokt(sb, body.adviseur_id, start)) {
-      return NextResponse.json(
-        { error: "Dit tijdsblok is afgeblokt voor deze adviseur" },
-        { status: 409 }
-      );
-    }
-
-    if (afspraakBlokkeertAgenda(soort)) {
-      const overlap = await hasBlockingOverlap(sb, {
-        adviseurId: body.adviseur_id,
-        start,
-        end,
-      });
-      if (overlap) {
-        return NextResponse.json(
-          { error: "Dit tijdslot is al bezet voor deze adviseur" },
-          { status: 409 }
-        );
-      }
-    }
-
-    let { data: afspraak, error } = await sb
-      .from("afspraken")
-      .insert(insertRow)
-      .select(AFSPRAAK_SELECT)
-      .single();
-
-    if (error && (error.message?.includes("soort") || error.code === "42703")) {
-      // Zonder soort-kolom mag alleen de default (nieuw) door; bel/vervolg niet stil omzetten
-      if (soort !== "nieuw") {
-        return NextResponse.json(
-          {
-            error:
-              "Afspraaksoort niet ondersteund. Voer supabase/migrate-afspraak-vervolg-punt.sql uit in Supabase.",
-            detail: error.message,
-          },
-          { status: 500 }
-        );
-      }
-      const { soort: _soort, ...withoutSoort } = insertRow;
-      const retry = await sb
-        .from("afspraken")
-        .insert(withoutSoort)
-        .select(AFSPRAAK_SELECT)
-        .single();
-      afspraak = retry.data;
-      error = retry.error;
-    }
-
-    if (error?.message?.includes("opwarm_verstuurd")) {
-      const { opwarm_verstuurd: _opwarm, ...rest } = insertRow;
-      const retry = await sb
-        .from("afspraken")
-        .insert(rest)
-        .select(AFSPRAAK_SELECT)
-        .single();
-      afspraak = retry.data;
-      error = retry.error;
-    }
-
-    if (error || !afspraak) {
-      return NextResponse.json(
-        { error: "Afspraak opslaan mislukt", detail: error?.message },
-        { status: 500 }
-      );
-    }
-
-    return await afterCreate(sb, afspraak, body, soort);
+    return NextResponse.json(
+      {
+        ok: true,
+        afspraak: result.afspraak,
+        manage_url: result.manage_url,
+        bevestiging_direct: result.bevestiging_direct,
+        bevestiging_error: result.bevestiging_error,
+      },
+      { status: 201 }
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "Fout";
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
-
-async function afterCreate(
-  sb: ReturnType<typeof getSupabaseAdmin>,
-  afspraak: {
-    id: string;
-    start_at: string;
-    created_at: string;
-    manage_token: string;
-    notities?: string | null;
-    leads?: {
-      naam?: string | null;
-      email?: string | null;
-      postcode?: string | null;
-      huisnummer?: string | null;
-      toevoeging?: string | null;
-      straat?: string | null;
-      plaats?: string | null;
-    } | null;
-    adviseurs?: { naam?: string | null } | null;
-  },
-  body: { lead_id: string; adviseur_id: string },
-  soort: AfspraakSoort
-) {
-  const { data: leadRow } = await sb
-    .from("leads")
-    .select("status")
-    .eq("id", body.lead_id)
-    .single();
-  if (leadRow?.status !== "deal" && !isInterneAfspraakSoort(soort)) {
-    await sb
-      .from("leads")
-      .update({ status: leadStatusVoorAfspraakSoort(soort) })
-      .eq("id", body.lead_id);
-    const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
-    queueLeadMetaCapi(body.lead_id);
-  }
-
-  if (soort === "bel" || soort === "warme_bel") {
-    await sb
-      .from("leads")
-      .update({
-        terugbellen: true,
-        terugbel_notitie: afspraak.notities || null,
-        ...(body.adviseur_id ? { adviseur_id: body.adviseur_id } : {}),
-      })
-      .eq("id", body.lead_id);
-  } else if (body.adviseur_id) {
-    await sb
-      .from("leads")
-      .update({ adviseur_id: body.adviseur_id })
-      .eq("id", body.lead_id);
-  }
-
-  await logLeadEvent({
-    leadId: body.lead_id,
-    soort: isInterneAfspraakSoort(soort) ? "terugbel" : "afspraak",
-    titel: `${afspraakSoortLabel[soort] || soort} gepland`,
-    detail: new Date(afspraak.start_at).toLocaleString("nl-NL", {
-      timeZone: "Europe/Amsterdam",
-    }),
-    meta: { afspraak_id: afspraak.id, soort },
-  });
-
-  const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
-  const email = afspraak.leads?.email?.trim();
-  const startAt = new Date(afspraak.start_at);
-
-  let mailedNow = false;
-  let mailError: string | null = null;
-  if (afspraakStuurtMail(soort)) {
-    if (email) {
-      const vars = afspraakMailVars({
-        naam: afspraak.leads?.naam || "klant",
-        startAt,
-        adviseurNaam: afspraak.adviseurs?.naam || "Batterijconcept",
-        manageUrl,
-        lead: afspraak.leads,
-      });
-      const sent = await sendEmail({
-        to: email,
-        subject: "Afspraak bevestigd — Batterijconcept",
-        html: afspraakBevestigingSequenceEmail(vars),
-        tag: "afspraak-bevestiging",
-      });
-      if (sent.ok) {
-        await sb
-          .from("afspraken")
-          .update({ bevestiging_verstuurd: true })
-          .eq("id", afspraak.id);
-        mailedNow = true;
-      } else {
-        mailError = sent.error || "Mail versturen mislukt";
-      }
-    } else {
-      mailError = "Lead heeft geen e-mailadres";
-    }
-  }
-
-  return NextResponse.json(
-    {
-      ok: true,
-      afspraak: {
-        ...afspraak,
-        bevestiging_verstuurd: mailedNow,
-      },
-      manage_url: manageUrl,
-      bevestiging_direct: mailedNow,
-      bevestiging_error: mailError,
-    },
-    { status: 201 }
-  );
 }
