@@ -5,7 +5,6 @@
  */
 
 import { addDays, getISOWeekYear } from "date-fns";
-import { nl } from "date-fns/locale";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
@@ -23,7 +22,7 @@ import {
   uniqueAddresses,
   type FastDirectionStop,
 } from "@/lib/fast-direction";
-import { AMSTERDAM_TZ, adresRegel } from "@/lib/format";
+import { AMSTERDAM_TZ, adresRegel, formatSlotLabelSpokenNl } from "@/lib/format";
 import { generateAvailableSlots } from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
 
@@ -84,15 +83,11 @@ export function decodeSlotId(slotId: string): SlotTokenPayload | null {
 }
 
 function labelNl(iso: string): string {
-  return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "EEEE d MMMM HH:mm", {
-    locale: nl,
-  });
+  return formatSlotLabelSpokenNl(iso);
 }
 
 function labelKort(iso: string): string {
-  return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "EEE d MMM HH:mm", {
-    locale: nl,
-  });
+  return formatSlotLabelSpokenNl(iso, { kort: true });
 }
 
 type AdviseurRow = {

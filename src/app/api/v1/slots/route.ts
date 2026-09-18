@@ -11,11 +11,10 @@
 
 import { NextRequest } from "next/server";
 import { addDays, getISOWeekYear } from "date-fns";
-import { nl } from "date-fns/locale";
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { toZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { AMSTERDAM_TZ } from "@/lib/format";
+import { AMSTERDAM_TZ, formatSlotLabelSpokenNl } from "@/lib/format";
 import { generateAvailableSlots } from "@/lib/slots";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
@@ -145,18 +144,8 @@ export async function GET(req: NextRequest) {
       .map((s) => ({
         start_at: s.start_at,
         end_at: s.end_at,
-        label_nl: formatInTimeZone(
-          new Date(s.start_at),
-          AMSTERDAM_TZ,
-          "EEEE d MMMM HH:mm",
-          { locale: nl }
-        ),
-        label_kort: formatInTimeZone(
-          new Date(s.start_at),
-          AMSTERDAM_TZ,
-          "EEE d MMM HH:mm",
-          { locale: nl }
-        ),
+        label_nl: formatSlotLabelSpokenNl(s.start_at),
+        label_kort: formatSlotLabelSpokenNl(s.start_at, { kort: true }),
       }));
 
     return jsonOk({

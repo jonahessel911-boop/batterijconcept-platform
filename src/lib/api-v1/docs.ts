@@ -345,7 +345,7 @@ export const API_V1_DOCS: EndpointDoc[] = [
         {
           slot_id: "<opaque>",
           start_at: "2026-09-22T11:00:00.000Z",
-          label_nl: "maandag 22 september 13:00",
+          label_nl: "maandag 22 september om dertien uur",
           adviseur_id: "<uuid>",
           adviseur_naam: "Huub Veldman",
         },
