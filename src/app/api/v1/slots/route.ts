@@ -24,7 +24,7 @@ import {
   loadAfblokkingen,
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
-import { requireApiKey } from "@/lib/api-v1/auth";
+import { requireSalesOrAdminApiKey } from "@/lib/api-v1/auth";
 import { loadBestSlotsForLead } from "@/lib/api-v1/best-slots";
 import { jsonErr, jsonOk, parseNum, pickStr } from "@/lib/api-v1/http";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
@@ -32,7 +32,7 @@ import { isAdminAdviseur } from "@/lib/admin-adviseur";
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const denied = requireApiKey(req);
+  const denied = requireSalesOrAdminApiKey(req);
   if (denied) return denied;
 
   const sp = req.nextUrl.searchParams;

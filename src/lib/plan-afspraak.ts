@@ -18,6 +18,7 @@ import {
   afspraakSoortLabel,
   afspraakStuurtMail,
   isInterneAfspraakSoort,
+  isTerugbelSoort,
   leadStatusVoorAfspraakSoort,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
@@ -157,24 +158,27 @@ export async function planAfspraak(
     opwarm_verstuurd: !magMailen,
   };
 
-  const wk = weekKeyFromDate(start);
-  const unavailable = await loadUnavailableWeekKeys(sb, input.adviseur_id, [
-    wk.jaar,
-  ]);
-  if (unavailable.has(weekKeyString(wk.jaar, wk.week))) {
-    return {
-      ok: false,
-      status: 409,
-      error: `Deze adviseur is niet beschikbaar in week ${wk.week} (${wk.jaar})`,
-    };
-  }
+  // Terugbel staat niet in de agenda — geen week/slot-checks.
+  if (!isTerugbelSoort(soort)) {
+    const wk = weekKeyFromDate(start);
+    const unavailable = await loadUnavailableWeekKeys(sb, input.adviseur_id, [
+      wk.jaar,
+    ]);
+    if (unavailable.has(weekKeyString(wk.jaar, wk.week))) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Deze adviseur is niet beschikbaar in week ${wk.week} (${wk.jaar})`,
+      };
+    }
 
-  if (await isSlotAfgeblokt(sb, input.adviseur_id, start)) {
-    return {
-      ok: false,
-      status: 409,
-      error: "Dit tijdsblok is afgeblokt voor deze adviseur",
-    };
+    if (await isSlotAfgeblokt(sb, input.adviseur_id, start)) {
+      return {
+        ok: false,
+        status: 409,
+        error: "Dit tijdsblok is afgeblokt voor deze adviseur",
+      };
+    }
   }
 
   if (afspraakBlokkeertAgenda(soort)) {

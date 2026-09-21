@@ -130,14 +130,22 @@ CRM (ingelogd): zelfde logica via `POST /api/afspraken`.
 
 ## REST API v1 (read + write)
 
-Centrale API achter één key: `API_V1_KEY`.
+Centrale API achter keys:
 
 ```bash
-# Auth (beide werken)
+# Volledige toegang
 Authorization: Bearer <API_V1_KEY>
-# of
-x-api-key: <API_V1_KEY>
+
+# Alleen sales-agenda (slots + afspraken boeken) — bijv. externe partner
+Authorization: Bearer <API_V1_SALES_KEY>
 ```
+
+Of header `x-api-key: <key>`.
+
+| Key | Scope |
+|-----|--------|
+| `API_V1_KEY` | Alles |
+| `API_V1_SALES_KEY` | `GET /api/v1/slots`, `GET/POST /api/v1/afspraken` (+ docs gefilterd) |
 
 **Volledige parameterlijst (machine-readable):** `GET /api/v1`  
 Die response bevat per endpoint `method`, `path`, `params[]` (`name`, `in`, `type`, `required`, `description`, `example`) en vaak `example_body`.
@@ -181,10 +189,17 @@ Die response bevat per endpoint `method`, `path`, `params[]` (`name`, `in`, `typ
 | Method | Path | Parameters |
 |--------|------|------------|
 | GET | `/api/v1/slots` | **query:** `lead_id`* (beste momenten + reistijd), of legacy `adviseur_id`; `days`, `limit` |
-| GET | `/api/v1/afspraken` | **query:** `lead_id`, `adviseur_id`, `from`, `to`, `limit` |
+| GET | `/api/v1/afspraken` | **query:** `lead_id`, `adviseur_id`, `status`, `from`, `to`, `limit` |
 | POST | `/api/v1/afspraken` | **body:** `lead_id`* + `slot_id`* (uit slots), of legacy `adviseur_id`* + `start_at`*; `soort`, `partner_aanwezig`, `notities` |
+| GET | `/api/v1/herplan` | **query:** `mode` (klant\|all), `limit` — wachtrij geannuleerde afspraken voor herplan-bot |
+| GET | `/api/v1/terugbel` | **query:** `lead_id`, `due` (1 = alleen vandaag/achterstallig), `limit` |
+| POST | `/api/v1/terugbel` | **body:** `lead_id`*, `notitie`, `start_at` (default nu), `warm`, `adviseur_id` |
 
 Met `lead_id` kiest de API de beste tijden over alle adviseurs (route-fit). De agent biedt alleen `label_nl` / `slots_tekst` aan; bij boeken stuurt die `slot_id` mee — adviseur wordt automatisch gekoppeld.
+
+`POST /api/v1/terugbel` maakt een bel-/warme_bel-afspraak en zet `lead.terugbellen`. Die verschijnt in CRM → **Bellen** (chip Terugbellen) ter opvolging. Gebruik dit als de klant geen agenda heeft of liever teruggebeld wordt.
+
+**Herplan-bot (2e agent):** `GET /api/v1/herplan` → outbound met `dynamic_variables` → zelfde slots + boek als Fay.
 
 ### Leads
 

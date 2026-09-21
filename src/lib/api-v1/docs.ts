@@ -359,6 +359,13 @@ export const API_V1_DOCS: EndpointDoc[] = [
     params: [
       { name: "lead_id", in: "query", type: "uuid", description: "Filter lead" },
       { name: "adviseur_id", in: "query", type: "uuid", description: "Filter adviseur" },
+      {
+        name: "status",
+        in: "query",
+        type: "string",
+        description: "gepland | bevestigd | verzet | geannuleerd | voltooid",
+        example: "geannuleerd",
+      },
       { name: "from", in: "query", type: "ISO datetime", description: "start_at >= from" },
       { name: "to", in: "query", type: "ISO datetime", description: "start_at <= to" },
       { name: "limit", in: "query", type: "number", description: "Max resultaten" },
@@ -414,6 +421,115 @@ export const API_V1_DOCS: EndpointDoc[] = [
       lead_id: "<uuid>",
       slot_id: "<uit GET /api/v1/slots>",
       soort: "nieuw",
+    },
+  },
+
+  // —— Herplan (bot 2) ——
+  {
+    method: "GET",
+    path: "/api/v1/herplan",
+    summary:
+      "Wachtrij herplan-bot: geannuleerde huisbezoeken zonder nieuwe actieve afspraak. Bevat dynamic_variables voor outbound.",
+    params: [
+      {
+        name: "mode",
+        in: "query",
+        type: "klant|all",
+        description:
+          "klant = alleen leadstatus afspraak_afgezegd_klant (default). all = ook andere geannuleerde bezoeken.",
+        example: "klant",
+      },
+      { name: "limit", in: "query", type: "number", description: "Max items (default 50)", example: 50 },
+    ],
+    example_response: {
+      ok: true,
+      count: 1,
+      herplan: [
+        {
+          lead_id: "<uuid>",
+          first_name: "Jan",
+          telefoon: "+316…",
+          oude_afspraak_label_nl: "dinsdag 16 september 2026 om 13:00",
+          annuleringsreden: "Past niet",
+          dynamic_variables: {
+            lead_id: "<uuid>",
+            first_name: "Jan",
+            oude_afspraak_label: "…",
+          },
+        },
+      ],
+    },
+  },
+
+  // —— Terugbel (Retell) ——
+  {
+    method: "GET",
+    path: "/api/v1/terugbel",
+    summary: "Openstaande terugbelverzoeken (bel / warme_bel)",
+    params: [
+      { name: "lead_id", in: "query", type: "uuid", description: "Filter lead" },
+      {
+        name: "due",
+        in: "query",
+        type: "1|true",
+        description: "Alleen verzoeken waarvan de geplande dag ≤ vandaag (Amsterdam)",
+        example: "1",
+      },
+      { name: "limit", in: "query", type: "number", description: "Max resultaten", example: 100 },
+    ],
+  },
+  {
+    method: "POST",
+    path: "/api/v1/terugbel",
+    summary:
+      "Terugbelverzoek aanmaken (Retell). Verschijnt in CRM → Bellen. Zet lead.terugbellen.",
+    params: [
+      { name: "lead_id", in: "body", type: "uuid", required: true, description: "Lead" },
+      {
+        name: "notitie",
+        in: "body",
+        type: "string",
+        description: "Reden / intake-samenvatting (aliases: notities, reden)",
+        example: "Agenda niet bij de hand — graag vandaag terugbellen",
+      },
+      {
+        name: "start_at",
+        in: "body",
+        type: "string",
+        description:
+          "Gewenst terugbelmoment — ISO of Amsterdam YYYY-MM-DDTHH:mm (default: nu → meteen due)",
+        example: "2026-09-18T16:00",
+      },
+      {
+        name: "adviseur_id",
+        in: "body",
+        type: "uuid",
+        description: "Optioneel; anders lead.adviseur_id of eerste planbare adviseur",
+      },
+      {
+        name: "warm",
+        in: "body",
+        type: "boolean",
+        description: "true → warme_bel (prioriteit in Bellen)",
+        example: false,
+      },
+    ],
+    example_body: {
+      lead_id: "<uuid>",
+      notitie: "Wil later teruggebeld worden — 12 panelen, interesse Warmtefonds",
+      warm: false,
+    },
+    example_response: {
+      ok: true,
+      bericht: "Terugbelverzoek genoteerd — verschijnt in Bellen",
+      terugbel: {
+        afspraak_id: "<uuid>",
+        lead_id: "<uuid>",
+        start_at: "2026-09-18T10:05:00.000Z",
+        soort: "bel",
+        warm: false,
+        notitie: "…",
+      },
     },
   },
 
@@ -586,15 +702,30 @@ export const API_V1_DOCS: EndpointDoc[] = [
   },
 ];
 
-export function buildApiV1DocsPayload() {
+export function buildApiV1DocsPayload(opts?: { scope?: "admin" | "sales" }) {
+  const scope = opts?.scope || "admin";
+  const endpoints =
+    scope === "sales"
+      ? API_V1_DOCS.filter(
+          (e) =>
+            e.path === "/api/v1/slots" ||
+            e.path.startsWith("/api/v1/afspraken")
+        )
+      : API_V1_DOCS;
+
   return {
     ok: true,
     name: "Batterijconcept API v1",
+    scope,
     auth: {
-      header: "Authorization: Bearer <API_V1_KEY>",
-      alt: "x-api-key: <API_V1_KEY>",
+      header: "Authorization: Bearer <key>",
+      alt: "x-api-key: <key>",
+      scopes: {
+        admin: "API_V1_KEY — volledige API",
+        sales: "API_V1_SALES_KEY — alleen GET /slots + GET/POST /afspraken",
+      },
     },
-    agenda_types: agendaTypesDocs(),
-    endpoints: API_V1_DOCS,
+    ...(scope === "admin" ? { agenda_types: agendaTypesDocs() } : {}),
+    endpoints,
   };
 }

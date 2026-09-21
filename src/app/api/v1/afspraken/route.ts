@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { requireApiKey } from "@/lib/api-v1/auth";
+import { requireSalesOrAdminApiKey } from "@/lib/api-v1/auth";
 import { decodeSlotId } from "@/lib/api-v1/best-slots";
 import { jsonErr, jsonOk, parseNum, pickStr } from "@/lib/api-v1/http";
 import { planAfspraak, parseJaNee } from "@/lib/plan-afspraak";
@@ -10,12 +10,13 @@ export const runtime = "nodejs";
 
 /** GET /api/v1/afspraken — sales-afspraken (huisbezoek/bel) */
 export async function GET(req: NextRequest) {
-  const denied = requireApiKey(req);
+  const denied = requireSalesOrAdminApiKey(req);
   if (denied) return denied;
 
   const sp = req.nextUrl.searchParams;
   const leadId = pickStr(sp.get("lead_id"));
   const adviseurId = pickStr(sp.get("adviseur_id"));
+  const status = pickStr(sp.get("status"));
   const from = pickStr(sp.get("from"));
   const to = pickStr(sp.get("to"));
   const limit = Math.min(Math.max(parseNum(sp.get("limit")) || 100, 1), 500);
@@ -32,6 +33,7 @@ export async function GET(req: NextRequest) {
 
     if (leadId) q = q.eq("lead_id", leadId);
     if (adviseurId) q = q.eq("adviseur_id", adviseurId);
+    if (status) q = q.eq("status", status);
     if (from) q = q.gte("start_at", new Date(from).toISOString());
     if (to) q = q.lte("start_at", new Date(to).toISOString());
 
@@ -56,7 +58,7 @@ export async function GET(req: NextRequest) {
  *   { lead_id, adviseur_id, start_at }
  */
 export async function POST(req: NextRequest) {
-  const denied = requireApiKey(req);
+  const denied = requireSalesOrAdminApiKey(req);
   if (denied) return denied;
 
   let body: Record<string, unknown>;
