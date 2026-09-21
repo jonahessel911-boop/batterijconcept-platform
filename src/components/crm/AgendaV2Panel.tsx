@@ -299,17 +299,41 @@ function StickerCard({
   );
 }
 
-function GeblokkeerdCell() {
-  return (
-    <div
-      className="flex h-full min-h-[2.25rem] items-center justify-center gap-1 rounded border border-[#FECACA] px-1.5 py-1 text-[#B91C1C]"
-      style={{
-        background:
-          "repeating-linear-gradient(135deg, #FEF2F2, #FEF2F2 6px, #FEE2E2 6px, #FEE2E2 12px)",
-      }}
-    >
+function GeblokkeerdCell({
+  onClick,
+  hint,
+}: {
+  onClick?: () => void;
+  hint?: string;
+}) {
+  const style = {
+    background:
+      "repeating-linear-gradient(135deg, #FEF2F2, #FEF2F2 6px, #FEE2E2 6px, #FEE2E2 12px)",
+  };
+  const className =
+    "flex h-full min-h-[2.25rem] w-full items-center justify-center gap-1 rounded border border-[#FECACA] px-1.5 py-1 text-[#B91C1C]";
+  const body = (
+    <>
       <span className="text-[10px]">🔒</span>
       <span className="text-[10px] font-semibold">Geblokkeerd</span>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={hint || "Klik om te deblokkeren"}
+        className={`${className} cursor-pointer transition hover:border-[#F87171]`}
+        style={style}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div className={className} style={style}>
+      {body}
     </div>
   );
 }
@@ -357,6 +381,9 @@ export function AgendaPanel({
   const [planSoort, setPlanSoort] = useState<AfspraakSoort>("nieuw");
   const [saving, setSaving] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
+  /** Klik op Afblokken → modus aan; daarna tijdslots aan/uit blokkeren. */
+  const [afblokMode, setAfblokMode] = useState(false);
+  const [afblokkingen, setAfblokkingen] = useState<Set<string>>(new Set());
 
   const todayKey = dayKeyAmsterdam(new Date());
 
@@ -570,50 +597,127 @@ export function AgendaPanel({
     };
   }, [planAdviseurs, weekInfo.jaar]);
 
+  // Slot-afblokkingen voor de zichtbare week
+  useEffect(() => {
+    const ids = planAdviseurs.map((a) => a.id);
+    if (!ids.length || !days.length) {
+      setAfblokkingen(new Set());
+      return;
+    }
+    let cancelled = false;
+    const van = days[0].key;
+    const tot = days[days.length - 1].key;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/adviseurs/afblokkingen?adviseur_ids=${encodeURIComponent(ids.join(","))}&van=${van}&tot=${tot}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          if (data.migration_required) return;
+          throw new Error(data.error || "Afblokkingen laden mislukt");
+        }
+        const next = new Set<string>();
+        for (const item of data.items || []) {
+          next.add(
+            afblokKey(
+              item.adviseur_id as string,
+              item.dag as string,
+              Number(item.slot_hour)
+            )
+          );
+        }
+        setAfblokkingen(next);
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            e instanceof Error ? e.message : "Afblokkingen laden mislukt"
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [planAdviseurs, days]);
+
   function isWeekBlocked(adviseurId: string): boolean {
     const key = `${adviseurId}:${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
     const v = beschikbaarMap.get(key);
     return v === false;
   }
 
-  async function toggleBlockWeek(adviseurId?: string) {
-    const id = adviseurId || defaultAdviseurId || visibleAdviseurs[0]?.id;
-    if (!id) {
-      setError("Selecteer een adviseur om te blokkeren");
-      return;
-    }
+  function isSlotBlocked(
+    adviseurId: string,
+    dayKey: string,
+    hour: number
+  ): boolean {
+    return afblokkingen.has(afblokKey(adviseurId, dayKey, hour));
+  }
+
+  async function toggleSlotAfblok(
+    adviseurId: string,
+    dayKey: string,
+    hour: number
+  ) {
+    const key = afblokKey(adviseurId, dayKey, hour);
+    const currentlyBlocked = afblokkingen.has(key);
+    const nextBlocked = !currentlyBlocked;
     setBlockBusy(true);
     setError(null);
-    const next = isWeekBlocked(id);
+    setOkMsg(null);
+    // Optimistic
+    setAfblokkingen((prev) => {
+      const copy = new Set(prev);
+      if (nextBlocked) copy.add(key);
+      else copy.delete(key);
+      return copy;
+    });
     try {
-      const res = await fetch("/api/adviseurs/beschikbaarheid", {
+      const res = await fetch("/api/adviseurs/afblokkingen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          adviseur_id: id,
-          jaar: weekInfo.jaar,
-          week: weekInfo.week,
-          beschikbaar: next, // if blocked → make available
+          adviseur_id: adviseurId,
+          dag: dayKey,
+          slot_hour: hour,
+          geblokkeerd: nextBlocked,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Blokkeren mislukt");
-      const key = `${id}:${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
-      setBeschikbaarMap((prev) => {
-        const copy = new Map(prev);
-        copy.set(key, next);
-        return copy;
-      });
       setOkMsg(
-        next
-          ? `Week ${weekInfo.week}: weer beschikbaar`
-          : `Week ${weekInfo.week}: geblokkeerd`
+        data.message ||
+          (nextBlocked
+            ? `${dayKey} ${String(hour).padStart(2, "0")}:00 geblokkeerd`
+            : `${dayKey} ${String(hour).padStart(2, "0")}:00 weer open`)
       );
     } catch (e) {
+      // Rollback
+      setAfblokkingen((prev) => {
+        const copy = new Set(prev);
+        if (currentlyBlocked) copy.add(key);
+        else copy.delete(key);
+        return copy;
+      });
       setError(e instanceof Error ? e.message : "Blokkeren mislukt");
     } finally {
       setBlockBusy(false);
     }
+  }
+
+  function handleEmptySlotClick(
+    adviseurId: string,
+    dayKey: string,
+    slotIdx: number
+  ) {
+    const row = SLOT_ROWS[slotIdx];
+    if (afblokMode) {
+      void toggleSlotAfblok(adviseurId, dayKey, row.hour);
+      return;
+    }
+    openPlan(adviseurId, dayKey, slotIdx);
   }
 
   function appointmentsInCell(
@@ -668,6 +772,10 @@ export function AgendaPanel({
       return;
     }
     const row = SLOT_ROWS[slotIdx];
+    if (isSlotBlocked(adviseurId, dayKey, row.hour)) {
+      setError("Dit tijdslot is afgeblokt");
+      return;
+    }
     setPlanSlot({
       adviseurId,
       startAt: isoForDaySlot(dayKey, row.hour, row.minute),
@@ -842,10 +950,26 @@ export function AgendaPanel({
             <button
               type="button"
               disabled={blockBusy}
-              onClick={() => void toggleBlockWeek()}
-              className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash disabled:opacity-60"
+              onClick={() => {
+                setAfblokMode((v) => {
+                  const next = !v;
+                  setOkMsg(
+                    next
+                      ? "Afblok-modus: klik op een tijdslot om te blokkeren of te openen"
+                      : null
+                  );
+                  setError(null);
+                  return next;
+                });
+              }}
+              className={[
+                "rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-60",
+                afblokMode
+                  ? "border-[#B91C1C] bg-[#FEF2F2] text-[#B91C1C]"
+                  : "border-line hover:bg-wash",
+              ].join(" ")}
             >
-              Afblokken
+              {afblokMode ? "Klaar met afblokken" : "Afblokken"}
             </button>
             {!defaultAdviseurId && (
               <div className="relative">
@@ -889,8 +1013,15 @@ export function AgendaPanel({
           ) : null}
         </div>
 
-        {(error || okMsg) && (
+        {(error || okMsg || afblokMode) && (
           <div className="mt-3 space-y-1">
+            {afblokMode && (
+              <p className="border border-[#B91C1C]/25 bg-[#FEF2F2] px-3 py-2 text-xs font-medium text-[#B91C1C]">
+                Afblok-modus actief — klik op een leeg tijdslot (10 / 13 / 16 /
+                19) om te blokkeren of weer te openen. Klik op “Klaar met
+                afblokken” als je klaar bent.
+              </p>
+            )}
             {error && (
               <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
                 {error}
@@ -961,7 +1092,13 @@ export function AgendaPanel({
                       {row.label}
                     </div>
                     {visibleAdviseurs.map((adv) => {
-                      const blocked = isWeekBlocked(adv.id);
+                      const weekBlocked = isWeekBlocked(adv.id);
+                      const slotBlocked = isSlotBlocked(
+                        adv.id,
+                        day.key,
+                        row.hour
+                      );
+                      const blocked = weekBlocked || slotBlocked;
                       const items = appointmentsInCell(
                         adv.id,
                         day.key,
@@ -970,10 +1107,38 @@ export function AgendaPanel({
                       return (
                         <div
                           key={`${adv.id}-${day.key}-${slotIdx}`}
-                          className="min-h-[2.75rem] border-r border-line p-1"
+                          className={[
+                            "min-h-[2.75rem] border-r border-line p-1",
+                            afblokMode && items.length === 0
+                              ? "bg-[#FFF7F7]/60"
+                              : "",
+                          ].join(" ")}
                         >
                           {blocked && items.length === 0 ? (
-                            <GeblokkeerdCell />
+                            <GeblokkeerdCell
+                              onClick={
+                                afblokMode && !blockBusy && !weekBlocked
+                                  ? () =>
+                                      void toggleSlotAfblok(
+                                        adv.id,
+                                        day.key,
+                                        row.hour
+                                      )
+                                  : afblokMode && weekBlocked
+                                    ? () =>
+                                        setError(
+                                          "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                        )
+                                    : undefined
+                              }
+                              hint={
+                                afblokMode
+                                  ? slotBlocked
+                                    ? "Klik om dit slot weer te openen"
+                                    : "Week geblokkeerd"
+                                  : undefined
+                              }
+                            />
                           ) : items.length > 0 ? (
                             <div className="space-y-1">
                               {items.map((a) => {
@@ -997,6 +1162,12 @@ export function AgendaPanel({
                                       vervolgIndexByAfspraak.get(a.id) || 1
                                     }
                                     onClick={() => {
+                                      if (afblokMode) {
+                                        setError(
+                                          "Dit slot heeft al een afspraak — kies een leeg tijdslot"
+                                        );
+                                        return;
+                                      }
                                       setSelected(a);
                                       setPlanOpen(false);
                                     }}
@@ -1007,13 +1178,23 @@ export function AgendaPanel({
                           ) : (
                             <button
                               type="button"
+                              disabled={blockBusy}
                               onClick={() =>
-                                openPlan(adv.id, day.key, slotIdx)
+                                handleEmptySlotClick(adv.id, day.key, slotIdx)
                               }
-                              className="flex h-full min-h-[2.25rem] w-full items-center justify-center rounded text-[11px] text-transparent hover:bg-[#F0FDF4] hover:text-green-dark"
-                              title="Afspraak plannen"
+                              className={[
+                                "flex h-full min-h-[2.25rem] w-full items-center justify-center rounded text-[11px] disabled:opacity-50",
+                                afblokMode
+                                  ? "border border-dashed border-[#FECACA] text-[#B91C1C] hover:bg-[#FEF2F2]"
+                                  : "text-transparent hover:bg-[#F0FDF4] hover:text-green-dark",
+                              ].join(" ")}
+                              title={
+                                afblokMode
+                                  ? "Slot afblokken"
+                                  : "Afspraak plannen"
+                              }
                             >
-                              +
+                              {afblokMode ? "Blokkeer" : "+"}
                             </button>
                           )}
                         </div>
