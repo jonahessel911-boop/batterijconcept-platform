@@ -674,7 +674,7 @@ export function CrmShell() {
     },
     instroom: {
       title: "Recruitment",
-      sub: "Kandidaten slepen tussen statussen · filter op functie",
+      sub: "Kanban + interne agenda · geen mail naar kandidaten",
     },
     projecten: {
       title: "Backoffice",

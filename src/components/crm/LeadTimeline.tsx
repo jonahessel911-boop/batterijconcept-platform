@@ -11,6 +11,11 @@ const SOORT_LABEL: Record<string, string> = {
   terugbel: "Terugbellen",
   notitie: "Notitie",
   contact: "Contact",
+  betaling: "Betaling",
+  inkoop: "Inkoop",
+  installatie: "Installatie",
+  schouw: "Schouw",
+  service: "Service",
   overig: "Overig",
 };
 
@@ -61,8 +66,8 @@ export function LeadTimeline({
   if (events.length === 0) {
     return (
       <p className="text-sm text-muted">
-        Nog geen gebeurtenissen. Notities, statuswijzigingen en belacties
-        verschijnen hier.
+        Nog geen gebeurtenissen. Notities, betalingen, inkoop, installatie en
+        service verschijnen hier.
       </p>
     );
   }

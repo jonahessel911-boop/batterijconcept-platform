@@ -5,6 +5,7 @@ import {
   findProjectByKlantEmail,
   syncProjectServiceStatus,
 } from "@/lib/service-verzoek";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -140,6 +141,19 @@ export async function POST(req: NextRequest) {
     }
 
     await syncProjectServiceStatus(sb, projectId);
+
+    if (leadId) {
+      await logLeadEvent({
+        leadId,
+        soort: "service",
+        titel: `Serviceverzoek: ${onderwerp}`,
+        detail: body.omschrijving?.trim() || null,
+        meta: {
+          service_verzoek_id: data.id,
+          project_id: projectId,
+        },
+      });
+    }
 
     const { data: refreshed } = await sb
       .from("service_verzoeken")

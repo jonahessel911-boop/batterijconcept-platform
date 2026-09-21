@@ -29,17 +29,50 @@ function withWebhookAuth(req: NextRequest) {
   return Boolean(provided && provided === expected);
 }
 
+function coerceNoteText(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((v) => coerceNoteText(v))
+      .filter((v): v is string => Boolean(v));
+    return parts.length ? parts.join("\n") : null;
+  }
+  return null;
+}
+
+/** Haal interne notitie uit webhook-payload (veel voorkomende veldnamen). */
+function pickNotitieFromBody(body: Record<string, unknown>): string | null {
+  const keys = [
+    "notitie",
+    "notities",
+    "notes",
+    "note",
+    "opmerking",
+    "opmerkingen",
+    "message",
+    "bericht",
+    "motivatie",
+    "motivation",
+    "cover_letter",
+    "coverLetter",
+    "comment",
+    "comments",
+    "description",
+  ] as const;
+
+  for (const key of keys) {
+    const text = coerceNoteText(body[key]);
+    if (text) return text;
+  }
+  return null;
+}
+
 function buildNotitie(
   body: Record<string, unknown>,
   files: File[]
 ): string | null {
-  const base = pickStr(
-    body.notitie,
-    body.notes,
-    body.opmerking,
-    body.message,
-    body.bericht
-  );
+  const base = pickNotitieFromBody(body);
   // Alleen bestandsnaam in notitie zetten als die er nog niet in staat
   if (!files.length) return base;
   const names = files.map((f) => f.name).filter(Boolean);
@@ -110,7 +143,7 @@ export async function POST(req: NextRequest) {
           })),
         }),
       })
-      .select("id, naam, email, status, created_at")
+      .select("id, naam, email, status, notitie, created_at")
       .single();
 
     if (error) throw error;
@@ -130,11 +163,18 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      const notitieHtml = (data.notitie || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br />");
       const detailBlok = [
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Naam</strong><br />${data.naam}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${data.email || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${pickStr(body.telefoon, body.phone, body.mobiel) || "-"}</p>`,
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Functie</strong><br />${pickStr(body.functie, body.function, body.role, body.vacature, body.job) || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Status</strong><br />${status}</p>`,
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Notitie</strong><br />${notitieHtml || "-"}</p>`,
         `<p style="margin:0;font-size:15px;"><strong>Bestanden</strong><br />${
           bestanden.length
             ? bestanden.map((b) => b.bestandsnaam).join(", ")
@@ -200,6 +240,7 @@ export async function GET() {
         naam: "Jona Candidate",
         email: "jona@example.com",
         telefoon: "0612345678",
+        functie: "Adviseur",
         status: "nieuw",
         notitie: "Beschikbaar vanaf september",
         bron: "werkenbij-formulier",
@@ -207,9 +248,32 @@ export async function GET() {
         file_base64: "… (optioneel)",
       },
       multipart: {
-        fields: ["naam*", "email", "telefoon", "status", "notitie", "bron"],
+        fields: [
+          "naam*",
+          "email",
+          "telefoon",
+          "functie",
+          "status",
+          "notitie|notities|notes|opmerking|bericht|motivatie",
+          "bron",
+        ],
         fileField: "willekeurige veldnaam — alle File-uploads worden meegenomen",
       },
+      note_aliases: [
+        "notitie",
+        "notities",
+        "notes",
+        "note",
+        "opmerking",
+        "opmerkingen",
+        "message",
+        "bericht",
+        "motivatie",
+        "motivation",
+        "cover_letter",
+        "comment",
+        "description",
+      ],
     },
   });
 }

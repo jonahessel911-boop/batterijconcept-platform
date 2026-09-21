@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import type { ProjectStatus } from "@/types/database";
-import { PROJECT_STATUSES } from "@/lib/labels";
+import { PROJECT_STATUSES, projectStatusLabel } from "@/lib/labels";
 import {
   isValidSchouwWeek,
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -132,6 +133,13 @@ export async function PATCH(
 
   try {
     const sb = getSupabaseAdmin();
+
+    const { data: before } = await sb
+      .from("projecten")
+      .select("id, lead_id, status, project_nummer, materiaal_checks")
+      .eq("id", id)
+      .maybeSingle();
+
     let { data, error } = await sb
       .from("projecten")
       .update(patch)
@@ -178,6 +186,46 @@ export async function PATCH(
         },
         { status: 500 }
       );
+    }
+
+    const leadId = (before?.lead_id || data.lead_id) as string | undefined;
+    if (leadId) {
+      if (body.status && before?.status && body.status !== before.status) {
+        await logLeadEvent({
+          leadId,
+          soort: "status",
+          titel: `Projectstatus: ${projectStatusLabel[body.status] || body.status}`,
+          detail: before.status
+            ? `Was: ${projectStatusLabel[before.status as ProjectStatus] || before.status}`
+            : null,
+          meta: {
+            project_id: id,
+            project_nummer: data.project_nummer,
+            van: before.status,
+            naar: body.status,
+          },
+        });
+      }
+
+      if (body.materiaal_checks && typeof body.materiaal_checks === "object") {
+        const prev = (before?.materiaal_checks || {}) as Record<string, boolean>;
+        const next = body.materiaal_checks;
+        const newlyChecked = Object.keys(next).filter(
+          (key) => next[key] === true && prev[key] !== true
+        );
+        for (const key of newlyChecked) {
+          const label = key.replace(/^std:/, "").replace(/[_-]/g, " ");
+          await logLeadEvent({
+            leadId,
+            soort: "inkoop",
+            titel: `Inkoop gemarkeerd: ${label}`,
+            detail: data.project_nummer
+              ? `Project ${data.project_nummer}`
+              : null,
+            meta: { project_id: id, check_key: key },
+          });
+        }
+      }
     }
 
     if (body.status) {

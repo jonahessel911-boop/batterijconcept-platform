@@ -7,6 +7,8 @@ import {
   amsterdamDatePlusDays,
   parseBetaaltermijnDagen,
 } from "@/lib/factuur-betaling";
+import { formatEuro } from "@/lib/format";
+import { logLeadEvent } from "@/lib/lead-events";
 import type { FactuurStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -62,7 +64,9 @@ export async function PATCH(
 
     const { data: current, error: loadErr } = await sb
       .from("facturen")
-      .select("id, status, factuurdatum")
+      .select(
+        "id, status, factuurdatum, lead_id, factuur_nummer, bedrag_inc_btw, omschrijving"
+      )
       .eq("id", id)
       .maybeSingle();
 
@@ -143,6 +147,33 @@ export async function PATCH(
         { error: "Bijwerken mislukt", detail: error?.message },
         { status: 500 }
       );
+    }
+
+    const becamePaid =
+      body.status === "betaald" && current.status !== "betaald" && current.lead_id;
+    if (becamePaid) {
+      const nr = data.factuur_nummer || current.factuur_nummer || id.slice(0, 8);
+      const bedrag = Number(data.bedrag_inc_btw ?? current.bedrag_inc_btw ?? 0);
+      const oms =
+        (typeof data.omschrijving === "string" && data.omschrijving) ||
+        current.omschrijving ||
+        null;
+      await logLeadEvent({
+        leadId: current.lead_id,
+        soort: "betaling",
+        titel: `Factuur ${nr} betaald`,
+        detail: [
+          bedrag > 0 ? formatEuro(bedrag) + " incl. btw" : null,
+          oms,
+        ]
+          .filter(Boolean)
+          .join(" · ") || null,
+        meta: {
+          factuur_id: id,
+          factuur_nummer: nr,
+          bedrag_inc_btw: bedrag,
+        },
+      });
     }
 
     return NextResponse.json({ factuur: data });

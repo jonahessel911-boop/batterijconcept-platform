@@ -10,6 +10,7 @@ import {
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -313,6 +314,34 @@ export async function POST(
       id,
       (updated.status as string) || "schouw_in_afwachting"
     );
+
+    if (updated.lead_id) {
+      await logLeadEvent({
+        leadId: updated.lead_id,
+        soort: "schouw",
+        titel: exactSchouwAt
+          ? "Schouwdag gepland"
+          : `Schouwweek gezet (W${schouwWeek})`,
+        detail: [
+          exactSchouwAt
+            ? null
+            : schouwJaar && schouwWeek
+              ? `${schouwJaar}-W${String(schouwWeek).padStart(2, "0")}`
+              : null,
+          updated.project_nummer
+            ? `Project ${updated.project_nummer}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || null,
+        meta: {
+          project_id: id,
+          schouw_jaar: schouwJaar,
+          schouw_week: schouwWeek,
+          schouw_at: schouwAtIso,
+        },
+      });
+    }
 
     return NextResponse.json({
       project: { ...updated, ...mailPatch },

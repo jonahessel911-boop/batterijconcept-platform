@@ -8,6 +8,8 @@ import {
   matchPaymentToFactuur,
   type OpenFactuur,
 } from "@/lib/bunq/match";
+import { formatEuro } from "@/lib/format";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export type BunqSyncResult = {
   ok: boolean;
@@ -137,6 +139,33 @@ async function markFactuurPaid(
   if (error) {
     console.error("bunq mark paid:", error.message);
     return false;
+  }
+
+  const { data: fac } = await sb
+    .from("facturen")
+    .select("lead_id, factuur_nummer, bedrag_inc_btw, omschrijving")
+    .eq("id", factuur.id)
+    .maybeSingle();
+
+  if (fac?.lead_id) {
+    await logLeadEvent({
+      leadId: fac.lead_id,
+      soort: "betaling",
+      titel: `Factuur ${fac.factuur_nummer || factuur.factuur_nummer} betaald`,
+      detail: [
+        formatEuro(Number(fac.bedrag_inc_btw ?? factuur.bedrag_inc_btw)),
+        "incl. btw",
+        "via bunq",
+        fac.omschrijving || null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      meta: {
+        factuur_id: factuur.id,
+        bron: "bunq",
+        bunq_payment_id: payment.id,
+      },
+    });
   }
 
   // Log (best-effort)

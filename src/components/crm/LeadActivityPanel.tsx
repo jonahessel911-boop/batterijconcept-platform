@@ -21,8 +21,11 @@ type ActivityKind =
   | "offerte"
   | "offerte_getekend"
   | "factuur"
+  | "betaling"
+  | "inkoop"
   | "schouw"
   | "installatie"
+  | "service"
   | "project"
   | "overig";
 
@@ -47,8 +50,11 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   offerte: "Offerte",
   offerte_getekend: "Offerte getekend",
   factuur: "Factuur",
+  betaling: "Betaling",
+  inkoop: "Inkoop",
   schouw: "Schouw",
   installatie: "Installatie",
+  service: "Service",
   project: "Backoffice",
   overig: "Overig",
 };
@@ -66,14 +72,32 @@ const PROJECT_STATUS_LABEL: Record<string, string> = {
 };
 
 function kindTone(kind: ActivityKind): string {
-  if (kind === "offerte_getekend" || kind === "installatie") {
+  if (
+    kind === "offerte_getekend" ||
+    kind === "installatie" ||
+    kind === "betaling"
+  ) {
     return "border-green";
   }
-  if (kind === "factuur" || kind === "offerte") return "border-orange";
-  if (kind === "notitie") return "border-orange";
+  if (kind === "factuur" || kind === "offerte" || kind === "inkoop") {
+    return "border-orange";
+  }
+  if (kind === "notitie" || kind === "service") return "border-orange";
   if (kind === "schouw" || kind === "afspraak") return "border-green";
   return "border-line";
 }
+
+const EVENT_KINDS = new Set<ActivityKind>([
+  "notitie",
+  "status",
+  "bel",
+  "afspraak",
+  "betaling",
+  "inkoop",
+  "installatie",
+  "schouw",
+  "service",
+]);
 
 function buildFromEntities(opts: {
   events: LeadEvent[];
@@ -86,13 +110,7 @@ function buildFromEntities(opts: {
 
   for (const ev of opts.events) {
     const soort = (ev.soort || "overig") as ActivityKind;
-    const kind: ActivityKind =
-      soort === "notitie" ||
-      soort === "status" ||
-      soort === "bel" ||
-      soort === "afspraak"
-        ? soort
-        : "overig";
+    const kind: ActivityKind = EVENT_KINDS.has(soort) ? soort : "overig";
     items.push({
       id: `ev-${ev.id}`,
       at: ev.created_at,
@@ -154,6 +172,24 @@ function buildFromEntities(opts: {
         label: "Download PDF",
       },
     });
+
+    if (f.status === "betaald" && f.betaald_op) {
+      items.push({
+        id: `fac-paid-${f.id}`,
+        at: `${f.betaald_op}T12:00:00`,
+        kind: "betaling",
+        titel: `Factuur ${f.factuur_nummer} betaald`,
+        detail: `${formatEuro(f.bedrag_inc_btw)} incl. btw${
+          f.omschrijving ? ` · ${f.omschrijving}` : ""
+        }`,
+        action: {
+          type: "factuur_pdf",
+          factuurId: f.id,
+          filename: `${f.factuur_nummer}.pdf`,
+          label: "Download PDF",
+        },
+      });
+    }
   }
 
   for (const p of opts.projecten) {

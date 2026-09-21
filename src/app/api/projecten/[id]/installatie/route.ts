@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { adresRegel } from "@/lib/format";
+import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import {
   installatieKlantEmail,
   installatiePartnerEmail,
 } from "@/lib/email/templates";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -221,6 +222,28 @@ export async function POST(
       id,
       (updated.status as string) || "materiaal_installatie"
     );
+
+    if (updated.lead_id) {
+      await logLeadEvent({
+        leadId: updated.lead_id,
+        soort: "installatie",
+        titel: "Installatie gepland",
+        detail: [
+          formatDateTimeNl(whenIso),
+          partner.naam ? `Partner: ${partner.naam}` : null,
+          updated.project_nummer
+            ? `Project ${updated.project_nummer}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        meta: {
+          project_id: id,
+          installatie_at: whenIso,
+          installatie_partner_id: partner.id,
+        },
+      });
+    }
 
     return NextResponse.json({
       project: { ...updated, ...mailPatch },

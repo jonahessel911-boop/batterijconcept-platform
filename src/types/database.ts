@@ -258,6 +258,11 @@ export type LeadEventSoort =
   | "terugbel"
   | "notitie"
   | "contact"
+  | "betaling"
+  | "inkoop"
+  | "installatie"
+  | "schouw"
+  | "service"
   | "overig";
 
 export interface LeadEvent {
@@ -460,6 +465,22 @@ export interface Sollicitatie {
   created_at: string;
   updated_at: string;
   sollicitatie_bestanden?: SollicitatieBestand[];
+}
+
+export type SollicitatieAfspraakSoort = "fysiek" | "telefonisch";
+
+export interface SollicitatieAfspraak {
+  id: string;
+  sollicitatie_id: string;
+  start_at: string;
+  soort: SollicitatieAfspraakSoort;
+  notitie: string | null;
+  created_at: string;
+  updated_at: string;
+  sollicitaties?: Pick<
+    Sollicitatie,
+    "id" | "naam" | "email" | "telefoon" | "functie" | "status"
+  > | null;
 }
 
 export interface ProjectFoto {

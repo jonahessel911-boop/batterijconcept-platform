@@ -4,6 +4,7 @@ import {
   findProjectByKlantEmail,
   syncProjectServiceStatus,
 } from "@/lib/service-verzoek";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -115,6 +116,17 @@ export async function POST(req: NextRequest) {
           );
         }
         await syncProjectServiceStatus(sb, match.project.id);
+        await logLeadEvent({
+          leadId: match.lead.id,
+          soort: "service",
+          titel: `Serviceverzoek: ${onderwerp}`,
+          detail: omschrijving,
+          meta: {
+            service_verzoek_id: retry.data.id,
+            project_id: match.project.id,
+            bron: "webhook",
+          },
+        });
         return NextResponse.json(
           {
             ok: true,
@@ -135,6 +147,18 @@ export async function POST(req: NextRequest) {
     }
 
     await syncProjectServiceStatus(sb, match.project.id);
+
+    await logLeadEvent({
+      leadId: match.lead.id,
+      soort: "service",
+      titel: `Serviceverzoek: ${onderwerp}`,
+      detail: omschrijving,
+      meta: {
+        service_verzoek_id: data.id,
+        project_id: match.project.id,
+        bron: "webhook",
+      },
+    });
 
     return NextResponse.json(
       {
