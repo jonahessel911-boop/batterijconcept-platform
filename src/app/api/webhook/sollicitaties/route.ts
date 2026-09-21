@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
       });
 
       await sendEmail({
-        to: "jona@batterijconcept.nl",
+        to: "jona@batterijconcept.nl, jonahessel911@gmail.com",
         subject: `Nieuwe sollicitatie: ${data.naam}`,
         html,
         tag: "sollicitatie-intern",

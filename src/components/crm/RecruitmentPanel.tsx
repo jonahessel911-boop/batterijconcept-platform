@@ -15,16 +15,58 @@ import {
 } from "@/lib/sollicitatie";
 import { formatDateTimeNl } from "@/lib/format";
 
-const COLUMN_ACCENT: Record<SollicitatieStatus, string> = {
-  nieuw: "#1A4A6E",
-  diskwalificatie: "#9B2C2C",
-  gesprek_gepland: "#CA8A04",
-  aangenomen: "#0D5C32",
+const STATUS_TONE: Record<
+  SollicitatieStatus,
+  { bar: string; soft: string; text: string }
+> = {
+  nieuw: { bar: "#1A4A6E", soft: "#E8F0F6", text: "#1A4A6E" },
+  diskwalificatie: { bar: "#9B2C2C", soft: "#FCEAEA", text: "#9B2C2C" },
+  gesprek_gepland: { bar: "#A16207", soft: "#FEF7E6", text: "#854D0E" },
+  aangenomen: { bar: "#0D5C32", soft: "#E8F6EC", text: "#0D5C32" },
 };
+
+function initials(naam: string) {
+  const parts = naam.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
+}
 
 function toLocalInputValue(d = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+      {children}
+    </span>
+  );
+}
+
+function SoftInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={[
+        "w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none transition focus:border-green",
+        props.className || "",
+      ].join(" ")}
+    />
+  );
+}
+
+function SoftTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={[
+        "w-full resize-y border border-line bg-wash/40 px-3.5 py-3 text-sm leading-relaxed text-ink outline-none transition focus:border-green focus:bg-white disabled:opacity-50",
+        props.className || "",
+      ].join(" ")}
+    />
+  );
 }
 
 function RecruitmentAddModal({
@@ -101,48 +143,49 @@ function RecruitmentAddModal({
       />
       <form
         onSubmit={submit}
-        className="relative z-10 w-full max-w-md border border-line bg-white p-5 shadow-lg"
+        className="relative z-10 w-full max-w-md border border-line bg-white p-6 shadow-lg"
       >
-        <h2 className="font-display text-lg tracking-tight text-ink">
+        <h2 className="font-display text-xl tracking-tight text-ink">
           Kandidaat toevoegen
         </h2>
-        <div className="mt-4 flex flex-col gap-3">
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Naam *</span>
-            <input
+        <p className="mt-1 text-sm text-muted">
+          Verschijnt direct in de kolom Nieuw.
+        </p>
+        <div className="mt-5 flex flex-col gap-3.5">
+          <label className="block">
+            <FieldLabel>Naam *</FieldLabel>
+            <SoftInput
               value={naam}
               onChange={(e) => setNaam(e.target.value)}
-              className="w-full border border-line px-3 py-2 text-sm"
               autoFocus
               required
             />
           </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Telefoon</span>
-            <input
-              value={telefoon}
-              onChange={(e) => setTelefoon(e.target.value)}
-              className="w-full border border-line px-3 py-2 text-sm"
-              inputMode="tel"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">E-mail</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-line px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Functie</span>
-            <input
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <label className="block">
+              <FieldLabel>Telefoon</FieldLabel>
+              <SoftInput
+                value={telefoon}
+                onChange={(e) => setTelefoon(e.target.value)}
+                inputMode="tel"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>E-mail</FieldLabel>
+              <SoftInput
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+          </div>
+          <label className="block">
+            <FieldLabel>Functie</FieldLabel>
+            <SoftInput
               value={functie}
               onChange={(e) => setFunctie(e.target.value)}
               list="recruitment-functies"
               placeholder="Bijv. Adviseur, Beller…"
-              className="w-full border border-line px-3 py-2 text-sm"
             />
             <datalist id="recruitment-functies">
               {functieSuggestions.map((f) => (
@@ -152,25 +195,25 @@ function RecruitmentAddModal({
           </label>
         </div>
         {error && (
-          <p className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+          <p className="mt-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
             {error}
           </p>
         )}
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
             onClick={() => {
               reset();
               onClose();
             }}
-            className="border border-line px-4 py-2 text-sm text-muted hover:bg-wash"
+            className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
           >
             Annuleren
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="bg-green px-4 py-2 text-sm font-medium text-white hover:bg-green-deeper disabled:opacity-60"
+            className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
           >
             {saving ? "Bezig…" : "Toevoegen"}
           </button>
@@ -251,22 +294,22 @@ function PlanGesprekModal({
       />
       <form
         onSubmit={submit}
-        className="relative z-10 w-full max-w-md border border-line bg-white p-5 shadow-lg"
+        className="relative z-10 w-full max-w-md border border-line bg-white p-6 shadow-lg"
       >
-        <h2 className="font-display text-lg tracking-tight text-ink">
+        <h2 className="font-display text-xl tracking-tight text-ink">
           Gesprek plannen
         </h2>
-        <p className="mt-1 text-xs text-muted">
+        <p className="mt-1 text-sm text-muted">
           Alleen intern — er gaat geen e-mail naar de kandidaat.
         </p>
 
-        <div className="mt-4 flex flex-col gap-3">
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Kandidaat *</span>
+        <div className="mt-5 flex flex-col gap-3.5">
+          <label className="block">
+            <FieldLabel>Kandidaat *</FieldLabel>
             <select
               value={sollicitatieId}
               onChange={(e) => setSollicitatieId(e.target.value)}
-              className="w-full border border-line px-3 py-2 text-sm"
+              className="w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
               required
             >
               <option value="">Kies…</option>
@@ -279,9 +322,9 @@ function PlanGesprekModal({
             </select>
           </label>
 
-          <fieldset className="text-sm">
-            <legend className="mb-1.5 text-muted">Type *</legend>
-            <div className="flex gap-2">
+          <fieldset>
+            <FieldLabel>Type *</FieldLabel>
+            <div className="grid grid-cols-2 gap-2">
               {(
                 [
                   ["telefonisch", "Telefonisch"],
@@ -293,9 +336,9 @@ function PlanGesprekModal({
                   type="button"
                   onClick={() => setSoort(value)}
                   className={[
-                    "flex-1 border px-3 py-2 text-sm font-medium",
+                    "border px-3 py-2.5 text-sm font-medium transition",
                     soort === value
-                      ? "border-green bg-green/10 text-green-deeper"
+                      ? "border-green bg-green-soft text-green-deeper"
                       : "border-line text-muted hover:bg-wash",
                   ].join(" ")}
                 >
@@ -305,53 +348,94 @@ function PlanGesprekModal({
             </div>
           </fieldset>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Datum & tijd *</span>
-            <input
+          <label className="block">
+            <FieldLabel>Datum & tijd *</FieldLabel>
+            <SoftInput
               type="datetime-local"
               value={startAt}
               onChange={(e) => setStartAt(e.target.value)}
-              className="w-full border border-line px-3 py-2 text-sm"
               required
             />
           </label>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted">Notitie</span>
-            <textarea
+          <label className="block">
+            <FieldLabel>Notitie</FieldLabel>
+            <SoftTextarea
               value={notitie}
               onChange={(e) => setNotitie(e.target.value)}
               rows={3}
               placeholder="Bijv. tweede ronde, meenemen CV…"
-              className="w-full border border-line px-3 py-2 text-sm"
+              className="bg-white"
             />
           </label>
         </div>
 
         {error && (
-          <p className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+          <p className="mt-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
             {error}
           </p>
         )}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
-            className="border border-line px-4 py-2 text-sm text-muted hover:bg-wash"
+            className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
           >
             Annuleren
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="bg-green px-4 py-2 text-sm font-medium text-white hover:bg-green-deeper disabled:opacity-60"
+            className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
           >
             {saving ? "Bezig…" : "Inplannen"}
           </button>
         </div>
       </form>
     </div>
+  );
+}
+
+function AfspraakRow({
+  afspraak,
+  muted,
+  onDelete,
+}: {
+  afspraak: SollicitatieAfspraak;
+  muted?: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <li
+      className={[
+        "group flex items-start justify-between gap-3 px-4 py-3.5",
+        muted ? "opacity-70" : "",
+      ].join(" ")}
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-ink">
+            {formatDateTimeNl(afspraak.start_at)}
+          </p>
+          <span className="border border-line bg-wash px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            {afspraak.soort === "fysiek" ? "Fysiek" : "Telefonisch"}
+          </span>
+        </div>
+        {afspraak.notitie && (
+          <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-muted">
+            {afspraak.notitie}
+          </p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="shrink-0 text-xs font-medium text-muted opacity-0 transition group-hover:opacity-100 hover:text-[#9B2C2C]"
+      >
+        Verwijderen
+      </button>
+    </li>
   );
 }
 
@@ -381,6 +465,7 @@ function KandidaatDetail({
   onDeleteFile: (fileId: string) => void;
 }) {
   const status = normalizeSollicitatieStatus(kandidaat.status);
+  const tone = STATUS_TONE[status];
   const bestanden = kandidaat.sollicitatie_bestanden || [];
   const now = Date.now();
   const upcoming = afspraken.filter(
@@ -391,75 +476,130 @@ function KandidaatDetail({
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+      <nav className="flex flex-wrap items-center gap-2 text-sm text-muted">
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-2 border border-line bg-white px-3 py-1.5 text-sm font-medium text-muted hover:border-green/40 hover:text-green-deeper"
+          className="font-medium hover:text-green-deeper"
         >
-          ← Terug naar overzicht
+          Recruitment
         </button>
-        <button
-          type="button"
-          onClick={onPlan}
-          className="bg-green px-4 py-2 text-sm font-medium text-white hover:bg-green-deeper"
-        >
-          Gesprek plannen
-        </button>
-      </div>
+        <span className="text-line">/</span>
+        <span className="font-medium text-ink">{kandidaat.naam}</span>
+      </nav>
 
-      <div className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line px-4 py-4 sm:px-6">
-          <div className="min-w-0">
-            <h2 className="font-display text-2xl tracking-tight text-ink">
-              {kandidaat.naam}
-            </h2>
-            {kandidaat.functie && (
-              <p className="mt-0.5 text-sm font-medium text-green-deeper">
-                {kandidaat.functie}
-              </p>
-            )}
-            <p className="mt-2 text-sm text-muted">
-              {[kandidaat.telefoon, kandidaat.email]
-                .filter(Boolean)
-                .join(" · ") || "Geen contactgegevens"}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              Binnengekomen {formatDateTimeNl(kandidaat.created_at)}
-              {kandidaat.bron ? ` · via ${kandidaat.bron}` : ""}
-            </p>
-          </div>
-          <label className="block text-sm">
-            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Status
-            </span>
-            <select
-              value={status}
-              disabled={saving}
-              onChange={(e) =>
-                void onSave({ status: e.target.value as SollicitatieStatus })
-              }
-              className="cursor-pointer border border-line bg-white px-3 py-2 text-sm font-medium outline-none focus:border-green disabled:opacity-50"
+      <section className="border border-line bg-white">
+        <div className="flex flex-wrap items-start justify-between gap-5 border-b border-line px-5 py-5 sm:px-7 sm:py-6">
+          <div className="flex min-w-0 items-start gap-4">
+            <div
+              className="flex h-14 w-14 shrink-0 items-center justify-center text-base font-semibold"
+              style={{ background: tone.soft, color: tone.text }}
             >
-              {SOLLICITATIE_STATUSES.map((st) => (
-                <option key={st} value={st}>
-                  {SOLLICITATIE_STATUS_LABEL[st]}
-                </option>
-              ))}
-            </select>
-          </label>
+              {initials(kandidaat.naam)}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="font-display text-2xl tracking-tight text-ink sm:text-[1.75rem]">
+                  {kandidaat.naam}
+                </h1>
+                <span
+                  className="px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+                  style={{ background: tone.soft, color: tone.text }}
+                >
+                  {SOLLICITATIE_STATUS_LABEL[status]}
+                </span>
+              </div>
+              {kandidaat.functie && (
+                <p className="mt-1 text-sm font-medium text-green-deeper">
+                  {kandidaat.functie}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block">
+              <FieldLabel>Status</FieldLabel>
+              <select
+                value={status}
+                disabled={saving}
+                onChange={(e) =>
+                  void onSave({ status: e.target.value as SollicitatieStatus })
+                }
+                className="cursor-pointer border border-line bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-green disabled:opacity-50"
+              >
+                {SOLLICITATIE_STATUSES.map((st) => (
+                  <option key={st} value={st}>
+                    {SOLLICITATIE_STATUS_LABEL[st]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={onPlan}
+              className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper"
+            >
+              Gesprek plannen
+            </button>
+          </div>
         </div>
 
-        <div className="grid gap-0 lg:grid-cols-2">
-          <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Notities
+        <div className="grid gap-px bg-line sm:grid-cols-2 lg:grid-cols-4">
+          <div className="bg-wash px-5 py-4">
+            <FieldLabel>Telefoon</FieldLabel>
+            {kandidaat.telefoon ? (
+              <a
+                href={`tel:${kandidaat.telefoon}`}
+                className="block truncate text-sm font-medium text-ink hover:text-green-deeper"
+              >
+                {kandidaat.telefoon}
+              </a>
+            ) : (
+              <p className="text-sm text-muted">—</p>
+            )}
+          </div>
+          <div className="bg-wash px-5 py-4">
+            <FieldLabel>E-mail</FieldLabel>
+            {kandidaat.email ? (
+              <a
+                href={`mailto:${kandidaat.email}`}
+                className="block truncate text-sm font-medium text-ink hover:text-green-deeper"
+              >
+                {kandidaat.email}
+              </a>
+            ) : (
+              <p className="text-sm text-muted">—</p>
+            )}
+          </div>
+          <div className="bg-wash px-5 py-4">
+            <FieldLabel>Bron</FieldLabel>
+            <p className="truncate text-sm font-medium text-ink">
+              {kandidaat.bron || "—"}
             </p>
-            <textarea
+          </div>
+          <div className="bg-wash px-5 py-4">
+            <FieldLabel>Binnengekomen</FieldLabel>
+            <p className="truncate text-sm font-medium text-ink">
+              {formatDateTimeNl(kandidaat.created_at)}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-5">
+        <section className="border border-line bg-white lg:col-span-3">
+          <div className="border-b border-line px-5 py-3.5">
+            <h2 className="font-display text-base font-semibold text-ink">
+              Notities
+            </h2>
+          </div>
+          <div className="p-5">
+            <SoftTextarea
               key={`${kandidaat.id}-notitie`}
               defaultValue={kandidaat.notitie || ""}
-              rows={10}
+              rows={12}
               disabled={saving}
               onBlur={(e) => {
                 const next = e.target.value.trim() || null;
@@ -467,166 +607,140 @@ function KandidaatDetail({
                 void onSave({ notitie: next });
               }}
               placeholder="Interne notities over deze kandidaat…"
-              className="mt-2 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green disabled:opacity-50"
             />
-            <p className="mt-1.5 text-xs text-muted">
-              Wordt opgeslagen als je het veld verlaat.
+            <p className="mt-2 text-xs text-muted">
+              Automatisch opgeslagen wanneer je het veld verlaat.
             </p>
-          </section>
+          </div>
+        </section>
 
-          <section className="p-4 sm:p-6">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                Afspraken
-              </p>
-              <button
-                type="button"
-                onClick={onPlan}
-                className="text-xs font-medium text-green-deeper hover:underline"
-              >
-                + Plannen
-              </button>
-            </div>
+        <section className="border border-line bg-white lg:col-span-2">
+          <div className="flex items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+            <h2 className="font-display text-base font-semibold text-ink">
+              Afspraken
+            </h2>
+            <button
+              type="button"
+              onClick={onPlan}
+              className="text-xs font-semibold text-green-deeper hover:underline"
+            >
+              + Plannen
+            </button>
+          </div>
 
+          <div className="min-h-[220px]">
             {afsprakenLoading ? (
-              <p className="mt-3 text-sm text-muted">Afspraken laden…</p>
+              <p className="px-5 py-8 text-sm text-muted">Laden…</p>
             ) : afspraken.length === 0 ? (
-              <p className="mt-3 text-sm text-muted">
-                Nog geen gesprekken gepland met deze kandidaat.
-              </p>
+              <div className="flex flex-col items-start gap-3 px-5 py-8">
+                <p className="text-sm text-muted">
+                  Nog geen gesprekken gepland.
+                </p>
+                <button
+                  type="button"
+                  onClick={onPlan}
+                  className="border border-line bg-wash px-3 py-2 text-xs font-semibold text-ink hover:border-green/40"
+                >
+                  Eerste gesprek plannen
+                </button>
+              </div>
             ) : (
-              <div className="mt-3 space-y-4">
+              <div>
                 {upcoming.length > 0 && (
                   <div>
-                    <p className="mb-1.5 text-xs font-medium text-ink">
+                    <p className="bg-[#fafbfa] px-5 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                       Gepland
                     </p>
-                    <ul className="divide-y divide-line border border-line">
+                    <ul className="divide-y divide-line">
                       {upcoming.map((a) => (
-                        <li
+                        <AfspraakRow
                           key={a.id}
-                          className="flex items-start justify-between gap-3 px-3 py-2.5"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-ink">
-                              {formatDateTimeNl(a.start_at)}
-                              <span className="ml-2 inline-block border border-line px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                                {a.soort === "fysiek"
-                                  ? "Fysiek"
-                                  : "Telefonisch"}
-                              </span>
-                            </p>
-                            {a.notitie && (
-                              <p className="mt-1 whitespace-pre-wrap text-xs text-muted">
-                                {a.notitie}
-                              </p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteAfspraak(a.id)}
-                            className="shrink-0 text-xs text-[#9B2C2C] hover:underline"
-                          >
-                            Verwijderen
-                          </button>
-                        </li>
+                          afspraak={a}
+                          onDelete={() => onDeleteAfspraak(a.id)}
+                        />
                       ))}
                     </ul>
                   </div>
                 )}
                 {past.length > 0 && (
                   <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted">
+                    <p className="bg-[#fafbfa] px-5 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                       Eerder
                     </p>
-                    <ul className="divide-y divide-line border border-line">
+                    <ul className="divide-y divide-line">
                       {past.map((a) => (
-                        <li
+                        <AfspraakRow
                           key={a.id}
-                          className="flex items-start justify-between gap-3 px-3 py-2.5"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-sm text-ink">
-                              {formatDateTimeNl(a.start_at)}
-                              <span className="ml-2 inline-block border border-line px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                                {a.soort === "fysiek"
-                                  ? "Fysiek"
-                                  : "Telefonisch"}
-                              </span>
-                            </p>
-                            {a.notitie && (
-                              <p className="mt-1 whitespace-pre-wrap text-xs text-muted">
-                                {a.notitie}
-                              </p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteAfspraak(a.id)}
-                            className="shrink-0 text-xs text-[#9B2C2C] hover:underline"
-                          >
-                            Verwijderen
-                          </button>
-                        </li>
+                          afspraak={a}
+                          muted
+                          onDelete={() => onDeleteAfspraak(a.id)}
+                        />
                       ))}
                     </ul>
                   </div>
                 )}
               </div>
             )}
-          </section>
-        </div>
-
-        <section className="border-t border-line p-4 sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Bestanden
-            </p>
-            <label className="cursor-pointer text-xs font-medium text-green-deeper hover:underline">
-              {uploading ? "Uploaden…" : "Bestand uploaden"}
-              <input
-                type="file"
-                className="hidden"
-                disabled={uploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onUpload(file);
-                  e.target.value = "";
-                }}
-              />
-            </label>
           </div>
-          <ul className="mt-2 divide-y divide-line border border-line">
+        </section>
+      </div>
+
+      <section className="border border-line bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+          <h2 className="font-display text-base font-semibold text-ink">
+            Bestanden
+          </h2>
+          <label className="cursor-pointer border border-line bg-wash px-3 py-1.5 text-xs font-semibold text-ink hover:border-green/40">
+            {uploading ? "Uploaden…" : "Uploaden"}
+            <input
+              type="file"
+              className="hidden"
+              disabled={uploading}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onUpload(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+        {bestanden.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-muted">Nog geen bestanden.</p>
+        ) : (
+          <ul className="divide-y divide-line">
             {bestanden.map((file) => (
               <li
                 key={file.id}
-                className="flex items-center justify-between gap-3 px-3 py-2"
+                className="group flex items-center justify-between gap-3 px-5 py-3"
               >
                 <a
                   href={file.url || "#"}
                   target="_blank"
                   rel="noreferrer"
-                  className="truncate text-sm text-green-deeper hover:underline"
+                  className="truncate text-sm font-medium text-green-deeper hover:underline"
                 >
                   {file.bestandsnaam || "Bestand"}
                 </a>
                 <button
                   type="button"
                   onClick={() => onDeleteFile(file.id)}
-                  className="shrink-0 border border-line px-2 py-1 text-xs text-muted hover:bg-wash"
+                  className="shrink-0 text-xs font-medium text-muted opacity-0 transition group-hover:opacity-100 hover:text-[#9B2C2C]"
                 >
                   Verwijderen
                 </button>
               </li>
             ))}
-            {bestanden.length === 0 && (
-              <li className="px-3 py-3 text-sm text-muted">
-                Nog geen bestanden.
-              </li>
-            )}
           </ul>
-        </section>
-      </div>
+        )}
+      </section>
+
+      <button
+        type="button"
+        onClick={onBack}
+        className="inline-flex w-fit items-center gap-2 border border-line bg-white px-4 py-2.5 text-sm font-medium text-muted transition hover:border-green/40 hover:text-green-deeper"
+      >
+        ← Alle kandidaten
+      </button>
     </div>
   );
 }
@@ -963,10 +1077,10 @@ export function RecruitmentPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex border border-line">
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex border border-line p-0.5">
             {(
               [
                 ["kanban", "Kanban"],
@@ -978,7 +1092,7 @@ export function RecruitmentPanel() {
                 type="button"
                 onClick={() => setView(id)}
                 className={[
-                  "px-3 py-1.5 text-sm font-medium",
+                  "px-3.5 py-1.5 text-sm font-medium transition",
                   view === id
                     ? "bg-green text-white"
                     : "bg-white text-muted hover:bg-wash",
@@ -991,22 +1105,20 @@ export function RecruitmentPanel() {
 
           {view === "kanban" && (
             <>
-              <label className="flex items-center gap-2 text-sm text-muted">
-                Functie
-                <select
-                  value={functieFilter}
-                  onChange={(e) => setFunctieFilter(e.target.value)}
-                  className="border border-line bg-white px-2.5 py-1.5 text-sm text-ink"
-                >
-                  <option value="">Alle functies</option>
-                  {functies.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span className="text-xs text-muted">
+              <select
+                value={functieFilter}
+                onChange={(e) => setFunctieFilter(e.target.value)}
+                className="border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                aria-label="Filter op functie"
+              >
+                <option value="">Alle functies</option>
+                {functies.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs tabular-nums text-muted">
                 {filtered.length} kandidaat{filtered.length === 1 ? "" : "en"}
               </span>
             </>
@@ -1024,7 +1136,7 @@ export function RecruitmentPanel() {
           <button
             type="button"
             onClick={() => setAddOpen(true)}
-            className="bg-green px-4 py-2 text-sm font-medium text-white hover:bg-green-deeper"
+            className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper"
           >
             + Kandidaat
           </button>
@@ -1039,133 +1151,150 @@ export function RecruitmentPanel() {
 
       {view === "kanban" &&
         (loading ? (
-          <p className="text-sm text-muted">Laden…</p>
+          <p className="py-10 text-center text-sm text-muted">Laden…</p>
         ) : (
-          <>
-            <div
-              className="flex gap-3 overflow-x-auto pb-2"
-              style={{ WebkitOverflowScrolling: "touch" }}
-            >
-              {SOLLICITATIE_STATUSES.map((status) => {
-                const column = byStatus.get(status) || [];
-                const accent = COLUMN_ACCENT[status];
-                const isOver = overStatus === status;
-                return (
-                  <section
-                    key={status}
-                    className={[
-                      "flex w-[260px] shrink-0 flex-col border bg-[#FAFBFA]",
-                      isOver
-                        ? "border-green ring-2 ring-green/30"
-                        : "border-line",
-                    ].join(" ")}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setOverStatus(status);
-                    }}
-                    onDragLeave={() => {
-                      if (overStatus === status) setOverStatus(null);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      handleDrop(status);
+          <div
+            className="flex gap-3 overflow-x-auto pb-1"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            {SOLLICITATIE_STATUSES.map((status) => {
+              const column = byStatus.get(status) || [];
+              const tone = STATUS_TONE[status];
+              const isOver = overStatus === status;
+              return (
+                <section
+                  key={status}
+                  className={[
+                    "flex w-[280px] shrink-0 flex-col border bg-white transition",
+                    isOver
+                      ? "border-green ring-2 ring-green/20"
+                      : "border-line",
+                  ].join(" ")}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setOverStatus(status);
+                  }}
+                  onDragLeave={() => {
+                    if (overStatus === status) setOverStatus(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleDrop(status);
+                  }}
+                >
+                  <header
+                    className="flex items-center justify-between gap-2 px-3.5 py-3"
+                    style={{
+                      borderTop: `3px solid ${tone.bar}`,
+                      background: tone.soft,
                     }}
                   >
-                    <header
-                      className="flex items-center justify-between gap-2 border-b border-line bg-white px-3 py-2.5"
-                      style={{ borderTop: `3px solid ${accent}` }}
+                    <h3
+                      className="text-sm font-semibold tracking-tight"
+                      style={{ color: tone.text }}
                     >
-                      <h3 className="font-display text-sm tracking-tight text-ink">
-                        {SOLLICITATIE_STATUS_LABEL[status]}
-                      </h3>
-                      <span className="text-xs tabular-nums text-muted">
-                        {column.length}
-                      </span>
-                    </header>
-                    <ul className="flex min-h-[180px] flex-col gap-2 p-2">
-                      {column.map((s) => (
-                        <li
-                          key={s.id}
-                          draggable={!busy}
-                          onDragStart={() => {
-                            draggedRef.current = false;
-                            setDragId(s.id);
-                          }}
-                          onDrag={() => {
-                            draggedRef.current = true;
-                          }}
-                          onDragEnd={() => {
-                            setDragId(null);
-                            setOverStatus(null);
-                          }}
-                          onClick={() => {
-                            if (draggedRef.current) return;
-                            openKandidaat(s.id);
-                          }}
-                          className={[
-                            "cursor-pointer border border-line bg-white px-3 py-2.5 hover:border-green/40",
-                            dragId === s.id ? "opacity-50" : "",
-                          ].join(" ")}
-                        >
-                          <p className="cursor-grab text-sm font-medium text-ink active:cursor-grabbing">
-                            {s.naam}
-                          </p>
-                          {s.functie && (
-                            <p className="mt-0.5 text-xs font-medium text-green-deeper">
-                              {s.functie}
+                      {SOLLICITATIE_STATUS_LABEL[status]}
+                    </h3>
+                    <span
+                      className="min-w-6 rounded-sm px-1.5 py-0.5 text-center text-xs font-semibold tabular-nums"
+                      style={{ background: "white", color: tone.text }}
+                    >
+                      {column.length}
+                    </span>
+                  </header>
+                  <ul className="flex min-h-[220px] flex-col gap-2 bg-[#fafbfa] p-2.5">
+                    {column.map((s) => (
+                      <li
+                        key={s.id}
+                        draggable={!busy}
+                        onDragStart={() => {
+                          draggedRef.current = false;
+                          setDragId(s.id);
+                        }}
+                        onDrag={() => {
+                          draggedRef.current = true;
+                        }}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverStatus(null);
+                        }}
+                        onClick={() => {
+                          if (draggedRef.current) return;
+                          openKandidaat(s.id);
+                        }}
+                        className={[
+                          "group cursor-pointer border border-line bg-white p-3 transition hover:border-green/50 hover:shadow-[0_1px_0_rgba(13,92,50,0.06)]",
+                          dragId === s.id ? "opacity-40" : "",
+                        ].join(" ")}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <div
+                            className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center text-[11px] font-semibold"
+                            style={{
+                              background: tone.soft,
+                              color: tone.text,
+                            }}
+                          >
+                            {initials(s.naam)}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-ink">
+                              {s.naam}
                             </p>
-                          )}
-                          {s.telefoon && (
-                            <p className="mt-1 text-xs tabular-nums text-muted">
-                              {s.telefoon}
+                            {s.functie ? (
+                              <p className="mt-0.5 truncate text-xs text-green-deeper">
+                                {s.functie}
+                              </p>
+                            ) : null}
+                            <p className="mt-1.5 truncate text-xs text-muted">
+                              {s.telefoon || s.email || "Geen contact"}
                             </p>
-                          )}
-                          {s.email && (
-                            <p className="truncate text-xs text-muted">
-                              {s.email}
-                            </p>
-                          )}
+                          </div>
+                        </div>
+                        <div className="mt-2.5 flex items-center justify-between border-t border-line/80 pt-2">
+                          <span className="text-[11px] font-medium text-muted group-hover:text-green-deeper">
+                            Openen →
+                          </span>
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               openPlan(s.id);
                             }}
-                            className="mt-2 text-xs font-medium text-green-deeper hover:underline"
+                            className="text-[11px] font-semibold text-muted hover:text-green-deeper"
                           >
-                            Gesprek plannen
+                            Plannen
                           </button>
-                        </li>
-                      ))}
-                      {column.length === 0 && (
-                        <li className="px-2 py-6 text-center text-xs text-muted">
-                          Leeg
-                        </li>
-                      )}
-                    </ul>
-                  </section>
-                );
-              })}
-            </div>
-            <p className="text-xs text-muted">
-              Klik op een kandidaat voor details · sleep tussen kolommen ·
-              gesprekken zijn alleen intern (geen mail).
-            </p>
-          </>
+                        </div>
+                      </li>
+                    ))}
+                    {column.length === 0 && (
+                      <li className="flex flex-1 items-center justify-center px-2 py-10 text-center text-xs text-muted">
+                        Sleep hierheen
+                      </li>
+                    )}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
         ))}
 
       {view === "agenda" &&
         (agendaLoading ? (
-          <p className="text-sm text-muted">Agenda laden…</p>
+          <p className="py-10 text-center text-sm text-muted">Agenda laden…</p>
         ) : afspraken.length === 0 ? (
-          <div className="border border-line bg-wash px-4 py-8 text-center">
-            <p className="text-sm text-muted">Nog geen gesprekken gepland.</p>
+          <div className="border border-line bg-white px-6 py-14 text-center">
+            <p className="font-display text-lg text-ink">Nog geen gesprekken</p>
+            <p className="mt-1 text-sm text-muted">
+              Plan een intern gesprek met een kandidaat.
+            </p>
             <button
               type="button"
               onClick={() => openPlan()}
-              className="mt-3 text-sm font-medium text-green-deeper hover:underline"
+              className="mt-5 bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper"
             >
-              Eerste gesprek plannen
+              Gesprek plannen
             </button>
           </div>
         ) : (
@@ -1175,43 +1304,53 @@ export function RecruitmentPanel() {
               return (
                 <li
                   key={a.id}
-                  className="flex flex-wrap items-start justify-between gap-3 px-4 py-3"
+                  className="group flex flex-wrap items-center justify-between gap-3 px-5 py-4 transition hover:bg-wash/60"
                 >
                   <button
                     type="button"
                     onClick={() => openKandidaat(a.sollicitatie_id)}
-                    className="min-w-0 flex-1 text-left hover:opacity-80"
+                    className="flex min-w-0 flex-1 items-start gap-3.5 text-left"
                   >
-                    <p className="text-sm font-medium text-ink">
-                      {formatDateTimeNl(a.start_at)}
-                      <span className="ml-2 inline-block border border-line px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        {a.soort === "fysiek" ? "Fysiek" : "Telefonisch"}
-                      </span>
-                    </p>
-                    <p className="mt-0.5 text-sm font-medium text-green-deeper">
-                      {k?.naam || "Onbekend"}
-                      {k?.functie ? (
-                        <span className="font-normal text-muted">
-                          {" "}
-                          · {k.functie}
+                    <div
+                      className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center text-xs font-semibold"
+                      style={{
+                        background: STATUS_TONE.gesprek_gepland.soft,
+                        color: STATUS_TONE.gesprek_gepland.text,
+                      }}
+                    >
+                      {initials(k?.naam || "?")}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-ink">
+                          {formatDateTimeNl(a.start_at)}
+                        </p>
+                        <span className="border border-line bg-wash px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          {a.soort === "fysiek" ? "Fysiek" : "Telefonisch"}
                         </span>
-                      ) : null}
-                    </p>
-                    {(k?.telefoon || k?.email) && (
-                      <p className="mt-0.5 text-xs text-muted">
-                        {[k.telefoon, k.email].filter(Boolean).join(" · ")}
+                      </div>
+                      <p className="mt-0.5 text-sm text-green-deeper">
+                        {k?.naam || "Onbekend"}
+                        {k?.functie ? (
+                          <span className="text-muted"> · {k.functie}</span>
+                        ) : null}
                       </p>
-                    )}
-                    {a.notitie && (
-                      <p className="mt-1 whitespace-pre-wrap text-xs text-muted">
-                        {a.notitie}
-                      </p>
-                    )}
+                      {(k?.telefoon || k?.email) && (
+                        <p className="mt-0.5 text-xs text-muted">
+                          {[k.telefoon, k.email].filter(Boolean).join(" · ")}
+                        </p>
+                      )}
+                      {a.notitie && (
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-muted">
+                          {a.notitie}
+                        </p>
+                      )}
+                    </div>
                   </button>
                   <button
                     type="button"
                     onClick={() => void deleteAfspraak(a.id)}
-                    className="shrink-0 text-xs text-[#9B2C2C] hover:underline"
+                    className="shrink-0 text-xs font-medium text-muted opacity-0 transition group-hover:opacity-100 hover:text-[#9B2C2C]"
                   >
                     Verwijderen
                   </button>
