@@ -9,6 +9,7 @@ import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   factuurBetaaltermijnDagen,
+  factuurDisplayStatus,
   factuurIsOverdue,
 } from "@/lib/factuur-betaling";
 import { StatusBadge } from "./StatusBadge";
@@ -463,6 +464,8 @@ export function FactuurPage() {
     ? creditVanRaw[0]
     : creditVanRaw;
   const isCredit = Boolean(factuur.credit_van_factuur_id);
+  const heeftCredit = credits.length > 0;
+  const displayStatus = factuurDisplayStatus(factuur, { heeftCredit });
   const creditSign = isCredit ? -1 : 1;
   const displayEx = creditSign * Math.abs(Number(factuur.bedrag_ex_btw) || 0);
   const displayBtw = creditSign * Math.abs(Number(factuur.btw_bedrag) || 0);
@@ -508,8 +511,13 @@ export function FactuurPage() {
 
       {/* Actiebalk */}
       <div className="mb-4 flex flex-wrap items-center gap-2 border border-line bg-white px-4 py-3">
-        <StatusBadge kind="factuur" value={factuur.status} />
-        {overdue ? (
+        <StatusBadge kind="factuur" value={displayStatus} />
+        {heeftCredit && factuur.status !== "vervallen" ? (
+          <span className="text-[11px] font-medium text-muted">
+            Was: {factuur.status.replace("_", " ")}
+          </span>
+        ) : null}
+        {overdue && !heeftCredit ? (
           <span className="text-[11px] font-semibold text-[#C45A12]">
             Verlopen
           </span>

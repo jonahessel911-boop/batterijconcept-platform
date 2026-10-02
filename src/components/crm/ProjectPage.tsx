@@ -14,6 +14,7 @@ import type {
   ProjectTaak,
 } from "@/types/database";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import { factuurDisplayStatus } from "@/lib/factuur-betaling";
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { appendStampedNotitie, parseProjectNotitieEntries } from "@/lib/lead-notitie";
@@ -2185,7 +2186,13 @@ export function ProjectPage() {
                           </p>
                         ) : (
                           <ul className="mt-2 divide-y divide-line border border-line">
-                            {facturen.map((f) => (
+                            {facturen
+                              .filter((f) => !f.credit_van_factuur_id)
+                              .map((f) => {
+                                const heeftCredit = facturen.some(
+                                  (c) => c.credit_van_factuur_id === f.id
+                                );
+                                return (
                               <li
                                 key={f.id}
                                 className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
@@ -2193,9 +2200,6 @@ export function ProjectPage() {
                                 <div className="min-w-0">
                                   <p className="text-sm font-semibold text-ink">
                                     {f.factuur_nummer}
-                                    {f.credit_van_factuur_id
-                                      ? " · Credit"
-                                      : ""}
                                   </p>
                                   <p className="text-[11px] text-muted">
                                     {formatEuro(f.bedrag_inc_btw)} ·{" "}
@@ -2205,7 +2209,9 @@ export function ProjectPage() {
                                 <div className="flex items-center gap-2">
                                   <StatusBadge
                                     kind="factuur"
-                                    value={f.status}
+                                    value={factuurDisplayStatus(f, {
+                                      heeftCredit,
+                                    })}
                                   />
                                   <Link
                                     href={`/facturen/${f.id}`}
@@ -2215,7 +2221,8 @@ export function ProjectPage() {
                                   </Link>
                                 </div>
                               </li>
-                            ))}
+                                );
+                              })}
                           </ul>
                         )}
                       </div>

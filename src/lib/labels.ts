@@ -183,12 +183,13 @@ export const afspraakStatusLabel: Record<AfspraakStatus, string> = {
   voltooid: "Voltooid",
 };
 
-export const factuurStatusLabel: Record<FactuurStatus, string> = {
+export const factuurStatusLabel: Record<FactuurStatus | "credit", string> = {
   concept: "Concept",
   verzonden: "Verzonden",
   betaald: "Betaald",
   deels_betaald: "Deels betaald",
   vervallen: "Vervallen",
+  credit: "Credit",
 };
 
 /** Tailwind classes voor status labels (strak, geen pills). Elke status eigen tint. */
@@ -345,6 +346,7 @@ export function statusTone(
       deels_betaald:
         "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
       vervallen: "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]",
+      credit: "border border-[#C45A12]/40 bg-[#FFF0E6] text-[#C45A12]",
     };
     return (
       factuur[value] ||

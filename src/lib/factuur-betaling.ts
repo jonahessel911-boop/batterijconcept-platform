@@ -71,6 +71,107 @@ export function factuurIsOpenstaand(status: string): boolean {
   return status === "verzonden" || status === "deels_betaald";
 }
 
+/**
+ * Weergavestatus: als er een creditfactuur bij hoort (of dit ís een credit),
+ * toon "credit" i.p.v. verzonden/betaald/vervallen — duidelijkheid in de lijst.
+ */
+export function factuurDisplayStatus(
+  factuur: { status: string; credit_van_factuur_id?: string | null },
+  opts?: { heeftCredit?: boolean }
+): string {
+  if (factuur.credit_van_factuur_id) return "credit";
+  if (opts?.heeftCredit) return "credit";
+  return factuur.status;
+}
+
+/** BTW-teken: creditfacturen verminderen af te dragen BTW. */
+export function factuurBtwSigned(factuur: {
+  btw_bedrag?: number | null;
+  credit_van_factuur_id?: string | null;
+}): number {
+  const btw = Number(factuur.btw_bedrag) || 0;
+  return factuur.credit_van_factuur_id ? -Math.abs(btw) : btw;
+}
+
+/**
+ * Bijdrage aan af-te-dragen / openstaande BTW.
+ * Credits (niet-concept) verlagen altijd de af te dragen BTW.
+ */
+export function factuurBtwBuckets(factuur: {
+  status: string;
+  btw_bedrag?: number | null;
+  bedrag_inc_btw?: number | null;
+  credit_van_factuur_id?: string | null;
+}): {
+  ontvangenBtw: number;
+  openstaandeBtw: number;
+  betaaldInc: number;
+  openstaandInc: number;
+  betaald: boolean;
+  open: boolean;
+} {
+  const empty = {
+    ontvangenBtw: 0,
+    openstaandeBtw: 0,
+    betaaldInc: 0,
+    openstaandInc: 0,
+    betaald: false,
+    open: false,
+  };
+  if (factuur.status === "concept") return empty;
+
+  const isCredit = Boolean(factuur.credit_van_factuur_id);
+  const btw = factuurBtwSigned(factuur);
+  const inc = isCredit
+    ? -Math.abs(Number(factuur.bedrag_inc_btw) || 0)
+    : Number(factuur.bedrag_inc_btw) || 0;
+
+  // Credit: zodra verstuurd/betaald → BTW aftrekken van af te dragen
+  if (isCredit) {
+    if (
+      factuur.status === "verzonden" ||
+      factuur.status === "deels_betaald" ||
+      factuur.status === "betaald"
+    ) {
+      return {
+        ontvangenBtw: btw,
+        openstaandeBtw: 0,
+        betaaldInc: factuur.status === "betaald" ? inc : 0,
+        openstaandInc: 0,
+        betaald: factuur.status === "betaald",
+        open: false,
+      };
+    }
+    return empty;
+  }
+
+  if (factuur.status === "vervallen") return empty;
+
+  if (factuur.status === "betaald") {
+    return {
+      ontvangenBtw: btw,
+      openstaandeBtw: 0,
+      betaaldInc: inc,
+      openstaandInc: 0,
+      betaald: true,
+      open: false,
+    };
+  }
+
+  if (factuur.status === "verzonden" || factuur.status === "deels_betaald") {
+    return {
+      ontvangenBtw: 0,
+      openstaandeBtw: btw,
+      betaaldInc: 0,
+      openstaandInc: inc,
+      betaald: false,
+      open: true,
+    };
+  }
+
+  return empty;
+}
+
 /** Verzonden + na vervaldatum + niet betaald → rood / nabellen. */
 export function factuurIsOverdue(opts: {
   status: string;

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Factuur, OfferteRegel } from "@/types/database";
 import { formatDateShort, formatEuro } from "@/lib/format";
-import { FACTUUR_BETAALTERMIJN_DAGEN } from "@/lib/factuur-betaling";
+import { FACTUUR_BETAALTERMIJN_DAGEN, factuurDisplayStatus } from "@/lib/factuur-betaling";
 import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
 import { StatusBadge } from "./StatusBadge";
 
@@ -430,12 +430,12 @@ export function ProjectFinancieelSection({
                           >
                             {f.factuur_nummer}
                           </Link>
-                          <StatusBadge kind="factuur" value={f.status} />
-                          {childCredits.length > 0 ? (
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-                              Creditfactuur
-                            </span>
-                          ) : null}
+                          <StatusBadge
+                            kind="factuur"
+                            value={factuurDisplayStatus(f, {
+                              heeftCredit: childCredits.length > 0,
+                            })}
+                          />
                         </div>
                         <p className="mt-0.5 text-xs text-muted">
                           {f.omschrijving || "—"} ·{" "}
@@ -553,7 +553,10 @@ export function ProjectFinancieelSection({
                                   >
                                     {c.factuur_nummer}
                                   </Link>
-                                  <StatusBadge kind="factuur" value={c.status} />
+                                  <StatusBadge
+                                    kind="factuur"
+                                    value={factuurDisplayStatus(c)}
+                                  />
                                 </div>
                                 <p className="mt-0.5 text-xs text-muted">
                                   {formatEuro(

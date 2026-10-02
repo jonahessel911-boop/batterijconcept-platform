@@ -6,19 +6,17 @@ import { useRouter } from "next/navigation";
 import type { Factuur } from "@/types/database";
 import { StatusBadge } from "./StatusBadge";
 import { formatDateShort, formatEuro } from "@/lib/format";
-import { factuurIsOverdue } from "@/lib/factuur-betaling";
+import {
+  factuurBtwBuckets,
+  factuurDisplayStatus,
+  factuurIsOverdue,
+} from "@/lib/factuur-betaling";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 
 type StatusFilter = "actief" | "alles" | "betaald" | "open" | "concept";
 
 function isCreditFactuur(f: Factuur): boolean {
   return Boolean(f.credit_van_factuur_id);
-}
-
-/** BTW-teken: credits verminderen ontvangen BTW. */
-function btwSigned(f: Factuur): number {
-  const btw = Number(f.btw_bedrag) || 0;
-  return isCreditFactuur(f) ? -Math.abs(btw) : btw;
 }
 
 export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
@@ -69,21 +67,13 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
     let openCount = 0;
 
     for (const f of facturen) {
-      if (f.status === "concept" || f.status === "vervallen") continue;
-      const btw = btwSigned(f);
-      const inc = isCreditFactuur(f)
-        ? -Math.abs(Number(f.bedrag_inc_btw) || 0)
-        : Number(f.bedrag_inc_btw) || 0;
-
-      if (f.status === "betaald") {
-        ontvangenBtw += btw;
-        betaaldInc += inc;
-        betaaldCount += 1;
-      } else if (f.status === "verzonden" || f.status === "deels_betaald") {
-        openstaandeBtw += btw;
-        openstaandInc += inc;
-        openCount += 1;
-      }
+      const b = factuurBtwBuckets(f);
+      ontvangenBtw += b.ontvangenBtw;
+      openstaandeBtw += b.openstaandeBtw;
+      betaaldInc += b.betaaldInc;
+      openstaandInc += b.openstaandInc;
+      if (b.betaald) betaaldCount += 1;
+      if (b.open) openCount += 1;
     }
 
     return {
@@ -116,9 +106,9 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
       <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
         {[
           {
-            label: "Ontvangen BTW",
+            label: "Af te dragen BTW",
             value: formatEuro(overview.ontvangenBtw),
-            hint: `${overview.betaaldCount} betaald`,
+            hint: `${overview.betaaldCount} betaald · credits verlagen`,
             accent: true,
           },
           {
@@ -190,6 +180,10 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
           <div className="crm-card-list flex md:hidden">
             {filtered.map((f) => {
               const overdue = factuurIsOverdue(f);
+              const heeftCredit = (creditsByParent.get(f.id) || []).length > 0;
+              const displayStatus = factuurDisplayStatus(f, {
+                heeftCredit,
+              });
               return (
                 <article
                   key={f.id}
@@ -210,12 +204,9 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
                         </p>
                         <p className="mt-0.5 font-mono text-[11px] font-semibold text-green-dark">
                           {f.factuur_nummer}
-                          {(creditsByParent.get(f.id) || []).length > 0
-                            ? " · Creditfactuur"
-                            : ""}
                         </p>
                       </div>
-                      <StatusBadge kind="factuur" value={f.status} />
+                      <StatusBadge kind="factuur" value={displayStatus} />
                     </div>
                     <p className="mt-2 text-sm font-medium text-ink">
                       {formatEuro(f.bedrag_inc_btw)}
@@ -267,6 +258,11 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
               <tbody>
                 {filtered.map((f) => {
                   const overdue = factuurIsOverdue(f);
+                  const heeftCredit =
+                    (creditsByParent.get(f.id) || []).length > 0;
+                  const displayStatus = factuurDisplayStatus(f, {
+                    heeftCredit,
+                  });
                   return (
                     <tr
                       key={f.id}
@@ -278,11 +274,6 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
                     >
                       <td className="whitespace-nowrap font-mono text-[11px] font-semibold text-green-dark">
                         {f.factuur_nummer}
-                        {(creditsByParent.get(f.id) || []).length > 0 ? (
-                          <span className="ml-1 font-sans text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-                            Creditfactuur
-                          </span>
-                        ) : null}
                       </td>
                       <td className="whitespace-nowrap">
                         <Link
@@ -300,7 +291,7 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
                         {f.omschrijving || "—"}
                       </td>
                       <td>
-                        <StatusBadge kind="factuur" value={f.status} />
+                        <StatusBadge kind="factuur" value={displayStatus} />
                       </td>
                       <td className="whitespace-nowrap font-medium">
                         {formatEuro(f.bedrag_inc_btw)}
