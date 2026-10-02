@@ -2,6 +2,11 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { normalizeRol } from "@/lib/rollen";
+import {
+  clearCrmShellCache,
+  writeCrmSessionCache,
+} from "@/lib/crm-shell-cache";
 
 export function LoginForm() {
   const router = useRouter();
@@ -25,6 +30,15 @@ export function LoginForm() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inloggen mislukt");
+      clearCrmShellCache();
+      if (data.adviseur) {
+        writeCrmSessionCache({
+          id: data.adviseur.id,
+          naam: data.adviseur.naam,
+          email: (data.adviseur.email || email).trim(),
+          rol: normalizeRol(data.adviseur.rol),
+        });
+      }
       router.replace(next.startsWith("/") ? next : "/");
       router.refresh();
     } catch (err) {

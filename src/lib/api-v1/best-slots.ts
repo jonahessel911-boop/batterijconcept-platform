@@ -22,7 +22,7 @@ import {
   uniqueAddresses,
   type FastDirectionStop,
 } from "@/lib/fast-direction";
-import { AMSTERDAM_TZ, adresRegel, formatSlotLabelSpokenNl } from "@/lib/format";
+import { AMSTERDAM_TZ, adresRegel, formatSlotLabelNl, formatSlotLabelSpokenNl } from "@/lib/format";
 import { generateAvailableSlots } from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
 import { loadAdviseurConversieMap } from "@/lib/adviseur-conversie";
@@ -88,11 +88,13 @@ export function decodeSlotId(slotId: string): SlotTokenPayload | null {
 }
 
 function labelNl(iso: string): string {
+  // Spoken voor TTS / Fonio
   return formatSlotLabelSpokenNl(iso);
 }
 
 function labelKort(iso: string): string {
-  return formatSlotLabelSpokenNl(iso, { kort: true });
+  // Cijfers voor CRM-UI: "zat 3 okt. om 19:00"
+  return formatSlotLabelNl(iso, { kort: true });
 }
 
 function hourAmsterdam(iso: string): number {

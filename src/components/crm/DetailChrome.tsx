@@ -5,10 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CrmTab } from "@/types/database";
 import { magTab } from "@/lib/rollen";
-import { usesCrmSidebar } from "@/lib/admin-adviseur";
+import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import { useCrmSession } from "@/hooks/useCrmSession";
 import { CrmHeader } from "./CrmHeader";
-import { TabNav } from "./TabNav";
 import { CrmSidebar } from "./CrmSidebar";
 
 export function DetailShell({
@@ -25,7 +24,6 @@ export function DetailShell({
 }) {
   const router = useRouter();
   const { session, ready, rol, visibleTabs } = useCrmSession();
-  const sidebarMode = usesCrmSidebar(session?.email);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -45,6 +43,7 @@ export function DetailShell({
 
   async function logout() {
     try {
+      clearCrmShellCache();
       await fetch("/api/auth/login", { method: "DELETE" });
     } catch {
       /* ignore */
@@ -66,20 +65,12 @@ export function DetailShell({
         tabs={visibleTabs}
         userName={session?.naam}
         showBekijkAls={false}
-        hideTabNav={sidebarMode}
-        onOpenSidebar={
-          sidebarMode ? () => setSidebarMobileOpen(true) : undefined
-        }
+        hideTabNav
+        onOpenSidebar={() => setSidebarMobileOpen(true)}
       />
 
-      <div
-        className={
-          sidebarMode
-            ? "flex w-full flex-1"
-            : "mx-auto flex w-full max-w-[1440px]"
-        }
-      >
-        {sidebarMode && ready ? (
+      <div className="flex min-w-0 w-full flex-1">
+        {ready ? (
           <CrmSidebar
             active={activeTab}
             onChange={changeTab}
@@ -105,19 +96,6 @@ export function DetailShell({
         ) : null}
 
         <div className="min-w-0 flex-1">
-          {!sidebarMode ? (
-            <div className="border-b border-line bg-white">
-              {ready && visibleTabs.length > 0 ? (
-                <TabNav
-                  active={activeTab}
-                  onChange={changeTab}
-                  tabs={visibleTabs}
-                />
-              ) : (
-                <div className="hidden h-11 md:block" aria-hidden />
-              )}
-            </div>
-          ) : null}
           <main className="px-3 py-4 sm:px-6 sm:py-8">{children}</main>
         </div>
       </div>

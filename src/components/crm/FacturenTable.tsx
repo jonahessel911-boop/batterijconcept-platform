@@ -31,21 +31,34 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
   }
 
   const filtered = useMemo(() => {
+    // Creditfacturen staan onder de oorspronkelijke factuur — niet als aparte rij
+    const base = facturen.filter((f) => !isCreditFactuur(f));
     switch (filter) {
       case "actief":
-        return facturen.filter((f) => f.status !== "concept");
+        return base.filter((f) => f.status !== "concept");
       case "betaald":
-        return facturen.filter((f) => f.status === "betaald");
+        return base.filter((f) => f.status === "betaald");
       case "open":
-        return facturen.filter(
+        return base.filter(
           (f) => f.status === "verzonden" || f.status === "deels_betaald"
         );
       case "concept":
-        return facturen.filter((f) => f.status === "concept");
+        return base.filter((f) => f.status === "concept");
       default:
-        return facturen;
+        return base;
     }
   }, [facturen, filter]);
+
+  const creditsByParent = useMemo(() => {
+    const map = new Map<string, Factuur[]>();
+    for (const f of facturen) {
+      if (!f.credit_van_factuur_id) continue;
+      const list = map.get(f.credit_van_factuur_id) || [];
+      list.push(f);
+      map.set(f.credit_van_factuur_id, list);
+    }
+    return map;
+  }, [facturen]);
 
   const overview = useMemo(() => {
     let ontvangenBtw = 0;
@@ -83,7 +96,9 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
     };
   }, [facturen]);
 
-  const conceptCount = facturen.filter((f) => f.status === "concept").length;
+  const conceptCount = facturen.filter(
+    (f) => f.status === "concept" && !isCreditFactuur(f)
+  ).length;
 
   const filters: { id: StatusFilter; label: string }[] = [
     { id: "actief", label: "Zonder concepten" },
@@ -195,7 +210,9 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
                         </p>
                         <p className="mt-0.5 font-mono text-[11px] font-semibold text-green-dark">
                           {f.factuur_nummer}
-                          {isCreditFactuur(f) ? " · Credit" : ""}
+                          {(creditsByParent.get(f.id) || []).length > 0
+                            ? " · Creditfactuur"
+                            : ""}
                         </p>
                       </div>
                       <StatusBadge kind="factuur" value={f.status} />
@@ -261,9 +278,9 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
                     >
                       <td className="whitespace-nowrap font-mono text-[11px] font-semibold text-green-dark">
                         {f.factuur_nummer}
-                        {isCreditFactuur(f) ? (
-                          <span className="ml-1 font-sans text-[10px] font-semibold text-muted">
-                            Credit
+                        {(creditsByParent.get(f.id) || []).length > 0 ? (
+                          <span className="ml-1 font-sans text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+                            Creditfactuur
                           </span>
                         ) : null}
                       </td>

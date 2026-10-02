@@ -717,6 +717,19 @@ export interface Factuur {
   offertes?: Pick<Offerte, "id" | "offerte_nummer"> | null;
   /** Join: oorspronkelijke factuur bij credit */
   credit_van?: Pick<Factuur, "id" | "factuur_nummer"> | null;
+  /** Creditfacturen die bij deze factuur horen (client-side geladen) */
+  credits?: Pick<
+    Factuur,
+    | "id"
+    | "factuur_nummer"
+    | "status"
+    | "bedrag_inc_btw"
+    | "btw_bedrag"
+    | "bedrag_ex_btw"
+    | "factuurdatum"
+    | "omschrijving"
+    | "created_at"
+  >[];
 }
 
 export interface WebhookLeadPayload {

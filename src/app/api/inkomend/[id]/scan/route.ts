@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
+import { magInkomend, normalizeRol } from "@/lib/rollen";
 import {
   openaiConfigured,
   scanAndPersistInkomendeFactuur,
@@ -19,7 +19,7 @@ export const maxDuration = 90;
 
 type Ctx = { params: Promise<{ id: string }> };
 
-async function requireAdmin() {
+async function requireInkomendAccess() {
   const jar = await cookies();
   const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
   if (!session) {
@@ -27,9 +27,12 @@ async function requireAdmin() {
       error: NextResponse.json({ error: "Niet ingelogd" }, { status: 401 }),
     };
   }
-  if (normalizeRol(session.rol) !== "admin") {
+  if (!magInkomend(normalizeRol(session.rol))) {
     return {
-      error: NextResponse.json({ error: "Alleen admin" }, { status: 403 }),
+      error: NextResponse.json(
+        { error: "Geen toegang tot inkomende facturen" },
+        { status: 403 }
+      ),
     };
   }
   return { session };
@@ -37,7 +40,7 @@ async function requireAdmin() {
 
 /** POST /api/inkomend/[id]/scan — AI-scan bijlagen → vul bedragen/datum/leverancier */
 export async function POST(_req: NextRequest, ctx: Ctx) {
-  const auth = await requireAdmin();
+  const auth = await requireInkomendAccess();
   if (auth.error) return auth.error;
 
   if (!openaiConfigured()) {

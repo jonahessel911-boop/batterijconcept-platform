@@ -13,10 +13,9 @@ import type {
   Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
-import { findAdminAdviseurId, usesCrmSidebar } from "@/lib/admin-adviseur";
+import { findAdminAdviseurId } from "@/lib/admin-adviseur";
 import { errMessage } from "@/lib/errors";
 import { CrmHeader } from "./CrmHeader";
-import { TabNav } from "./TabNav";
 import { CrmSidebar } from "./CrmSidebar";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 import {
@@ -25,6 +24,7 @@ import {
   readCrmSessionCache,
   writeCrmBootstrapCache,
   writeCrmSessionCache,
+  clearCrmShellCache,
 } from "@/lib/crm-shell-cache";
 import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
@@ -157,7 +157,6 @@ export function CrmShell() {
     : null;
   const visibleTabIds = userRol ? tabsVoorRol(userRol) : [];
   const visibleTabs = CRM_TABS.filter((t) => visibleTabIds.includes(t.id));
-  const sidebarMode = usesCrmSidebar(sessionUser?.email);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,7 +172,7 @@ export function CrmShell() {
           const next = {
             id: data.adviseur.id,
             naam: data.adviseur.naam,
-            email: data.adviseur.email,
+            email: (data.adviseur.email || "").trim(),
             rol: normalizeRol(data.adviseur.rol),
           };
           setSessionUser(next);
@@ -846,12 +845,11 @@ export function CrmShell() {
         showBekijkAls={
           Boolean(userRol && magBekijkAls(userRol)) && tab !== "rapportage"
         }
-        hideTabNav={sidebarMode}
-        onOpenSidebar={
-          sidebarMode ? () => setSidebarMobileOpen(true) : undefined
-        }
+        hideTabNav
+        onOpenSidebar={() => setSidebarMobileOpen(true)}
         userName={sessionUser?.naam}
         onLogout={() => {
+          clearCrmShellCache();
           void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
             router.replace("/login");
             router.refresh();
@@ -859,40 +857,32 @@ export function CrmShell() {
         }}
       />
 
-      <div
-        className={
-          sidebarMode
-            ? "flex w-full flex-1"
-            : "mx-auto flex w-full max-w-[1440px] flex-1"
-        }
-      >
-        {sidebarMode ? (
-          <CrmSidebar
-            active={tab}
-            onChange={changeTab}
-            counts={counts}
-            allowedTabs={visibleTabIds}
-            collapsed={sidebarCollapsed}
-            onToggleCollapsed={() => {
-              setSidebarCollapsed((v) => {
-                const next = !v;
-                try {
-                  localStorage.setItem(
-                    "bc_crm_sidebar_rail_v1",
-                    next ? "1" : "0"
-                  );
-                } catch {
-                  /* ignore */
-                }
-                return next;
-              });
-            }}
-            mobileOpen={sidebarMobileOpen}
-            onMobileClose={() => setSidebarMobileOpen(false)}
-          />
-        ) : null}
+      <div className="flex min-w-0 w-full flex-1">
+        <CrmSidebar
+          active={tab}
+          onChange={changeTab}
+          counts={counts}
+          allowedTabs={visibleTabIds}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => {
+            setSidebarCollapsed((v) => {
+              const next = !v;
+              try {
+                localStorage.setItem(
+                  "bc_crm_sidebar_rail_v1",
+                  next ? "1" : "0"
+                );
+              } catch {
+                /* ignore */
+              }
+              return next;
+            });
+          }}
+          mobileOpen={sidebarMobileOpen}
+          onMobileClose={() => setSidebarMobileOpen(false)}
+        />
 
-        <main className="flex min-w-0 flex-1 flex-col px-3 py-4 sm:px-6 sm:py-8">
+        <main className="flex min-w-0 flex-1 flex-col px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8">
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -933,7 +923,7 @@ export function CrmShell() {
           </div>
         )}
 
-        <div className="flex flex-1 flex-col overflow-hidden border border-line bg-white">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border border-line bg-white">
           {userRol === "installateur" ? (
             <div className="px-6 py-16 text-center">
               <p className="font-display text-lg font-semibold text-ink">
@@ -946,15 +936,7 @@ export function CrmShell() {
             </div>
           ) : (
             <>
-          {!sidebarMode ? (
-            <TabNav
-              active={tab}
-              onChange={changeTab}
-              counts={counts}
-              tabs={visibleTabs}
-            />
-          ) : null}
-          <div className="flex-1 overflow-auto">
+          <div className="min-h-0 min-w-0 flex-1 overflow-auto">
             {(!sessionReady || !userRol) && !sessionUser ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : loading &&

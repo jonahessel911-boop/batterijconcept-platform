@@ -215,7 +215,7 @@ export async function POST(req: NextRequest) {
     const token = await createSessionToken({
       adviseurId: adviseur.id,
       naam: adviseur.naam,
-      email: adviseur.email || email,
+      email: (adviseur.email || email).trim(),
       rol,
     });
 
@@ -224,7 +224,7 @@ export async function POST(req: NextRequest) {
       adviseur: {
         id: adviseur.id,
         naam: adviseur.naam,
-        email: adviseur.email,
+        email: (adviseur.email || email).trim(),
         rol,
       },
     });
@@ -246,12 +246,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
-  // Rol live uit DB (wijzigingen in Instellingen meteen actief)
+  // Rol + e-mail live uit DB (wijzigingen in Instellingen meteen actief)
   let rol = normalizeRol(session.rol);
+  let data: { rol?: string | null; naam?: string; email?: string | null } | null =
+    null;
   try {
     const sb = getSupabaseAdmin();
-    let data: { rol?: string | null; naam?: string; email?: string | null } | null =
-      null;
     const withRol = await sb
       .from("adviseurs")
       .select("rol, naam, email")
@@ -302,12 +302,19 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const liveEmail = (
+    data?.email ||
+    session.email ||
+    ""
+  ).trim();
+  const liveNaam = (data?.naam || session.naam || "").trim() || session.naam;
+
   return NextResponse.json({
     authenticated: true,
     adviseur: {
       id: session.adviseurId,
-      naam: session.naam,
-      email: session.email,
+      naam: liveNaam,
+      email: liveEmail,
       rol,
     },
   });

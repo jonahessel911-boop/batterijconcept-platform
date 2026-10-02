@@ -74,6 +74,8 @@ export function FactuurPage() {
     String(FACTUUR_BETAALTERMIJN_DAGEN)
   );
   const [showCredit, setShowCredit] = useState(false);
+  const [credits, setCredits] = useState<Factuur[]>([]);
+  const [creditBusy, setCreditBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,19 +101,25 @@ export function FactuurPage() {
         setNotFound(true);
       } else {
         const fac = data as Factuur;
+
+        // Creditfacturen openen via de oorspronkelijke factuur
+        if (fac.credit_van_factuur_id) {
+          router.replace(`/facturen/${fac.credit_van_factuur_id}`);
+          return;
+        }
+
         const leadData = (fac.leads as FactuurLead | null) || null;
         setLead(leadData);
 
-        if (fac.credit_van_factuur_id) {
-          const { data: creditVan } = await sb
-            .from("facturen")
-            .select("id, factuur_nummer")
-            .eq("id", fac.credit_van_factuur_id)
-            .maybeSingle();
-          if (creditVan) {
-            fac.credit_van = creditVan as Factuur["credit_van"];
-          }
-        }
+        const { data: creditRows } = await sb
+          .from("facturen")
+          .select(
+            "id, factuur_nummer, status, bedrag_inc_btw, btw_bedrag, bedrag_ex_btw, factuurdatum, omschrijving, created_at, credit_van_factuur_id"
+          )
+          .eq("credit_van_factuur_id", fac.id)
+          .order("created_at", { ascending: true });
+
+        setCredits((creditRows || []) as Factuur[]);
         setFactuur(fac);
         setEditBedrag(
           Number(fac.bedrag_inc_btw).toLocaleString("nl-NL", {
@@ -149,7 +157,7 @@ export function FactuurPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, router]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => void load());
@@ -352,11 +360,79 @@ export function FactuurPage() {
       }
       const created = data.factuur as Factuur;
       setShowCredit(false);
-      setMsg(`Creditfactuur ${created.factuur_nummer} als concept aangemaakt.`);
-      router.push(`/facturen/${created.id}`);
+      setMsg(
+        `Creditfactuur ${created.factuur_nummer} aangemaakt — staat hieronder.`
+      );
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Creditfactuur mislukt");
+    } finally {
       setBusy(null);
+    }
+  }
+
+  async function downloadCreditPdf(credit: Factuur) {
+    setCreditBusy(`pdf:${credit.id}`);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${credit.id}/pdf`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data as { error?: string }).error || "PDF downloaden mislukt"
+        );
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `credit-${credit.factuur_nummer}${
+        credit.status === "concept" ? "-concept" : ""
+      }.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg(`Creditfactuur ${credit.factuur_nummer} gedownload.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "PDF mislukt");
+    } finally {
+      setCreditBusy(null);
+    }
+  }
+
+  async function sendCredit(credit: Factuur) {
+    if (
+      !confirm(
+        `Creditfactuur ${credit.factuur_nummer} mailen naar ${
+          lead?.email || factuur?.leads?.email || "de klant"
+        }?`
+      )
+    ) {
+      return;
+    }
+    setCreditBusy(`send:${credit.id}`);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${credit.id}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verzenden mislukt"
+        );
+      }
+      setMsg(`Creditfactuur ${credit.factuur_nummer} is gemaild.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verzenden mislukt");
+    } finally {
+      setCreditBusy(null);
     }
   }
 
@@ -445,16 +521,6 @@ export function FactuurPage() {
         ) : null}
 
         <div className="ml-auto flex flex-wrap gap-2">
-          {canCredit ? (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => setShowCredit((v) => !v)}
-              className="border border-line bg-white px-3.5 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
-            >
-              Creditfactuur maken
-            </button>
-          ) : null}
           <button
             type="button"
             disabled={busy !== null}
@@ -488,37 +554,6 @@ export function FactuurPage() {
           </button>
         </div>
       </div>
-
-      {showCredit && canCredit ? (
-        <div className="mb-4 border border-line bg-white px-4 py-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Creditfactuur bij {factuur.factuur_nummer}
-          </p>
-          <p className="mt-1.5 text-sm text-muted">
-            Maakt een concept-creditfactuur voor hetzelfde bedrag (
-            {formatEuro(factuur.bedrag_inc_btw)}). Op de PDF staan de bedragen
-            als −bedrag. Bij versturen vervalt de openstaande oorspronkelijke
-            factuur — er hoeft niets meer te worden betaald.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => void createCredit()}
-              className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-            >
-              {busy === "credit" ? "Aanmaken…" : "Creditconcept maken"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCredit(false)}
-              className="border border-line px-4 py-2 text-sm font-semibold text-ink hover:bg-wash"
-            >
-              Annuleren
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
         {/* Factuurdocument */}
@@ -880,6 +915,129 @@ export function FactuurPage() {
           </section>
         </aside>
       </div>
+
+      {/* Creditfacturen blijven onder de oorspronkelijke factuur */}
+      {!isCredit ? (
+        <section className="mt-4 border border-line bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 sm:px-5">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#C45A12]">
+                Creditfactuur
+              </p>
+              <p className="mt-0.5 text-sm text-muted">
+                {credits.length === 0
+                  ? "Nog geen creditfactuur bij deze factuur."
+                  : `${credits.length} creditfactuur${
+                      credits.length === 1 ? "" : "en"
+                    } onder ${factuur.factuur_nummer}.`}
+              </p>
+            </div>
+            {canCredit ? (
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => setShowCredit((v) => !v)}
+                className="border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+              >
+                Creditfactuur maken
+              </button>
+            ) : null}
+          </div>
+
+          {showCredit && canCredit ? (
+            <div className="border-b border-line px-4 py-4 sm:px-5">
+              <p className="text-sm text-muted">
+                Maakt een concept-creditfactuur voor hetzelfde bedrag (
+                {formatEuro(factuur.bedrag_inc_btw)}). Die blijft hieronder
+                staan — de oorspronkelijke factuur verdwijnt niet. Bij
+                versturen van de credit vervalt de openstaande
+                oorspronkelijke factuur.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void createCredit()}
+                  className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                >
+                  {busy === "credit" ? "Aanmaken…" : "Creditconcept maken"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCredit(false)}
+                  className="border border-line px-4 py-2 text-sm font-semibold text-ink hover:bg-wash"
+                >
+                  Annuleren
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {credits.length > 0 ? (
+            <ul className="divide-y divide-line">
+              {credits.map((c) => {
+                const busyKeyPdf = creditBusy === `pdf:${c.id}`;
+                const busyKeySend = creditBusy === `send:${c.id}`;
+                return (
+                  <li
+                    key={c.id}
+                    className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#C45A12]">
+                          Creditfactuur
+                        </span>
+                        <StatusBadge kind="factuur" value={c.status} />
+                        <span className="font-mono text-xs font-semibold text-green-dark">
+                          {c.factuur_nummer}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-sm text-ink">
+                        {c.omschrijving ||
+                          `Credit bij ${factuur.factuur_nummer}`}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        {formatEuro(-Math.abs(Number(c.bedrag_inc_btw) || 0))}{" "}
+                        incl. · btw{" "}
+                        {formatEuro(-Math.abs(Number(c.btw_bedrag) || 0))} ·{" "}
+                        {formatDateShort(c.factuurdatum)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={creditBusy !== null}
+                        onClick={() => void downloadCreditPdf(c)}
+                        className="border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                      >
+                        {busyKeyPdf ? "PDF…" : "PDF downloaden"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={creditBusy !== null || !klantEmail}
+                        title={
+                          klantEmail
+                            ? `Mail naar ${klantEmail}`
+                            : "Lead heeft geen e-mail"
+                        }
+                        onClick={() => void sendCredit(c)}
+                        className="bg-orange px-3 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+                      >
+                        {busyKeySend
+                          ? "Verzenden…"
+                          : c.status === "concept"
+                            ? "Versturen"
+                            : "Opnieuw versturen"}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
     </DetailShell>
   );
 }

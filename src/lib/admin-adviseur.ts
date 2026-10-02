@@ -5,11 +5,15 @@ export function adminEmail(): string {
   return (process.env.ADMIN_EMAIL || "admin@batterijconcept.nl").toLowerCase();
 }
 
-/** Alleen dit account krijgt de georganiseerde CRM-sidebar i.p.v. tabs. */
+/** Bekende admin-e-mail (o.a. rechten / catch-all), geen UI-gate meer. */
 export const CRM_SIDEBAR_EMAIL = "jona@batterijconcept.nl";
 
-export function usesCrmSidebar(email: string | null | undefined): boolean {
-  return email?.trim().toLowerCase() === CRM_SIDEBAR_EMAIL;
+/** CRM gebruikt overal de sidebar i.p.v. de oude tab-balk. */
+export function usesCrmSidebar(
+  _email?: string | null,
+  _rol?: string | null
+): boolean {
+  return true;
 }
 
 /** E-mails die altijd CRM-rol admin krijgen (ook als DB-rol ontbreekt/verkeerd is). */

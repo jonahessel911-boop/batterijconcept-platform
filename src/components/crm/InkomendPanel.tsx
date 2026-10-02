@@ -15,6 +15,39 @@ import {
 } from "@/lib/inkomende-facturen";
 import { formatDateShort, formatDateTimeNl } from "@/lib/format";
 
+function FolderIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" />
+    </svg>
+  );
+}
+
+function FileIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+    </svg>
+  );
+}
+
 function formatBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";
   if (n < 1024) return `${n} B`;
@@ -30,6 +63,33 @@ function formatEuro(n: number | null | undefined): string {
   }).format(n);
 }
 
+function waarvoorVan(item: InkomendeFactuur): string | null {
+  const n = item.notitie?.trim();
+  if (!n) return null;
+  const line = n
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.toLowerCase().startsWith("waarvoor:"));
+  if (line) return line.replace(/^waarvoor:\s*/i, "").trim() || null;
+  // Fallback: eerste regel zonder meta-prefix
+  const first = n.split("\n")[0]?.trim();
+  if (
+    first &&
+    !/^factuurnr:/i.test(first) &&
+    !/^boekperiode:/i.test(first) &&
+    !/^btw:/i.test(first)
+  ) {
+    return first;
+  }
+  return null;
+}
+
+function boekperiodeLabel(item: InkomendeFactuur): string {
+  const ymd = inkomendBoekDatum(item);
+  const key = inkomendPeriodeKey(ymd, "maand");
+  return inkomendPeriodeLabel(key, "maand");
+}
+
 const STATUS_TONE: Record<InkomendeFactuurStatus, string> = {
   nieuw: "bg-[#E8F0F6] text-[#1A4A6E]",
   in_behandeling: "bg-[#FEF7E6] text-[#854D0E]",
@@ -43,6 +103,7 @@ type PeriodeGroup = {
   label: string;
   items: InkomendeFactuur[];
   totalInc: number;
+  totalBtw: number;
 };
 
 export function InkomendPanel() {
@@ -53,9 +114,11 @@ export function InkomendPanel() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [periodeMode, setPeriodeMode] =
     useState<InkomendPeriodeMode>("maand");
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [scanningId, setScanningId] = useState<string | null>(null);
+  const [scanAllBusy, setScanAllBusy] = useState(false);
 
   const selected = items.find((i) => i.id === selectedId) || null;
 
@@ -101,15 +164,33 @@ export function InkomendPanel() {
           (sum, i) => sum + (i.bedrag_inc_btw ?? i.bedrag_ex_btw ?? 0),
           0
         );
+        const totalBtw = sorted.reduce(
+          (sum, i) => sum + (i.btw_bedrag ?? 0),
+          0
+        );
         return {
           key,
           label: inkomendPeriodeLabel(key, periodeMode),
           items: sorted,
           totalInc,
+          totalBtw,
         };
       })
       .sort((a, b) => b.key.localeCompare(a.key));
   }, [items, periodeMode]);
+
+  // Open nieuwste map standaard
+  useEffect(() => {
+    if (!groups.length) return;
+    setOpenFolders((prev) => {
+      if (Object.keys(prev).length > 0) return prev;
+      return { [groups[0].key]: true };
+    });
+  }, [groups]);
+
+  function toggleFolder(key: string) {
+    setOpenFolders((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   async function setStatus(id: string, status: InkomendeFactuurStatus) {
     setBusyId(id);
@@ -146,14 +227,24 @@ export function InkomendPanel() {
         throw new Error(data.detail || data.error || "AI-scan mislukt");
       }
       const updated = data.item as InkomendeFactuur;
+      const extract = data.extract as
+        | { boekperiode?: string; omschrijving?: string }
+        | undefined;
       setItems((prev) =>
         prev.map((i) => (i.id === id ? { ...i, ...updated } : i))
       );
+      const periode =
+        extract?.boekperiode ||
+        (updated.factuurdatum
+          ? updated.factuurdatum.slice(0, 7)
+          : null);
       setInfo(
         data.booked
-          ? `Gescand en geboekt op ${updated.factuurdatum || "periode"}.`
+          ? `Gescand en geboekt${periode ? ` op ${periode}` : ""}${
+              extract?.omschrijving ? ` · ${extract.omschrijving}` : ""
+            }.`
           : `Gescand — controleer de gegevens${
-              updated.factuurdatum ? ` (${updated.factuurdatum})` : ""
+              periode ? ` (periode ${periode})` : ""
             }.`
       );
     } catch (e) {
@@ -163,13 +254,54 @@ export function InkomendPanel() {
     }
   }
 
+  async function scanUnscanned() {
+    const todo = items.filter(
+      (i) =>
+        !i.factuurdatum &&
+        (i.bestanden?.length || 0) > 0 &&
+        (i.status === "nieuw" || i.status === "in_behandeling")
+    );
+    if (!todo.length) {
+      setInfo("Geen openstaande posten zonder factuurdatum om te scannen.");
+      return;
+    }
+    setScanAllBusy(true);
+    setError(null);
+    setInfo(null);
+    let ok = 0;
+    let fail = 0;
+    for (const item of todo.slice(0, 15)) {
+      try {
+        const res = await fetch(`/api/inkomend/${item.id}/scan`, {
+          method: "POST",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          fail += 1;
+          continue;
+        }
+        const updated = data.item as InkomendeFactuur;
+        setItems((prev) =>
+          prev.map((i) => (i.id === item.id ? { ...i, ...updated } : i))
+        );
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setScanAllBusy(false);
+    setInfo(
+      `AI-scan klaar: ${ok} gelukt${fail ? `, ${fail} mislukt` : ""}.`
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
         <div>
           <p className="text-sm text-muted">
-            Facturen/bonnetjes via Postmark · AI leest PDF/foto uit en boekt op
-            factuurdatum.
+            AI leest foto/PDF uit (btw, totaal, waarvoor) en boekt in de juiste
+            maandmap.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -184,7 +316,10 @@ export function InkomendPanel() {
               <button
                 key={id}
                 type="button"
-                onClick={() => setPeriodeMode(id)}
+                onClick={() => {
+                  setPeriodeMode(id);
+                  setOpenFolders({});
+                }}
                 className={[
                   "px-3 py-1.5 text-sm font-medium transition",
                   periodeMode === id
@@ -209,6 +344,14 @@ export function InkomendPanel() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            disabled={scanAllBusy || loading}
+            onClick={() => void scanUnscanned()}
+            className="border border-green bg-green-soft px-3 py-2 text-sm font-semibold text-green-deeper hover:bg-green hover:text-white disabled:opacity-50"
+          >
+            {scanAllBusy ? "Scannen…" : "Scan openstaand"}
+          </button>
           <button
             type="button"
             onClick={() => void load()}
@@ -241,113 +384,150 @@ export function InkomendPanel() {
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-          <div className="flex flex-col gap-3">
-            {groups.map((group) => (
-              <details
-                key={group.key}
-                open={group.key === groups[0]?.key}
-                className="group border border-line bg-white"
-              >
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:content-none hover:bg-wash/50 sm:px-5 [&::-webkit-details-marker]:hidden">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="text-ink group-open:hidden">▶</span>
-                    <span className="hidden text-ink group-open:inline">▼</span>
-                    <div className="min-w-0">
-                      <p className="font-display text-sm font-semibold capitalize text-ink">
-                        {group.label}
-                      </p>
-                      <p className="text-xs text-muted">
-                        {group.items.length} stuk
-                        {group.items.length === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="shrink-0 text-sm font-semibold tabular-nums text-green-deeper">
-                    {formatEuro(group.totalInc)}
-                  </p>
-                </summary>
+          <div className="overflow-hidden border border-line bg-white">
+            <div className="border-b border-line bg-wash/40 px-4 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Mappen · {periodeMode}
+              </p>
+            </div>
+            <ul className="divide-y divide-line">
+              {groups.map((group) => {
+                const open = Boolean(openFolders[group.key]);
+                return (
+                  <li key={group.key}>
+                    <button
+                      type="button"
+                      onClick={() => toggleFolder(group.key)}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-wash"
+                    >
+                      <span className="text-[#CA8A04]">
+                        <FolderIcon />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium capitalize text-ink">
+                          {group.label}
+                        </span>
+                        <span className="text-[11px] text-muted">
+                          Map · {group.items.length} stuk
+                          {group.items.length === 1 ? "" : "s"}
+                          {group.totalBtw > 0
+                            ? ` · btw ${formatEuro(group.totalBtw)}`
+                            : ""}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-green-deeper">
+                        {formatEuro(group.totalInc)}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted">
+                        {open ? "▾" : "▸"}
+                      </span>
+                    </button>
 
-                <ul className="divide-y divide-line border-t border-line">
-                  {group.items.map((item) => {
-                    const active = item.id === selectedId;
-                    const nFiles = item.bestanden?.length || 0;
-                    return (
-                      <li key={item.id}>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedId(item.id)}
-                          className={[
-                            "flex w-full flex-col gap-1 px-4 py-3 text-left transition sm:px-5",
-                            active ? "bg-green-soft/60" : "hover:bg-wash/60",
-                          ].join(" ")}
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              className={[
-                                "px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                                STATUS_TONE[item.status],
-                              ].join(" ")}
-                            >
-                              {INKOMENDE_FACTUUR_STATUS_LABEL[item.status]}
-                            </span>
-                            <span className="text-xs tabular-nums text-muted">
-                              {item.factuurdatum
-                                ? formatDateShort(item.factuurdatum)
-                                : formatDateTimeNl(
-                                    item.received_at || item.created_at
-                                  )}
-                            </span>
-                            {nFiles > 0 ? (
-                              <span className="text-xs text-muted">
-                                {nFiles} bijlage{nFiles === 1 ? "" : "n"}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-ink">
-                                {item.leverancier ||
-                                  item.subject ||
-                                  "(geen onderwerp)"}
-                              </p>
-                              <p className="truncate text-xs text-muted">
-                                {item.leverancier && item.subject
-                                  ? item.subject
-                                  : item.from_email || item.from_name || ""}
-                              </p>
-                            </div>
-                            <p className="shrink-0 text-sm font-semibold tabular-nums text-ink">
-                              {formatEuro(
-                                item.bedrag_inc_btw ?? item.bedrag_ex_btw
-                              )}
-                            </p>
-                          </div>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </details>
-            ))}
+                    {open ? (
+                      <ul className="divide-y divide-line border-t border-line bg-wash/20">
+                        {group.items.map((item) => {
+                          const active = item.id === selectedId;
+                          const nFiles = item.bestanden?.length || 0;
+                          const waarvoor = waarvoorVan(item);
+                          return (
+                            <li key={item.id}>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedId(item.id)}
+                                className={[
+                                  "flex w-full items-start gap-3 px-4 py-3 pl-11 text-left transition",
+                                  active
+                                    ? "bg-green-soft/70"
+                                    : "hover:bg-wash/70",
+                                ].join(" ")}
+                              >
+                                <span className="mt-0.5 shrink-0 text-muted">
+                                  <FileIcon />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex flex-wrap items-center gap-2">
+                                    <span
+                                      className={[
+                                        "px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                                        STATUS_TONE[item.status],
+                                      ].join(" ")}
+                                    >
+                                      {INKOMENDE_FACTUUR_STATUS_LABEL[item.status]}
+                                    </span>
+                                    <span className="text-xs tabular-nums text-muted">
+                                      {item.factuurdatum
+                                        ? formatDateShort(item.factuurdatum)
+                                        : formatDateTimeNl(
+                                            item.received_at || item.created_at
+                                          )}
+                                    </span>
+                                    {nFiles > 0 ? (
+                                      <span className="text-xs text-muted">
+                                        {nFiles} bijlage
+                                        {nFiles === 1 ? "" : "n"}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                  <span className="mt-0.5 block truncate text-sm font-semibold text-ink">
+                                    {item.leverancier ||
+                                      item.subject ||
+                                      "(geen onderwerp)"}
+                                  </span>
+                                  <span className="block truncate text-xs text-muted">
+                                    {waarvoor ||
+                                      (item.leverancier && item.subject
+                                        ? item.subject
+                                        : item.from_email ||
+                                          item.from_name ||
+                                          "")}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 text-right">
+                                  <span className="block text-sm font-semibold tabular-nums text-ink">
+                                    {formatEuro(
+                                      item.bedrag_inc_btw ?? item.bedrag_ex_btw
+                                    )}
+                                  </span>
+                                  {item.btw_bedrag != null ? (
+                                    <span className="block text-[11px] tabular-nums text-muted">
+                                      btw {formatEuro(item.btw_bedrag)}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
           </div>
 
           <div className="border border-line bg-white lg:sticky lg:top-4 lg:self-start">
             {!selected ? (
               <p className="px-5 py-12 text-center text-sm text-muted">
-                Selecteer een post links.
+                Open een map en selecteer een factuur.
               </p>
             ) : (
               <div className="flex flex-col gap-4 p-5">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                    Leverancier / onderwerp
+                    Leverancier
                   </p>
                   <h2 className="mt-1 font-display text-lg font-semibold text-ink">
                     {selected.leverancier ||
                       selected.subject ||
                       "(geen onderwerp)"}
                   </h2>
-                  {selected.leverancier && selected.subject ? (
+                  {waarvoorVan(selected) ? (
+                    <p className="mt-1 text-sm text-ink">
+                      <span className="text-muted">Waarvoor · </span>
+                      {waarvoorVan(selected)}
+                    </p>
+                  ) : selected.leverancier && selected.subject ? (
                     <p className="mt-0.5 text-sm text-muted">{selected.subject}</p>
                   ) : null}
                   <p className="mt-1 text-sm text-muted">
@@ -371,18 +551,18 @@ export function InkomendPanel() {
                   </div>
                   <div className="border border-line bg-wash/40 px-3 py-2">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Totaal incl.
+                      Boekperiode
                     </p>
-                    <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">
-                      {formatEuro(selected.bedrag_inc_btw)}
+                    <p className="mt-0.5 text-sm font-semibold capitalize text-ink">
+                      {boekperiodeLabel(selected)}
                     </p>
                   </div>
                   <div className="border border-line bg-wash/40 px-3 py-2">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Excl. btw
+                      Totaal incl. btw
                     </p>
                     <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">
-                      {formatEuro(selected.bedrag_ex_btw)}
+                      {formatEuro(selected.bedrag_inc_btw)}
                     </p>
                   </div>
                   <div className="border border-line bg-wash/40 px-3 py-2">
@@ -391,6 +571,14 @@ export function InkomendPanel() {
                     </p>
                     <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">
                       {formatEuro(selected.btw_bedrag)}
+                    </p>
+                  </div>
+                  <div className="col-span-2 border border-line bg-wash/40 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Excl. btw
+                    </p>
+                    <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">
+                      {formatEuro(selected.bedrag_ex_btw)}
                     </p>
                   </div>
                 </div>
@@ -406,7 +594,7 @@ export function InkomendPanel() {
                     className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
                   >
                     {scanningId === selected.id
-                      ? "AI scant…"
+                      ? "AI scant foto…"
                       : selected.factuurdatum
                         ? "Opnieuw scannen"
                         : "AI scannen & boeken"}

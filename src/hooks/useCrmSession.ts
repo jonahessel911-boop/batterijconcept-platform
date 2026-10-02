@@ -41,7 +41,7 @@ export function useCrmSession() {
           setSession({
             id: data.adviseur.id,
             naam: data.adviseur.naam,
-            email: data.adviseur.email || "",
+            email: (data.adviseur.email || "").trim(),
             rol: normalizeRol(data.adviseur.rol),
           });
         }

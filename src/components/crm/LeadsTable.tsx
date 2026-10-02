@@ -472,9 +472,9 @@ export function LeadsTable({
         />
       </div>
 
-      <div className="hidden md:block">
-        <div className="overflow-x-auto">
-          <table className="crm-table crm-table--compact">
+      <div className="hidden min-w-0 md:block">
+        <div className="w-full max-w-full overflow-x-auto">
+          <table className="crm-table crm-table--compact min-w-[960px]">
             <thead>
               <tr>
                 {showAfspraakTijdFirst && <th>Tijd</th>}

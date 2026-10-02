@@ -1045,8 +1045,8 @@ export function InstellingenPanel({
                   </select>
                 </Field>
                 <p className="text-[11px] leading-relaxed text-muted">
-                  Beller: alleen de Bellen-tab · Adviseur: sales · Backoffice:
-                  projecten/facturen · Admin: alles
+                  Beller: alleen Bellen · Adviseur: sales · Backoffice:
+                  Backoffice, Facturen en Inkomend · Admin: alles
                 </p>
               </>
             )}

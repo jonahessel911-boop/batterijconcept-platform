@@ -39,7 +39,7 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
     case "beller":
       return ["bellen"];
     case "backoffice":
-      return ["leads", "agenda", "projecten", "facturen"];
+      return ["projecten", "facturen", "inkomend"];
     case "installateur":
       return [];
     case "admin":
@@ -86,10 +86,15 @@ export function magBekijkAls(rol: GebruikerRol): boolean {
 
 /**
  * Backoffice-rol: agenda = installatie-agenda (schouw/installatie),
- * niet de adviseur-afsprakenagenda.
+ * niet de adviseur-afsprakenagenda. (Agenda-tab zelf is voor backoffice uit.)
  */
 export function agendaIsInstallatie(rol: GebruikerRol): boolean {
   return rol === "backoffice";
+}
+
+/** Mag inkomende facturen bekijken/bewerken. */
+export function magInkomend(rol: GebruikerRol): boolean {
+  return rol === "admin" || rol === "backoffice";
 }
 
 /** Sales-adviseurs die afspraken kunnen krijgen (geen beller/admin/installateur). */

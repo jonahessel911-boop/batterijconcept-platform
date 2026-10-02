@@ -8,11 +8,10 @@ import { FACTUUR_BETAALTERMIJN_DAGEN } from "@/lib/factuur-betaling";
 import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
 import { StatusBadge } from "./StatusBadge";
 
-function creditVanLabel(f: Factuur): string | null {
-  if (!f.credit_van_factuur_id) return null;
-  const raw = f.credit_van;
-  const cv = Array.isArray(raw) ? raw[0] : raw;
-  return cv?.factuur_nummer || null;
+function creditsForParent(all: Factuur[], parentId: string): Factuur[] {
+  return all
+    .filter((f) => f.credit_van_factuur_id === parentId)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 type Props = {
@@ -415,9 +414,10 @@ export function ProjectFinancieelSection({
             <p className="text-sm text-muted">Nog geen facturen voor dit project.</p>
           ) : (
             <ul className="divide-y divide-line border border-line">
-              {facturen.map((f) => {
-                const isCredit = Boolean(f.credit_van_factuur_id);
-                const van = creditVanLabel(f);
+              {facturen
+                .filter((f) => !f.credit_van_factuur_id)
+                .map((f) => {
+                const childCredits = creditsForParent(facturen, f.id);
                 const rowBusy = busy?.endsWith(f.id);
                 return (
                   <li key={f.id} className="px-3 py-3">
@@ -431,20 +431,16 @@ export function ProjectFinancieelSection({
                             {f.factuur_nummer}
                           </Link>
                           <StatusBadge kind="factuur" value={f.status} />
-                          {isCredit ? (
+                          {childCredits.length > 0 ? (
                             <span className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-                              Credit
-                              {van ? ` (${van})` : ""}
+                              Creditfactuur
                             </span>
                           ) : null}
                         </div>
                         <p className="mt-0.5 text-xs text-muted">
                           {f.omschrijving || "—"} ·{" "}
-                          {formatEuro(
-                            (f.credit_van_factuur_id ? -1 : 1) *
-                              Math.abs(Number(f.bedrag_inc_btw) || 0)
-                          )}{" "}
-                          · {formatDateShort(f.factuurdatum)}
+                          {formatEuro(Number(f.bedrag_inc_btw) || 0)} ·{" "}
+                          {formatDateShort(f.factuurdatum)}
                           {f.status === "betaald" && f.betaald_op
                             ? ` · Betaald ${formatDateShort(f.betaald_op)}`
                             : ""}
@@ -475,18 +471,17 @@ export function ProjectFinancieelSection({
                             Versturen
                           </button>
                         )}
-                        {!isCredit &&
-                          (f.status === "verzonden" ||
-                            f.status === "deels_betaald") && (
-                            <button
-                              type="button"
-                              disabled={Boolean(rowBusy)}
-                              onClick={() => void markPaid(f)}
-                              className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                            >
-                              Betaald
-                            </button>
-                          )}
+                        {(f.status === "verzonden" ||
+                          f.status === "deels_betaald") && (
+                          <button
+                            type="button"
+                            disabled={Boolean(rowBusy)}
+                            onClick={() => void markPaid(f)}
+                            className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                          >
+                            Betaald
+                          </button>
+                        )}
                         {canCredit(f) ? (
                           <button
                             type="button"
@@ -512,9 +507,9 @@ export function ProjectFinancieelSection({
                         </p>
                         <p className="text-xs text-muted">
                           Concept voor hetzelfde bedrag (
-                          {formatEuro(f.bedrag_inc_btw)}), op de PDF als −bedrag.
-                          Bij versturen vervalt de openstaande oorspronkelijke
-                          factuur.
+                          {formatEuro(f.bedrag_inc_btw)}). Blijft onder deze
+                          factuur staan. Bij versturen vervalt de openstaande
+                          oorspronkelijke factuur.
                         </p>
                         <div className="flex gap-2">
                           <button
@@ -536,6 +531,62 @@ export function ProjectFinancieelSection({
                           </button>
                         </div>
                       </div>
+                    ) : null}
+
+                    {childCredits.length > 0 ? (
+                      <ul className="mt-3 space-y-2 border-l-2 border-[#C45A12]/40 pl-3">
+                        {childCredits.map((c) => {
+                          const cBusy = busy?.endsWith(c.id);
+                          return (
+                            <li
+                              key={c.id}
+                              className="flex flex-wrap items-start justify-between gap-2 bg-wash/50 px-2.5 py-2"
+                            >
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                                    Creditfactuur
+                                  </span>
+                                  <Link
+                                    href={`/facturen/${f.id}`}
+                                    className="font-mono text-xs font-semibold text-green-dark hover:underline"
+                                  >
+                                    {c.factuur_nummer}
+                                  </Link>
+                                  <StatusBadge kind="factuur" value={c.status} />
+                                </div>
+                                <p className="mt-0.5 text-xs text-muted">
+                                  {formatEuro(
+                                    -Math.abs(Number(c.bedrag_inc_btw) || 0)
+                                  )}{" "}
+                                  · {formatDateShort(c.factuurdatum)}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={Boolean(cBusy)}
+                                  onClick={() => void downloadPdf(c)}
+                                  className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                >
+                                  PDF
+                                </button>
+                                {(c.status === "concept" ||
+                                  c.status === "verzonden") && (
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(cBusy) || !leadEmail}
+                                    onClick={() => void sendFactuur(c)}
+                                    className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                  >
+                                    Versturen
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     ) : null}
                   </li>
                 );

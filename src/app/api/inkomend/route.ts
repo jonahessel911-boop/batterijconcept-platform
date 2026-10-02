@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
+import { magInkomend, normalizeRol } from "@/lib/rollen";
 import {
   normalizeInkomendeFactuurStatus,
   signInkomendeFactuurBestanden,
@@ -16,7 +16,7 @@ import type {
 
 export const runtime = "nodejs";
 
-async function requireAdmin() {
+async function requireInkomendAccess() {
   const jar = await cookies();
   const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
   if (!session) {
@@ -24,16 +24,19 @@ async function requireAdmin() {
       error: NextResponse.json({ error: "Niet ingelogd" }, { status: 401 }),
     };
   }
-  if (normalizeRol(session.rol) !== "admin") {
+  if (!magInkomend(normalizeRol(session.rol))) {
     return {
-      error: NextResponse.json({ error: "Alleen admin" }, { status: 403 }),
+      error: NextResponse.json(
+        { error: "Geen toegang tot inkomende facturen" },
+        { status: 403 }
+      ),
     };
   }
   return { session };
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAdmin();
+  const auth = await requireInkomendAccess();
   if (auth.error) return auth.error;
 
   const status = req.nextUrl.searchParams.get("status")?.trim() || "";
@@ -90,7 +93,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const auth = await requireAdmin();
+  const auth = await requireInkomendAccess();
   if (auth.error) return auth.error;
 
   let body: {

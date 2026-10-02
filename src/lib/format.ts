@@ -40,6 +40,24 @@ export function formatTimeNl(date: Date | string | null | undefined): string {
   return formatInTimeZone(d, TZ, "HH:mm", { locale: nl });
 }
 
+/**
+ * Slot-label met cijferlijke tijd (CRM-UI): "zat 3 okt. om 19:00"
+ */
+export function formatSlotLabelNl(
+  date: Date | string | null | undefined,
+  opts?: { kort?: boolean }
+): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? new Date(date) : date;
+  const dag = formatInTimeZone(
+    d,
+    TZ,
+    opts?.kort ? "EEE d MMM" : "EEEE d MMMM",
+    { locale: nl }
+  );
+  return `${dag} om ${formatTimeNl(d)}`;
+}
+
 const UUR_SPRAAK: Record<number, string> = {
   0: "twaalf",
   1: "één",

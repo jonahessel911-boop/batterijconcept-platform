@@ -83,3 +83,13 @@ export function writeCrmBootstrapCache(data: Omit<CrmBootstrapCache, "at">): voi
 export function hasCrmBootstrapCache(): boolean {
   return readCrmBootstrapCache() !== null;
 }
+
+export function clearCrmShellCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(BOOTSTRAP_KEY);
+  } catch {
+    /* ignore */
+  }
+}

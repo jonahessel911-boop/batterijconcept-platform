@@ -56,7 +56,7 @@ export function CrmHeader({
       <div
         className={[
           "flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-6 sm:py-0 sm:h-14",
-          hideTabNav ? "w-full" : "mx-auto max-w-[1440px]",
+          hideTabNav ? "w-full" : "mx-auto max-w-[1600px]",
         ].join(" ")}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -175,7 +175,7 @@ export function CrmHeader({
             className="absolute inset-x-0 top-full z-50 border-b border-line bg-white shadow-lg md:hidden"
             aria-label="Hoofdmenu"
           >
-            <ul className="mx-auto max-w-[1440px] py-1">
+            <ul className="mx-auto max-w-[1600px] py-1">
               {navTabs.map((tab) => {
                 const isActive = activeTab === tab.id;
                 return (
