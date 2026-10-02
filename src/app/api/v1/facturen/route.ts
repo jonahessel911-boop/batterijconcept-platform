@@ -5,6 +5,7 @@ import { requireApiKey } from "@/lib/api-v1/auth";
 import { jsonErr, jsonOk, parseNum, pickStr } from "@/lib/api-v1/http";
 import { serializeFactuur } from "@/lib/api-v1/serialize";
 import { splitIncToExBtw } from "@/lib/aanbetaling";
+import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
 
   const projectId = pickStr(body.project_id, body.projectId);
   const bedrag = parseNum(body.bedrag_inc_btw ?? body.bedrag);
-  const omschrijving = pickStr(body.omschrijving, body.titel) || "Factuur Batterijconcept";
+  const omschrijvingRaw = pickStr(body.omschrijving, body.titel);
   const betaaltermijn = parseBetaaltermijnDagen(
     body.betaaltermijn_dagen ?? body.betaaltermijn,
     FACTUUR_BETAALTERMIJN_DAGEN
@@ -99,6 +100,18 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (pErr || !project) return jsonErr("Project niet gevonden", 404);
+
+    let omschrijving = omschrijvingRaw;
+    if (!omschrijving && project.offerte_id) {
+      const { data: regels } = await sb
+        .from("offerte_regels")
+        .select("omschrijving, product_id, prijs_ex_btw, sort_order")
+        .eq("offerte_id", project.offerte_id)
+        .order("sort_order", { ascending: true });
+      omschrijving =
+        primaireProductOmschrijving(regels || []) || "Factuur Batterijconcept";
+    }
+    if (!omschrijving) omschrijving = "Factuur Batterijconcept";
 
     const split = splitIncToExBtw(bedrag);
     const today = new Date();

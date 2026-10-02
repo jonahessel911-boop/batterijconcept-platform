@@ -17,6 +17,8 @@ export function CrmHeader({
   userName,
   onLogout,
   showBekijkAls = true,
+  hideTabNav = false,
+  onOpenSidebar,
 }: {
   onRefresh?: () => void;
   loading?: boolean;
@@ -30,9 +32,13 @@ export function CrmHeader({
   userName?: string;
   onLogout?: () => void;
   showBekijkAls?: boolean;
+  /** Sidebar-modus: geen top-tabs / hamburger-tabs */
+  hideTabNav?: boolean;
+  /** Sidebar-modus (mobiel): open sidebar-drawer */
+  onOpenSidebar?: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const showNav = Boolean(onTabChange && activeTab);
+  const showNav = Boolean(onTabChange && activeTab) && !hideTabNav;
   // Nooit alle CRM_TABS als fallback — alleen expliciet doorgegeven (rol-gefilterd) tabs
   const navTabs = tabs ?? [];
 
@@ -47,8 +53,26 @@ export function CrmHeader({
 
   return (
     <header className="sticky top-0 z-40 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
-      <div className="mx-auto flex min-h-14 max-w-[1440px] items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-6 sm:py-0 sm:h-14">
+      <div
+        className={[
+          "flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-6 sm:py-0 sm:h-14",
+          hideTabNav ? "w-full" : "mx-auto max-w-[1440px]",
+        ].join(" ")}
+      >
         <div className="flex min-w-0 items-center gap-2">
+          {hideTabNav && onOpenSidebar ? (
+            <button
+              type="button"
+              className="flex h-10 w-10 shrink-0 flex-col items-center justify-center gap-[5px] border border-white/25 bg-white/10 md:hidden"
+              aria-label="Menu openen"
+              onClick={onOpenSidebar}
+            >
+              <span className="block h-0.5 w-4 bg-white" />
+              <span className="block h-0.5 w-4 bg-white" />
+              <span className="block h-0.5 w-4 bg-white" />
+            </button>
+          ) : null}
+
           {showNav && (
             <button
               type="button"

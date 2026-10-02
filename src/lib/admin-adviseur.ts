@@ -5,10 +5,17 @@ export function adminEmail(): string {
   return (process.env.ADMIN_EMAIL || "admin@batterijconcept.nl").toLowerCase();
 }
 
+/** Alleen dit account krijgt de georganiseerde CRM-sidebar i.p.v. tabs. */
+export const CRM_SIDEBAR_EMAIL = "jona@batterijconcept.nl";
+
+export function usesCrmSidebar(email: string | null | undefined): boolean {
+  return email?.trim().toLowerCase() === CRM_SIDEBAR_EMAIL;
+}
+
 /** E-mails die altijd CRM-rol admin krijgen (ook als DB-rol ontbreekt/verkeerd is). */
 export function adminEmails(): string[] {
   const primary = adminEmail();
-  const extras = ["jona@batterijconcept.nl"];
+  const extras = [CRM_SIDEBAR_EMAIL];
   return Array.from(new Set([primary, ...extras.map((e) => e.toLowerCase())]));
 }
 
@@ -30,6 +37,22 @@ export function isAdminAdviseur(a: {
   if (a.naam.trim().toLowerCase() === "admin") return true;
   const email = a.email?.trim().toLowerCase();
   return Boolean(email && email === adminEmail());
+}
+
+/**
+ * Mag in klantgerichte slot-planning (Fonio / v1 slots).
+ * Systeem-Admin én CRM-admins (o.a. jona@) uit — die hebben lege agenda's
+ * waardoor "vrije" slots ontstaan die in de echte adviseur-agenda bezet zijn.
+ */
+export function isPlanbaarAdviseur(a: {
+  naam: string;
+  email?: string | null;
+  actief?: boolean | null;
+}): boolean {
+  if (a.actief === false) return false;
+  if (isAdminAdviseur(a)) return false;
+  if (isAdminEmail(a.email)) return false;
+  return true;
 }
 
 /** Zoekt de Admin-adviseur (via ADMIN_EMAIL, anders naam "Admin"). */
@@ -66,5 +89,34 @@ export function findAdminAdviseurId(
   const byName = adviseurs.find(
     (a) => a.naam.trim().toLowerCase() === "admin"
   );
+  return byName?.id ?? null;
+}
+
+/** Standaard backoffice-medewerker op nieuwe projecten. */
+export function defaultBackofficeEmail(): string {
+  return (
+    process.env.DEFAULT_BACKOFFICE_EMAIL || "jona@batterijconcept.nl"
+  ).toLowerCase();
+}
+
+/** Zoekt Jona Hessel (of DEFAULT_BACKOFFICE_EMAIL) als project-verantwoordelijke. */
+export async function getDefaultBackofficeMedewerkerId(
+  sb: SupabaseClient
+): Promise<string | null> {
+  const email = defaultBackofficeEmail();
+  const { data: byEmail } = await sb
+    .from("adviseurs")
+    .select("id")
+    .ilike("email", email)
+    .limit(1)
+    .maybeSingle();
+  if (byEmail?.id) return byEmail.id;
+
+  const { data: byName } = await sb
+    .from("adviseurs")
+    .select("id")
+    .ilike("naam", "%jona%hessel%")
+    .limit(1)
+    .maybeSingle();
   return byName?.id ?? null;
 }

@@ -7,9 +7,9 @@ export const runtime = "nodejs";
 
 /** Statussen die installateur zelf mag zetten (labels in portaal). */
 const INSTALLATEUR_STATUSES = new Set<ProjectStatus>([
-  "schouw_in_afwachting", // Schouw gepland
+  "schouwdag_ingepland",
   "schouw_voltooid",
-  "materiaal_installatie", // Installatie gepland
+  "installatie_ingepland",
 ]);
 
 async function resolvePartner(token: string) {

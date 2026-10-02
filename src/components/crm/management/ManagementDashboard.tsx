@@ -184,9 +184,9 @@ function DrilldownDrawer({
   const hrefFor = (id: string) => {
     if (drillRef.kind === "leads") return `/leads/${id}`;
     if (drillRef.kind === "deals" || drillRef.kind === "offertes")
-      return `/offertes`;
-    if (drillRef.kind === "projecten") return `/projecten`;
-    if (drillRef.kind === "facturen") return `/facturen`;
+      return `/offertes/${id}`;
+    if (drillRef.kind === "projecten") return `/projecten/${id}?from=orders`;
+    if (drillRef.kind === "facturen") return `/facturen/${id}`;
     return "/";
   };
 

@@ -15,7 +15,7 @@ import type {
   Project,
   ProjectStatus,
 } from "@/types/database";
-import { PROJECT_STATUSES, projectStatusLabel } from "@/lib/labels";
+import { PROJECT_STATUSES, projectStatusLabel, normalizeProjectStatus } from "@/lib/labels";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
   formatProjectSchouwWeek,
@@ -31,17 +31,28 @@ import {
 } from "@/lib/project-inkoop-checklist";
 import type { ProductInkoop } from "@/lib/inkoop";
 import type { Factuur, Offerte } from "@/types/database";
+import { rememberCrmReturnUrl } from "./DetailChrome";
 
-const COLUMN_ACCENT: Record<ProjectStatus, string> = {
-  schouw_aanbetaling: "#1A4A6E",
+const COLUMN_ACCENT: Partial<Record<ProjectStatus, string>> = {
+  schouwweek_inplannen: "#1A4A6E",
+  aanbetaling_verstuurd: "#C9A227",
   aanbetaling_betaald: "#0D7A6F",
-  schouw_in_afwachting: "#CA8A04",
+  warmtefonds_afspraak_ingepland: "#1A4A6E",
+  warmtefonds_aangevraagd: "#1A4A6E",
+  warmtefonds_in_behandeling: "#CA8A04",
+  warmtefonds_afgewezen: "#C62828",
+  warmtefonds_goedgekeurd: "#0D5C32",
+  schouwdag_ingepland: "#1565C0",
   schouw_voltooid: "#1565C0",
   restfactuur_verstuurd: "#C45A12",
   restfactuur_betaald: "#C9A227",
-  materiaal_installatie: "#7C3AED",
+  materiaal_besteld: "#7C3AED",
+  installatie_ingepland: "#C45A12",
   installatie_voltooid: "#0D5C32",
+  review_gevraagd: "#0D7A6F",
   service: "#00695C",
+  annulering: "#C62828",
+  hold_sales_actie: "#5A4A6E",
 };
 
 function adresRegel(p: Project): string {
@@ -90,7 +101,8 @@ export function ProjectKanban({
     const map = new Map<ProjectStatus, Project[]>();
     for (const s of PROJECT_STATUSES) map.set(s, []);
     for (const p of projecten) {
-      const list = map.get(p.status) || map.get("schouw_aanbetaling")!;
+      const key = normalizeProjectStatus(p.status);
+      const list = map.get(key) || map.get("schouwweek_inplannen")!;
       list.push(p);
     }
     return map;
@@ -126,6 +138,14 @@ export function ProjectKanban({
     setDragId(null);
     setOverStatus(null);
     if (!project || project.status === status) return;
+    if (
+      status === "annulering" &&
+      !window.confirm(
+        "Weet je zeker dat je deze order definitief wilt annuleren?"
+      )
+    ) {
+      return;
+    }
     void patchStatus(project, status);
   }
 
@@ -232,9 +252,10 @@ export function ProjectKanban({
                       <button
                         type="button"
                         className="w-full text-left"
-                        onClick={() =>
-                          router.push(`/projecten/${p.id}?from=orders`)
-                        }
+                        onClick={() => {
+                          rememberCrmReturnUrl();
+                          router.push(`/projecten/${p.id}?from=orders`);
+                        }}
                       >
                         <p className="font-mono text-[10px] font-semibold text-green-dark">
                           {p.project_nummer}
@@ -248,7 +269,8 @@ export function ProjectKanban({
                         {(p.schouw_jaar && p.schouw_week) || p.schouw_at ? (
                           <p className="mt-1 text-[10px] font-medium text-[#1A4A6E]">
                             {p.schouw_at &&
-                            p.status !== "schouw_aanbetaling" &&
+                            p.status !== "schouwweek_inplannen" &&
+                            p.status !== "aanbetaling_verstuurd" &&
                             p.status !== "aanbetaling_betaald"
                               ? formatDateTimeNl(p.schouw_at)
                               : formatProjectSchouwWeek(p)}
@@ -260,7 +282,7 @@ export function ProjectKanban({
                           </p>
                         ) : null}
                       </button>
-                      {status === "materiaal_installatie" && (
+                      {status === "materiaal_besteld" && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -294,7 +316,7 @@ export function ProjectKanban({
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  status: "schouw_aanbetaling",
+                  status: "schouwweek_inplannen",
                   schouw_jaar: jaar,
                   schouw_week: week,
                 }),
@@ -645,12 +667,22 @@ function MateriaalModal({
     setSaving(true);
     setError(null);
     try {
+      const wasVolledig =
+        items.length > 0 &&
+        items.every((i) =>
+          isInkoopItemBesteld(i, project.materiaal_checks || {})
+        );
+      const nuVolledig =
+        items.length > 0 && items.every((i) => isInkoopItemBesteld(i, checks));
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leveradres,
           materiaal_checks: checks,
+          ...(nuVolledig && !wasVolledig
+            ? { materiaal_volledig_afgevinkt: true }
+            : {}),
         }),
       });
       const data = await res.json();
@@ -661,7 +693,7 @@ function MateriaalModal({
     } finally {
       setSaving(false);
     }
-  }, [project.id, leveradres, checks, onUpdated]);
+  }, [project.id, project.materiaal_checks, leveradres, checks, items, onUpdated]);
 
   return (
     <ModalShell title="Materiaal inkopen" onClose={onClose} wide>

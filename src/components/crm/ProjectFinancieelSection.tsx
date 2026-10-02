@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import type { Factuur } from "@/types/database";
+import type { Factuur, OfferteRegel } from "@/types/database";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import { FACTUUR_BETAALTERMIJN_DAGEN } from "@/lib/factuur-betaling";
+import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
 import { StatusBadge } from "./StatusBadge";
 
 function creditVanLabel(f: Factuur): string | null {
@@ -17,10 +18,20 @@ function creditVanLabel(f: Factuur): string | null {
 type Props = {
   projectId: string;
   leadEmail?: string | null;
+  defaultOpen?: boolean;
+  /** Altijd open, zonder inklapbare header (voor tab Financieel). */
+  alwaysOpen?: boolean;
+  onFacturenChanged?: (facturen: Factuur[]) => void;
 };
 
-export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
-  const [open, setOpen] = useState(false);
+export function ProjectFinancieelSection({
+  projectId,
+  leadEmail,
+  defaultOpen = false,
+  alwaysOpen = false,
+  onFacturenChanged,
+}: Props) {
+  const [open, setOpen] = useState(defaultOpen || alwaysOpen);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -36,7 +47,11 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
   const [adresOpFactuur, setAdresOpFactuur] = useState(false);
 
   const [creditForId, setCreditForId] = useState<string | null>(null);
-  const [creditBedrag, setCreditBedrag] = useState("");
+
+  const onFacturenChangedRef = useRef(onFacturenChanged);
+  useEffect(() => {
+    onFacturenChangedRef.current = onFacturenChanged;
+  }, [onFacturenChanged]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,7 +64,9 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
           (data as { error?: string }).error || "Facturen laden mislukt"
         );
       }
-      setFacturen((data.facturen as Factuur[]) || []);
+      const list = (data.facturen as Factuur[]) || [];
+      setFacturen(list);
+      onFacturenChangedRef.current?.(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -58,10 +75,32 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
   }, [projectId]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open && !alwaysOpen) return;
     const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
-  }, [open, load]);
+  }, [open, alwaysOpen, load]);
+
+  async function openCreateForm() {
+    setShowCreate((v) => !v);
+    setCreditForId(null);
+    if (showCreate || omschrijving.trim()) return;
+    try {
+      const res = await fetch(`/api/projecten/${projectId}`);
+      const data = await res.json().catch(() => ({}));
+      const project = (data as { project?: { offerte_id?: string | null } })
+        .project;
+      const offerteId = project?.offerte_id;
+      if (!offerteId) return;
+      const oRes = await fetch(`/api/offertes/${offerteId}`);
+      const oData = await oRes.json().catch(() => ({}));
+      const offerte = (oData as { offerte?: { offerte_regels?: OfferteRegel[] } })
+        .offerte;
+      const label = primaireProductOmschrijving(offerte?.offerte_regels || []);
+      if (label) setOmschrijving(label);
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function createFactuur() {
     setBusy("create");
@@ -108,7 +147,6 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           credit_van_factuur_id: orig.id,
-          bedrag_inc_btw: creditBedrag || orig.bedrag_inc_btw,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -118,9 +156,8 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
         );
       }
       setCreditForId(null);
-      setCreditBedrag("");
       setMsg(
-        `Creditfactuur aangemaakt bij ${orig.factuur_nummer}.`
+        `Creditfactuur als concept aangemaakt bij ${orig.factuur_nummer}.`
       );
       await load();
     } catch (e) {
@@ -239,22 +276,36 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
       f.status === "betaald" ||
       f.status === "deels_betaald");
 
+  const isOpen = alwaysOpen || open;
+
   return (
     <section className="border border-line bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-wash"
-      >
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-          Financiële gegevens
-          {facturen.length > 0 ? ` (${facturen.length})` : ""}
-        </h2>
-        <span className="text-xs text-muted">{open ? "▲" : "▼"}</span>
-      </button>
+      {alwaysOpen ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Facturen
+            {facturen.length > 0 ? ` (${facturen.length})` : ""}
+          </h2>
+          <p className="text-[11px] text-muted">
+            Aanmaken, versturen, betaald markeren of creditnota maken
+          </p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-wash"
+        >
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Financiële gegevens
+            {facturen.length > 0 ? ` (${facturen.length})` : ""}
+          </h2>
+          <span className="text-xs text-muted">{open ? "▲" : "▼"}</span>
+        </button>
+      )}
 
-      {open ? (
-        <div className="border-t border-line px-4 py-4">
+      {isOpen ? (
+        <div className={alwaysOpen ? "px-4 py-4" : "border-t border-line px-4 py-4"}>
           {error ? (
             <p className="mb-3 text-sm text-red-700">{error}</p>
           ) : null}
@@ -265,10 +316,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
           <div className="mb-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => {
-                setShowCreate((v) => !v);
-                setCreditForId(null);
-              }}
+              onClick={() => void openCreateForm()}
               className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c]"
             >
               + Factuur
@@ -305,7 +353,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                   type="text"
                   value={omschrijving}
                   onChange={(e) => setOmschrijving(e.target.value)}
-                  placeholder="Bijv. Restfactuur installatie"
+                  placeholder="Standaard: productnaam van de offerte"
                   className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
                 />
               </label>
@@ -336,7 +384,7 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                 <span>
                   <span className="font-semibold">Adres gegevens op factuur</span>
                   <span className="mt-0.5 block text-muted">
-                    Alfred Nobellaan 68, 3731DW De Bilt als bedrijfsadres op de
+                    Daltonlaan 500, 3584 BK Utrecht als bedrijfsadres op de
                     PDF
                   </span>
                 </span>
@@ -391,8 +439,15 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                           ) : null}
                         </div>
                         <p className="mt-0.5 text-xs text-muted">
-                          {f.omschrijving || "—"} · {formatEuro(f.bedrag_inc_btw)}{" "}
+                          {f.omschrijving || "—"} ·{" "}
+                          {formatEuro(
+                            (f.credit_van_factuur_id ? -1 : 1) *
+                              Math.abs(Number(f.bedrag_inc_btw) || 0)
+                          )}{" "}
                           · {formatDateShort(f.factuurdatum)}
+                          {f.status === "betaald" && f.betaald_op
+                            ? ` · Betaald ${formatDateShort(f.betaald_op)}`
+                            : ""}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
@@ -440,9 +495,6 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                               setCreditForId(
                                 creditForId === f.id ? null : f.id
                               );
-                              setCreditBedrag(
-                                String(f.bedrag_inc_btw ?? "")
-                              );
                               setShowCreate(false);
                             }}
                             className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
@@ -459,20 +511,11 @@ export function ProjectFinancieelSection({ projectId, leadEmail }: Props) {
                           Creditfactuur bij {f.factuur_nummer}
                         </p>
                         <p className="text-xs text-muted">
-                          Op de PDF staat: CREDIT FACTUUR ({f.factuur_nummer}).
+                          Concept voor hetzelfde bedrag (
+                          {formatEuro(f.bedrag_inc_btw)}), op de PDF als −bedrag.
                           Bij versturen vervalt de openstaande oorspronkelijke
-                          factuur — er hoeft niets meer te worden betaald.
+                          factuur.
                         </p>
-                        <label className="block text-xs text-muted">
-                          Bedrag incl. btw (€)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={creditBedrag}
-                            onChange={(e) => setCreditBedrag(e.target.value)}
-                            className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-                          />
-                        </label>
                         <div className="flex gap-2">
                           <button
                             type="button"

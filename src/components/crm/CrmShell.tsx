@@ -13,20 +13,29 @@ import type {
   Project,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
-import { findAdminAdviseurId } from "@/lib/admin-adviseur";
+import { findAdminAdviseurId, usesCrmSidebar } from "@/lib/admin-adviseur";
 import { errMessage } from "@/lib/errors";
 import { CrmHeader } from "./CrmHeader";
 import { TabNav } from "./TabNav";
+import { CrmSidebar } from "./CrmSidebar";
+import { rememberCrmReturnUrl } from "./DetailChrome";
+import {
+  hasCrmBootstrapCache,
+  readCrmBootstrapCache,
+  readCrmSessionCache,
+  writeCrmBootstrapCache,
+  writeCrmSessionCache,
+} from "@/lib/crm-shell-cache";
 import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { FacturenTable } from "./FacturenTable";
 import { RapportagePanel } from "./RapportagePanel";
-import { DrivePanel } from "./DrivePanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { RecruitmentPanel } from "./RecruitmentPanel";
+import { InkomendPanel } from "./InkomendPanel";
 import { AdminTargetsPanel } from "./AdminTargetsPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
@@ -47,16 +56,18 @@ import {
 } from "@/lib/rollen";
 import { CRM_TABS } from "./TabNav";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
+import { NettoBoord } from "./NettoBoord";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
   "bellen",
   "agenda",
   "offertes",
+  "netto",
   "instroom",
   "projecten",
   "facturen",
-  "drive",
+  "inkomend",
   "rapportage",
   "admin",
   "ai",
@@ -81,14 +92,33 @@ export function CrmShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tab = parseTab(searchParams.get("tab"));
+
+  useEffect(() => {
+    rememberCrmReturnUrl();
+  }, [tab, searchParams]);
+
   const statusFilter = parseLeadStatus(searchParams.get("status"));
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
-  const [offertes, setOffertes] = useState<Offerte[]>([]);
-  const [projecten, setProjecten] = useState<Project[]>([]);
-  const [facturen, setFacturen] = useState<Factuur[]>([]);
-  const [instroomCount, setInstroomCount] = useState(0);
-  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
+  const [leads, setLeads] = useState<Lead[]>(
+    () => readCrmBootstrapCache()?.leads ?? []
+  );
+  const [afspraken, setAfspraken] = useState<Afspraak[]>(
+    () => readCrmBootstrapCache()?.afspraken ?? []
+  );
+  const [offertes, setOffertes] = useState<Offerte[]>(
+    () => readCrmBootstrapCache()?.offertes ?? []
+  );
+  const [projecten, setProjecten] = useState<Project[]>(
+    () => readCrmBootstrapCache()?.projecten ?? []
+  );
+  const [facturen, setFacturen] = useState<Factuur[]>(
+    () => readCrmBootstrapCache()?.facturen ?? []
+  );
+  const [instroomCount, setInstroomCount] = useState(
+    () => readCrmBootstrapCache()?.instroomCount ?? 0
+  );
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>(
+    () => readCrmBootstrapCache()?.adviseurs ?? []
+  );
   const [adviseurFilter, setAdviseurFilter] = useState(() => {
     if (typeof window === "undefined") return "";
     try {
@@ -97,17 +127,28 @@ export function CrmShell() {
       return "";
     }
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !hasCrmBootstrapCache());
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [addLeadOpen, setAddLeadOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("bc_crm_sidebar_rail_v1") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
   const [sessionUser, setSessionUser] = useState<{
     id: string;
     naam: string;
     email: string;
     rol: GebruikerRol;
-  } | null>(null);
-  const [sessionReady, setSessionReady] = useState(false);
+  } | null>(() => readCrmSessionCache());
+  const [sessionReady, setSessionReady] = useState(
+    () => readCrmSessionCache() !== null
+  );
   const orphanBackfillDone = useRef(false);
 
   // Nooit "admin" als fallback — tot sessie bekend is: geen tabs tonen
@@ -116,6 +157,7 @@ export function CrmShell() {
     : null;
   const visibleTabIds = userRol ? tabsVoorRol(userRol) : [];
   const visibleTabs = CRM_TABS.filter((t) => visibleTabIds.includes(t.id));
+  const sidebarMode = usesCrmSidebar(sessionUser?.email);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,12 +170,14 @@ export function CrmShell() {
         }
         const data = await res.json();
         if (!cancelled && data.adviseur) {
-          setSessionUser({
+          const next = {
             id: data.adviseur.id,
             naam: data.adviseur.naam,
             email: data.adviseur.email,
             rol: normalizeRol(data.adviseur.rol),
-          });
+          };
+          setSessionUser(next);
+          writeCrmSessionCache(next);
         }
       } catch {
         /* ignore */
@@ -270,20 +314,42 @@ export function CrmShell() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const hadCache = hasCrmBootstrapCache();
+    if (!hadCache) setLoading(true);
     setError(null);
     try {
       // Primair: service-role bootstrap (betrouwbaar voor admin / alle data)
       const boot = await fetch("/api/crm/bootstrap");
       const bootData = await boot.json();
       if (boot.ok) {
-        setLeads((bootData.leads as Lead[]) || []);
-        setAfspraken((bootData.afspraken as Afspraak[]) || []);
-        setOffertes((bootData.offertes as Offerte[]) || []);
-        setProjecten((bootData.projecten as Project[]) || []);
-        setFacturen((bootData.facturen as Factuur[]) || []);
-        setInstroomCount(bootData.instroomCount || 0);
-        await loadAdviseurs();
+        const nextLeads = (bootData.leads as Lead[]) || [];
+        const nextAfspraken = (bootData.afspraken as Afspraak[]) || [];
+        const nextOffertes = (bootData.offertes as Offerte[]) || [];
+        const nextProjecten = (bootData.projecten as Project[]) || [];
+        const nextFacturen = (bootData.facturen as Factuur[]) || [];
+        const nextInstroom = bootData.instroomCount || 0;
+        setLeads(nextLeads);
+        setAfspraken(nextAfspraken);
+        setOffertes(nextOffertes);
+        setProjecten(nextProjecten);
+        setFacturen(nextFacturen);
+        setInstroomCount(nextInstroom);
+        let nextAdviseurs: Adviseur[] = [];
+        const advRes = await fetch("/api/adviseurs");
+        const advData = await advRes.json();
+        if (advRes.ok) {
+          nextAdviseurs = (advData.adviseurs as Adviseur[]) || [];
+          setAdviseurs(nextAdviseurs);
+        }
+        writeCrmBootstrapCache({
+          leads: nextLeads,
+          afspraken: nextAfspraken,
+          offertes: nextOffertes,
+          projecten: nextProjecten,
+          facturen: nextFacturen,
+          instroomCount: nextInstroom,
+          adviseurs: nextAdviseurs,
+        });
         return;
       }
 
@@ -306,7 +372,7 @@ export function CrmShell() {
         sb
           .from("projecten")
           .select(
-            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status), installatie_partners(id, naam), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
+            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status, adviseur_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
           )
           .order("created_at", { ascending: false }),
         sb
@@ -321,13 +387,34 @@ export function CrmShell() {
       const firstErr = l.error || a.error || o.error || p.error || f.error;
       if (firstErr) throw firstErr;
 
-      setLeads((l.data as Lead[]) || []);
-      setAfspraken((a.data as Afspraak[]) || []);
-      setOffertes((o.data as Offerte[]) || []);
-      setProjecten((p.data as Project[]) || []);
-      setFacturen((f.data as Factuur[]) || []);
-      setInstroomCount(sCount.count || 0);
-      await loadAdviseurs();
+      const nextLeads = (l.data as Lead[]) || [];
+      const nextAfspraken = (a.data as Afspraak[]) || [];
+      const nextOffertes = (o.data as Offerte[]) || [];
+      const nextProjecten = (p.data as Project[]) || [];
+      const nextFacturen = (f.data as Factuur[]) || [];
+      const nextInstroom = sCount.count || 0;
+      setLeads(nextLeads);
+      setAfspraken(nextAfspraken);
+      setOffertes(nextOffertes);
+      setProjecten(nextProjecten);
+      setFacturen(nextFacturen);
+      setInstroomCount(nextInstroom);
+      let nextAdviseurs: Adviseur[] = [];
+      const advRes = await fetch("/api/adviseurs");
+      const advData = await advRes.json();
+      if (advRes.ok) {
+        nextAdviseurs = (advData.adviseurs as Adviseur[]) || [];
+        setAdviseurs(nextAdviseurs);
+      }
+      writeCrmBootstrapCache({
+        leads: nextLeads,
+        afspraken: nextAfspraken,
+        offertes: nextOffertes,
+        projecten: nextProjecten,
+        facturen: nextFacturen,
+        instroomCount: nextInstroom,
+        adviseurs: nextAdviseurs,
+      });
     } catch (e) {
       setError(errMessage(e, "Kon data niet laden"));
     } finally {
@@ -443,6 +530,7 @@ export function CrmShell() {
           offerte_nummer: o.offerte_nummer,
           financiering_voorbehoud: o.financiering_voorbehoud,
           aanbetaling_te_innen_inc: o.aanbetaling_te_innen_inc,
+          ondertekend_op: o.ondertekend_op,
         },
         aanbetaling_te_innen_inc:
           p.aanbetaling_te_innen_inc ?? o.aanbetaling_te_innen_inc ?? null,
@@ -464,6 +552,14 @@ export function CrmShell() {
       };
     });
   }, [facturen, adviseurFilter, scopedLeadIds, offertes]);
+
+  const projectIdByLeadId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of projecten) {
+      if (p.lead_id && !m.has(p.lead_id)) m.set(p.lead_id, p.id);
+    }
+    return m;
+  }, [projecten]);
 
   const appointmentLeadIds = useMemo(() => {
     const ids = new Set<string>();
@@ -592,12 +688,29 @@ export function CrmShell() {
       )
     );
     try {
-      const sb = getSupabaseBrowser();
-      const { error: err } = await sb
-        .from("leads")
-        .update({ adviseur_id: adviseurId })
-        .eq("id", leadId);
-      if (err) throw err;
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adviseur_id: adviseurId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Adviseur koppelen mislukt"
+        );
+      }
+      if (adviseurId) {
+        setAfspraken((prev) =>
+          prev.map((a) =>
+            a.lead_id === leadId &&
+            (a.status === "gepland" ||
+              a.status === "bevestigd" ||
+              a.status === "verzet")
+              ? { ...a, adviseur_id: adviseurId }
+              : a
+          )
+        );
+      }
     } catch (e) {
       const msg = errMessage(e, "Adviseur koppelen mislukt");
       setError(
@@ -672,9 +785,15 @@ export function CrmShell() {
         ? `Sales van ${filterLabel}`
         : "Verstuurde en ondertekende offertes",
     },
+    netto: {
+      title: "Netto-boord",
+      sub: filterLabel
+        ? `Commissie & voortgang · ${filterLabel}`
+        : "Sales, fases, commissie en creditfacturen",
+    },
     instroom: {
       title: "Recruitment",
-      sub: "Kanban + interne agenda · geen mail naar kandidaten",
+      sub: "Kanban + agenda · bevestigingsmail bij gesprek",
     },
     projecten: {
       title: "Backoffice",
@@ -690,13 +809,13 @@ export function CrmShell() {
         ? `Facturen van ${filterLabel}`
         : "Betalingen en openstaande posten",
     },
-    drive: {
-      title: "Drive",
-      sub: "Mappen en PDF’s voor het team",
+    inkomend: {
+      title: "Inkomend",
+      sub: "Facturen en bonnetjes via Postmark inbound",
     },
     rapportage: {
       title: "Rapportage",
-      sub: "Omzet, kosten en winst per periode",
+      sub: "Dashboard en kaart",
     },
     admin: {
       title: "Admin",
@@ -724,7 +843,13 @@ export function CrmShell() {
         onTabChange={changeTab}
         tabCounts={counts}
         tabs={visibleTabs}
-        showBekijkAls={Boolean(userRol && magBekijkAls(userRol))}
+        showBekijkAls={
+          Boolean(userRol && magBekijkAls(userRol)) && tab !== "rapportage"
+        }
+        hideTabNav={sidebarMode}
+        onOpenSidebar={
+          sidebarMode ? () => setSidebarMobileOpen(true) : undefined
+        }
         userName={sessionUser?.naam}
         onLogout={() => {
           void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
@@ -734,7 +859,40 @@ export function CrmShell() {
         }}
       />
 
-      <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col px-3 py-4 sm:px-6 sm:py-8">
+      <div
+        className={
+          sidebarMode
+            ? "flex w-full flex-1"
+            : "mx-auto flex w-full max-w-[1440px] flex-1"
+        }
+      >
+        {sidebarMode ? (
+          <CrmSidebar
+            active={tab}
+            onChange={changeTab}
+            counts={counts}
+            allowedTabs={visibleTabIds}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => {
+              setSidebarCollapsed((v) => {
+                const next = !v;
+                try {
+                  localStorage.setItem(
+                    "bc_crm_sidebar_rail_v1",
+                    next ? "1" : "0"
+                  );
+                } catch {
+                  /* ignore */
+                }
+                return next;
+              });
+            }}
+            mobileOpen={sidebarMobileOpen}
+            onMobileClose={() => setSidebarMobileOpen(false)}
+          />
+        ) : null}
+
+        <main className="flex min-w-0 flex-1 flex-col px-3 py-4 sm:px-6 sm:py-8">
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -788,22 +946,28 @@ export function CrmShell() {
             </div>
           ) : (
             <>
-          <TabNav
-            active={tab}
-            onChange={changeTab}
-            counts={counts}
-            tabs={visibleTabs}
-          />
+          {!sidebarMode ? (
+            <TabNav
+              active={tab}
+              onChange={changeTab}
+              counts={counts}
+              tabs={visibleTabs}
+            />
+          ) : null}
           <div className="flex-1 overflow-auto">
-            {!sessionReady || !userRol ? (
+            {(!sessionReady || !userRol) && !sessionUser ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : loading &&
+              !hasCrmBootstrapCache() &&
+              projecten.length === 0 &&
+              leads.length === 0 &&
               tab !== "instellingen" &&
               tab !== "ai" &&
               tab !== "admin" &&
+              tab !== "netto" &&
               tab !== "instroom" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
-            ) : !magTab(userRol, tab) ? (
+            ) : !userRol || !magTab(userRol, tab) ? (
               <p className="px-6 py-14 text-center text-sm text-muted">
                 Geen toegang tot dit menu.
               </p>
@@ -822,6 +986,7 @@ export function CrmShell() {
                       userRol === "admin" ? updateLeadBeller : undefined
                     }
                     showBellerColumn={userRol === "admin"}
+                    projectIdByLeadId={projectIdByLeadId}
                   />
                 )}
                 {tab === "bellen" && (
@@ -885,6 +1050,16 @@ export function CrmShell() {
                     onOpenSign={openSignLink}
                   />
                 )}
+                {tab === "netto" && (
+                  <NettoBoord
+                    adviseurId={
+                      alleenEigenLeads(userRol)
+                        ? sessionUser?.id
+                        : adviseurFilter || undefined
+                    }
+                    lockAdviseur={alleenEigenLeads(userRol)}
+                  />
+                )}
                 {tab === "instroom" && <RecruitmentPanel />}
                 {tab === "projecten" && (
                   <BackofficePanel
@@ -918,12 +1093,9 @@ export function CrmShell() {
                 {tab === "facturen" && (
                   <FacturenTable facturen={scopedFacturen} />
                 )}
-                {tab === "drive" && <DrivePanel />}
+                {tab === "inkomend" && <InkomendPanel />}
                 {tab === "rapportage" && (
-                  <RapportagePanel
-                    adviseurs={adviseurs}
-                    defaultAdviseurId={adviseurFilter || undefined}
-                  />
+                  <RapportagePanel />
                 )}
                 {tab === "admin" && <AdminTargetsPanel />}
                 {tab === "instellingen" && (
@@ -936,6 +1108,7 @@ export function CrmShell() {
           )}
         </div>
       </main>
+      </div>
 
       <LeadToevoegenModal
         open={addLeadOpen}

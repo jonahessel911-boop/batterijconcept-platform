@@ -26,6 +26,8 @@ function dayValue(d: DrilldownDay, kpi: DashboardV2Kpi): number {
       return d.eersteAfspraken ?? d.afsprakenGepland;
     case "afspraakToSale":
       return d.afspraakToSale ?? 0;
+    case "annuleringen":
+      return d.annuleringen;
     case "omzet":
     case "sales":
       return d.omzet;

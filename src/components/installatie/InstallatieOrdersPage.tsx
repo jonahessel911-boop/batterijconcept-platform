@@ -12,9 +12,9 @@ type OrderRow = Project & {
 };
 
 const INSTALLER_STATUS_LABEL: Partial<Record<ProjectStatus, string>> = {
-  schouw_in_afwachting: "Schouw gepland",
+  schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
-  materiaal_installatie: "Installatie gepland",
+  installatie_ingepland: "Installatie gepland",
 };
 
 function leadOf(o: OrderRow) {

@@ -8,6 +8,7 @@ export const AFSPRAAK_SOORTEN: AfspraakSoort[] = [
   "vervolg_fysiek",
   "vervolg_tel",
   "vervolg_punt",
+  "warmtefonds_aanvraag",
 ];
 
 export const afspraakSoortLabel: Record<AfspraakSoort, string> = {
@@ -17,6 +18,7 @@ export const afspraakSoortLabel: Record<AfspraakSoort, string> = {
   vervolg_fysiek: "Vervolg op locatie",
   vervolg_tel: "Vervolg telefonisch",
   vervolg_punt: "Vervolg punt",
+  warmtefonds_aanvraag: "Warmtefonds aanvraag",
 };
 
 const ACTIEF = new Set(["gepland", "bevestigd", "verzet"]);
@@ -64,6 +66,7 @@ export function normalizeAfspraakSoort(
     value === "vervolg_fysiek" ||
     value === "vervolg_tel" ||
     value === "vervolg_punt" ||
+    value === "warmtefonds_aanvraag" ||
     value === "nieuw"
   ) {
     return value;
@@ -88,7 +91,19 @@ export function isInterneAfspraakSoort(
   soort: string | null | undefined
 ): boolean {
   const s = normalizeAfspraakSoort(soort);
-  return s === "bel" || s === "warme_bel" || s === "vervolg_punt";
+  return (
+    s === "bel" ||
+    s === "warme_bel" ||
+    s === "vervolg_punt" ||
+    s === "warmtefonds_aanvraag"
+  );
+}
+
+/** Warmtefonds-aanvraagafspraak (intern, zichtbaar in agenda). */
+export function isWarmtefondsAanvraagSoort(
+  soort: string | null | undefined
+): boolean {
+  return normalizeAfspraakSoort(soort) === "warmtefonds_aanvraag";
 }
 
 /** Terugbel / warme terugbel (bellijst-prioriteit). */

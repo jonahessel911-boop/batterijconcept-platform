@@ -8,11 +8,27 @@ import {
   splitIncToExBtw,
   type AanbetalingModus,
 } from "@/lib/aanbetaling";
+import {
+  factuurOmschrijvingMetProduct,
+  primaireProductOmschrijving,
+} from "@/lib/factuur-omschrijving";
 import { formatEuro } from "@/lib/format";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
 } from "@/lib/factuur-betaling";
+
+async function productLabelVoorOfferte(
+  sb: SupabaseClient,
+  offerteId: string
+): Promise<string | null> {
+  const { data } = await sb
+    .from("offerte_regels")
+    .select("omschrijving, product_id, prijs_ex_btw, sort_order")
+    .eq("offerte_id", offerteId)
+    .order("sort_order", { ascending: true });
+  return primaireProductOmschrijving(data || []);
+}
 
 /**
  * Maakt een concept-aanbetalingsfactuur bij een ondertekende Warmtefonds-offerte.
@@ -46,7 +62,11 @@ export async function ensureBtwDraftFactuur(
     return null;
   }
 
-  const omschrijving = `Aanbetaling bij ${opts.offerteNummer} (restant ${formatEuro(aanbetaling.restantIncBtw)})`;
+  const product = await productLabelVoorOfferte(sb, opts.offerteId);
+  const omschrijving = factuurOmschrijvingMetProduct(
+    product,
+    `Aanbetaling bij ${opts.offerteNummer} (restant ${formatEuro(aanbetaling.restantIncBtw)})`
+  );
   const today = new Date();
   const factuurdatum = amsterdamDatePlusDays(today, 0);
   // Concept: nog geen harde termijn; bij versturen wordt 3 dagen gezet
@@ -210,7 +230,11 @@ export async function ensureRestantDraftFactuur(
 
   const split = splitIncToExBtw(bedragIncBtw);
   const label = opts.warmtefonds ? "Warmtefonds / restant" : "Restant";
-  const omschrijving = `Restantfactuur bij ${opts.offerteNummer} (${label} ${formatEuro(bedragIncBtw)})`;
+  const product = await productLabelVoorOfferte(sb, opts.offerteId);
+  const omschrijving = factuurOmschrijvingMetProduct(
+    product,
+    `Restantfactuur bij ${opts.offerteNummer} (${label} ${formatEuro(bedragIncBtw)})`
+  );
   const today = new Date();
   const factuurdatum = amsterdamDatePlusDays(today, 0);
   const vervaldatum = amsterdamDatePlusDays(today, FACTUUR_BETAALTERMIJN_DAGEN);

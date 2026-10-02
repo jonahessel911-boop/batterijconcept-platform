@@ -34,6 +34,7 @@ import {
   afspraakStuurtMail,
   afspraakZichtbaarInAgenda,
   isSaleUitkomst,
+  isWarmtefondsAanvraagSoort,
   needsVervolgPunt,
   normalizeAfspraakSoort,
   uitkomstVereistVervolgPunt,
@@ -189,6 +190,18 @@ function PlanSoortPicker({
         </span>
         <span className="mt-0.5 block text-xs text-muted">
           Geen mail nodig — planning mag eroverheen boeken
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("warmtefonds_aanvraag")}
+        className="w-full border border-line bg-white px-3 py-3 text-left hover:border-green/50"
+      >
+        <span className="block text-sm font-semibold text-ink">
+          Warmtefonds aanvraag
+        </span>
+        <span className="mt-0.5 block text-xs text-muted">
+          Geen klantmail — status wordt Warmtefonds afspraak ingepland
         </span>
       </button>
       <button
@@ -553,12 +566,16 @@ export function AfspraakDetail({
     backofficeNotitie: "",
     installateurNotitie: "",
   });
+  const [wfProjectId, setWfProjectId] = useState<string | null>(null);
+  const [wfAangevraagdAt, setWfAangevraagdAt] = useState<string | null>(null);
+  const [wfBusy, setWfBusy] = useState(false);
   const actionSectionRef = useRef<HTMLElement | null>(null);
   const saleFormRef = useRef<HTMLDivElement | null>(null);
 
   const note = appointmentNote(current);
   const mailed = Boolean(current.bevestiging_verstuurd);
   const magKlantMail = afspraakStuurtMail(current.soort);
+  const isWarmtefondsAfspraak = isWarmtefondsAanvraagSoort(current.soort);
   const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
@@ -606,6 +623,8 @@ export function AfspraakDetail({
     setVervolgNotitie("");
     setUitkomst("");
     setSaleOfferte(null);
+    setWfProjectId(null);
+    setWfAangevraagdAt(null);
     setBoValues({
       aanbetalingModus: "restant",
       aanbetalingHandmatig: "",
@@ -613,6 +632,34 @@ export function AfspraakDetail({
       installateurNotitie: "",
     });
   }, [afspraak]);
+
+  useEffect(() => {
+    if (!isWarmtefondsAanvraagSoort(afspraak.soort) || !afspraak.lead_id) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/projecten/${afspraak.lead_id}`);
+        const data = await res.json().catch(() => ({}));
+        const project = data.project as
+          | {
+              id: string;
+              status?: string;
+              warmtefonds_aangevraagd_at?: string | null;
+            }
+          | undefined;
+        if (cancelled || !project?.id) return;
+        setWfProjectId(project.id);
+        setWfAangevraagdAt(project.warmtefonds_aangevraagd_at || null);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [afspraak.id, afspraak.lead_id, afspraak.soort]);
 
   useEffect(() => {
     if (!needsAction || mode !== "view") return;
@@ -1002,6 +1049,53 @@ export function AfspraakDetail({
     }
   }
 
+  async function markWarmtefondsAangevraagd() {
+    if (!wfProjectId || wfBusy) return;
+    setWfBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const nowIso = new Date().toISOString();
+      const res = await fetch(`/api/projecten/${wfProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "warmtefonds_aangevraagd",
+          warmtefonds_aangevraagd_at: nowIso,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Status bijwerken mislukt");
+      }
+
+      const sb = getSupabaseBrowser();
+      const { error: afspraakErr } = await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .eq("id", current.id);
+      if (afspraakErr) throw afspraakErr;
+
+      const next: Afspraak = { ...current, status: "voltooid" };
+      setCurrent(next);
+      onUpdated(next);
+
+      setWfAangevraagdAt(
+        (data.project as { warmtefonds_aangevraagd_at?: string } | undefined)
+          ?.warmtefonds_aangevraagd_at || nowIso
+      );
+      setOkMsg(
+        `Warmtefonds aangevraagd op ${new Date(nowIso).toLocaleString("nl-NL", {
+          timeZone: "Europe/Amsterdam",
+        })}.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setWfBusy(false);
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -1056,6 +1150,37 @@ export function AfspraakDetail({
               </span>
             )}
           </div>
+
+          {isWarmtefondsAfspraak && mode === "view" && (
+            <section className="rounded-2xl border border-[#1A4A6E]/30 bg-[#E8F0F6] p-5 shadow-[0_1px_2px_rgba(26,74,110,0.06)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#1A4A6E]">
+                Warmtefonds aanvraag
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Geen klantmail. Zodra de aanvraag is ingediend, springt de
+                projectstatus naar Warmtefonds aangevraagd (met datum).
+              </p>
+              {wfAangevraagdAt ? (
+                <p className="mt-3 rounded-lg border border-[#0D5C32]/25 bg-[#E8F6EC] px-3 py-2 text-sm font-medium text-[#0D5C32]">
+                  Warmtefonds aangevraagd op{" "}
+                  {formatDateTimeNl(wfAangevraagdAt)}
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={wfBusy || !wfProjectId}
+                  onClick={() => void markWarmtefondsAangevraagd()}
+                  className="mt-4 min-h-11 w-full bg-[#1A4A6E] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#143a57] disabled:opacity-60"
+                >
+                  {wfBusy
+                    ? "Bezig…"
+                    : !wfProjectId
+                      ? "Geen project gevonden voor deze lead"
+                      : "Warmtefonds aangevraagd"}
+                </button>
+              )}
+            </section>
+          )}
 
           {needsAction && mode === "view" && (
             <section
@@ -2225,11 +2350,13 @@ export function AgendaPanel({
           ? "Bezig…"
           : planSoort === "bel"
             ? "Belafspraak plannen"
-            : planSoort === "vervolg_fysiek"
-              ? "Vervolg fysiek plannen"
-              : planSoort === "vervolg_tel"
-                ? "Vervolg telefonisch plannen"
-                : "Afspraak plannen"}
+            : planSoort === "warmtefonds_aanvraag"
+              ? "Warmtefonds-afspraak plannen"
+              : planSoort === "vervolg_fysiek"
+                ? "Vervolg fysiek plannen"
+                : planSoort === "vervolg_tel"
+                  ? "Vervolg telefonisch plannen"
+                  : "Afspraak plannen"}
       </button>
     </form>
   );

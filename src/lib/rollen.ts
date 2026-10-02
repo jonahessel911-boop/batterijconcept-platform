@@ -35,11 +35,11 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
 export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
   switch (rol) {
     case "adviseur":
-      return ["leads", "agenda", "offertes", "drive"];
+      return ["leads", "agenda", "offertes", "netto"];
     case "beller":
       return ["bellen"];
     case "backoffice":
-      return ["leads", "agenda", "projecten", "facturen", "drive"];
+      return ["leads", "agenda", "projecten", "facturen"];
     case "installateur":
       return [];
     case "admin":
@@ -49,10 +49,11 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "bellen",
         "agenda",
         "offertes",
+        "netto",
         "instroom",
         "projecten",
         "facturen",
-        "drive",
+        "inkomend",
         "rapportage",
         "admin",
         "instellingen",

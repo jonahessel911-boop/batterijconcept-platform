@@ -145,7 +145,7 @@ export async function POST(
       schouw_mail_partner_verstuurd: false,
       installatie_partner_id: partnerId,
       monteur: partnerNaam,
-      status: "schouw_in_afwachting",
+        status: "schouwdag_ingepland",
     };
 
     const { data: updated, error: updateErr } = await sb
@@ -312,7 +312,7 @@ export async function POST(
     await syncAutoTakenVoorProject(
       sb,
       id,
-      (updated.status as string) || "schouw_in_afwachting"
+      (updated.status as string) || "schouwdag_ingepland"
     );
 
     if (updated.lead_id) {
@@ -356,13 +356,20 @@ export async function POST(
 }
 
 const SCHOUW_PLAN_STATUS = new Set([
-  "schouw_aanbetaling",
+  "schouwweek_inplannen",
+  "aanbetaling_verstuurd",
   "aanbetaling_betaald",
-  "schouw_in_afwachting",
+  "warmtefonds_afspraak_ingepland",
+  "warmtefonds_aangevraagd",
+  "warmtefonds_in_behandeling",
+  "warmtefonds_goedgekeurd",
+  "schouwdag_ingepland",
   "schouw_voltooid",
   // legacy
-  "schouw_inplannen",
   "schouwweek_gepland",
+  "schouw_aanbetaling",
+  "schouw_in_afwachting",
+  "schouw_inplannen",
   "schouwdag_plannen",
   "schouw_gepland",
 ]);
@@ -410,7 +417,7 @@ export async function DELETE(
       schouw_mail_partner_verstuurd: false,
     };
     if (SCHOUW_PLAN_STATUS.has(project.status)) {
-      patch.status = "schouw_aanbetaling";
+      patch.status = "schouwweek_inplannen";
     }
 
     const { data: updated, error: updateErr } = await sb

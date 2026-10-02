@@ -7,6 +7,7 @@ import type {
   ProjectStatus,
   ServiceVerzoekStatus,
 } from "@/types/database";
+import { remapLegacyProjectStatus } from "@/lib/project-status-config";
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
@@ -114,64 +115,59 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 };
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
-  schouw_aanbetaling: "Schouw + aanbetaling",
+  schouwweek_inplannen: "Schouwweek inplannen",
+  aanbetaling_verstuurd: "Aanbetaling verstuurd",
   aanbetaling_betaald: "Aanbetaling betaald",
-  schouw_in_afwachting: "Schouw in afwachting",
+  warmtefonds_afspraak_ingepland: "Warmtefonds afspraak ingepland",
+  warmtefonds_aangevraagd: "Warmtefonds aangevraagd",
+  warmtefonds_in_behandeling: "Warmtefonds in behandeling",
+  warmtefonds_afgewezen: "Warmtefonds afgewezen",
+  warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
+  schouwdag_ingepland: "Schouwdag ingepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
   restfactuur_betaald: "Restfactuur betaald",
-  materiaal_installatie: "Materiaal + installatie plannen",
+  materiaal_besteld: "Materiaal ingekocht — wachten op levering",
+  installatie_ingepland: "Installatie ingepland",
   installatie_voltooid: "Installatie voltooid",
+  review_gevraagd: "Review gevraagd",
   service: "Service",
+  annulering: "Annulering",
+  hold_sales_actie: "HOLD - Sales actie",
 };
 
-/** Klikbare pipeline in backoffice (zonder service). */
+/** @deprecated Gebruik projectPipelineFor(betaalwijze) — warmtefonds-default. */
 export const PROJECT_PIPELINE: ProjectStatus[] = [
-  "schouw_aanbetaling",
+  "schouwweek_inplannen",
+  "aanbetaling_verstuurd",
   "aanbetaling_betaald",
-  "schouw_in_afwachting",
+  "warmtefonds_afspraak_ingepland",
+  "warmtefonds_aangevraagd",
+  "warmtefonds_in_behandeling",
+  "warmtefonds_goedgekeurd",
+  "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
   "restfactuur_betaald",
-  "materiaal_installatie",
+  "materiaal_besteld",
+  "installatie_ingepland",
   "installatie_voltooid",
+  "review_gevraagd",
 ];
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
   ...PROJECT_PIPELINE,
+  "warmtefonds_afgewezen",
   "service",
+  "annulering",
+  "hold_sales_actie",
 ];
 
 /** Oude statussen → nieuwe pipeline (voor data vóór migrate). */
 export function normalizeProjectStatus(
   status: string | null | undefined
 ): ProjectStatus {
-  switch (status) {
-    case "schouw_aanbetaling":
-    case "aanbetaling_betaald":
-    case "schouw_in_afwachting":
-    case "schouw_voltooid":
-    case "restfactuur_verstuurd":
-    case "restfactuur_betaald":
-    case "materiaal_installatie":
-    case "installatie_voltooid":
-    case "service":
-      return status;
-    case "schouw_inplannen":
-    case "schouwweek_gepland":
-    case "schouwdag_plannen":
-      return "schouw_aanbetaling";
-    case "schouw_gepland":
-      return "schouw_in_afwachting";
-    case "btw_factuur_eruit":
-      return "restfactuur_verstuurd";
-    case "materiaal_inkopen":
-    case "product_ingekocht":
-    case "installatie_gepland":
-      return "materiaal_installatie";
-    default:
-      return "schouw_aanbetaling";
-  }
+  return remapLegacyProjectStatus(status);
 }
 
 export const serviceVerzoekStatusLabel: Record<ServiceVerzoekStatus, string> = {
@@ -274,27 +270,54 @@ export function statusTone(
 
   if (kind === "project") {
     const project: Record<string, string> = {
-      schouw_aanbetaling:
+      schouwweek_inplannen:
         "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      aanbetaling_verstuurd:
+        "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
       aanbetaling_betaald:
         "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
-      schouw_in_afwachting:
+      warmtefonds_afspraak_ingepland:
+        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      warmtefonds_aangevraagd:
+        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      warmtefonds_in_behandeling:
         "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
+      warmtefonds_afgewezen:
+        "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]",
+      warmtefonds_goedgekeurd:
+        "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
+      schouwdag_ingepland:
+        "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
       schouw_voltooid:
         "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
       restfactuur_verstuurd:
         "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
       restfactuur_betaald:
         "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
-      materiaal_installatie:
+      materiaal_besteld:
         "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
+      installatie_ingepland:
+        "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
       installatie_voltooid:
         "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
+      review_gevraagd:
+        "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
       service: "border border-[#00695C]/30 bg-[#E0F2F1] text-[#00695C]",
-      schouw_inplannen:
-        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      annulering:
+        "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]",
+      hold_sales_actie:
+        "border border-[#5A4A6E]/30 bg-[#F0ECF5] text-[#4A3A5C]",
+      // legacy
       schouwweek_gepland:
         "border border-[#0F766E]/30 bg-[#F0FDFA] text-[#0F766E]",
+      schouw_aanbetaling:
+        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
+      schouw_in_afwachting:
+        "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
+      materiaal_installatie:
+        "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
+      schouw_inplannen:
+        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
       schouwdag_plannen:
         "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
       schouw_gepland:
@@ -393,6 +416,13 @@ export function afspraakAgendaAccent(
       bar: "bg-[#5B4B8A]",
       bg: "bg-[#F0ECF8]",
       time: "text-[#5B4B8A]",
+    };
+  }
+  if (soort === "warmtefonds_aanvraag") {
+    return {
+      bar: "bg-[#1A4A6E]",
+      bg: "bg-[#E8F0F6]",
+      time: "text-[#1A4A6E]",
     };
   }
   if (soort === "vervolg_fysiek") {

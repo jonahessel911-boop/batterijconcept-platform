@@ -74,7 +74,7 @@ export const API_V1_DOCS: EndpointDoc[] = [
         name: "adres_gegevens_op_factuur",
         in: "body",
         type: "boolean",
-        description: "Zet Alfred Nobellaan-adres op PDF",
+        description: "Zet Daltonlaan-bedrijfsadres op PDF",
         example: false,
       },
     ],

@@ -165,6 +165,12 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
   async function toggleItem(item: InkoopChecklistItem, next: boolean) {
     if (!cash.inkoopUnlocked) return;
     const nextChecks = { ...checks, [item.key]: next };
+    const wasVolledig =
+      items.length > 0 &&
+      items.every((i) => isInkoopItemBesteld(i, checks));
+    const nuVolledig =
+      items.length > 0 &&
+      items.every((i) => isInkoopItemBesteld(i, nextChecks));
     setChecks(nextChecks);
     setSaving(true);
     setError(null);
@@ -172,7 +178,12 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ materiaal_checks: nextChecks }),
+        body: JSON.stringify({
+          materiaal_checks: nextChecks,
+          ...(nuVolledig && !wasVolledig
+            ? { materiaal_volledig_afgevinkt: true }
+            : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

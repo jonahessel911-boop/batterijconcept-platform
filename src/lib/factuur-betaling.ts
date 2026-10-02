@@ -89,12 +89,12 @@ export function betalingsOmschrijving(offerteNummer?: string | null): string {
   return (offerteNummer || "").trim() || "";
 }
 
-/** Marker in factuur.notities: toon Alfred Nobellaan als bedrijfsadres op PDF. */
+/** Marker in factuur.notities: toon bedrijfsadres op PDF. */
 export const FACTUUR_ADRES_OP_PDF_MARKER = "[[adres_gegevens_op_factuur]]";
 
 export const FACTUUR_BEDRIJFSADRES_OP_PDF = {
-  straat: "Alfred Nobellaan 68",
-  postcodePlaats: "3731DW De Bilt",
+  straat: "Daltonlaan 500",
+  postcodePlaats: "3584 BK Utrecht",
 } as const;
 
 export function factuurHeeftAdresGegevensOpPdf(

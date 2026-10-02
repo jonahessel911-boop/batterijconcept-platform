@@ -30,13 +30,13 @@ import {
 } from "./BackofficeActieForm";
 import { StatusBadge } from "./StatusBadge";
 import {
-  BackLink,
   Breadcrumb,
   DetailShell,
   HeroCard,
   InfoTile,
   NotFoundState,
   Panel,
+  TerugButton,
 } from "./DetailChrome";
 
 export function OffertePage() {
@@ -359,12 +359,15 @@ export function OffertePage() {
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="offertes">
-      <Breadcrumb
-        items={[
-          { label: "Offertes", href: "/?tab=offertes" },
-          { label: offerte.offerte_nummer },
-        ]}
-      />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <TerugButton fallbackHref="/?tab=offertes" />
+        <Breadcrumb
+          items={[
+            { label: "Offertes", href: "/?tab=offertes" },
+            { label: offerte.offerte_nummer },
+          ]}
+        />
+      </div>
 
       <HeroCard>
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -769,8 +772,6 @@ export function OffertePage() {
           )}
         </Panel>
       </div>
-
-      <BackLink href="/?tab=offertes" label="Alle offertes" />
     </DetailShell>
   );
 }

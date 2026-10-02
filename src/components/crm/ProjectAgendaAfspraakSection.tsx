@@ -3,16 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { InstallatiePartner, Project } from "@/types/database";
 import { recommendedSchouwWeekForProject } from "@/lib/backoffice-acties";
+import { formatDateTimeNl } from "@/lib/format";
 import {
   formatProjectSchouwWeek,
   isSchouwdagDefinitief,
   parseSchouwWeekValue,
   schouwWeekFromDate,
-  schouwWeekToMondayIso,
   schouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
-import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 
 type AfspraakSoort = "schouwweek" | "schouwdag" | "installatie";
 
@@ -61,6 +60,64 @@ function mailSummary(mails: {
   };
 }
 
+type PlannedRow = {
+  key: string;
+  type: string;
+  wanneer: string;
+  partner: string;
+  notities: string | null;
+  detail?: string | null;
+};
+
+function plannedRows(project: Project): PlannedRow[] {
+  const partner =
+    project.installatie_partners?.naam || project.monteur || "—";
+  const rows: PlannedRow[] = [];
+
+  const weekLabel = formatProjectSchouwWeek(project);
+  const dagDefinitief = isSchouwdagDefinitief(project);
+
+  if (project.schouw_at && dagDefinitief) {
+    rows.push({
+      key: "schouwdag",
+      type: "Schouwdag",
+      wanneer: formatDateTimeNl(project.schouw_at),
+      partner,
+      notities: project.schouw_notities?.trim() || null,
+      detail: weekLabel,
+    });
+  } else if (project.schouw_jaar && project.schouw_week) {
+    rows.push({
+      key: "schouwweek",
+      type: "Schouwweek",
+      wanneer: weekLabel || `Week ${project.schouw_week} · ${project.schouw_jaar}`,
+      partner,
+      notities: project.schouw_notities?.trim() || null,
+      detail: "Exacte dag nog niet vastgelegd",
+    });
+  } else if (project.schouw_at) {
+    rows.push({
+      key: "schouw-at",
+      type: "Schouw",
+      wanneer: formatDateTimeNl(project.schouw_at),
+      partner,
+      notities: project.schouw_notities?.trim() || null,
+    });
+  }
+
+  if (project.installatie_at) {
+    rows.push({
+      key: "installatie",
+      type: "Installatie",
+      wanneer: formatDateTimeNl(project.installatie_at),
+      partner,
+      notities: project.installatie_notities?.trim() || null,
+    });
+  }
+
+  return rows;
+}
+
 export function ProjectAgendaAfspraakSection({
   project,
   onChanged,
@@ -91,34 +148,12 @@ export function ProjectAgendaAfspraakSection({
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
-  const [agendaOrders, setAgendaOrders] = useState<Project[]>([]);
-  const [agendaLoading, setAgendaLoading] = useState(false);
-  const [agendaError, setAgendaError] = useState<string | null>(null);
-
-  const agendaPartnerId = partnerId || project.installatie_partner_id || "";
-
-  const agendaAnchor = useMemo(() => {
-    if (project.schouw_at) return project.schouw_at;
-    if (project.schouw_jaar && project.schouw_week) {
-      try {
-        return schouwWeekToMondayIso(project.schouw_jaar, project.schouw_week);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (project.installatie_at) return project.installatie_at;
-    return null;
-  }, [
-    project.schouw_at,
-    project.schouw_jaar,
-    project.schouw_week,
-    project.installatie_at,
-  ]);
-
   const selectedPartner = useMemo(
-    () => partners.find((p) => p.id === agendaPartnerId) || null,
-    [partners, agendaPartnerId]
+    () => partners.find((p) => p.id === partnerId) || null,
+    [partners, partnerId]
   );
+
+  const rows = useMemo(() => plannedRows(project), [project]);
 
   const loadPartners = useCallback(async () => {
     try {
@@ -136,48 +171,10 @@ export function ProjectAgendaAfspraakSection({
     }
   }, [project.installatie_partner_id]);
 
-  const loadAgenda = useCallback(async (pid: string) => {
-    if (!pid) {
-      setAgendaOrders([]);
-      return;
-    }
-    setAgendaLoading(true);
-    setAgendaError(null);
-    try {
-      const res = await fetch(`/api/installatie-partners/${pid}/agenda`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Agenda laden mislukt"
-        );
-      }
-      const orders = (data.orders as Project[]) || [];
-      // Huidig project altijd meenemen (ook zonder geplande sloten)
-      if (!orders.some((o) => o.id === project.id)) {
-        orders.unshift(project);
-      }
-      setAgendaOrders(orders);
-    } catch (e) {
-      setAgendaError(e instanceof Error ? e.message : "Agenda laden mislukt");
-      setAgendaOrders([project]);
-    } finally {
-      setAgendaLoading(false);
-    }
-  }, [project]);
-
   useEffect(() => {
     const id = requestAnimationFrame(() => void loadPartners());
     return () => cancelAnimationFrame(id);
   }, [loadPartners]);
-
-  useEffect(() => {
-    if (!agendaPartnerId) {
-      setAgendaOrders([project]);
-      return;
-    }
-    const frame = requestAnimationFrame(() => void loadAgenda(agendaPartnerId));
-    return () => cancelAnimationFrame(frame);
-  }, [agendaPartnerId, loadAgenda, project]);
 
   useEffect(() => {
     setSchouwWeek(initialWeekValue(project));
@@ -273,7 +270,6 @@ export function ProjectAgendaAfspraakSection({
         setOpen(false);
         setNotities("");
         onChanged();
-        void loadAgenda(partnerId);
         return;
       }
 
@@ -307,7 +303,6 @@ export function ProjectAgendaAfspraakSection({
       setOpen(false);
       setNotities("");
       onChanged();
-      void loadAgenda(partnerId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
     } finally {
@@ -320,7 +315,7 @@ export function ProjectAgendaAfspraakSection({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
         <div>
           <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Agenda installateur
+            Afspraken
           </h2>
           {selectedPartner ? (
             <p className="mt-0.5 text-xs text-muted">{selectedPartner.naam}</p>
@@ -339,24 +334,6 @@ export function ProjectAgendaAfspraakSection({
         </button>
       </div>
 
-      <div className="border-b border-line px-4 py-3">
-        <label className="block text-[10px] font-semibold uppercase text-muted">
-          Installateur
-          <select
-            value={agendaPartnerId}
-            onChange={(e) => setPartnerId(e.target.value)}
-            className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-          >
-            <option value="">Kies installateur…</option>
-            {partners.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.naam}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
       {(okMsg || error) && !open ? (
         <div className="space-y-1 border-b border-line px-4 py-2.5">
           {okMsg ? (
@@ -372,9 +349,25 @@ export function ProjectAgendaAfspraakSection({
           className="space-y-3 border-b border-line px-4 py-4"
         >
           <p className="text-xs text-muted">
-            Kies het type afspraak. Klant en installateur krijgen een
+            Plan een schouw of installatie. Klant en installateur krijgen een
             bevestigingsmail.
           </p>
+
+          <label className="block text-[10px] font-semibold uppercase text-muted">
+            Installateur
+            <select
+              value={partnerId}
+              onChange={(e) => setPartnerId(e.target.value)}
+              className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+            >
+              <option value="">Kies installateur…</option>
+              {partners.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.naam}
+                </option>
+              ))}
+            </select>
+          </label>
 
           <fieldset>
             <legend className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -506,38 +499,51 @@ export function ProjectAgendaAfspraakSection({
         </form>
       ) : null}
 
-      <div className="px-2 py-2 sm:px-3 sm:py-3">
-        {!agendaPartnerId ? (
-          <p className="px-2 py-6 text-center text-sm text-muted">
-            Kies een installateur om de agenda te zien.
-          </p>
-        ) : agendaLoading && agendaOrders.length <= 1 ? (
-          <p className="px-2 py-6 text-center text-sm text-muted">
-            Agenda laden…
-          </p>
-        ) : (
-          <>
-            {agendaError ? (
-              <p className="mb-2 px-2 text-xs text-[#C45A12]">{agendaError}</p>
-            ) : null}
-            <PlanningAgenda
-              key={`${agendaPartnerId}-${agendaAnchor || "now"}`}
-              orders={agendaOrders}
-              showPartner={false}
-              initialWeekAnchor={agendaAnchor}
-              linkHref={(event) =>
-                event.order.id === project.id
-                  ? undefined
-                  : `/projecten/${event.order.id}?from=orders`
-              }
-              onOrderUpdated={() => {
-                onChanged();
-                if (agendaPartnerId) void loadAgenda(agendaPartnerId);
-              }}
-            />
-          </>
-        )}
-      </div>
+      {rows.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-muted">
+          Nog geen schouw of installatie gepland voor deze klant.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold text-muted">
+                <th className="px-4 py-2.5 font-semibold text-ink">Type</th>
+                <th className="px-3 py-2.5 font-semibold text-ink">Wanneer</th>
+                <th className="px-3 py-2.5 font-semibold text-ink">
+                  Installateur
+                </th>
+                <th className="px-3 py-2.5 font-semibold text-ink">Notitie</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key} className="border-b border-line last:border-b-0">
+                  <td className="px-4 py-3 align-top">
+                    <p className="font-semibold text-ink">{r.type}</p>
+                    {r.detail ? (
+                      <p className="mt-0.5 text-[11px] text-muted">{r.detail}</p>
+                    ) : null}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3 align-top text-ink">
+                    {r.wanneer}
+                  </td>
+                  <td className="px-3 py-3 align-top text-ink">{r.partner}</td>
+                  <td className="max-w-[14rem] px-3 py-3 align-top text-muted">
+                    {r.notities ? (
+                      <span className="whitespace-pre-wrap text-ink/90">
+                        {r.notities}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

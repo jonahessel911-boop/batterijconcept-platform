@@ -351,6 +351,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Optioneel: Fonio outbound direct na nieuwe lead (FONIO_AUTO_CALL_ON_LEAD=true)
+    let fonioCall: { ok: boolean; error?: string } | null = null;
+    try {
+      const { fonioAutoCallOnLead, fonioConfigured, triggerFonioOutbound, buildFonioLeadContext } =
+        await import("@/lib/fonio");
+      if (fonioAutoCallOnLead() && fonioConfigured()) {
+        const { data: fullLead } = await supabase
+          .from("leads")
+          .select(
+            "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, lead_number, status, notities"
+          )
+          .eq("id", data.id)
+          .maybeSingle();
+        if (fullLead?.telefoon) {
+          const call = await triggerFonioOutbound({
+            toNumber: fullLead.telefoon,
+            context: buildFonioLeadContext(fullLead),
+          });
+          fonioCall = call.ok
+            ? { ok: true }
+            : { ok: false, error: call.error };
+          if (!call.ok) {
+            console.error("Fonio auto-call:", call.error);
+          }
+        }
+      }
+    } catch (fonioErr) {
+      console.error("Fonio auto-call:", fonioErr);
+      fonioCall = {
+        ok: false,
+        error: fonioErr instanceof Error ? fonioErr.message : "mislukt",
+      };
+    }
+
     return NextResponse.json(
       {
         ok: true,
@@ -360,6 +394,7 @@ export async function POST(req: NextRequest) {
         lander: data.lander ?? null,
         campaign_name: data.campaign_name ?? null,
         ad_name: data.ad_name ?? null,
+        ...(fonioCall ? { fonio_call: fonioCall } : {}),
       },
       { status: 201 }
     );

@@ -80,6 +80,8 @@ export function isWarmtefondsSale(opts: {
 }
 
 export function isWarmtefondsProject(project: Project): boolean {
+  if (project.betaalwijze === "eigen_middelen") return false;
+  if (project.betaalwijze === "warmtefonds") return true;
   const leadStatus = project.leads?.status ?? null;
   return isWarmtefondsSale({
     leadStatus,
@@ -153,7 +155,8 @@ export function isBelSchouwActieOpen(project: Project): boolean {
 }
 
 export function isSchakelFinancieringActieOpen(project: Project): boolean {
-  if (!isWarmtefondsProject(project)) return false;
+  // Alleen bij Warmtefonds-afwijzing — tot betaalwijze is omgezet of actie is afgerond
+  if (project.status !== "warmtefonds_afgewezen") return false;
   if (project.financiering_geschakeld_at) return false;
   return true;
 }
@@ -246,8 +249,9 @@ export function openSchakelFinancieringActies(
     items.push({
       id: `schakel-financiering-${project.id}`,
       soort: "schakel_financiering",
-      titel: "Schakelen met financieringsman",
-      detail: `Stuur naam, tel, plaats + getekende offerte. Bel ${FINANCIERINGSMAN_TEL}.`,
+      titel: "Schakel financiering (Warmtefonds afgewezen)",
+      detail:
+        "Zet om naar eigen middelen of stop project — overleg met klant. Bel financieringsman indien nodig.",
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
@@ -396,6 +400,7 @@ export function openBackofficeActies(
     >[];
   }
 ): BackofficeActie[] {
+  // bel-schouw + nabellen-factuur: gedekt door status-gekoppelde auto-taken
   return [
     ...openHerplanAfspraakActies(
       opts?.leads || [],
@@ -403,8 +408,6 @@ export function openBackofficeActies(
       now
     ),
     ...openSchakelFinancieringActies(projecten, now),
-    ...openBelSchouwActies(projecten, now),
-    ...openNabellenFactuurActies(facturen, now),
   ].sort(
     (a, b) =>
       new Date(a.deadlineAt).getTime() - new Date(b.deadlineAt).getTime()

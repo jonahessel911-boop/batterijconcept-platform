@@ -1,34 +1,67 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import type { Factuur, Offerte, Project } from "@/types/database";
+import type { Factuur, Lead, Offerte, Project } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   factuurBetaaltermijnDagen,
+  factuurIsOverdue,
 } from "@/lib/factuur-betaling";
 import { StatusBadge } from "./StatusBadge";
-import {
-  BackLink,
-  Breadcrumb,
-  DetailShell,
-  HeroCard,
-  InfoTile,
-  NotFoundState,
-} from "./DetailChrome";
+import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
+
+type FactuurLead = Pick<
+  Lead,
+  | "naam"
+  | "email"
+  | "telefoon"
+  | "lead_number"
+  | "straat"
+  | "huisnummer"
+  | "toevoeging"
+  | "postcode"
+  | "plaats"
+>;
+
+const COMPANY = {
+  naam: "BatterijConcept",
+  adres: "Daltonlaan 500",
+  postcodePlaats: "3584 BK Utrecht",
+  kvk: "42141855",
+  iban: "NL48 BUNQ 2209 5579 33",
+  email: "info@batterijconcept.nl",
+  telefoon: "085 800 1645",
+  website: "Batterijconcept.nl",
+};
+
+function klantAdres(lead: FactuurLead | null | undefined): string[] {
+  if (!lead) return [];
+  const lines: string[] = [];
+  const straat = [lead.straat, lead.huisnummer, lead.toevoeging]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (straat) lines.push(straat);
+  const plaats = [lead.postcode, lead.plaats].filter(Boolean).join(" ").trim();
+  if (plaats) lines.push(plaats);
+  return lines;
+}
 
 export function FactuurPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [factuur, setFactuur] = useState<Factuur | null>(null);
+  const [lead, setLead] = useState<FactuurLead | null>(null);
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState<
-    "pdf" | "send" | "paid" | "delete" | "save" | null
+    "pdf" | "send" | "paid" | "delete" | "save" | "credit" | null
   >(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +73,7 @@ export function FactuurPage() {
   const [editBetaaltermijn, setEditBetaaltermijn] = useState(
     String(FACTUUR_BETAALTERMIJN_DAGEN)
   );
+  const [showCredit, setShowCredit] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,7 +89,9 @@ export function FactuurPage() {
       const sb = getSupabaseBrowser();
       const { data, error: err } = await sb
         .from("facturen")
-        .select("*, leads(naam, email, lead_number)")
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, straat, huisnummer, toevoeging, postcode, plaats)"
+        )
         .eq("id", id)
         .single();
 
@@ -63,7 +99,9 @@ export function FactuurPage() {
         setNotFound(true);
       } else {
         const fac = data as Factuur;
-        // Optioneel: credit-koppeling ophalen als kolom bestaat
+        const leadData = (fac.leads as FactuurLead | null) || null;
+        setLead(leadData);
+
         if (fac.credit_van_factuur_id) {
           const { data: creditVan } = await sb
             .from("facturen")
@@ -173,7 +211,9 @@ export function FactuurPage() {
       const res = await fetch(`/api/facturen/${factuur.id}/pdf`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "PDF downloaden mislukt");
+        throw new Error(
+          (data as { error?: string }).error || "PDF downloaden mislukt"
+        );
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -199,7 +239,7 @@ export function FactuurPage() {
     if (
       !confirm(
         `Factuur ${factuur.factuur_nummer} mailen naar ${
-          factuur.leads?.email || "de klant"
+          lead?.email || factuur.leads?.email || "de klant"
         }?`
       )
     ) {
@@ -215,7 +255,11 @@ export function FactuurPage() {
         body: JSON.stringify({ action: "send" }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Verzenden mislukt");
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verzenden mislukt"
+        );
+      }
       if (data.factuur) setFactuur(data.factuur as Factuur);
       else await load();
       setMsg("Factuur is gemaild naar de klant.");
@@ -245,7 +289,11 @@ export function FactuurPage() {
         body: JSON.stringify({ status: "betaald", betaald_op: betaaldOp }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Markeren als betaald mislukt");
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Markeren als betaald mislukt"
+        );
+      }
       if (data.factuur) setFactuur(data.factuur as Factuur);
       else await load();
       setMsg("Factuur gemarkeerd als betaald.");
@@ -273,10 +321,41 @@ export function FactuurPage() {
         method: "DELETE",
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
       router.push("/?tab=facturen");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+      setBusy(null);
+    }
+  }
+
+  async function createCredit() {
+    if (!factuur) return;
+    setBusy("credit");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}/credit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Creditfactuur mislukt"
+        );
+      }
+      const created = data.factuur as Factuur;
+      setShowCredit(false);
+      setMsg(`Creditfactuur ${created.factuur_nummer} als concept aangemaakt.`);
+      router.push(`/facturen/${created.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Creditfactuur mislukt");
       setBusy(null);
     }
   }
@@ -302,227 +381,505 @@ export function FactuurPage() {
 
   const isDraft = factuur.status === "concept";
   const isPaid = factuur.status === "betaald";
+  const overdue = factuurIsOverdue(factuur);
   const creditVanRaw = factuur.credit_van;
   const creditVan = Array.isArray(creditVanRaw)
     ? creditVanRaw[0]
     : creditVanRaw;
   const isCredit = Boolean(factuur.credit_van_factuur_id);
+  const creditSign = isCredit ? -1 : 1;
+  const displayEx = creditSign * Math.abs(Number(factuur.bedrag_ex_btw) || 0);
+  const displayBtw = creditSign * Math.abs(Number(factuur.btw_bedrag) || 0);
+  const displayInc = creditSign * Math.abs(Number(factuur.bedrag_inc_btw) || 0);
+  const canCredit =
+    !isCredit &&
+    (factuur.status === "verzonden" ||
+      factuur.status === "betaald" ||
+      factuur.status === "deels_betaald");
+  const klantNaam = lead?.naam || factuur.leads?.naam || "Klant";
+  const klantEmail = lead?.email || factuur.leads?.email || null;
+  const adresLines = klantAdres(lead);
+  const regelOmschrijving =
+    factuur.omschrijving ||
+    (isCredit
+      ? `Creditfactuur${
+          creditVan?.factuur_nummer ? ` bij ${creditVan.factuur_nummer}` : ""
+        }`
+      : "Factuur");
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="facturen">
-      <Breadcrumb
-        items={[
-          { label: "Facturen", href: "/?tab=facturen" },
-          { label: factuur.factuur_nummer },
-        ]}
-      />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <TerugButton fallbackHref="/?tab=facturen" />
+        <Breadcrumb
+          items={[
+            { label: "Facturen", href: "/?tab=facturen" },
+            { label: factuur.factuur_nummer },
+          ]}
+        />
+      </div>
 
-      <HeroCard>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="font-mono text-xs font-semibold text-green-dark">
-              {factuur.factuur_nummer}
-            </p>
-            <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight text-green-deeper sm:text-4xl">
-              {isCredit
-                ? `Creditfactuur${
-                    creditVan?.factuur_nummer
-                      ? ` (${creditVan.factuur_nummer})`
-                      : ""
-                  }`
-                : factuur.omschrijving || "Factuur"}
-            </h1>
-            <p className="mt-2 text-sm text-muted">
-              Aangemaakt {formatDateTimeNl(factuur.created_at)}
-              {isDraft ? " · Concept (nog niet verzonden)" : ""}
-              {isCredit && creditVan?.factuur_nummer
-                ? ` · CREDIT FACTUUR (${creditVan.factuur_nummer})`
-                : ""}
-            </p>
-          </div>
-          <StatusBadge kind="factuur" value={factuur.status} />
+      {msg ? (
+        <div className="mb-4 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
+          {msg}
         </div>
+      ) : null}
+      {error ? (
+        <div className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-2.5 text-sm text-[#C45A12]">
+          {error}
+        </div>
+      ) : null}
 
-        <div className="mt-6 flex flex-wrap gap-2">
+      {/* Actiebalk */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 border border-line bg-white px-4 py-3">
+        <StatusBadge kind="factuur" value={factuur.status} />
+        {overdue ? (
+          <span className="text-[11px] font-semibold text-[#C45A12]">
+            Verlopen
+          </span>
+        ) : null}
+        {isPaid && factuur.betaald_op ? (
+          <span className="text-[11px] font-medium text-green-deeper">
+            Betaald {formatDateShort(factuur.betaald_op)}
+          </span>
+        ) : null}
+
+        <div className="ml-auto flex flex-wrap gap-2">
+          {canCredit ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => setShowCredit((v) => !v)}
+              className="border border-line bg-white px-3.5 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+            >
+              Creditfactuur maken
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={busy !== null}
-            onClick={downloadPdf}
-            className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+            onClick={() => void downloadPdf()}
+            className="border border-line bg-white px-3.5 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
-            {busy === "pdf" ? "PDF laden…" : "PDF downloaden"}
+            {busy === "pdf" ? "PDF laden…" : "PDF"}
           </button>
           <button
             type="button"
-            disabled={busy !== null || !factuur.leads?.email}
-            onClick={sendToKlant}
-            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+            disabled={busy !== null || !klantEmail}
+            onClick={() => void sendToKlant()}
+            className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
             title={
-              factuur.leads?.email
-                ? `Mail naar ${factuur.leads.email}`
-                : "Lead heeft geen e-mail"
+              klantEmail ? `Mail naar ${klantEmail}` : "Lead heeft geen e-mail"
             }
           >
             {busy === "send"
               ? "Verzenden…"
               : isDraft
-                ? "Verstuur naar klant"
+                ? "Verstuur"
                 : "Opnieuw versturen"}
           </button>
-          {!isPaid && !isCredit ? (
-            <>
-              <input
-                type="date"
-                value={betaaldOp}
-                onChange={(e) => setBetaaldOp(e.target.value)}
-                className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                aria-label="Betaaldatum"
-              />
-              <button
-                type="button"
-                disabled={busy !== null || !betaaldOp}
-                onClick={markAsPaid}
-                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-              >
-                {busy === "paid" ? "Opslaan…" : "Markeer als betaald"}
-              </button>
-            </>
-          ) : null}
-          {isCredit ? (
-            <p className="w-full text-sm text-muted">
-              Creditfactuur — er hoeft niets te worden betaald.
-            </p>
-          ) : null}
           <button
             type="button"
             disabled={busy !== null}
             onClick={() => void removeFactuur()}
-            className="border border-[#D32F2F]/40 bg-white px-4 py-2 text-sm font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
+            className="border border-[#D32F2F]/35 bg-white px-3.5 py-2 text-sm font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
           >
-            {busy === "delete" ? "Verwijderen…" : "Verwijderen"}
+            {busy === "delete" ? "…" : "Verwijderen"}
           </button>
         </div>
+      </div>
 
-        {msg && (
-          <p className="mt-3 text-sm font-medium text-green-dark">{msg}</p>
-        )}
-        {error && (
-          <p className="mt-3 text-sm font-medium text-[#C45A12]">{error}</p>
-        )}
-
-        {isDraft ? (
-          <div className="mt-6 space-y-3 border border-line bg-wash px-4 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Concept bewerken
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="block text-xs text-muted">
-                Bedrag incl. btw (€)
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={editBedrag}
-                  onChange={(e) => setEditBedrag(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-                />
-              </label>
-              <label className="block text-xs text-muted sm:col-span-2 lg:col-span-1">
-                Omschrijving
-                <input
-                  type="text"
-                  value={editOmschrijving}
-                  onChange={(e) => setEditOmschrijving(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-                />
-              </label>
-              <label className="block text-xs text-muted">
-                Betaaltermijn (dagen)
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={365}
-                  value={editBetaaltermijn}
-                  onChange={(e) => setEditBetaaltermijn(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-                />
-              </label>
-            </div>
+      {showCredit && canCredit ? (
+        <div className="mb-4 border border-line bg-white px-4 py-4">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+            Creditfactuur bij {factuur.factuur_nummer}
+          </p>
+          <p className="mt-1.5 text-sm text-muted">
+            Maakt een concept-creditfactuur voor hetzelfde bedrag (
+            {formatEuro(factuur.bedrag_inc_btw)}). Op de PDF staan de bedragen
+            als −bedrag. Bij versturen vervalt de openstaande oorspronkelijke
+            factuur — er hoeft niets meer te worden betaald.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={busy !== null || !editBedrag.trim()}
-              onClick={() => void saveConcept()}
+              disabled={busy !== null}
+              onClick={() => void createCredit()}
               className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
             >
-              {busy === "save" ? "Opslaan…" : "Wijzigingen opslaan"}
+              {busy === "credit" ? "Aanmaken…" : "Creditconcept maken"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCredit(false)}
+              className="border border-line px-4 py-2 text-sm font-semibold text-ink hover:bg-wash"
+            >
+              Annuleren
             </button>
           </div>
-        ) : null}
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoTile
-            label="Lead"
-            value={factuur.leads?.lead_number || factuur.lead_id.slice(0, 8)}
-            href={`/leads/${factuur.lead_id}`}
-            accent
-          />
-          <InfoTile label="Klant" value={factuur.leads?.naam} />
-          <InfoTile
-            label="Totaal incl. btw"
-            value={formatEuro(factuur.bedrag_inc_btw)}
-          />
-          <InfoTile
-            label="Factuurdatum"
-            value={formatDateShort(factuur.factuurdatum)}
-          />
         </div>
+      ) : null}
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoTile
-            label="Vervaldatum"
-            value={formatDateShort(factuur.vervaldatum)}
-          />
-          <InfoTile
-            label="Betaald op"
-            value={formatDateShort(factuur.betaald_op)}
-          />
-          <InfoTile
-            label="Excl. btw"
-            value={formatEuro(factuur.bedrag_ex_btw)}
-          />
-          <InfoTile label="Btw" value={formatEuro(factuur.btw_bedrag)} />
-        </div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
+        {/* Factuurdocument */}
+        <article className="border border-line bg-white shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+          <div className="border-b border-line px-5 py-6 sm:px-8 sm:py-8">
+            <div className="flex flex-wrap items-start justify-between gap-6">
+              <div>
+                <p className="font-display text-xl font-semibold tracking-tight text-green-deeper">
+                  {COMPANY.naam}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  {COMPANY.adres}
+                  <br />
+                  {COMPANY.postcodePlaats}
+                  <br />
+                  KvK {COMPANY.kvk}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                  {isCredit ? "Creditfactuur" : "Factuur"}
+                </p>
+                <p className="mt-1 font-mono text-sm font-semibold text-green-dark">
+                  {factuur.factuur_nummer}
+                </p>
+                {isDraft ? (
+                  <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    Concept — nog niet verzonden
+                  </p>
+                ) : null}
+              </div>
+            </div>
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {offerte && (
-            <InfoTile
-              label="Offerte"
-              value={offerte.offerte_nummer}
-              href={`/offertes/${offerte.id}`}
-            />
-          )}
-          {project && (
-            <InfoTile
-              label="Project"
-              value={project.project_nummer}
-              href={`/projecten/${project.id}`}
-            />
-          )}
-          {factuur.leads?.email && (
-            <InfoTile label="E-mail klant" value={factuur.leads.email} />
-          )}
-        </div>
+            <div className="mt-8 grid gap-6 sm:grid-cols-2">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+                  Factuur aan
+                </p>
+                <p className="mt-2 text-base font-semibold text-ink">
+                  {klantNaam}
+                </p>
+                {adresLines.map((line) => (
+                  <p key={line} className="text-sm text-muted">
+                    {line}
+                  </p>
+                ))}
+                {klantEmail ? (
+                  <p className="mt-1 text-sm text-muted">{klantEmail}</p>
+                ) : null}
+                {lead?.telefoon ? (
+                  <p className="text-sm text-muted">{lead.telefoon}</p>
+                ) : null}
+              </div>
+              <div className="sm:text-right">
+                <dl className="inline-grid grid-cols-[auto_auto] gap-x-4 gap-y-1.5 text-sm">
+                  <dt className="text-muted">Factuurdatum</dt>
+                  <dd className="font-medium text-ink">
+                    {formatDateShort(factuur.factuurdatum)}
+                  </dd>
+                  <dt className="text-muted">Vervaldatum</dt>
+                  <dd
+                    className={[
+                      "font-medium",
+                      overdue ? "text-[#C45A12]" : "text-ink",
+                    ].join(" ")}
+                  >
+                    {formatDateShort(factuur.vervaldatum)}
+                    {overdue ? " · Verlopen" : ""}
+                  </dd>
+                  {isPaid && factuur.betaald_op ? (
+                    <>
+                      <dt className="text-muted">Betaald op</dt>
+                      <dd className="font-medium text-green-deeper">
+                        {formatDateShort(factuur.betaald_op)}
+                      </dd>
+                    </>
+                  ) : null}
+                  {offerte?.offerte_nummer ? (
+                    <>
+                      <dt className="text-muted">Offerte</dt>
+                      <dd className="font-medium text-ink">
+                        {offerte.offerte_nummer}
+                      </dd>
+                    </>
+                  ) : null}
+                </dl>
+              </div>
+            </div>
+          </div>
 
-        {(offerte?.offerte_nummer || factuur.notities) && (
-          <p className="mt-6 border-t border-line pt-6 text-sm leading-relaxed text-ink">
-            {offerte?.offerte_nummer
-              ? `Betreft offerte ${offerte.offerte_nummer}`
-              : factuur.notities}
-          </p>
-        )}
-      </HeroCard>
+          {/* Regels */}
+          <div className="overflow-x-auto px-5 py-2 sm:px-8">
+            <table className="w-full min-w-[28rem] text-left text-sm">
+              <thead>
+                <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                  <th className="py-3 pr-4 font-semibold">Omschrijving</th>
+                  <th className="py-3 pr-4 text-right font-semibold">
+                    Excl. btw
+                  </th>
+                  <th className="py-3 pr-4 text-right font-semibold">Btw</th>
+                  <th className="py-3 text-right font-semibold">Incl. btw</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-line">
+                  <td className="py-4 pr-4 align-top">
+                    <p className="font-medium text-ink">{regelOmschrijving}</p>
+                    {isCredit && creditVan?.factuur_nummer ? (
+                      <p className="mt-1 text-xs text-muted">
+                        Bij factuur{" "}
+                        <Link
+                          href={`/facturen/${creditVan.id}`}
+                          className="text-green-deeper hover:underline"
+                        >
+                          {creditVan.factuur_nummer}
+                        </Link>
+                      </p>
+                    ) : null}
+                  </td>
+                  <td className="py-4 pr-4 text-right tabular-nums text-ink">
+                    {formatEuro(displayEx)}
+                  </td>
+                  <td className="py-4 pr-4 text-right tabular-nums text-ink">
+                    {formatEuro(displayBtw)}
+                  </td>
+                  <td className="py-4 text-right tabular-nums font-medium text-ink">
+                    {formatEuro(displayInc)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-      <BackLink href="/?tab=facturen" label="Alle facturen" />
+          <div className="flex justify-end px-5 pb-2 sm:px-8">
+            <dl className="w-full max-w-xs space-y-2 border border-line bg-[#f7fbf9] px-4 py-3.5">
+              <div className="flex justify-between gap-6 text-sm">
+                <dt className="text-muted">Subtotaal excl. btw</dt>
+                <dd className="tabular-nums text-ink">
+                  {formatEuro(displayEx)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-6 text-sm">
+                <dt className="text-muted">Btw</dt>
+                <dd className="tabular-nums text-ink">
+                  {formatEuro(displayBtw)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-6 border-t border-line pt-2">
+                <dt className="text-sm font-semibold text-ink">Totaal</dt>
+                <dd className="font-display text-xl font-semibold tabular-nums text-green-deeper">
+                  {formatEuro(displayInc)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
+          <div className="mt-4 border-t border-line px-5 py-5 sm:px-8">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Betaling
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-ink">
+              Gelieve te betalen op{" "}
+              <span className="font-mono font-semibold">{COMPANY.iban}</span>{" "}
+              t.n.v. {COMPANY.naam}, onder vermelding van{" "}
+              <span className="font-mono font-semibold">
+                {factuur.factuur_nummer}
+              </span>
+              .
+            </p>
+            {factuur.notities ? (
+              <p className="mt-3 whitespace-pre-wrap text-sm text-muted">
+                {factuur.notities}
+              </p>
+            ) : null}
+            <p className="mt-4 text-xs text-muted">
+              {COMPANY.email} · {COMPANY.telefoon} · {COMPANY.website}
+            </p>
+          </div>
+        </article>
+
+        {/* Zijbalk acties + koppelingen */}
+        <aside className="space-y-4">
+          {isDraft ? (
+            <section className="border border-line bg-white p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Concept bewerken
+              </p>
+              <div className="mt-3 space-y-3">
+                <label className="block text-xs text-muted">
+                  Bedrag incl. btw (€)
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={editBedrag}
+                    onChange={(e) => setEditBedrag(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                  />
+                </label>
+                <label className="block text-xs text-muted">
+                  Omschrijving
+                  <input
+                    type="text"
+                    value={editOmschrijving}
+                    onChange={(e) => setEditOmschrijving(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                  />
+                </label>
+                <label className="block text-xs text-muted">
+                  Betaaltermijn (dagen)
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={365}
+                    value={editBetaaltermijn}
+                    onChange={(e) => setEditBetaaltermijn(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy !== null || !editBedrag.trim()}
+                  onClick={() => void saveConcept()}
+                  className="w-full bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                >
+                  {busy === "save" ? "Opslaan…" : "Opslaan"}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {!isPaid && !isCredit ? (
+            <section className="border border-line bg-white p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Markeer als betaald
+              </p>
+              <label className="mt-3 block text-xs text-muted">
+                Betaaldatum
+                <input
+                  type="date"
+                  value={betaaldOp}
+                  onChange={(e) => setBetaaldOp(e.target.value)}
+                  className="mt-1 block w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={busy !== null || !betaaldOp}
+                onClick={() => void markAsPaid()}
+                className="mt-3 w-full bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                {busy === "paid" ? "Opslaan…" : "Markeer als betaald"}
+              </button>
+            </section>
+          ) : null}
+
+          {isCredit ? (
+            <section className="border border-line bg-white p-4 text-sm text-muted">
+              Creditfactuur — er hoeft niets te worden betaald.
+              {creditVan?.factuur_nummer ? (
+                <>
+                  {" "}
+                  Gekoppeld aan{" "}
+                  <Link
+                    href={`/facturen/${creditVan.id}`}
+                    className="font-medium text-green-deeper hover:underline"
+                  >
+                    {creditVan.factuur_nummer}
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          <section className="border border-line bg-white p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Datums
+            </p>
+            <dl className="mt-3 space-y-3">
+              <div>
+                <dt className="text-[11px] text-muted">Aangemaakt</dt>
+                <dd className="mt-0.5 text-sm font-medium text-ink">
+                  {formatDateTimeNl(factuur.created_at)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-muted">
+                  Betaald gemarkeerd op
+                </dt>
+                <dd
+                  className={[
+                    "mt-0.5 text-sm font-medium",
+                    isPaid && factuur.betaald_op
+                      ? "text-green-deeper"
+                      : "text-muted",
+                  ].join(" ")}
+                >
+                  {isPaid && factuur.betaald_op
+                    ? formatDateShort(factuur.betaald_op)
+                    : "Nog niet betaald"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="border border-line bg-white p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Koppelingen
+            </p>
+            <ul className="mt-3 space-y-2">
+              <li>
+                <Link
+                  href={`/leads/${factuur.lead_id}`}
+                  className="block border border-line px-3 py-2.5 hover:border-green/40 hover:bg-wash"
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Lead
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs font-semibold text-orange">
+                    {lead?.lead_number ||
+                      factuur.leads?.lead_number ||
+                      factuur.lead_id.slice(0, 8)}
+                  </p>
+                  <p className="mt-0.5 text-sm text-ink">{klantNaam}</p>
+                </Link>
+              </li>
+              {offerte ? (
+                <li>
+                  <Link
+                    href={`/offertes/${offerte.id}`}
+                    className="block border border-line px-3 py-2.5 hover:border-green/40 hover:bg-wash"
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Offerte
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium text-ink">
+                      {offerte.offerte_nummer}
+                    </p>
+                  </Link>
+                </li>
+              ) : null}
+              {project ? (
+                <li>
+                  <Link
+                    href={`/projecten/${project.id}`}
+                    className="block border border-line px-3 py-2.5 hover:border-green/40 hover:bg-wash"
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Project
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium text-ink">
+                      {project.project_nummer}
+                    </p>
+                  </Link>
+                </li>
+              ) : null}
+            </ul>
+          </section>
+        </aside>
+      </div>
     </DetailShell>
   );
 }

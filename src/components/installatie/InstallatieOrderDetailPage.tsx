@@ -16,9 +16,9 @@ type OrderDetail = Project & {
 
 /** Alleen installatie-statussen — geen backoffice-pipeline. */
 const STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
-  { value: "schouw_in_afwachting", label: "Schouw gepland" },
+  { value: "schouwdag_ingepland", label: "Schouw gepland" },
   { value: "schouw_voltooid", label: "Schouw voltooid" },
-  { value: "materiaal_installatie", label: "Installatie gepland" },
+  { value: "installatie_ingepland", label: "Installatie gepland" },
 ];
 
 function installerStatusOf(order: {
@@ -30,9 +30,9 @@ function installerStatusOf(order: {
   if (STATUS_OPTIONS.some((o) => o.value === order.status)) {
     return order.status as ProjectStatus;
   }
-  if (order.installatie_at) return "materiaal_installatie";
-  if (order.schouw_at || order.schouw_week) return "schouw_in_afwachting";
-  return "schouw_in_afwachting";
+  if (order.installatie_at) return "installatie_ingepland";
+  if (order.schouw_at || order.schouw_week) return "schouwdag_ingepland";
+  return "schouwdag_ingepland";
 }
 
 function installerStatusLabel(status: ProjectStatus): string {
@@ -61,7 +61,7 @@ export function InstallatieOrderDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const [status, setStatus] = useState<ProjectStatus>("schouw_in_afwachting");
+  const [status, setStatus] = useState<ProjectStatus>("schouwdag_ingepland");
   const [schouwNotities, setSchouwNotities] = useState("");
   const [installatieNotities, setInstallatieNotities] = useState("");
 

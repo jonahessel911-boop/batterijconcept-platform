@@ -7,6 +7,7 @@ import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import type { Project } from "@/types/database";
 import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
+import { normalizeProjectStatus } from "@/lib/labels";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
 import {
   agendaWeekJumpOptions,
@@ -49,6 +50,7 @@ function leadOf(o: PlanningOrder) {
 export function eventsFromOrders(orders: PlanningOrder[]): PlanningEvent[] {
   const events: PlanningEvent[] = [];
   for (const o of orders) {
+    if (normalizeProjectStatus(o.status) === "annulering") continue;
     if (o.schouw_at) {
       events.push({
         key: `${o.id}-schouw`,

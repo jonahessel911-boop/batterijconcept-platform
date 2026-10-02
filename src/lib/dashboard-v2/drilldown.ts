@@ -34,6 +34,7 @@ export type DashboardV2Kpi =
   | "afspraakToSale"
   | "afsprakenGepland"
   | "omzet"
+  | "annuleringen"
   | "sales";
 
 export const DASHBOARD_V2_KPI_LABELS: Record<DashboardV2Kpi, string> = {
@@ -43,6 +44,7 @@ export const DASHBOARD_V2_KPI_LABELS: Record<DashboardV2Kpi, string> = {
   afspraakToSale: "Afspraak → sale",
   afsprakenGepland: "Afspraken gepland",
   omzet: "Omzet",
+  annuleringen: "Annuleringen",
   sales: "Omzet per sales",
 };
 
@@ -60,6 +62,8 @@ export type DrilldownDay = {
   afspraakToSale: number | null;
   orders: number;
   omzet: number;
+  annuleringen: number;
+  verlorenOmzet?: number;
 };
 
 export type DrilldownRow = {
@@ -145,6 +149,7 @@ export type DrilldownRaw = {
     offerte_nummer: string | null;
     lead_naam: string | null;
     lead_number: string | null;
+    geannuleerd?: boolean;
   }[];
   adviseurs: { id: string; naam: string; actief: boolean; rol: string | null }[];
 };
@@ -157,6 +162,7 @@ export function parseDashboardV2Kpi(v: string | null): DashboardV2Kpi | null {
     v === "afspraakToSale" ||
     v === "afsprakenGepland" ||
     v === "omzet" ||
+    v === "annuleringen" ||
     v === "sales"
   ) {
     return v;
@@ -201,6 +207,7 @@ function toBuildRaw(raw: DrilldownRaw): DashboardV2Raw {
       ondertekend_op: o.ondertekend_op,
       created_at: o.created_at,
       subtotaal_ex_btw: o.subtotaal_ex_btw,
+      geannuleerd: Boolean(o.geannuleerd),
     })),
     adviseurs: raw.adviseurs,
   };
@@ -236,9 +243,16 @@ function buildSeries(
     ).length;
     let orders = 0;
     let omzet = 0;
+    let annuleringen = 0;
+    let verlorenOmzet = 0;
     for (const o of raw.offertes) {
       const at = dealAt(o);
       if (!at || !inIsoRange(at, d.start, d.end)) continue;
+      if (o.geannuleerd) {
+        annuleringen += 1;
+        verlorenOmzet += Number(o.subtotaal_ex_btw) || 0;
+        continue;
+      }
       orders += 1;
       omzet += Number(o.subtotaal_ex_btw) || 0;
     }
@@ -257,6 +271,8 @@ function buildSeries(
       afspraakToSale: a2s != null ? round2(a2s * 100) : null,
       orders,
       omzet: round2(omzet),
+      annuleringen,
+      verlorenOmzet: round2(verlorenOmzet),
     };
   });
   return { granularity, days };
@@ -343,11 +359,17 @@ function afspraakRows(
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 }
 
-function orderRows(raw: DrilldownRaw, range: Range): DrilldownRow[] {
+function orderRows(
+  raw: DrilldownRaw,
+  range: Range,
+  opts: { alleenGeannuleerd?: boolean } = {}
+): DrilldownRow[] {
   return raw.offertes
     .filter((o) => {
       const at = dealAt(o);
-      return at ? inIsoRange(at, range.start, range.end) : false;
+      if (!at || !inIsoRange(at, range.start, range.end)) return false;
+      if (opts.alleenGeannuleerd) return Boolean(o.geannuleerd);
+      return !o.geannuleerd;
     })
     .map((o) => {
       const at = dealAt(o)!;
@@ -358,7 +380,7 @@ function orderRows(raw: DrilldownRaw, range: Range): DrilldownRow[] {
         dayKey: amsDayKey(at),
         titel: o.lead_naam || "—",
         subtitel: o.offerte_nummer || o.lead_number || o.id.slice(0, 8),
-        meta: null,
+        meta: o.geannuleerd ? "Geannuleerd" : null,
         waarde: omzet,
         waardeLabel: fmtMoney(omzet),
         doel: null,
@@ -388,6 +410,7 @@ function salesRows(
   for (const o of raw.offertes) {
     const at = dealAt(o);
     if (!at || !inIsoRange(at, range.start, range.end)) continue;
+    if (o.geannuleerd) continue;
     if (!o.adviseur_id) continue;
     const row = byId.get(o.adviseur_id) || {
       naam: adviseurNaam(raw, o.adviseur_id) || "Onbekend",
@@ -473,6 +496,12 @@ export function buildDashboardV2Drilldown(
   const afsprakenVoltooid = days.reduce((s, d) => s + d.afsprakenVoltooid, 0);
   const orders = days.reduce((s, d) => s + d.orders, 0);
   const omzet = round2(days.reduce((s, d) => s + d.omzet, 0));
+  const annuleringen = days.reduce((s, d) => s + d.annuleringen, 0);
+  const getekendTotaal = orders + annuleringen;
+  const annuleringsPct =
+    getekendTotaal > 0
+      ? round2((annuleringen / getekendTotaal) * 100)
+      : 0;
   const l2a = safeDiv(eersteAfspraken, leads);
   const leadToAppt = l2a != null ? round2(l2a * 100) : 0;
   const a2s = safeDiv(orders, afsprakenVoltooid);
@@ -561,6 +590,23 @@ export function buildDashboardV2Drilldown(
         chartGoal: goals.orders,
         rateGoal: false,
         rows: orderRows(raw, range),
+        rowKind: "orders",
+      };
+    case "annuleringen":
+      return {
+        ...base,
+        actual: annuleringsPct,
+        goal: 0,
+        actualLabel: `${fmtPct(annuleringsPct)} · ${annuleringen} van ${getekendTotaal}`,
+        goalLabel: "—",
+        chartGoal: 0,
+        rateGoal: true,
+        extras: {
+          leads: annuleringen,
+          afsprakenGepland: getekendTotaal,
+          orders,
+        },
+        rows: orderRows(raw, range, { alleenGeannuleerd: true }),
         rowKind: "orders",
       };
     case "omzet":

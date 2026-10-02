@@ -11,6 +11,7 @@ import type {
 } from "@/types/database";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
 type ActivityKind =
@@ -60,15 +61,25 @@ const KIND_LABEL: Record<ActivityKind, string> = {
 };
 
 const PROJECT_STATUS_LABEL: Record<string, string> = {
-  schouw_aanbetaling: "Schouw + aanbetaling",
+  schouwweek_inplannen: "Schouwweek inplannen",
+  aanbetaling_verstuurd: "Aanbetaling verstuurd",
   aanbetaling_betaald: "Aanbetaling betaald",
-  schouw_in_afwachting: "Schouw in afwachting",
+  warmtefonds_afspraak_ingepland: "Warmtefonds afspraak ingepland",
+  warmtefonds_aangevraagd: "Warmtefonds aangevraagd",
+  warmtefonds_in_behandeling: "Warmtefonds in behandeling",
+  warmtefonds_afgewezen: "Warmtefonds afgewezen",
+  warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
+  schouwdag_ingepland: "Schouwdag ingepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
   restfactuur_betaald: "Restfactuur betaald",
-  materiaal_installatie: "Materiaal + installatie plannen",
+  materiaal_besteld: "Materiaal ingekocht — wachten op levering",
+  installatie_ingepland: "Installatie ingepland",
   installatie_voltooid: "Installatie voltooid",
+  review_gevraagd: "Review gevraagd",
   service: "Service / nazorg",
+  annulering: "Annulering",
+  hold_sales_actie: "HOLD - Sales actie",
 };
 
 function kindTone(kind: ActivityKind): string {
@@ -93,6 +104,7 @@ const EVENT_KINDS = new Set<ActivityKind>([
   "bel",
   "afspraak",
   "betaling",
+  "factuur",
   "inkoop",
   "installatie",
   "schouw",
@@ -108,9 +120,41 @@ function buildFromEntities(opts: {
 }): ActivityItem[] {
   const items: ActivityItem[] = [];
 
+  // Factuur-id's die al via lead_events in de tijdlijn staan (apart voor send vs paid)
+  const loggedSendIds = new Set<string>();
+  const loggedPaidIds = new Set<string>();
+  for (const ev of opts.events) {
+    const meta = ev.meta as { factuur_id?: string } | null;
+    const fid = meta?.factuur_id;
+    if (!fid) continue;
+    if (ev.soort === "factuur") loggedSendIds.add(fid);
+    if (ev.soort === "betaling") loggedPaidIds.add(fid);
+  }
+
+  const schouwWeekEvByProject = new Map<string, LeadEvent>();
+  for (const ev of opts.events) {
+    if (ev.soort !== "schouw" || !/Schouwweek gezet/i.test(ev.titel || "")) {
+      continue;
+    }
+    const meta = (ev.meta || {}) as {
+      project_id?: string;
+      schouw_week?: number;
+      schouw_jaar?: number;
+    };
+    const pid = meta.project_id;
+    if (!pid) continue;
+    const prev = schouwWeekEvByProject.get(pid);
+    if (!prev || ev.created_at < prev.created_at) {
+      schouwWeekEvByProject.set(pid, ev);
+    }
+  }
+
   for (const ev of opts.events) {
     const soort = (ev.soort || "overig") as ActivityKind;
     const kind: ActivityKind = EVENT_KINDS.has(soort) ? soort : "overig";
+    if (soort === "schouw" && /Schouwweek gezet/i.test(ev.titel || "")) {
+      continue;
+    }
     items.push({
       id: `ev-${ev.id}`,
       at: ev.created_at,
@@ -159,34 +203,86 @@ function buildFromEntities(opts: {
   }
 
   for (const f of opts.facturen) {
+    const isAanb = isAanbetalingFactuurOmschrijving(f.omschrijving);
+    const isCredit = Boolean(
+      (f as { credit_van_factuur_id?: string | null }).credit_van_factuur_id
+    );
+    const soortLabel = isCredit
+      ? "Creditfactuur"
+      : isAanb
+        ? "Aanbetalingsfactuur"
+        : "Factuur";
+    const nr = f.factuur_nummer || "";
+    const pdfAction = {
+      type: "factuur_pdf" as const,
+      factuurId: f.id,
+      filename: `${nr || "factuur"}${f.status === "concept" ? "-concept" : ""}.pdf`,
+      label: "Download PDF",
+    };
+
     items.push({
-      id: `fac-${f.id}`,
+      id: `fac-create-${f.id}`,
       at: f.created_at || `${f.factuurdatum}T12:00:00`,
       kind: "factuur",
-      titel: `Factuur ${f.factuur_nummer} aangemaakt`,
-      detail: `${formatEuro(f.bedrag_ex_btw)} excl. btw · ${f.status}`,
-      action: {
-        type: "factuur_pdf",
-        factuurId: f.id,
-        filename: `${f.factuur_nummer}${f.status === "concept" ? "-concept" : ""}.pdf`,
-        label: "Download PDF",
-      },
+      titel: `${soortLabel} ${nr} aangemaakt`.trim(),
+      detail: [
+        f.bedrag_ex_btw != null ? `${formatEuro(f.bedrag_ex_btw)} excl. btw` : null,
+        f.omschrijving,
+        f.status,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      action: pdfAction,
     });
 
-    if (f.status === "betaald" && f.betaald_op) {
+    if (
+      !loggedSendIds.has(f.id) &&
+      (f.status === "verzonden" ||
+        f.status === "betaald" ||
+        f.status === "deels_betaald") &&
+      f.factuurdatum
+    ) {
+      items.push({
+        id: `fac-send-${f.id}`,
+        at: `${f.factuurdatum}T12:00:00`,
+        kind: "factuur",
+        titel: `${soortLabel} ${nr} verstuurd`.trim(),
+        detail: [
+          f.bedrag_inc_btw != null
+            ? `${formatEuro(f.bedrag_inc_btw)} incl. btw`
+            : null,
+          f.omschrijving,
+        ]
+          .filter(Boolean)
+          .join(" · ") || null,
+        action: {
+          ...pdfAction,
+          filename: `${nr || "factuur"}.pdf`,
+        },
+      });
+    }
+
+    if (
+      !loggedPaidIds.has(f.id) &&
+      f.status === "betaald" &&
+      f.betaald_op
+    ) {
       items.push({
         id: `fac-paid-${f.id}`,
         at: `${f.betaald_op}T12:00:00`,
         kind: "betaling",
-        titel: `Factuur ${f.factuur_nummer} betaald`,
-        detail: `${formatEuro(f.bedrag_inc_btw)} incl. btw${
-          f.omschrijving ? ` · ${f.omschrijving}` : ""
-        }`,
+        titel: `${soortLabel} ${nr} betaald`.trim(),
+        detail: [
+          f.bedrag_inc_btw != null
+            ? `${formatEuro(f.bedrag_inc_btw)} incl. btw`
+            : null,
+          f.omschrijving,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         action: {
-          type: "factuur_pdf",
-          factuurId: f.id,
-          filename: `${f.factuur_nummer}.pdf`,
-          label: "Download PDF",
+          ...pdfAction,
+          filename: `${nr || "factuur"}.pdf`,
         },
       });
     }
@@ -206,23 +302,16 @@ function buildFromEntities(opts: {
       },
     });
 
-    if (p.schouw_at || (p.schouw_jaar && p.schouw_week)) {
-      const at =
-        p.schouw_at ||
-        p.updated_at ||
-        p.created_at;
+    if (p.schouw_jaar && p.schouw_week) {
+      const weekEv = schouwWeekEvByProject.get(p.id);
       items.push({
-        id: `schouw-${p.id}`,
-        at,
+        id: `schouw-week-${p.id}`,
+        at: weekEv?.created_at || p.updated_at || p.created_at,
         kind: "schouw",
-        titel: p.schouw_at
-          ? "Schouw gepland"
-          : `Schouwweek gezet (W${p.schouw_week})`,
-        detail: p.schouw_at
-          ? formatDateTimeNl(p.schouw_at)
-          : p.schouw_jaar && p.schouw_week
-            ? `${p.schouw_jaar}-W${String(p.schouw_week).padStart(2, "0")}`
-            : null,
+        titel: `Schouwweek gezet (W${p.schouw_week})`,
+        detail:
+          weekEv?.detail ||
+          `${p.schouw_jaar}-W${String(p.schouw_week).padStart(2, "0")}`,
         action: {
           type: "link",
           href: `/projecten/${p.id}`,
@@ -231,7 +320,26 @@ function buildFromEntities(opts: {
       });
     }
 
-    if (p.installatie_at || p.status === "materiaal_installatie") {
+    if (p.schouw_at) {
+      items.push({
+        id: `schouw-datum-${p.id}`,
+        at: p.schouw_at,
+        kind: "schouw",
+        titel: "Schouwdatum gepland",
+        detail: formatDateTimeNl(p.schouw_at),
+        action: {
+          type: "link",
+          href: `/projecten/${p.id}`,
+          label: "Open project",
+        },
+      });
+    }
+
+    if (
+      p.installatie_at ||
+      p.status === "installatie_ingepland" ||
+      p.status === "materiaal_besteld"
+    ) {
       items.push({
         id: `inst-${p.id}`,
         at: p.installatie_at || p.updated_at || p.created_at,
@@ -320,7 +428,7 @@ export function LeadActivityPanel({
             sb
               .from("facturen")
               .select(
-                "id, factuur_nummer, status, created_at, factuurdatum, bedrag_ex_btw"
+                "id, factuur_nummer, status, created_at, factuurdatum, betaald_op, bedrag_ex_btw, bedrag_inc_btw, omschrijving, credit_van_factuur_id"
               )
               .eq("lead_id", leadId)
               .order("created_at", { ascending: false }),
@@ -408,9 +516,22 @@ export function LeadActivityPanel({
   }
 
   return (
-    <section className="mt-4 border border-line bg-white">
-      <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+    <section className="mt-3 border border-line bg-white">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5 sm:px-5">
+        <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-3.5 w-3.5 text-green-dark/70"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M12 8v4l2.5 2.5" />
+            <circle cx="12" cy="12" r="9" />
+          </svg>
           Activiteit
         </h2>
         <button
@@ -422,7 +543,7 @@ export function LeadActivityPanel({
         </button>
       </div>
 
-      <div className="px-4 py-4 sm:px-5">
+      <div className="px-4 py-3 sm:px-5">
         {msg && (
           <p className="mb-3 border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
             {msg}
@@ -435,8 +556,8 @@ export function LeadActivityPanel({
           </p>
         ) : items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted">
-            Nog geen activiteit. Offertes, facturen, schouw, installatie en
-            notities verschijnen hier.
+            Nog geen activiteit. Offertes, facturen (verstuurd/betaald), schouw,
+            installatie, statuswijzigingen en notities verschijnen hier.
           </p>
         ) : (
           <ol className="relative space-y-0 border-l border-line pl-4">

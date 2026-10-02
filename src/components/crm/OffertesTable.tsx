@@ -7,6 +7,7 @@ import type { Offerte, OfferteStatus } from "@/types/database";
 import { offerteStatusLabel } from "@/lib/labels";
 import { StatusBadge } from "./StatusBadge";
 import { formatDateShort, formatEuro } from "@/lib/format";
+import { rememberCrmReturnUrl } from "./DetailChrome";
 
 const OFFERTE_STATUSES: OfferteStatus[] = [
   "concept",
@@ -102,7 +103,10 @@ export function OffertesTable({
               <tr
                 key={o.id}
                 className="cursor-pointer"
-                onClick={() => router.push(`/offertes/${o.id}`)}
+                onClick={() => {
+                  rememberCrmReturnUrl();
+                  router.push(`/offertes/${o.id}`);
+                }}
               >
                 <td className="font-mono text-[11px] font-semibold text-green-dark whitespace-nowrap">
                   {o.offerte_nummer}

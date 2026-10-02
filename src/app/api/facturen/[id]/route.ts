@@ -9,6 +9,7 @@ import {
 } from "@/lib/factuur-betaling";
 import { formatEuro } from "@/lib/format";
 import { logLeadEvent } from "@/lib/lead-events";
+import { ensureNettoAanbetalingCreditfactuur } from "@/lib/netto-creditfactuur";
 import type { FactuurStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -174,6 +175,13 @@ export async function PATCH(
           bedrag_inc_btw: bedrag,
         },
       });
+
+      // Netto-boord: eerste €250 commissie + creditfactuur (uitbetaling eerstvolgende woensdag)
+      try {
+        await ensureNettoAanbetalingCreditfactuur(sb, id);
+      } catch {
+        // niet blokkeren — factuur blijft betaald
+      }
     }
 
     return NextResponse.json({ factuur: data });

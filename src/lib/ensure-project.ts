@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getDefaultBackofficeMedewerkerId } from "@/lib/admin-adviseur";
 import { STANDAARD_INSTALLATIEKOSTEN } from "@/lib/project-kosten";
+import { resolveBetaalwijze } from "@/lib/project-status-config";
 
 /** Maakt een project aan voor een ondertekende offerte (idempotent). */
 export async function ensureProjectForOfferte(
@@ -15,7 +17,7 @@ export async function ensureProjectForOfferte(
   const { data: offerteMeta } = await sb
     .from("offertes")
     .select(
-      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door"
+      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, financiering_voorbehoud, leads(status)"
     )
     .eq("id", opts.offerteId)
     .maybeSingle();
@@ -55,22 +57,45 @@ export async function ensureProjectForOfferte(
     ? partnerJoin[0]?.naam
     : partnerJoin?.naam;
 
+  const leadJoin = (
+    offerteMeta as {
+      leads?:
+        | { status?: string | null }
+        | { status?: string | null }[]
+        | null;
+      financiering_voorbehoud?: boolean | null;
+    } | null
+  )?.leads;
+  const leadStatus = Array.isArray(leadJoin)
+    ? leadJoin[0]?.status
+    : leadJoin?.status;
+  const betaalwijze = resolveBetaalwijze({
+    leadStatus,
+    financieringVoorbehoud: (
+      offerteMeta as { financiering_voorbehoud?: boolean | null } | null
+    )?.financiering_voorbehoud,
+  });
+
+  const defaultBackofficeId = await getDefaultBackofficeMedewerkerId(sb);
+
   const { data: existing } = await sb
     .from("projecten")
-    .select("id, project_nummer, installatie_partner_id")
+    .select("id, project_nummer, installatie_partner_id, verantwoordelijke_id")
     .eq("offerte_id", opts.offerteId)
     .maybeSingle();
 
   if (existing?.id) {
+    const patch: Record<string, unknown> = {};
     // Partner van offerte alsnog overnemen als project die nog mist
     if (partnerId && !existing.installatie_partner_id) {
-      await sb
-        .from("projecten")
-        .update({
-          installatie_partner_id: partnerId,
-          ...(partnerNaam ? { monteur: partnerNaam } : {}),
-        })
-        .eq("id", existing.id);
+      patch.installatie_partner_id = partnerId;
+      if (partnerNaam) patch.monteur = partnerNaam;
+    }
+    if (defaultBackofficeId && !existing.verantwoordelijke_id) {
+      patch.verantwoordelijke_id = defaultBackofficeId;
+    }
+    if (Object.keys(patch).length > 0) {
+      await sb.from("projecten").update(patch).eq("id", existing.id);
     }
     return {
       id: existing.id,
@@ -97,7 +122,7 @@ export async function ensureProjectForOfferte(
     lead_id: opts.leadId,
     offerte_id: opts.offerteId,
     project_nummer: nummer as string,
-    status: "schouw_aanbetaling",
+    status: "schouwweek_inplannen",
     titel,
     notities: `Aangemaakt na afronden backoffice-actie voor ${opts.offerteNummer}.`,
     projectkosten: STANDAARD_INSTALLATIEKOSTEN,
@@ -107,7 +132,11 @@ export async function ensureProjectForOfferte(
     backoffice_notitie_door: backofficeNotitieDoor,
     installateur_notitie_door: installateurNotitieDoor,
     backoffice_afgerond_at: new Date().toISOString(),
+    betaalwijze,
   };
+  if (defaultBackofficeId) {
+    insertRow.verantwoordelijke_id = defaultBackofficeId;
+  }
   if (partnerId) {
     insertRow.installatie_partner_id = partnerId;
     if (partnerNaam) insertRow.monteur = partnerNaam;
@@ -119,7 +148,7 @@ export async function ensureProjectForOfferte(
     .select("id, project_nummer")
     .single();
 
-  // Kolom ontbreekt nog → opnieuw zonder partner
+  // Kolom ontbreekt nog → opnieuw zonder optionele velden
   if (
     error &&
     (error.message?.includes("installatie_partner_id") ||
@@ -127,6 +156,8 @@ export async function ensureProjectForOfferte(
       error.message?.includes("backoffice_notitie") ||
       error.message?.includes("installateur_notitie") ||
       error.message?.includes("backoffice_afgerond_at") ||
+      error.message?.includes("betaalwijze") ||
+      error.message?.includes("verantwoordelijke_id") ||
       error.code === "42703")
   ) {
     delete insertRow.installatie_partner_id;
@@ -136,6 +167,8 @@ export async function ensureProjectForOfferte(
     delete insertRow.backoffice_notitie_door;
     delete insertRow.installateur_notitie_door;
     delete insertRow.backoffice_afgerond_at;
+    delete insertRow.betaalwijze;
+    delete insertRow.verantwoordelijke_id;
     const retry = await sb
       .from("projecten")
       .insert(insertRow)
@@ -152,7 +185,7 @@ export async function ensureProjectForOfferte(
 
   try {
     const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
-    await syncAutoTakenVoorProject(sb, created.id, "schouw_aanbetaling");
+    await syncAutoTakenVoorProject(sb, created.id, "schouwweek_inplannen");
   } catch (e) {
     console.error("Auto-taken na project:", e);
   }

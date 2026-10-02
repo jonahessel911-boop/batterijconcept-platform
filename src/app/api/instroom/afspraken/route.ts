@@ -1,6 +1,6 @@
 /**
  * GET /api/instroom/afspraken — interne recruitment-agenda
- * POST — gesprek inplannen (geen e-mail naar kandidaat)
+ * POST — gesprek inplannen (+ bevestigingsmail naar kandidaat indien e-mail bekend)
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -8,6 +8,8 @@ import { fromZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { sendEmail } from "@/lib/email/postmark";
+import { sollicitatieGesprekBevestigingEmail } from "@/lib/email/templates";
 import type { SollicitatieAfspraakSoort } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -114,7 +116,7 @@ export async function POST(req: NextRequest) {
 
     const { data: sol, error: solErr } = await sb
       .from("sollicitaties")
-      .select("id, status")
+      .select("id, status, naam, email, functie")
       .eq("id", sollicitatieId)
       .maybeSingle();
     if (solErr) throw solErr;
@@ -149,15 +151,64 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    // Kanban: zet op "Gesprek gepland" (geen mail)
-    if (sol.status !== "aangenomen" && sol.status !== "diskwalificatie") {
+    // Kanban: zet op "Gesprek gepland" (niet terugzetten vanuit beoordeling/aangenomen)
+    const { canAutoPromoteToGesprekGepland, normalizeSollicitatieStatus } =
+      await import("@/lib/sollicitatie");
+    if (
+      canAutoPromoteToGesprekGepland(
+        normalizeSollicitatieStatus(sol.status as string)
+      )
+    ) {
       await sb
         .from("sollicitaties")
-        .update({ status: "gesprek_gepland", updated_at: new Date().toISOString() })
+        .update({
+          status: "gesprek_gepland",
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", sollicitatieId);
     }
 
-    return NextResponse.json({ afspraak: data }, { status: 201 });
+    let mailSent = false;
+    let mailError: string | null = null;
+    const to = sol.email?.trim() || null;
+    if (to) {
+      try {
+        const html = sollicitatieGesprekBevestigingEmail({
+          naam: sol.naam,
+          startAt: start,
+          soort,
+          functie: sol.functie,
+        });
+        const sent = await sendEmail({
+          to,
+          subject:
+            soort === "fysiek"
+              ? "Bevestiging gesprek bij Batterijconcept"
+              : "Bevestiging telefonisch gesprek Batterijconcept",
+          html,
+          tag: "sollicitatie-gesprek-bevestiging",
+        });
+        if (sent.ok) {
+          mailSent = true;
+        } else {
+          mailError = sent.error || "Mail versturen mislukt";
+          console.error("Sollicitatie bevestigingsmail:", mailError);
+        }
+      } catch (e) {
+        mailError = errMessage(e, "Mail versturen mislukt");
+        console.error("Sollicitatie bevestigingsmail:", e);
+      }
+    }
+
+    return NextResponse.json(
+      {
+        afspraak: data,
+        mail_sent: mailSent,
+        mail_skipped: !to,
+        mail_error: mailError,
+      },
+      { status: 201 }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Afspraak aanmaken mislukt") },

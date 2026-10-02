@@ -6,9 +6,14 @@ import {
   emailMuted,
   emailP,
 } from "./layout";
-import { formatDateTimeLongNl } from "@/lib/format";
+import { formatDateNl, formatDateTimeLongNl, formatTimeNl } from "@/lib/format";
 import { planningVensterNl } from "@/lib/planning-window";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
+import {
+  RECRUITMENT_GESPREK_CONTACT,
+  RECRUITMENT_GESPREK_LOCATIE,
+  RECRUITMENT_GESPREK_TEL,
+} from "@/lib/sollicitatie";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -179,6 +184,148 @@ export function afspraakBevestigingEmail(opts: {
       lead: opts.lead,
     })
   );
+}
+
+/** Bevestiging sollicitatiegesprek naar kandidaat. */
+export function sollicitatieGesprekBevestigingEmail(opts: {
+  naam: string;
+  startAt: string | Date;
+  soort: "fysiek" | "telefonisch";
+  functie?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const datum = formatDateNl(opts.startAt);
+  const tijd = formatTimeNl(opts.startAt);
+  const isFysiek = opts.soort === "fysiek";
+  const titel = isFysiek
+    ? "Je gesprek bij Batterijconcept"
+    : "Je telefonische gesprek met Batterijconcept";
+
+  const detailsRows = [
+    `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Datum</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${datum}</td></tr>`,
+    `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Tijd</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${tijd}</td></tr>`,
+    `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Soort</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${isFysiek ? "Op locatie" : "Telefonisch"}</td></tr>`,
+    isFysiek
+      ? `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;vertical-align:top;">Adres</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${RECRUITMENT_GESPREK_LOCATIE}</td></tr>`
+      : "",
+    opts.functie
+      ? `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Functie</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${opts.functie}</td></tr>`
+      : "",
+  ].join("");
+
+  return emailLayout({
+    title: titel,
+    preheader: `${datum} om ${tijd}${isFysiek ? ` · ${RECRUITMENT_GESPREK_LOCATIE}` : ""}`,
+    bodyHtml: [
+      emailH1(titel),
+      emailP(`Hoi ${first},`),
+      emailP(
+        isFysiek
+          ? "Hierbij de bevestiging van je sollicitatiegesprek. We kijken ernaar uit je te ontmoeten."
+          : "Hierbij de bevestiging van je telefonische sollicitatiegesprek. We bellen je op het doorgegeven nummer."
+      ),
+      emailBox(
+        `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${detailsRows}</table>`
+      ),
+      isFysiek
+        ? emailP(
+            `We verwachten je op <strong>${RECRUITMENT_GESPREK_LOCATIE}</strong>.`
+          )
+        : "",
+      emailP(
+        `Bel of app als je moeite hebt met het vinden: <strong>${RECRUITMENT_GESPREK_TEL}</strong> (${RECRUITMENT_GESPREK_CONTACT}).`
+      ),
+      emailMuted(
+        "Kun je niet? Laat het ons zo snel mogelijk weten via dezelfde nummers of info@batterijconcept.nl."
+      ),
+    ].join(""),
+  });
+}
+
+/** Bevestiging trainingsplanning naar aangenomen kandidaat. */
+export function sollicitatieTrainingBevestigingEmail(opts: {
+  naam: string;
+  trainingNaam: string;
+  adres: string;
+  inhoud: string;
+  functie?: string | null;
+  dagen: Array<{
+    dag_nummer: number;
+    datum: string;
+    start_tijd: string;
+    eind_tijd: string;
+    planning: string;
+  }>;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const titel = `Je training: ${opts.trainingNaam}`;
+
+  const formatTijd = (t: string) => {
+    const raw = (t || "").slice(0, 5);
+    return raw || t;
+  };
+
+  const dagenHtml = opts.dagen
+    .map((d) => {
+      const datumLabel = formatDateNl(`${d.datum}T12:00:00`);
+      const planning = (d.planning || "").trim();
+      return `
+        <tr>
+          <td style="padding:10px 0;border-top:1px solid #E6EBE8;vertical-align:top;">
+            <div style="font-weight:700;color:#1A1F1C;font-size:13px;">Dag ${d.dag_nummer} · ${datumLabel}</div>
+            <div style="color:#5A635C;font-size:13px;margin-top:2px;">${formatTijd(d.start_tijd)} – ${formatTijd(d.eind_tijd)}</div>
+            ${
+              planning
+                ? `<div style="color:#1A1F1C;font-size:13px;margin-top:6px;white-space:pre-wrap;">${planning.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>`
+                : ""
+            }
+          </td>
+        </tr>`;
+    })
+    .join("");
+
+  const inhoudSafe = opts.inhoud
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br/>");
+
+  return emailLayout({
+    title: titel,
+    preheader: `${opts.trainingNaam} · ${opts.adres}`,
+    bodyHtml: [
+      emailH1(titel),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Gefeliciteerd — je bent aangenomen en ingepland voor de training. Hieronder vind je alle details."
+      ),
+      emailBox(
+        `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+          <tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Training</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${opts.trainingNaam}</td></tr>
+          <tr><td style="padding:6px 0;color:#5A635C;font-size:13px;vertical-align:top;">Adres</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${opts.adres}</td></tr>
+          ${
+            opts.functie
+              ? `<tr><td style="padding:6px 0;color:#5A635C;font-size:13px;">Functie</td><td style="padding:6px 0;text-align:right;font-weight:600;color:#1A1F1C;font-size:13px;">${opts.functie}</td></tr>`
+              : ""
+          }
+        </table>`
+      ),
+      emailP("<strong>Wat gaan we doen?</strong>"),
+      emailP(inhoudSafe),
+      emailP("<strong>Planning</strong>"),
+      emailBox(
+        `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${dagenHtml}</table>`
+      ),
+      emailP(
+        "<strong>Lunch en drinken worden verzorgd</strong> — je hoeft zelf niets mee te nemen."
+      ),
+      emailP(
+        `We verwachten je op <strong>${opts.adres}</strong>. Bel of app bij vragen: <strong>${RECRUITMENT_GESPREK_TEL}</strong> (${RECRUITMENT_GESPREK_CONTACT}).`
+      ),
+      emailMuted(
+        "Kun je een dag niet? Laat het ons zo snel mogelijk weten via hetzelfde nummer of info@batterijconcept.nl."
+      ),
+    ].join(""),
+  });
 }
 
 export function afspraakHerinneringEmail(opts: {
@@ -356,6 +503,40 @@ export function afspraakGeannuleerdKlantEmail(opts: {
       ),
       emailMuted("Tot snel, team Batterijconcept"),
     ].join(""),
+  });
+}
+
+/** Klant: project/bestelling definitief geannuleerd (wettelijk herroepingsrecht) */
+export function projectGeannuleerdKlantEmail(opts: {
+  naam: string;
+  projectNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const nr = opts.projectNummer?.trim() || null;
+  return emailLayout({
+    title: "Bestelling geannuleerd — Batterijconcept",
+    preheader: "Je bestelling is definitief opgeheven.",
+    bodyHtml: [
+      emailH1("Bestelling geannuleerd"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Hierbij bevestigen we dat je bestelling bij Batterijconcept definitief is geannuleerd en daarmee is opgeheven."
+      ),
+      nr
+        ? emailBox(
+            `<p style="margin:0;font-size:15px;"><strong>Order</strong><br />${nr}</p>`
+          )
+        : "",
+      emailP(
+        "Je maakt hiermee gebruik van je <strong>wettelijke annuleringsrecht</strong> (herroepingsrecht). Er volgen vanuit ons geen verdere verplichtingen meer voor deze bestelling."
+      ),
+      emailP(
+        "Heb je vragen of wil je later opnieuw advies? Mail ons op info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ]
+      .filter(Boolean)
+      .join(""),
   });
 }
 

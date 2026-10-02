@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import { normalizeProjectStatus } from "@/lib/labels";
 import {
   buildDashboardV2,
   buildDashboardV2Drilldown,
@@ -79,7 +80,7 @@ async function loadAfsprakenRows(sb: Sb): Promise<Record<string, unknown>[]> {
 }
 
 async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
-  const [leadsRows, afsprakenRows, offertesRows, adviseursRes] =
+  const [leadsRows, afsprakenRows, offertesRows, projectenRows, adviseursRes] =
     await Promise.all([
       fetchAllRows((from, to) =>
         sb
@@ -97,15 +98,32 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
           .select(
             "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, offerte_nummer, leads(naam, lead_number, adviseur_id)"
           )
-          .eq("status", "ondertekend")
+          .in("status", ["ondertekend", "afgewezen"])
           .not("ondertekend_op", "is", null)
           .order("ondertekend_op", { ascending: true })
+          .range(from, to)
+      ),
+      fetchAllRows((from, to) =>
+        sb
+          .from("projecten")
+          .select("id, offerte_id, status")
+          .not("offerte_id", "is", null)
           .range(from, to)
       ),
       sb.from("adviseurs").select("id, naam, actief, rol"),
     ]);
 
   if (adviseursRes.error) throw adviseursRes.error;
+
+  const geannuleerdOfferteIds = new Set(
+    projectenRows
+      .filter(
+        (p) =>
+          normalizeProjectStatus(p.status as string | null) === "annulering"
+      )
+      .map((p) => p.offerte_id as string)
+      .filter(Boolean)
+  );
 
   const leadMap = new Map(
     leadsRows.map((l) => [
@@ -148,6 +166,9 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
       lead_number?: string | null;
       adviseur_id?: string | null;
     } | null;
+    const status = (o.status as string) || "";
+    const geannuleerd =
+      status === "afgewezen" || geannuleerdOfferteIds.has(o.id as string);
     return {
       id: o.id as string,
       lead_id: o.lead_id as string,
@@ -158,6 +179,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
       offerte_nummer: (o.offerte_nummer as string) || null,
       lead_naam: lead?.naam || null,
       lead_number: lead?.lead_number || null,
+      geannuleerd,
     };
   });
 
@@ -209,6 +231,7 @@ function toDashboardRaw(raw: DrilldownRaw): DashboardV2Raw {
       ondertekend_op: o.ondertekend_op,
       created_at: o.created_at,
       subtotaal_ex_btw: o.subtotaal_ex_btw,
+      geannuleerd: Boolean(o.geannuleerd),
     })),
     adviseurs: raw.adviseurs,
   };

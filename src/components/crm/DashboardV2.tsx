@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatEuro } from "@/lib/format";
 import {
   DASHBOARD_V2_PERIOD_LABELS,
+  type DashboardV2AdviseurBar,
   type DashboardV2Data,
   type DashboardV2Forecast,
   type DashboardV2Kpi,
@@ -12,6 +13,7 @@ import {
   type DashboardV2Scope,
   type ForecastWeek,
 } from "@/lib/dashboard-v2";
+import { NETTO_COMMISSIE_PCT } from "@/lib/netto-boord";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,
@@ -1034,6 +1036,52 @@ export function DashboardV2() {
                 formatValue={money}
                 onOpen={() => setOpenKpi("omzet")}
               />
+              <button
+                type="button"
+                onClick={() => setOpenKpi("annuleringen")}
+                className="flex h-full w-full flex-col rounded-2xl border border-line bg-white p-5 text-left transition hover:border-green hover:shadow-[0_8px_24px_rgba(26,138,62,0.08)]"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-display text-base font-semibold text-ink">
+                    Annuleringen
+                  </p>
+                  <span className="text-[11px] font-semibold text-green-dark">
+                    Open →
+                  </span>
+                </div>
+                <div className="mt-4 flex flex-1 flex-col justify-center">
+                  <p className="font-display text-3xl font-semibold tabular-nums text-ink">
+                    {data.totals.annuleringsPct != null
+                      ? `${num(data.totals.annuleringsPct, 1)}%`
+                      : "—"}
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    {num(data.totals.annuleringen)} geannuleerd van{" "}
+                    {num(
+                      data.totals.orders + data.totals.annuleringen
+                    )}{" "}
+                    getekend
+                  </p>
+                  <p className="mt-1 text-sm font-medium tabular-nums text-[#C62828]">
+                    Verloren omzet {money(data.totals.verlorenOmzet)}
+                  </p>
+                  {data.deltas.annuleringsPct != null ? (
+                    <p
+                      className={[
+                        "mt-2 text-xs font-semibold tabular-nums",
+                        data.deltas.annuleringsPct > 0
+                          ? "text-[#C62828]"
+                          : data.deltas.annuleringsPct < 0
+                            ? "text-[#1a8a3e]"
+                            : "text-muted",
+                      ].join(" ")}
+                    >
+                      {data.deltas.annuleringsPct > 0 ? "+" : ""}
+                      {num(data.deltas.annuleringsPct, 1)} pp vs vorige periode
+                    </p>
+                  ) : null}
+                </div>
+              </button>
             </div>
           </section>
 
@@ -1100,6 +1148,27 @@ export function DashboardV2() {
                 goalTotal={g.omzet}
                 formatValue={money}
                 onOpen={() => setOpenKpi("omzet")}
+              />
+              <TrendLine
+                title="Annuleringen %"
+                subtitle="Geannuleerd van getekende orders"
+                labels={labels}
+                actual={data.buckets.map((b) => b.annuleringsPct ?? 0)}
+                goalTotal={0}
+                formatValue={(n) => `${num(n, 1)}%`}
+                rateGoal
+                periodValue={data.totals.annuleringsPct}
+                onOpen={() => setOpenKpi("annuleringen")}
+              />
+              <TrendLine
+                title="Verloren omzet"
+                subtitle="Omzet excl. btw van geannuleerde orders"
+                labels={labels}
+                actual={data.buckets.map((b) => b.verlorenOmzet)}
+                goalTotal={0}
+                formatValue={money}
+                periodValue={data.totals.verlorenOmzet}
+                onOpen={() => setOpenKpi("annuleringen")}
               />
               <SalesRace
                 rows={data.adviseurs.map((a) => ({

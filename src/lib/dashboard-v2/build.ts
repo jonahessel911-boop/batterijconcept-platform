@@ -16,6 +16,7 @@ import {
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { afspraakBlokkeertAgenda, isAfgeboekteFysiekeAfspraak, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { deltaPct, inIsoRange, round2, safeDiv } from "@/lib/management-dashboard/periods";
+import { NETTO_COMMISSIE_PCT } from "@/lib/netto-boord";
 import {
   formatSchouwWeekLabel,
   parseSchouwWeekValue,
@@ -77,6 +78,8 @@ export type DashboardV2Raw = {
     ondertekend_op: string | null;
     created_at: string;
     subtotaal_ex_btw: number;
+    /** Getekend maar later geannuleerd (projectstatus / afgewezen) */
+    geannuleerd?: boolean;
   }[];
   adviseurs: { id: string; naam: string; actief: boolean; rol: string | null }[];
 };
@@ -353,6 +356,9 @@ function emptyTotals(): DashboardV2Totals {
     afspraakToSale: null,
     orders: 0,
     omzet: 0,
+    annuleringen: 0,
+    annuleringsPct: null,
+    verlorenOmzet: 0,
   };
 }
 
@@ -421,12 +427,25 @@ export function aggRange(
 
   let orders = 0;
   let omzet = 0;
+  let annuleringen = 0;
+  let verlorenOmzet = 0;
   for (const o of raw.offertes) {
     const at = dealAt(o);
     if (!at || !inIsoRange(at, range.start, range.end)) continue;
+    if (o.geannuleerd) {
+      annuleringen += 1;
+      verlorenOmzet += Number(o.subtotaal_ex_btw) || 0;
+      continue;
+    }
     orders += 1;
     omzet += Number(o.subtotaal_ex_btw) || 0;
   }
+
+  const getekendTotaal = orders + annuleringen;
+  const annuleringsPct =
+    getekendTotaal > 0
+      ? round2((annuleringen / getekendTotaal) * 100)
+      : null;
 
   const l2a = safeDiv(eersteAfspraken, leads);
   const a2s = safeDiv(orders, afsprakenVoltooid);
@@ -438,6 +457,9 @@ export function aggRange(
     afspraakToSale: a2s != null ? round2(a2s * 100) : null,
     orders,
     omzet: round2(omzet),
+    annuleringen,
+    annuleringsPct,
+    verlorenOmzet: round2(verlorenOmzet),
   };
 }
 
@@ -474,34 +496,76 @@ function salesAdviseurIds(raw: DashboardV2Raw): Set<string> {
   return ids;
 }
 
-function omzetForAdviseur(
+function metricsForAdviseur(
   raw: DashboardV2Raw,
   adviseurId: string,
-  range: Range
-): { omzet: number; orders: number; afsprakenGepland: number } {
+  range: Range,
+  now = new Date()
+): {
+  omzet: number;
+  orders: number;
+  afsprakenGepland: number;
+  afsprakenVoltooid: number;
+  afspraakToSale: number | null;
+  annuleringen: number;
+  annuleringsPct: number | null;
+  commissie: number;
+} {
   let orders = 0;
   let omzet = 0;
+  let annuleringen = 0;
   for (const o of raw.offertes) {
     if (o.adviseur_id !== adviseurId) continue;
     const at = dealAt(o);
     if (!at || !inIsoRange(at, range.start, range.end)) continue;
+    if (o.geannuleerd) {
+      annuleringen += 1;
+      continue;
+    }
     orders += 1;
     omzet += Number(o.subtotaal_ex_btw) || 0;
   }
+
   const afsprakenGepland = raw.afspraken.filter((a) => {
     if (a.adviseur_id !== adviseurId) return false;
     if (!afspraakBlokkeertAgenda(a.soort)) return false;
     const at = a.created_at || a.start_at;
     return inIsoRange(at, range.start, range.end);
   }).length;
-  return { omzet: round2(omzet), orders, afsprakenGepland };
+
+  const afsprakenVanAdviseur = raw.afspraken.filter(
+    (a) => a.adviseur_id === adviseurId
+  );
+  const afsprakenVoltooid = afsprakenVoltooidInRange(
+    afsprakenVanAdviseur,
+    range,
+    now,
+    leadStatusMap(raw)
+  ).length;
+
+  const getekendTotaal = orders + annuleringen;
+  const a2s = safeDiv(orders, afsprakenVoltooid);
+  return {
+    omzet: round2(omzet),
+    orders,
+    afsprakenGepland,
+    afsprakenVoltooid,
+    afspraakToSale: a2s != null ? round2(a2s * 100) : null,
+    annuleringen,
+    annuleringsPct:
+      getekendTotaal > 0
+        ? round2((annuleringen / getekendTotaal) * 100)
+        : null,
+    commissie: round2(omzet * NETTO_COMMISSIE_PCT),
+  };
 }
 
 function buildAdviseurs(
   raw: DashboardV2Raw,
   current: Range,
   previous: Range,
-  omzetGoals: Record<string, number>
+  omzetGoals: Record<string, number>,
+  now = new Date()
 ): DashboardV2AdviseurBar[] {
   const ids = salesAdviseurIds(raw);
   const naamById = new Map(raw.adviseurs.map((a) => [a.id, a.naam]));
@@ -510,14 +574,15 @@ function buildAdviseurs(
   const rows: DashboardV2AdviseurBar[] = [];
 
   for (const id of ids) {
-    const cur = omzetForAdviseur(raw, id, current);
-    const prev = omzetForAdviseur(raw, id, previous);
+    const cur = metricsForAdviseur(raw, id, current, now);
+    const prev = metricsForAdviseur(raw, id, previous, now);
     const omzetGoal = omzetGoals[id] || 0;
     const actief = raw.adviseurs.find((a) => a.id === id)?.actief !== false;
     if (
       cur.omzet === 0 &&
       prev.omzet === 0 &&
       cur.afsprakenGepland === 0 &&
+      cur.annuleringen === 0 &&
       omzetGoal === 0 &&
       !actief
     ) {
@@ -527,6 +592,7 @@ function buildAdviseurs(
       cur.omzet === 0 &&
       prev.omzet === 0 &&
       cur.afsprakenGepland === 0 &&
+      cur.annuleringen === 0 &&
       omzetGoal === 0
     ) {
       const rol = (
@@ -542,6 +608,11 @@ function buildAdviseurs(
       omzetGoal,
       orders: cur.orders,
       afsprakenGepland: cur.afsprakenGepland,
+      afsprakenVoltooid: cur.afsprakenVoltooid,
+      afspraakToSale: cur.afspraakToSale,
+      annuleringen: cur.annuleringen,
+      annuleringsPct: cur.annuleringsPct,
+      commissie: cur.commissie,
       previousOmzet: prev.omzet,
       deltaPct: deltaPct(cur.omzet, prev.omzet),
     });
@@ -726,6 +797,12 @@ export function buildDashboardV2(
           : null,
       orders: deltaPct(totals.orders, previous.orders),
       omzet: deltaPct(totals.omzet, previous.omzet),
+      annuleringen: deltaPct(totals.annuleringen, previous.annuleringen),
+      annuleringsPct:
+        totals.annuleringsPct != null && previous.annuleringsPct != null
+          ? round2(totals.annuleringsPct - previous.annuleringsPct)
+          : null,
+      verlorenOmzet: deltaPct(totals.verlorenOmzet, previous.verlorenOmzet),
     },
     goals,
     goalsWeekly: weeklyGoals,
@@ -733,7 +810,8 @@ export function buildDashboardV2(
       scopedRaw,
       range,
       prev,
-      goals.omzetPerAdviseur || {}
+      goals.omzetPerAdviseur || {},
+      now
     ),
     people,
     forecast: buildDashboardV2Forecast(scopedRaw, now),

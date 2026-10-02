@@ -1,10 +1,12 @@
 "use client";
 
+import { useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Adviseur, Afspraak, Factuur, Lead, Project } from "@/types/database";
-import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
+import { openBackofficeActies } from "@/lib/backoffice-acties";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
+import { Planbord } from "./Planbord";
 
 export type BoView = "orders" | "agenda" | "acties";
 
@@ -45,6 +47,15 @@ export function BackofficePanel({
   const searchParams = useSearchParams();
   const view = parseBoView(searchParams.get("bo"));
 
+  const openActieCount = useMemo(
+    () =>
+      openBackofficeActies(projecten, facturen, new Date(), {
+        leads,
+        afspraken,
+      }).length,
+    [projecten, facturen, leads, afspraken]
+  );
+
   function setView(next: BoView) {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", "projecten");
@@ -54,16 +65,18 @@ export function BackofficePanel({
 
   const title =
     view === "agenda"
-      ? "Agenda"
+      ? "Planbord"
       : view === "acties"
         ? "Acties"
         : "Projecten";
   const sub =
     view === "agenda"
-      ? "Schouw en installatie"
+      ? "Schouw en installatie per week"
       : view === "acties"
-        ? "Herplannen, schouw, financiering en facturen"
-        : `${projecten.length} projecten in de backoffice`;
+        ? openActieCount > 0
+          ? `${openActieCount} openstaande ${openActieCount === 1 ? "actie" : "acties"}`
+          : "Herplannen, schouw, financiering en facturen"
+        : null;
 
   return (
     <>
@@ -72,58 +85,71 @@ export function BackofficePanel({
           <h2 className="font-display text-lg font-semibold text-ink">
             {title}
           </h2>
-          <p className="mt-0.5 text-sm text-muted">{sub}</p>
+          {sub ? <p className="mt-0.5 text-sm text-muted">{sub}</p> : null}
         </div>
         <div className="flex border border-line bg-white p-0.5 text-sm font-semibold">
-          <button
-            type="button"
-            onClick={() => setView("orders")}
-            className={[
-              "px-4 py-1.5",
-              view === "orders"
-                ? "bg-green text-white"
-                : "text-muted hover:text-ink",
-            ].join(" ")}
-          >
-            Projecten
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("acties")}
-            className={[
-              "px-4 py-1.5",
-              view === "acties"
-                ? "bg-green text-white"
-                : "text-muted hover:text-ink",
-            ].join(" ")}
-          >
-            Acties
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("agenda")}
-            className={[
-              "px-4 py-1.5",
-              view === "agenda"
-                ? "bg-green text-white"
-                : "text-muted hover:text-ink",
-            ].join(" ")}
-          >
-            Agenda
-          </button>
+          {(
+            [
+              ["orders", "Projecten"],
+              ["acties", "Acties"],
+              ["agenda", "Planbord"],
+            ] as const
+          ).map(([id, label]) => {
+            const isActive = view === id;
+            const showActieBadge = id === "acties" && openActieCount > 0;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setView(id)}
+                className={[
+                  "inline-flex items-center gap-1.5 px-4 py-1.5",
+                  isActive
+                    ? "bg-green text-white"
+                    : "text-muted hover:text-ink",
+                ].join(" ")}
+              >
+                {label}
+                {showActieBadge ? (
+                  <span
+                    className={[
+                      "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none",
+                      isActive
+                        ? "bg-white/20 text-white"
+                        : "bg-[#C45A12] text-white",
+                    ].join(" ")}
+                    title={`${openActieCount} openstaande ${openActieCount === 1 ? "actie" : "acties"}`}
+                  >
+                    <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white/25 text-[9px]">
+                      I
+                    </span>
+                    <span className="tabular-nums">{openActieCount}</span>
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {view === "agenda" ? (
+      {view === "orders" ? (
+        <BackofficeTable
+          projecten={projecten}
+          adviseurs={adviseurs}
+          facturen={facturen}
+          leads={leads}
+          afspraken={afspraken}
+          onProjectUpdated={onProjectUpdated}
+          hideTitle
+        />
+      ) : view === "agenda" ? (
         <div className="px-5 pb-5">
-          <PlanningAgenda
-            orders={projecten}
-            showPartner
-            linkHref={(event) => `/projecten/${event.order.id}?from=agenda`}
-            onOrderUpdated={onProjectUpdated}
+          <Planbord
+            projecten={projecten}
+            onProjectUpdated={onProjectUpdated}
           />
         </div>
-      ) : view === "acties" ? (
+      ) : (
         <BackofficeActiesList
           projecten={projecten}
           facturen={facturen}
@@ -134,12 +160,6 @@ export function BackofficePanel({
           onProjectUpdated={onProjectUpdated}
           onFactuurUpdated={onFactuurUpdated}
           onLeadUpdated={onLeadUpdated}
-        />
-      ) : (
-        <BackofficeTable
-          projecten={projecten}
-          adviseurs={adviseurs}
-          onProjectUpdated={onProjectUpdated}
         />
       )}
     </>

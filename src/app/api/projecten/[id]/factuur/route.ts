@@ -3,6 +3,10 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { splitIncToExBtw } from "@/lib/aanbetaling";
 import {
+  factuurOmschrijvingMetProduct,
+  primaireProductOmschrijving,
+} from "@/lib/factuur-omschrijving";
+import {
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
   parseBetaaltermijnDagen,
@@ -55,6 +59,8 @@ export async function POST(
       id: string;
       factuur_nummer: string;
       bedrag_inc_btw: number;
+      bedrag_ex_btw: number;
+      btw_bedrag: number;
       status: string;
       project_id: string | null;
       lead_id: string;
@@ -65,7 +71,7 @@ export async function POST(
       const { data: orig, error: origErr } = await sb
         .from("facturen")
         .select(
-          "id, factuur_nummer, bedrag_inc_btw, status, project_id, lead_id, offerte_id, credit_van_factuur_id"
+          "id, factuur_nummer, bedrag_inc_btw, bedrag_ex_btw, btw_bedrag, status, project_id, lead_id, offerte_id, credit_van_factuur_id"
         )
         .eq("id", creditVanId)
         .single();
@@ -100,27 +106,50 @@ export async function POST(
       creditVan = orig;
     }
 
-    const bedragRaw =
-      typeof body.bedrag_inc_btw === "string"
-        ? Number(body.bedrag_inc_btw.replace(",", "."))
+    const bedragRaw = creditVan
+      ? Number(creditVan.bedrag_inc_btw)
+      : typeof body.bedrag_inc_btw === "string"
+        ? Number(
+            body.bedrag_inc_btw
+              .trim()
+              .replace(/\s/g, "")
+              .replace(/\./g, "")
+              .replace(",", ".")
+          )
         : body.bedrag_inc_btw != null
           ? Number(body.bedrag_inc_btw)
-          : creditVan
-            ? Number(creditVan.bedrag_inc_btw)
-            : NaN;
+          : NaN;
 
     if (!Number.isFinite(bedragRaw) || bedragRaw < 0.01) {
       return NextResponse.json(
-        { error: "Vul een bedrag incl. btw in (minimaal €0,01)" },
+        {
+          error: creditVan
+            ? "Oorspronkelijke factuur heeft geen geldig bedrag"
+            : "Vul een bedrag incl. btw in (minimaal €0,01)",
+        },
         { status: 400 }
       );
+    }
+
+    let productLabel: string | null = null;
+    const offerteId = project.offerte_id || creditVan?.offerte_id || null;
+    if (offerteId) {
+      const { data: regels } = await sb
+        .from("offerte_regels")
+        .select("omschrijving, product_id, prijs_ex_btw, sort_order")
+        .eq("offerte_id", offerteId)
+        .order("sort_order", { ascending: true });
+      productLabel = primaireProductOmschrijving(regels || []);
     }
 
     const omschrijving =
       body.omschrijving?.trim() ||
       (creditVan
-        ? `Creditfactuur bij ${creditVan.factuur_nummer}`
-        : "Factuur Batterijconcept");
+        ? factuurOmschrijvingMetProduct(
+            productLabel,
+            `Creditfactuur bij ${creditVan.factuur_nummer}`
+          )
+        : productLabel || "Factuur Batterijconcept");
 
     const betaaltermijnDagen = creditVan
       ? FACTUUR_BETAALTERMIJN_DAGEN
@@ -129,7 +158,22 @@ export async function POST(
           FACTUUR_BETAALTERMIJN_DAGEN
         );
 
-    const split = splitIncToExBtw(bedragRaw);
+    let split: { ex: number; btw: number; inc: number };
+    if (creditVan) {
+      const origEx = Number(creditVan.bedrag_ex_btw);
+      const origBtw = Number(creditVan.btw_bedrag);
+      const origInc = Number(creditVan.bedrag_inc_btw);
+      const amountsMatch =
+        Number.isFinite(origEx) &&
+        Number.isFinite(origBtw) &&
+        Number.isFinite(origInc) &&
+        Math.abs(origEx + origBtw - origInc) < 0.02;
+      split = amountsMatch
+        ? { ex: origEx, btw: origBtw, inc: origInc }
+        : splitIncToExBtw(bedragRaw);
+    } else {
+      split = splitIncToExBtw(bedragRaw);
+    }
     const today = new Date();
     const factuurdatum = amsterdamDatePlusDays(today, 0);
     const vervaldatum = amsterdamDatePlusDays(today, betaaltermijnDagen);
@@ -208,6 +252,20 @@ export async function POST(
         },
         { status: 500 }
       );
+    }
+
+    if (creditVan?.id) {
+      const { data: proj } = await sb
+        .from("projecten")
+        .select("status")
+        .eq("id", project.id)
+        .maybeSingle();
+      if (proj?.status === "annulering") {
+        const { syncAutoTakenVoorProject } = await import(
+          "@/lib/sync-auto-taken"
+        );
+        await syncAutoTakenVoorProject(sb, project.id, "annulering");
+      }
     }
 
     return NextResponse.json({ factuur });

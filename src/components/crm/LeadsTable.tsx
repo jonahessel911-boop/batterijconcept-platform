@@ -11,6 +11,7 @@ import {
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
+import { rememberCrmReturnUrl } from "./DetailChrome";
 
 const PAGE_SIZE = 20;
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
@@ -228,6 +229,8 @@ export function LeadsTable({
   showBellerColumn = false,
   /** Agenda “Leads vandaag”: toon afspraaktijd als eerste kolom. */
   showAfspraakTijdFirst = false,
+  /** Sale-leads met project → open project i.p.v. lead. */
+  projectIdByLeadId,
 }: {
   leads: Lead[];
   adviseurs?: Adviseur[];
@@ -239,6 +242,7 @@ export function LeadsTable({
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
   showBellerColumn?: boolean;
   showAfspraakTijdFirst?: boolean;
+  projectIdByLeadId?: Map<string, string>;
 }) {
   const router = useRouter();
   const [page, setPage] = useState(1);
@@ -247,6 +251,20 @@ export function LeadsTable({
       adviseurs.filter((a) => a.actief && isBellerRol(normalizeRol(a.rol))),
     [adviseurs]
   );
+
+  function openLeadRow(lead: Lead) {
+    rememberCrmReturnUrl();
+    const projectId = projectIdByLeadId?.get(lead.id);
+    const isSale =
+      lead.status === "sale_financiering" ||
+      lead.status === "sale_eigen_middelen" ||
+      lead.status === "deal";
+    if (projectId && isSale) {
+      router.push(`/projecten/${projectId}?from=orders`);
+      return;
+    }
+    router.push(`/leads/${lead.id}`);
+  }
 
   const adviseurNaamById = useMemo(() => {
     const m = new Map<string, string>();
@@ -333,11 +351,11 @@ export function LeadsTable({
                 <div
                   role="link"
                   tabIndex={0}
-                  onClick={() => router.push(`/leads/${lead.id}`)}
+                  onClick={() => openLeadRow(lead)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      router.push(`/leads/${lead.id}`);
+                      openLeadRow(lead);
                     }
                   }}
                   className={[
@@ -495,7 +513,7 @@ export function LeadsTable({
                       "cursor-pointer",
                       lead.terugbellen ? "bg-[#FFF8F3]" : "",
                     ].join(" ")}
-                    onClick={() => router.push(`/leads/${lead.id}`)}
+                    onClick={() => openLeadRow(lead)}
                   >
                     {showAfspraakTijdFirst && (
                       <td className="whitespace-nowrap font-semibold tabular-nums text-ink">

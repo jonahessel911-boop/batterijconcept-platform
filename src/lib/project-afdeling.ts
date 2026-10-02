@@ -20,19 +20,30 @@ export function isProjectAfdeling(
 /** Standaard-afdeling bij een pipeline-status. */
 export function defaultAfdelingVoorStatus(status: string): ProjectAfdeling {
   switch (status) {
+    case "schouwweek_inplannen":
+    case "schouwdag_ingepland":
+    case "warmtefonds_goedgekeurd":
+    case "materiaal_besteld":
+    case "installatie_ingepland":
     case "schouw_aanbetaling":
-    case "aanbetaling_betaald":
     case "schouw_in_afwachting":
-    case "schouw_voltooid":
       return "Planning";
+    case "aanbetaling_verstuurd":
+    case "schouw_voltooid":
     case "restfactuur_verstuurd":
     case "restfactuur_betaald":
       return "Facturatie";
     case "materiaal_installatie":
-    case "installatie_voltooid":
       return "Installatie";
+    case "review_gevraagd":
+      return "Verkoop";
+    case "aanbetaling_betaald":
+    case "warmtefonds_afspraak_ingepland":
+    case "warmtefonds_aangevraagd":
+    case "warmtefonds_in_behandeling":
+    case "warmtefonds_afgewezen":
+    case "installatie_voltooid":
     case "service":
-      return "Backoffice";
     default:
       return "Backoffice";
   }

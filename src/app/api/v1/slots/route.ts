@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
     60
   );
   const limit = Math.min(
-    Math.max(parseNum(sp.get("limit")) || (leadId ? 6 : 40), 1),
+    Math.max(parseNum(sp.get("limit")) || (leadId ? 5 : 40), 1),
     100
   );
 

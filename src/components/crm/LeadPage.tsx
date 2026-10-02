@@ -25,10 +25,10 @@ import { LeadContactEditor } from "./LeadContactEditor";
 import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
 import { LeadActivityPanel } from "./LeadActivityPanel";
 import {
-  BackLink,
   Breadcrumb,
   DetailShell,
   NotFoundState,
+  TerugButton,
 } from "./DetailChrome";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
@@ -37,21 +37,120 @@ function isActieveTerugbel(a: Afspraak): boolean {
   return ACTIEVE_AFSPRAAK.has(a.status) && isTerugbelSoort(a.soort);
 }
 
-function PencilIcon({ className = "h-4 w-4" }: { className?: string }) {
+function Icon({
+  children,
+  className = "h-4 w-4",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <svg
       viewBox="0 0 24 24"
       className={className}
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
     >
+      {children}
+    </svg>
+  );
+}
+
+function PencilIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <Icon className={className}>
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
+    </Icon>
+  );
+}
+
+function PhoneIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.68 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.74.32 1.53.55 2.34.68A2 2 0 0 1 22 16.92z" />
+    </Icon>
+  );
+}
+
+function MailIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </Icon>
+  );
+}
+
+function MapPinIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11Z" />
+      <circle cx="12" cy="10" r="2.5" />
+    </Icon>
+  );
+}
+
+function CalendarIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </Icon>
+  );
+}
+
+function UserIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </Icon>
+  );
+}
+
+function NoteIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6M8 13h8M8 17h5" />
+    </Icon>
+  );
+}
+
+function PlusIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M12 5v14M5 12h14" />
+    </Icon>
+  );
+}
+
+function FileIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <Icon className={className}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+    </Icon>
+  );
+}
+
+function SectionTitle({
+  icon,
+  children,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+      <span className="text-green-dark/70">{icon}</span>
+      {children}
+    </h2>
   );
 }
 
@@ -212,12 +311,27 @@ export function LeadPage() {
       adviseurs: adv ? { id: adv.id, naam: adv.naam } : null,
     });
     try {
-      const sb = getSupabaseBrowser();
-      const { error } = await sb
-        .from("leads")
-        .update({ adviseur_id: adviseurId })
-        .eq("id", lead.id);
-      if (error) throw error;
+      const res = await fetch(`/api/leads/${lead.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adviseur_id: adviseurId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      const moved = Number(
+        (data as { afspraken_verplaatst?: number }).afspraken_verplaatst || 0
+      );
+      if (moved > 0) {
+        setOkMsg(
+          moved === 1
+            ? "Adviseur bijgewerkt — 1 afspraak staat nu in die agenda."
+            : `Adviseur bijgewerkt — ${moved} afspraken staan nu in die agenda.`
+        );
+      }
     } catch {
       setLead({ ...lead, adviseur_id: prevId, adviseurs: prevJoin });
     }
@@ -394,19 +508,31 @@ export function LeadPage() {
     return (
       <li
         key={a.id}
-        className={
+        className={[
+          "flex items-start gap-3 px-3 py-2.5",
           variant === "upcoming"
-            ? "flex flex-wrap items-center justify-between gap-2 border border-green/25 bg-green-soft/40 px-3 py-2.5"
-            : "flex flex-wrap items-center justify-between gap-2 border border-line px-3 py-2.5"
-        }
+            ? "bg-green-soft/50"
+            : "border-b border-line last:border-b-0",
+        ].join(" ")}
       >
-        <div className="min-w-0">
+        <span
+          className={[
+            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+            variant === "upcoming"
+              ? "bg-green text-white"
+              : "bg-wash text-muted",
+          ].join(" ")}
+        >
+          <CalendarIcon className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
           <p
-            className={
+            className={[
+              "text-sm tabular-nums",
               variant === "upcoming"
-                ? "text-sm font-semibold text-ink"
-                : "text-sm font-medium text-ink"
-            }
+                ? "font-semibold text-ink"
+                : "font-medium text-ink",
+            ].join(" ")}
           >
             {formatDateTimeNl(a.start_at)}
           </p>
@@ -424,9 +550,9 @@ export function LeadPage() {
             type="button"
             disabled={completingAfspraakId !== null}
             onClick={() => void voltooiTerugbel(a.id)}
-            className="shrink-0 border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
+            className="shrink-0 self-center border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
           >
-            {completingAfspraakId === a.id ? "Bezig…" : "Markeer voltooid"}
+            {completingAfspraakId === a.id ? "Bezig…" : "Voltooid"}
           </button>
         )}
       </li>
@@ -435,31 +561,38 @@ export function LeadPage() {
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="leads">
-      <Breadcrumb
-        items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
-      />
-
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <TerugButton fallbackHref="/" />
+        <Breadcrumb
+          items={[{ label: "Leads", href: "/" }, { label: lead.lead_number }]}
+        />
+      </div>
       {okMsg && (
-        <div className="mb-4 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
+        <div className="mb-3 border border-green/30 bg-green-soft px-4 py-2.5 text-sm text-green-dark">
           {okMsg}
         </div>
       )}
 
       {showTerugbelBanner && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-[#C45A12]">
-              Openstaande terugbelafspraak
-            </p>
-            {lead.terugbel_notitie?.trim() ? (
-              <p className="mt-0.5 text-xs text-[#C45A12]/90">
-                {lead.terugbel_notitie}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-white">
+              <PhoneIcon className="h-3.5 w-3.5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[#C45A12]">
+                Openstaande terugbelafspraak
               </p>
-            ) : openTerugbel[0] ? (
-              <p className="mt-0.5 text-xs text-[#C45A12]/90">
-                Gepland: {formatDateTimeNl(openTerugbel[0].start_at)}
-              </p>
-            ) : null}
+              {lead.terugbel_notitie?.trim() ? (
+                <p className="mt-0.5 text-xs text-[#C45A12]/90">
+                  {lead.terugbel_notitie}
+                </p>
+              ) : openTerugbel[0] ? (
+                <p className="mt-0.5 text-xs text-[#C45A12]/90">
+                  Gepland: {formatDateTimeNl(openTerugbel[0].start_at)}
+                </p>
+              ) : null}
+            </div>
           </div>
           <button
             type="button"
@@ -475,16 +608,17 @@ export function LeadPage() {
       )}
 
       {/* Header */}
-      <section className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-5 sm:px-6">
+      <section className="overflow-hidden border border-line bg-white">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-4 sm:px-5">
           <div className="min-w-0">
-            <p className="font-mono text-[11px] font-semibold text-muted">
+            <p className="font-mono text-[11px] font-semibold tracking-wide text-muted">
               {lead.lead_number}
             </p>
-            <h1 className="mt-1 font-display text-2xl font-semibold text-ink sm:text-3xl">
+            <h1 className="mt-0.5 font-display text-2xl font-semibold tracking-tight text-ink sm:text-[1.75rem]">
               {lead.naam}
             </h1>
-            <p className="mt-1 text-sm text-muted">
+            <p className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
+              <UserIcon className="h-3.5 w-3.5 shrink-0 text-muted/80" />
               {lead.adviseurs?.naam || "Geen adviseur"}
             </p>
           </div>
@@ -506,15 +640,132 @@ export function LeadPage() {
             <button
               type="button"
               onClick={() => setMaakOfferteOpen(true)}
-              className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+              className="inline-flex items-center gap-1.5 bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
             >
+              <FileIcon />
               Maak offerte
             </button>
           </div>
         </div>
 
+        {/* Quick contact strip / editor */}
+        {editingGegevens ? (
+          <div className="space-y-5 border-t border-line px-4 py-4 sm:px-5">
+            <div className="flex items-center justify-between">
+              <SectionTitle icon={<UserIcon className="h-3.5 w-3.5" />}>
+                Gegevens bewerken
+              </SectionTitle>
+              <button
+                type="button"
+                onClick={() => setEditingGegevens(false)}
+                className="inline-flex items-center gap-1.5 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+              >
+                Klaar
+              </button>
+            </div>
+            <LeadContactEditor
+              lead={lead}
+              onSaved={(patch) =>
+                setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+              }
+            />
+            <LeadAdresEditor
+              lead={lead}
+              onSaved={(patch) =>
+                setLead((prev) => (prev ? { ...prev, ...patch } : prev))
+              }
+            />
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Adviseur
+              <select
+                value={lead.adviseur_id || ""}
+                onChange={(e) =>
+                  void updateAdviseur(e.target.value ? e.target.value : null)
+                }
+                className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+              >
+                <option value="">Geen adviseur</option>
+                {adviseurs.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.naam}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : (
+          <div className="relative border-t border-line">
+            <div className="grid gap-px bg-line sm:grid-cols-3">
+              <a
+                href={lead.telefoon ? `tel:${lead.telefoon}` : undefined}
+                className={[
+                  "flex items-center gap-3 bg-white px-4 py-3 sm:px-5",
+                  lead.telefoon
+                    ? "hover:bg-green-soft/40"
+                    : "pointer-events-none",
+                ].join(" ")}
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-green-soft text-green-dark">
+                  <PhoneIcon />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Telefoon
+                  </p>
+                  <p className="truncate text-sm font-medium text-ink">
+                    {lead.telefoon || "—"}
+                  </p>
+                </div>
+              </a>
+              <a
+                href={lead.email ? `mailto:${lead.email}` : undefined}
+                className={[
+                  "flex items-center gap-3 bg-white px-4 py-3 sm:px-5",
+                  lead.email
+                    ? "hover:bg-green-soft/40"
+                    : "pointer-events-none",
+                ].join(" ")}
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-green-soft text-green-dark">
+                  <MailIcon />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    E-mail
+                  </p>
+                  <p className="truncate text-sm font-medium text-ink">
+                    {lead.email || "—"}
+                  </p>
+                </div>
+              </a>
+              <div className="flex items-center gap-3 bg-white px-4 py-3 pr-14 sm:px-5 sm:pr-16">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-green-soft text-green-dark">
+                  <MapPinIcon />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Adres
+                  </p>
+                  <p className="truncate text-sm font-medium text-ink">
+                    {adresRegel(lead)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setEditingGegevens(true)}
+              className="absolute right-3 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 border border-line bg-white px-2 py-1.5 text-xs font-semibold text-ink shadow-sm hover:bg-wash"
+              title="Gegevens bewerken"
+            >
+              <PencilIcon />
+              <span className="hidden sm:inline">Bewerken</span>
+            </button>
+          </div>
+        )}
+
         {showKwalForm && (
-          <div className="border-t border-line bg-wash px-4 py-4 sm:px-6">
+          <div className="border-t border-line bg-wash px-4 py-4 sm:px-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Reden niet gekwalificeerd
             </p>
@@ -554,118 +805,37 @@ export function LeadPage() {
         )}
       </section>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        {/* Gegevens */}
-        <section className="border border-line bg-white">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-              Gegevens
-            </h2>
-            <button
-              type="button"
-              onClick={() => setEditingGegevens((v) => !v)}
-              className="inline-flex items-center gap-1.5 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
-              title={editingGegevens ? "Sluiten" : "Bewerken"}
-            >
-              <PencilIcon />
-              {editingGegevens ? "Klaar" : "Bewerken"}
-            </button>
-          </div>
-
-          {editingGegevens ? (
-            <div className="space-y-5 px-4 py-4 sm:px-5">
-              <LeadContactEditor
-                lead={lead}
-                onSaved={(patch) =>
-                  setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                }
-              />
-              <LeadAdresEditor
-                lead={lead}
-                onSaved={(patch) =>
-                  setLead((prev) => (prev ? { ...prev, ...patch } : prev))
-                }
-              />
-              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Adviseur
-                <select
-                  value={lead.adviseur_id || ""}
-                  onChange={(e) =>
-                    void updateAdviseur(e.target.value ? e.target.value : null)
-                  }
-                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
-                >
-                  <option value="">Geen adviseur</option>
-                  {adviseurs.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.naam}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          ) : (
-            <div className="space-y-4 px-4 py-4 sm:px-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Telefoon
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-ink">
-                    {lead.telefoon ? (
-                      <a href={`tel:${lead.telefoon}`} className="hover:underline">
-                        {lead.telefoon}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    E-mail
-                  </p>
-                  <p className="mt-1 truncate text-sm font-medium text-ink">
-                    {lead.email ? (
-                      <a href={`mailto:${lead.email}`} className="hover:underline">
-                        {lead.email}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </p>
-                </div>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Adres
-                </p>
-                <p className="mt-1 text-sm font-medium text-ink">
-                  {adresRegel(lead)}
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
-
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {/* Afspraken */}
         <section className="border border-line bg-white">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5 sm:px-5">
+            <SectionTitle icon={<CalendarIcon className="h-3.5 w-3.5" />}>
               Afspraken
-            </h2>
+              {upcoming.length > 0 ? (
+                <span className="ml-1 rounded-full bg-green-soft px-1.5 py-0.5 text-[10px] font-bold normal-case tracking-normal text-green-dark">
+                  {upcoming.length} gepland
+                </span>
+              ) : null}
+            </SectionTitle>
             <button
               type="button"
               onClick={() => setPlanOpen((v) => !v)}
-              className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+              className="inline-flex items-center gap-1 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
             >
-              {planOpen ? "Sluiten" : "+ Plannen"}
+              {planOpen ? (
+                "Sluiten"
+              ) : (
+                <>
+                  <PlusIcon />
+                  Plannen
+                </>
+              )}
             </button>
           </div>
 
-          <div className="px-4 py-4 sm:px-5">
+          <div>
             {planOpen && (
-              <div className="mb-4 border border-line bg-wash/40 p-3">
+              <div className="border-b border-line bg-wash/40 px-4 py-3 sm:px-5">
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
@@ -680,63 +850,59 @@ export function LeadPage() {
             )}
 
             {upcoming.length === 0 && past.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted">
+              <p className="px-4 py-8 text-center text-sm text-muted sm:px-5">
                 Nog geen afspraken met deze klant.
               </p>
             ) : (
-              <ul className="space-y-2">
+              <ul>
                 {upcoming.map((a) => afspraakRow(a, "upcoming"))}
                 {past.slice(0, 4).map((a) => afspraakRow(a, "past"))}
               </ul>
             )}
           </div>
         </section>
-      </div>
 
-      {/* Notities */}
-      <section className="mt-4 border border-line bg-white">
-        <div className="border-b border-line px-4 py-3 sm:px-5">
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Notities
-          </h2>
-        </div>
-        <div className="px-4 py-4 sm:px-5">
-          {lead.notities?.trim() && (
-            <div className="mb-4 whitespace-pre-wrap border border-line bg-wash/30 px-3.5 py-3 text-sm leading-relaxed text-ink">
-              {lead.notities}
-            </div>
-          )}
-          <textarea
-            value={noteDraft}
-            onChange={(e) => setNoteDraft(e.target.value)}
-            rows={3}
-            placeholder="Nieuwe notitie…"
-            className="w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
-          />
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => void addNotitie()}
-              disabled={savingNote || !noteDraft.trim()}
-              className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-            >
-              {savingNote ? "Opslaan…" : "Notitie opslaan"}
-            </button>
+        {/* Notities */}
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-2.5 sm:px-5">
+            <SectionTitle icon={<NoteIcon className="h-3.5 w-3.5" />}>
+              Notities
+            </SectionTitle>
           </div>
-        </div>
-      </section>
+          <div className="px-4 py-3 sm:px-5">
+            {lead.notities?.trim() && (
+              <div className="mb-3 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-wash/50 px-3.5 py-3 text-sm leading-relaxed text-ink">
+                {lead.notities}
+              </div>
+            )}
+            <textarea
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              rows={2}
+              placeholder="Nieuwe notitie…"
+              className="w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <Link
+                href={`/advies/${lead.id}`}
+                className="text-xs font-semibold text-green-dark hover:underline"
+              >
+                Start adviesproces →
+              </Link>
+              <button
+                type="button"
+                onClick={() => void addNotitie()}
+                disabled={savingNote || !noteDraft.trim()}
+                className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+              >
+                {savingNote ? "Opslaan…" : "Notitie opslaan"}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
 
       <LeadActivityPanel leadId={lead.id} refreshKey={activityKey} />
-
-      <div className="mt-4 flex flex-wrap gap-3">
-        <BackLink href="/" label="Alle leads" />
-        <Link
-          href={`/advies/${lead.id}`}
-          className="text-sm font-medium text-green-dark underline-offset-2 hover:underline"
-        >
-          Start adviesproces →
-        </Link>
-      </div>
 
       <MaakOfferteModal
         open={maakOfferteOpen}

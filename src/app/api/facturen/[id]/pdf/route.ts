@@ -243,16 +243,74 @@ export async function POST(
         .update({ status: "restfactuur_verstuurd" })
         .eq("id", factuur.project_id)
         .in("status", [
-          "schouw_aanbetaling",
+          "schouwweek_inplannen",
+          "aanbetaling_verstuurd",
           "aanbetaling_betaald",
-          "schouw_in_afwachting",
+          "warmtefonds_afspraak_ingepland",
+          "warmtefonds_aangevraagd",
+          "warmtefonds_in_behandeling",
+          "warmtefonds_goedgekeurd",
+          "schouwdag_ingepland",
           "schouw_voltooid",
           "restfactuur_verstuurd",
           // legacy
+          "schouwweek_gepland",
+          "schouw_aanbetaling",
+          "schouw_in_afwachting",
           "schouw_inplannen",
           "schouw_gepland",
           "btw_factuur_eruit",
         ]);
+    }
+
+    const leadId = factuur.lead_id as string | null | undefined;
+    if (leadId) {
+      const { logLeadEvent } = await import("@/lib/lead-events");
+      const { isAanbetalingFactuurOmschrijving } = await import(
+        "@/lib/aanbetaling"
+      );
+      const nr = factuur.factuur_nummer || id.slice(0, 8);
+      const bedrag = Number(factuur.bedrag_inc_btw || 0);
+      const isAanb = isAanbetalingFactuurOmschrijving(factuur.omschrijving);
+      const soortLabel = isCredit
+        ? "Creditfactuur"
+        : isAanb
+          ? "Aanbetalingsfactuur"
+          : "Factuur";
+      await logLeadEvent({
+        leadId,
+        soort: "factuur",
+        titel: `${soortLabel} ${nr} verstuurd`,
+        detail: [
+          `Naar ${email}`,
+          bedrag > 0 ? `${formatEuro(bedrag)} incl. btw` : null,
+          factuur.omschrijving,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        meta: {
+          factuur_id: id,
+          factuur_nummer: nr,
+          message_id: sent.messageId,
+          is_credit: isCredit,
+          is_aanbetaling: isAanb,
+        },
+      });
+
+      if (isCredit && factuur.credit_van_factuur_id) {
+        await logLeadEvent({
+          leadId,
+          soort: "factuur",
+          titel: `Oorspronkelijke factuur vervallen (credit ${nr})`,
+          detail: creditVanNummer
+            ? `Was: ${creditVanNummer}`
+            : null,
+          meta: {
+            factuur_id: factuur.credit_van_factuur_id,
+            credit_factuur_id: id,
+          },
+        });
+      }
     }
 
     return NextResponse.json({

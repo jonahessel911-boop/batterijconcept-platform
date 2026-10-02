@@ -24,7 +24,8 @@ export type AfspraakSoort =
   | "warme_bel"
   | "vervolg_fysiek"
   | "vervolg_tel"
-  | "vervolg_punt";
+  | "vervolg_punt"
+  | "warmtefonds_aanvraag";
 
 export type Prioriteit = "laag" | "normaal" | "hoog" | "urgent";
 export type OfferteStatus =
@@ -34,15 +35,27 @@ export type OfferteStatus =
   | "verlopen"
   | "afgewezen";
 export type ProjectStatus =
-  | "schouw_aanbetaling"
+  | "schouwweek_inplannen"
+  | "aanbetaling_verstuurd"
   | "aanbetaling_betaald"
-  | "schouw_in_afwachting"
+  | "warmtefonds_afspraak_ingepland"
+  | "warmtefonds_aangevraagd"
+  | "warmtefonds_in_behandeling"
+  | "warmtefonds_afgewezen"
+  | "warmtefonds_goedgekeurd"
+  | "schouwdag_ingepland"
   | "schouw_voltooid"
   | "restfactuur_verstuurd"
   | "restfactuur_betaald"
-  | "materiaal_installatie"
+  | "materiaal_besteld"
+  | "installatie_ingepland"
   | "installatie_voltooid"
-  | "service";
+  | "review_gevraagd"
+  | "service"
+  | "annulering"
+  | "hold_sales_actie";
+
+export type Betaalwijze = "warmtefonds" | "eigen_middelen";
 export type FactuurStatus =
   | "concept"
   | "verzonden"
@@ -53,19 +66,23 @@ export type FactuurStatus =
 export type ServiceVerzoekStatus = "open" | "afgehandeld";
 export type SollicitatieStatus =
   | "nieuw"
+  | "geen_contact"
   | "diskwalificatie"
   | "gesprek_gepland"
-  | "aangenomen";
+  | "gesprek_gehad"
+  | "aangenomen_training_gepland"
+  | "aangenomen_actief";
 
 export type CrmTab =
   | "leads"
   | "bellen"
   | "agenda"
   | "offertes"
+  | "netto"
   | "instroom"
   | "projecten"
   | "facturen"
-  | "drive"
+  | "inkomend"
   | "rapportage"
   | "admin"
   | "ai"
@@ -259,6 +276,7 @@ export type LeadEventSoort =
   | "notitie"
   | "contact"
   | "betaling"
+  | "factuur"
   | "inkoop"
   | "installatie"
   | "schouw"
@@ -273,6 +291,27 @@ export interface LeadEvent {
   detail: string | null;
   meta: Record<string, unknown> | null;
   created_at: string;
+}
+
+export type FonioCallStatus =
+  | "ringing"
+  | "active"
+  | "done"
+  | "failed"
+  | "timed_out";
+
+export interface FonioCall {
+  id: string;
+  lead_id: string;
+  to_number: string | null;
+  status: FonioCallStatus;
+  started_at: string;
+  ended_at: string | null;
+  outcome: string | null;
+  error: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Product {
@@ -375,6 +414,12 @@ export interface Project {
   monteur: string | null;
   notities: string | null;
   projectkosten: number;
+  /** Warmtefonds of eigen middelen — bepaalt beschikbare statussen. */
+  betaalwijze?: Betaalwijze | null;
+  /** Laatste wijziging betaalwijze (ISO). */
+  betaalwijze_gewijzigd_at?: string | null;
+  /** Reden van laatste betaalwijze-wijziging. */
+  betaalwijze_reden?: string | null;
   schouw_at?: string | null;
   /** ISO-weekjaar van de schouw (exacte dag/tijd volgt later). */
   schouw_jaar?: number | null;
@@ -404,6 +449,8 @@ export interface Project {
   bel_schouw_aanbetaling_at?: string | null;
   /** Backoffice heeft met financieringsman geschakeld (Warmtefonds). */
   financiering_geschakeld_at?: string | null;
+  /** Moment waarop de Warmtefonds-aanvraag is ingediend. */
+  warmtefonds_aangevraagd_at?: string | null;
   /** Afleveradres voor materiaalinkoop. */
   leveradres?: string | null;
   /** Offerte-regel id → afgevinkt bij inkopen. */
@@ -438,6 +485,7 @@ export interface Project {
     | "offerte_nummer"
     | "financiering_voorbehoud"
     | "aanbetaling_te_innen_inc"
+    | "ondertekend_op"
   > | null;
 }
 
@@ -461,10 +509,12 @@ export interface Sollicitatie {
   bron: string | null;
   status: SollicitatieStatus;
   notitie: string | null;
+  training_moment_id?: string | null;
   raw_payload?: unknown;
   created_at: string;
   updated_at: string;
   sollicitatie_bestanden?: SollicitatieBestand[];
+  training_moment?: TrainingMoment | null;
 }
 
 export type SollicitatieAfspraakSoort = "fysiek" | "telefonisch";
@@ -481,6 +531,91 @@ export interface SollicitatieAfspraak {
     Sollicitatie,
     "id" | "naam" | "email" | "telefoon" | "functie" | "status"
   > | null;
+}
+
+export type SollicitatieTaakStatus = "todo" | "doing" | "done";
+
+export interface SollicitatieTaak {
+  id: string;
+  sollicitatie_id: string;
+  titel: string;
+  status: SollicitatieTaakStatus;
+  due_at: string;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
+  sollicitaties?: Pick<
+    Sollicitatie,
+    "id" | "naam" | "email" | "telefoon" | "functie" | "status"
+  > | null;
+}
+
+export interface TrainingMomentDag {
+  id: string;
+  training_moment_id: string;
+  dag_nummer: number;
+  datum: string;
+  start_tijd: string;
+  eind_tijd: string;
+  planning: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingMoment {
+  id: string;
+  naam: string;
+  periode_van: string;
+  periode_tot: string;
+  adres: string;
+  inhoud: string;
+  created_at: string;
+  updated_at: string;
+  dagen?: TrainingMomentDag[];
+}
+
+export type InkomendeFactuurStatus =
+  | "nieuw"
+  | "in_behandeling"
+  | "geboekt"
+  | "afgewezen"
+  | "archief";
+
+export interface InkomendeFactuur {
+  id: string;
+  postmark_message_id: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  to_email: string | null;
+  subject: string | null;
+  body_text: string | null;
+  body_html: string | null;
+  received_at: string | null;
+  status: InkomendeFactuurStatus;
+  leverancier: string | null;
+  bedrag_ex_btw: number | null;
+  btw_bedrag: number | null;
+  bedrag_inc_btw: number | null;
+  factuurdatum: string | null;
+  project_id: string | null;
+  notitie: string | null;
+  raw_payload?: unknown;
+  created_at: string;
+  updated_at: string;
+  bestanden?: InkomendeFactuurBestand[];
+}
+
+export interface InkomendeFactuurBestand {
+  id: string;
+  inkomende_factuur_id: string;
+  storage_path: string;
+  bestandsnaam: string | null;
+  mime_type: string | null;
+  grootte_bytes: number | null;
+  content_id: string | null;
+  created_at: string;
+  /** Signed URL — alleen in API-responses */
+  url?: string | null;
 }
 
 export interface ProjectFoto {

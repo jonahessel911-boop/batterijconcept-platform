@@ -44,6 +44,12 @@ export type DashboardV2Bucket = {
   afspraakToSale: number | null;
   orders: number;
   omzet: number;
+  /** Getekende orders die later geannuleerd zijn */
+  annuleringen: number;
+  /** annuleringen / (orders + annuleringen) × 100 */
+  annuleringsPct: number | null;
+  /** Omzet excl. btw van geannuleerde getekende orders */
+  verlorenOmzet: number;
 };
 
 export type DashboardV2Totals = {
@@ -54,6 +60,9 @@ export type DashboardV2Totals = {
   afspraakToSale: number | null;
   orders: number;
   omzet: number;
+  annuleringen: number;
+  annuleringsPct: number | null;
+  verlorenOmzet: number;
 };
 
 export type DashboardV2AdviseurBar = {
@@ -64,6 +73,13 @@ export type DashboardV2AdviseurBar = {
   omzetGoal: number;
   orders: number;
   afsprakenGepland: number;
+  afsprakenVoltooid: number;
+  /** Afspraak → sale % */
+  afspraakToSale: number | null;
+  annuleringen: number;
+  annuleringsPct: number | null;
+  /** 10% van omzet excl. btw */
+  commissie: number;
   previousOmzet: number;
   deltaPct: number | null;
 };
@@ -95,6 +111,9 @@ export type DashboardV2Data = {
     afspraakToSale: number | null;
     orders: number | null;
     omzet: number | null;
+    annuleringen: number | null;
+    annuleringsPct: number | null;
+    verlorenOmzet: number | null;
   };
   goals: DashboardV2Goals;
   /** Ingevoerde weekdoelen (per 7 dagen) — voor de edit-popup */

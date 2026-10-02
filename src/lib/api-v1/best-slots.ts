@@ -7,7 +7,7 @@
 import { addDays, getISOWeekYear } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
   dayKeyAmsterdam,
   filterSlotsByAfblokkingen,
@@ -25,6 +25,7 @@ import {
 import { AMSTERDAM_TZ, adresRegel, formatSlotLabelSpokenNl } from "@/lib/format";
 import { generateAvailableSlots } from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
+import { loadAdviseurConversieMap } from "@/lib/adviseur-conversie";
 
 export type SlotTokenPayload = {
   v: 1;
@@ -45,6 +46,10 @@ export type BestSlotOption = {
   adviseur_naam: string;
   feasible: boolean;
   reason: string | null;
+  /** Sales-conversie (voltooid → deal), % over ~90 dagen; null = onbekend */
+  conversie_pct: number | null;
+  /** Geschatte totale reistijd-score in minuten (Google Maps / fallback) */
+  reistijd_min: number | null;
 };
 
 function b64urlEncode(json: string): string {
@@ -88,6 +93,149 @@ function labelNl(iso: string): string {
 
 function labelKort(iso: string): string {
   return formatSlotLabelSpokenNl(iso, { kort: true });
+}
+
+function hourAmsterdam(iso: string): number {
+  return Number(formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "H"));
+}
+
+function dayKeyAmsterdamIso(iso: string): string {
+  return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "yyyy-MM-dd");
+}
+
+/** Agenda-blokken: 10 ochtend, 13/16 middag, 19 avond. */
+export type FonioDagdeel = "ochtend" | "middag" | "avond";
+
+export function dagdeelVanHour(hour: number): FonioDagdeel | null {
+  if (hour === 10) return "ochtend";
+  if (hour === 13 || hour === 16) return "middag";
+  if (hour === 19) return "avond";
+  return null;
+}
+
+/**
+ * Top 3 voor Fonio: 3 verschillende (vroegste) dagen ×
+ * 1 ochtend (10) + 1 middag (13 of 16) + 1 avond (19).
+ */
+export function pickFonioDaypartSlots<T extends { start_at: string }>(
+  pool: T[]
+): T[] {
+  if (pool.length === 0) return [];
+  const sorted = [...pool].sort((a, b) => a.start_at.localeCompare(b.start_at));
+
+  const usedDays = new Set<string>();
+  const picked: T[] = [];
+
+  const pickFirst = (pred: (s: T) => boolean): T | null => {
+    for (const s of sorted) {
+      const day = dayKeyAmsterdamIso(s.start_at);
+      if (usedDays.has(day)) continue;
+      if (!pred(s)) continue;
+      usedDays.add(day);
+      return s;
+    }
+    return null;
+  };
+
+  const ochtend = pickFirst((s) => hourAmsterdam(s.start_at) === 10);
+  if (ochtend) picked.push(ochtend);
+
+  const middag = pickFirst((s) => {
+    const h = hourAmsterdam(s.start_at);
+    return h === 13 || h === 16;
+  });
+  if (middag) picked.push(middag);
+
+  const avond = pickFirst((s) => hourAmsterdam(s.start_at) === 19);
+  if (avond) picked.push(avond);
+
+  // Tekort? Vul met vroegste vrije slot op nog ongebruikte dag
+  if (picked.length < 3) {
+    for (const s of sorted) {
+      if (picked.length >= 3) break;
+      const day = dayKeyAmsterdamIso(s.start_at);
+      if (usedDays.has(day)) continue;
+      if (picked.some((p) => p.start_at === s.start_at)) continue;
+      usedDays.add(day);
+      picked.push(s);
+    }
+  }
+
+  return picked.sort((a, b) => a.start_at.localeCompare(b.start_at));
+}
+
+/** Filter pool op dagdeel / weekdag / datum (klantvoorkeur). */
+export function filterSlotsByVoorkeur<T extends { start_at: string }>(
+  pool: T[],
+  voorkeur: {
+    dagdeel?: FonioDagdeel | null;
+    /** 1=ma … 7=zo (ISO) */
+    weekday?: number | null;
+    /** yyyy-MM-dd */
+    date?: string | null;
+  }
+): T[] {
+  return pool.filter((s) => {
+    const h = hourAmsterdam(s.start_at);
+    const deel = dagdeelVanHour(h);
+    if (voorkeur.dagdeel && deel !== voorkeur.dagdeel) return false;
+    if (voorkeur.date) {
+      if (dayKeyAmsterdamIso(s.start_at) !== voorkeur.date) return false;
+    }
+    if (voorkeur.weekday != null) {
+      const wd = Number(
+        formatInTimeZone(new Date(s.start_at), AMSTERDAM_TZ, "i")
+      ); // 1–7
+      if (wd !== voorkeur.weekday) return false;
+    }
+    return true;
+  });
+}
+
+/** Parse losse voorkeur-tekst uit Fonio ("dinsdagavond", "morgen ochtend", …). */
+export function parseFonioVoorkeur(raw: string | null | undefined): {
+  dagdeel?: FonioDagdeel;
+  weekday?: number;
+  date?: string;
+} {
+  if (!raw?.trim()) return {};
+  const t = raw.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  const out: { dagdeel?: FonioDagdeel; weekday?: number; date?: string } = {};
+
+  if (/ochtend|10\s*uur/.test(t)) out.dagdeel = "ochtend";
+  else if (/avond|19\s*uur/.test(t)) out.dagdeel = "avond";
+  else if (/middag|13\s*uur|16\s*uur|dertien|zestien/.test(t))
+    out.dagdeel = "middag";
+
+  const days: Record<string, number> = {
+    maandag: 1,
+    dinsdag: 2,
+    woensdag: 3,
+    donderdag: 4,
+    vrijdag: 5,
+    zaterdag: 6,
+    zondag: 7,
+  };
+  for (const [name, n] of Object.entries(days)) {
+    if (t.includes(name)) {
+      out.weekday = n;
+      break;
+    }
+  }
+
+  const iso = t.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (iso) out.date = iso[1];
+
+  return out;
+}
+
+/** @deprecated alias — gebruik pickFonioDaypartSlots */
+export function pickDiverseEarlySlots<T extends { start_at: string }>(
+  pool: T[],
+  limit = 3
+): T[] {
+  const picked = pickFonioDaypartSlots(pool);
+  return picked.slice(0, limit);
 }
 
 type AdviseurRow = {
@@ -202,6 +350,13 @@ export async function loadBestSlotsForLead(
     leadId: string;
     daysAhead?: number;
     limit?: number;
+    /**
+     * Fonio: haal een pool op en kies top-N met vroege datums + gevarieerde tijden
+     * (niet 3× dezelfde ochtendslot).
+     */
+    diversifyHours?: boolean;
+    /** Grootte van de kandidaat-pool bij diversifyHours (default 14). */
+    poolSize?: number;
   }
 ): Promise<
   | {
@@ -215,7 +370,12 @@ export async function loadBestSlotsForLead(
   | { ok: false; status: number; error: string; detail?: string }
 > {
   const daysAhead = Math.min(Math.max(opts.daysAhead ?? 21, 1), 60);
-  const limit = Math.min(Math.max(opts.limit ?? 6, 1), 20);
+  const limit = Math.min(Math.max(opts.limit ?? 5, 1), 20);
+  const diversifyHours = Boolean(opts.diversifyHours);
+  const poolSize = Math.min(
+    Math.max(opts.poolSize ?? (diversifyHours ? 14 : limit), limit),
+    40
+  );
 
   const { data: lead, error: leadErr } = await sb
     .from("leads")
@@ -286,10 +446,22 @@ export async function loadBestSlotsForLead(
     }));
   }
 
-  const adviseurs = adviseursList.filter((a) => !isAdminAdviseur(a));
+  const adviseurs = adviseursList.filter((a) => isPlanbaarAdviseur(a));
   if (adviseurs.length === 0) {
     return { ok: false, status: 404, error: "Geen actieve adviseurs" };
   }
+
+  const conversieMap = await loadAdviseurConversieMap(
+    sb,
+    adviseurs.map((a) => a.id)
+  );
+  const conversieRate = (adviseurId: string) =>
+    conversieMap.get(adviseurId)?.rate ?? 0;
+  const conversiePct = (adviseurId: string) => {
+    const row = conversieMap.get(adviseurId);
+    if (!row || row.uitgevoerd === 0) return null;
+    return row.pct;
+  };
 
   const fromIso = new Date().toISOString();
   const toIso = addDays(new Date(), daysAhead + 2).toISOString();
@@ -309,20 +481,24 @@ export async function loadBestSlotsForLead(
     scoreSec: number;
     dayKey: string;
     preferred: boolean;
+    conversie: number;
   };
 
   const candidates: Candidate[] = [];
   let usedRoute = false;
 
   for (const adv of adviseurs) {
+    const freeCap = diversifyHours ? 80 : 40;
     const free = (await freeSlotsForAdviseur(sb, adv.id, daysAhead)).slice(
       0,
-      40
+      freeCap
     );
     if (free.length === 0) continue;
 
     const stops = stopsForAdviseur(afsprakenRaw || [], adv.id);
     const preferred = leadRow.adviseur_id === adv.id;
+    const conversie = conversieRate(adv.id);
+    const convPct = conversiePct(adv.id);
 
     let scored:
       | ReturnType<typeof pickTopFastDirectionSlots>
@@ -353,7 +529,7 @@ export async function loadBestSlotsForLead(
               return distanceMap.get(`${from}|||${to}`) ?? null;
             },
           },
-          5
+          diversifyHours ? 14 : 5
         );
         if (scored.length > 0) usedRoute = true;
       }
@@ -378,14 +554,25 @@ export async function loadBestSlotsForLead(
           adviseur_naam: adv.naam,
           feasible: s.feasible,
           reason: s.reason || null,
+          conversie_pct: convPct,
+          reistijd_min: Math.round(s.scoreSec / 60),
           scoreSec: s.scoreSec,
           dayKey: s.dayKey,
           preferred,
+          conversie,
         });
       }
-    } else {
-      // Fallback: kalender-slots (geen reistijd)
-      for (const s of free.slice(0, 8)) {
+    }
+
+    // Altijd kalender-uren toevoegen (10/13/16/19) zodat diversifyHours
+    // niet alleen ochtend-FD-picks krijgt.
+    if (diversifyHours || !scored || scored.length === 0) {
+      const calCap = diversifyHours ? 40 : 8;
+      const seenStart = new Set(
+        candidates.filter((c) => c.adviseur_id === adv.id).map((c) => c.start_at)
+      );
+      for (const s of free.slice(0, calCap)) {
+        if (seenStart.has(s.start_at)) continue;
         const dayKey = formatInTimeZone(
           new Date(s.start_at),
           AMSTERDAM_TZ,
@@ -406,9 +593,13 @@ export async function loadBestSlotsForLead(
           adviseur_naam: adv.naam,
           feasible: true,
           reason: null,
-          scoreSec: 0,
+          conversie_pct: convPct,
+          reistijd_min: null,
+          // Iets slechter dan route-score zodat FD blijft winnen als die er is
+          scoreSec: scored && scored.length > 0 ? 50_000 : 0,
           dayKey,
           preferred,
+          conversie,
         });
       }
     }
@@ -422,7 +613,8 @@ export async function loadBestSlotsForLead(
     };
   }
 
-  // Per wandklok-moment: beste adviseur (feasible → preferred → score)
+  // Per wandklok-moment: beste adviseur
+  // (feasible → hoogste conversie → preferred → laagste reistijd)
   const byMoment = new Map<string, Candidate>();
   for (const c of candidates) {
     const cur = byMoment.get(c.start_at);
@@ -432,41 +624,63 @@ export async function loadBestSlotsForLead(
     }
     const better =
       Number(c.feasible) - Number(cur.feasible) ||
+      c.conversie - cur.conversie ||
       Number(c.preferred) - Number(cur.preferred) ||
       cur.scoreSec - c.scoreSec;
     if (better > 0) byMoment.set(c.start_at, c);
   }
 
   const ranked = [...byMoment.values()].sort((a, b) => {
-    // Feasible eerst, dan vroegste dag, dan score, dan preferred
+    // Feasible → hoogste conversie → vroegste dag → laagste reistijd → preferred
     if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
+    if (a.conversie !== b.conversie) return b.conversie - a.conversie;
     if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
     if (a.scoreSec !== b.scoreSec) return a.scoreSec - b.scoreSec;
     if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
     return a.start_at.localeCompare(b.start_at);
   });
 
-  // Max 1 slot per dag in de top (zoals Fast Direction)
-  const onePerDay: Candidate[] = [];
-  const seenDays = new Set<string>();
-  for (const c of ranked) {
-    if (seenDays.has(c.dayKey)) continue;
-    seenDays.add(c.dayKey);
-    onePerDay.push(c);
-    if (onePerDay.length >= limit) break;
-  }
+  let chosen: Candidate[];
 
-  // Vul aan met volgende beste momenten als we te weinig dagen hebben
-  if (onePerDay.length < limit) {
+  if (diversifyHours) {
+    // Pool over ~2 weken → top 3: ochtend + middag + avond op 3 dagen
+    const chronological = [...ranked].sort((a, b) => {
+      if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
+      if (a.conversie !== b.conversie) return b.conversie - a.conversie;
+      return a.start_at.localeCompare(b.start_at);
+    });
+    const pool = chronological.slice(0, Math.max(poolSize, 40));
+    chosen = pickFonioDaypartSlots(pool);
+  } else {
+    // Max 1 slot per dag in de top (zoals Fast Direction)
+    const onePerDay: Candidate[] = [];
+    const seenDays = new Set<string>();
     for (const c of ranked) {
-      if (onePerDay.some((x) => x.start_at === c.start_at)) continue;
+      if (seenDays.has(c.dayKey)) continue;
+      seenDays.add(c.dayKey);
       onePerDay.push(c);
       if (onePerDay.length >= limit) break;
     }
+
+    // Vul aan met volgende beste momenten als we te weinig dagen hebben
+    if (onePerDay.length < limit) {
+      for (const c of ranked) {
+        if (onePerDay.some((x) => x.start_at === c.start_at)) continue;
+        onePerDay.push(c);
+        if (onePerDay.length >= limit) break;
+      }
+    }
+    chosen = onePerDay;
   }
 
-  const slots: BestSlotOption[] = onePerDay.map(
-    ({ scoreSec: _s, dayKey: _d, preferred: _p, ...rest }) => rest
+  const slots: BestSlotOption[] = chosen.map(
+    ({
+      scoreSec: _s,
+      dayKey: _d,
+      preferred: _p,
+      conversie: _c,
+      ...rest
+    }) => rest
   );
 
   const slots_tekst = slots
@@ -480,6 +694,6 @@ export async function loadBestSlotsForLead(
     slots_tekst: slots_tekst || "Geen vrije momenten gevonden",
     mode: usedRoute ? "route" : "calendar",
     note:
-      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld).",
+      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: conversie → reistijd (Google Maps).",
   };
 }

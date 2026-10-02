@@ -8,6 +8,7 @@ import { nl } from "date-fns/locale";
 import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { normalizeProjectStatus } from "@/lib/labels";
 import {
   NL_PROVINCIES,
   PROVINCIE_ONBEKEND,
@@ -366,11 +367,21 @@ export function buildAttributionTree(
     afspraakLeadIds.add(a.lead_id);
   }
 
+  const geannuleerdOfferteIds = new Set(
+    raw.projecten
+      .filter(
+        (p) =>
+          normalizeProjectStatus(p.status) === "annulering" && p.offerte_id
+      )
+      .map((p) => p.offerte_id as string)
+  );
+
   const signed = raw.offertes.filter(
     (o) =>
       o.status === "ondertekend" &&
       o.ondertekend_op &&
-      leadIds.has(o.lead_id)
+      leadIds.has(o.lead_id) &&
+      !geannuleerdOfferteIds.has(o.id)
   );
   const dealCounts = new Map<string, number>();
   for (const o of signed) {
@@ -543,8 +554,17 @@ export function buildRapportageTree(
     ? (raw.facturen || []).filter((f) => f.adviseur_id === adviseurId)
     : raw.facturen || [];
 
+  const geannuleerdOfferteIds = new Set(
+    projecten
+      .filter((p) => normalizeProjectStatus(p.status) === "annulering" && p.offerte_id)
+      .map((p) => p.offerte_id as string)
+  );
+
   const signed = offertes.filter(
-    (o) => o.status === "ondertekend" && o.ondertekend_op
+    (o) =>
+      o.status === "ondertekend" &&
+      o.ondertekend_op &&
+      !geannuleerdOfferteIds.has(o.id)
   );
 
   const now = new Date();
@@ -840,8 +860,18 @@ export function buildGeoBreakdown(
     if (afspraakLeadIds.has(l.id)) acc.afspraakLeads.add(l.id);
   }
 
+  const geannuleerdOfferteIds = new Set(
+    raw.projecten
+      .filter(
+        (p) =>
+          normalizeProjectStatus(p.status) === "annulering" && p.offerte_id
+      )
+      .map((p) => p.offerte_id as string)
+  );
+
   for (const o of raw.offertes) {
     if (o.status !== "ondertekend" || !o.ondertekend_op) continue;
+    if (geannuleerdOfferteIds.has(o.id)) continue;
     if (!leadIds.has(o.lead_id)) continue;
     const lead = leads.find((l) => l.id === o.lead_id);
     const prov = provincieVanPostcode(lead?.postcode);

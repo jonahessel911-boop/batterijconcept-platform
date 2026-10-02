@@ -213,8 +213,13 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
       : offerte
         ? `Aanbetaling bij ${offerte.offerte_nummer}`
         : "Aanbetaling");
-  const bedragEx = Number(factuur.bedrag_ex_btw);
-  const bedragInc = Number(factuur.bedrag_inc_btw);
+  const bedragExAbs = Math.abs(Number(factuur.bedrag_ex_btw) || 0);
+  const bedragBtwAbs = Math.abs(Number(factuur.btw_bedrag) || 0);
+  const bedragIncAbs = Math.abs(Number(factuur.bedrag_inc_btw) || 0);
+  const sign = isCredit ? -1 : 1;
+  const bedragEx = sign * bedragExAbs;
+  const bedragBtw = sign * bedragBtwAbs;
+  const bedragInc = sign * bedragIncAbs;
 
   // Font vóór split zetten — anders wrapt jsPDF te breed (overlap met PRIJS)
   doc.setFont("helvetica", "normal");
@@ -299,7 +304,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.setFontSize(8);
   doc.setTextColor(...CHARCOAL);
   doc.text("Excl. btw", totalsX + 2, y + 4.8);
-  doc.text(formatEuroPdf(Number(factuur.bedrag_ex_btw)), totalsX + totalsW - 2, y + 4.8, {
+  doc.text(formatEuroPdf(bedragEx), totalsX + totalsW - 2, y + 4.8, {
     align: "right",
   });
   y += 7;
@@ -308,7 +313,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.setFillColor(...GRAY);
   doc.rect(totalsX, y, totalsW, 7, "F");
   doc.text("BTW 21%", totalsX + 2, y + 4.8);
-  doc.text(formatEuroPdf(Number(factuur.btw_bedrag)), totalsX + totalsW - 2, y + 4.8, {
+  doc.text(formatEuroPdf(bedragBtw), totalsX + totalsW - 2, y + 4.8, {
     align: "right",
   });
   y += 7;

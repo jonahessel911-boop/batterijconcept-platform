@@ -27,6 +27,19 @@ import { FastDirectionButton } from "./FastDirectionButton";
 import { LeadTimeline } from "./LeadTimeline";
 import { ReistijdHint } from "./ReistijdHint";
 
+type BestSlotOption = {
+  slot_id: string;
+  start_at: string;
+  end_at: string;
+  label_nl: string;
+  label_kort: string;
+  adviseur_id: string;
+  adviseur_naam: string;
+  feasible: boolean;
+  reason: string | null;
+  conversie_pct: number | null;
+  reistijd_min: number | null;
+};
 async function clientLogLeadEvent(
   leadId: string,
   opts: {
@@ -155,6 +168,16 @@ export function BelPanel({
   const [notities, setNotities] = useState("");
   const [partnerAanwezig, setPartnerAanwezig] = useState<boolean | null>(null);
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
+  const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
+  const [bestSlotsLoading, setBestSlotsLoading] = useState(false);
+  const [bestSlotsError, setBestSlotsError] = useState<string | null>(null);
+  const [bestSlotsMode, setBestSlotsMode] = useState<"route" | "calendar" | null>(
+    null
+  );
+  const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
+    null
+  );
+  const [showHandmatig, setShowHandmatig] = useState(false);
   const [terugbelAt, setTerugbelAt] = useState("");
   const [terugbelNotitie, setTerugbelNotitie] = useState("");
   const [terugbelWarm, setTerugbelWarm] = useState(false);
@@ -269,6 +292,11 @@ export function BelPanel({
     setTerugbelNotitie(current.terugbel_notitie || "");
     setNoteDraft("");
     setSavingNote(false);
+    setSelectedBestSlotId(null);
+    setBestSlots([]);
+    setBestSlotsError(null);
+    setBestSlotsMode(null);
+    setShowHandmatig(false);
     setTimelineTick((t) => t + 1);
     const preferred = current.adviseur_id || defaultAdviseurId || "";
     const allowed = planAdviseurs.some((a) => a.id === preferred)
@@ -276,6 +304,56 @@ export function BelPanel({
       : planAdviseurs[0]?.id || "";
     setAdviseurId(allowed);
   }, [current?.id, defaultAdviseurId, planAdviseurs]);
+
+  useEffect(() => {
+    if (!current?.id) {
+      setBestSlots([]);
+      return;
+    }
+    const adres = adresRegel(current);
+    if (adres === "—") {
+      setBestSlots([]);
+      setBestSlotsError("Lead heeft geen volledig adres — top-opties niet beschikbaar.");
+      setBestSlotsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setBestSlotsLoading(true);
+    setBestSlotsError(null);
+    queueMicrotask(async () => {
+      try {
+        const res = await fetch(
+          `/api/best-slots?lead_id=${encodeURIComponent(current.id)}&limit=5`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setBestSlots([]);
+          setBestSlotsError(
+            (data as { error?: string }).error || "Beste opties laden mislukt"
+          );
+          setBestSlotsMode(null);
+          return;
+        }
+        setBestSlots((data.slots || []) as BestSlotOption[]);
+        setBestSlotsMode(
+          data.mode === "route" || data.mode === "calendar" ? data.mode : null
+        );
+        setBestSlotsError(null);
+      } catch {
+        if (!cancelled) {
+          setBestSlots([]);
+          setBestSlotsError("Beste opties laden mislukt");
+        }
+      } finally {
+        if (!cancelled) setBestSlotsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.id, current?.straat, current?.huisnummer, current?.postcode, current?.plaats]);
 
   useEffect(() => {
     if (!adviseurId) {
@@ -293,6 +371,14 @@ export function BelPanel({
     };
   }, [adviseurId]);
 
+  function selectBestSlot(slot: BestSlotOption) {
+    setSelectedBestSlotId(slot.slot_id);
+    setAdviseurId(slot.adviseur_id);
+    setUseCustomTime(false);
+    setCustomStart("");
+    setStartAt(slot.start_at);
+    setShowHandmatig(false);
+  }
   function goNextLead(excludeId: string) {
     setUitgesteldIds((prev) => {
       const next = new Set(prev);
@@ -996,8 +1082,102 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Zelfde flow als in de agenda — bevestigingsmail gaat mee.
+              Top 5 over alle adviseurs: hoogste conversie eerst, daarna
+              reistijd (Google Maps) en agenda.
             </p>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Beste opties
+                </span>
+                {bestSlotsMode === "route" ? (
+                  <span className="text-[10px] font-medium text-green-deeper">
+                    Incl. reistijd
+                  </span>
+                ) : null}
+              </div>
+
+              {bestSlotsLoading ? (
+                <p className="text-sm text-muted">Beste opties berekenen…</p>
+              ) : bestSlotsError ? (
+                <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+                  {bestSlotsError}
+                </p>
+              ) : bestSlots.length === 0 ? (
+                <p className="text-sm text-muted">
+                  Geen gezamenlijke opties gevonden — gebruik handmatig.
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {bestSlots.map((slot, idx) => {
+                    const selected = selectedBestSlotId === slot.slot_id;
+                    return (
+                      <li key={slot.slot_id}>
+                        <button
+                          type="button"
+                          onClick={() => selectBestSlot(slot)}
+                          className={[
+                            "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
+                            selected
+                              ? "border-green bg-green-soft"
+                              : "border-line bg-white hover:border-green/50",
+                          ].join(" ")}
+                        >
+                          <span
+                            className={[
+                              "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
+                              selected
+                                ? "bg-green text-white"
+                                : "bg-wash text-muted",
+                            ].join(" ")}
+                          >
+                            {idx + 1}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-semibold text-ink">
+                              {slot.label_kort || slot.label_nl}
+                            </span>
+                            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+                              <span className="font-medium text-ink">
+                                {slot.adviseur_naam}
+                              </span>
+                              {slot.conversie_pct != null ? (
+                                <span>
+                                  {slot.conversie_pct.toLocaleString("nl-NL")}%
+                                  conversie
+                                </span>
+                              ) : (
+                                <span>Nog geen conversie</span>
+                              )}
+                              {slot.reistijd_min != null ? (
+                                <span>~{slot.reistijd_min} min route</span>
+                              ) : null}
+                              {!slot.feasible ? (
+                                <span className="text-[#C45A12]">Strak</span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowHandmatig((v) => !v)}
+              className="text-xs font-medium text-green hover:underline"
+            >
+              {showHandmatig
+                ? "Handmatig verbergen"
+                : "Handmatig adviseur + tijd kiezen…"}
+            </button>
+
+            {showHandmatig ? (
+              <>
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Adviseur
               <select
@@ -1007,6 +1187,7 @@ export function BelPanel({
                   setAdviseurId(e.target.value);
                   setStartAt("");
                   setCustomStart("");
+                  setSelectedBestSlotId(null);
                 }}
                 className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
               >
@@ -1029,6 +1210,7 @@ export function BelPanel({
                     setUseCustomTime((v) => !v);
                     setStartAt("");
                     setCustomStart("");
+                    setSelectedBestSlotId(null);
                   }}
                   className="text-xs font-medium text-green hover:underline"
                 >
@@ -1040,7 +1222,10 @@ export function BelPanel({
                   type="datetime-local"
                   required
                   value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
+                  onChange={(e) => {
+                    setCustomStart(e.target.value);
+                    setSelectedBestSlotId(null);
+                  }}
                   className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
                 />
               ) : !adviseurId ? (
@@ -1072,7 +1257,10 @@ export function BelPanel({
                               key={s.start_at}
                               type="button"
                               disabled={taken}
-                              onClick={() => setStartAt(s.start_at)}
+                              onClick={() => {
+                                setStartAt(s.start_at);
+                                setSelectedBestSlotId(null);
+                              }}
                               className={[
                                 "min-h-9 min-w-[3.5rem] border px-2.5 py-1.5 text-sm font-semibold tabular-nums disabled:cursor-not-allowed",
                                 taken
@@ -1116,6 +1304,7 @@ export function BelPanel({
                   setUseCustomTime(false);
                   setCustomStart("");
                   setStartAt(iso);
+                  setSelectedBestSlotId(null);
                 }}
               />
             )}
@@ -1133,6 +1322,26 @@ export function BelPanel({
                 planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
               }
             />
+              </>
+            ) : selectedBestSlotId && startAt ? (
+              <p className="text-xs text-muted">
+                Gekozen:{" "}
+                <span className="font-medium text-ink">
+                  {bestSlots.find((s) => s.slot_id === selectedBestSlotId)
+                    ?.label_kort || formatDateTimeNl(startAt)}
+                </span>
+                {" · "}
+                {
+                  bestSlots.find((s) => s.slot_id === selectedBestSlotId)
+                    ?.adviseur_naam
+                }
+              </p>
+            ) : (
+              <p className="text-xs text-muted">
+                Kies een optie hierboven, of open handmatig.
+              </p>
+            )}
+
             <JaNeeField
               label="Partner aanwezig?"
               value={partnerAanwezig}
@@ -1159,14 +1368,16 @@ export function BelPanel({
             <button
               type="submit"
               disabled={
-                busy || partnerAanwezig === null || andereOffertes === null
+                busy ||
+                partnerAanwezig === null ||
+                andereOffertes === null ||
+                (!startAt && !(useCustomTime && customStart))
               }
               className="min-h-11 w-full bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
               {busy ? "Bezig…" : "Afspraak plannen"}
             </button>
-          </form>
-        </div>
+          </form>        </div>
       </aside>
     </div>
     </div>

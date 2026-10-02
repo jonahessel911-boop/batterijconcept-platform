@@ -208,7 +208,7 @@ export async function planAfspraak(
         ok: false,
         status: 500,
         error:
-          "Afspraaksoort niet ondersteund. Voer supabase/migrate-afspraak-vervolg-punt.sql uit in Supabase.",
+          "Afspraaksoort niet ondersteund. Voer supabase/migrate-warmtefonds-afspraak.sql uit in Supabase.",
         detail: error.message,
       };
     }
@@ -298,13 +298,17 @@ async function afterCreate(
 
   await logLeadEvent({
     leadId: body.lead_id,
-    soort: isInterneAfspraakSoort(soort) ? "terugbel" : "afspraak",
+    soort: isTerugbelSoort(soort) ? "terugbel" : "afspraak",
     titel: `${afspraakSoortLabel[soort] || soort} gepland`,
     detail: new Date(afspraak.start_at).toLocaleString("nl-NL", {
       timeZone: "Europe/Amsterdam",
     }),
     meta: { afspraak_id: afspraak.id, soort },
   });
+
+  if (soort === "warmtefonds_aanvraag") {
+    await markWarmtefondsAfspraakIngepland(sb, body.lead_id, afspraak.id);
+  }
 
   const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
   const email = afspraak.leads?.email?.trim();
@@ -351,4 +355,69 @@ async function afterCreate(
     bevestiging_direct: mailedNow,
     bevestiging_error: mailError,
   };
+}
+
+/** Zet gekoppeld project op Warmtefonds afspraak ingepland + timeline-event. */
+async function markWarmtefondsAfspraakIngepland(
+  sb: SupabaseClient,
+  leadId: string,
+  afspraakId: string
+): Promise<void> {
+  const { data: project } = await sb
+    .from("projecten")
+    .select("id, status, project_nummer, betaalwijze")
+    .eq("lead_id", leadId)
+    .neq("status", "annulering")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!project?.id) return;
+
+  const prevStatus = project.status as string | null;
+  if (
+    prevStatus === "warmtefonds_aangevraagd" ||
+    prevStatus === "warmtefonds_in_behandeling" ||
+    prevStatus === "warmtefonds_goedgekeurd" ||
+    prevStatus === "warmtefonds_afgewezen"
+  ) {
+    // Al verder in de WF-pipeline — niet terugzetten
+    return;
+  }
+
+  const { error } = await sb
+    .from("projecten")
+    .update({ status: "warmtefonds_afspraak_ingepland" })
+    .eq("id", project.id);
+
+  if (error) return;
+
+  await logLeadEvent({
+    leadId,
+    soort: "status",
+    titel: "Projectstatus: Warmtefonds afspraak ingepland",
+    detail: prevStatus
+      ? `Was: ${prevStatus}`
+      : project.project_nummer
+        ? `Project ${project.project_nummer}`
+        : null,
+    meta: {
+      project_id: project.id,
+      project_nummer: project.project_nummer,
+      van: prevStatus,
+      naar: "warmtefonds_afspraak_ingepland",
+      afspraak_id: afspraakId,
+    },
+  });
+
+  try {
+    const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
+    await syncAutoTakenVoorProject(
+      sb,
+      project.id,
+      "warmtefonds_afspraak_ingepland"
+    );
+  } catch {
+    /* best-effort */
+  }
 }

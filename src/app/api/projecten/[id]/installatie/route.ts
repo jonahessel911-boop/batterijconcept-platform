@@ -92,7 +92,7 @@ export async function POST(
         installatie_notities: installatieNotities,
         installatie_partner_id: partner.id,
         monteur: partner.naam,
-        status: "materiaal_installatie",
+        status: "installatie_ingepland",
         installatie_herinnering_verstuurd: false,
         installatie_mail_klant_verstuurd: false,
         installatie_mail_partner_verstuurd: false,
@@ -220,7 +220,7 @@ export async function POST(
     await syncAutoTakenVoorProject(
       sb,
       id,
-      (updated.status as string) || "materiaal_installatie"
+      (updated.status as string) || "installatie_ingepland"
     );
 
     if (updated.lead_id) {

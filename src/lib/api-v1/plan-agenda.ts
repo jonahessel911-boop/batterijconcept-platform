@@ -123,7 +123,7 @@ export async function planProjectAgenda(
       schouw_jaar: schouwJaar,
       schouw_week: schouwWeek,
       schouw_at: exactAt,
-      status: "schouw_in_afwachting",
+      status: "schouwdag_ingepland",
       updated_at: new Date().toISOString(),
     };
     if (input.notities !== undefined) {
@@ -197,7 +197,7 @@ export async function planProjectAgenda(
   const patch: Record<string, unknown> = {
     installatie_at: parsed.toISOString(),
     installatie_partner_id: partnerId,
-    status: "materiaal_installatie",
+    status: "installatie_ingepland",
     updated_at: new Date().toISOString(),
   };
   if (input.notities !== undefined) {
