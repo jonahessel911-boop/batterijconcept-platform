@@ -777,7 +777,7 @@ export function MaakOfferteModal({
               </select>
               {partners.length === 0 && (
                 <span className="mt-1 block text-xs font-normal normal-case tracking-normal text-[#C45A12]">
-                  Voeg eerst een installatiepartner toe onder Instellingen.
+                  Voeg eerst een installatiepartner toe onder Partners.
                 </span>
               )}
             </label>

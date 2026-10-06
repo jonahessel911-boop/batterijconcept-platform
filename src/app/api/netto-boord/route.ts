@@ -6,15 +6,17 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { normalizeProjectStatus } from "@/lib/labels";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
-import { isSchouwFormulier } from "@/lib/project-documenten";
+import { isSchouwFormulierBewijs } from "@/lib/project-documenten";
 import {
   boardStatusOf,
   buildNettoFases,
+  isNettoGeannuleerd,
   resolveNettoCommissie,
   resolveNettoVorm,
   summarizeFases,
   type NettoBoardRow,
 } from "@/lib/netto-boord";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export const runtime = "nodejs";
 
@@ -74,10 +76,21 @@ type ProjectRow = {
   schouw_jaar: number | null;
   schouw_week: number | null;
   installatie_at: string | null;
-  warmtefonds_aangevraagd_at: string | null;
+  warmtefonds_aangevraagd_at?: string | null;
+  warmtefonds_afspraak_at?: string | null;
+  btw_terugvragen_aangevraagd_at?: string | null;
+  overstap_dynamische_leverancier_at?: string | null;
+  review_gevraagd_at?: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
+
+const PROJECT_SELECT_FULL =
+  "id, offerte_id, lead_id, project_nummer, status, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, created_at, updated_at";
+
+/** Zonder optionele migratie-kolommen — altijd beschikbaar voor Planbord-data. */
+const PROJECT_SELECT_CORE =
+  "id, offerte_id, lead_id, project_nummer, status, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, created_at, updated_at";
 
 const WF_STATUSES = new Set([
   "warmtefonds_afspraak_ingepland",
@@ -134,8 +147,8 @@ export async function GET(req: NextRequest) {
       ),
     ];
 
-    const [
-      { data: projecten },
+    let [
+      { data: projecten, error: projErr },
       { data: facturen },
       { data: creditRegels },
       { data: wfEvents },
@@ -143,11 +156,9 @@ export async function GET(req: NextRequest) {
       offerteIds.length
         ? sb
             .from("projecten")
-            .select(
-              "id, offerte_id, lead_id, project_nummer, status, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, warmtefonds_aangevraagd_at, created_at, updated_at"
-            )
+            .select(PROJECT_SELECT_FULL)
             .in("offerte_id", offerteIds)
-        : Promise.resolve({ data: [] as ProjectRow[] }),
+        : Promise.resolve({ data: [] as ProjectRow[], error: null }),
       leadIds.length
         ? sb
             .from("facturen")
@@ -170,17 +181,42 @@ export async function GET(req: NextRequest) {
         : Promise.resolve({ data: [] as { lead_id: string; meta: unknown }[] }),
     ]);
 
+    // Ontbrekende migratie-kolommen mogen Planbord-data (schouw/installatie) niet blokkeren.
+    if (projErr?.code === "42703" || projErr?.message?.includes("column")) {
+      const retry = offerteIds.length
+        ? await sb
+            .from("projecten")
+            .select(PROJECT_SELECT_CORE)
+            .in("offerte_id", offerteIds)
+        : { data: [] as ProjectRow[], error: null };
+      if (!retry.error) {
+        projecten = retry.data;
+        projErr = null;
+      }
+    }
+
+    if (projErr) {
+      return NextResponse.json(
+        { error: "Projecten laden mislukt", detail: projErr.message },
+        { status: 500 }
+      );
+    }
+
     const projectIds = (projecten || []).map((p) => (p as ProjectRow).id);
     const { data: schouwFotos } = projectIds.length
       ? await sb
           .from("project_fotos")
-          .select("project_id, omschrijving, created_at")
+          .select("project_id, omschrijving, bestandsnaam, storage_path, created_at")
           .in("project_id", projectIds)
       : { data: [] as { project_id: string; omschrijving: string | null; created_at: string }[] };
 
     const projectByOfferte = new Map<string, ProjectRow>();
+    const projectByLead = new Map<string, ProjectRow>();
     for (const p of (projecten || []) as ProjectRow[]) {
       if (p.offerte_id) projectByOfferte.set(p.offerte_id, p);
+      if (p.lead_id && !projectByLead.has(p.lead_id)) {
+        projectByLead.set(p.lead_id, p);
+      }
     }
 
     const wfHistoryByLead = new Map<string, Set<string>>();
@@ -201,9 +237,18 @@ export async function GET(req: NextRequest) {
       const row = f as {
         project_id: string;
         omschrijving: string | null;
+        bestandsnaam?: string | null;
+        storage_path?: string | null;
         created_at: string;
       };
-      if (!isSchouwFormulier(row.omschrijving)) continue;
+      if (
+        !isSchouwFormulierBewijs(
+          row.omschrijving,
+          row.bestandsnaam,
+          row.storage_path
+        )
+      )
+        continue;
       const prev = schouwFormByProject.get(row.project_id);
       if (!prev || row.created_at < (prev.at || "")) {
         schouwFormByProject.set(row.project_id, {
@@ -257,10 +302,14 @@ export async function GET(req: NextRequest) {
         adviseursMap.set(adviseurId, adviseurNaam);
       }
 
-      const project = projectByOfferte.get(o.id as string);
-      const geannuleerd =
-        o.status === "afgewezen" ||
-        normalizeProjectStatus(project?.status) === "annulering";
+      const project =
+        projectByOfferte.get(o.id as string) ||
+        projectByLead.get(lead.id) ||
+        undefined;
+      const geannuleerd = isNettoGeannuleerd({
+        projectStatus: project?.status,
+        offerteStatus: o.status as string,
+      });
 
       const vorm = resolveNettoVorm({
         betaalwijze: project?.betaalwijze,
@@ -321,6 +370,10 @@ export async function GET(req: NextRequest) {
         warmtefondsHistory: wfHistoryByLead.get(lead.id),
         schouwFormulierGeupload: Boolean(schouwForm?.geupload),
         schouwFormulierAt: schouwForm?.at || null,
+        btwTerugvragenAt: project?.btw_terugvragen_aangevraagd_at || null,
+        overstapDynamischeLeverancierAt:
+          project?.overstap_dynamische_leverancier_at || null,
+        reviewGevraagdAt: project?.review_gevraagd_at || null,
       });
 
       const progress = summarizeFases(fases);
@@ -369,7 +422,15 @@ export async function GET(req: NextRequest) {
         adviseur_naam: adviseurNaam,
         board_status,
         status_sinds: statusSinds || null,
-        schouw_at: project?.schouw_at || null,
+        schouw_at:
+          project &&
+          isSchouwdagDefinitief({
+            schouw_at: project.schouw_at,
+            schouw_jaar: project.schouw_jaar,
+            schouw_week: project.schouw_week,
+          })
+            ? project.schouw_at
+            : null,
         schouw_jaar: project?.schouw_jaar ?? null,
         schouw_week: project?.schouw_week ?? null,
         installatie_at: project?.installatie_at || null,
@@ -403,23 +464,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let filtered = rows;
+    let scoped = rows;
 
     if (adviseurFilter) {
-      filtered = filtered.filter((r) => r.adviseur_id === adviseurFilter);
+      scoped = scoped.filter((r) => r.adviseur_id === adviseurFilter);
     }
     if (vormFilter === "EM" || vormFilter === "WF") {
-      filtered = filtered.filter((r) => r.vorm === vormFilter);
-    }
-    if (statusFilter === "netto") {
-      filtered = filtered.filter((r) => r.board_status === "netto");
-    } else if (statusFilter === "actief") {
-      filtered = filtered.filter((r) => r.board_status === "actief");
-    } else if (statusFilter === "geannuleerd") {
-      filtered = filtered.filter((r) => r.board_status === "geannuleerd");
+      scoped = scoped.filter((r) => r.vorm === vormFilter);
     }
     if (q) {
-      filtered = filtered.filter((r) =>
+      scoped = scoped.filter((r) =>
         [
           r.klant_naam,
           r.plaats,
@@ -434,19 +488,35 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const actief = filtered.filter((r) => !r.geannuleerd);
+    const annuleringenCount = scoped.filter((r) => r.geannuleerd).length;
+
+    // Standaard ("alles"): annuleringen eruit — die horen niet in het Netto-overzicht.
+    // Filter "geannuleerd" = alleen annuleringen (label: Annulering door klant).
+    let filtered = scoped;
+    if (statusFilter === "netto") {
+      filtered = scoped.filter((r) => r.board_status === "netto");
+    } else if (statusFilter === "actief") {
+      filtered = scoped.filter((r) => r.board_status === "actief");
+    } else if (statusFilter === "geannuleerd") {
+      filtered = scoped.filter((r) => r.board_status === "geannuleerd");
+    } else {
+      // alles → actief + netto, géén annulering
+      filtered = scoped.filter((r) => r.board_status !== "geannuleerd");
+    }
+
+    const actiefRows = filtered.filter((r) => !r.geannuleerd);
     const totals = {
-      aantal: filtered.length,
-      omzet_ex_btw: round2(actief.reduce((s, r) => s + r.bedrag_ex_btw, 0)),
+      aantal: actiefRows.length,
+      omzet_ex_btw: round2(actiefRows.reduce((s, r) => s + r.bedrag_ex_btw, 0)),
       commissie_verwacht: round2(
-        actief.reduce((s, r) => s + r.commissie_verwacht, 0)
+        actiefRows.reduce((s, r) => s + r.commissie_verwacht, 0)
       ),
       commissie_verdiend: round2(
-        actief.reduce((s, r) => s + r.commissie_verdiend, 0)
+        actiefRows.reduce((s, r) => s + r.commissie_verdiend, 0)
       ),
-      geannuleerd: filtered.filter((r) => r.geannuleerd).length,
-      netto: filtered.filter((r) => r.board_status === "netto").length,
-      actief: filtered.filter((r) => r.board_status === "actief").length,
+      geannuleerd: annuleringenCount,
+      netto: scoped.filter((r) => r.board_status === "netto").length,
+      actief: scoped.filter((r) => r.board_status === "actief").length,
     };
 
     const adviseurs = [...adviseursMap.entries()]

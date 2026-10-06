@@ -13,6 +13,25 @@ export function isSchouwFormulier(
   );
 }
 
+/** Bewijs dat de schouw is gedaan: vast label, of schouw-PDF/rapport. */
+export function isSchouwFormulierBewijs(
+  omschrijving?: string | null,
+  bestandsnaam?: string | null,
+  storagePath?: string | null
+): boolean {
+  if (isSchouwFormulier(omschrijving)) return true;
+  const blob = [omschrijving, bestandsnaam, storagePath]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!blob.includes("schouw")) return false;
+  return (
+    /\.pdf\b/.test(blob) ||
+    blob.includes("formulier") ||
+    blob.includes("rapport")
+  );
+}
+
 export function isOpleveringsrapport(
   omschrijving: string | null | undefined
 ): boolean {

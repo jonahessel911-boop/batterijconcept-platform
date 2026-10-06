@@ -317,6 +317,12 @@ export async function GET(req: NextRequest) {
       email: liveEmail,
       rol,
     },
+    impersonating: session.impersonatorId
+      ? {
+          id: session.impersonatorId,
+          naam: session.impersonatorNaam || "Admin",
+        }
+      : null,
   });
 }
 

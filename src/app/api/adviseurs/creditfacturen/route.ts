@@ -16,6 +16,7 @@ import {
 } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
+import { ensureAdviseurOrderCommissieConcept } from "@/lib/netto-creditfactuur";
 
 export const runtime = "nodejs";
 
@@ -225,13 +226,16 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/adviseurs/creditfacturen
- * Maak creditfactuur-concept (altijd mogelijk).
- * Body: { adviseur_id, jaar?, week?, mark_paid?, bedrag_ex_btw?, omschrijving? }
- * Met bedrag_ex_btw: handmatig concept. Zonder: uit openstaande aanbetalingen in de week.
+ * Maak creditfactuur-concept.
+ * Body:
+ * - { offerte_id } → commissie tranche A (€250) voor die deal
+ * - { adviseur_id, bedrag_ex_btw, omschrijving?, offerte_id? } → handmatig
+ * - { adviseur_id, jaar?, week? } → uit openstaande aanbetalingen in de week
  */
 export async function POST(req: NextRequest) {
   let body: {
     adviseur_id?: string;
+    offerte_id?: string;
     jaar?: number;
     week?: number;
     mark_paid?: boolean;
@@ -243,10 +247,6 @@ export async function POST(req: NextRequest) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
-  }
-
-  if (!body.adviseur_id) {
-    return NextResponse.json({ error: "adviseur_id is verplicht" }, { status: 400 });
   }
 
   const weekInfo =
@@ -261,6 +261,89 @@ export async function POST(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
+
+    // Vanuit deal: standaard tranche A-concept (€250) tenzij handmatig bedrag meegegeven
+    if (body.offerte_id && !useManual) {
+      const { data: offerte, error: offErr } = await sb
+        .from("offertes")
+        .select("id, offerte_nummer, lead_id, status")
+        .eq("id", body.offerte_id)
+        .maybeSingle();
+      if (offErr || !offerte) {
+        return NextResponse.json(
+          { error: "Offerte / deal niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (!offerte.lead_id) {
+        return NextResponse.json(
+          { error: "Deal heeft geen lead" },
+          { status: 400 }
+        );
+      }
+      const { data: project } = await sb
+        .from("projecten")
+        .select("project_nummer")
+        .eq("offerte_id", offerte.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const result = await ensureAdviseurOrderCommissieConcept(sb, {
+        leadId: offerte.lead_id as string,
+        offerteId: offerte.id as string,
+        offerteNummer: (offerte.offerte_nummer as string) || offerte.id,
+        projectNummer: (project?.project_nummer as string | null) || null,
+      });
+
+      if (!result.ok) {
+        return NextResponse.json(
+          { error: result.error || "Aanmaken mislukt" },
+          { status: 500 }
+        );
+      }
+      if (result.skipped === "geen_adviseur") {
+        return NextResponse.json(
+          { error: "Deal heeft geen adviseur — wijs eerst een adviseur toe." },
+          { status: 400 }
+        );
+      }
+      if (result.skipped === "zzp_gegevens_incompleet") {
+        return NextResponse.json(
+          {
+            error:
+              "Vul eerst ZZP-gegevens in bij de adviseur: bedrijfsnaam, KvK en IBAN.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const { data: factuur } = result.creditfactuur_id
+        ? await sb
+            .from("adviseur_creditfacturen")
+            .select("*")
+            .eq("id", result.creditfactuur_id)
+            .maybeSingle()
+        : { data: null };
+
+      return NextResponse.json(
+        {
+          factuur,
+          created: Boolean(result.created),
+          skipped: result.skipped || null,
+          vanuit_deal: true,
+          mail_sent: false,
+        },
+        { status: result.created ? 201 : 200 }
+      );
+    }
+
+    if (!body.adviseur_id) {
+      return NextResponse.json(
+        { error: "adviseur_id is verplicht (of kies een deal via offerte_id)" },
+        { status: 400 }
+      );
+    }
 
     const { data: adviseur, error: advErr } = await sb
       .from("adviseurs")
@@ -296,6 +379,31 @@ export async function POST(req: NextRequest) {
         { error: "Vul eerst een e-mailadres in bij de adviseur." },
         { status: 400 }
       );
+    }
+
+    // Handmatig + optioneel gekoppeld aan deal
+    let dealTag: string | null = null;
+    let dealLabel: string | null = null;
+    if (body.offerte_id && useManual) {
+      const { data: offerte } = await sb
+        .from("offertes")
+        .select("id, offerte_nummer, lead_id, leads(naam)")
+        .eq("id", body.offerte_id)
+        .maybeSingle();
+      if (offerte?.offerte_nummer) {
+        dealTag = `ref_offerte:${offerte.offerte_nummer}`;
+        const leadRaw = offerte.leads as
+          | { naam?: string }
+          | { naam?: string }[]
+          | null;
+        const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+        dealLabel = [
+          `Offerte ${offerte.offerte_nummer}`,
+          lead?.naam ? `Klant ${lead.naam}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+      }
     }
 
     const { data: leads } = await sb
@@ -445,7 +553,9 @@ export async function POST(req: NextRequest) {
         factuurdatum: weekInfo.betaalMaandag,
         betaald_op: body.mark_paid ? weekInfo.betaalMaandag : null,
         notities: [
+          dealTag,
           omschrijving,
+          dealLabel,
           `Factuur van ${adviseur.bedrijfsnaam} aan Batterijconcept.`,
           `Week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot}).`,
           useManual

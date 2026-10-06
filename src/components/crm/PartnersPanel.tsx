@@ -7,13 +7,17 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useSearchParams } from "next/navigation";
 import type { Adviseur, InstallatiePartner } from "@/types/database";
 import { formatEuro } from "@/lib/format";
+import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { CreditfacturenPanel } from "./CreditfacturenPanel";
+import { PartnerUitbetalingenBlock } from "./PartnerUitbetalingenBlock";
+import { InstellingenPanel } from "./InstellingenPanel";
 
 type PartnerKind = "adviseur" | "installatiepartner";
-type PartnersView = "relaties" | "facturen";
+type PartnersView = "relaties" | "facturen" | "team";
 
 type ListRow = {
   kind: PartnerKind;
@@ -127,6 +131,13 @@ export function PartnersPanel({
 }: {
   onAdviseursChange?: () => void;
 }) {
+  const searchParams = useSearchParams();
+  const initialView: PartnersView = (() => {
+    const p = searchParams.get("partners");
+    if (p === "uitbetalingen" || p === "facturen") return "facturen";
+    if (p === "team") return "team";
+    return "relaties";
+  })();
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [advCommissie, setAdvCommissie] = useState<CommissieTotals>({});
@@ -136,12 +147,57 @@ export function PartnersPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [view, setView] = useState<PartnersView>("relaties");
+  const [view, setView] = useState<PartnersView>(initialView);
   const [filter, setFilter] = useState<"alle" | PartnerKind>("alle");
   const [mode, setMode] = useState<"list" | "create" | "edit">("list");
   const [editKey, setEditKey] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
   const [saving, setSaving] = useState(false);
+  const [loginBusyId, setLoginBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const p = searchParams.get("partners");
+    if (p === "uitbetalingen" || p === "facturen") {
+      setView("facturen");
+      setMode("list");
+    } else if (p === "team") {
+      setView("team");
+      setMode("list");
+    }
+  }, [searchParams]);
+
+  async function loginAlsAdviseur(id: string, naam: string) {
+    setLoginBusyId(id);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/auth/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adviseur_id: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Login als mislukt"
+        );
+      }
+      clearCrmShellCache();
+      setOkMsg(`Ingelogd als ${naam}…`);
+      window.location.href = "/";
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Login als mislukt");
+      setLoginBusyId(null);
+    }
+  }
+
+  function loginAlsPartner(token: string | null | undefined) {
+    if (!token) {
+      setError("Deze partner heeft nog geen portaallink.");
+      return;
+    }
+    window.open(`${portalBase()}/installatie/${token}`, "_blank", "noopener");
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -445,13 +501,13 @@ export function PartnersPanel({
               {mode === "edit" && editingRow && (
                 <div className="min-w-[10rem] border border-line bg-wash/40 px-4 py-3 text-right">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Totaal commissie
+                    {isAdviseur ? "Totaal commissie" : "Totaal gefactureerd"}
                   </p>
                   <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
                     {formatEuro(editingRow.totaalCommissie)}
                   </p>
                   <p className="mt-0.5 text-xs text-muted">
-                    excl. btw (10% omzet)
+                    {isAdviseur ? "excl. btw (10% omzet)" : "excl. btw"}
                     {editingRow.openCommissie > 0
                       ? ` · ${formatEuro(editingRow.openCommissie)} open`
                       : editingRow.factuurCount > 0
@@ -631,6 +687,23 @@ export function PartnersPanel({
             </section>
 
             {mode === "edit" && editingRow && (
+              <PartnerUitbetalingenBlock
+                kind={
+                  editingRow.kind === "adviseur" ? "adviseur" : "partner"
+                }
+                id={editingRow.id}
+                naam={editingRow.naam || form.naam}
+                onMessage={(msg, isError) => {
+                  if (isError) setError(msg);
+                  else {
+                    setError(null);
+                    setOkMsg(msg);
+                  }
+                }}
+              />
+            )}
+
+            {mode === "edit" && editingRow && (
               <section>
                 <RelatieContractUpload
                   kind={
@@ -648,13 +721,35 @@ export function PartnersPanel({
                     else setOkMsg(msg);
                   }}
                 />
+                {editingRow.kind === "adviseur" && editingRow.actief ? (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      disabled={loginBusyId === editingRow.id}
+                      onClick={() =>
+                        void loginAlsAdviseur(editingRow.id, editingRow.naam)
+                      }
+                      className="border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                    >
+                      {loginBusyId === editingRow.id
+                        ? "Bezig…"
+                        : "Login als deze adviseur"}
+                    </button>
+                  </div>
+                ) : null}
                 {editingRow.kind === "installatiepartner" &&
                   editingRow.portal_token && (
-                    <p className="mt-3 text-xs text-muted">
-                      Portaal:{" "}
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
-                        className="font-semibold text-green-dark hover:underline"
+                        onClick={() => loginAlsPartner(editingRow.portal_token)}
+                        className="border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash"
+                      >
+                        Login als (portaal openen)
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-green-dark hover:underline"
                         onClick={() => {
                           const url = `${portalBase()}/installatie/${editingRow.portal_token}`;
                           void navigator.clipboard.writeText(url).then(
@@ -665,7 +760,7 @@ export function PartnersPanel({
                       >
                         Link kopiëren
                       </button>
-                    </p>
+                    </div>
                   )}
               </section>
             )}
@@ -697,30 +792,20 @@ export function PartnersPanel({
     );
   }
 
+  const relatiesStats = useMemo(() => {
+    const adviseurCount = rows.filter((r) => r.kind === "adviseur").length;
+    const partnerCount = rows.filter(
+      (r) => r.kind === "installatiepartner"
+    ).length;
+    const kvkOpen = rows.filter((r) => !kvkCompleet(r)).length;
+    const openEuro = rows.reduce((s, r) => s + r.openCommissie, 0);
+    return { adviseurCount, partnerCount, kvkOpen, openEuro };
+  }, [rows]);
+
   return (
     <div className="space-y-4">
-      <div className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
-          <div>
-            <h2 className="font-display text-xl font-semibold text-ink">
-              Partners
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Relaties, KvK en creditfacturen
-            </p>
-          </div>
-          {view === "relaties" && (
-            <button
-              type="button"
-              onClick={openCreate}
-              className="bg-orange px-4 py-2 text-sm font-semibold text-white"
-            >
-              + Nieuwe partner
-            </button>
-          )}
-        </div>
-
-        <div className="border-b border-line px-4 py-2 sm:px-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex border border-line p-0.5">
             <button
               type="button"
@@ -750,14 +835,48 @@ export function PartnersPanel({
                   : "bg-white text-muted hover:bg-wash",
               ].join(" ")}
             >
-              Facturen
+              Uitbetalingen
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setView("team");
+                setMode("list");
+              }}
+              className={[
+                "px-3 py-1.5 text-xs font-semibold",
+                view === "team"
+                  ? "bg-green text-white"
+                  : "bg-white text-muted hover:bg-wash",
+              ].join(" ")}
+            >
+              Team
             </button>
           </div>
+          {view === "relaties" ? (
+            <p className="text-xs text-muted">
+              {rows.length} relatie{rows.length === 1 ? "" : "s"}
+            </p>
+          ) : null}
         </div>
+        {view === "relaties" ? (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+          >
+            + Nieuwe partner
+          </button>
+        ) : null}
       </div>
 
       {view === "facturen" ? (
         <CreditfacturenPanel />
+      ) : view === "team" ? (
+        <InstellingenPanel
+          teamOnly
+          onAdviseursChange={onAdviseursChange}
+        />
       ) : (
         <div className="border border-line bg-white">
           {(error || okMsg) && (
@@ -775,13 +894,40 @@ export function PartnersPanel({
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+          <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
+            {(
+              [
+                ["Adviseurs", String(relatiesStats.adviseurCount)],
+                ["Installateurs", String(relatiesStats.partnerCount)],
+                ["KvK incompleet", String(relatiesStats.kvkOpen)],
+                ["Open excl.", formatEuro(relatiesStats.openEuro)],
+              ] as const
+            ).map(([label, value]) => (
+              <div key={label} className="bg-white px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  {label}
+                </p>
+                <p
+                  className={[
+                    "mt-1 font-display text-lg font-semibold tabular-nums",
+                    label === "KvK incompleet" && relatiesStats.kvkOpen > 0
+                      ? "text-[#C45A12]"
+                      : "text-ink",
+                  ].join(" ")}
+                >
+                  {value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5 sm:px-5">
             <div className="flex border border-line p-0.5">
               {(
                 [
                   ["alle", "Alle"],
                   ["adviseur", "Adviseurs"],
-                  ["installatiepartner", "Installatiepartners"],
+                  ["installatiepartner", "Installateurs"],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -789,9 +935,9 @@ export function PartnersPanel({
                   type="button"
                   onClick={() => setFilter(id)}
                   className={[
-                    "px-3 py-1.5 text-xs font-semibold",
+                    "px-3 py-1.5 text-[11px] font-semibold",
                     filter === id
-                      ? "bg-green text-white"
+                      ? "bg-ink text-white"
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
@@ -799,88 +945,153 @@ export function PartnersPanel({
                 </button>
               ))}
             </div>
-            <p className="text-xs text-muted">
-              {rows.length} partner{rows.length === 1 ? "" : "s"}
-            </p>
           </div>
 
           {loading ? (
             <p className="px-5 py-10 text-center text-sm text-muted">Laden…</p>
           ) : rows.length === 0 ? (
-            <p className="px-5 py-10 text-center text-sm text-muted">
-              Nog geen partners. Maak de eerste aan.
-            </p>
+            <div className="px-5 py-12 text-center">
+              <p className="text-sm font-medium text-ink">Nog geen partners</p>
+              <p className="mt-1 text-sm text-muted">
+                Voeg een adviseur of installatiepartner toe om te beginnen.
+              </p>
+              <button
+                type="button"
+                onClick={openCreate}
+                className="mt-4 bg-orange px-4 py-2 text-sm font-semibold text-white"
+              >
+                + Nieuwe partner
+              </button>
+            </div>
           ) : (
-            <ul className="divide-y divide-line">
-              {rows.map((r) => (
-                <li key={`${r.kind}:${r.id}`}>
-                  <button
-                    type="button"
-                    onClick={() => openEdit(r)}
-                    className="flex w-full flex-wrap items-center gap-3 px-4 py-4 text-left hover:bg-wash sm:px-5"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-display text-base font-semibold text-ink">
-                          {r.naam}
-                        </span>
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                          {r.kind === "adviseur"
-                            ? "Adviseur"
-                            : "Installatiepartner"}
-                        </span>
-                        {!r.actief && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                            Uit
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    <th className="px-4 py-2.5 sm:px-5">Relatie</th>
+                    <th className="px-3 py-2.5">Type</th>
+                    <th className="px-3 py-2.5">Status</th>
+                    <th className="px-3 py-2.5 text-right">Open</th>
+                    <th className="px-3 py-2.5 text-right">Totaal</th>
+                    <th className="px-4 py-2.5 text-right sm:px-5">Acties</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {rows.map((r) => {
+                    const kvkOk = kvkCompleet(r);
+                    const hasContract = Boolean(r.contract_bestandsnaam);
+                    return (
+                      <tr
+                        key={`${r.kind}:${r.id}`}
+                        className="group hover:bg-wash/70"
+                      >
+                        <td className="px-4 py-3.5 sm:px-5">
+                          <button
+                            type="button"
+                            onClick={() => openEdit(r)}
+                            className="min-w-0 text-left"
+                          >
+                            <span className="block font-display text-base font-semibold text-ink group-hover:text-green-deeper">
+                              {r.naam}
+                              {!r.actief ? (
+                                <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                                  Uit
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="mt-0.5 block text-xs text-muted">
+                              {r.email || "Geen e-mail"}
+                              {r.bedrijfsnaam ? ` · ${r.bedrijfsnaam}` : ""}
+                            </span>
+                          </button>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <span
+                            className={[
+                              "inline-block border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                              r.kind === "adviseur"
+                                ? "border-line bg-wash text-muted"
+                                : "border-green/25 bg-green-soft text-green-dark",
+                            ].join(" ")}
+                          >
+                            {r.kind === "adviseur"
+                              ? "Adviseur"
+                              : "Installateur"}
                           </span>
-                        )}
-                      </div>
-                      <p className="mt-0.5 text-xs text-muted">
-                        {r.email || "—"}
-                        {r.bedrijfsnaam ? ` · ${r.bedrijfsnaam}` : ""}
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                        {kvkCompleet(r) ? (
-                          <span className="font-semibold text-green-dark">
-                            KvK compleet
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={[
+                                "text-xs font-semibold",
+                                kvkOk ? "text-green-dark" : "text-[#C45A12]",
+                              ].join(" ")}
+                            >
+                              {kvkOk ? "KvK compleet" : "KvK incompleet"}
+                            </span>
+                            <span className="text-xs text-muted">
+                              {hasContract ? "Contract ✓" : "Geen contract"}
+                              {r.factuurCount > 0
+                                ? ` · ${r.factuurCount} factuur${r.factuurCount === 1 ? "" : "en"}`
+                                : ""}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3.5 text-right">
+                          {r.openCommissie > 0 ? (
+                            <span className="font-semibold tabular-nums text-[#854D0E]">
+                              {formatEuro(r.openCommissie)}
+                            </span>
+                          ) : (
+                            <span className="tabular-nums text-muted">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3.5 text-right">
+                          <span className="font-semibold tabular-nums text-ink">
+                            {r.totaalCommissie > 0
+                              ? formatEuro(r.totaalCommissie)
+                              : "—"}
                           </span>
-                        ) : (
-                          <span className="font-semibold text-[#C45A12]">
-                            KvK incompleet
-                          </span>
-                        )}
-                        {r.contract_bestandsnaam ? (
-                          <span className="text-muted">Contract ✓</span>
-                        ) : (
-                          <span className="text-muted">Geen contract</span>
-                        )}
-                        {r.factuurCount > 0 && (
-                          <span className="text-muted">
-                            {r.factuurCount} factuur
-                            {r.factuurCount === 1 ? "" : "en"}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        Totaal commissie
-                      </p>
-                      <p className="mt-0.5 font-display text-lg font-semibold tabular-nums text-ink">
-                        {formatEuro(r.totaalCommissie)}
-                      </p>
-                      <p className="text-xs text-muted">
-                        {r.openCommissie > 0
-                          ? `${formatEuro(r.openCommissie)} open`
-                          : r.factuurCount > 0
-                            ? "Alles betaald"
-                            : "Nog geen facturen"}
-                      </p>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+                        </td>
+                        <td className="px-4 py-3.5 text-right sm:px-5">
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEdit(r)}
+                              className="border border-line bg-white px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                            >
+                              Openen
+                            </button>
+                            {r.kind === "adviseur" && r.actief ? (
+                              <button
+                                type="button"
+                                disabled={loginBusyId === r.id}
+                                onClick={() =>
+                                  void loginAlsAdviseur(r.id, r.naam)
+                                }
+                                className="border border-line bg-white px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                              >
+                                {loginBusyId === r.id ? "…" : "Login als"}
+                              </button>
+                            ) : null}
+                            {r.kind === "installatiepartner" &&
+                            r.portal_token ? (
+                              <button
+                                type="button"
+                                onClick={() => loginAlsPartner(r.portal_token)}
+                                className="border border-line bg-white px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                              >
+                                Login als
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

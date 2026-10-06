@@ -120,9 +120,7 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
     case "installatie_ingepland":
       return "Bevestig tijdig zodat klant en monteur niet voor verrassingen staan.";
     case "installatie_voltooid":
-      return wf
-        ? "Afronden: Frank Energie + BTW-teruggave direct oppakken."
-        : "Afronden: BTW-teruggave / nazorg oppakken.";
+      return "Afronden: BTW terugvragen, overstap dynamische leverancier, daarna review.";
     case "review_gevraagd":
       return "Reviews helpen nieuwe klanten over de streep.";
     default:

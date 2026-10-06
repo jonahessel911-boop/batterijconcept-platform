@@ -38,7 +38,6 @@ import { PurchasingPanel } from "./PurchasingPanel";
 import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
-import { InstellingenPanel } from "./InstellingenPanel";
 import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
 import { AdminTargetsPanel } from "./AdminTargetsPanel";
@@ -62,6 +61,7 @@ import {
 import { CRM_TABS } from "./TabNav";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import { NettoBoord } from "./NettoBoord";
+import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
 
 const VALID_TABS: CrmTab[] = [
   "leads",
@@ -69,6 +69,7 @@ const VALID_TABS: CrmTab[] = [
   "agenda",
   "offertes",
   "netto",
+  "leaderboard",
   "instroom",
   "projecten",
   "facturen",
@@ -79,14 +80,13 @@ const VALID_TABS: CrmTab[] = [
   "admin",
   "ai",
   "partners",
-  "instellingen",
 ];
 
 const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v3";
 
 function parseTab(value: string | null): CrmTab {
-  // Oude URL-tab → Partners (facturen zitten daar nu)
-  if (value === "creditfacturen") return "partners";
+  // Oude URL-tab → Partners (facturen / team zitten daar nu)
+  if (value === "creditfacturen" || value === "instellingen") return "partners";
   // Service / AI zitten onder Backoffice
   if (value === "service" || value === "ai") return "projecten";
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -119,7 +119,14 @@ export function CrmShell() {
     if (searchParams.get("tab") === "ai") {
       setBoViewStore("ai");
     }
-  }, [searchParams]);
+    // Oude Instellingen-tab → Partners › Team
+    if (searchParams.get("tab") === "instellingen") {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("tab", "partners");
+      params.set("partners", "team");
+      router.replace(`/?${params.toString()}`, { scroll: false });
+    }
+  }, [searchParams, router]);
 
   useEffect(() => {
     rememberCrmReturnUrl();
@@ -178,6 +185,11 @@ export function CrmShell() {
   const [sessionReady, setSessionReady] = useState(
     () => readCrmSessionCache() !== null
   );
+  const [impersonator, setImpersonator] = useState<{
+    id: string;
+    naam: string;
+  } | null>(null);
+  const [impersonateBusy, setImpersonateBusy] = useState(false);
   const orphanBackfillDone = useRef(false);
 
   // Nooit "admin" als fallback — tot sessie bekend is: geen tabs tonen
@@ -206,6 +218,14 @@ export function CrmShell() {
           };
           setSessionUser(next);
           writeCrmSessionCache(next);
+          setImpersonator(
+            data.impersonating
+              ? {
+                  id: data.impersonating.id as string,
+                  naam: (data.impersonating.naam as string) || "Admin",
+                }
+              : null
+          );
         }
       } catch {
         /* ignore */
@@ -856,6 +876,10 @@ export function CrmShell() {
         ? `Commissie & voortgang · ${filterLabel}`
         : "Sales, fases, commissie en creditfacturen",
     },
+    leaderboard: {
+      title: "Sales Leaderboard",
+      sub: "Live sale-momenten bij ondertekende offertes",
+    },
     instroom: {
       title: "Recruitment",
       sub: "Kanban + agenda · bevestigingsmail bij gesprek",
@@ -931,11 +955,11 @@ export function CrmShell() {
     },
     partners: {
       title: "Partners",
-      sub: "Relaties, KvK en creditfacturen voor adviseurs en installatiepartners",
+      sub: "Relaties, uitbetalingen en team (login · rollen)",
     },
     instellingen: {
-      title: "Instellingen",
-      sub: "Team · rollen, login en commissie",
+      title: "Partners",
+      sub: "Doorverwezen naar Partners → Team",
     },
   };
 
@@ -952,7 +976,9 @@ export function CrmShell() {
         tabCounts={counts}
         tabs={visibleTabs}
         showBekijkAls={
-          Boolean(userRol && magBekijkAls(userRol)) && tab !== "rapportage"
+          Boolean(userRol && magBekijkAls(userRol)) &&
+          !impersonator &&
+          tab !== "rapportage"
         }
         hideTabNav
         onOpenSidebar={() => setSidebarMobileOpen(true)}
@@ -965,6 +991,47 @@ export function CrmShell() {
           });
         }}
       />
+
+      {impersonator ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#854D0E]/30 bg-[#FFF8D6] px-4 py-2.5 sm:px-6">
+          <p className="text-sm text-[#854D0E]">
+            Ingelogd als{" "}
+            <span className="font-semibold">{sessionUser?.naam}</span>
+            <span className="text-[#854D0E]/80">
+              {" "}
+              · via {impersonator.naam}
+            </span>
+          </p>
+          <button
+            type="button"
+            disabled={impersonateBusy}
+            onClick={() => {
+              setImpersonateBusy(true);
+              void fetch("/api/auth/impersonate", { method: "DELETE" })
+                .then(async (res) => {
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    throw new Error(
+                      (data as { error?: string }).error ||
+                        "Terugkeren mislukt"
+                    );
+                  }
+                  clearCrmShellCache();
+                  window.location.href = "/";
+                })
+                .catch((e) => {
+                  setError(
+                    e instanceof Error ? e.message : "Terugkeren mislukt"
+                  );
+                  setImpersonateBusy(false);
+                });
+            }}
+            className="border border-[#854D0E]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#854D0E] hover:bg-[#FFF8D6] disabled:opacity-60"
+          >
+            {impersonateBusy ? "Bezig…" : "Terug naar admin"}
+          </button>
+        </div>
+      ) : null}
 
       <div className="flex min-w-0 w-full flex-1">
         <CrmSidebar
@@ -995,7 +1062,15 @@ export function CrmShell() {
           }}
         />
 
-        <main className="flex min-w-0 flex-1 flex-col px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8">
+        <main
+          className={[
+            "flex min-w-0 flex-1 flex-col",
+            tab === "leaderboard"
+              ? "px-0 py-0"
+              : "px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
+          ].join(" ")}
+        >
+        {tab !== "leaderboard" ? (
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -1029,14 +1104,22 @@ export function CrmShell() {
             </div>
           )}
         </div>
+        ) : null}
 
-        {error && (
+        {error && tab !== "leaderboard" && (
           <div className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
             {error}
           </div>
         )}
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border border-line bg-white">
+        <div
+          className={[
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+            tab === "leaderboard"
+              ? "border-0 bg-black"
+              : "border border-line bg-white",
+          ].join(" ")}
+        >
           {userRol === "installateur" ? (
             <div className="px-6 py-16 text-center">
               <p className="font-display text-lg font-semibold text-ink">
@@ -1044,7 +1127,7 @@ export function CrmShell() {
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm text-muted">
                 Installateurs werken via het installatieportaal (aparte link per
-                partner). Beheer partners onder Instellingen als admin.
+                partner). Beheer partners onder Partners als admin.
               </p>
             </div>
           ) : (
@@ -1056,12 +1139,12 @@ export function CrmShell() {
               !hasCrmBootstrapCache() &&
               projecten.length === 0 &&
               leads.length === 0 &&
-              tab !== "instellingen" &&
               tab !== "partners" &&
               tab !== "purchasing" &&
               tab !== "ai" &&
               tab !== "admin" &&
               tab !== "netto" &&
+              tab !== "leaderboard" &&
               tab !== "instroom" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : !userRol || !magTab(userRol, tab) ? (
@@ -1157,6 +1240,7 @@ export function CrmShell() {
                     lockAdviseur={alleenEigenLeads(userRol)}
                   />
                 )}
+                {tab === "leaderboard" && <SalesLeaderboardPanel />}
                 {tab === "instroom" && <RecruitmentPanel />}
                 {tab === "projecten" && (
                   <BackofficePanel
@@ -1203,9 +1287,6 @@ export function CrmShell() {
                 {tab === "admin" && <AdminTargetsPanel />}
                 {tab === "partners" && (
                   <PartnersPanel onAdviseursChange={loadAdviseurs} />
-                )}
-                {tab === "instellingen" && (
-                  <InstellingenPanel onAdviseursChange={loadAdviseurs} />
                 )}
               </>
             )}

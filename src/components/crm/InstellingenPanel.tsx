@@ -1,16 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Adviseur, AdviseurCreditFactuur, InstallatiePartner } from "@/types/database";
+import type { Adviseur, InstallatiePartner } from "@/types/database";
 import {
   GEBRUIKER_ROLLEN,
   gebruikerRolLabel,
   normalizeRol,
   type GebruikerRol,
 } from "@/lib/rollen";
-import { formatEuro } from "@/lib/format";
-import { VERKOPER_AANBETALING_FEE } from "@/lib/adviseur-creditfactuur";
 import { RelatieContractUpload } from "./RelatieContractUpload";
+import Link from "next/link";
 
 type ListFilter = "medewerkers" | "partners";
 
@@ -43,8 +42,11 @@ function PencilIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
 
 export function InstellingenPanel({
   onAdviseursChange,
+  /** Alleen medewerkers — geen installatiepartners (die zitten onder Partners → Relaties). */
+  teamOnly = false,
 }: {
   onAdviseursChange?: () => void;
+  teamOnly?: boolean;
 }) {
   const [filter, setFilter] = useState<ListFilter>("medewerkers");
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
@@ -70,6 +72,12 @@ export function InstellingenPanel({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordSaving, setPasswordSaving] = useState(false);
+
+  useEffect(() => {
+    if (teamOnly) setFilter("medewerkers");
+  }, [teamOnly]);
+
+  const activeFilter: ListFilter = teamOnly ? "medewerkers" : filter;
 
   const selectedAdviseur =
     selectedKind === "medewerkers"
@@ -182,7 +190,7 @@ export function InstellingenPanel({
     setError(null);
     setOkMsg(null);
     try {
-      if (filter === "medewerkers") {
+      if (activeFilter === "medewerkers") {
         const res = await fetch("/api/adviseurs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -407,7 +415,7 @@ export function InstellingenPanel({
   }
 
   const rows = useMemo(() => {
-    if (filter === "medewerkers") {
+    if (activeFilter === "medewerkers") {
       return [...adviseurs].sort((a, b) => {
         if (a.actief !== b.actief) return a.actief ? -1 : 1;
         return a.naam.localeCompare(b.naam, "nl");
@@ -417,10 +425,10 @@ export function InstellingenPanel({
       if (a.actief !== b.actief) return a.actief ? -1 : 1;
       return a.naam.localeCompare(b.naam, "nl");
     });
-  }, [filter, adviseurs, partners]);
+  }, [activeFilter, adviseurs, partners]);
 
   const countLabel =
-    filter === "medewerkers"
+    activeFilter === "medewerkers"
       ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
       : `${partners.length} partner${partners.length === 1 ? "" : "s"}`;
 
@@ -646,16 +654,7 @@ export function InstellingenPanel({
                   </Field>
                 </div>
               </div>
-              <AdviseurCreditFacturenBlock
-                adviseurId={selectedAdviseur.id}
-                onMessage={(msg, isError) => {
-                  if (isError) setError(msg);
-                  else {
-                    setError(null);
-                    setOkMsg(msg);
-                  }
-                }}
-              />
+              <AdviseurCreditFacturenBlock />
             </>
           )}
 
@@ -970,32 +969,38 @@ export function InstellingenPanel({
     <div className="border border-line bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex border border-line p-0.5">
-            <button
-              type="button"
-              onClick={() => setFilter("medewerkers")}
-              className={[
-                "px-3 py-1.5 text-xs font-semibold",
-                filter === "medewerkers"
-                  ? "bg-green text-white"
-                  : "bg-white text-muted hover:bg-wash",
-              ].join(" ")}
-            >
-              Medewerkers
-            </button>
-            <button
-              type="button"
-              onClick={() => setFilter("partners")}
-              className={[
-                "px-3 py-1.5 text-xs font-semibold",
-                filter === "partners"
-                  ? "bg-green text-white"
-                  : "bg-white text-muted hover:bg-wash",
-              ].join(" ")}
-            >
-              Installatiepartners
-            </button>
-          </div>
+          {teamOnly ? (
+            <p className="text-sm font-medium text-ink">
+              Team · login, rollen en toegangsrechten
+            </p>
+          ) : (
+            <div className="flex border border-line p-0.5">
+              <button
+                type="button"
+                onClick={() => setFilter("medewerkers")}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold",
+                  activeFilter === "medewerkers"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Medewerkers
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilter("partners")}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold",
+                  activeFilter === "partners"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Installatiepartners
+              </button>
+            </div>
+          )}
           <p className="text-xs text-muted">{countLabel}</p>
         </div>
         <button
@@ -1007,7 +1012,9 @@ export function InstellingenPanel({
           }}
           className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
         >
-          {filter === "medewerkers" ? "Medewerker toevoegen" : "Partner toevoegen"}
+          {activeFilter === "medewerkers"
+            ? "Medewerker toevoegen"
+            : "Partner toevoegen"}
         </button>
       </div>
 
@@ -1031,7 +1038,7 @@ export function InstellingenPanel({
       ) : rows.length === 0 ? (
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
-            {filter === "medewerkers"
+            {activeFilter === "medewerkers"
               ? "Nog geen medewerkers"
               : "Nog geen installatiepartners"}
           </p>
@@ -1039,7 +1046,7 @@ export function InstellingenPanel({
             Klik op toevoegen om de eerste aan te maken.
           </p>
         </div>
-      ) : filter === "medewerkers" ? (
+      ) : activeFilter === "medewerkers" ? (
         <div className="overflow-x-auto">
           <table className="crm-table w-full">
             <thead>
@@ -1175,7 +1182,7 @@ export function InstellingenPanel({
           >
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold text-ink">
-                {filter === "medewerkers"
+                {activeFilter === "medewerkers"
                   ? "Medewerker toevoegen"
                   : "Installatiepartner toevoegen"}
               </h3>
@@ -1194,7 +1201,7 @@ export function InstellingenPanel({
                 onChange={(e) => setNaam(e.target.value)}
                 className={inputCls}
                 placeholder={
-                  filter === "medewerkers" ? "Bijv. Huub" : "Bijv. Installatie BV"
+                  activeFilter === "medewerkers" ? "Bijv. Huub" : "Bijv. Installatie BV"
                 }
               />
             </Field>
@@ -1214,7 +1221,7 @@ export function InstellingenPanel({
                 className={inputCls}
               />
             </Field>
-            {filter === "medewerkers" && (
+            {activeFilter === "medewerkers" && (
               <>
                 <Field label="Rol">
                   <select
@@ -1279,243 +1286,26 @@ function Field({
   );
 }
 
-type CreditPreview = {
-  week: {
-    jaar: number;
-    week: number;
-    van: string;
-    tot: string;
-    betaalMaandag: string;
-  };
-  fee_per_aanbetaling: number;
-  eligible: {
-    factuur_id: string;
-    factuur_nummer: string;
-    lead_naam: string | null;
-    betaald_op: string;
-    fee: number;
-  }[];
-  preview: {
-    aantal: number;
-    bruto: number;
-    bedrag: number;
-    capped: boolean;
-  };
-  existing: AdviseurCreditFactuur | null;
-  facturen: AdviseurCreditFactuur[];
-};
-
-function AdviseurCreditFacturenBlock({
-  adviseurId,
-  onMessage,
-}: {
-  adviseurId: string;
-  onMessage: (msg: string, isError?: boolean) => void;
-}) {
-  const [data, setData] = useState<CreditPreview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(
-        `/api/adviseurs/creditfacturen?adviseur_id=${adviseurId}`
-      );
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Laden mislukt");
-      setData(json as CreditPreview);
-    } catch (e) {
-      onMessage(e instanceof Error ? e.message : "Laden mislukt", true);
-    } finally {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adviseurId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function createInvoice() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/adviseurs/creditfacturen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          adviseur_id: adviseurId,
-          jaar: data?.week.jaar,
-          week: data?.week.week,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Aanmaken mislukt");
-      onMessage(
-        `Concept ${json.factuur.factuur_nummer} aangemaakt (${json.regels_count} × €${VERKOPER_AANBETALING_FEE}). Verstuur via Creditfacturen.`
-      );
-      await load();
-    } catch (e) {
-      onMessage(e instanceof Error ? e.message : "Aanmaken mislukt", true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function patchStatus(id: string, status: "verzonden" | "betaald") {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/adviseurs/creditfacturen", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Bijwerken mislukt");
-      onMessage(
-        status === "verzonden"
-          ? `Factuur ${json.factuur.factuur_nummer} verstuurd naar adviseur.`
-          : `Creditfactuur ${json.factuur.factuur_nummer} gemarkeerd als betaald.`
-      );
-      await load();
-    } catch (e) {
-      onMessage(e instanceof Error ? e.message : "Bijwerken mislukt", true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+function AdviseurCreditFacturenBlock() {
   return (
     <div className="border border-line">
       <div className="border-b border-line px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Creditfacturen
+          Uitbetalingen
         </p>
         <p className="mt-1 text-sm text-muted">
-          €{VERKOPER_AANBETALING_FEE} per betaalde klant-aanbetaling (ma–zo).
+          Commissie-creditfacturen maak en verstuur je in de
+          uitbetalingen-inbox.
         </p>
       </div>
-      {loading || !data ? (
-        <p className="px-4 py-6 text-sm text-muted">Laden…</p>
-      ) : (
-        <div className="space-y-4 p-4">
-          <div className="border border-line bg-wash px-3 py-3">
-            <p className="text-sm font-semibold text-ink">
-              Week {data.week.week} · {data.week.van} t/m {data.week.tot}
-            </p>
-            <p className="mt-2 text-sm">
-              {data.preview.aantal} aanbetaling
-              {data.preview.aantal === 1 ? "" : "en"} →{" "}
-              <span className="font-semibold tabular-nums">
-                {formatEuro(data.preview.bedrag)}
-              </span>
-            </p>
-            <div className="mt-3">
-              {data.existing && data.existing.status !== "geannuleerd" ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-xs text-muted">
-                    {data.existing.status === "concept"
-                      ? "Concept: "
-                      : "Al aangemaakt: "}
-                    <span className="font-semibold text-ink">
-                      {data.existing.factuur_nummer}
-                    </span>
-                  </p>
-                  {(data.existing.status === "concept" ||
-                    data.existing.status === "verzonden") && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void patchStatus(data.existing!.id, "verzonden")
-                      }
-                      className="bg-orange px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-                    >
-                      {data.existing.status === "verzonden"
-                        ? "Opnieuw versturen"
-                        : "Verstuur naar adviseur"}
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled={busy || data.preview.aantal === 0}
-                  onClick={() => void createInvoice()}
-                  className="bg-orange px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {busy
-                    ? "Bezig…"
-                    : `Maak concept (${formatEuro(data.preview.bedrag)})`}
-                </button>
-              )}
-            </div>
-          </div>
-          {data.facturen.length > 0 && (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-line text-left text-[10px] uppercase text-muted">
-                  <th className="py-2">Nummer</th>
-                  <th>Week</th>
-                  <th className="text-right">Bedrag</th>
-                  <th>Status</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.facturen.map((f) => (
-                  <tr key={f.id} className="border-b border-line/60">
-                    <td className="py-2 font-medium">{f.factuur_nummer}</td>
-                    <td className="text-muted">
-                      {f.week_jaar}-W{String(f.week_nummer).padStart(2, "0")}
-                    </td>
-                    <td className="text-right tabular-nums">
-                      {formatEuro(f.bedrag_ex_btw)}
-                    </td>
-                    <td className="capitalize text-muted">
-                      {(f.status === "goedgekeurd" || f.status === "betaald") &&
-                      f.goedgekeurd_op ? (
-                        <span className="inline-flex items-center gap-1 text-green-dark">
-                          <span aria-hidden>✓</span>
-                          {f.status}
-                        </span>
-                      ) : (
-                        f.status
-                      )}
-                    </td>
-                    <td className="text-right">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        {(f.status === "concept" ||
-                          f.status === "verzonden") && (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void patchStatus(f.id, "verzonden")}
-                            className="text-xs font-medium text-orange hover:underline"
-                          >
-                            Verstuur
-                          </button>
-                        )}
-                        {(f.status === "goedgekeurd" ||
-                          f.status === "verzonden") && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void patchStatus(f.id, "betaald")}
-                              className="bg-green px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-                            >
-                              Betaald
-                            </button>
-                          )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+      <div className="px-4 py-4">
+        <Link
+          href="/?tab=partners&partners=uitbetalingen"
+          className="inline-flex bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper"
+        >
+          Open Partners → Uitbetalingen
+        </Link>
+      </div>
     </div>
   );
 }

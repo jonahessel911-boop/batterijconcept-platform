@@ -7,7 +7,9 @@ import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
   NETTO_AANBETALING_COMMISSIE,
+  NETTO_ANNULERING_LABEL,
   NETTO_COMMISSIE_PCT,
+  formatNettoPlanMoment,
   type NettoBoardRow,
   type NettoFase,
 } from "@/lib/netto-boord";
@@ -133,8 +135,8 @@ function StatusBadge({ row }: { row: NettoBoardRow }) {
   if (row.board_status === "geannuleerd") {
     return (
       <div>
-        <span className="inline-flex items-center rounded-full bg-[#f3e8e8] px-2.5 py-1 text-xs font-semibold text-[#9b3b3b]">
-          Geannuleerd
+        <span className="inline-flex items-center rounded-full bg-[#f3e8e8] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[#9b3b3b]">
+          {NETTO_ANNULERING_LABEL}
         </span>
         {row.status_sinds ? (
           <p className="mt-1 text-[10px] text-muted">
@@ -263,9 +265,11 @@ function FaseTimeline({ fases }: { fases: NettoFase[] }) {
 function DetailDrawer({
   row,
   onClose,
+  onRefresh,
 }: {
   row: NettoBoardRow;
   onClose: () => void;
+  onRefresh?: () => void;
 }) {
   const [tab, setTab] = useState<DrawerTab>("fases");
   const [timeline, setTimeline] = useState<NettoTimelineItem[]>([]);
@@ -284,6 +288,7 @@ function DetailDrawer({
   const [actieNotitie, setActieNotitie] = useState("");
   const [actieDue, setActieDue] = useState(defaultDueDateLocal);
   const [actieSaving, setActieSaving] = useState(false);
+  const [creatingCredit, setCreatingCredit] = useState(false);
 
   const loadDetail = useCallback(async () => {
     setDetailLoading(true);
@@ -426,6 +431,42 @@ function DetailDrawer({
     }
   }
 
+  async function createCreditFromDeal() {
+    if (row.geannuleerd) {
+      setMsg("Geen commissiefactuur bij annulering.");
+      return;
+    }
+    setCreatingCredit(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/adviseurs/creditfacturen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offerte_id: row.offerte_id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Aanmaken mislukt"
+        );
+      }
+      const nummer =
+        (data as { factuur?: { factuur_nummer?: string } }).factuur
+          ?.factuur_nummer || "concept";
+      const created = (data as { created?: boolean }).created !== false;
+      setMsg(
+        created
+          ? `Creditfactuur ${nummer} aangemaakt.`
+          : `Creditfactuur ${nummer} bestond al.`
+      );
+      onRefresh?.();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Aanmaken mislukt");
+    } finally {
+      setCreatingCredit(false);
+    }
+  }
+
   const openActieCount = adviseurActies.filter((a) => a.status !== "done").length;
   const tabs: { id: DrawerTab; label: string; count?: number }[] = [
     { id: "fases", label: "Fases" },
@@ -555,7 +596,7 @@ function DetailDrawer({
                 Schouwdatum
               </p>
               <p className="mt-1 text-xs font-medium text-ink">
-                {row.schouw_at ? formatSinds(row.schouw_at) : "—"}
+                {formatNettoPlanMoment(row.schouw_at) || "—"}
               </p>
             </div>
             <div className="rounded-lg border border-line px-2 py-2.5">
@@ -563,7 +604,7 @@ function DetailDrawer({
                 Installatie
               </p>
               <p className="mt-1 text-xs font-medium text-ink">
-                {row.installatie_at ? formatSinds(row.installatie_at) : "—"}
+                {formatNettoPlanMoment(row.installatie_at) || "—"}
               </p>
             </div>
             <div className="rounded-lg border border-line px-2 py-2.5">
@@ -746,12 +787,30 @@ function DetailDrawer({
                           : "Download creditfactuur"}
                       </button>
                     </div>
-                  ) : row.aanbetaling_betaald ? (
-                    <p className="border-t border-line pt-2 text-[11px] text-muted">
-                      Creditfactuur volgt automatisch (uitbetaling
-                      eerstvolgende woensdag).
-                    </p>
-                  ) : null}
+                  ) : row.geannuleerd ? null : (
+                    <div className="space-y-2 border-t border-line pt-3">
+                      <p className="text-[11px] text-muted">
+                        Nog geen verkopersfactuur. Maak tranche A (€
+                        {NETTO_AANBETALING_COMMISSIE} excl.) nu aan, of wacht
+                        tot het automatisch gebeurt.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={creatingCredit || !row.adviseur_id}
+                        onClick={() => void createCreditFromDeal()}
+                        className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
+                      >
+                        {creatingCredit
+                          ? "Bezig…"
+                          : "Maak creditfactuur"}
+                      </button>
+                      {!row.adviseur_id ? (
+                        <p className="text-[11px] text-[#C45A12]">
+                          Deal heeft geen adviseur.
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
                 </dl>
               </div>
             </>
@@ -1010,7 +1069,7 @@ function DetailDrawer({
           </p>
           {row.geannuleerd ? (
             <p className="mt-1 text-xs text-[#9b3b3b]">
-              Geannuleerd — geen commissie
+              {NETTO_ANNULERING_LABEL} — geen commissie
             </p>
           ) : (
             <p className="mt-1 text-xs text-muted">
@@ -1139,10 +1198,10 @@ export function NettoBoord({
             onChange={(e) => setStatus(e.target.value as StatusFilter)}
             className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
           >
-            <option value="alles">Alles</option>
+            <option value="alles">Alles (zonder annulering)</option>
             <option value="actief">Actief</option>
             <option value="netto">Netto</option>
-            <option value="geannuleerd">Geannuleerd</option>
+            <option value="geannuleerd">Annulering door klant</option>
           </select>
         </div>
 
@@ -1184,7 +1243,10 @@ export function NettoBoord({
               label: "Getriggerd (€250)",
               value: formatEuro(totals.commissie_verdiend),
             },
-            { label: "Geannuleerd", value: String(totals.geannuleerd) },
+            {
+              label: "Annulering klant",
+              value: String(totals.geannuleerd),
+            },
           ].map((kpi) => (
             <div key={kpi.label} className="bg-white px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -1300,12 +1362,10 @@ export function NettoBoord({
                         "—"}
                     </td>
                     <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {row.schouw_at ? formatSinds(row.schouw_at) : "—"}
+                      {formatNettoPlanMoment(row.schouw_at) || "—"}
                     </td>
                     <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {row.installatie_at
-                        ? formatSinds(row.installatie_at)
-                        : "—"}
+                      {formatNettoPlanMoment(row.installatie_at) || "—"}
                     </td>
                     <td className="px-3 py-3 text-xs tabular-nums text-muted">
                       {row.factuur_verstuurd_at
@@ -1334,7 +1394,11 @@ export function NettoBoord({
       )}
 
       {selected ? (
-        <DetailDrawer row={selected} onClose={() => setSelectedId(null)} />
+        <DetailDrawer
+          row={selected}
+          onClose={() => setSelectedId(null)}
+          onRefresh={() => void load()}
+        />
       ) : null}
     </div>
   );

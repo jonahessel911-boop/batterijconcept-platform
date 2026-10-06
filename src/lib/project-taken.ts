@@ -71,6 +71,23 @@ export function autoTakenVoorStatus(
     return kickoffAutoTaken(betaalwijze === "warmtefonds");
   }
 
+  if (key === "installatie_voltooid") {
+    return [
+      {
+        autoKey: "installatie_voltooid:btw_terugvragen",
+        titel: "BTW terugvragen aanvragen",
+        afdeling: "Backoffice",
+        dueInDays: 2,
+      },
+      {
+        autoKey: "installatie_voltooid:overstap_leverancier",
+        titel: "Overstap dynamische leverancier",
+        afdeling: "Backoffice",
+        dueInDays: 2,
+      },
+    ];
+  }
+
   const taak = resolveStatusTaak(key, betaalwijze);
   if (!taak) return [];
 

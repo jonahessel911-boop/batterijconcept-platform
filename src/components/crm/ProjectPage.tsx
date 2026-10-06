@@ -32,6 +32,7 @@ import { backofficeHref, parseBoView } from "@/lib/bo-view";
 import { ProjectStatusPath } from "./ProjectStatusPath";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { ProjectKickoffChecklist } from "./ProjectKickoffChecklist";
+import { ProjectAfrondingChecklist } from "./ProjectAfrondingChecklist";
 import { ProjectVolgendeStap } from "./ProjectVolgendeStap";
 import { ProjectStatusSelect } from "./ProjectStatusSelect";
 import { ProjectFinancieelSection } from "./ProjectFinancieelSection";
@@ -2041,6 +2042,14 @@ export function ProjectPage() {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
                   setOkMsg("Doorgestuurd naar Edwin.");
+                }}
+              />
+
+              <ProjectAfrondingChecklist
+                project={project}
+                onUpdated={(p) => {
+                  setProject((prev) => (prev ? { ...prev, ...p } : p));
+                  void refreshLeadEvents(p.lead_id);
                 }}
               />
 

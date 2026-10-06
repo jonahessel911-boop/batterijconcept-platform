@@ -19,6 +19,11 @@ export type SessionPayload = {
   email: string;
   rol: string;
   exp: number;
+  /** Admin die “Login als” gebruikt — aanwezig tijdens impersonatie. */
+  impersonatorId?: string;
+  impersonatorNaam?: string;
+  impersonatorEmail?: string;
+  impersonatorRol?: string;
 };
 
 function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {
@@ -71,6 +76,10 @@ export async function createSessionToken(data: {
   naam: string;
   email: string;
   rol?: string;
+  impersonatorId?: string;
+  impersonatorNaam?: string;
+  impersonatorEmail?: string;
+  impersonatorRol?: string;
 }): Promise<string> {
   const payload: SessionPayload = {
     adviseurId: data.adviseurId,
@@ -79,6 +88,12 @@ export async function createSessionToken(data: {
     rol: data.rol || "adviseur",
     exp: Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000,
   };
+  if (data.impersonatorId) {
+    payload.impersonatorId = data.impersonatorId;
+    payload.impersonatorNaam = data.impersonatorNaam || "";
+    payload.impersonatorEmail = data.impersonatorEmail || "";
+    payload.impersonatorRol = data.impersonatorRol || "admin";
+  }
   const payloadB64 = toBase64Url(
     new TextEncoder().encode(JSON.stringify(payload))
   );

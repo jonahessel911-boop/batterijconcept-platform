@@ -426,7 +426,7 @@ export function AdminTargetsPanel() {
             <ul className="max-h-[28rem] space-y-1 overflow-y-auto">
               {personen.length === 0 ? (
                 <li className="px-2 py-3 text-sm text-muted">
-                  Geen actieve medewerkers. Voeg ze toe via Instellingen.
+                  Geen actieve medewerkers. Voeg ze toe via Partners → Team.
                 </li>
               ) : (
                 personen.map((p) => {
@@ -470,7 +470,7 @@ export function AdminTargetsPanel() {
             <ul className="max-h-[28rem] space-y-1 overflow-y-auto">
               {partners.filter((p) => p.actief).length === 0 ? (
                 <li className="px-2 py-3 text-sm text-muted">
-                  Geen actieve partners. Voeg ze toe via Instellingen.
+                  Geen actieve partners. Voeg ze toe via Partners.
                 </li>
               ) : (
                 partners
@@ -582,7 +582,7 @@ export function AdminTargetsPanel() {
             !selectedPerson ? (
               <p className="text-sm text-muted">
                 Kies een medewerker links. Bellers, adviseurs en installateurs
-                staan hier zodra ze actief zijn in Instellingen.
+                staan hier zodra ze actief zijn in Partners.
               </p>
             ) : (
               <>

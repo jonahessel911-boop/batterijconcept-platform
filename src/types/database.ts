@@ -79,6 +79,7 @@ export type CrmTab =
   | "agenda"
   | "offertes"
   | "netto"
+  | "leaderboard"
   | "instroom"
   | "projecten"
   | "facturen"
@@ -521,6 +522,12 @@ export interface Project {
    * Waarden: true/"besteld" | "geleverd" | false/"te_kopen".
    */
   materiaal_checks?: Record<string, boolean | string> | null;
+  /** Moment waarop BTW-teruggave is aangevraagd. */
+  btw_terugvragen_aangevraagd_at?: string | null;
+  /** Overstap naar dynamische energieleverancier aangevraagd. */
+  overstap_dynamische_leverancier_at?: string | null;
+  /** Review-verzoek verstuurd. */
+  review_gevraagd_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<

@@ -116,6 +116,9 @@ export async function PATCH(
     schouw_notities?: string | null;
     installatie_notities?: string | null;
     service_notities?: string | null;
+    btw_terugvragen_aangevraagd_at?: string | null;
+    overstap_dynamische_leverancier_at?: string | null;
+    review_gevraagd_at?: string | null;
   };
   try {
     body = await req.json();
@@ -209,6 +212,29 @@ export async function PATCH(
       }
       patch.warmtefonds_aangevraagd_at = d.toISOString();
     }
+  }
+  for (const key of [
+    "btw_terugvragen_aangevraagd_at",
+    "overstap_dynamische_leverancier_at",
+    "review_gevraagd_at",
+  ] as const) {
+    const val = body[key];
+    if (val === undefined) continue;
+    if (val === null) {
+      patch[key] = null;
+      continue;
+    }
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) {
+      return NextResponse.json({ error: "Ongeldige datum" }, { status: 400 });
+    }
+    patch[key] = d.toISOString();
+  }
+  if (
+    body.status === "review_gevraagd" &&
+    patch.review_gevraagd_at === undefined
+  ) {
+    patch.review_gevraagd_at = new Date().toISOString();
   }
   if (body.financiering_status !== undefined) {
     if (body.financiering_status === null) {
@@ -369,12 +395,15 @@ export async function PATCH(
         error.message?.includes("warmtefonds_afspraak_ingepland") ||
         error.message?.includes("financiering_status") ||
         error.message?.includes("warmtefonds_afspraak_at") ||
+        error.message?.includes("btw_terugvragen_aangevraagd_at") ||
+        error.message?.includes("overstap_dynamische_leverancier_at") ||
+        error.message?.includes("review_gevraagd_at") ||
         error.code === "42703")
     ) {
       return NextResponse.json(
         {
           error:
-            "Voer supabase/migrate-financiering-status.sql (en eventueel bel-/Warmtefonds-migraties) uit in Supabase.",
+            "Voer supabase/migrate-project-afronding.sql (en eventueel eerdere migraties) uit in Supabase.",
         },
         { status: 500 }
       );

@@ -6,6 +6,10 @@ import {
   resolveBetaalwijze,
   type Betaalwijze,
 } from "@/lib/project-status-config";
+import {
+  isSchouwdagDefinitief,
+  schouwWeekFromDate,
+} from "@/lib/schouw-week";
 import type { ProjectStatus } from "@/types/database";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 
@@ -98,6 +102,26 @@ export function formatEuroNl(n: number): string {
     style: "currency",
     currency: "EUR",
   }).format(n);
+}
+
+/** Planmoment voor fase-labels: `6/10/2026 - 10.00` (Amsterdam). */
+export function formatNettoPlanMoment(
+  iso: string | null | undefined
+): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    const stamp = formatInTimeZone(d, AMSTERDAM_TZ, "d/M/yyyy - HH.mm");
+    return stamp;
+  } catch {
+    return null;
+  }
+}
+
+function withPlanMoment(base: string, iso: string | null | undefined): string {
+  const stamp = formatNettoPlanMoment(iso);
+  return stamp ? `${base} - ${stamp}` : base;
 }
 
 export function commissieVerwacht(omzetExBtw: number): number {
@@ -296,6 +320,9 @@ type BuildCtx = {
   warmtefondsHistory?: Iterable<string> | null;
   schouwFormulierGeupload: boolean;
   schouwFormulierAt: string | null;
+  btwTerugvragenAt?: string | null;
+  overstapDynamischeLeverancierAt?: string | null;
+  reviewGevraagdAt?: string | null;
 };
 
 function taak(
@@ -377,32 +404,52 @@ export function buildNettoFases(ctx: BuildCtx): NettoFase[] {
           ),
         ];
 
+  const schouwDefinitief = isSchouwdagDefinitief({
+    schouw_at: ctx.schouwAt,
+    schouw_jaar: ctx.schouwJaar,
+    schouw_week: ctx.schouwWeek,
+  });
+  const schouwWeek =
+    ctx.schouwJaar && ctx.schouwWeek
+      ? { jaar: ctx.schouwJaar, week: ctx.schouwWeek }
+      : schouwDefinitief && ctx.schouwAt
+        ? schouwWeekFromDate(ctx.schouwAt)
+        : null;
+  const schouwWeekGezet = Boolean(schouwWeek);
+  const installatieGepland = Boolean(ctx.installatieAt);
+
   const f2Taken: NettoFaseTaak[] = [
     taak(
       "schouw_week",
-      "2.1 Schouwweek gezet",
-      !cancelled &&
-        (Boolean(ctx.schouwJaar && ctx.schouwWeek) ||
-          reached(st, "schouwdag_ingepland") ||
-          reached(st, "schouw_voltooid") ||
-          Boolean(ctx.schouwAt)),
+      schouwWeek
+        ? `2.1 Schouwweek gezet - W${schouwWeek.week} · ${schouwWeek.jaar}`
+        : "2.1 Schouwweek gezet",
+      !cancelled && schouwWeekGezet,
       null,
-      ctx.schouwJaar && ctx.schouwWeek
-        ? `Week ${ctx.schouwWeek} · ${ctx.schouwJaar}`
-        : null
+      null
     ),
     taak(
       "schouw_datum",
-      "2.2 Schouwdatum gepland",
+      withPlanMoment(
+        "2.2 Schouwdatum gepland",
+        schouwDefinitief ? ctx.schouwAt : null
+      ),
       !cancelled &&
-        (Boolean(ctx.schouwAt) ||
+        (schouwDefinitief ||
           reached(st, "schouwdag_ingepland") ||
           reached(st, "schouw_voltooid")),
-      ctx.schouwAt
+      schouwDefinitief ? ctx.schouwAt : null,
+      null
     ),
     taak(
       "schouw_done",
-      "2.3 Schouw uitgevoerd",
+      withPlanMoment(
+        "2.3 Schouw uitgevoerd",
+        ctx.schouwFormulierGeupload
+          ? ctx.schouwFormulierAt ||
+              (schouwDefinitief ? ctx.schouwAt : null)
+          : null
+      ),
       !cancelled && ctx.schouwFormulierGeupload,
       ctx.schouwFormulierAt,
       ctx.schouwFormulierGeupload ? "Schouwformulier geüpload" : null
@@ -417,40 +464,47 @@ export function buildNettoFases(ctx: BuildCtx): NettoFase[] {
     ),
     taak(
       "installatie_plan",
-      "3.2 Installatie inplannen",
+      withPlanMoment("3.2 Installatie inplannen", ctx.installatieAt),
       !cancelled &&
-        (Boolean(ctx.installatieAt) ||
+        (installatieGepland ||
           reached(st, "installatie_ingepland") ||
           reached(st, "installatie_voltooid")),
-      ctx.installatieAt
+      null,
+      null
     ),
     taak(
       "installatie_done",
-      "3.3 Installatie uitgevoerd",
+      withPlanMoment(
+        "3.3 Installatie uitgevoerd",
+        reached(st, "installatie_voltooid") ? ctx.installatieAt : null
+      ),
       !cancelled && reached(st, "installatie_voltooid"),
-      ctx.installatieAt
+      null,
+      null
     ),
   ];
 
   const f4Taken: NettoFaseTaak[] = [
     taak(
-      "rest_verstuurd",
-      "4.1 Restfactuur verstuurd",
-      !cancelled && (ctx.restVerstuurd || reached(st, "restfactuur_verstuurd")),
-      ctx.restVerstuurdOp
+      "btw_terugvragen",
+      "4.1 BTW terugvragen aangevraagd",
+      !cancelled && Boolean(ctx.btwTerugvragenAt),
+      ctx.btwTerugvragenAt || null
     ),
     taak(
-      "rest_betaald",
-      "4.2 Restfactuur betaald",
-      !cancelled && (ctx.restBetaald || reached(st, "restfactuur_betaald")),
-      ctx.restBetaaldOp
+      "overstap_leverancier",
+      "4.2 Overstap dynamische leverancier",
+      !cancelled && Boolean(ctx.overstapDynamischeLeverancierAt),
+      ctx.overstapDynamischeLeverancierAt || null
     ),
     taak(
       "review",
-      "4.3 Afronding / review",
+      "4.3 Review",
       !cancelled &&
-        (reached(st, "review_gevraagd") ||
-          normalizeProjectStatus(st) === "service")
+        (Boolean(ctx.reviewGevraagdAt) ||
+          reached(st, "review_gevraagd") ||
+          normalizeProjectStatus(st) === "service"),
+      ctx.reviewGevraagdAt || null
     ),
   ];
 
@@ -508,6 +562,17 @@ export function boardStatusOf(opts: {
   if (s.allDone) return "netto";
   return "actief";
 }
+
+/** Order geannuleerd in CRM → niet meetellen in Netto (actief/netto). */
+export function isNettoGeannuleerd(opts: {
+  projectStatus?: string | null;
+  offerteStatus?: string | null;
+}): boolean {
+  if (opts.offerteStatus === "afgewezen") return true;
+  return normalizeProjectStatus(opts.projectStatus) === "annulering";
+}
+
+export const NETTO_ANNULERING_LABEL = "Annulering door klant";
 
 export function isAanbetalingFactuur(omschrijving: string | null | undefined) {
   return isAanbetalingFactuurOmschrijving(omschrijving);

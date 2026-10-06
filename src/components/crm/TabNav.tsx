@@ -8,6 +8,7 @@ export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "agenda", label: "Agenda" },
   { id: "offertes", label: "Offertes" },
   { id: "netto", label: "Netto" },
+  { id: "leaderboard", label: "Leaderboard" },
   { id: "instroom", label: "Recruitment" },
   { id: "projecten", label: "Backoffice" },
   { id: "facturen", label: "Facturen" },
@@ -16,7 +17,6 @@ export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "rapportage", label: "Rapportage" },
   { id: "admin", label: "Admin" },
   { id: "partners", label: "Partners" },
-  { id: "instellingen", label: "Instellingen" },
 ];
 
 /** Desktop tab-balk (verborgen op telefoon — daar hamburger) */

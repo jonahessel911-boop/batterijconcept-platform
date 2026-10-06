@@ -237,9 +237,8 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     scope: "beide",
     inPipeline: true,
     taak: {
-      autoKeySuffix: "frank_btw",
-      titel:
-        "Overstap Frank Energie aanvragen + BTW-teruggave indienen (eenmalig, direct uitvoeren)",
+      autoKeySuffix: "afronding",
+      titel: "BTW terugvragen + overstap dynamische leverancier",
       afdeling: "Backoffice",
       due: { kind: "days", days: 2 },
     },
