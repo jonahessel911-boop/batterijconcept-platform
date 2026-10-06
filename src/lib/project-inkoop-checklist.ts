@@ -32,11 +32,11 @@ export const INKOOP_REGEL_STATUS_LABEL: Record<InkoopRegelStatus, string> = {
 
 export type MateriaalChecks = Record<
   string,
-  boolean | InkoopRegelStatus | null | undefined
+  boolean | string | InkoopRegelStatus | null | undefined
 >;
 
 export function parseInkoopRegelStatus(
-  value: boolean | InkoopRegelStatus | null | undefined
+  value: boolean | string | InkoopRegelStatus | null | undefined
 ): InkoopRegelStatus {
   if (value === true || value === "besteld") return "besteld";
   if (value === "geleverd") return "geleverd";

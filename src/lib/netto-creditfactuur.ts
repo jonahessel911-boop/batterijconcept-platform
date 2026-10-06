@@ -414,19 +414,28 @@ export async function ensureAdviseurCommissieTrancheB(
     return { ok: false, error: pErr?.message || "Project niet gevonden" };
   }
 
-  const lead = project.leads as
+  const leadRaw = project.leads as
     | { id: string; naam?: string | null; adviseur_id?: string | null }
+    | { id: string; naam?: string | null; adviseur_id?: string | null }[]
     | null
     | undefined;
-  const off = project.offertes as
+  const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+  const offRaw = project.offertes as
     | {
         id: string;
         offerte_nummer?: string | null;
         subtotaal_ex_btw?: number | null;
         totaal_inc_btw?: number | null;
       }
+    | {
+        id: string;
+        offerte_nummer?: string | null;
+        subtotaal_ex_btw?: number | null;
+        totaal_inc_btw?: number | null;
+      }[]
     | null
     | undefined;
+  const off = Array.isArray(offRaw) ? offRaw[0] : offRaw;
 
   if (!lead?.adviseur_id) return { ok: true, skipped: "geen_adviseur" };
   if (!off?.offerte_nummer) return { ok: true, skipped: "geen_offerte" };

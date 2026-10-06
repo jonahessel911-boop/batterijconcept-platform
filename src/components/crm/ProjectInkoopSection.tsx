@@ -11,6 +11,7 @@ import {
   batterijPurchasingStatus,
   resolveInkoopRegelStatus,
   type InkoopChecklistItem,
+  type MateriaalChecks,
 } from "@/lib/project-inkoop-checklist";
 import type { ProductInkoop } from "@/lib/inkoop";
 
@@ -64,7 +65,7 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [producten, setProducten] = useState<ProductInkoop[]>([]);
-  const [checks, setChecks] = useState<Record<string, boolean>>(
+  const [checks, setChecks] = useState<MateriaalChecks>(
     () => project.materiaal_checks || {}
   );
   const [loading, setLoading] = useState(true);

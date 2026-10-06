@@ -203,12 +203,12 @@ export async function GET(_req: NextRequest) {
       (productenQuery.error.code === "42703" ||
         productenQuery.error.message?.includes("inkoop_"))
     ) {
-      productenQuery = await sb
+      productenQuery = (await sb
         .from("producten")
         .select(
           "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief"
         )
-        .eq("actief", true);
+        .eq("actief", true)) as typeof productenQuery;
     }
     if (productenQuery.error) throw productenQuery.error;
 

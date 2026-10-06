@@ -156,7 +156,10 @@ export async function PATCH(
 
     let mail: { ok: boolean; skipped?: boolean; error?: string } | undefined;
     if (becameDone && before.hasCreatorCol) {
-      mail = await notifyCreatorActieVoltooid(sb, data as Record<string, unknown>);
+      mail = await notifyCreatorActieVoltooid(
+        sb,
+        data as unknown as Record<string, unknown>
+      );
     }
 
     return NextResponse.json({ taak: data, mail });

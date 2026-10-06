@@ -410,6 +410,7 @@ export function BackofficeActiesList({
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     herplan: true,
     volgende: true,
+    inkoop: true,
     warmtefonds: true,
     stap1: true,
     factuur: true,

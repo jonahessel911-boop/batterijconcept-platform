@@ -472,24 +472,14 @@ export function PlanningAgenda({
               <button
                 type="button"
                 onClick={() => changeCalendarView("dag")}
-                className={[
-                  "px-2.5 py-1",
-                  calendarView === "dag"
-                    ? "bg-[#0D9488] text-white"
-                    : "text-muted hover:text-ink",
-                ].join(" ")}
+                className="px-2.5 py-1 text-muted hover:text-ink"
               >
                 Dag
               </button>
               <button
                 type="button"
                 onClick={() => changeCalendarView("week")}
-                className={[
-                  "px-2.5 py-1",
-                  calendarView === "week"
-                    ? "bg-[#0D9488] text-white"
-                    : "text-muted hover:text-ink",
-                ].join(" ")}
+                className="px-2.5 py-1 bg-[#0D9488] text-white"
               >
                 Week
               </button>

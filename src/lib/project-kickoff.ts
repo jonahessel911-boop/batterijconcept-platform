@@ -141,8 +141,8 @@ export function kickoffWarmtefondsBedragen(
   ) {
     const a = aanbetalingVanOrder({
       subtotaalExBtw: Number(off.subtotaal_ex_btw) || 0,
-      btwBedrag: off.btw_bedrag,
-      totaalIncBtw: off.totaal_inc_btw,
+      btwBedrag: off.btw_bedrag ?? undefined,
+      totaalIncBtw: off.totaal_inc_btw ?? undefined,
       modus: off.aanbetaling_modus,
       handmatigIncBtw: off.aanbetaling_bedrag_inc,
       financieringVoorbehoud: true,

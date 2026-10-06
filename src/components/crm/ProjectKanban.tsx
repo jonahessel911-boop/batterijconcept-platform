@@ -28,6 +28,7 @@ import {
   buildInkoopChecklist,
   inkoopChecklistTotaalExBtw,
   isInkoopItemBesteld,
+  type MateriaalChecks,
 } from "@/lib/project-inkoop-checklist";
 import type { ProductInkoop } from "@/lib/inkoop";
 import type { Factuur, Offerte } from "@/types/database";
@@ -569,7 +570,7 @@ function MateriaalModal({
   } | null>(null);
   const [producten, setProducten] = useState<ProductInkoop[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
-  const [checks, setChecks] = useState<Record<string, boolean>>(
+  const [checks, setChecks] = useState<MateriaalChecks>(
     () => project.materiaal_checks || {}
   );
   const [leveradres, setLeveradres] = useState(
