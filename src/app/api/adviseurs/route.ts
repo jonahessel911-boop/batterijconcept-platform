@@ -34,8 +34,10 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
+const ADVISEUR_PUBLIC_MID =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, created_at, updated_at";
 const ADVISEUR_PUBLIC_MIN =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
@@ -116,7 +118,8 @@ export async function GET(req: NextRequest) {
         error.message?.includes("commissie_pct") ||
         error.message?.includes("bedrijfsnaam") ||
         error.message?.includes("kvk_nummer") ||
-        error.message?.includes("max_factuur_bedrag"))
+        error.message?.includes("max_factuur_bedrag") ||
+        error.message?.includes("contract_storage_path"))
     ) {
       let retry = sb
         .from("adviseurs")
@@ -127,18 +130,35 @@ export async function GET(req: NextRequest) {
       if (
         second.error &&
         (second.error.code === "42703" ||
-          second.error.message?.includes("start_adres") ||
-          second.error.message?.includes("commissie_pct") ||
-          second.error.message?.includes("rol"))
+          second.error.message?.includes("bedrijfsnaam") ||
+          second.error.message?.includes("kvk_nummer") ||
+          second.error.message?.includes("max_factuur_bedrag"))
       ) {
-        let bare = sb
+        let mid = sb
           .from("adviseurs")
-          .select(ADVISEUR_PUBLIC_MIN)
+          .select(ADVISEUR_PUBLIC_MID)
           .order("naam");
-        if (!includeInactive) bare = bare.eq("actief", true);
-        const third = await bare;
-        adviseurs = (third.data || null) as typeof adviseurs;
-        error = third.error;
+        if (!includeInactive) mid = mid.eq("actief", true);
+        const midRes = await mid;
+        if (
+          midRes.error &&
+          (midRes.error.code === "42703" ||
+            midRes.error.message?.includes("start_adres") ||
+            midRes.error.message?.includes("commissie_pct") ||
+            midRes.error.message?.includes("rol"))
+        ) {
+          let bare = sb
+            .from("adviseurs")
+            .select(ADVISEUR_PUBLIC_MIN)
+            .order("naam");
+          if (!includeInactive) bare = bare.eq("actief", true);
+          const third = await bare;
+          adviseurs = (third.data || null) as typeof adviseurs;
+          error = third.error;
+        } else {
+          adviseurs = (midRes.data || null) as typeof adviseurs;
+          error = midRes.error;
+        }
       } else {
         adviseurs = (second.data || null) as typeof adviseurs;
         error = second.error;
@@ -231,6 +251,13 @@ export async function POST(req: NextRequest) {
     email?: string;
     telefoon?: string;
     rol?: string;
+    bedrijfsnaam?: string | null;
+    kvk_nummer?: string | null;
+    btw_nummer?: string | null;
+    factuur_adres?: string | null;
+    factuur_postcode?: string | null;
+    factuur_plaats?: string | null;
+    iban?: string | null;
   };
   try {
     body = await req.json();
@@ -254,6 +281,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige rol" }, { status: 400 });
   }
 
+  const kvkFields = {
+    bedrijfsnaam: body.bedrijfsnaam?.trim() || null,
+    kvk_nummer: body.kvk_nummer?.trim() || null,
+    btw_nummer: body.btw_nummer?.trim() || null,
+    factuur_adres: body.factuur_adres?.trim() || null,
+    factuur_postcode: body.factuur_postcode?.trim() || null,
+    factuur_plaats: body.factuur_plaats?.trim() || null,
+    iban: body.iban?.trim().toUpperCase() || null,
+  };
+
   try {
     const sb = getSupabaseAdmin();
     const password = generatePassword(12);
@@ -268,6 +305,7 @@ export async function POST(req: NextRequest) {
         password_hash,
         actief: true,
         rol,
+        ...kvkFields,
       })
       .select(ADVISEUR_PUBLIC)
       .single();

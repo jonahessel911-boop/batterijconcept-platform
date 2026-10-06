@@ -13,7 +13,7 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 
-type AfspraakSoort = "schouwweek" | "schouwdag" | "installatie";
+type AfspraakSoort = "schouwweek" | "schouwdag" | "installatie" | "service";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -115,15 +115,28 @@ function plannedRows(project: Project): PlannedRow[] {
     });
   }
 
+  if (project.service_at) {
+    rows.push({
+      key: "service",
+      type: "Service",
+      wanneer: formatDateTimeNl(project.service_at),
+      partner,
+      notities: project.service_notities?.trim() || null,
+    });
+  }
+
   return rows;
 }
 
 export function ProjectAgendaAfspraakSection({
   project,
   onChanged,
+  openSoortRequest = null,
 }: {
   project: Project;
   onChanged: () => void;
+  /** Verhoog/zet om formulier te openen met dit type (bijv. vanuit Volgende stap). */
+  openSoortRequest?: { soort: AfspraakSoort; nonce: number } | null;
 }) {
   const weekOptions = useMemo(() => upcomingSchouwWeekOptions(60), []);
   const [open, setOpen] = useState(false);
@@ -139,6 +152,9 @@ export function ProjectAgendaAfspraakSection({
   );
   const [installatieAt, setInstallatieAt] = useState(
     toDatetimeLocalValue(project.installatie_at)
+  );
+  const [serviceAt, setServiceAt] = useState(
+    toDatetimeLocalValue(project.service_at)
   );
   const [partnerId, setPartnerId] = useState(
     project.installatie_partner_id || ""
@@ -177,6 +193,20 @@ export function ProjectAgendaAfspraakSection({
   }, [loadPartners]);
 
   useEffect(() => {
+    if (!openSoortRequest) return;
+    setSoort(openSoortRequest.soort);
+    setOpen(true);
+    setError(null);
+    setOkMsg(null);
+    const t = window.setTimeout(() => {
+      document
+        .getElementById("project-afspraken")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [openSoortRequest]);
+
+  useEffect(() => {
     setSchouwWeek(initialWeekValue(project));
     setSchouwAtLocal(
       isSchouwdagDefinitief(project)
@@ -184,6 +214,7 @@ export function ProjectAgendaAfspraakSection({
         : ""
     );
     setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
+    setServiceAt(toDatetimeLocalValue(project.service_at));
     if (project.installatie_partner_id) {
       setPartnerId(project.installatie_partner_id);
     }
@@ -193,6 +224,7 @@ export function ProjectAgendaAfspraakSection({
     project.schouw_jaar,
     project.schouw_week,
     project.installatie_at,
+    project.service_at,
     project.installatie_partner_id,
   ]);
 
@@ -273,6 +305,40 @@ export function ProjectAgendaAfspraakSection({
         return;
       }
 
+      if (soort === "service") {
+        if (!serviceAt.trim()) {
+          throw new Error("Kies servicedatum + tijd");
+        }
+        const parsed = new Date(serviceAt);
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error("Ongeldige servicedatum");
+        }
+        const res = await fetch(`/api/projecten/${project.id}/service`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service_at: parsed.toISOString(),
+            installatie_partner_id: partnerId,
+            service_notities: notities.trim() || null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Inplannen mislukt"
+          );
+        }
+        const summary = mailSummary(
+          (data as { mails?: Parameters<typeof mailSummary>[0] }).mails || {}
+        );
+        setOkMsg(`Service-afspraak ingepland. ${summary.ok}`);
+        if (summary.warn) setError(summary.warn);
+        setOpen(false);
+        setNotities("");
+        onChanged();
+        return;
+      }
+
       if (!installatieAt.trim()) {
         throw new Error("Kies installatiedatum + tijd");
       }
@@ -311,7 +377,7 @@ export function ProjectAgendaAfspraakSection({
   }
 
   return (
-    <section className="border border-line bg-white">
+    <section id="project-afspraken" className="scroll-mt-4 border border-line bg-white">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
         <div>
           <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
@@ -373,7 +439,7 @@ export function ProjectAgendaAfspraakSection({
             <legend className="text-[10px] font-semibold uppercase tracking-wide text-muted">
               Type afspraak
             </legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {(
                 [
                   {
@@ -389,6 +455,11 @@ export function ProjectAgendaAfspraakSection({
                   {
                     id: "installatie" as const,
                     label: "Installatie",
+                    hint: "Datum + tijd",
+                  },
+                  {
+                    id: "service" as const,
+                    label: "Service",
                     hint: "Datum + tijd",
                   },
                 ] as const
@@ -460,6 +531,19 @@ export function ProjectAgendaAfspraakSection({
             </label>
           ) : null}
 
+          {soort === "service" ? (
+            <label className="block text-[10px] font-semibold uppercase text-muted">
+              Servicedatum + tijd
+              <input
+                type="datetime-local"
+                required
+                value={serviceAt}
+                onChange={(e) => setServiceAt(e.target.value)}
+                className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+              />
+            </label>
+          ) : null}
+
           <label className="block text-[10px] font-semibold uppercase text-muted">
             Notities (optioneel)
             <textarea
@@ -493,7 +577,9 @@ export function ProjectAgendaAfspraakSection({
                   ? "Schouwweek inplannen"
                   : soort === "schouwdag"
                     ? "Schouwdag inplannen"
-                    : "Installatie inplannen"}
+                    : soort === "service"
+                      ? "Service inplannen"
+                      : "Installatie inplannen"}
             </button>
           </div>
         </form>
@@ -501,7 +587,7 @@ export function ProjectAgendaAfspraakSection({
 
       {rows.length === 0 ? (
         <p className="px-4 py-6 text-sm text-muted">
-          Nog geen schouw of installatie gepland voor deze klant.
+          Nog geen schouw, installatie of service gepland voor deze klant.
         </p>
       ) : (
         <div className="overflow-x-auto">

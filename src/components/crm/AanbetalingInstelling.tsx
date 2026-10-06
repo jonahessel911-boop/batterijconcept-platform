@@ -3,6 +3,7 @@
 import { useId } from "react";
 import {
   AANBETALING_MODUS_OPTIES,
+  RESTANT_VAST_INC_BTW,
   aanbetalingVanOrder,
   parseEuroInput,
   type AanbetalingModus,
@@ -45,9 +46,14 @@ export function AanbetalingSamenvatting({
 
   return (
     <p className="text-xs text-muted">
-      Warmtefonds · {opt?.label ?? modus} · restant{" "}
+      Warmtefonds · {opt?.label ?? modus} · aanbetaling{" "}
       <span className="tabular-nums text-ink">
-        {formatEuro(preview.restantIncBtw)}
+        {formatEuro(preview.bedragIncBtw)}
+      </span>
+      {" · "}
+      WF-aanvraag{" "}
+      <span className="tabular-nums text-ink">
+        {formatEuro(preview.warmtefondsIncBtw)}
       </span>
     </p>
   );
@@ -125,7 +131,8 @@ export function AanbetalingInstelling({
         </span>
       </div>
       <p className="text-xs text-muted">
-        Aanbetaling = totaal incl. btw − Warmtefonds-deel.
+        Standaard betaalt de klant de BTW. Warmtefonds-aanvraag is max.{" "}
+        {formatEuro(RESTANT_VAST_INC_BTW)}. Restantfactuur pas ná goedkeuring.
       </p>
       <div className="space-y-2">
         {AANBETALING_MODUS_OPTIES.map((opt) => (
@@ -162,17 +169,25 @@ export function AanbetalingInstelling({
       )}
       <div className="space-y-1 border-t border-line pt-3 text-sm">
         <p className="flex justify-between gap-3 text-muted">
-          Aanbetaling
+          Aanbetaling (klant)
           <span className="tabular-nums text-ink">
             {formatEuro(preview.bedragIncBtw)}
           </span>
         </p>
         <p className="flex justify-between gap-3 text-muted">
-          Restant (Warmtefonds)
-          <span className="tabular-nums text-ink">
-            {formatEuro(preview.restantIncBtw)}
+          Warmtefonds-aanvraag (max. {formatEuro(RESTANT_VAST_INC_BTW)})
+          <span className="tabular-nums font-medium text-ink">
+            {formatEuro(preview.warmtefondsIncBtw)}
           </span>
         </p>
+        {preview.overigNaWarmtefondsIncBtw > 0.01 ? (
+          <p className="flex justify-between gap-3 text-[#C45A12]">
+            Nog open na WF (niet via Warmtefonds)
+            <span className="tabular-nums font-medium">
+              {formatEuro(preview.overigNaWarmtefondsIncBtw)}
+            </span>
+          </p>
+        ) : null}
       </div>
     </div>
   );

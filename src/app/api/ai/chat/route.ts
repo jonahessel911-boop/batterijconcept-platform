@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       reply: result.reply,
       toolsUsed: result.toolsUsed,
+      proposedActions: result.proposedActions,
     });
   } catch (e) {
     return NextResponse.json(

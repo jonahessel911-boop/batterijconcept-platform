@@ -4,6 +4,8 @@ import {
   ensureBtwDraftFactuur,
   ensureRestantDraftFactuur,
 } from "@/lib/ensure-btw-factuur";
+import { magWarmtefondsRestantFactuur } from "@/lib/aanbetaling";
+import { resolveFinancieringStatus } from "@/lib/financiering-status";
 import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -12,6 +14,7 @@ export const runtime = "nodejs";
  * POST /api/offertes/[id]/factuur
  * { soort?: 'aanbetaling' | 'restant' } — conceptfactuur aanmaken/bijwerken.
  * Default: aanbetaling (BTW / Warmtefonds-aanbetaling).
+ * Restant bij Warmtefonds: pas na aanvraag_goedgekeurd.
  */
 export async function POST(
   req: NextRequest,
@@ -48,11 +51,27 @@ export async function POST(
 
     const { data: project } = await sb
       .from("projecten")
-      .select("id")
+      .select("id, status, financiering_status")
       .eq("offerte_id", id)
       .maybeSingle();
 
     if (soort === "restant") {
+      const isWf = Boolean(offerte.financiering_voorbehoud);
+      const fs = project
+        ? resolveFinancieringStatus(project)
+        : null;
+      if (isWf && fs !== "afgewezen" && !magWarmtefondsRestantFactuur(fs)) {
+        return NextResponse.json(
+          {
+            error:
+              "Restantfactuur Warmtefonds pas na goedkeuring van de aanvraag",
+            code: "wf_niet_goedgekeurd",
+            financiering_status: fs,
+          },
+          { status: 409 }
+        );
+      }
+
       const factuur = await ensureRestantDraftFactuur(sb, {
         offerteId: offerte.id,
         leadId: offerte.lead_id,
@@ -60,7 +79,7 @@ export async function POST(
         offerteNummer: offerte.offerte_nummer,
         orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
         orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        warmtefonds: Boolean(offerte.financiering_voorbehoud),
+        warmtefonds: isWf && fs !== "afgewezen",
       });
 
       if (!factuur) {

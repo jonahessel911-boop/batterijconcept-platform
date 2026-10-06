@@ -78,19 +78,40 @@ const KIND_LABEL: Record<PlanningKind, string> = {
 
 const KIND_STYLE: Record<
   PlanningKind,
-  { border: string; bg: string; text: string }
+  { border: string; bg: string; text: string; accent: string }
 > = {
   schouw: {
-    border: "border-l-green",
-    bg: "bg-green-soft/70",
-    text: "text-green-dark",
+    border: "border-[#5EEAD4]",
+    bg: "bg-[#F0FDFA]",
+    text: "text-[#115E59]",
+    accent: "bg-[#0D9488]",
   },
   installatie: {
-    border: "border-l-orange",
-    bg: "bg-[#FFF0E6]",
-    text: "text-[#C45A12]",
+    border: "border-[#FDBA74]",
+    bg: "bg-[#FFF7ED]",
+    text: "text-[#9A3412]",
+    accent: "bg-[#C45A12]",
   },
 };
+
+const DAY_START_HOUR = 7;
+const DAY_END_HOUR = 19;
+const HOUR_PX = 72;
+
+function minutesFromMidnightAmsterdam(iso: string): number {
+  const hm = formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "H:m");
+  const [h, m] = hm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function eventTopPx(iso: string): number {
+  const mins = minutesFromMidnightAmsterdam(iso);
+  const clamped = Math.max(
+    DAY_START_HOUR * 60,
+    Math.min(DAY_END_HOUR * 60, mins)
+  );
+  return ((clamped - DAY_START_HOUR * 60) / 60) * HOUR_PX;
+}
 
 export function PlanningAgenda({
   orders,
@@ -143,6 +164,15 @@ export function PlanningAgenda({
     } catch {
       /* ignore */
     }
+  }
+
+  function zoomToDay(dayKey: string) {
+    setSelectedDayKey(dayKey);
+    changeCalendarView("dag");
+  }
+
+  function backToWeek() {
+    changeCalendarView("week");
   }
 
   const allEvents = useMemo(() => eventsFromOrders(orders), [orders]);
@@ -299,7 +329,13 @@ export function PlanningAgenda({
     setActionOk(null);
   }
 
-  function EventCard({ event }: { event: PlanningEvent }) {
+  function EventCard({
+    event,
+    compact = false,
+  }: {
+    event: PlanningEvent;
+    compact?: boolean;
+  }) {
     const lead = leadOf(event.order);
     const style = KIND_STYLE[event.kind];
     const selected = selectedEvent?.key === event.key;
@@ -307,28 +343,35 @@ export function PlanningAgenda({
       <button
         type="button"
         onClick={() => openEvent(event)}
-        className={`block w-full rounded-lg border border-transparent border-l-[3px] px-2 py-1.5 text-left hover:shadow-sm ${style.border} ${style.bg} ${
-          selected ? "ring-2 ring-green/40" : ""
-        }`}
+        className={[
+          "relative block w-full overflow-hidden border px-2.5 py-2 text-left",
+          style.border,
+          style.bg,
+          selected ? "ring-2 ring-[#0D9488]/35" : "",
+        ].join(" ")}
       >
-        <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <span
+          className={`absolute inset-y-0 left-0 w-1 ${style.accent}`}
+          aria-hidden
+        />
+        <span
+          className={`block pl-2 text-xs font-bold uppercase tracking-[0.04em] ${style.text}`}
+        >
           {KIND_LABEL[event.kind]}
+          <span className="ml-2 text-sm font-bold tabular-nums normal-case tracking-normal">
+            {formatTimeNl(event.at)}
+          </span>
         </span>
         <span
-          className={`mt-0.5 block text-[11px] font-bold tabular-nums ${style.text}`}
+          className={[
+            "mt-1 block truncate pl-2 font-semibold text-ink",
+            compact ? "text-sm" : "text-base",
+          ].join(" ")}
         >
-          {event.kind === "schouw"
-            ? `W${
-                event.order.schouw_week ??
-                schouwWeekFromDate(event.at).week
-              }`
-            : formatTimeNl(event.at)}
-        </span>
-        <span className="mt-1 block truncate text-[12px] font-semibold text-ink">
           {lead?.naam || event.order.project_nummer}
         </span>
-        {showPartner && event.order.installatie_partners?.naam ? (
-          <span className="mt-0.5 block truncate text-[10px] text-muted">
+        {!compact && showPartner && event.order.installatie_partners?.naam ? (
+          <span className="mt-1 block truncate pl-2 text-sm text-muted">
             {event.order.installatie_partners.naam}
           </span>
         ) : null}
@@ -336,45 +379,58 @@ export function PlanningAgenda({
     );
   }
 
-  function DayList() {
+  function DayTimeGrid() {
+    const hours: number[] = [];
+    for (let h = DAY_START_HOUR; h <= DAY_END_HOUR; h++) hours.push(h);
+    const height = (DAY_END_HOUR - DAY_START_HOUR) * HOUR_PX;
+
     if (selectedList.length === 0) {
       return (
-        <p className="px-2 py-8 text-center text-sm text-muted">
+        <p className="px-2 py-10 text-center text-sm text-muted">
           Geen afspraken op deze dag
         </p>
       );
     }
+
     return (
-      <div className="space-y-2">
-        {selectedList.map((event) => {
-          const lead = leadOf(event.order);
-          const style = KIND_STYLE[event.kind];
-          const selected = selectedEvent?.key === event.key;
-          return (
-            <button
-              key={event.key}
-              type="button"
-              onClick={() => openEvent(event)}
-              className={[
-                "block w-full border px-3 py-3 text-left hover:border-green/40",
-                selected ? "border-green bg-green-soft/30" : "border-line",
-              ].join(" ")}
+      <div className="flex overflow-x-auto">
+        <div
+          className="sticky left-0 z-[1] w-[4.5rem] shrink-0 border-r border-line bg-[#FAFBFA]"
+          style={{ height: height + 8 }}
+        >
+          {hours.map((h) => (
+            <div
+              key={h}
+              className="relative border-b border-line/60"
+              style={{ height: HOUR_PX }}
             >
-              <p className="text-[10px] font-semibold uppercase text-muted">
-                {KIND_LABEL[event.kind]}
-              </p>
-              <p className={`text-sm font-bold tabular-nums ${style.text}`}>
-                {formatTimeNl(event.at)}
-              </p>
-              <p className="mt-0.5 font-semibold text-ink">
-                {lead?.naam || event.order.project_nummer}
-              </p>
-              <p className="mt-0.5 text-xs text-muted">
-                {lead ? adresRegel(lead) : "—"}
-              </p>
-            </button>
-          );
-        })}
+              <span className="absolute -top-2.5 right-2.5 text-sm font-bold tabular-nums text-ink">
+                {String(h).padStart(2, "0")}:00
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="relative min-w-0 flex-1" style={{ height }}>
+          {hours.map((h, i) => (
+            <div
+              key={h}
+              className={[
+                "absolute inset-x-0 border-b border-line/50",
+                i % 2 === 0 ? "bg-white" : "bg-[#FAFBFA]/80",
+              ].join(" ")}
+              style={{ top: i * HOUR_PX, height: HOUR_PX }}
+            />
+          ))}
+          {selectedList.map((event) => (
+            <div
+              key={event.key}
+              className="absolute left-2 right-2 z-[1] sm:left-3 sm:right-10"
+              style={{ top: eventTopPx(event.at) + 4 }}
+            >
+              <EventCard event={event} />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -403,32 +459,42 @@ export function PlanningAgenda({
               <option value="installatie">Alleen installatie</option>
             </select>
           </label>
-          <div className="flex rounded-lg border border-line p-0.5 text-xs font-semibold">
+          {calendarView === "dag" ? (
             <button
               type="button"
-              onClick={() => changeCalendarView("dag")}
-              className={[
-                "rounded-md px-2.5 py-1",
-                calendarView === "dag"
-                  ? "bg-green text-white"
-                  : "text-muted hover:text-ink",
-              ].join(" ")}
+              onClick={backToWeek}
+              className="shrink-0 whitespace-nowrap border border-[#0D9488] bg-[#F0FDFA] px-3.5 py-2 text-sm font-semibold text-[#115E59] hover:bg-[#CCFBF1]"
             >
-              Dag
+              Terug naar volledige agenda
             </button>
-            <button
-              type="button"
-              onClick={() => changeCalendarView("week")}
-              className={[
-                "rounded-md px-2.5 py-1",
-                calendarView === "week"
-                  ? "bg-green text-white"
-                  : "text-muted hover:text-ink",
-              ].join(" ")}
-            >
-              Week
-            </button>
-          </div>
+          ) : (
+            <div className="flex border border-line p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => changeCalendarView("dag")}
+                className={[
+                  "px-2.5 py-1",
+                  calendarView === "dag"
+                    ? "bg-[#0D9488] text-white"
+                    : "text-muted hover:text-ink",
+                ].join(" ")}
+              >
+                Dag
+              </button>
+              <button
+                type="button"
+                onClick={() => changeCalendarView("week")}
+                className={[
+                  "px-2.5 py-1",
+                  calendarView === "week"
+                    ? "bg-[#0D9488] text-white"
+                    : "text-muted hover:text-ink",
+                ].join(" ")}
+              >
+                Week
+              </button>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -558,10 +624,10 @@ export function PlanningAgenda({
         </div>
       )}
 
-      {/* Dag-strip: in dagweergave altijd; in week alleen mobiel (desktop heeft kolomkoppen) */}
+      {/* Dag-strip: in dagweergave altijd; in week alleen mobiel */}
       <div
         className={[
-          "flex gap-1.5 overflow-x-auto px-3 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          "flex gap-1.5 overflow-x-auto border-b border-line px-3 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           calendarView === "week" ? "md:hidden" : "",
         ].join(" ")}
       >
@@ -573,13 +639,13 @@ export function PlanningAgenda({
             <button
               key={day.key}
               type="button"
-              onClick={() => setSelectedDayKey(day.key)}
+              onClick={() => zoomToDay(day.key)}
               className={[
-                "flex min-w-[3.25rem] flex-1 flex-col items-center rounded-xl px-2 py-2 sm:min-w-0",
+                "flex min-w-[3.25rem] flex-1 flex-col items-center px-2 py-2 sm:min-w-0",
                 selected
-                  ? "bg-green text-white"
+                  ? "bg-[#0D9488] text-white"
                   : isToday
-                    ? "bg-green-soft text-green-dark"
+                    ? "bg-[#F0FDFA] text-[#0F766E]"
                     : "bg-wash text-ink",
               ].join(" ")}
             >
@@ -595,7 +661,7 @@ export function PlanningAgenda({
                   count > 0
                     ? selected
                       ? "bg-white"
-                      : "bg-green"
+                      : "bg-[#0D9488]"
                     : "bg-transparent",
                 ].join(" ")}
               />
@@ -605,58 +671,56 @@ export function PlanningAgenda({
       </div>
 
       {calendarView === "dag" ? (
-        <div className="px-3 pb-4">
-          <DayList />
+        <div className="pb-2">
+          <DayTimeGrid />
         </div>
       ) : (
         <>
           <div className="md:hidden">
-            <div className="space-y-2 px-3 pb-4">
-              <DayList />
+            <div className="pb-2">
+              <DayTimeGrid />
             </div>
           </div>
 
           <div className="hidden overflow-x-auto md:block">
             <div className="min-w-[720px]">
-              <div className="grid grid-cols-7 border-b border-line bg-wash/50">
+              <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
                 {days.map((day) => {
                   const isToday = day.key === todayKey;
                   const count = byDay.get(day.key)?.length ?? 0;
-                  const selected = day.key === selectedDayKey;
                   return (
                     <button
                       key={day.key}
                       type="button"
-                      onClick={() => setSelectedDayKey(day.key)}
+                      onClick={() => zoomToDay(day.key)}
                       className={[
-                        "border-r border-line px-2 py-3 text-left last:border-r-0",
-                        selected
-                          ? "bg-green-soft"
-                          : isToday
-                            ? "bg-green-soft/50"
-                            : "hover:bg-wash",
+                        "border-r border-line px-2 py-3 text-left last:border-r-0 transition-colors",
+                        isToday
+                          ? "bg-[#F0FDFA] hover:bg-[#CCFBF1]"
+                          : "hover:bg-wash",
                       ].join(" ")}
+                      title="Zoom in op deze dag"
                     >
                       <p
                         className={[
-                          "text-[10px] font-semibold uppercase tracking-wide",
-                          isToday || selected ? "text-green" : "text-muted",
+                          "text-xs font-semibold uppercase tracking-[0.06em]",
+                          isToday ? "text-[#0F766E]" : "text-muted",
                         ].join(" ")}
                       >
                         {format(day.date, "EEE", { locale: nl })}
                       </p>
                       <p
                         className={[
-                          "mt-0.5 font-display text-xl font-semibold tabular-nums leading-none",
+                          "mt-1.5 font-display text-2xl font-semibold tabular-nums leading-none",
                           isToday
-                            ? "inline-flex h-8 w-8 items-center justify-center rounded-full bg-green text-base text-white"
+                            ? "inline-flex h-9 min-w-9 items-center justify-center bg-[#0D9488] px-2 text-lg text-white"
                             : "text-ink",
                         ].join(" ")}
                       >
                         {format(day.date, "d")}
                       </p>
-                      <p className="mt-1 text-[10px] text-muted">
-                        {count > 0 ? `${count}×` : "—"}
+                      <p className="mt-2 text-xs font-medium text-muted">
+                        {count > 0 ? `${count}× · zoom` : "Leeg · zoom"}
                       </p>
                     </button>
                   );
@@ -671,7 +735,7 @@ export function PlanningAgenda({
                       key={day.key}
                       className={[
                         "min-h-[280px] space-y-1.5 border-r border-line p-1.5 last:border-r-0 sm:p-2",
-                        isToday ? "bg-green-soft/20" : "bg-white",
+                        isToday ? "bg-[#F0FDFA]/35" : "bg-white",
                       ].join(" ")}
                     >
                       {list.length === 0 ? (
@@ -680,7 +744,11 @@ export function PlanningAgenda({
                         </p>
                       ) : (
                         list.map((event) => (
-                          <EventCard key={event.key} event={event} />
+                          <EventCard
+                            key={event.key}
+                            event={event}
+                            compact
+                          />
                         ))
                       )}
                     </div>

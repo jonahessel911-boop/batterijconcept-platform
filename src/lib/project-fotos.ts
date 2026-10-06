@@ -1,7 +1,13 @@
 import { randomBytes } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export { SCHOUW_FORMULIER_OMSCHRIJVING, isSchouwFormulier } from "@/lib/project-documenten";
+export {
+  SCHOUW_FORMULIER_OMSCHRIJVING,
+  OPLEVERINGSRAPPORT_OMSCHRIJVING,
+  isSchouwFormulier,
+  isOpleveringsrapport,
+  isProjectDocumentUpload,
+} from "@/lib/project-documenten";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_DOC_BYTES = 15 * 1024 * 1024;

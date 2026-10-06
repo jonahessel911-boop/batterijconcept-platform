@@ -15,6 +15,7 @@ import {
   PROJECT_STATUS_FASE_LABEL,
   projectStatusesFor,
   resolveBetaalwijze,
+  toOperationalStatus,
   type Betaalwijze,
   type ProjectStatusFase,
   type ProjectStatusKey,
@@ -116,7 +117,13 @@ export function ProjectStatusSelect({
     };
   }, [open]);
 
-  const current = normalizeProjectStatus(localStatus);
+  const current = toOperationalStatus(normalizeProjectStatus(localStatus));
+  const displayStatus =
+    localStatus === "service" ||
+    localStatus === "annulering" ||
+    localStatus === "hold_sales_actie"
+      ? normalizeProjectStatus(localStatus)
+      : current;
 
   async function selectStatus(next: ProjectStatus) {
     if (next === current || saving) {
@@ -207,7 +214,7 @@ export function ProjectStatusSelect({
                   {PROJECT_STATUS_FASE_LABEL[fase]}
                 </p>
                 {keys.map((st) => {
-                  const active = st === current;
+                  const active = st === displayStatus;
                   return (
                     <button
                       key={st}
@@ -261,14 +268,14 @@ export function ProjectStatusSelect({
         }}
         className={[
           "inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold disabled:opacity-60",
-          statusTone("project", current),
+          statusTone("project", displayStatus),
         ].join(" ")}
         aria-haspopup="listbox"
         aria-expanded={open}
         title="Status wijzigen"
       >
         <span className="truncate">
-          {projectStatusLabel[current] || current}
+          {projectStatusLabel[displayStatus] || displayStatus}
         </span>
         <span className="text-[9px] opacity-70" aria-hidden>
           ▾

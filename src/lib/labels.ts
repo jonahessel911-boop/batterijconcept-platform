@@ -115,7 +115,7 @@ export const offerteStatusLabel: Record<OfferteStatus, string> = {
 };
 
 export const projectStatusLabel: Record<ProjectStatus, string> = {
-  schouwweek_inplannen: "Schouwweek inplannen",
+  schouwweek_inplannen: "Opstarten",
   aanbetaling_verstuurd: "Aanbetaling verstuurd",
   aanbetaling_betaald: "Aanbetaling betaald",
   warmtefonds_afspraak_ingepland: "Warmtefonds afspraak ingepland",
@@ -126,7 +126,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   schouwdag_ingepland: "Schouwdag ingepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
-  restfactuur_betaald: "Restfactuur betaald",
+  restfactuur_betaald: "Restfactuur betaald — materiaal inkopen",
   materiaal_besteld: "Materiaal ingekocht — wachten op levering",
   installatie_ingepland: "Installatie ingepland",
   installatie_voltooid: "Installatie voltooid",

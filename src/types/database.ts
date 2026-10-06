@@ -82,10 +82,13 @@ export type CrmTab =
   | "instroom"
   | "projecten"
   | "facturen"
+  | "creditfacturen"
   | "inkomend"
+  | "purchasing"
   | "rapportage"
   | "admin"
   | "ai"
+  | "partners"
   | "instellingen";
 
 export type AfspraakStatus =
@@ -126,10 +129,15 @@ export interface Adviseur {
   iban?: string | null;
   /** Max bedrag per creditfactuur (excl. btw); null = geen limiet */
   max_factuur_bedrag?: number | null;
+  /** Ondertekend samenwerkingscontract */
+  contract_storage_path?: string | null;
+  contract_bestandsnaam?: string | null;
+  contract_uploaded_at?: string | null;
 }
 
 export type AdviseurCreditFactuurStatus =
   | "concept"
+  | "verzonden"
   | "goedgekeurd"
   | "betaald"
   | "geannuleerd";
@@ -150,6 +158,8 @@ export interface AdviseurCreditFactuur {
   max_bedrag_toegepast?: number | null;
   factuurdatum: string;
   betaald_op: string | null;
+  verzonden_op?: string | null;
+  goedgekeurd_op?: string | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
@@ -165,6 +175,30 @@ export interface AdviseurCreditFactuurRegel {
   omschrijving: string | null;
   factuur_nummer?: string | null;
   lead_naam?: string | null;
+}
+
+export interface PartnerCreditFactuur {
+  id: string;
+  partner_id: string;
+  factuur_nummer: string;
+  status: AdviseurCreditFactuurStatus;
+  week_jaar?: number | null;
+  week_nummer?: number | null;
+  periode_van?: string | null;
+  periode_tot?: string | null;
+  omschrijving: string | null;
+  offerte_nummer?: string | null;
+  project_nummer?: string | null;
+  bedrag_ex_btw: number;
+  btw_bedrag: number;
+  bedrag_inc_btw: number;
+  factuurdatum: string;
+  betaald_op: string | null;
+  verzonden_op?: string | null;
+  goedgekeurd_op?: string | null;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AdviseurBeschikbaarheid {
@@ -346,6 +380,18 @@ export interface InstallatiePartner {
   portal_token: string;
   created_at: string;
   updated_at: string;
+  /** Bedrijfs- / factuurgegevens */
+  bedrijfsnaam?: string | null;
+  kvk_nummer?: string | null;
+  btw_nummer?: string | null;
+  factuur_adres?: string | null;
+  factuur_postcode?: string | null;
+  factuur_plaats?: string | null;
+  iban?: string | null;
+  /** Ondertekend samenwerkingscontract */
+  contract_storage_path?: string | null;
+  contract_bestandsnaam?: string | null;
+  contract_uploaded_at?: string | null;
 }
 
 export interface Offerte {
@@ -433,6 +479,9 @@ export interface Project {
   installatie_notities?: string | null;
   installatie_mail_klant_verstuurd?: boolean;
   installatie_mail_partner_verstuurd?: boolean;
+  /** Geplande service-afspraak (na oplevering / serviceverzoek). */
+  service_at?: string | null;
+  service_notities?: string | null;
   schouw_herinnering_verstuurd?: boolean;
   installatie_herinnering_verstuurd?: boolean;
   aanbetaling_te_innen_inc?: number | null;
@@ -451,10 +500,27 @@ export interface Project {
   financiering_geschakeld_at?: string | null;
   /** Moment waarop de Warmtefonds-aanvraag is ingediend. */
   warmtefonds_aangevraagd_at?: string | null;
+  /**
+   * Aparte Warmtefonds-financieringfase (parallel aan status).
+   * Alleen relevant bij voorbehoud Warmtefonds.
+   */
+  financiering_status?:
+    | "doorgestuurd_naar_edwin"
+    | "afspraak_ingepland"
+    | "aanvraag_gedaan"
+    | "aanvraag_goedgekeurd"
+    | "uitbetaald"
+    | "afgewezen"
+    | null;
+  /** Interne datum/tijd Warmtefonds-afspraak (geen mail). */
+  warmtefonds_afspraak_at?: string | null;
   /** Afleveradres voor materiaalinkoop. */
   leveradres?: string | null;
-  /** Offerte-regel id → afgevinkt bij inkopen. */
-  materiaal_checks?: Record<string, boolean> | null;
+  /**
+   * Inkoopstatus per checklist-key.
+   * Waarden: true/"besteld" | "geleverd" | false/"te_kopen".
+   */
+  materiaal_checks?: Record<string, boolean | string> | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -485,6 +551,11 @@ export interface Project {
     | "offerte_nummer"
     | "financiering_voorbehoud"
     | "aanbetaling_te_innen_inc"
+    | "aanbetaling_modus"
+    | "aanbetaling_bedrag_inc"
+    | "subtotaal_ex_btw"
+    | "btw_bedrag"
+    | "totaal_inc_btw"
     | "ondertekend_op"
   > | null;
 }
@@ -641,9 +712,13 @@ export interface ProjectTaak {
   due_at: string | null;
   auto_key: string | null;
   notities: string | null;
+  /** Adviseur die de actie heeft aangemaakt (Nettoboord → backoffice) */
+  aangemaakt_door_id?: string | null;
+  completed_notified_at?: string | null;
   created_at: string;
   updated_at: string;
   verantwoordelijke?: Pick<Adviseur, "id" | "naam" | "email"> | null;
+  aangemaakt_door?: Pick<Adviseur, "id" | "naam" | "email"> | null;
   projecten?: Pick<
     Project,
     "id" | "project_nummer" | "titel" | "status" | "lead_id"

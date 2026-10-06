@@ -11,6 +11,7 @@ export const MODULE_KWH = 9.3;
 /** Standaard G3-accessoires (ex. btw). */
 export const DEFAULT_BASEPLATE_EX_BTW = 60;
 export const DEFAULT_KOPPELKABEL_EX_BTW = 29.45;
+export const DEFAULT_DTSU_METER_EX_BTW = 112.34;
 
 export type InkoopInstellingen = {
   installatie_standaard: number;

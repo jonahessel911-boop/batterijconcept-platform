@@ -61,7 +61,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
 };
 
 const PROJECT_STATUS_LABEL: Record<string, string> = {
-  schouwweek_inplannen: "Schouwweek inplannen",
+  schouwweek_inplannen: "Opstarten",
   aanbetaling_verstuurd: "Aanbetaling verstuurd",
   aanbetaling_betaald: "Aanbetaling betaald",
   warmtefonds_afspraak_ingepland: "Warmtefonds afspraak ingepland",

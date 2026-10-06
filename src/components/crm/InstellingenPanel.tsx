@@ -10,6 +10,7 @@ import {
 } from "@/lib/rollen";
 import { formatEuro } from "@/lib/format";
 import { VERKOPER_AANBETALING_FEE } from "@/lib/adviseur-creditfactuur";
+import { RelatieContractUpload } from "./RelatieContractUpload";
 
 type ListFilter = "medewerkers" | "partners";
 
@@ -132,6 +133,9 @@ export function InstellingenPanel({
       factuur_plaats: a.factuur_plaats ?? "",
       iban: a.iban ?? "",
       max_factuur_bedrag: a.max_factuur_bedrag ?? null,
+      contract_storage_path: a.contract_storage_path ?? null,
+      contract_bestandsnaam: a.contract_bestandsnaam ?? null,
+      contract_uploaded_at: a.contract_uploaded_at ?? null,
     });
     setNewPassword("");
     setConfirmPassword("");
@@ -148,6 +152,16 @@ export function InstellingenPanel({
       email: p.email,
       telefoon: p.telefoon,
       actief: p.actief,
+      bedrijfsnaam: p.bedrijfsnaam ?? "",
+      kvk_nummer: p.kvk_nummer ?? "",
+      btw_nummer: p.btw_nummer ?? "",
+      factuur_adres: p.factuur_adres ?? "",
+      factuur_postcode: p.factuur_postcode ?? "",
+      factuur_plaats: p.factuur_plaats ?? "",
+      iban: p.iban ?? "",
+      contract_storage_path: p.contract_storage_path ?? null,
+      contract_bestandsnaam: p.contract_bestandsnaam ?? null,
+      contract_uploaded_at: p.contract_uploaded_at ?? null,
     });
     setError(null);
     setOkMsg(null);
@@ -274,6 +288,14 @@ export function InstellingenPanel({
           email: partnerDraft.email?.toString().trim().toLowerCase() || null,
           telefoon: partnerDraft.telefoon?.toString().trim() || null,
           actief: partnerDraft.actief !== false,
+          bedrijfsnaam: partnerDraft.bedrijfsnaam?.toString().trim() || null,
+          kvk_nummer: partnerDraft.kvk_nummer?.toString().trim() || null,
+          btw_nummer: partnerDraft.btw_nummer?.toString().trim() || null,
+          factuur_adres: partnerDraft.factuur_adres?.toString().trim() || null,
+          factuur_postcode:
+            partnerDraft.factuur_postcode?.toString().trim() || null,
+          factuur_plaats: partnerDraft.factuur_plaats?.toString().trim() || null,
+          iban: partnerDraft.iban?.toString().trim().toUpperCase() || null,
         }),
       });
       const data = await res.json();
@@ -637,6 +659,30 @@ export function InstellingenPanel({
             </>
           )}
 
+          <RelatieContractUpload
+            kind="adviseur"
+            id={selectedAdviseur.id}
+            bestandsnaam={
+              draft.contract_bestandsnaam ||
+              selectedAdviseur.contract_bestandsnaam
+            }
+            uploadedAt={
+              draft.contract_uploaded_at ||
+              selectedAdviseur.contract_uploaded_at
+            }
+            onUploaded={(meta) => {
+              setDraft((d) => ({ ...d, ...meta }));
+              void load();
+            }}
+            onMessage={(msg, isError) => {
+              if (isError) setError(msg);
+              else {
+                setError(null);
+                setOkMsg(msg);
+              }
+            }}
+          />
+
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -776,6 +822,120 @@ export function InstellingenPanel({
               />
             </Field>
           </div>
+
+          <div className="border border-line p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Bedrijfs- / KvK-gegevens
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="Bedrijfsnaam" className="sm:col-span-2">
+                <input
+                  value={partnerDraft.bedrijfsnaam || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      bedrijfsnaam: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="KvK">
+                <input
+                  value={partnerDraft.kvk_nummer || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      kvk_nummer: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Btw-nummer">
+                <input
+                  value={partnerDraft.btw_nummer || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      btw_nummer: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Adres" className="sm:col-span-2">
+                <input
+                  value={partnerDraft.factuur_adres || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      factuur_adres: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Postcode">
+                <input
+                  value={partnerDraft.factuur_postcode || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      factuur_postcode: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Plaats">
+                <input
+                  value={partnerDraft.factuur_plaats || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({
+                      ...d,
+                      factuur_plaats: e.target.value,
+                    }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="IBAN">
+                <input
+                  value={partnerDraft.iban || ""}
+                  onChange={(e) =>
+                    setPartnerDraft((d) => ({ ...d, iban: e.target.value }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <RelatieContractUpload
+            kind="partner"
+            id={selectedPartner.id}
+            bestandsnaam={
+              partnerDraft.contract_bestandsnaam ||
+              selectedPartner.contract_bestandsnaam
+            }
+            uploadedAt={
+              partnerDraft.contract_uploaded_at ||
+              selectedPartner.contract_uploaded_at
+            }
+            onUploaded={(meta) => {
+              setPartnerDraft((d) => ({ ...d, ...meta }));
+              void load();
+            }}
+            onMessage={(msg, isError) => {
+              if (isError) setError(msg);
+              else {
+                setError(null);
+                setOkMsg(msg);
+              }
+            }}
+          />
+
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -888,6 +1048,8 @@ export function InstellingenPanel({
                 <th>E-mail</th>
                 <th>Rol</th>
                 <th>Commissie</th>
+                <th>KvK</th>
+                <th>Contract</th>
                 <th>Status</th>
                 <th className="w-10" />
               </tr>
@@ -896,6 +1058,7 @@ export function InstellingenPanel({
               {(rows as Adviseur[]).map((a) => {
                 const sales = isSalesRol(a.rol);
                 const pct = Number(a.commissie_pct) || 0;
+                const kvkOk = Boolean(a.bedrijfsnaam && a.kvk_nummer && a.iban);
                 return (
                   <tr
                     key={a.id}
@@ -918,6 +1081,20 @@ export function InstellingenPanel({
                       ) : (
                         <span className="text-muted">—</span>
                       )}
+                    </td>
+                    <td className="text-muted text-xs">
+                      {sales ? (
+                        kvkOk ? (
+                          a.kvk_nummer
+                        ) : (
+                          <span className="text-[#C45A12]">Incompleet</span>
+                        )
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="text-muted text-xs">
+                      {a.contract_bestandsnaam ? "Ja" : "—"}
                     </td>
                     <td>
                       <span
@@ -946,7 +1123,8 @@ export function InstellingenPanel({
               <tr>
                 <th>Naam</th>
                 <th>E-mail</th>
-                <th>Telefoon</th>
+                <th>KvK</th>
+                <th>Contract</th>
                 <th>Status</th>
                 <th className="w-10" />
               </tr>
@@ -960,7 +1138,14 @@ export function InstellingenPanel({
                 >
                   <td className="font-medium text-ink">{p.naam}</td>
                   <td className="text-muted">{p.email || "—"}</td>
-                  <td className="text-muted">{p.telefoon || "—"}</td>
+                  <td className="text-muted text-xs">
+                    {p.kvk_nummer || (
+                      <span className="text-[#C45A12]">Ontbreekt</span>
+                    )}
+                  </td>
+                  <td className="text-muted text-xs">
+                    {p.contract_bestandsnaam ? "Ja" : "—"}
+                  </td>
                   <td>
                     <span
                       className={
@@ -1167,7 +1352,7 @@ function AdviseurCreditFacturenBlock({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Aanmaken mislukt");
       onMessage(
-        `Creditfactuur ${json.factuur.factuur_nummer} aangemaakt (${json.regels_count} × €${VERKOPER_AANBETALING_FEE}).`
+        `Concept ${json.factuur.factuur_nummer} aangemaakt (${json.regels_count} × €${VERKOPER_AANBETALING_FEE}). Verstuur via Creditfacturen.`
       );
       await load();
     } catch (e) {
@@ -1177,22 +1362,24 @@ function AdviseurCreditFacturenBlock({
     }
   }
 
-  async function markPaid(id: string) {
+  async function patchStatus(id: string, status: "verzonden" | "betaald") {
     setBusy(true);
     try {
       const res = await fetch("/api/adviseurs/creditfacturen", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: "betaald" }),
+        body: JSON.stringify({ id, status }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Markeren mislukt");
+      if (!res.ok) throw new Error(json.error || "Bijwerken mislukt");
       onMessage(
-        `Creditfactuur ${json.factuur.factuur_nummer} gemarkeerd als betaald.`
+        status === "verzonden"
+          ? `Factuur ${json.factuur.factuur_nummer} verstuurd naar adviseur.`
+          : `Creditfactuur ${json.factuur.factuur_nummer} gemarkeerd als betaald.`
       );
       await load();
     } catch (e) {
-      onMessage(e instanceof Error ? e.message : "Markeren mislukt", true);
+      onMessage(e instanceof Error ? e.message : "Bijwerken mislukt", true);
     } finally {
       setBusy(false);
     }
@@ -1225,12 +1412,31 @@ function AdviseurCreditFacturenBlock({
             </p>
             <div className="mt-3">
               {data.existing && data.existing.status !== "geannuleerd" ? (
-                <p className="text-xs text-muted">
-                  Al aangemaakt:{" "}
-                  <span className="font-semibold text-ink">
-                    {data.existing.factuur_nummer}
-                  </span>
-                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs text-muted">
+                    {data.existing.status === "concept"
+                      ? "Concept: "
+                      : "Al aangemaakt: "}
+                    <span className="font-semibold text-ink">
+                      {data.existing.factuur_nummer}
+                    </span>
+                  </p>
+                  {(data.existing.status === "concept" ||
+                    data.existing.status === "verzonden") && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        void patchStatus(data.existing!.id, "verzonden")
+                      }
+                      className="bg-orange px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
+                    >
+                      {data.existing.status === "verzonden"
+                        ? "Opnieuw versturen"
+                        : "Verstuur naar adviseur"}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <button
                   type="button"
@@ -1240,7 +1446,7 @@ function AdviseurCreditFacturenBlock({
                 >
                   {busy
                     ? "Bezig…"
-                    : `Maak creditfactuur (${formatEuro(data.preview.bedrag)})`}
+                    : `Maak concept (${formatEuro(data.preview.bedrag)})`}
                 </button>
               )}
             </div>
@@ -1266,18 +1472,42 @@ function AdviseurCreditFacturenBlock({
                     <td className="text-right tabular-nums">
                       {formatEuro(f.bedrag_ex_btw)}
                     </td>
-                    <td className="capitalize text-muted">{f.status}</td>
-                    <td className="text-right">
-                      {f.status !== "betaald" && f.status !== "geannuleerd" && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void markPaid(f.id)}
-                          className="text-xs font-medium text-green-dark hover:underline"
-                        >
-                          Markeer betaald
-                        </button>
+                    <td className="capitalize text-muted">
+                      {(f.status === "goedgekeurd" || f.status === "betaald") &&
+                      f.goedgekeurd_op ? (
+                        <span className="inline-flex items-center gap-1 text-green-dark">
+                          <span aria-hidden>✓</span>
+                          {f.status}
+                        </span>
+                      ) : (
+                        f.status
                       )}
+                    </td>
+                    <td className="text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {(f.status === "concept" ||
+                          f.status === "verzonden") && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void patchStatus(f.id, "verzonden")}
+                            className="text-xs font-medium text-orange hover:underline"
+                          >
+                            Verstuur
+                          </button>
+                        )}
+                        {(f.status === "goedgekeurd" ||
+                          f.status === "verzonden") && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void patchStatus(f.id, "betaald")}
+                              className="bg-green px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
+                            >
+                              Betaald
+                            </button>
+                          )}
+                      </div>
                     </td>
                   </tr>
                 ))}

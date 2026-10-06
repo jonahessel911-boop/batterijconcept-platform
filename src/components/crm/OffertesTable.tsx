@@ -27,14 +27,29 @@ export function OffertesTable({
   const router = useRouter();
   const [actieOfferte, setActieOfferte] = useState<Offerte | null>(null);
   const [statusFilter, setStatusFilter] = useState<OfferteStatus | "">("");
+  const [search, setSearch] = useState("");
 
-  const filtered = useMemo(
-    () =>
-      statusFilter
-        ? offertes.filter((o) => o.status === statusFilter)
-        : offertes,
-    [offertes, statusFilter]
-  );
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return offertes.filter((o) => {
+      if (statusFilter && o.status !== statusFilter) return false;
+      if (!q) return true;
+      const hay = [
+        o.offerte_nummer,
+        o.leads?.naam,
+        o.leads?.lead_number,
+        o.leads?.email,
+        o.leads?.telefoon,
+        o.leads?.plaats,
+        o.installatie_partners?.naam,
+        o.titel,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [offertes, statusFilter, search]);
 
   if (offertes.length === 0) {
     return (
@@ -45,7 +60,27 @@ export function OffertesTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div>
+      <div className="flex flex-col gap-3 border-b border-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="relative w-full sm:max-w-md">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted/50">
+            ⌕
+          </span>
+          <input
+            type="search"
+            inputMode="search"
+            placeholder="Zoek offertenummer, klant, lead, plaats…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full border border-line bg-white py-2.5 pl-8 pr-3 text-sm outline-none transition placeholder:text-muted/60 focus:border-green"
+          />
+        </div>
+        <p className="text-xs text-muted">
+          {filtered.length} van {offertes.length} offerte
+          {offertes.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      <div className="overflow-x-auto">
       <table className="crm-table crm-table--compact">
         <thead>
           <tr>
@@ -86,14 +121,14 @@ export function OffertesTable({
               <td colSpan={8} className="!cursor-default">
                 <div className="px-5 py-14 text-center">
                   <p className="font-display text-base font-semibold text-ink">
-                    Geen offertes met status “
-                    {statusFilter
-                      ? offerteStatusLabel[statusFilter]
-                      : "—"}
-                    ”
+                    Geen offertes gevonden
                   </p>
                   <p className="mt-1 text-sm text-muted">
-                    Kies een andere statusfilter of zet op Alles.
+                    {search.trim()
+                      ? `Geen resultaat voor “${search.trim()}”.`
+                      : statusFilter
+                        ? `Geen offertes met status “${offerteStatusLabel[statusFilter]}”.`
+                        : "Pas je zoekopdracht of filter aan."}
                   </p>
                 </div>
               </td>
@@ -167,6 +202,7 @@ export function OffertesTable({
           )}
         </tbody>
       </table>
+      </div>
       {actieOfferte && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md border border-line bg-white p-5 shadow-xl">

@@ -229,11 +229,11 @@ export async function ensureRestantDraftFactuur(
   }
 
   const split = splitIncToExBtw(bedragIncBtw);
-  const label = opts.warmtefonds ? "Warmtefonds / restant" : "Restant";
   const product = await productLabelVoorOfferte(sb, opts.offerteId);
+  // Product verplicht + restbetaling/offerte — geen bedragen in de omschrijving
   const omschrijving = factuurOmschrijvingMetProduct(
     product,
-    `Restantfactuur bij ${opts.offerteNummer} (${label} ${formatEuro(bedragIncBtw)})`
+    `Restbetaling bij ${opts.offerteNummer}`
   );
   const today = new Date();
   const factuurdatum = amsterdamDatePlusDays(today, 0);

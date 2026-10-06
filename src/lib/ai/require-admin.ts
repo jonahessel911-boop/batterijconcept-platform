@@ -13,8 +13,8 @@ export async function requireAiAdmin(): Promise<
     return { ok: false, status: 401, error: "Niet ingelogd" };
   }
   const rol = normalizeRol(session.rol);
-  if (rol !== "admin" && !isAdminEmail(session.email)) {
-    return { ok: false, status: 403, error: "Alleen admin mag de AI interface gebruiken" };
+  if (rol !== "admin" && rol !== "backoffice" && !isAdminEmail(session.email)) {
+    return { ok: false, status: 403, error: "Geen toegang tot de AI-assistent" };
   }
   return { ok: true, session };
 }

@@ -119,6 +119,43 @@ export async function POST(
       return NextResponse.json({ error: "Factuur niet gevonden" }, { status: 404 });
     }
 
+    const {
+      isRestantFactuurOmschrijving,
+      magWarmtefondsRestantFactuur,
+    } = await import("@/lib/aanbetaling");
+    const { resolveFinancieringStatus } = await import(
+      "@/lib/financiering-status"
+    );
+    const isRestant = isRestantFactuurOmschrijving(factuur.omschrijving);
+
+    if (isRestant && factuur.project_id) {
+      const { data: project } = await sb
+        .from("projecten")
+        .select(
+          "id, status, financiering_status, offertes(financiering_voorbehoud)"
+        )
+        .eq("id", factuur.project_id)
+        .maybeSingle();
+      const offJoin = project?.offertes as
+        | { financiering_voorbehoud?: boolean | null }
+        | { financiering_voorbehoud?: boolean | null }[]
+        | null
+        | undefined;
+      const off = Array.isArray(offJoin) ? offJoin[0] : offJoin;
+      const isWf = Boolean(off?.financiering_voorbehoud);
+      const fs = project ? resolveFinancieringStatus(project) : null;
+      if (isWf && fs !== "afgewezen" && !magWarmtefondsRestantFactuur(fs)) {
+        return NextResponse.json(
+          {
+            error:
+              "Restantfactuur Warmtefonds pas versturen na goedkeuring van de aanvraag",
+            code: "wf_niet_goedgekeurd",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const email = factuur.leads?.email as string | null | undefined;
     if (!email) {
       return NextResponse.json(
@@ -236,8 +273,8 @@ export async function POST(
         .in("status", ["verzonden", "deels_betaald"]);
     }
 
-    // Projectstatus → restfactuur verstuurd (niet bij credit)
-    if (!isCredit && factuur.project_id) {
+    // Alleen bij echte restantfactuur → orderstatus restfactuur_verstuurd
+    if (!isCredit && isRestant && factuur.project_id) {
       await sb
         .from("projecten")
         .update({ status: "restfactuur_verstuurd" })

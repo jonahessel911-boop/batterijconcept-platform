@@ -6,6 +6,10 @@ import type { Factuur, OfferteRegel } from "@/types/database";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import { FACTUUR_BETAALTERMIJN_DAGEN, factuurDisplayStatus } from "@/lib/factuur-betaling";
 import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
+import {
+  isRestantFactuurOmschrijving,
+  magWarmtefondsRestantFactuur,
+} from "@/lib/aanbetaling";
 import { StatusBadge } from "./StatusBadge";
 
 function creditsForParent(all: Factuur[], parentId: string): Factuur[] {
@@ -21,6 +25,10 @@ type Props = {
   /** Altijd open, zonder inklapbare header (voor tab Financieel). */
   alwaysOpen?: boolean;
   onFacturenChanged?: (facturen: Factuur[]) => void;
+  /** Warmtefonds: restantfactuur-knop tonen. */
+  offerteId?: string | null;
+  warmtefonds?: boolean;
+  financieringStatus?: string | null;
 };
 
 export function ProjectFinancieelSection({
@@ -29,6 +37,9 @@ export function ProjectFinancieelSection({
   defaultOpen = false,
   alwaysOpen = false,
   onFacturenChanged,
+  offerteId = null,
+  warmtefonds = false,
+  financieringStatus = null,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen || alwaysOpen);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -78,6 +89,36 @@ export function ProjectFinancieelSection({
     const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
   }, [open, alwaysOpen, load]);
+
+  async function createRestantFactuur() {
+    if (!offerteId) return;
+    setBusy("restant");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerteId}/factuur`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ soort: "restant" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Restantfactuur mislukt"
+        );
+      }
+      if ((data as { skipped?: boolean }).skipped) {
+        setMsg("Geen restant meer te factureren.");
+      } else {
+        setMsg("Restantfactuur Warmtefonds als concept klaargezet.");
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Restantfactuur mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function openCreateForm() {
     setShowCreate((v) => !v);
@@ -320,6 +361,34 @@ export function ProjectFinancieelSection({
             >
               + Factuur
             </button>
+            {warmtefonds && offerteId ? (
+              <button
+                type="button"
+                disabled={
+                  busy === "restant" ||
+                  (!magWarmtefondsRestantFactuur(financieringStatus) &&
+                    financieringStatus !== "afgewezen")
+                }
+                title={
+                  magWarmtefondsRestantFactuur(financieringStatus) ||
+                  financieringStatus === "afgewezen"
+                    ? "Concept-restantfactuur (max. € 8.500 bij Warmtefonds)"
+                    : "Pas na Warmtefonds-goedkeuring"
+                }
+                onClick={() => void createRestantFactuur()}
+                className="border border-[#C45A12] bg-[#FFF7ED] px-3 py-2 text-xs font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {busy === "restant"
+                  ? "Bezig…"
+                  : facturen.some(
+                        (f) =>
+                          !f.credit_van_factuur_id &&
+                          isRestantFactuurOmschrijving(f.omschrijving)
+                      )
+                    ? "Restantfactuur bijwerken"
+                    : "Restantfactuur Warmtefonds"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void load()}
@@ -329,6 +398,14 @@ export function ProjectFinancieelSection({
               {loading ? "Laden…" : "Vernieuwen"}
             </button>
           </div>
+          {warmtefonds &&
+          !magWarmtefondsRestantFactuur(financieringStatus) &&
+          financieringStatus !== "afgewezen" ? (
+            <p className="mb-3 text-[11px] text-muted">
+              Restantfactuur Warmtefonds (max. € 8.500) pas na “Aanvraag
+              goedgekeurd” in Financiering.
+            </p>
+          ) : null}
 
           {showCreate ? (
             <div className="mb-4 space-y-2 border border-line bg-wash px-3 py-3">

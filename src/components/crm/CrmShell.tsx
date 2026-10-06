@@ -29,7 +29,12 @@ import {
 import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
+import { useBoViewStore, setBoViewStore } from "@/lib/bo-view-store";
+import { isOpenstaandeSchouwweek } from "./SchouwweekList";
 import { FacturenTable } from "./FacturenTable";
+import { AdviseurFacturenPanel } from "./AdviseurFacturenPanel";
+import { PartnersPanel } from "./PartnersPanel";
+import { PurchasingPanel } from "./PurchasingPanel";
 import { RapportagePanel } from "./RapportagePanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
@@ -67,16 +72,23 @@ const VALID_TABS: CrmTab[] = [
   "instroom",
   "projecten",
   "facturen",
+  "creditfacturen",
   "inkomend",
+  "purchasing",
   "rapportage",
   "admin",
   "ai",
+  "partners",
   "instellingen",
 ];
 
 const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v3";
 
 function parseTab(value: string | null): CrmTab {
+  // Oude URL-tab → Partners (facturen zitten daar nu)
+  if (value === "creditfacturen") return "partners";
+  // Service / AI zitten onder Backoffice
+  if (value === "service" || value === "ai") return "projecten";
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
   return "leads";
 }
@@ -91,7 +103,23 @@ function parseLeadStatus(value: string | null): LeadStatus | "" {
 export function CrmShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const tab = parseTab(searchParams.get("tab"));
+  const urlTab = parseTab(searchParams.get("tab"));
+  const [tab, setTab] = useState<CrmTab>(urlTab);
+  const [boView] = useBoViewStore();
+
+  useEffect(() => {
+    setTab(urlTab);
+  }, [urlTab]);
+
+  useEffect(() => {
+    // Oude losse Service-tab → Backoffice › Service
+    if (searchParams.get("tab") === "service") {
+      setBoViewStore("service");
+    }
+    if (searchParams.get("tab") === "ai") {
+      setBoViewStore("ai");
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     rememberCrmReturnUrl();
@@ -140,6 +168,7 @@ export function CrmShell() {
     }
   });
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+  const [adviseurFacturenPending, setAdviseurFacturenPending] = useState(0);
   const [sessionUser, setSessionUser] = useState<{
     id: string;
     naam: string;
@@ -188,6 +217,30 @@ export function CrmShell() {
       cancelled = true;
     };
   }, []);
+
+  // Adviseur: badge op Facturen met openstaande goedkeuringen
+  useEffect(() => {
+    if (userRol !== "adviseur") {
+      setAdviseurFacturenPending(0);
+      return;
+    }
+    let cancelled = false;
+    void fetch("/api/adviseurs/creditfacturen/mijn")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const list = (data.facturen || []) as { status?: string }[];
+        setAdviseurFacturenPending(
+          list.filter((f) => f.status === "verzonden").length
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAdviseurFacturenPending(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userRol]);
 
   // Rol: ongeldige tab → eerste toegestane tab
   useEffect(() => {
@@ -279,12 +332,14 @@ export function CrmShell() {
   }, [sessionUser, userRol]);
 
   function changeTab(next: CrmTab) {
-    if (!userRol || !magTab(userRol, next)) return;
+    if (userRol && !magTab(userRol, next)) return;
+    setTab(next);
     const params = new URLSearchParams(searchParams.toString());
     if (next === "leads") params.delete("tab");
     else params.set("tab", next);
+    if (next !== "projecten") params.delete("bo");
     const qs = params.toString();
-    router.replace(qs ? `/?${qs}` : "/", { scroll: false });
+    router.push(qs ? `/?${qs}` : "/", { scroll: false });
   }
 
   function changeStatusFilter(next: string) {
@@ -371,7 +426,7 @@ export function CrmShell() {
         sb
           .from("projecten")
           .select(
-            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status, adviseur_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
+            "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status, adviseur_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
           )
           .order("created_at", { ascending: false }),
         sb
@@ -529,6 +584,9 @@ export function CrmShell() {
           offerte_nummer: o.offerte_nummer,
           financiering_voorbehoud: o.financiering_voorbehoud,
           aanbetaling_te_innen_inc: o.aanbetaling_te_innen_inc,
+          subtotaal_ex_btw: o.subtotaal_ex_btw,
+          btw_bedrag: o.btw_bedrag,
+          totaal_inc_btw: o.totaal_inc_btw,
           ondertekend_op: o.ondertekend_op,
         },
         aanbetaling_te_innen_inc:
@@ -611,9 +669,17 @@ export function CrmShell() {
     [scopedProjecten, scopedFacturen, scopedLeads, afspraken]
   );
 
+  const schouwweekCount = useMemo(
+    () => scopedProjecten.filter(isOpenstaandeSchouwweek).length,
+    [scopedProjecten]
+  );
+
   const counts = {
     bellen: belQueueCount,
     projecten: backofficeActieCount,
+    ...(userRol === "adviseur" && adviseurFacturenPending > 0
+      ? { facturen: adviseurFacturenPending }
+      : {}),
   };
 
   function openSignLink(o: Offerte) {
@@ -795,22 +861,61 @@ export function CrmShell() {
       sub: "Kanban + agenda · bevestigingsmail bij gesprek",
     },
     projecten: {
-      title: "Backoffice",
-      sub: filterLabel
-        ? `Backoffice van ${filterLabel}`
-        : backofficeActieCount > 0
-          ? `${backofficeActieCount} openstaande ${backofficeActieCount === 1 ? "actie" : "acties"}`
-          : "Backoffice in planning en uitvoering",
+      title:
+        boView === "agenda"
+          ? "Planbord"
+          : boView === "acties"
+            ? "Acties"
+            : boView === "taken"
+              ? "Toekomstige taken"
+              : boView === "schouwweek"
+                ? "Schouwweek"
+                : boView === "service"
+                  ? "Service"
+                  : boView === "ai"
+                    ? "AI"
+                    : "Projecten",
+      sub:
+        boView === "agenda"
+          ? "Schouw, installatie en service per week"
+          : boView === "acties"
+            ? backofficeActieCount > 0
+              ? `${backofficeActieCount} openstaande ${backofficeActieCount === 1 ? "actie" : "acties"}`
+              : "Herplannen, schouw, financiering en facturen"
+            : boView === "taken"
+              ? "Alle openstaande taken · op due date"
+              : boView === "schouwweek"
+                ? schouwweekCount > 0
+                  ? `${schouwweekCount} openstaande schouwweek${schouwweekCount === 1 ? "" : "en"}`
+                  : "Orders met schouwweek · nog geen definitieve schouwdag"
+                : boView === "service"
+                  ? "Serviceverzoeken · inplannen op het planbord"
+                  : boView === "ai"
+                    ? "Typ of spreek in · acties bevestig je zelf"
+                    : filterLabel
+                      ? `Backoffice van ${filterLabel}`
+                      : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
-      sub: filterLabel
-        ? `Facturen van ${filterLabel}`
-        : "Betalingen en openstaande posten",
+      sub:
+        userRol === "adviseur"
+          ? "Jouw selfbilling-facturen · goedkeuren voor uitbetaling"
+          : filterLabel
+            ? `Facturen van ${filterLabel}`
+            : "Betalingen en openstaande posten",
+    },
+    creditfacturen: {
+      title: "Creditfacturen",
+      sub: "Adviseurs en installatiepartners · versturen en goedkeuring",
     },
     inkomend: {
       title: "Inkomend",
-      sub: "Facturen en bonnetjes via Postmark inbound",
+      sub: "Maandmappen · mail wordt automatisch verwerkt",
+    },
+    purchasing: {
+      title: "Purchasing",
+      sub: "Materiaal inkopen bij Apex Power Supplies · status en levering",
     },
     rapportage: {
       title: "Rapportage",
@@ -824,9 +929,13 @@ export function CrmShell() {
       title: "AI interface",
       sub: "Verborgen",
     },
+    partners: {
+      title: "Partners",
+      sub: "Relaties, KvK en creditfacturen voor adviseurs en installatiepartners",
+    },
     instellingen: {
       title: "Instellingen",
-      sub: "Medewerkers en installatiepartners",
+      sub: "Team · rollen, login en commissie",
     },
   };
 
@@ -880,6 +989,10 @@ export function CrmShell() {
           }}
           mobileOpen={sidebarMobileOpen}
           onMobileClose={() => setSidebarMobileOpen(false)}
+          boCounts={{
+            acties: backofficeActieCount,
+            schouwweek: schouwweekCount,
+          }}
         />
 
         <main className="flex min-w-0 flex-1 flex-col px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8">
@@ -944,6 +1057,8 @@ export function CrmShell() {
               projecten.length === 0 &&
               leads.length === 0 &&
               tab !== "instellingen" &&
+              tab !== "partners" &&
+              tab !== "purchasing" &&
               tab !== "ai" &&
               tab !== "admin" &&
               tab !== "netto" &&
@@ -1072,14 +1187,23 @@ export function CrmShell() {
                     }}
                   />
                 )}
-                {tab === "facturen" && (
-                  <FacturenTable facturen={scopedFacturen} />
-                )}
+                {tab === "facturen" &&
+                  (userRol === "adviseur" ? (
+                    <AdviseurFacturenPanel
+                      onPendingChange={setAdviseurFacturenPending}
+                    />
+                  ) : (
+                    <FacturenTable facturen={scopedFacturen} />
+                  ))}
                 {tab === "inkomend" && <InkomendPanel />}
+                {tab === "purchasing" && <PurchasingPanel />}
                 {tab === "rapportage" && (
                   <RapportagePanel />
                 )}
                 {tab === "admin" && <AdminTargetsPanel />}
+                {tab === "partners" && (
+                  <PartnersPanel onAdviseursChange={loadAdviseurs} />
+                )}
                 {tab === "instellingen" && (
                   <InstellingenPanel onAdviseursChange={loadAdviseurs} />
                 )}

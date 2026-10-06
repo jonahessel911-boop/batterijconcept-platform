@@ -35,7 +35,14 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 
-type SectionId = "herplan" | "warmtefonds" | "stap1" | "factuur" | "handmatig";
+type SectionId =
+  | "herplan"
+  | "volgende"
+  | "inkoop"
+  | "warmtefonds"
+  | "stap1"
+  | "factuur"
+  | "handmatig";
 
 type TaskRow = {
   key: string;
@@ -43,6 +50,8 @@ type TaskRow = {
   actie: BackofficeActie;
   kind:
     | "herplan"
+    | "volgende_stap"
+    | "bestel_materiaal"
     | "financiering"
     | "factuur_versturen"
     | "schouw_week"
@@ -61,6 +70,14 @@ const SECTION_META: Record<
 > = {
   herplan: {
     label: "Afspraak herplannen",
+    accent: "bg-[#FFF0E6] text-[#C45A12]",
+  },
+  volgende: {
+    label: "Volgende stappen",
+    accent: "bg-[#F0FDFA] text-[#0F766E]",
+  },
+  inkoop: {
+    label: "Purchasing",
     accent: "bg-[#FFF0E6] text-[#C45A12]",
   },
   warmtefonds: {
@@ -85,6 +102,14 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
   {
     herplan: {
       label: "Herplan",
+      className: "bg-[#FFF0E6] text-[#C45A12]",
+    },
+    volgende_stap: {
+      label: "Volgende",
+      className: "bg-[#F0FDFA] text-[#0F766E]",
+    },
+    bestel_materiaal: {
+      label: "Inkoop",
       className: "bg-[#FFF0E6] text-[#C45A12]",
     },
     financiering: {
@@ -227,6 +252,36 @@ function buildTaskRows(
       });
       continue;
     }
+    if (actie.soort === "volgende_stap") {
+      rows.push({
+        key: `${actie.id}-volgende`,
+        section: "volgende",
+        actie,
+        kind: "volgende_stap",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
+    if (actie.soort === "bestel_materiaal") {
+      rows.push({
+        key: `${actie.id}-inkoop`,
+        section: "inkoop",
+        actie,
+        kind: "bestel_materiaal",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
     if (actie.soort === "schakel_financiering") {
       rows.push({
         key: `${actie.id}-fin`,
@@ -354,6 +409,7 @@ export function BackofficeActiesList({
   const [handmatigeTaken, setHandmatigeTaken] = useState<ProjectTaak[]>([]);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     herplan: true,
+    volgende: true,
     warmtefonds: true,
     stap1: true,
     factuur: true,
@@ -425,6 +481,8 @@ export function BackofficeActiesList({
   const sections = useMemo(() => {
     const order: SectionId[] = [
       "herplan",
+      "inkoop",
+      "volgende",
       "warmtefonds",
       "stap1",
       "factuur",
@@ -530,7 +588,15 @@ export function BackofficeActiesList({
         );
       }
       setHandmatigeTaken((prev) => prev.filter((t) => t.id !== taak.id));
-      setMsg("Actie voltooid.");
+      const mail = (data as { mail?: { ok?: boolean; skipped?: boolean } })
+        .mail;
+      if (taak.aangemaakt_door_id && mail?.ok) {
+        setMsg("Actie voltooid · adviseur gemaild.");
+      } else if (taak.aangemaakt_door_id && mail && !mail.ok && !mail.skipped) {
+        setMsg("Actie voltooid · mail naar adviseur mislukt.");
+      } else {
+        setMsg("Actie voltooid.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Voltooien mislukt");
     } finally {
@@ -869,7 +935,7 @@ export function BackofficeActiesList({
     rows.some((r) => !r.done) || handmatigeTaken.length > 0 || showCreate;
 
   return (
-    <div className="space-y-5 px-5 pb-6">
+    <div className="space-y-5 px-5 pb-6 pt-5">
       {error && (
         <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
           {error}
@@ -1088,12 +1154,20 @@ export function BackofficeActiesList({
                                     {taak.notities}
                                   </p>
                                 ) : null}
+                                {taak.aangemaakt_door?.naam ? (
+                                  <p className="mt-1 text-xs font-medium text-[#0F766E]">
+                                    Van adviseur: {taak.aangemaakt_door.naam}
+                                  </p>
+                                ) : null}
                               </div>
                             </div>
                           </td>
                           <td className="py-2.5 pr-3 whitespace-nowrap">
                             <span className="rounded bg-[#F3F0FF] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B21B6]">
-                              {taak.verantwoordelijke?.naam || "—"}
+                              {taak.verantwoordelijke?.naam ||
+                                (taak.aangemaakt_door_id
+                                  ? "Backoffice"
+                                  : "—")}
                             </span>
                           </td>
                           <td className="py-2.5 pr-3 whitespace-nowrap text-xs text-muted">
@@ -1216,6 +1290,29 @@ export function BackofficeActiesList({
                                     {actie.annuleringsReden.trim()}
                                   </p>
                                 ) : null}
+                                {(row.kind === "volgende_stap" ||
+                                  row.kind === "bestel_materiaal") &&
+                                (actie.reden || actie.detail) ? (
+                                  <div className="mt-1.5 max-w-md space-y-0.5 text-xs leading-snug">
+                                    <p className="text-ink">
+                                      <span className="font-semibold text-muted">
+                                        Waarom:{" "}
+                                      </span>
+                                      {actie.reden || actie.detail}
+                                    </p>
+                                    {actie.later ? (
+                                      <p className="text-[11px] text-muted">
+                                        Nog niet belweek — staat klaar met
+                                        deadline.
+                                      </p>
+                                    ) : null}
+                                    {actie.schouwWeekLabel ? (
+                                      <p className="text-[11px] text-muted">
+                                        Schouwweek: {actie.schouwWeekLabel}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                                 <SaleNotities actie={actie} projecten={projecten} />
                                 {isOpen && row.kind === "financiering" ? (
                                   <div className="mt-2 space-y-0.5 rounded border border-line bg-wash/50 px-2 py-1.5 text-[11px] text-muted">
@@ -1267,6 +1364,97 @@ export function BackofficeActiesList({
                                         ? "…"
                                         : "Versturen"}
                                     </button>
+                                  </div>
+                                ) : null}
+                                {isOpen &&
+                                row.kind === "volgende_stap" &&
+                                (actie.planSchouwdag ||
+                                  actie.planSchouwweek) ? (
+                                  <div className="mt-2 space-y-1.5">
+                                    <p className="max-w-md text-[11px] leading-snug text-muted">
+                                      {actie.planSchouwdag
+                                        ? "Bel de klant, plan de exacte schouwdag, en de klant krijgt een bevestigingsmail."
+                                        : warmtefonds
+                                          ? "Plan de schouwweek (±5 wkn vooruit i.v.m. Warmtefonds)."
+                                          : "Plan de schouwweek zo snel mogelijk."}
+                                    </p>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      {actie.planSchouwweek ? (
+                                        <select
+                                          value={selectedWeek}
+                                          onChange={(e) =>
+                                            setWeekKeuze((p) => ({
+                                              ...p,
+                                              [actie.id]: e.target.value,
+                                            }))
+                                          }
+                                          disabled={Boolean(selectedSchouwAt)}
+                                          className="min-h-8 max-w-[14rem] border border-line bg-white px-2 text-xs text-ink outline-none focus:border-green disabled:opacity-50"
+                                        >
+                                          {weekOptions.map((o) => (
+                                            <option
+                                              key={o.value}
+                                              value={o.value}
+                                            >
+                                              {o.value === recommendedValue
+                                                ? `Aanbevolen · W${o.week}`
+                                                : `W${o.week} · ${o.jaar}`}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : null}
+                                      <input
+                                        type="datetime-local"
+                                        value={selectedSchouwAt}
+                                        onChange={(e) =>
+                                          setSchouwAtKeuze((p) => ({
+                                            ...p,
+                                            [actie.id]: e.target.value,
+                                          }))
+                                        }
+                                        className="min-h-8 border border-line bg-white px-2 text-xs text-ink outline-none focus:border-green"
+                                      />
+                                      <select
+                                        value={
+                                          partnerKeuze[actie.id] ||
+                                          actie.project
+                                            ?.installatie_partner_id ||
+                                          defaultPartnerId
+                                        }
+                                        onChange={(e) =>
+                                          setPartnerKeuze((p) => ({
+                                            ...p,
+                                            [actie.id]: e.target.value,
+                                          }))
+                                        }
+                                        className="min-h-8 max-w-[10rem] border border-line bg-white px-2 text-xs text-ink outline-none focus:border-green"
+                                      >
+                                        <option value="">Partner…</option>
+                                        {partners.map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {p.naam}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          busyId === `${actie.id}-schouw` ||
+                                          (actie.planSchouwdag &&
+                                            !selectedSchouwAt)
+                                        }
+                                        onClick={() =>
+                                          void planSchouwWeek(actie)
+                                        }
+                                        className="min-h-8 bg-green px-2.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                                      >
+                                        {busyId === `${actie.id}-schouw`
+                                          ? "…"
+                                          : actie.planSchouwdag
+                                            ? "Plan schouwdag"
+                                            : "Zet in agenda"}
+                                      </button>
+                                    </div>
                                   </div>
                                 ) : null}
                                 {isOpen && row.kind === "schouw_week" ? (
@@ -1447,6 +1635,14 @@ export function BackofficeActiesList({
                                 >
                                   Betaald
                                 </button>
+                              ) : null}
+                              {row.kind === "bestel_materiaal" ? (
+                                <Link
+                                  href="/?tab=purchasing"
+                                  className="min-h-8 bg-orange px-2 text-[11px] font-semibold leading-8 text-white hover:opacity-90"
+                                >
+                                  Open Purchasing
+                                </Link>
                               ) : null}
                               {actie.projectId ? (
                                 <Link

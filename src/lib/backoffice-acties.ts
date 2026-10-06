@@ -11,16 +11,29 @@ import {
   schouwWeekOffsetVoorSale,
   type SchouwWeek,
 } from "@/lib/schouw-week";
+import { isKickoffComplete } from "@/lib/project-kickoff";
+import { resolveProjectVolgendeStap } from "@/lib/project-volgende-stap";
+import { toOperationalStatus } from "@/lib/project-status-config";
+import {
+  bestelDeadlineVoorInstallatie,
+  INKOOP_DAGEN_VOOR_INSTALLATIE,
+  materiaalNogTeBestellen,
+} from "@/lib/inkoop-sla";
 
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
   | "schakel_financiering"
   | "nabellen_factuur"
-  | "herplan_afspraak";
+  | "herplan_afspraak"
+  | "volgende_stap"
+  | "bestel_materiaal";
 
-/** Financieringsman Warmtefonds — bel/WhatsApp bij Warmtefonds-sale. */
+/** Edwin van Veenendaal — plant Warmtefonds-afspraken / aanvragen. */
+export const FINANCIERINGSMAN_NAAM = "Edwin van Veenendaal";
 export const FINANCIERINGSMAN_TEL = "+31 6 58824298";
 export const FINANCIERINGSMAN_TEL_HREF = "tel:+31658824298";
+export const FINANCIERINGSMAN_WHATSAPP =
+  "https://wa.me/31658824298";
 
 export type BackofficeActie = {
   id: string;
@@ -49,6 +62,14 @@ export type BackofficeActie = {
   project?: Project;
   /** Annuleringsreden (herplan_afspraak), uit afspraak-notities */
   annuleringsReden?: string | null;
+  /** Volgende-stap: waarom dit nu moet */
+  reden?: string | null;
+  /** Volgende-stap: toon planner voor exacte schouwdag */
+  planSchouwdag?: boolean;
+  /** Volgende-stap: toon planner voor schouwweek */
+  planSchouwweek?: boolean;
+  /** Volgende-stap nog niet urgent (belweek ligt in de toekomst) */
+  later?: boolean;
 };
 
 type ProjectOfferteJoin = {
@@ -156,7 +177,10 @@ export function isBelSchouwActieOpen(project: Project): boolean {
 
 export function isSchakelFinancieringActieOpen(project: Project): boolean {
   // Alleen bij Warmtefonds-afwijzing — tot betaalwijze is omgezet of actie is afgerond
-  if (project.status !== "warmtefonds_afgewezen") return false;
+  const afgewezen =
+    project.financiering_status === "afgewezen" ||
+    project.status === "warmtefonds_afgewezen";
+  if (!afgewezen) return false;
   if (project.financiering_geschakeld_at) return false;
   return true;
 }
@@ -175,12 +199,68 @@ export function financieringSchakelBericht(actie: {
   offerteNummer?: string | null;
 }): string {
   return [
-    `Hallo, Warmtefonds-klant voor financiering:`,
+    `Hoi Edwin,`,
+    ``,
+    `Warmtefonds-klant voor financiering:`,
     `Naam: ${actie.leadNaam}`,
     `Tel: ${actie.telefoon?.trim() || "—"}`,
     `Plaats: ${actie.plaats?.trim() || "—"}`,
     `Offerte: ${actie.offerteNummer || "—"} (getekende PDF bijgevoegd)`,
   ].join("\n");
+}
+
+/** WhatsApp-bericht naar Edwin: klant + bedragen + PDF-bijlage handmatig. */
+export function edwinWarmtefondsWhatsappBericht(opts: {
+  leadNaam: string;
+  telefoon?: string | null;
+  straat?: string | null;
+  postcode?: string | null;
+  huisnummer?: string | null;
+  toevoeging?: string | null;
+  plaats?: string | null;
+  offerteNummer?: string | null;
+  projectNummer?: string | null;
+  aanbetalingInc?: number | null;
+  warmtefondsInc?: number | null;
+}): string {
+  const adres = [
+    [opts.straat, opts.huisnummer, opts.toevoeging]
+      .filter(Boolean)
+      .join(" "),
+    [opts.postcode, opts.plaats].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const fmt = (n: number | null | undefined) =>
+    n != null && Number.isFinite(n)
+      ? new Intl.NumberFormat("nl-NL", {
+          style: "currency",
+          currency: "EUR",
+        }).format(n)
+      : "—";
+
+  return [
+    `Hoi Edwin,`,
+    ``,
+    `Hierbij een Warmtefonds-klant. Kun jij de aanvraagafspraak inplannen?`,
+    ``,
+    `Klant: ${opts.leadNaam}`,
+    `Tel: ${opts.telefoon?.trim() || "—"}`,
+    `Adres: ${adres || "—"}`,
+    opts.projectNummer ? `Project: ${opts.projectNummer}` : null,
+    `Offerte: ${opts.offerteNummer || "—"}`,
+    `Aanbetaling: ${fmt(opts.aanbetalingInc)}`,
+    `Warmtefonds-deel: ${fmt(opts.warmtefondsInc)}`,
+    ``,
+    `Getekende offerte stuur ik als PDF-bijlage mee.`,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+export function edwinWhatsappUrl(bericht: string): string {
+  return `${FINANCIERINGSMAN_WHATSAPP}?text=${encodeURIComponent(bericht)}`;
 }
 
 function leadFromProject(project: Project) {
@@ -388,6 +468,136 @@ export function openHerplanAfspraakActies(
   return items;
 }
 
+/**
+ * Operationele “Volgende stap” per project → backoffice-actie
+ * (zelfde logica als op de projectpagina: wat / waarom / uiterlijk).
+ */
+export function openVolgendeStapActies(
+  projecten: Project[],
+  facturen: Factuur[] = [],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (project.status === "annulering") continue;
+
+    const related = facturen.filter(
+      (f) =>
+        f.project_id === project.id ||
+        (!f.project_id && f.lead_id === project.lead_id)
+    );
+    const op = toOperationalStatus(project.status);
+    if (
+      op === "schouwweek_inplannen" &&
+      !isKickoffComplete(project, related)
+    ) {
+      continue;
+    }
+
+    const stap = resolveProjectVolgendeStap(project, now);
+    if (!stap) continue;
+
+    if (
+      project.installatie_at &&
+      materiaalNogTeBestellen(project) &&
+      /materiaal|inkoop|bestel/i.test(stap.titel)
+    ) {
+      continue;
+    }
+
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const deadlineAt = stap.uiterlijkAt || now.toISOString();
+    const planSchouwdag =
+      (stap.actie?.kind === "anchor" &&
+        stap.actie.openSoort === "schouwdag") ||
+      /schouwdag/i.test(stap.titel);
+    const planSchouwweek =
+      !planSchouwdag &&
+      stap.actie?.kind === "anchor" &&
+      /schouwweek/i.test(stap.titel);
+
+    const schouwLabel =
+      project.schouw_jaar && project.schouw_week
+        ? formatSchouwWeekLabel(project.schouw_jaar, project.schouw_week)
+        : undefined;
+
+    items.push({
+      id: `volgende-stap-${project.id}`,
+      soort: "volgende_stap",
+      titel: stap.titel,
+      detail: stap.reden,
+      reden: stap.reden,
+      deadlineAt,
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue: stap.overdue,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      schouwJaar: project.schouw_jaar ?? undefined,
+      schouwWeek: project.schouw_week ?? undefined,
+      schouwWeekLabel: schouwLabel,
+      project,
+      planSchouwdag,
+      planSchouwweek,
+      later: !stap.urgent && !stap.overdue,
+    });
+  }
+  return items;
+}
+
+/**
+ * Batterij/materiaal moet uiterlijk 3 werkdagen (ma–vr) vóór installatie
+ * besteld zijn — Apex levert niet in het weekend.
+ */
+export function openBestelMateriaalActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  const nowMs = now.getTime();
+  for (const project of projecten) {
+    if (!project.installatie_at) continue;
+    if (!materiaalNogTeBestellen(project)) continue;
+
+    const deadlineAt = bestelDeadlineVoorInstallatie(project.installatie_at);
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const overdue = deadlineAt.getTime() < nowMs;
+    items.push({
+      id: `bestel-materiaal-${project.id}`,
+      soort: "bestel_materiaal",
+      titel: "Batterij bestellen (3 werkdagen vóór installatie)",
+      detail: overdue
+        ? `Installatie staat gepland — materiaal had uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen van tevoren besteld moeten zijn (levering alleen ma–vr).`
+        : `Bestel bij Apex uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór de installatie. Levering alleen ma–vr, niet in het weekend.`,
+      reden: overdue
+        ? `Installatie staat gepland — materiaal had uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen van tevoren besteld moeten zijn (levering alleen ma–vr).`
+        : `Bestel bij Apex uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór de installatie. Levering alleen ma–vr, niet in het weekend.`,
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: "/?tab=purchasing",
+      project,
+    });
+  }
+  return items;
+}
+
 export function openBackofficeActies(
   projecten: Project[],
   facturen: Factuur[] = [],
@@ -408,6 +618,8 @@ export function openBackofficeActies(
       now
     ),
     ...openSchakelFinancieringActies(projecten, now),
+    ...openBestelMateriaalActies(projecten, now),
+    ...openVolgendeStapActies(projecten, facturen, now),
   ].sort(
     (a, b) =>
       new Date(a.deadlineAt).getTime() - new Date(b.deadlineAt).getTime()

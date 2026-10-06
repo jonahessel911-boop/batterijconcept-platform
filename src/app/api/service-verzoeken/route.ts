@@ -9,11 +9,12 @@ import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
-/** GET /api/service-verzoeken — lijst (optioneel ?status=open) */
+/** GET /api/service-verzoeken — lijst (optioneel ?status=open|afgehandeld, ?project_id=) */
 export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
     const status = req.nextUrl.searchParams.get("status");
+    const projectId = req.nextUrl.searchParams.get("project_id");
     let q = sb
       .from("service_verzoeken")
       .select(
@@ -23,6 +24,9 @@ export async function GET(req: NextRequest) {
 
     if (status === "open" || status === "afgehandeld") {
       q = q.eq("status", status);
+    }
+    if (projectId) {
+      q = q.eq("project_id", projectId);
     }
 
     const { data, error } = await q;

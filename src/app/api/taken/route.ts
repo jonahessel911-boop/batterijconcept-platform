@@ -7,12 +7,20 @@ import { dueAtFromDays } from "@/lib/project-taken";
 export const runtime = "nodejs";
 
 const SELECT =
+  "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), aangemaakt_door:adviseurs!aangemaakt_door_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon))";
+
+const SELECT_FALLBACK =
   "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon))";
 
 /** GET /api/taken — open + recente taken (optioneel ?project_id=) */
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("project_id");
   const openOnly = req.nextUrl.searchParams.get("open") !== "0";
+  const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "200");
+  const limit = Math.min(
+    Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 200, 1),
+    1000
+  );
 
   try {
     const sb = getSupabaseAdmin();
@@ -21,12 +29,28 @@ export async function GET(req: NextRequest) {
       .select(SELECT)
       .order("due_at", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(limit);
 
     if (projectId) q = q.eq("project_id", projectId);
     if (openOnly) q = q.neq("status", "done");
 
-    const { data, error } = await q;
+    let { data, error } = await q;
+    if (
+      error &&
+      (error.message?.includes("aangemaakt_door") || error.code === "42703")
+    ) {
+      let q2 = sb
+        .from("project_taken")
+        .select(SELECT_FALLBACK)
+        .order("due_at", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (projectId) q2 = q2.eq("project_id", projectId);
+      if (openOnly) q2 = q2.neq("status", "done");
+      const retry = await q2;
+      data = retry.data;
+      error = retry.error;
+    }
     if (error) {
       if (
         error.code === "42P01" ||

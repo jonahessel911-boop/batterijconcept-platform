@@ -24,6 +24,7 @@ import { isToday, isYesterday, parseISO } from "date-fns";
 import { nl } from "date-fns/locale";
 import { ProjectStatusSelect } from "./ProjectStatusSelect";
 import { rememberCrmReturnUrl } from "./DetailChrome";
+import { KlantContactMailModal } from "./KlantContactMailModal";
 
 const PAGE_SIZE = 10;
 
@@ -158,6 +159,7 @@ export function BackofficeTable({
   >("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [contactProject, setContactProject] = useState<Project | null>(null);
   const [page, setPage] = useState(1);
   const [openTaken, setOpenTaken] = useState<ProjectTaak[]>([]);
 
@@ -323,7 +325,7 @@ export function BackofficeTable({
   const actieCount = filtered.filter((p) => projectIdsWithActie.has(p.id)).length;
 
   return (
-    <div className="mx-5 mb-5 space-y-4">
+    <div className="mx-5 mb-5 mt-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {hideTitle ? (
           <span />
@@ -464,24 +466,36 @@ export function BackofficeTable({
                   <p className="text-xs text-muted">
                     {p.leads?.naam || "—"} · {datumbereik(p)}
                   </p>
-                  <div className="flex items-center gap-2 text-[11px] text-muted">
-                    <span>{bijgewerktLabel(p.created_at)}</span>
-                    {leden.length ? (
-                      <span className="flex -space-x-1">
-                        {leden.map((m) => (
-                          <span
-                            key={`${m.rol}-${m.naam}`}
-                            title={`${m.rol}: ${m.naam}`}
-                            className={[
-                              "inline-flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold ring-1 ring-white",
-                              avatarTone(m.naam),
-                            ].join(" ")}
-                          >
-                            {initials(m.naam)}
-                          </span>
-                        ))}
-                      </span>
-                    ) : null}
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span>{bijgewerktLabel(p.created_at)}</span>
+                      {leden.length ? (
+                        <span className="flex -space-x-1">
+                          {leden.map((m) => (
+                            <span
+                              key={`${m.rol}-${m.naam}`}
+                              title={`${m.rol}: ${m.naam}`}
+                              className={[
+                                "inline-flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold ring-1 ring-white",
+                                avatarTone(m.naam),
+                              ].join(" ")}
+                            >
+                              {initials(m.naam)}
+                            </span>
+                          ))}
+                        </span>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="shrink-0 border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:border-green hover:text-green-dark"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setContactProject(p);
+                      }}
+                    >
+                      Contact
+                    </button>
                   </div>
                 </div>
               );
@@ -510,6 +524,9 @@ export function BackofficeTable({
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
                     Leden
+                  </th>
+                  <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
+                    Contact
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
                     <button
@@ -589,6 +606,18 @@ export function BackofficeTable({
                         ) : (
                           <span className="text-muted">—</span>
                         )}
+                      </td>
+                      <td
+                        className="px-3 py-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="border border-line bg-white px-2.5 py-1.5 text-xs font-semibold text-ink hover:border-green hover:text-green-dark"
+                          onClick={() => setContactProject(p)}
+                        >
+                          Contact
+                        </button>
                       </td>
                       <td className="px-3 py-3">
                         <p className="whitespace-nowrap font-medium text-ink">
@@ -670,6 +699,13 @@ export function BackofficeTable({
           </div>
         </div>
       )}
+
+      {contactProject ? (
+        <KlantContactMailModal
+          project={contactProject}
+          onClose={() => setContactProject(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -19,7 +19,9 @@ import {
 } from "@/lib/schouw-week";
 import { Panel } from "./DetailChrome";
 import {
+  isOpleveringsrapport,
   isSchouwFormulier,
+  OPLEVERINGSRAPPORT_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
 
@@ -114,6 +116,7 @@ export function ProjectSchouwSection({
   const [installatieSaving, setInstallatieSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadingSchouw, setUploadingSchouw] = useState(false);
+  const [uploadingOplevering, setUploadingOplevering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
@@ -310,6 +313,11 @@ export function ProjectSchouwSection({
     setError(null);
     setOkMsg(null);
     try {
+      if (!fotos.some((f) => isOpleveringsrapport(f.omschrijving))) {
+        throw new Error(
+          "Upload eerst het opleveringsrapport met handtekening van de klant."
+        );
+      }
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -323,6 +331,37 @@ export function ProjectSchouwSection({
       setError(err instanceof Error ? err.message : "Fout");
     } finally {
       setInstallatieSaving(false);
+    }
+  }
+
+  async function uploadOpleveringsrapport(file: File) {
+    setUploadingOplevering(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("omschrijving", OPLEVERINGSRAPPORT_OMSCHRIJVING);
+      form.append("allow_pdf", "1");
+      const res = await fetch(`/api/projecten/${project.id}/fotos`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      setFotos((prev) => [...prev, data.foto]);
+      if (data.status_advance?.advanced) {
+        setOkMsg(
+          "Opleveringsrapport geüpload · installatie gemarkeerd als voltooid."
+        );
+      } else {
+        setOkMsg("Opleveringsrapport geüpload.");
+      }
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload mislukt");
+    } finally {
+      setUploadingOplevering(false);
     }
   }
 
@@ -362,7 +401,21 @@ export function ProjectSchouwSection({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload mislukt");
       setFotos((prev) => [...prev, data.foto]);
-      setOkMsg("Schouw formulier geüpload.");
+      const adv = data.status_advance as
+        | { advanced?: boolean; klaarVoorMateriaal?: boolean }
+        | undefined;
+      if (adv?.advanced && adv.klaarVoorMateriaal) {
+        setOkMsg(
+          "Schouw formulier geüpload · alles betaald → klaar voor materiaalinkoop."
+        );
+      } else if (adv?.advanced) {
+        setOkMsg(
+          "Schouw formulier geüpload · Schouw voltooid. Check Financieel of alles betaald is."
+        );
+      } else {
+        setOkMsg("Schouw formulier geüpload.");
+      }
+      onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload mislukt");
     } finally {
@@ -388,9 +441,15 @@ export function ProjectSchouwSection({
   const schouwFormulieren = fotos.filter((f) =>
     isSchouwFormulier(f.omschrijving)
   );
-  const normaleFotos = fotos.filter(
-    (f) => !isSchouwFormulier(f.omschrijving)
+  const opleveringsrapporten = fotos.filter((f) =>
+    isOpleveringsrapport(f.omschrijving)
   );
+  const normaleFotos = fotos.filter(
+    (f) =>
+      !isSchouwFormulier(f.omschrijving) &&
+      !isOpleveringsrapport(f.omschrijving)
+  );
+  const heeftOplevering = opleveringsrapporten.length > 0;
 
   const body = (
     <>
@@ -417,6 +476,10 @@ export function ProjectSchouwSection({
               ? formatDateTimeNl(project.installatie_at)
               : null
           }
+        />
+        <CheckRow
+          done={heeftOplevering}
+          label="Opleveringsrapport (handtekening)"
         />
         <CheckRow done={installatieVoltooid} label="Installatie voltooid" />
       </ul>
@@ -583,14 +646,25 @@ export function ProjectSchouwSection({
               {installatieGepland && !installatieVoltooid ? (
                 <button
                   type="button"
-                  disabled={installatieSaving}
+                  disabled={installatieSaving || !heeftOplevering}
                   onClick={() => void markInstallatieVoltooid()}
+                  title={
+                    heeftOplevering
+                      ? undefined
+                      : "Upload eerst het opleveringsrapport"
+                  }
                   className="border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
                 >
                   Markeer voltooid
                 </button>
               ) : null}
             </div>
+            {installatieGepland && !heeftOplevering ? (
+              <p className="text-xs text-[#C45A12]">
+                Upload het opleveringsrapport met handtekening van de klant om
+                de installatie af te ronden.
+              </p>
+            ) : null}
           </form>
         </>
       ) : null}
@@ -605,6 +679,64 @@ export function ProjectSchouwSection({
           {okMsg}
         </p>
       )}
+
+      <div className="mt-6 border-t border-line px-1 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Opleveringsrapport ({opleveringsrapporten.length})
+          </p>
+          <label className="cursor-pointer text-xs font-semibold text-green-dark underline-offset-2 hover:underline">
+            {uploadingOplevering ? "Uploaden…" : "Opleveringsrapport"}
+            <input
+              type="file"
+              accept="image/*,application/pdf,.pdf"
+              className="hidden"
+              disabled={uploadingOplevering}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void uploadOpleveringsrapport(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+        <p className="mt-1 text-xs text-muted">
+          Verplicht · met handtekening van de klant dat alles goed is
+        </p>
+        {opleveringsrapporten.length === 0 ? (
+          <p className="mt-2 text-sm text-[#C45A12]">
+            Nog geen opleveringsrapport geüpload.
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-line border border-line">
+            {opleveringsrapporten.map((f) => (
+              <li
+                key={f.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-ink">
+                    {f.bestandsnaam || "Opleveringsrapport"}
+                  </p>
+                  <p className="text-[11px] text-muted">
+                    {formatDateShort(f.created_at)}
+                  </p>
+                </div>
+                {f.url ? (
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-semibold text-green-dark hover:underline"
+                  >
+                    Openen
+                  </a>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="mt-6 border-t border-line px-1 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -190,6 +190,20 @@ export async function ensureProjectForOfferte(
     console.error("Auto-taken na project:", e);
   }
 
+  try {
+    const { ensureAdviseurOrderCommissieConcept } = await import(
+      "@/lib/netto-creditfactuur"
+    );
+    await ensureAdviseurOrderCommissieConcept(sb, {
+      leadId: opts.leadId,
+      offerteId: opts.offerteId,
+      offerteNummer: opts.offerteNummer,
+      projectNummer: created.project_nummer,
+    });
+  } catch (e) {
+    console.error("Adviseur commissie-concept na project:", e);
+  }
+
   return {
     id: created.id,
     project_nummer: created.project_nummer,

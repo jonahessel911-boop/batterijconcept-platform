@@ -8,6 +8,8 @@ import {
   buildInkoopChecklist,
   inkoopChecklistTotaalExBtw,
   isInkoopItemBesteld,
+  batterijPurchasingStatus,
+  resolveInkoopRegelStatus,
   type InkoopChecklistItem,
 } from "@/lib/project-inkoop-checklist";
 import type { ProductInkoop } from "@/lib/inkoop";
@@ -160,6 +162,22 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
     isInkoopItemBesteld(i, checks)
   ).length;
 
+  const batterijStatus = useMemo(() => {
+    const batterijItems = items.filter(
+      (i) => /batterij/i.test(i.key) || /batterij/i.test(i.label)
+    );
+    if (batterijItems.length === 0) {
+      return batterijPurchasingStatus(checks);
+    }
+    const statuses = batterijItems.map((i) =>
+      resolveInkoopRegelStatus(i, checks)
+    );
+    return {
+      besteld: statuses.every((s) => s === "besteld" || s === "geleverd"),
+      geleverd: statuses.every((s) => s === "geleverd"),
+    };
+  }, [items, checks]);
+
   const heeftOrderBedrag = cash.orderIncBtw > 0;
 
   async function toggleItem(item: InkoopChecklistItem, next: boolean) {
@@ -265,6 +283,29 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
                   ex. btw
                 </p>
               </div>
+              <p className="mt-2 text-sm text-ink">
+                Batterij besteld:{" "}
+                <span
+                  className={
+                    batterijStatus.besteld
+                      ? "font-semibold text-green-dark"
+                      : "font-semibold text-[#C45A12]"
+                  }
+                >
+                  {batterijStatus.besteld ? "ja" : "nee"}
+                </span>
+                <span className="mx-2 text-muted">·</span>
+                Batterij geleverd:{" "}
+                <span
+                  className={
+                    batterijStatus.geleverd
+                      ? "font-semibold text-green-dark"
+                      : "font-semibold text-muted"
+                  }
+                >
+                  {batterijStatus.geleverd ? "ja" : "nee"}
+                </span>
+              </p>
 
               <ul className="mt-2 divide-y divide-line border border-line">
                 {items.length === 0 ? (

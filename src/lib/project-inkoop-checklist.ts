@@ -6,6 +6,7 @@
 import {
   DEFAULT_BATTERIJ_PER_MODULE,
   DEFAULT_BASEPLATE_EX_BTW,
+  DEFAULT_DTSU_METER_EX_BTW,
   DEFAULT_KOPPELKABEL_EX_BTW,
   DEFAULT_OMVORMER,
   findProductForRegel,
@@ -15,6 +16,85 @@ import {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Leverancier voor Alpha ESS / G3 inkoop. */
+export const INKOOP_LEVERANCIER = "Apex Power Supplies";
+
+/** Status per inkoopregel (opgeslagen in project.materiaal_checks). */
+export type InkoopRegelStatus = "te_kopen" | "besteld" | "geleverd";
+
+export const INKOOP_REGEL_STATUS_LABEL: Record<InkoopRegelStatus, string> = {
+  te_kopen: "Nog in te kopen",
+  besteld: "Besteld — wacht op levering",
+  geleverd: "Geleverd",
+};
+
+export type MateriaalChecks = Record<
+  string,
+  boolean | InkoopRegelStatus | null | undefined
+>;
+
+export function parseInkoopRegelStatus(
+  value: boolean | InkoopRegelStatus | null | undefined
+): InkoopRegelStatus {
+  if (value === true || value === "besteld") return "besteld";
+  if (value === "geleverd") return "geleverd";
+  return "te_kopen";
+}
+
+/** Batterij-status uit Purchasing (`materiaal_checks`). */
+export function batterijPurchasingStatus(
+  checks: MateriaalChecks | null | undefined
+): { besteld: boolean; geleverd: boolean } {
+  const entries = Object.entries(checks || {});
+  const batterij = entries.filter(([k]) => /batterij/i.test(k));
+  const source = batterij.length > 0 ? batterij : entries;
+  if (source.length === 0) {
+    return { besteld: false, geleverd: false };
+  }
+  const statuses = source.map(([, v]) => parseInkoopRegelStatus(v));
+  const geleverd = statuses.every((s) => s === "geleverd");
+  const besteld = statuses.every(
+    (s) => s === "besteld" || s === "geleverd"
+  );
+  return { besteld, geleverd };
+}
+
+export function resolveInkoopRegelStatus(
+  item: InkoopChecklistItem,
+  checks: MateriaalChecks | null | undefined
+): InkoopRegelStatus {
+  const c = checks || {};
+  const direct = parseInkoopRegelStatus(c[item.key]);
+  if (direct !== "te_kopen") return direct;
+  if (item.regelId) return parseInkoopRegelStatus(c[item.regelId]);
+  return "te_kopen";
+}
+
+export function orderInkoopSamenvatting(
+  items: InkoopChecklistItem[],
+  checks: MateriaalChecks | null | undefined
+): {
+  te_kopen: number;
+  besteld: number;
+  geleverd: number;
+  overall: InkoopRegelStatus | "deels";
+} {
+  let te_kopen = 0;
+  let besteld = 0;
+  let geleverd = 0;
+  for (const item of items) {
+    const s = resolveInkoopRegelStatus(item, checks);
+    if (s === "geleverd") geleverd += 1;
+    else if (s === "besteld") besteld += 1;
+    else te_kopen += 1;
+  }
+  let overall: InkoopRegelStatus | "deels" = "te_kopen";
+  if (items.length > 0 && geleverd === items.length) overall = "geleverd";
+  else if (items.length > 0 && te_kopen === 0) overall = "besteld";
+  else if (besteld > 0 || geleverd > 0) overall = "deels";
+  return { te_kopen, besteld, geleverd, overall };
 }
 
 /** Standaard accessoires (ex. btw) — Apex / Alpha ESS G3. */
@@ -30,6 +110,12 @@ export const STANDAARD_INKOOP_ACCESSOIRES = [
     sku: "smile-g3-kabelset-9.3",
     naam: "AlphaESS Koppelkabel Single kolom 9.3 kWh modules",
     inkoopExBtw: DEFAULT_KOPPELKABEL_EX_BTW,
+  },
+  {
+    key: "std:dtsu-meter",
+    sku: "alpha-ess-dtsu-3ct-100a",
+    naam: "Alpha ESS Meter DTSU 3CT 100A",
+    inkoopExBtw: DEFAULT_DTSU_METER_EX_BTW,
   },
 ] as const;
 
@@ -179,15 +265,13 @@ export function inkoopChecklistTotaalExBtw(
   return round2(items.reduce((s, i) => s + (Number(i.inkoopExBtw) || 0), 0));
 }
 
-/** Legacy: oude checks op alleen regel-id ook als “besteld” beschouwen. */
+/** true als regel minstens besteld is (of geleverd). Legacy boolean true telt mee. */
 export function isInkoopItemBesteld(
   item: InkoopChecklistItem,
-  checks: Record<string, boolean> | null | undefined
+  checks: MateriaalChecks | null | undefined
 ): boolean {
-  const c = checks || {};
-  if (c[item.key]) return true;
-  if (item.regelId && c[item.regelId]) return true;
-  return false;
+  const s = resolveInkoopRegelStatus(item, checks);
+  return s === "besteld" || s === "geleverd";
 }
 
 function guessSkuFromText(text: string): string | null {

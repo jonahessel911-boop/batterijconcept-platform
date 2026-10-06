@@ -54,7 +54,7 @@ export function OffertePage() {
   const [verstuurMsg, setVerstuurMsg] = useState<string | null>(null);
   const [actieOpen, setActieOpen] = useState(false);
   const [aanbetalingModus, setAanbetalingModus] =
-    useState<AanbetalingModus>("restant");
+    useState<AanbetalingModus>("btw");
   const [aanbetalingHandmatig, setAanbetalingHandmatig] = useState("");
   const [backofficeNotitie, setBackofficeNotitie] = useState("");
   const [installateurNotitie, setInstallateurNotitie] = useState("");

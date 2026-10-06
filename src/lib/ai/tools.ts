@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { buildProposedAction } from "@/lib/ai/proposed-actions";
 
 export const AI_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -125,6 +126,41 @@ export const AI_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       description:
         "Statistieken over belpogingen: hoeveel leads op geen_contact, verdeling belpogingen.",
       parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "stel_actie_voor",
+      description:
+        "Stel een actie voor die de medewerker moet bevestigen (Plan / Verstuur). Voert NIETS uit. Gebruik dit als de gebruiker schouw of installatie wil inplannen, of een klantmail wil sturen. Zoek eerst de order als je geen project_id hebt.",
+      parameters: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["plan_schouw", "plan_installatie", "send_mail"],
+          },
+          query: {
+            type: "string",
+            description: "Klantnaam, projectnummer of plaats",
+          },
+          project_id: { type: "string" },
+          datetime: {
+            type: "string",
+            description:
+              "ISO-8601 met timezone, bijv. 2026-10-23T09:00:00+02:00",
+          },
+          to: { type: "string" },
+          subject: { type: "string" },
+          bericht: {
+            type: "string",
+            description: "Platte mailtekst NL; template wrapping bij versturen",
+          },
+        },
+        required: ["kind"],
+        additionalProperties: false,
+      },
     },
   },
 ];
@@ -384,7 +420,7 @@ export async function runAiTool(
       let query = sb
         .from("projecten")
         .select(
-          "id, status, created_at, leads(naam, lead_number, plaats), installatie_partners(naam)"
+          "id, project_nummer, status, created_at, schouw_at, installatie_at, leads(naam, email, lead_number, plaats, telefoon), installatie_partners(naam)"
         )
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -399,10 +435,28 @@ export async function runAiTool(
             p as { leads?: { naam?: string } | { naam?: string }[] | null }
           ).leads;
           const naam = Array.isArray(leads) ? leads[0]?.naam : leads?.naam;
-          return (naam || "").toLowerCase().includes(ql);
+          const nummer =
+            (p as { project_nummer?: string | null }).project_nummer || "";
+          return (
+            (naam || "").toLowerCase().includes(ql) ||
+            nummer.toLowerCase().includes(ql)
+          );
         });
       }
       return { count: list.length, projecten: list };
+    }
+
+    case "stel_actie_voor": {
+      return buildProposedAction({
+        kind: String(args.kind || ""),
+        query: args.query != null ? String(args.query) : undefined,
+        project_id:
+          args.project_id != null ? String(args.project_id) : undefined,
+        datetime: args.datetime != null ? String(args.datetime) : undefined,
+        to: args.to != null ? String(args.to) : undefined,
+        subject: args.subject != null ? String(args.subject) : undefined,
+        bericht: args.bericht != null ? String(args.bericht) : undefined,
+      });
     }
 
     case "bel_queue_stats": {

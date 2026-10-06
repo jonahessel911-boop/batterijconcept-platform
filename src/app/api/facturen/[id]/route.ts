@@ -10,6 +10,7 @@ import {
 import { formatEuro } from "@/lib/format";
 import { logLeadEvent } from "@/lib/lead-events";
 import { ensureNettoAanbetalingCreditfactuur } from "@/lib/netto-creditfactuur";
+import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
 import type { FactuurStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -66,7 +67,7 @@ export async function PATCH(
     const { data: current, error: loadErr } = await sb
       .from("facturen")
       .select(
-        "id, status, factuurdatum, lead_id, factuur_nummer, bedrag_inc_btw, omschrijving"
+        "id, status, factuurdatum, lead_id, project_id, factuur_nummer, bedrag_inc_btw, omschrijving"
       )
       .eq("id", id)
       .maybeSingle();
@@ -181,6 +182,16 @@ export async function PATCH(
         await ensureNettoAanbetalingCreditfactuur(sb, id);
       } catch {
         // niet blokkeren — factuur blijft betaald
+      }
+
+      // Schouwformulier al binnen + alles betaald → materiaal inkopen
+      const projectId = (current as { project_id?: string | null }).project_id;
+      if (projectId) {
+        try {
+          await maybeAdvanceProjectNaSchouw(sb, projectId);
+        } catch {
+          /* best-effort */
+        }
       }
     }
 

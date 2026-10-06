@@ -6,22 +6,79 @@ import {
   creditWeekByYearWeek,
   creditWeekFromDate,
   filterEligibleAanbetalingen,
-  formatCreditFactuurNummer,
+  formatCreditFactuurNummerWeek,
   previousCreditWeek,
   VERKOPER_AANBETALING_FEE,
 } from "@/lib/adviseur-creditfactuur";
+import {
+  RELATIE_FACTUUR_BETAALTERMIJN_DAGEN,
+  bedragenMetBtw,
+} from "@/lib/pdf-relatie-factuur";
+import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
+import { dayKeyAmsterdam } from "@/lib/planning-window";
 
 export const runtime = "nodejs";
 
 /**
  * GET /api/adviseurs/creditfacturen?adviseur_id=&jaar=&week=
- * Lijst creditfacturen + openstaande aanbetalingen voor een week.
+ * Zonder adviseur_id: overzicht alle creditfacturen (admin).
+ * Met adviseur_id: lijst + openstaande aanbetalingen voor een week.
  */
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
   const adviseurId = p.get("adviseur_id");
+
   if (!adviseurId) {
-    return NextResponse.json({ error: "adviseur_id is verplicht" }, { status: 400 });
+    try {
+      const sb = getSupabaseAdmin();
+      const weekInfo = previousCreditWeek();
+      const { data: facturen, error: facErr } = await sb
+        .from("adviseur_creditfacturen")
+        .select(
+          "*, adviseurs!adviseur_id(id, naam, bedrijfsnaam, kvk_nummer, iban)"
+        )
+        .order("week_jaar", { ascending: false })
+        .order("week_nummer", { ascending: false })
+        .limit(200);
+
+      if (facErr) {
+        if (
+          facErr.code === "42703" ||
+          facErr.message?.includes("adviseur_creditfacturen")
+        ) {
+          return NextResponse.json(
+            { error: "Voer supabase/migrate-adviseur-creditfacturen.sql uit" },
+            { status: 503 }
+          );
+        }
+        throw facErr;
+      }
+
+      const { data: salesAdviseurs } = await sb
+        .from("adviseurs")
+        .select(
+          "id, naam, actief, rol, bedrijfsnaam, kvk_nummer, iban, commissie_pct, max_factuur_bedrag"
+        )
+        .eq("actief", true)
+        .order("naam");
+
+      const adviseurs = (salesAdviseurs || []).filter((a) => {
+        const rol = (a.rol || "adviseur") as string;
+        return rol === "adviseur" || rol === "admin";
+      });
+
+      return NextResponse.json({
+        week: weekInfo,
+        fee_per_aanbetaling: VERKOPER_AANBETALING_FEE,
+        facturen: facturen || [],
+        adviseurs,
+      });
+    } catch (e) {
+      return NextResponse.json(
+        { error: errMessage(e, "Laden mislukt") },
+        { status: 500 }
+      );
+    }
   }
 
   const jaar = p.get("jaar") ? Number(p.get("jaar")) : null;
@@ -128,10 +185,20 @@ export async function GET(req: NextRequest) {
       maxBedrag: adviseur.max_factuur_bedrag as number | null,
     });
 
-    const existingWeek = (facturen || []).find(
-      (f) =>
-        f.week_jaar === weekInfo.jaar && f.week_nummer === weekInfo.week
-    );
+    const existingWeek =
+      (facturen || []).find(
+        (f) =>
+          f.week_jaar === weekInfo.jaar &&
+          f.week_nummer === weekInfo.week &&
+          f.status === "concept"
+      ) ||
+      (facturen || []).find(
+        (f) =>
+          f.week_jaar === weekInfo.jaar &&
+          f.week_nummer === weekInfo.week &&
+          f.status !== "geannuleerd"
+      ) ||
+      null;
 
     return NextResponse.json({
       adviseur,
@@ -158,8 +225,9 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/adviseurs/creditfacturen
- * Maak creditfactuur voor een week (default: vorige week).
- * Body: { adviseur_id, jaar?, week?, mark_paid? }
+ * Maak creditfactuur-concept (altijd mogelijk).
+ * Body: { adviseur_id, jaar?, week?, mark_paid?, bedrag_ex_btw?, omschrijving? }
+ * Met bedrag_ex_btw: handmatig concept. Zonder: uit openstaande aanbetalingen in de week.
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -168,6 +236,8 @@ export async function POST(req: NextRequest) {
     week?: number;
     mark_paid?: boolean;
     status?: string;
+    bedrag_ex_btw?: number;
+    omschrijving?: string;
   };
   try {
     body = await req.json();
@@ -184,13 +254,18 @@ export async function POST(req: NextRequest) {
       ? creditWeekByYearWeek(body.jaar, body.week)
       : previousCreditWeek();
 
+  const manualBedrag =
+    body.bedrag_ex_btw != null ? Number(body.bedrag_ex_btw) : null;
+  const useManual =
+    manualBedrag != null && Number.isFinite(manualBedrag) && manualBedrag > 0;
+
   try {
     const sb = getSupabaseAdmin();
 
     const { data: adviseur, error: advErr } = await sb
       .from("adviseurs")
       .select(
-        "id, naam, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag"
+        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag"
       )
       .eq("id", body.adviseur_id)
       .single();
@@ -216,22 +291,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
-    const { data: existing } = await sb
-      .from("adviseur_creditfacturen")
-      .select("id, factuur_nummer, status")
-      .eq("adviseur_id", body.adviseur_id)
-      .eq("week_jaar", weekInfo.jaar)
-      .eq("week_nummer", weekInfo.week)
-      .maybeSingle();
-
-    if (existing && existing.status !== "geannuleerd") {
+    if (!adviseur.email?.trim()) {
       return NextResponse.json(
-        {
-          error: `Er bestaat al een creditfactuur voor week ${weekInfo.week}: ${existing.factuur_nummer}`,
-          existing,
-        },
-        { status: 409 }
+        { error: "Vul eerst een e-mailadres in bij de adviseur." },
+        { status: 400 }
       );
     }
 
@@ -242,79 +305,110 @@ export async function POST(req: NextRequest) {
     const leadIds = (leads || []).map((l) => l.id);
     const leadNaam = new Map((leads || []).map((l) => [l.id, l.naam as string]));
 
-    if (leadIds.length === 0) {
-      return NextResponse.json(
-        { error: "Geen leads gekoppeld aan deze adviseur" },
-        { status: 400 }
+    let paidFac: {
+      id: string;
+      factuur_nummer: string;
+      lead_id: string;
+      offerte_id: string | null;
+      status: string;
+      omschrijving: string | null;
+      betaald_op: string | null;
+      offertes:
+        | { offerte_nummer?: string }
+        | { offerte_nummer?: string }[]
+        | null;
+    }[] = [];
+    let projectByLead = new Map<string, string>();
+    let projectByOfferte = new Map<string, string>();
+    let eligible: ReturnType<typeof filterEligibleAanbetalingen> = [];
+
+    if (leadIds.length > 0 && !useManual) {
+      const { data: paid } = await sb
+        .from("facturen")
+        .select(
+          "id, factuur_nummer, lead_id, offerte_id, status, omschrijving, betaald_op, offertes(offerte_nummer)"
+        )
+        .in("lead_id", leadIds)
+        .eq("status", "betaald")
+        .gte("betaald_op", weekInfo.van)
+        .lte("betaald_op", weekInfo.tot);
+      paidFac = (paid || []) as typeof paidFac;
+
+      const { data: already } = await sb
+        .from("adviseur_creditfactuur_regels")
+        .select("factuur_id");
+      const alreadySet = new Set((already || []).map((r) => r.factuur_id));
+
+      const { data: projects } = await sb
+        .from("projecten")
+        .select("project_nummer, lead_id, offerte_id")
+        .in("lead_id", leadIds);
+      projectByLead = new Map<string, string>();
+      projectByOfferte = new Map<string, string>();
+      for (const p of projects || []) {
+        if (p.lead_id) projectByLead.set(p.lead_id as string, p.project_nummer);
+        if (p.offerte_id)
+          projectByOfferte.set(p.offerte_id as string, p.project_nummer);
+      }
+
+      eligible = filterEligibleAanbetalingen(
+        paidFac.map((f) => {
+          const off = f.offertes;
+          const offerte_nummer = Array.isArray(off)
+            ? off[0]?.offerte_nummer
+            : off?.offerte_nummer;
+          return {
+            id: f.id,
+            factuur_nummer: f.factuur_nummer,
+            lead_id: f.lead_id,
+            status: f.status,
+            omschrijving: f.omschrijving,
+            betaald_op: f.betaald_op,
+            lead_naam: leadNaam.get(f.lead_id) || null,
+            offerte_nummer: offerte_nummer || null,
+            already_invoiced: alreadySet.has(f.id),
+          };
+        })
       );
     }
 
-    const { data: paidFac } = await sb
-      .from("facturen")
-      .select(
-        "id, factuur_nummer, lead_id, status, omschrijving, betaald_op, offertes(offerte_nummer)"
-      )
-      .in("lead_id", leadIds)
-      .eq("status", "betaald")
-      .gte("betaald_op", weekInfo.van)
-      .lte("betaald_op", weekInfo.tot);
+    const amounts = {
+      bedrag: 0,
+      capped: false,
+      maxToegepast: null as number | null,
+    };
+    let regels = eligible;
 
-    const { data: already } = await sb
-      .from("adviseur_creditfactuur_regels")
-      .select("factuur_id");
-    const alreadySet = new Set((already || []).map((r) => r.factuur_id));
-
-    const eligible = filterEligibleAanbetalingen(
-      (paidFac || []).map((f) => {
-        const off = f.offertes as
-          | { offerte_nummer?: string }
-          | { offerte_nummer?: string }[]
-          | null;
-        const offerte_nummer = Array.isArray(off)
-          ? off[0]?.offerte_nummer
-          : off?.offerte_nummer;
-        return {
-          id: f.id,
-          factuur_nummer: f.factuur_nummer,
-          lead_id: f.lead_id,
-          status: f.status,
-          omschrijving: f.omschrijving,
-          betaald_op: f.betaald_op,
-          lead_naam: leadNaam.get(f.lead_id) || null,
-          offerte_nummer: offerte_nummer || null,
-          already_invoiced: alreadySet.has(f.id),
-        };
-      })
-    );
-
-    if (eligible.length === 0) {
+    if (useManual) {
+      amounts.bedrag = Math.round(manualBedrag! * 100) / 100;
+      regels = [];
+    } else if (eligible.length === 0) {
       return NextResponse.json(
         {
-          error: `Geen nieuwe betaalde aanbetalingen in week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot})`,
+          error: `Geen nieuwe betaalde aanbetalingen in week ${weekInfo.week}. Vul een bedrag in om een handmatig concept te maken.`,
           week: weekInfo,
         },
         { status: 400 }
       );
-    }
-
-    const amounts = computeCreditInvoiceAmount({
-      aantal: eligible.length,
-      maxBedrag: adviseur.max_factuur_bedrag as number | null,
-    });
-
-    // Als max limiet: neem zoveel regels als in het bedrag passen (€250/stuk)
-    let regels = eligible;
-    if (amounts.capped) {
-      const maxCount = Math.floor(amounts.bedrag / VERKOPER_AANBETALING_FEE);
-      regels = eligible.slice(0, Math.max(1, maxCount));
-      // herbereken exact
-      const recalc = computeCreditInvoiceAmount({
-        aantal: regels.length,
+    } else {
+      const computed = computeCreditInvoiceAmount({
+        aantal: eligible.length,
         maxBedrag: adviseur.max_factuur_bedrag as number | null,
       });
-      amounts.bedrag = recalc.bedrag;
-      amounts.capped = regels.length < eligible.length;
-      amounts.maxToegepast = adviseur.max_factuur_bedrag as number | null;
+      amounts.bedrag = computed.bedrag;
+      amounts.capped = computed.capped;
+      amounts.maxToegepast = computed.maxToegepast;
+      if (amounts.capped) {
+        const maxCount = Math.floor(amounts.bedrag / VERKOPER_AANBETALING_FEE);
+        regels = eligible.slice(0, Math.max(1, maxCount));
+        const recalc = computeCreditInvoiceAmount({
+          aantal: regels.length,
+          maxBedrag: adviseur.max_factuur_bedrag as number | null,
+        });
+        amounts.bedrag = recalc.bedrag;
+        amounts.capped = regels.length < eligible.length;
+        amounts.maxToegepast = adviseur.max_factuur_bedrag as number | null;
+      }
     }
 
     const { count } = await sb
@@ -323,14 +417,15 @@ export async function POST(req: NextRequest) {
       .eq("week_jaar", weekInfo.jaar)
       .eq("week_nummer", weekInfo.week);
 
-    const factuurNummer = formatCreditFactuurNummer(
+    const factuurNummer = formatCreditFactuurNummerWeek(
       weekInfo.jaar,
       weekInfo.week,
       (count || 0) + 1
     );
 
-    const today = creditWeekFromDate().van; // any ams date ok — use factuurdatum = betaalmaandag
     const status = body.mark_paid ? "betaald" : "concept";
+    const omschrijving = body.omschrijving?.trim() || null;
+    const withBtw = bedragenMetBtw(amounts.bedrag);
 
     const { data: created, error: insErr } = await sb
       .from("adviseur_creditfacturen")
@@ -342,18 +437,23 @@ export async function POST(req: NextRequest) {
         week_nummer: weekInfo.week,
         periode_van: weekInfo.van,
         periode_tot: weekInfo.tot,
-        aantal_aanbetalingen: regels.length,
-        bedrag_ex_btw: amounts.bedrag,
-        btw_bedrag: 0,
-        bedrag_inc_btw: amounts.bedrag,
+        aantal_aanbetalingen: useManual ? 0 : regels.length,
+        bedrag_ex_btw: withBtw.bedrag_ex_btw,
+        btw_bedrag: withBtw.btw_bedrag,
+        bedrag_inc_btw: withBtw.bedrag_inc_btw,
         max_bedrag_toegepast: amounts.capped ? amounts.maxToegepast : null,
         factuurdatum: weekInfo.betaalMaandag,
         betaald_op: body.mark_paid ? weekInfo.betaalMaandag : null,
         notities: [
-          `Creditfactuur verkoper — week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot}).`,
-          `€${VERKOPER_AANBETALING_FEE} per betaalde klant-aanbetaling.`,
-          `BTW verlegd (ZZP B2B).`,
-          `Bedrijf: ${adviseur.bedrijfsnaam}, KvK ${adviseur.kvk_nummer}, IBAN ${adviseur.iban}.`,
+          omschrijving,
+          `Factuur van ${adviseur.bedrijfsnaam} aan Batterijconcept.`,
+          `Week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot}).`,
+          useManual
+            ? "Handmatig concept."
+            : `€${VERKOPER_AANBETALING_FEE} excl. btw per betaalde klant-aanbetaling.`,
+          `Betaaltermijn ${RELATIE_FACTUUR_BETAALTERMIJN_DAGEN} dagen.`,
+          `BTW 21%.`,
+          `KvK ${adviseur.kvk_nummer}, IBAN ${adviseur.iban}.`,
           amounts.capped
             ? `Let op: bedrag begrensd door max factuurbedrag (€${amounts.maxToegepast}).`
             : null,
@@ -371,36 +471,54 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const regelRows = regels.map((r) => ({
-      creditfactuur_id: created.id,
-      factuur_id: r.factuur_id,
-      lead_id: r.lead_id,
-      bedrag: VERKOPER_AANBETALING_FEE,
-      omschrijving: `Aanbetaling ${r.factuur_nummer}${
-        r.offerte_nummer ? ` (${r.offerte_nummer})` : ""
-      } — ${r.lead_naam || "klant"} — betaald ${r.betaald_op}`,
-    }));
+    if (!useManual && regels.length > 0) {
+      const paidFacById = new Map(paidFac.map((f) => [f.id as string, f]));
 
-    const { error: regelsErr } = await sb
-      .from("adviseur_creditfactuur_regels")
-      .insert(regelRows);
+      const regelRows = regels.map((r) => {
+        const fac = paidFacById.get(r.factuur_id);
+        const project_nummer =
+          (fac?.offerte_id &&
+            projectByOfferte.get(fac.offerte_id as string)) ||
+          (r.lead_id && projectByLead.get(r.lead_id)) ||
+          null;
+        const parts = [
+          "Commissie aanbetaling",
+          r.lead_naam || null,
+          `klantfactuur ${r.factuur_nummer}`,
+          `betaald ${r.betaald_op}`,
+          r.offerte_nummer ? `Offerte ${r.offerte_nummer}` : null,
+          project_nummer ? `Project ${project_nummer}` : null,
+        ].filter(Boolean);
+        return {
+          creditfactuur_id: created.id,
+          factuur_id: r.factuur_id,
+          lead_id: r.lead_id,
+          bedrag: VERKOPER_AANBETALING_FEE,
+          omschrijving: parts.join(" · "),
+        };
+      });
 
-    if (regelsErr) {
-      await sb.from("adviseur_creditfacturen").delete().eq("id", created.id);
-      return NextResponse.json(
-        { error: regelsErr.message || "Regels opslaan mislukt" },
-        { status: 500 }
-      );
+      const { error: regelsErr } = await sb
+        .from("adviseur_creditfactuur_regels")
+        .insert(regelRows);
+
+      if (regelsErr) {
+        await sb.from("adviseur_creditfacturen").delete().eq("id", created.id);
+        return NextResponse.json(
+          { error: regelsErr.message || "Regels opslaan mislukt" },
+          { status: 500 }
+        );
+      }
     }
-
-    void today;
 
     return NextResponse.json(
       {
         factuur: created,
         week: weekInfo,
-        regels_count: regels.length,
-        skipped_by_cap: eligible.length - regels.length,
+        regels_count: useManual ? 0 : regels.length,
+        skipped_by_cap: useManual ? 0 : eligible.length - regels.length,
+        mail_sent: false,
+        handmatig: useManual,
       },
       { status: 201 }
     );
@@ -415,11 +533,17 @@ export async function POST(req: NextRequest) {
 /**
  * PATCH /api/adviseurs/creditfacturen
  * Status wijzigen: { id, status, betaald_op? }
+ * status=verzonden → mail + PDF naar adviseur
  */
 export async function PATCH(req: NextRequest) {
   let body: {
     id?: string;
-    status?: "concept" | "goedgekeurd" | "betaald" | "geannuleerd";
+    status?:
+      | "concept"
+      | "verzonden"
+      | "goedgekeurd"
+      | "betaald"
+      | "geannuleerd";
     betaald_op?: string | null;
   };
   try {
@@ -437,13 +561,34 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
+
+    if (body.status === "verzonden") {
+      const result = await verstuurAdviseurCreditfactuur(sb, body.id);
+      if (!result.ok) {
+        return NextResponse.json(
+          { error: result.error },
+          { status: result.status }
+        );
+      }
+      return NextResponse.json({
+        factuur: result.factuur,
+        mail_sent: result.mail_sent,
+      });
+    }
+
     const patch: Record<string, unknown> = { status: body.status };
     if (body.status === "betaald") {
-      patch.betaald_op =
-        body.betaald_op || creditWeekFromDate().van;
+      patch.betaald_op = body.betaald_op || dayKeyAmsterdam(new Date());
+    }
+    if (body.status === "goedgekeurd") {
+      patch.goedgekeurd_op = new Date().toISOString();
     }
     if (body.status === "geannuleerd" || body.status === "concept") {
       patch.betaald_op = null;
+      if (body.status === "concept") {
+        patch.verzonden_op = null;
+        patch.goedgekeurd_op = null;
+      }
     }
 
     const { data, error } = await sb

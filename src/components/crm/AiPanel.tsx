@@ -1,13 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { ProposedAction } from "@/lib/ai/proposed-actions";
 
 type ChatMsg = {
   id: string;
   role: "user" | "assistant";
   content: string;
   toolsUsed?: string[];
+  proposedActions?: ProposedAction[];
 };
+
+function toDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function MicIcon({ className }: { className?: string }) {
   return (
@@ -42,6 +52,192 @@ function StopIcon({ className }: { className?: string }) {
   );
 }
 
+function ActionCard({
+  action,
+  onDone,
+}: {
+  action: ProposedAction;
+  onDone: (ok: string) => void;
+}) {
+  const [draft, setDraft] = useState(action);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (draft.kind === "plan_schouw") {
+        const at = draft.schouw_at;
+        if (!at) throw new Error("Kies een datum en tijd");
+        const res = await fetch(`/api/projecten/${draft.project_id}/schouw`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            schouw_at: at,
+            installatie_partner_id: draft.partner_id || null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
+        setDone(true);
+        onDone(`Schouw gepland voor ${draft.klant}.`);
+        return;
+      }
+      if (draft.kind === "plan_installatie") {
+        const at = draft.installatie_at;
+        if (!at) throw new Error("Kies een datum en tijd");
+        const res = await fetch(
+          `/api/projecten/${draft.project_id}/installatie`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              installatie_at: at,
+              installatie_partner_id: draft.partner_id || undefined,
+            }),
+          }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
+        setDone(true);
+        onDone(`Installatie gepland voor ${draft.klant}.`);
+        return;
+      }
+      if (!draft.to?.trim()) throw new Error("Vul een e-mailadres in");
+      if (!draft.subject?.trim()) throw new Error("Vul een onderwerp in");
+      if (!draft.bericht?.trim()) throw new Error("Vul de mailtekst in");
+      const res = await fetch(
+        `/api/projecten/${draft.project_id}/contact-mail`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: draft.to.trim(),
+            subject: draft.subject.trim(),
+            bericht: draft.bericht.trim(),
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Versturen mislukt");
+      setDone(true);
+      onDone(`Mail verstuurd naar ${draft.klant}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const when =
+    draft.kind === "plan_schouw"
+      ? draft.schouw_at
+      : draft.kind === "plan_installatie"
+        ? draft.installatie_at
+        : null;
+
+  if (done) {
+    return (
+      <div className="mt-3 border border-green/30 bg-green-soft px-3 py-2 text-xs font-semibold text-green-dark">
+        Uitgevoerd
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 border border-line bg-wash/50 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+        {draft.kind === "send_mail"
+          ? "Mail · preview"
+          : draft.kind === "plan_schouw"
+            ? "Schouw"
+            : "Installatie"}
+      </p>
+      <p className="mt-0.5 text-sm font-semibold text-ink">
+        {draft.klant}
+        {draft.project_nummer ? (
+          <span className="font-mono text-xs font-medium text-muted">
+            {" "}
+            · {draft.project_nummer}
+          </span>
+        ) : null}
+      </p>
+      {draft.partner_naam ? (
+        <p className="text-xs text-muted">Partner: {draft.partner_naam}</p>
+      ) : null}
+      {draft.warning ? (
+        <p className="mt-1 text-xs text-[#C45A12]">{draft.warning}</p>
+      ) : null}
+
+      {draft.kind !== "send_mail" ? (
+        <label className="mt-2 block text-xs text-muted">
+          Datum en tijd
+          <input
+            type="datetime-local"
+            value={toDatetimeLocal(when)}
+            onChange={(e) => {
+              const v = e.target.value;
+              const iso = v ? new Date(v).toISOString() : null;
+              setDraft((d) =>
+                d.kind === "plan_schouw"
+                  ? { ...d, schouw_at: iso }
+                  : { ...d, installatie_at: iso }
+              );
+            }}
+            className="mt-1 w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+          />
+        </label>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <input
+            type="email"
+            value={draft.to || ""}
+            onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))}
+            placeholder="E-mail"
+            className="w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+          />
+          <input
+            value={draft.subject || ""}
+            onChange={(e) =>
+              setDraft((d) => ({ ...d, subject: e.target.value }))
+            }
+            placeholder="Onderwerp"
+            className="w-full border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+          />
+          <textarea
+            value={draft.bericht || ""}
+            onChange={(e) =>
+              setDraft((d) => ({ ...d, bericht: e.target.value }))
+            }
+            rows={6}
+            className="w-full resize-y border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+          />
+          <p className="text-[11px] text-muted">
+            Versturen gaat via het Batterijconcept-mailtemplate.
+          </p>
+        </div>
+      )}
+
+      {error ? <p className="mt-2 text-xs text-[#C45A12]">{error}</p> : null}
+
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void confirm()}
+        className="mt-3 bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+      >
+        {busy
+          ? "Bezig…"
+          : draft.kind === "send_mail"
+            ? "Verstuur"
+            : "Plan"}
+      </button>
+    </div>
+  );
+}
+
 export function AiPanel() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -49,6 +245,7 @@ export function AiPanel() {
     null
   );
   const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
@@ -80,6 +277,7 @@ export function AiPanel() {
     setInput("");
     setBusy("chat");
     setError(null);
+    setOkMsg(null);
 
     try {
       const res = await fetch("/api/ai/chat", {
@@ -102,6 +300,7 @@ export function AiPanel() {
           role: "assistant",
           content: data.reply || "—",
           toolsUsed: data.toolsUsed || [],
+          proposedActions: data.proposedActions || [],
         },
       ]);
     } catch (e) {
@@ -191,6 +390,7 @@ export function AiPanel() {
   function clearChat() {
     setMessages([]);
     setError(null);
+    setOkMsg(null);
   }
 
   return (
@@ -198,12 +398,11 @@ export function AiPanel() {
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-5 py-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-            Admin only · Whisper + CRM data
+            Backoffice · AI
           </p>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            Vraag alles over leads, agenda, offertes, facturen en meer. Tik op de
-            microfoon om te praten — Whisper zet je spraak om en stuurt de vraag
-            door.
+            Vraag of spreek in. Acties (schouw, installatie, mail) komen als
+            voorstel — jij klikt Plan of Verstuur.
           </p>
         </div>
         {messages.length > 0 && (
@@ -219,13 +418,13 @@ export function AiPanel() {
 
       <div className="flex-1 space-y-3 overflow-y-auto px-5 py-5">
         {messages.length === 0 && !busy && (
-          <div className="rounded-lg border border-dashed border-line bg-wash/60 px-4 py-8 text-center">
+          <div className="border border-dashed border-line bg-wash/60 px-4 py-8 text-center">
             <p className="font-display text-base font-semibold text-ink">
-              Stel een vraag of praat
+              Typ of praat
             </p>
             <p className="mt-2 text-sm text-muted">
-              Bijv. “Hoeveel afspraken vandaag?”, “Zoek lead Elzinga”, “Welke
-              facturen staan open?”
+              Bijv. “Plan de schouw bij Dekkers volgende week donderdag 9 uur”,
+              “Stuur Jona Hessel een mail over de schouw”.
             </p>
           </div>
         )}
@@ -234,7 +433,7 @@ export function AiPanel() {
           <div
             key={m.id}
             className={[
-              "max-w-3xl rounded-lg px-4 py-3 text-sm leading-relaxed",
+              "max-w-3xl px-4 py-3 text-sm leading-relaxed",
               m.role === "user"
                 ? "ml-auto bg-green text-white"
                 : "mr-auto border border-line bg-white text-ink",
@@ -242,17 +441,18 @@ export function AiPanel() {
           >
             <p className="whitespace-pre-wrap">{m.content}</p>
             {m.role === "assistant" &&
-              m.toolsUsed &&
-              m.toolsUsed.length > 0 && (
-                <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                  Data: {m.toolsUsed.join(" · ")}
-                </p>
-              )}
+              m.proposedActions?.map((a, i) => (
+                <ActionCard
+                  key={`${m.id}-${i}`}
+                  action={a}
+                  onDone={(ok) => setOkMsg(ok)}
+                />
+              ))}
           </div>
         ))}
 
         {busy === "chat" && (
-          <p className="text-sm text-muted">CRM data ophalen en antwoorden…</p>
+          <p className="text-sm text-muted">CRM data ophalen…</p>
         )}
         {busy === "listen" && (
           <p className="text-sm font-medium text-[#B71C1C]">
@@ -260,15 +460,24 @@ export function AiPanel() {
           </p>
         )}
         {busy === "transcribe" && (
-          <p className="text-sm text-muted">Whisper transcribeert…</p>
+          <p className="text-sm text-muted">Spraak omzetten…</p>
         )}
         <div ref={bottomRef} />
       </div>
 
-      {error && (
-        <p className="mx-5 mb-2 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
-          {error}
-        </p>
+      {(error || okMsg) && (
+        <div className="mx-5 mb-2 space-y-2">
+          {error && (
+            <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
+              {error}
+            </p>
+          )}
+          {okMsg && (
+            <p className="border border-green/30 bg-green-soft px-3 py-2 text-sm text-green-dark">
+              {okMsg}
+            </p>
+          )}
+        </div>
       )}
 
       <form
@@ -282,7 +491,7 @@ export function AiPanel() {
             onClick={() =>
               listening ? stopListening() : void startListening()
             }
-            title={listening ? "Stop opname" : "Praat (Whisper)"}
+            title={listening ? "Stop opname" : "Praat"}
             className={[
               "inline-flex h-11 w-11 shrink-0 items-center justify-center border transition",
               listening
@@ -303,7 +512,7 @@ export function AiPanel() {
               }
             }}
             rows={2}
-            placeholder="Typ je vraag… of gebruik de microfoon"
+            placeholder="Typ of spreek in…"
             disabled={busy !== null}
             className="min-h-[2.75rem] flex-1 resize-none border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green disabled:opacity-60"
           />

@@ -143,7 +143,7 @@ async function markFactuurPaid(
 
   const { data: fac } = await sb
     .from("facturen")
-    .select("lead_id, factuur_nummer, bedrag_inc_btw, omschrijving")
+    .select("lead_id, project_id, factuur_nummer, bedrag_inc_btw, omschrijving")
     .eq("id", factuur.id)
     .maybeSingle();
 
@@ -166,6 +166,26 @@ async function markFactuurPaid(
         bunq_payment_id: payment.id,
       },
     });
+  }
+
+  try {
+    const { ensureNettoAanbetalingCreditfactuur } = await import(
+      "@/lib/netto-creditfactuur"
+    );
+    await ensureNettoAanbetalingCreditfactuur(sb, factuur.id);
+  } catch {
+    /* best-effort */
+  }
+
+  if (fac?.project_id) {
+    try {
+      const { maybeAdvanceProjectNaSchouw } = await import(
+        "@/lib/project-na-schouw"
+      );
+      await maybeAdvanceProjectNaSchouw(sb, fac.project_id);
+    } catch {
+      /* best-effort */
+    }
   }
 
   // Log (best-effort)

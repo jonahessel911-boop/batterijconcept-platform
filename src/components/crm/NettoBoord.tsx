@@ -13,6 +13,7 @@ import {
 } from "@/lib/netto-boord";
 import {
   NETTO_TIMELINE_KIND_LABEL,
+  type NettoAdviseurActie,
   type NettoOpenTaak,
   type NettoSchouwDoc,
   type NettoTimelineItem,
@@ -34,7 +35,14 @@ type AdviseurOpt = { id: string; naam: string };
 
 type StatusFilter = "alles" | "actief" | "netto" | "geannuleerd";
 type VormFilter = "" | "EM" | "WF";
-type DrawerTab = "fases" | "tijdlijn" | "taken";
+type DrawerTab = "fases" | "tijdlijn" | "taken" | "acties";
+
+function defaultDueDateLocal(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 2);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 function formatSchouwWeek(
   jaar: number | null | undefined,
@@ -262,11 +270,20 @@ function DetailDrawer({
   const [tab, setTab] = useState<DrawerTab>("fases");
   const [timeline, setTimeline] = useState<NettoTimelineItem[]>([]);
   const [openTaken, setOpenTaken] = useState<NettoOpenTaak[]>([]);
+  const [adviseurActies, setAdviseurActies] = useState<NettoAdviseurActie[]>(
+    []
+  );
+  const [detailProjectId, setDetailProjectId] = useState<string | null>(
+    row.project_id
+  );
   const [schouwDocs, setSchouwDocs] = useState<NettoSchouwDoc[]>([]);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [actieNotitie, setActieNotitie] = useState("");
+  const [actieDue, setActieDue] = useState(defaultDueDateLocal);
+  const [actieSaving, setActieSaving] = useState(false);
 
   const loadDetail = useCallback(async () => {
     setDetailLoading(true);
@@ -283,6 +300,15 @@ function DetailDrawer({
       }
       setTimeline((data as { timeline: NettoTimelineItem[] }).timeline || []);
       setOpenTaken((data as { open_taken: NettoOpenTaak[] }).open_taken || []);
+      setAdviseurActies(
+        (data as { adviseur_acties: NettoAdviseurActie[] }).adviseur_acties ||
+          []
+      );
+      setDetailProjectId(
+        (data as { project_id?: string | null }).project_id ||
+          row.project_id ||
+          null
+      );
       setSchouwDocs(
         (data as { schouw_docs: NettoSchouwDoc[] }).schouw_docs || []
       );
@@ -291,7 +317,48 @@ function DetailDrawer({
     } finally {
       setDetailLoading(false);
     }
-  }, [row.offerte_id]);
+  }, [row.offerte_id, row.project_id]);
+
+  async function createBackofficeActie() {
+    if (!actieNotitie.trim()) {
+      setMsg("Vul een notitie / omschrijving in.");
+      return;
+    }
+    if (!actieDue) {
+      setMsg("Kies een deadline.");
+      return;
+    }
+    setActieSaving(true);
+    setMsg(null);
+    try {
+      const due = new Date(`${actieDue}T17:00:00`);
+      const res = await fetch("/api/netto-boord/acties", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: detailProjectId || undefined,
+          offerte_id: row.offerte_id,
+          notities: actieNotitie.trim(),
+          due_at: due.toISOString(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Actie aanmaken mislukt"
+        );
+      }
+      setActieNotitie("");
+      setActieDue(defaultDueDateLocal());
+      setMsg("Actie naar backoffice gestuurd.");
+      await loadDetail();
+      setTab("acties");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Actie aanmaken mislukt");
+    } finally {
+      setActieSaving(false);
+    }
+  }
 
   useEffect(() => {
     void loadDetail();
@@ -359,10 +426,16 @@ function DetailDrawer({
     }
   }
 
+  const openActieCount = adviseurActies.filter((a) => a.status !== "done").length;
   const tabs: { id: DrawerTab; label: string; count?: number }[] = [
     { id: "fases", label: "Fases" },
     { id: "tijdlijn", label: "Tijdlijn", count: timeline.length || undefined },
     { id: "taken", label: "Taken", count: openTaken.length || undefined },
+    {
+      id: "acties",
+      label: "Acties",
+      count: openActieCount || adviseurActies.length || undefined,
+    },
   ];
 
   return (
@@ -400,7 +473,7 @@ function DetailDrawer({
         </div>
 
         <div className="border-b border-line bg-[#FFF8E8] px-5 py-2 text-[11px] text-[#8a6a20]">
-          Alleen inzage — bewerken doe je in Backoffice / projectpagina.
+          Inzage + actie naar backoffice. Status/facturen bewerk je in Backoffice.
         </div>
 
         <div className="flex border-b border-line">
@@ -807,6 +880,120 @@ function DetailDrawer({
                     </li>
                   ))}
                 </ul>
+              </div>
+            )
+          ) : null}
+
+          {tab === "acties" ? (
+            detailLoading ? (
+              <p className="py-10 text-center text-sm text-muted">
+                Acties laden…
+              </p>
+            ) : (
+              <div className="space-y-5">
+                <div className="border border-line bg-[#F0FDFA] px-3 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.06em] text-[#115E59]">
+                    Actie voor backoffice
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    Zet een verzoek klaar met notitie en deadline. Backoffice ziet
+                    dit onder Acties; jij krijgt een mail als het klaar is.
+                  </p>
+                  {!detailProjectId && !row.project_id ? (
+                    <p className="mt-3 text-sm text-[#C45A12]">
+                      Nog geen project — eerst kickoff afronden in backoffice.
+                    </p>
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                        Notitie
+                        <textarea
+                          value={actieNotitie}
+                          onChange={(e) => setActieNotitie(e.target.value)}
+                          rows={3}
+                          placeholder="Wat moet de backoffice doen?"
+                          className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                        />
+                      </label>
+                      <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                        Deadline
+                        <input
+                          type="date"
+                          value={actieDue}
+                          onChange={(e) => setActieDue(e.target.value)}
+                          className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={actieSaving}
+                        onClick={() => void createBackofficeActie()}
+                        className="w-full bg-[#0D9488] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#0F766E] disabled:opacity-50"
+                      >
+                        {actieSaving ? "Bezig…" : "Stuur naar backoffice"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {adviseurActies.length === 0 ? (
+                  <p className="text-center text-sm text-muted">
+                    Nog geen acties voor dit project.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {adviseurActies.map((a) => {
+                      const done = a.status === "done";
+                      return (
+                        <li
+                          key={a.id}
+                          className={[
+                            "border px-3 py-3",
+                            done
+                              ? "border-line bg-wash"
+                              : "border-[#99F6E4] bg-[#F0FDFA]",
+                          ].join(" ")}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium text-ink">
+                              {a.titel}
+                            </p>
+                            <span
+                              className={[
+                                "shrink-0 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                                done
+                                  ? "bg-[#047857] text-white"
+                                  : "bg-white text-[#0F766E]",
+                              ].join(" ")}
+                            >
+                              {done ? "Voltooid" : "Open"}
+                            </span>
+                          </div>
+                          {a.notities && a.notities !== a.titel ? (
+                            <p className="mt-1 text-xs text-muted">
+                              {a.notities}
+                            </p>
+                          ) : null}
+                          <p className="mt-1 text-[11px] text-muted">
+                            {[
+                              a.due_at
+                                ? `Deadline ${formatSinds(a.due_at)}`
+                                : null,
+                              a.aangemaakt_door_naam
+                                ? `Van ${a.aangemaakt_door_naam}`
+                                : null,
+                              done && a.updated_at
+                                ? `Afgerond ${formatSinds(a.updated_at)}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             )
           ) : null}

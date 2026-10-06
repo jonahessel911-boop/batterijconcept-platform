@@ -1,14 +1,23 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { AI_TOOLS, runAiTool } from "./tools";
+import type { ProposedAction } from "./proposed-actions";
 
-const SYSTEM_PROMPT = `Je bent de AI-assistent van BatterijConcept CRM (thuisbatterijen, NL).
-Je helpt de admin met vragen over leads, agenda, offertes, facturen, projecten en belpogingen.
+const SYSTEM_PROMPT = `Je bent de AI-assistent van BatterijConcept backoffice (thuisbatterijen, NL).
+Je helpt met vragen én met voorstellen voor acties. Je voert nooit zelf een mutatie uit.
+
 Antwoord altijd in het Nederlands, kort en zakelijk.
-Gebruik tools om actuele data op te halen — verzin geen cijfers of namen.
+Gebruik tools om actuele data op te halen — verzin geen cijfers, namen of datums.
 Bedragen in euro's, datums/tijden in Europe/Amsterdam.
-Als iets onduidelijk is, vraag kort door.
-Je mag geen mutaties doen (geen status wijzigen, geen mails sturen) — alleen lezen en uitleggen.`;
+
+Acties (schouw inplannen, installatie inplannen, klantmail):
+- Roep altijd de tool stel_actie_voor aan. De medewerker ziet dan een kaart met knop Plan of Verstuur.
+- Zoek eerst de order (zoek_projecten / zoek_leads) als je geen project_id hebt.
+- Voor planning: geef datetime in ISO met timezone, bijv. 2026-10-23T09:00:00+02:00.
+- Voor mail: schrijf een complete, vriendelijke tekst in stel_actie_voor (subject + bericht). De branded template komt eromheen.
+- Als er meerdere klanten matchen, vraag welke — of geef de matches terug.
+
+Als iets onduidelijk is, vraag kort door.`;
 
 function getClient(): OpenAI {
   const key = process.env.OPENAI_API_KEY?.trim();
@@ -27,9 +36,14 @@ export type AiChatMessage = {
 
 export async function runCrmAiChat(
   messages: AiChatMessage[]
-): Promise<{ reply: string; toolsUsed: string[] }> {
+): Promise<{
+  reply: string;
+  toolsUsed: string[];
+  proposedActions: ProposedAction[];
+}> {
   const client = getClient();
   const toolsUsed: string[] = [];
+  const proposedActions: ProposedAction[] = [];
 
   const history: ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -53,7 +67,7 @@ export async function runCrmAiChat(
 
     const choice = completion.choices[0]?.message;
     if (!choice) {
-      return { reply: "Geen antwoord van het model.", toolsUsed };
+      return { reply: "Geen antwoord van het model.", toolsUsed, proposedActions };
     }
 
     const toolCalls = choice.tool_calls;
@@ -69,6 +83,16 @@ export async function runCrmAiChat(
         const name = call.function.name;
         toolsUsed.push(name);
         const result = await runAiTool(name, call.function.arguments || "{}");
+        if (
+          result &&
+          typeof result === "object" &&
+          "proposed_action" in result &&
+          (result as { proposed_action?: ProposedAction }).proposed_action
+        ) {
+          proposedActions.push(
+            (result as { proposed_action: ProposedAction }).proposed_action
+          );
+        }
         history.push({
           role: "tool",
           tool_call_id: call.id,
@@ -81,12 +105,14 @@ export async function runCrmAiChat(
     return {
       reply: (choice.content || "").trim() || "Geen tekstantwoord.",
       toolsUsed,
+      proposedActions,
     };
   }
 
   return {
     reply: "Te veel tool-rondes — probeer de vraag kleiner te maken.",
     toolsUsed,
+    proposedActions,
   };
 }
 

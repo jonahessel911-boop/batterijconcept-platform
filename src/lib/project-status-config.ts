@@ -85,91 +85,56 @@ export type ProjectStatusDef = {
 export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   {
     key: "schouwweek_inplannen",
-    label: "Schouwweek inplannen",
+    /** Eén opstartfase: aanbetaling + schouwweek (+ WF-afspraak) parallel */
+    label: "Opstarten",
     fase: "voorbereiding",
     scope: "beide",
     inPipeline: true,
-    taak: {
-      autoKeySuffix: "bellen",
-      titel:
-        "Klant bellen: schouwweek inplannen (±5 wkn vooruit bij warmtefonds) en aanbetalingsfactuur versturen (modus zoals ingesteld op project)",
-      afdeling: "Planning",
-      due: { kind: "days", days: 1 },
-    },
+    /** Taken via kickoffTaken() — meerdere parallel, niet één status-taak */
+    taak: null,
   },
   {
     key: "aanbetaling_verstuurd",
     label: "Aanbetaling verstuurd",
     fase: "voorbereiding",
     scope: "beide",
-    inPipeline: true,
-    taak: {
-      autoKeySuffix: "opvolgen",
-      titel: "Betaling aanbetaling opvolgen",
-      afdeling: "Facturatie",
-      due: { kind: "days", days: 5 },
-    },
+    /** Legacy: geen aparte status meer — zit in kickoff-checklist */
+    inPipeline: false,
+    taak: null,
   },
   {
     key: "aanbetaling_betaald",
     label: "Aanbetaling betaald",
     fase: "voorbereiding",
     scope: "beide",
-    inPipeline: true,
+    /** Legacy: betaling volgt uit factuurstatus, niet uit orderstatus */
+    inPipeline: false,
     taak: null,
-    taakPerBetaalwijze: {
-      warmtefonds: {
-        autoKeySuffix: "wf_aanvraag",
-        titel: "Warmtefonds-aanvraagafspraak inplannen",
-        afdeling: "Backoffice",
-        due: { kind: "days", days: 2 },
-      },
-      eigen_middelen: {
-        autoKeySuffix: "schouwdag",
-        titel: "Schouwdag direct inplannen (geen warmtefonds-wachttijd)",
-        afdeling: "Planning",
-        due: { kind: "days", days: 2 },
-      },
-    },
   },
   {
     key: "warmtefonds_afspraak_ingepland",
     label: "Warmtefonds afspraak ingepland",
     fase: "financiering",
     scope: "warmtefonds",
-    inPipeline: true,
-    taak: {
-      autoKeySuffix: "aanvraag",
-      titel: "Warmtefonds-aanvraag indienen tijdens/na afspraak",
-      afdeling: "Backoffice",
-      due: { kind: "days", days: 1 },
-    },
+    /** Niet in hoofdpad — parallel via financiering_status */
+    inPipeline: false,
+    taak: null,
   },
   {
     key: "warmtefonds_aangevraagd",
     label: "Warmtefonds aangevraagd",
     fase: "financiering",
     scope: "warmtefonds",
-    inPipeline: true,
-    taak: {
-      autoKeySuffix: "opvolgen",
-      titel: "Opvolgen bij Warmtefonds",
-      afdeling: "Backoffice",
-      due: { kind: "days", days: 3 },
-    },
+    inPipeline: false,
+    taak: null,
   },
   {
     key: "warmtefonds_in_behandeling",
     label: "Warmtefonds in behandeling",
     fase: "financiering",
     scope: "warmtefonds",
-    inPipeline: true,
-    taak: {
-      autoKeySuffix: "opvolgen",
-      titel: "Opvolgen Warmtefonds-status",
-      afdeling: "Backoffice",
-      due: { kind: "days", days: 5 },
-    },
+    inPipeline: false,
+    taak: null,
   },
   {
     key: "warmtefonds_afgewezen",
@@ -177,26 +142,15 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "financiering",
     scope: "warmtefonds",
     inPipeline: false,
-    taak: {
-      autoKeySuffix: "schakel",
-      titel:
-        "Schakel financiering: zet om naar eigen middelen of stop project, overleg met klant",
-      afdeling: "Backoffice",
-      due: { kind: "days", days: 1 },
-    },
+    taak: null,
   },
   {
     key: "warmtefonds_goedgekeurd",
     label: "Warmtefonds goedgekeurd",
     fase: "financiering",
     scope: "warmtefonds",
-    inPipeline: true,
-    taak: {
-      autoKeySuffix: "schouwdag",
-      titel: "Klant bellen: definitieve schouwdag inplannen",
-      afdeling: "Planning",
-      due: { kind: "days", days: 2 },
-    },
+    inPipeline: false,
+    taak: null,
   },
   {
     key: "schouwdag_ingepland",
@@ -239,13 +193,13 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "restfactuur_betaald",
-    label: "Restfactuur betaald",
+    label: "Restfactuur betaald — materiaal inkopen",
     fase: "eindafrekening",
     scope: "beide",
     inPipeline: true,
     taak: {
       autoKeySuffix: "materiaal",
-      titel: "Materiaal bestellen",
+      titel: "Materiaal inkopen / bestellen",
       afdeling: "Installatie",
       due: { kind: "days", days: 2 },
     },
@@ -355,22 +309,54 @@ export function statusAppliesToBetaalwijze(
   return def.scope === "beide" || def.scope === betaalwijze;
 }
 
-/** Lineaire pipeline voor een betaalwijze (zonder afgewezen/service). */
+/** Lineaire pipeline voor een betaalwijze (zonder afgewezen/service/financiering). */
 export function projectPipelineFor(
   betaalwijze: Betaalwijze
 ): ProjectStatusKey[] {
   return PROJECT_STATUS_DEFS.filter(
-    (d) => d.inPipeline && statusAppliesToBetaalwijze(d, betaalwijze)
+    (d) =>
+      d.inPipeline &&
+      d.fase !== "financiering" &&
+      statusAppliesToBetaalwijze(d, betaalwijze)
   ).map((d) => d.key);
 }
 
-/** Alle selecteerbare statussen voor een betaalwijze (incl. aftakkingen). */
+/**
+ * Selecteerbare hoofdstatussen — financiering loopt parallel via
+ * financiering_status; aanbetaling via factuur + kickoff-checklist.
+ */
 export function projectStatusesFor(
   betaalwijze: Betaalwijze
 ): ProjectStatusKey[] {
-  return PROJECT_STATUS_DEFS.filter((d) =>
-    statusAppliesToBetaalwijze(d, betaalwijze)
+  return PROJECT_STATUS_DEFS.filter(
+    (d) =>
+      d.fase !== "financiering" &&
+      d.key !== "aanbetaling_verstuurd" &&
+      d.key !== "aanbetaling_betaald" &&
+      statusAppliesToBetaalwijze(d, betaalwijze)
   ).map((d) => d.key);
+}
+
+/**
+ * Legacy / parallel-status → operationele orderstatus.
+ * Aanbetaling + Warmtefonds zitten niet in het orderpad.
+ */
+export function toOperationalStatus(
+  status: string | null | undefined
+): ProjectStatusKey {
+  const key = remapLegacyProjectStatus(status);
+  switch (key) {
+    case "aanbetaling_verstuurd":
+    case "aanbetaling_betaald":
+    case "warmtefonds_afspraak_ingepland":
+    case "warmtefonds_aangevraagd":
+    case "warmtefonds_in_behandeling":
+    case "warmtefonds_goedgekeurd":
+    case "warmtefonds_afgewezen":
+      return "schouwweek_inplannen";
+    default:
+      return key;
+  }
 }
 
 export function resolveStatusTaak(

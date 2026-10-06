@@ -12,6 +12,7 @@ import type {
   ProjectFoto,
   ProjectStatus,
   ProjectTaak,
+  ServiceVerzoek,
 } from "@/types/database";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { factuurDisplayStatus } from "@/lib/factuur-betaling";
@@ -27,21 +28,35 @@ import {
   schouwWeekFromDate,
 } from "@/lib/schouw-week";
 import { useCrmSession } from "@/hooks/useCrmSession";
-import {
-  backofficeHref,
-  parseBoView,
-} from "./BackofficePanel";
+import { backofficeHref, parseBoView } from "@/lib/bo-view";
 import { ProjectStatusPath } from "./ProjectStatusPath";
+import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
+import { ProjectKickoffChecklist } from "./ProjectKickoffChecklist";
+import { ProjectVolgendeStap } from "./ProjectVolgendeStap";
 import { ProjectStatusSelect } from "./ProjectStatusSelect";
 import { ProjectFinancieelSection } from "./ProjectFinancieelSection";
 import { ProjectInkoopSection } from "./ProjectInkoopSection";
+import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
 import { ProjectAgendaAfspraakSection } from "./ProjectAgendaAfspraakSection";
+import { ProjectServiceSection } from "./ProjectServiceSection";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 import { StatusBadge } from "./StatusBadge";
 import {
   isSchouwFormulier,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
+import {
+  resolveFinancieringStatus,
+  type FinancieringStatus,
+} from "@/lib/financiering-status";
+import {
+  isKickoffComplete,
+  kickoffWarmtefondsBedragen,
+} from "@/lib/project-kickoff";
+import {
+  isRestantFactuurOmschrijving,
+} from "@/lib/aanbetaling";
+import { KlantContactMailModal } from "./KlantContactMailModal";
 
 const BEDENKTIJD_DAGEN = 14;
 
@@ -321,15 +336,19 @@ export function ProjectPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadingSchouw, setUploadingSchouw] = useState(false);
   const [mainTab, setMainTab] = useState<
-    "overzicht" | "financieel" | "medewerkers"
+    "overzicht" | "financieel" | "medewerkers" | "service"
   >("overzicht");
   const [docsTab, setDocsTab] = useState<
     "documenten" | "rapporten" | "bestanden"
   >("documenten");
   const [facturen, setFacturen] = useState<Factuur[]>([]);
   const [leadEvents, setLeadEvents] = useState<LeadEvent[]>([]);
+  const [serviceVerzoeken, setServiceVerzoeken] = useState<ServiceVerzoek[]>(
+    []
+  );
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [medewerkerBusy, setMedewerkerBusy] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
 
   const [newTaakOpen, setNewTaakOpen] = useState(false);
   const [newTitel, setNewTitel] = useState("");
@@ -345,6 +364,10 @@ export function ProjectPage() {
   );
   const [gegevensSaving, setGegevensSaving] = useState(false);
   const [gegevensError, setGegevensError] = useState<string | null>(null);
+  const [afspraakOpenRequest, setAfspraakOpenRequest] = useState<{
+    soort: "schouwweek" | "schouwdag" | "installatie";
+    nonce: number;
+  } | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -374,21 +397,29 @@ export function ProjectPage() {
       setProject(loaded);
       const projectId = loaded.id;
       const resolvedLeadId = loaded.lead_id || null;
-      const [fotoRes, takenRes, advRes, factRes, partnerRes, eventsRes] =
-        await Promise.all([
-          fetch(`/api/projecten/${projectId}/fotos`),
-          fetch(`/api/taken/sync`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ project_id: projectId }),
-          }).then(() => fetch(`/api/taken?project_id=${projectId}&open=0`)),
-          fetch("/api/adviseurs"),
-          fetch(`/api/projecten/${projectId}/facturen`),
-          fetch("/api/installatie-partners"),
-          resolvedLeadId
-            ? fetch(`/api/leads/${resolvedLeadId}/events`)
-            : Promise.resolve(null),
-        ]);
+      const [
+        fotoRes,
+        takenRes,
+        advRes,
+        factRes,
+        partnerRes,
+        eventsRes,
+        serviceRes,
+      ] = await Promise.all([
+        fetch(`/api/projecten/${projectId}/fotos`),
+        fetch(`/api/taken/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_id: projectId }),
+        }).then(() => fetch(`/api/taken?project_id=${projectId}&open=0`)),
+        fetch("/api/adviseurs"),
+        fetch(`/api/projecten/${projectId}/facturen`),
+        fetch("/api/installatie-partners"),
+        resolvedLeadId
+          ? fetch(`/api/leads/${resolvedLeadId}/events`)
+          : Promise.resolve(null),
+        fetch(`/api/service-verzoeken?project_id=${projectId}`),
+      ]);
       const fotoData = await fotoRes.json().catch(() => ({}));
       const takenData = await takenRes.json().catch(() => ({}));
       const advData = await advRes.json().catch(() => ({}));
@@ -397,6 +428,7 @@ export function ProjectPage() {
       const eventsData = eventsRes
         ? await eventsRes.json().catch(() => ({}))
         : {};
+      const serviceData = await serviceRes.json().catch(() => ({}));
       setFotos((fotoData.fotos as ProjectFoto[]) || []);
       setTaken((takenData.taken as ProjectTaak[]) || []);
       if (factRes.ok) {
@@ -405,6 +437,11 @@ export function ProjectPage() {
       setLeadEvents(
         eventsRes && eventsRes.ok
           ? ((eventsData.events as LeadEvent[]) || [])
+          : []
+      );
+      setServiceVerzoeken(
+        serviceRes.ok
+          ? ((serviceData.verzoeken as ServiceVerzoek[]) || [])
           : []
       );
       const list = ((advData.adviseurs as Adviseur[]) || []).filter(
@@ -503,6 +540,75 @@ export function ProjectPage() {
     } catch (e) {
       setProject((p) => (p ? { ...p, status: prev } : p));
       setError(e instanceof Error ? e.message : "Status bijwerken mislukt");
+    } finally {
+      setStatusSaving(false);
+    }
+  }
+
+  async function updateFinancieringStatus(
+    status: FinancieringStatus | null,
+    extra?: { warmtefonds_afspraak_at?: string | null }
+  ) {
+    if (!project) return;
+    setStatusSaving(true);
+    setError(null);
+    const prevFs = project.financiering_status ?? null;
+    const prevAt = project.warmtefonds_afspraak_at ?? null;
+    setProject({
+      ...project,
+      financiering_status: status,
+      ...(extra?.warmtefonds_afspraak_at !== undefined
+        ? { warmtefonds_afspraak_at: extra.warmtefonds_afspraak_at }
+        : status === null
+          ? { warmtefonds_afspraak_at: null }
+          : {}),
+    });
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          financiering_status: status,
+          ...(extra?.warmtefonds_afspraak_at !== undefined
+            ? { warmtefonds_afspraak_at: extra.warmtefonds_afspraak_at }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error);
+      const updated = (data as { project?: Project }).project;
+      if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      void refreshLeadEvents(project.lead_id);
+      // Bij goedkeuring: restantconcept laden
+      if (status === "aanvraag_goedgekeurd") {
+        try {
+          const fRes = await fetch(`/api/projecten/${project.id}/facturen`);
+          const fData = await fRes.json().catch(() => ({}));
+          if (fRes.ok) {
+            setFacturen((fData.facturen as Factuur[]) || []);
+          }
+        } catch {
+          /* ignore */
+        }
+        setOkMsg(
+          "Financiering goedgekeurd — restantfactuur klaargezet (Financieel)."
+        );
+      } else {
+        setOkMsg("Financieringsfase bijgewerkt.");
+      }
+    } catch (e) {
+      setProject((p) =>
+        p
+          ? {
+              ...p,
+              financiering_status: prevFs,
+              warmtefonds_afspraak_at: prevAt,
+            }
+          : p
+      );
+      setError(
+        e instanceof Error ? e.message : "Financieringsfase bijwerken mislukt"
+      );
     } finally {
       setStatusSaving(false);
     }
@@ -1062,7 +1168,30 @@ export function ProjectPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload mislukt");
       setFotos((prev) => [...prev, data.foto as ProjectFoto]);
-      setOkMsg("Schouw formulier geüpload.");
+      const adv = data.status_advance as
+        | {
+            advanced?: boolean;
+            klaarVoorMateriaal?: boolean;
+            to?: string | null;
+          }
+        | undefined;
+      if (data.project) {
+        setProject((prev) =>
+          prev ? { ...prev, ...(data.project as Project) } : prev
+        );
+      }
+      if (adv?.advanced && adv.klaarVoorMateriaal) {
+        setOkMsg(
+          "Schouw formulier geüpload · alles betaald → status Materiaal inkopen (Restfactuur betaald)."
+        );
+      } else if (adv?.advanced) {
+        setOkMsg(
+          "Schouw formulier geüpload · status Schouw voltooid. Check Financieel of alles betaald is."
+        );
+      } else {
+        setOkMsg("Schouw formulier geüpload.");
+      }
+      void refreshLeadEvents(project.lead_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload mislukt");
     } finally {
@@ -1118,6 +1247,7 @@ export function ProjectPage() {
     (f) => !isSchouwFormulier(f.omschrijving)
   );
   const klantNaam = lead?.naam || project.titel || "Klant";
+  const batterijStatus = batterijPurchasingStatus(project.materiaal_checks);
   const offerte = resolveOfferte(project);
   const bedenktijd = bedenktijdState(offerte?.ondertekend_op);
 
@@ -1594,12 +1724,6 @@ export function ProjectPage() {
                   <h1 className="font-display text-2xl font-semibold text-ink">
                     {klantNaam}
                   </h1>
-                  <ProjectStatusSelect
-                    project={project}
-                    onUpdated={(p) => {
-                      setProject((prev) => (prev ? { ...prev, ...p } : p));
-                    }}
-                  />
                   {project.warmtefonds_aangevraagd_at ? (
                     <span className="text-xs text-muted">
                       WF aangevraagd{" "}
@@ -1617,28 +1741,52 @@ export function ProjectPage() {
               ) : null}
             </div>
 
-            <div className="flex gap-0 border-t border-line px-4 sm:px-5">
-              {(
-                [
-                  ["overzicht", "Overzicht"],
-                  ["financieel", "Financieel"],
-                  ["medewerkers", "Medewerkers"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setMainTab(id)}
-                  className={[
-                    "border-b-2 px-3 py-2.5 text-sm font-semibold",
-                    mainTab === id
-                      ? "border-ink text-ink"
-                      : "border-transparent text-muted hover:text-ink",
-                  ].join(" ")}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 sm:px-5">
+              <div className="flex min-w-0 flex-wrap gap-0">
+                {(
+                  [
+                    ["overzicht", "Overzicht"],
+                    ["financieel", "Financieel"],
+                    ["medewerkers", "Medewerkers"],
+                    ["service", "Service"],
+                  ] as const
+                ).map(([id, label]) => {
+                  const openService =
+                    id === "service"
+                      ? serviceVerzoeken.filter((v) => v.status === "open")
+                          .length
+                      : 0;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setMainTab(id)}
+                      className={[
+                        "inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-semibold",
+                        mainTab === id
+                          ? "border-ink text-ink"
+                          : "border-transparent text-muted hover:text-ink",
+                      ].join(" ")}
+                    >
+                      {label}
+                      {openService > 0 ? (
+                        <span className="min-w-[1.1rem] bg-[#C45A12] px-1 py-0.5 text-center text-[10px] font-bold leading-none text-white">
+                          {openService}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="shrink-0 py-1.5">
+                <ProjectStatusSelect
+                  project={project}
+                  onUpdated={(p) => {
+                    setProject((prev) => (prev ? { ...prev, ...p } : p));
+                    void refreshLeadEvents(p.lead_id);
+                  }}
+                />
+              </div>
             </div>
           </section>
 
@@ -1684,7 +1832,7 @@ export function ProjectPage() {
                   )}
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   <div className="border border-line bg-white px-4 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                       Klant
@@ -1854,8 +2002,122 @@ export function ProjectPage() {
                       </p>
                     )}
                   </div>
+                  <div className="border border-line bg-white px-4 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                      Purchasing
+                    </p>
+                    <p className="mt-1.5 text-sm font-medium text-ink">
+                      Batterij besteld:{" "}
+                      <span
+                        className={
+                          batterijStatus.besteld
+                            ? "font-semibold text-green-dark"
+                            : "font-semibold text-[#C45A12]"
+                        }
+                      >
+                        {batterijStatus.besteld ? "ja" : "nee"}
+                      </span>
+                    </p>
+                    <p className="mt-0.5 text-sm font-medium text-ink">
+                      Batterij geleverd:{" "}
+                      <span
+                        className={
+                          batterijStatus.geleverd
+                            ? "font-semibold text-green-dark"
+                            : "font-semibold text-muted"
+                        }
+                      >
+                        {batterijStatus.geleverd ? "ja" : "nee"}
+                      </span>
+                    </p>
+                  </div>
                 </div>
               </div>
+
+              <ProjectKickoffChecklist
+                project={project}
+                facturen={facturen}
+                onFinancieringUpdated={(p) => {
+                  setProject((prev) => (prev ? { ...prev, ...p } : p));
+                  void refreshLeadEvents(p.lead_id);
+                  setOkMsg("Doorgestuurd naar Edwin.");
+                }}
+              />
+
+              {/* Pas ná kickoff: order + financiering — anders dubbel/verwarrend */}
+              {isKickoffComplete(project, facturen) ? (
+                <div className="space-y-3">
+                  <ProjectVolgendeStap
+                    project={project}
+                    disabled={statusSaving}
+                    onStatusChange={(s) => void updateStatus(s)}
+                    onPlanSchouwdag={() => {
+                      setMainTab("overzicht");
+                      setAfspraakOpenRequest({
+                        soort: "schouwdag",
+                        nonce: Date.now(),
+                      });
+                    }}
+                  />
+
+                  <div
+                    className={[
+                      "grid gap-3",
+                      isWarmtefondsProject(project)
+                        ? "lg:grid-cols-2"
+                        : "grid-cols-1",
+                    ].join(" ")}
+                  >
+                    <section className="border border-line bg-white px-4 py-4 sm:px-5">
+                      <ProjectStatusPath
+                        status={project.status}
+                        betaalwijze={
+                          project.betaalwijze === "eigen_middelen"
+                            ? "eigen_middelen"
+                            : project.betaalwijze === "warmtefonds"
+                              ? "warmtefonds"
+                              : lead?.status === "sale_eigen_middelen"
+                                ? "eigen_middelen"
+                                : "warmtefonds"
+                        }
+                        disabled={statusSaving}
+                        onChange={(s) => void updateStatus(s)}
+                      />
+                    </section>
+
+                    {isWarmtefondsProject(project) ? (
+                      <section className="border border-line bg-white px-4 py-4 sm:px-5">
+                        {(() => {
+                          const wfBedragen = kickoffWarmtefondsBedragen(
+                            project,
+                            facturen
+                          );
+                          return (
+                            <ProjectFinancieringPath
+                              status={resolveFinancieringStatus(project)}
+                              afspraakAt={project.warmtefonds_afspraak_at}
+                              disabled={statusSaving}
+                              onChange={(s, extra) =>
+                                void updateFinancieringStatus(s, extra)
+                              }
+                              aanbetalingInc={wfBedragen.aanbetalingInc}
+                              warmtefondsInc={wfBedragen.warmtefondsInc}
+                              restantFactuurStatus={
+                                facturen.find(
+                                  (f) =>
+                                    !f.credit_van_factuur_id &&
+                                    isRestantFactuurOmschrijving(f.omschrijving)
+                                )?.status ?? null
+                              }
+                              onOpenFinancieel={() => setMainTab("financieel")}
+                            />
+                          );
+                        })()}
+                      </section>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
 
               {/* Openstaande acties — afvinken → chat */}
               <section className="border border-line bg-white">
@@ -2315,29 +2577,10 @@ export function ProjectPage() {
                 </div>
               </section>
 
-              <section className="border border-line bg-white px-3 py-3 sm:px-4">
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  Status
-                </p>
-                <ProjectStatusPath
-                  status={project.status}
-                  betaalwijze={
-                    project.betaalwijze === "eigen_middelen"
-                      ? "eigen_middelen"
-                      : project.betaalwijze === "warmtefonds"
-                        ? "warmtefonds"
-                        : lead?.status === "sale_eigen_middelen"
-                          ? "eigen_middelen"
-                          : "warmtefonds"
-                  }
-                  disabled={statusSaving}
-                  onChange={(s) => void updateStatus(s)}
-                />
-              </section>
-
               <ProjectAgendaAfspraakSection
                 project={project}
                 onChanged={() => void load()}
+                openSoortRequest={afspraakOpenRequest}
               />
             </>
           ) : mainTab === "financieel" ? (
@@ -2348,6 +2591,9 @@ export function ProjectPage() {
                 defaultOpen
                 alwaysOpen
                 onFacturenChanged={(list) => setFacturen(list)}
+                offerteId={project.offerte_id}
+                warmtefonds={isWarmtefondsProject(project)}
+                financieringStatus={resolveFinancieringStatus(project)}
               />
               <ProjectInkoopSection
                 project={project}
@@ -2357,15 +2603,32 @@ export function ProjectPage() {
                 }}
               />
             </div>
+          ) : mainTab === "service" ? (
+            <ProjectServiceSection
+              project={project}
+              verzoeken={serviceVerzoeken}
+              onChanged={() => void load()}
+            />
           ) : (
             <section className="border border-line bg-white px-4 py-5 sm:px-5">
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-                Medewerkers
-              </h2>
-              <p className="mt-1 text-sm text-muted">
-                Gekoppelde sales, backoffice en installateur — zichtbaar als
-                initialen bij Leden in de projectenlijst.
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                    Medewerkers
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Gekoppelde sales, backoffice en installateur — zichtbaar als
+                    initialen bij Leden in de projectenlijst.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setContactOpen(true)}
+                  className="shrink-0 border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:border-green hover:text-green-dark"
+                >
+                  Contact
+                </button>
+              </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Sales-adviseur
@@ -2548,6 +2811,13 @@ export function ProjectPage() {
           </div>
         </aside>
       </div>
+
+      {contactOpen ? (
+        <KlantContactMailModal
+          project={project}
+          onClose={() => setContactOpen(false)}
+        />
+      ) : null}
     </DetailShell>
   );
 }

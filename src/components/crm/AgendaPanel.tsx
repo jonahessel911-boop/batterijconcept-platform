@@ -1060,7 +1060,7 @@ export function AfspraakDetail({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          status: "warmtefonds_aangevraagd",
+          financiering_status: "aanvraag_gedaan",
           warmtefonds_aangevraagd_at: nowIso,
         }),
       });

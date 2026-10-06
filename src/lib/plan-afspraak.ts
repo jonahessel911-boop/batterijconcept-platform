@@ -307,7 +307,12 @@ async function afterCreate(
   });
 
   if (soort === "warmtefonds_aanvraag") {
-    await markWarmtefondsAfspraakIngepland(sb, body.lead_id, afspraak.id);
+    await markWarmtefondsAfspraakIngepland(
+      sb,
+      body.lead_id,
+      afspraak.id,
+      afspraak.start_at
+    );
   }
 
   const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
@@ -357,15 +362,16 @@ async function afterCreate(
   };
 }
 
-/** Zet gekoppeld project op Warmtefonds afspraak ingepland + timeline-event. */
+/** Zet financiering op afspraak_ingepland + interne afspraakdatum. */
 async function markWarmtefondsAfspraakIngepland(
   sb: SupabaseClient,
   leadId: string,
-  afspraakId: string
+  afspraakId: string,
+  startAt?: string | null
 ): Promise<void> {
   const { data: project } = await sb
     .from("projecten")
-    .select("id, status, project_nummer, betaalwijze")
+    .select("id, status, project_nummer, betaalwijze, financiering_status")
     .eq("lead_id", leadId)
     .neq("status", "annulering")
     .order("created_at", { ascending: false })
@@ -374,39 +380,49 @@ async function markWarmtefondsAfspraakIngepland(
 
   if (!project?.id) return;
 
-  const prevStatus = project.status as string | null;
+  const prevFs = (project as { financiering_status?: string | null })
+    .financiering_status;
   if (
-    prevStatus === "warmtefonds_aangevraagd" ||
-    prevStatus === "warmtefonds_in_behandeling" ||
-    prevStatus === "warmtefonds_goedgekeurd" ||
-    prevStatus === "warmtefonds_afgewezen"
+    prevFs === "aanvraag_gedaan" ||
+    prevFs === "aanvraag_goedgekeurd" ||
+    prevFs === "uitbetaald" ||
+    prevFs === "afgewezen"
   ) {
-    // Al verder in de WF-pipeline — niet terugzetten
+    // Al verder in financiering — niet terugzetten
     return;
   }
 
-  const { error } = await sb
-    .from("projecten")
-    .update({ status: "warmtefonds_afspraak_ingepland" })
-    .eq("id", project.id);
+  const patch: Record<string, unknown> = {
+    financiering_status: "afspraak_ingepland",
+  };
+  if (startAt) {
+    const d = new Date(startAt);
+    if (!Number.isNaN(d.getTime())) {
+      patch.warmtefonds_afspraak_at = d.toISOString();
+    }
+  }
+
+  const { error } = await sb.from("projecten").update(patch).eq("id", project.id);
 
   if (error) return;
 
   await logLeadEvent({
     leadId,
     soort: "status",
-    titel: "Projectstatus: Warmtefonds afspraak ingepland",
-    detail: prevStatus
-      ? `Was: ${prevStatus}`
+    titel: "Financiering: Afspraak gepland",
+    detail: prevFs
+      ? `Was: ${prevFs}`
       : project.project_nummer
         ? `Project ${project.project_nummer}`
         : null,
     meta: {
       project_id: project.id,
       project_nummer: project.project_nummer,
-      van: prevStatus,
-      naar: "warmtefonds_afspraak_ingepland",
+      veld: "financiering_status",
+      van: prevFs ?? null,
+      naar: "afspraak_ingepland",
       afspraak_id: afspraakId,
+      warmtefonds_afspraak_at: patch.warmtefonds_afspraak_at ?? null,
     },
   });
 
@@ -415,7 +431,8 @@ async function markWarmtefondsAfspraakIngepland(
     await syncAutoTakenVoorProject(
       sb,
       project.id,
-      "warmtefonds_afspraak_ingepland"
+      project.status as string,
+      "afspraak_ingepland"
     );
   } catch {
     /* best-effort */

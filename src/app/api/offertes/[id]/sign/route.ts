@@ -183,6 +183,20 @@ export async function POST(
       console.error("BTW-factuur na ondertekening:", facErr);
     }
 
+    // Concept commissiefactuur voor de adviseur (€250 excl. + btw)
+    try {
+      const { ensureAdviseurOrderCommissieConcept } = await import(
+        "@/lib/netto-creditfactuur"
+      );
+      await ensureAdviseurOrderCommissieConcept(supabase, {
+        leadId: offerte.lead_id,
+        offerteId: offerte.id,
+        offerteNummer: offerte.offerte_nummer,
+      });
+    } catch (cfErr) {
+      console.error("Adviseur commissie-concept na ondertekening:", cfErr);
+    }
+
     const klantEmail = offerte.leads?.email as string | null | undefined;
     if (klantEmail) {
       try {

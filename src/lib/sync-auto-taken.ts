@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  autoTakenVoorFinanciering,
   autoTakenVoorStatus,
   dueAtFromDays,
   type AutoTaakDef,
@@ -12,8 +13,13 @@ import {
 import {
   remapLegacyProjectStatus,
   resolveBetaalwijze,
+  toOperationalStatus,
   type Betaalwijze,
 } from "@/lib/project-status-config";
+import {
+  resolveFinancieringStatus,
+  type FinancieringStatus,
+} from "@/lib/financiering-status";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
@@ -28,6 +34,7 @@ const CREDIT_ELIGIBLE_STATUSES = [
 type ProjectSchouwFields = {
   status: string;
   betaalwijze?: string | null;
+  financiering_status?: string | null;
   schouw_jaar?: number | null;
   schouw_week?: number | null;
   schouw_at?: string | null;
@@ -119,16 +126,18 @@ async function creditfactuurTaakBijAnnulering(
  * Extra: bij geplande schouwweek (zonder exacte dag) taak 1 week eerder
  * om schouwdag + datum in te plannen.
  * Extra: bij annulering + verzonden factuur → taak Creditfactuur maken.
+ * Extra: Warmtefonds-financieringstaken parallel via financiering_status.
  */
 export async function syncAutoTakenVoorProject(
   sb: SupabaseClient,
   projectId: string,
-  status: string
+  status: string,
+  financieringStatusOverride?: FinancieringStatus | null
 ): Promise<void> {
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, betaalwijze, schouw_jaar, schouw_week, schouw_at, installatie_at, leads(status), offertes(financiering_voorbehoud)"
+      "status, betaalwijze, financiering_status, schouw_jaar, schouw_week, schouw_at, installatie_at, leads(status), offertes(financiering_voorbehoud)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -136,6 +145,7 @@ export async function syncAutoTakenVoorProject(
   const project = (projectRow as ProjectSchouwFields | null) || {
     status,
     betaalwijze: null,
+    financiering_status: null,
     schouw_jaar: null,
     schouw_week: null,
     schouw_at: null,
@@ -143,8 +153,9 @@ export async function syncAutoTakenVoorProject(
   };
 
   const betaalwijze = betaalwijzeOf(project);
+  const operational = toOperationalStatus(status);
   const defs: (AutoTaakDef & { dueAt?: string | null })[] = autoTakenVoorStatus(
-    status,
+    operational,
     betaalwijze,
     {
       schouwAt: project.schouw_at,
@@ -152,11 +163,25 @@ export async function syncAutoTakenVoorProject(
     }
   ).map((d) => ({ ...d }));
 
+  const finStatus =
+    financieringStatusOverride !== undefined
+      ? financieringStatusOverride
+      : resolveFinancieringStatus({
+          financiering_status: project.financiering_status,
+          status: project.status,
+        });
+
+  if (betaalwijze === "warmtefonds") {
+    for (const d of autoTakenVoorFinanciering(finStatus)) {
+      defs.push({ ...d });
+    }
+  }
+
   const week = schouwWeekOf(project);
   if (week && !isSchouwdagDefinitief(project)) {
     defs.push({
       autoKey: SCHOUWDAG_INPLAN_KEY,
-      titel: `Schouwdag + schouwdatum inplannen (week ${week.week})`,
+      titel: `Schouwdag inplannen met de klant (week ${week.week}) — want de week erop is de schouwweek`,
       afdeling: "Planning",
       dueInDays: 0,
       dueAt: dueAtVoorSchouwdagInplan(week.jaar, week.week),

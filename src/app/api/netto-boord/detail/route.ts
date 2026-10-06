@@ -6,6 +6,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import {
   buildNettoTimeline,
+  mapAdviseurActies,
   mapOpenTaken,
   mapSchouwDocs,
 } from "@/lib/netto-boord-detail";
@@ -162,7 +163,7 @@ export async function GET(req: NextRequest) {
         ? sb
             .from("project_taken")
             .select(
-              "id, titel, status, afdeling, due_at, auto_key, notities, created_at, updated_at, verantwoordelijke:adviseurs!verantwoordelijke_id(naam)"
+              "id, titel, status, afdeling, due_at, auto_key, notities, aangemaakt_door_id, created_at, updated_at, verantwoordelijke:adviseurs!verantwoordelijke_id(naam), aangemaakt_door:adviseurs!aangemaakt_door_id(naam)"
             )
             .eq("project_id", projectId)
             .order("updated_at", { ascending: false })
@@ -223,7 +224,7 @@ export async function GET(req: NextRequest) {
 
     type AdvJoin = { naam: string } | { naam: string }[] | null;
 
-    const taken = ((takenRes.data || []) as Array<{
+    type TakenRow = {
       id: string;
       titel: string;
       status: string;
@@ -231,13 +232,39 @@ export async function GET(req: NextRequest) {
       due_at: string | null;
       auto_key: string | null;
       notities: string | null;
+      aangemaakt_door_id?: string | null;
       created_at: string;
       updated_at: string;
       verantwoordelijke?: AdvJoin;
-    }>).map((t) => {
+      aangemaakt_door?: AdvJoin;
+    };
+
+    let takenRaw = (takenRes.data || []) as TakenRow[];
+    const takenErrEarly = "error" in takenRes ? takenRes.error : null;
+    if (
+      takenErrEarly &&
+      (takenErrEarly.message?.includes("aangemaakt_door") ||
+        takenErrEarly.code === "42703") &&
+      projectId
+    ) {
+      const fallback = await sb
+        .from("project_taken")
+        .select(
+          "id, titel, status, afdeling, due_at, auto_key, notities, created_at, updated_at, verantwoordelijke:adviseurs!verantwoordelijke_id(naam)"
+        )
+        .eq("project_id", projectId)
+        .order("updated_at", { ascending: false })
+        .limit(100);
+      takenRaw = (fallback.data || []) as TakenRow[];
+    }
+
+    const taken = takenRaw.map((t) => {
       const v = Array.isArray(t.verantwoordelijke)
         ? t.verantwoordelijke[0]
         : t.verantwoordelijke;
+      const maker = Array.isArray(t.aangemaakt_door)
+        ? t.aangemaakt_door[0]
+        : t.aangemaakt_door;
       return {
         id: t.id,
         titel: t.titel,
@@ -246,6 +273,8 @@ export async function GET(req: NextRequest) {
         due_at: t.due_at,
         auto_key: t.auto_key,
         notities: t.notities,
+        aangemaakt_door_id: t.aangemaakt_door_id || null,
+        aangemaakt_door_naam: maker?.naam || null,
         created_at: t.created_at,
         updated_at: t.updated_at,
         verantwoordelijke_naam: v?.naam || null,
@@ -330,6 +359,7 @@ export async function GET(req: NextRequest) {
     });
 
     const open_taken = mapOpenTaken(takenSafe);
+    const adviseur_acties = mapAdviseurActies(takenSafe);
     const schouw_docs = mapSchouwDocs(fotos);
 
     const project = (projectenRes.data || [])[0] as
@@ -348,6 +378,7 @@ export async function GET(req: NextRequest) {
       installatie_at: project?.installatie_at || null,
       timeline,
       open_taken,
+      adviseur_acties,
       schouw_docs,
       has_schouw_formulier: schouw_docs.length > 0,
     });

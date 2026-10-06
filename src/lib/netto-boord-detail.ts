@@ -51,6 +51,18 @@ export type NettoOpenTaak = {
   updated_at: string;
 };
 
+/** Handmatige actie voor/van adviseur (incl. afgeronde). */
+export type NettoAdviseurActie = {
+  id: string;
+  titel: string;
+  status: string;
+  due_at: string | null;
+  notities: string | null;
+  aangemaakt_door_naam: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type NettoSchouwDoc = {
   id: string;
   bestandsnaam: string | null;
@@ -571,6 +583,42 @@ export function mapOpenTaken(
       const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
       const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
       return da - db;
+    });
+}
+
+export function mapAdviseurActies(
+  taken: Array<{
+    id: string;
+    titel: string;
+    status: string;
+    due_at: string | null;
+    auto_key: string | null;
+    notities: string | null;
+    aangemaakt_door_id?: string | null;
+    aangemaakt_door_naam?: string | null;
+    created_at: string;
+    updated_at: string;
+  }>
+): NettoAdviseurActie[] {
+  return taken
+    .filter((t) => !t.auto_key && t.aangemaakt_door_id)
+    .map((t) => ({
+      id: t.id,
+      titel: t.titel,
+      status: t.status,
+      due_at: t.due_at,
+      notities: t.notities,
+      aangemaakt_door_naam: t.aangemaakt_door_naam || null,
+      created_at: t.created_at,
+      updated_at: t.updated_at,
+    }))
+    .sort((a, b) => {
+      // Open eerst, daarna nieuwste
+      if (a.status === "done" && b.status !== "done") return 1;
+      if (a.status !== "done" && b.status === "done") return -1;
+      return (
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
     });
 }
 

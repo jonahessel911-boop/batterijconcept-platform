@@ -4,16 +4,24 @@ import { errMessage } from "@/lib/errors";
 import type { Betaalwijze, ProjectStatus } from "@/types/database";
 import { PROJECT_STATUSES, projectStatusLabel } from "@/lib/labels";
 import {
+  FINANCIERING_STATUS_LABEL,
+  isFinancieringStatus,
+  type FinancieringStatus,
+} from "@/lib/financiering-status";
+import {
   isValidSchouwWeek,
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import { logLeadEvent } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
+import { projectHeeftOpleveringsrapport } from "@/lib/project-na-oplevering";
+import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
+import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
 
 export const runtime = "nodejs";
 
 const PROJECT_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)";
+  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)";
 
 /** GET /api/projecten/[id] — projectdetail (ook via lead_id als fallback). */
 export async function GET(
@@ -86,10 +94,14 @@ export async function PATCH(
     bel_schouw_aanbetaling_at?: string | null;
     financiering_geschakeld_at?: string | null;
     warmtefonds_aangevraagd_at?: string | null;
+    /** Aparte Warmtefonds-fase; null = reset. */
+    financiering_status?: FinancieringStatus | null;
+    /** Interne datum/tijd WF-afspraak (geen mail). */
+    warmtefonds_afspraak_at?: string | null;
     schouw_jaar?: number | null;
     schouw_week?: number | null;
     leveradres?: string | null;
-    materiaal_checks?: Record<string, boolean> | null;
+    materiaal_checks?: Record<string, boolean | string> | null;
     /** Client signaleert: alle inkoop-vinkjes net afgevinkt. */
     materiaal_volledig_afgevinkt?: boolean;
     notities?: string | null;
@@ -101,6 +113,9 @@ export async function PATCH(
     installatie_partner_id?: string | null;
     betaalwijze?: Betaalwijze;
     betaalwijze_reden?: string | null;
+    schouw_notities?: string | null;
+    installatie_notities?: string | null;
+    service_notities?: string | null;
   };
   try {
     body = await req.json();
@@ -120,6 +135,7 @@ export async function PATCH(
       patch.schouw_jaar = null;
       patch.schouw_week = null;
       patch.installatie_at = null;
+      patch.service_at = null;
     }
   }
   if (body.betaalwijze !== undefined) {
@@ -194,6 +210,35 @@ export async function PATCH(
       patch.warmtefonds_aangevraagd_at = d.toISOString();
     }
   }
+  if (body.financiering_status !== undefined) {
+    if (body.financiering_status === null) {
+      patch.financiering_status = null;
+      if (body.warmtefonds_afspraak_at === undefined) {
+        patch.warmtefonds_afspraak_at = null;
+      }
+    } else if (!isFinancieringStatus(body.financiering_status)) {
+      return NextResponse.json(
+        { error: "Ongeldige financieringsstatus" },
+        { status: 400 }
+      );
+    } else {
+      patch.financiering_status = body.financiering_status;
+    }
+  }
+  if (body.warmtefonds_afspraak_at !== undefined) {
+    if (body.warmtefonds_afspraak_at === null) {
+      patch.warmtefonds_afspraak_at = null;
+    } else {
+      const d = new Date(body.warmtefonds_afspraak_at);
+      if (Number.isNaN(d.getTime())) {
+        return NextResponse.json(
+          { error: "Ongeldige Warmtefonds-afspraakdatum" },
+          { status: 400 }
+        );
+      }
+      patch.warmtefonds_afspraak_at = d.toISOString();
+    }
+  }
   if (body.schouw_jaar !== undefined || body.schouw_week !== undefined) {
     if (body.schouw_jaar == null || body.schouw_week == null) {
       patch.schouw_jaar = null;
@@ -245,13 +290,23 @@ export async function PATCH(
     patch.installatie_partner_id =
       body.installatie_partner_id?.trim() || null;
   }
+  if (body.schouw_notities !== undefined) {
+    patch.schouw_notities = body.schouw_notities?.trim() || null;
+  }
+  if (body.installatie_notities !== undefined) {
+    patch.installatie_notities = body.installatie_notities?.trim() || null;
+  }
+  if (body.service_notities !== undefined) {
+    patch.service_notities = body.service_notities?.trim() || null;
+  }
   if (body.afdeling !== undefined) {
     patch.afdeling = body.afdeling?.trim() || null;
   }
 
   // Datum Warmtefonds aangevraagd: alleen auto-zetten als die nog ontbreekt
   const autoWfAangevraagdAt =
-    body.status === "warmtefonds_aangevraagd" &&
+    (body.status === "warmtefonds_aangevraagd" ||
+      body.financiering_status === "aanvraag_gedaan") &&
     body.warmtefonds_aangevraagd_at === undefined;
 
   if (Object.keys(patch).length === 0 && !autoWfAangevraagdAt) {
@@ -264,7 +319,7 @@ export async function PATCH(
     const { data: before } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at"
+        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status"
       )
       .eq("id", id)
       .maybeSingle();
@@ -277,6 +332,22 @@ export async function PATCH(
       patch.warmtefonds_aangevraagd_at = new Date().toISOString();
     }
 
+    if (
+      body.status === "installatie_voltooid" &&
+      before?.status !== "installatie_voltooid"
+    ) {
+      const hasRapport = await projectHeeftOpleveringsrapport(sb, id);
+      if (!hasRapport) {
+        return NextResponse.json(
+          {
+            error:
+              "Upload eerst het opleveringsrapport met handtekening van de klant.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
     }
@@ -286,7 +357,7 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, ondertekend_op)"
+        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
       )
       .single();
 
@@ -296,12 +367,14 @@ export async function PATCH(
         error.message?.includes("financiering_geschakeld_at") ||
         error.message?.includes("warmtefonds_aangevraagd_at") ||
         error.message?.includes("warmtefonds_afspraak_ingepland") ||
+        error.message?.includes("financiering_status") ||
+        error.message?.includes("warmtefonds_afspraak_at") ||
         error.code === "42703")
     ) {
       return NextResponse.json(
         {
           error:
-            "Voer supabase/migrate-warmtefonds-afspraak.sql (en eventueel bel-/financiering-migraties) uit in Supabase.",
+            "Voer supabase/migrate-financiering-status.sql (en eventueel bel-/Warmtefonds-migraties) uit in Supabase.",
         },
         { status: 500 }
       );
@@ -329,6 +402,22 @@ export async function PATCH(
         },
         { status: 500 }
       );
+    }
+
+    if (
+      body.status === "installatie_voltooid" &&
+      before?.status !== "installatie_voltooid"
+    ) {
+      try {
+        await ensurePartnerInstallatieCreditfactuur(sb, id);
+      } catch (e) {
+        console.error("ensurePartnerInstallatieCreditfactuur:", e);
+      }
+      try {
+        await ensureAdviseurCommissieTrancheB(sb, id);
+      } catch (e) {
+        console.error("ensureAdviseurCommissieTrancheB:", e);
+      }
     }
 
     const leadId = (before?.lead_id || data.lead_id) as string | undefined;
@@ -367,22 +456,82 @@ export async function PATCH(
         });
       }
 
+      if (body.financiering_status !== undefined) {
+        const prevFs =
+          (before as { financiering_status?: string | null } | null)
+            ?.financiering_status ?? null;
+        const nextFs = body.financiering_status;
+        if (prevFs !== nextFs) {
+          const nextLabel = nextFs
+            ? FINANCIERING_STATUS_LABEL[nextFs]
+            : "Gerereset";
+          const prevLabel = prevFs
+            ? isFinancieringStatus(prevFs)
+              ? FINANCIERING_STATUS_LABEL[prevFs]
+              : prevFs
+            : "Nog niet gestart";
+          await logLeadEvent({
+            leadId,
+            soort: "status",
+            titel: `Financiering: ${nextLabel}`,
+            detail: `Was: ${prevLabel}`,
+            meta: {
+              project_id: id,
+              project_nummer: data.project_nummer,
+              veld: "financiering_status",
+              van: prevFs,
+              naar: nextFs,
+            },
+          });
+        }
+
+        // Na goedkeuring: concept-restantfactuur Warmtefonds klaarzetten
+        if (
+          nextFs === "aanvraag_goedgekeurd" &&
+          prevFs !== "aanvraag_goedgekeurd"
+        ) {
+          const offRaw = data.offertes;
+          const off = Array.isArray(offRaw) ? offRaw[0] : offRaw;
+          if (off?.id && off.financiering_voorbehoud) {
+            const { ensureRestantDraftFactuur } = await import(
+              "@/lib/ensure-btw-factuur"
+            );
+            await ensureRestantDraftFactuur(sb, {
+              offerteId: off.id,
+              leadId,
+              projectId: id,
+              offerteNummer: off.offerte_nummer || data.project_nummer || "",
+              orderIncBtw: Number(off.totaal_inc_btw) || 0,
+              orderExBtw: Number(off.subtotaal_ex_btw) || 0,
+              warmtefonds: true,
+            });
+          }
+        }
+      }
+
       if (body.materiaal_checks && typeof body.materiaal_checks === "object") {
-        const prev = (before?.materiaal_checks || {}) as Record<string, boolean>;
+        const prev = (before?.materiaal_checks || {}) as Record<
+          string,
+          boolean | string
+        >;
         const next = body.materiaal_checks;
+        const isOrdered = (v: boolean | string | undefined) =>
+          v === true || v === "besteld" || v === "geleverd";
         const newlyChecked = Object.keys(next).filter(
-          (key) => next[key] === true && prev[key] !== true
+          (key) => isOrdered(next[key]) && !isOrdered(prev[key])
         );
         for (const key of newlyChecked) {
           const label = key.replace(/^std:/, "").replace(/[_-]/g, " ");
+          const statusLabel =
+            next[key] === "geleverd" ? "geleverd" : "besteld";
           await logLeadEvent({
             leadId,
             soort: "inkoop",
-            titel: `Inkoop gemarkeerd: ${label}`,
+            titel: `Inkoop ${statusLabel}: ${label}`,
             detail: data.project_nummer
               ? `Project ${data.project_nummer}`
               : null,
-            meta: { project_id: id, check_key: key },
+            meta: { project_id: id, check_key: key, status: next[key] },
           });
         }
         if (body.materiaal_volledig_afgevinkt === true) {
@@ -403,11 +552,21 @@ export async function PATCH(
       }
     }
 
-    if (body.status) {
+    if (body.status || body.financiering_status !== undefined) {
       const { syncAutoTakenVoorProject } = await import(
         "@/lib/sync-auto-taken"
       );
-      await syncAutoTakenVoorProject(sb, id, body.status);
+      await syncAutoTakenVoorProject(
+        sb,
+        id,
+        (body.status ||
+          (data as { status?: string }).status ||
+          before?.status ||
+          "") as string,
+        body.financiering_status !== undefined
+          ? body.financiering_status
+          : undefined
+      );
     }
 
     let annuleringMail: {

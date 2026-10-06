@@ -128,7 +128,24 @@ export function computeCreditInvoiceAmount(opts: {
   return { bruto, bedrag: bruto, capped: false, maxToegepast: null };
 }
 
+export type AdviseurCreditFactuurSoort = "aanbetaling" | "restbetaling";
+
+/**
+ * CF-2026/AANBETALING/OFF-2026-0076
+ * CF-2026/RESTBETALING/OFF-2026-0076
+ */
 export function formatCreditFactuurNummer(
+  jaar: number,
+  soort: AdviseurCreditFactuurSoort,
+  offerteNummer: string
+): string {
+  const off = offerteNummer.trim().replace(/^\/+|\/+$/g, "");
+  const label = soort === "restbetaling" ? "RESTBETALING" : "AANBETALING";
+  return `CF-${jaar}/${label}/${off}`;
+}
+
+/** Legacy week-batch nummering (handmatige weekfactuur zonder enkele offerte). */
+export function formatCreditFactuurNummerWeek(
   jaar: number,
   week: number,
   seq: number

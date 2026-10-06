@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { uploadProjectFotoFile } from "@/lib/project-fotos";
-import { isSchouwFormulier } from "@/lib/project-documenten";
+import {
+  isOpleveringsrapport,
+  isProjectDocumentUpload,
+  isSchouwFormulier,
+} from "@/lib/project-documenten";
+import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
+import { maybeAdvanceProjectNaOplevering } from "@/lib/project-na-oplevering";
 
 export const runtime = "nodejs";
 
@@ -75,7 +81,7 @@ export async function POST(
     const allowPdf =
       form.get("allow_pdf") === "1" ||
       form.get("allow_pdf") === "true" ||
-      isSchouwFormulier(omschrijving);
+      isProjectDocumentUpload(omschrijving);
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -94,7 +100,28 @@ export async function POST(
       );
     }
 
-    return NextResponse.json(result, { status: 201 });
+    let statusAdvance: {
+      advanced: boolean;
+      from: string | null;
+      to: string | null;
+      klaarVoorMateriaal?: boolean;
+      project?: Record<string, unknown> | null;
+    } | null = null;
+
+    if (isSchouwFormulier(omschrijving)) {
+      statusAdvance = await maybeAdvanceProjectNaSchouw(sb, id);
+    } else if (isOpleveringsrapport(omschrijving)) {
+      statusAdvance = await maybeAdvanceProjectNaOplevering(sb, id);
+    }
+
+    return NextResponse.json(
+      {
+        ...result,
+        status_advance: statusAdvance,
+        project: statusAdvance?.project || undefined,
+      },
+      { status: 201 }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

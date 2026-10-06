@@ -894,3 +894,144 @@ export function installatieHerinneringKlantEmail(opts: {
     belangrijkeInfo: opts.belangrijkeInfo,
   });
 }
+
+/** Vrije klantmail vanuit backoffice/projecten (bericht + vaste afsluiting). */
+export function klantContactEmail(opts: {
+  klantNaam: string;
+  bericht: string;
+  afdelingLabel: string;
+  medewerkerNaam: string;
+}) {
+  const first = escapeHtml(
+    opts.klantNaam.split(/\s+/)[0]?.trim() || opts.klantNaam || "daar"
+  );
+  const afdeling = escapeHtml(opts.afdelingLabel);
+  const medewerker = escapeHtml(opts.medewerkerNaam);
+  const body = opts.bericht
+    .trim()
+    .split(/\n+/)
+    .filter(Boolean)
+    .map((p) => emailP(escapeHtml(p)))
+    .join("");
+  return emailLayout({
+    title: "Bericht van Batterijconcept",
+    preheader: opts.bericht.trim().slice(0, 120),
+    bodyHtml: [
+      emailP(`Beste ${first},`),
+      body || emailP(""),
+      emailP("Met vriendelijke groet,"),
+      `<p style="margin:0 0 4px;font-size:15px;line-height:1.5;color:#1A1F1C;font-weight:600;">${afdeling}</p>
+       <p style="margin:0 0 14px;font-size:15px;line-height:1.5;color:#1A1F1C;">${medewerker}</p>`,
+      emailMuted("Batterijconcept · info@batterijconcept.nl · 085 800 1645"),
+    ].join(""),
+  });
+}
+
+/** Adviseur: backoffice heeft jouw actie-verzoek afgerond. */
+export function backofficeActieVoltooidEmail(opts: {
+  adviseurNaam: string;
+  titel: string;
+  notities?: string | null;
+  projectNummer?: string | null;
+  klantNaam?: string | null;
+  projectHref?: string | null;
+}) {
+  const first =
+    opts.adviseurNaam.split(" ")[0]?.trim() || opts.adviseurNaam || "daar";
+  const projectLabel = [opts.projectNummer, opts.klantNaam]
+    .filter(Boolean)
+    .join(" · ");
+  return emailLayout({
+    title: "Backoffice-actie voltooid",
+    preheader: `Afgerond: ${opts.titel}`,
+    bodyHtml: [
+      emailH1("Je actie is afgerond"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "De backoffice heeft je actie-verzoek afgerond:"
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:#0D5C32;">${opts.titel}</p>
+         ${
+           projectLabel
+             ? `<p style="margin:0 0 8px;font-size:14px;color:#5A635C;">${projectLabel}</p>`
+             : ""
+         }
+         ${
+           opts.notities
+             ? `<p style="margin:0;font-size:14px;line-height:1.5;color:#1A1F1C;">${opts.notities.replace(/\n/g, "<br />")}</p>`
+             : ""
+         }`
+      ),
+      opts.projectHref
+        ? emailButton("Bekijk project", opts.projectHref)
+        : "",
+      emailMuted("Dit is een automatische mail vanuit het Batterijconcept-platform."),
+    ].join(""),
+  });
+}
+
+/** Factuur van adviseur/partner aan Batterijconcept (PDF bijlage). */
+export function relatieFactuurAanBcEmail(opts: {
+  naam: string;
+  factuurNummer: string;
+  bedrag: string;
+  vervaldatum: string;
+  iban?: string | null;
+  rolLabel: "adviseur" | "installatiepartner";
+  /** Na goedkeuring: bevestiging + PDF nogmaals. */
+  variant?: "ter_goedkeuring" | "goedgekeurd";
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const rol =
+    opts.rolLabel === "adviseur" ? "adviseur" : "installatiepartner";
+  const goedgekeurd = opts.variant === "goedgekeurd";
+  return emailLayout({
+    title: goedgekeurd
+      ? `Factuur ${opts.factuurNummer} goedgekeurd`
+      : `Factuur ${opts.factuurNummer}`,
+    preheader: goedgekeurd
+      ? `Je hebt factuur ${opts.factuurNummer} goedgekeurd · uitbetaling binnen 7 dagen.`
+      : `Factuur ${opts.factuurNummer} aan Batterijconcept · uitbetaling binnen 7 dagen.`,
+    bodyHtml: [
+      emailH1(
+        goedgekeurd
+          ? `Factuur ${opts.factuurNummer} goedgekeurd`
+          : `Factuur ${opts.factuurNummer}`
+      ),
+      emailP(`Hoi ${first},`),
+      emailP(
+        goedgekeurd
+          ? `Bedankt voor je goedkeuring. Hierbij nogmaals de factuur die uit jouw naam als ${rol} is opgesteld, gericht aan Batterijconcept (selfbilling). De PDF zit in de bijlage.`
+          : `Hierbij ontvang je de factuur die uit jouw naam als ${rol} is opgesteld, gericht aan Batterijconcept (selfbilling). De PDF zit in de bijlage.`
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Betaaltermijn</strong><br />7 dagen na goedkeuring (uiterlijk ${opts.vervaldatum})</p>
+         ${
+           opts.iban
+             ? `<p style="margin:0;font-size:14px;">Uitbetaling op IBAN <strong>${opts.iban}</strong></p>`
+             : ""
+         }`
+      ),
+      goedgekeurd
+        ? emailP(
+            "Batterijconcept betaalt deze factuur binnen 7 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+          )
+        : emailP(
+            opts.rolLabel === "adviseur"
+              ? "Controleer de factuur in het platform onder <strong>Facturen</strong> en klik op <strong>Goedkeuren</strong> als alles klopt."
+              : "Controleer de factuur in het installatieportaal onder <strong>Facturen</strong> en klik op <strong>Goedkeuren</strong> als alles klopt."
+          ),
+      goedgekeurd
+        ? ""
+        : emailP(
+            "Na goedkeuring betaalt Batterijconcept binnen 7 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+          ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ]
+      .filter(Boolean)
+      .join(""),
+  });
+}
