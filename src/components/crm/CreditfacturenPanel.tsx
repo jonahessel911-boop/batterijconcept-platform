@@ -223,6 +223,7 @@ export function CreditfacturenPanel() {
   const [createMode, setCreateMode] = useState<"handmatig" | "deal">(
     "handmatig"
   );
+  const [createTranche, setCreateTranche] = useState<"a" | "b">("a");
   const [createAdviseurId, setCreateAdviseurId] = useState("");
   const [createPartnerId, setCreatePartnerId] = useState("");
   const [createBedrag, setCreateBedrag] = useState(
@@ -470,6 +471,7 @@ export function CreditfacturenPanel() {
   function resetCreateForm() {
     setCreateKind("verkoper");
     setCreateMode("handmatig");
+    setCreateTranche("a");
     setCreateAdviseurId("");
     setCreatePartnerId("");
     setCreateBedrag(String(VERKOPER_AANBETALING_FEE));
@@ -531,7 +533,7 @@ export function CreditfacturenPanel() {
             omschrijving: createOmschrijving.trim() || undefined,
           };
         } else {
-          body = { offerte_id: selectedOfferteId };
+          body = { offerte_id: selectedOfferteId, tranche: createTranche };
         }
         const res = await fetch("/api/adviseurs/creditfacturen", {
           method: "POST",
@@ -548,10 +550,12 @@ export function CreditfacturenPanel() {
           (json as { factuur?: { factuur_nummer?: string } }).factuur
             ?.factuur_nummer || "concept";
         const created = (json as { created?: boolean }).created !== false;
+        const label =
+          createTranche === "b" ? "Rest-commissie (B)" : "Aanbetalingscommissie (A)";
         setOkMsg(
           created
-            ? `Concept ${nummer} aangemaakt.`
-            : `Factuur ${nummer} bestond al voor deze deal.`
+            ? `${label} ${nummer} aangemaakt.`
+            : `${label} ${nummer} bestond al voor deze deal.`
         );
       } else {
         if (!createAdviseurId) throw new Error("Kies een verkoper.");
@@ -878,14 +882,49 @@ export function CreditfacturenPanel() {
                         </ul>
                       )}
                     </div>
+                    <div className="sm:max-w-xs">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Soort commissie
+                      </p>
+                      <div className="mt-1 inline-flex border border-line">
+                        <button
+                          type="button"
+                          onClick={() => setCreateTranche("a")}
+                          className={[
+                            "px-3 py-1.5 text-xs font-semibold",
+                            createTranche === "a"
+                              ? "bg-ink text-white"
+                              : "bg-white text-muted hover:bg-wash",
+                          ].join(" ")}
+                        >
+                          A · aanbetaling
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCreateTranche("b")}
+                          className={[
+                            "px-3 py-1.5 text-xs font-semibold",
+                            createTranche === "b"
+                              ? "bg-ink text-white"
+                              : "bg-white text-muted hover:bg-wash",
+                          ].join(" ")}
+                        >
+                          B · rest / netto
+                        </button>
+                      </div>
+                    </div>
                     <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted sm:max-w-xs">
-                      Bedrag excl. (leeg = €{VERKOPER_AANBETALING_FEE} tranche
-                      A)
+                      Bedrag excl. (leeg = automatisch)
                       <input
                         type="text"
                         inputMode="decimal"
                         value={createBedrag}
                         onChange={(e) => setCreateBedrag(e.target.value)}
+                        placeholder={
+                          createTranche === "b"
+                            ? "10% − €250"
+                            : `€${VERKOPER_AANBETALING_FEE}`
+                        }
                         className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                       />
                     </label>

@@ -412,10 +412,52 @@ export function teamWelkomEmail(opts: {
   });
 }
 
+/** Kickoff Opstarten: intro track & trace met knop naar portaal */
+export function trackAndTraceIntroEmail(opts: {
+  naam: string;
+  trackUrl: string;
+  projectNummer?: string | null;
+  offerteNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const nr = opts.projectNummer || opts.offerteNummer;
+  return emailLayout({
+    title: "Volg je order — BatterijConcept",
+    preheader:
+      "Bekijk op elk moment de status van je thuisbatterij-order, schouw en facturen.",
+    bodyHtml: [
+      emailH1("Volg je order"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Goed nieuws: we zijn gestart met je thuisbatterij-order. Via je persoonlijke track &amp; trace-pagina zie je altijd waar we staan — zonder dat je ons hoeft te bellen."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:#0D5C32;">Wat je daar vindt</p>
+         <p style="margin:0 0 6px;font-size:14px;line-height:1.55;">• Status van schouwweek en schouwdag</p>
+         <p style="margin:0 0 6px;font-size:14px;line-height:1.55;">• Installatiedatum zodra die bekend is</p>
+         <p style="margin:0 0 6px;font-size:14px;line-height:1.55;">• Getekende offerte en facturen (PDF)</p>
+         <p style="margin:0;font-size:14px;line-height:1.55;">• BTW-teruggave en overstap dynamische energie</p>`
+      ),
+      nr
+        ? emailP(`<strong>Order</strong><br />${nr}`)
+        : "",
+      emailButton("Open track &amp; trace", opts.trackUrl),
+      emailP(
+        "Bewaar deze mail — de knop blijft werken zolang je order loopt. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot snel, team BatterijConcept"),
+    ]
+      .filter(Boolean)
+      .join(""),
+  });
+}
+
 export function offerteOndertekendEmail(opts: {
   naam: string;
   offerteNummer: string;
   ondertekendOp?: string | Date;
+  /** Klant track & trace URL */
+  trackUrl?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const when = opts.ondertekendOp
@@ -551,6 +593,7 @@ export function factuurVerzondenEmail(opts: {
   /** Creditfactuur: andere tekst, geen betaalblok. */
   isCredit?: boolean;
   creditVanNummer?: string | null;
+  trackUrl?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const kenmerk = opts.betalingskenmerk || opts.factuurNummer;
@@ -575,6 +618,9 @@ export function factuurVerzondenEmail(opts: {
            <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
            <p style="margin:0;font-size:14px;">Er hoeft niets te worden betaald op dit document.</p>`
         ),
+        opts.trackUrl
+          ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
+          : "",
         emailP(
           "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
         ),
@@ -609,6 +655,9 @@ export function factuurVerzondenEmail(opts: {
          ${opts.vervaldatum ? `<p style="margin:0;font-size:15px;"><strong>Vervaldatum</strong><br />${opts.vervaldatum}</p>` : ""}`
       ),
       betalingHtml,
+      opts.trackUrl
+        ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
+        : "",
       emailP(
         "Heb je vragen over deze factuur? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
       ),
@@ -628,6 +677,7 @@ export function schouwKlantEmail(opts: {
   projectNummer?: string | null;
   /** Warmtefonds / sale met financiering */
   warmtefonds?: boolean;
+  trackUrl?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const weekLabel = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
@@ -667,6 +717,14 @@ export function schouwKlantEmail(opts: {
         ? emailP(
             "Omdat je kiest voor financiering via het Warmtefonds, plannen we de schouw ongeveer <strong>5 weken vooruit</strong>. Zo hebben we voldoende tijd om de Warmtefonds-aanvraag te regelen. Hierover wordt apart contact met je opgenomen."
           )
+        : "",
+      opts.trackUrl
+        ? [
+            emailP(
+              "Via onderstaande knop volg je je hele order: schouwweek, afspraken, facturen en voortgang."
+            ),
+            emailButton("Volg je order", opts.trackUrl),
+          ].join("")
         : "",
       emailP(
         "Heb je vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
@@ -739,6 +797,7 @@ export function installatieKlantEmail(opts: {
   installatieAt: string | Date;
   adres?: string | null;
   projectNummer?: string | null;
+  trackUrl?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const when = formatDateTimeLongNl(opts.installatieAt);
@@ -758,6 +817,9 @@ export function installatieKlantEmail(opts: {
          ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
          ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
       ),
+      opts.trackUrl
+        ? emailButton("Volg je order", opts.trackUrl)
+        : "",
       emailP(
         "Zorg dat er iemand aanwezig is en dat de meterkast en installatieruimte bereikbaar zijn. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
       ),

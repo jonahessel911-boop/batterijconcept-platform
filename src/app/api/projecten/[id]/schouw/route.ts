@@ -153,7 +153,7 @@ export async function POST(
       .update(patch)
       .eq("id", id)
       .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
       )
       .single();
 
@@ -235,6 +235,25 @@ export async function POST(
 
     if (lead?.email?.trim()) {
       const hasExactDay = Boolean(mailSchouwAt);
+      let trackUrl: string | null = null;
+      try {
+        const offJoin = Array.isArray(updated.offertes)
+          ? updated.offertes[0]
+          : updated.offertes;
+        const { ensureOfferteTrackToken } = await import(
+          "@/lib/ensure-track-token"
+        );
+        if (offJoin?.id) {
+          const trackToken = await ensureOfferteTrackToken(
+            sb,
+            offJoin.id,
+            (offJoin as { track_token?: string | null }).track_token
+          );
+          if (trackToken) trackUrl = `${appBaseUrl()}/track/${trackToken}`;
+        }
+      } catch {
+        /* track optioneel */
+      }
       const klantHtml = schouwKlantEmail({
         naam: lead.naam || "klant",
         schouwJaar,
@@ -243,6 +262,7 @@ export async function POST(
         adres,
         projectNummer: updated.project_nummer,
         warmtefonds,
+        trackUrl,
       });
       const sent = await sendEmail({
         to: lead.email.trim(),
@@ -255,8 +275,22 @@ export async function POST(
       mails.klant = sent.ok
         ? { ok: true }
         : { ok: false, error: sent.error || "Versturen mislukt" };
-      if (sent.ok) mailPatch.schouw_mail_klant_verstuurd = true;
-      else {
+      if (sent.ok) {
+        mailPatch.schouw_mail_klant_verstuurd = true;
+        // Track & trace zit in de schouwweek/-dag mail — geen aparte taak
+        if (trackUrl) {
+          const offJoin = Array.isArray(updated.offertes)
+            ? updated.offertes[0]
+            : updated.offertes;
+          if (offJoin?.id) {
+            await sb
+              .from("offertes")
+              .update({ track_mail_verstuurd_at: new Date().toISOString() })
+              .eq("id", offJoin.id)
+              .is("track_mail_verstuurd_at", null);
+          }
+        }
+      } else {
         console.error(
           "Schouw klantmail mislukt:",
           sent.error,

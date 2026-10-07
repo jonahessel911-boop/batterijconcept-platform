@@ -267,7 +267,46 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const creditIds = [...new Set([...creditByFactuur.values()])];
+    // Alle actieve adviseur-CFs → map A/B op offertenummer
+    const creditAByOfferte = new Map<string, { id: string; nummer: string }>();
+    const creditBByOfferte = new Map<string, { id: string; nummer: string }>();
+    const { data: allCfs } = await sb
+      .from("adviseur_creditfacturen")
+      .select("id, factuur_nummer, notities, status")
+      .neq("status", "geannuleerd")
+      .limit(8000);
+    for (const cf of allCfs || []) {
+      const row = cf as {
+        id: string;
+        factuur_nummer: string;
+        notities: string | null;
+      };
+      const notes = row.notities || "";
+      const nr = row.factuur_nummer || "";
+      const mB = notes.match(/ref_offerte_tranche_b:([^\s·]+)/i);
+      const mA = notes.match(/ref_offerte:([^\s·]+)/i);
+      if (mB?.[1]) {
+        creditBByOfferte.set(mB[1], { id: row.id, nummer: nr });
+      } else if (mA?.[1] && !/tranche_b/i.test(notes)) {
+        creditAByOfferte.set(mA[1], { id: row.id, nummer: nr });
+      }
+      const restMatch = nr.match(/\/RESTBETALING\/(.+)$/i);
+      if (restMatch?.[1]) {
+        creditBByOfferte.set(restMatch[1], { id: row.id, nummer: nr });
+      }
+      const aanbMatch = nr.match(/\/AANBETALING\/(.+)$/i);
+      if (aanbMatch?.[1]) {
+        creditAByOfferte.set(aanbMatch[1], { id: row.id, nummer: nr });
+      }
+    }
+
+    const creditIds = [
+      ...new Set([
+        ...creditByFactuur.values(),
+        ...[...creditAByOfferte.values()].map((x) => x.id),
+        ...[...creditBByOfferte.values()].map((x) => x.id),
+      ]),
+    ];
     const creditNummerById = new Map<string, string>();
     if (creditIds.length) {
       const { data: cfs } = await sb
@@ -399,9 +438,20 @@ export async function GET(req: NextRequest) {
           projStatus === "restfactuur_betaald",
       });
 
-      const creditId = aanbetalingBetaald
+      const offNr = (o.offerte_nummer as string | null) || null;
+      const creditFromRegel = aanbetalingBetaald
         ? creditByFactuur.get(aanbetalingBetaald.id) || null
         : null;
+      const creditA =
+        (creditFromRegel
+          ? {
+              id: creditFromRegel,
+              nummer: creditNummerById.get(creditFromRegel) || null,
+            }
+          : null) ||
+        (offNr ? creditAByOfferte.get(offNr) || null : null);
+      const creditB = offNr ? creditBByOfferte.get(offNr) || null : null;
+      const creditId = creditA?.id || null;
 
       const statusSinds = geannuleerd
         ? project?.updated_at || (o.updated_at as string | null)
@@ -447,9 +497,11 @@ export async function GET(req: NextRequest) {
         aanbetaling_betaald: Boolean(aanbetalingBetaald),
         aanbetaling_factuur_id: aanbetalingBetaald?.id || null,
         creditfactuur_id: creditId,
-        creditfactuur_nummer: creditId
-          ? creditNummerById.get(creditId) || null
-          : null,
+        creditfactuur_nummer:
+          creditA?.nummer ||
+          (creditId ? creditNummerById.get(creditId) || null : null),
+        creditfactuur_b_id: creditB?.id || null,
+        creditfactuur_b_nummer: creditB?.nummer || null,
         commissie_verwacht: commissie.verwacht,
         commissie_tranche_a: commissie.tranche_a,
         commissie_tranche_b: commissie.tranche_b,

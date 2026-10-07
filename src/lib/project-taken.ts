@@ -34,15 +34,15 @@ function kickoffAutoTaken(warmtefonds: boolean): AutoTaakDef[] {
   const taken: AutoTaakDef[] = [
     {
       autoKey: "kickoff:aanbetaling",
-      titel: "Aanbetalingsfactuur versturen",
+      titel: "BTW-factuur versturen",
       afdeling: "Facturatie",
       dueInDays: 1,
     },
     {
       autoKey: "kickoff:schouwweek",
       titel: warmtefonds
-        ? "Schouwweek inplannen (±5 weken vooruit)"
-        : "Schouwweek inplannen",
+        ? "Schouwweek inplannen + track & trace (±5 weken)"
+        : "Schouwweek inplannen + track & trace",
       afdeling: "Planning",
       dueInDays: 1,
     },

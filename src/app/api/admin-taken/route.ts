@@ -9,6 +9,8 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 
 export const runtime = "nodejs";
 
+type Soort = "taak" | "afspraak";
+
 async function requireAdmin() {
   const jar = await cookies();
   const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
@@ -32,6 +34,10 @@ function parseDueAt(raw: unknown): string | null {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+function parseSoort(raw: unknown): Soort {
+  return raw === "afspraak" ? "afspraak" : "taak";
 }
 
 /** GET /api/admin-taken?open=1 */
@@ -75,7 +81,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST /api/admin-taken — { titel, inhoud?, due_at } */
+/** POST /api/admin-taken — { titel, inhoud?, due_at, end_at?, soort? } */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
   if (auth.error) return auth.error;
@@ -85,9 +91,12 @@ export async function POST(req: NextRequest) {
       titel?: string;
       inhoud?: string | null;
       due_at?: string;
+      end_at?: string | null;
+      soort?: string;
     };
     const titel = body.titel?.trim() || "";
     const inhoud = body.inhoud?.trim() || null;
+    const soort = parseSoort(body.soort);
     const dueAt = parseDueAt(body.due_at);
 
     if (!titel) {
@@ -95,23 +104,74 @@ export async function POST(req: NextRequest) {
     }
     if (!dueAt) {
       return NextResponse.json(
-        { error: "Deadline (datum + tijd) is verplicht" },
+        {
+          error:
+            soort === "afspraak"
+              ? "Starttijd is verplicht"
+              : "Deadline (datum + tijd) is verplicht",
+        },
         { status: 400 }
       );
     }
 
+    let endAt: string | null = null;
+    if (soort === "afspraak") {
+      endAt = parseDueAt(body.end_at);
+      if (!endAt) {
+        // Default: 1 uur na start
+        endAt = new Date(new Date(dueAt).getTime() + 60 * 60 * 1000).toISOString();
+      }
+      if (new Date(endAt).getTime() <= new Date(dueAt).getTime()) {
+        return NextResponse.json(
+          { error: "Eindtijd moet na de starttijd liggen" },
+          { status: 400 }
+        );
+      }
+    }
+
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const row: Record<string, unknown> = {
+      titel,
+      inhoud,
+      due_at: dueAt,
+      status: "todo",
+      created_by_id: auth.session!.adviseurId,
+    };
+
+    // soort/end_at: graceful als migratie nog niet gedraaid is
+    row.soort = soort;
+    row.end_at = endAt;
+
+    let { data, error } = await sb
       .from("admin_taken")
-      .insert({
-        titel,
-        inhoud,
-        due_at: dueAt,
-        status: "todo",
-        created_by_id: auth.session!.adviseurId,
-      })
+      .insert(row)
       .select("*")
       .single();
+
+    if (
+      error &&
+      (error.message?.includes("soort") ||
+        error.message?.includes("end_at") ||
+        error.code === "42703")
+    ) {
+      const { soort: _s, end_at: _e, ...withoutSoort } = row;
+      const retry = await sb
+        .from("admin_taken")
+        .insert(withoutSoort)
+        .select("*")
+        .single();
+      data = retry.data;
+      error = retry.error;
+      if (!error && soort === "afspraak") {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-admin-taken-afspraak.sql uit om afspraken op te slaan.",
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     if (error) {
       if (error.code === "42P01" || error.message?.includes("admin_taken")) {

@@ -99,7 +99,7 @@ export async function POST(
       })
       .eq("id", id)
       .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
       )
       .single();
 
@@ -153,11 +153,31 @@ export async function POST(
     const mailPatch: Record<string, boolean> = {};
 
     if (lead?.email?.trim()) {
+      let trackUrl: string | null = null;
+      try {
+        const offJoin = Array.isArray(updated.offertes)
+          ? updated.offertes[0]
+          : updated.offertes;
+        const { ensureOfferteTrackToken } = await import(
+          "@/lib/ensure-track-token"
+        );
+        if (offJoin?.id) {
+          const trackToken = await ensureOfferteTrackToken(
+            sb,
+            offJoin.id,
+            (offJoin as { track_token?: string | null }).track_token
+          );
+          if (trackToken) trackUrl = `${appBaseUrl()}/track/${trackToken}`;
+        }
+      } catch {
+        /* track optioneel */
+      }
       const html = installatieKlantEmail({
         naam: lead.naam || "klant",
         installatieAt: whenIso,
         adres,
         projectNummer: updated.project_nummer,
+        trackUrl,
       });
       const sent = await sendEmail({
         to: lead.email.trim(),

@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
       offerte_nummer: offerteNr,
       status: "concept",
       sign_token: randomBytes(24).toString("hex"),
+      track_token: randomBytes(24).toString("hex"),
       titel: body.titel || "Offerte thuisbatterij",
       intro_tekst:
         body.intro_tekst ||
@@ -110,6 +111,7 @@ export async function POST(req: NextRequest) {
       insert.error &&
       (insert.error.message?.includes("financiering_voorbehoud") ||
         insert.error.message?.includes("installatie_partner_id") ||
+        insert.error.message?.includes("track_token") ||
         insert.error.code === "42703")
     ) {
       const missingPartner = insert.error.message?.includes(
@@ -118,8 +120,10 @@ export async function POST(req: NextRequest) {
       const missingFin = insert.error.message?.includes(
         "financiering_voorbehoud"
       );
+      const missingTrack = insert.error.message?.includes("track_token");
       if (missingPartner) delete row.installatie_partner_id;
       if (missingFin) delete row.financiering_voorbehoud;
+      if (missingTrack) delete row.track_token;
       insert = await sb
         .from("offertes")
         .insert(row)

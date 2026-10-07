@@ -2,12 +2,14 @@
 export const SCHOUW_DUUR_MINUTEN = 30;
 export const INSTALLATIE_DUUR_MINUTEN = 180; // 3 uur
 export const SERVICE_DUUR_MINUTEN = 60; // 1 uur
+export const LEVERING_DUUR_MINUTEN = 60; // 1 uur (ochtend-slot)
 
 export function duurMinutenVoorKind(
-  kind: "schouw" | "schouwweek" | "installatie" | "service"
+  kind: "schouw" | "schouwweek" | "installatie" | "service" | "levering"
 ): number {
   if (kind === "installatie") return INSTALLATIE_DUUR_MINUTEN;
   if (kind === "service") return SERVICE_DUUR_MINUTEN;
+  if (kind === "levering") return LEVERING_DUUR_MINUTEN;
   if (kind === "schouw") return SCHOUW_DUUR_MINUTEN;
   return 0;
 }

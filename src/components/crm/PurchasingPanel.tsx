@@ -40,6 +40,7 @@ type PurchasingOrder = {
   inkoop_totaal_ex_btw: number;
   schouw: SchouwInfo;
   installatie_at: string | null;
+  materiaal_leverdatum: string | null;
   summary: {
     te_kopen: number;
     besteld: number;
@@ -48,6 +49,29 @@ type PurchasingOrder = {
   };
   items: OrderLine[];
 };
+
+function defaultLeverdatumYmd(daysAhead = 7): string {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Vraagt leverdatum (jjjj-mm-dd). null = geannuleerd. */
+function askLeverdatum(existingIso?: string | null): string | null {
+  const def = existingIso?.slice(0, 10) || defaultLeverdatumYmd(7);
+  const raw = window.prompt(
+    "Verwachte leverdatum (jjjj-mm-dd) — komt oranje op Planbord:",
+    def
+  );
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    window.alert("Ongeldige datum. Gebruik formaat jjjj-mm-dd.");
+    return askLeverdatum(existingIso);
+  }
+  return trimmed;
+}
 
 /** Werkvoorraad-fases van de inkoopdesk. */
 type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd";
@@ -250,7 +274,7 @@ export function PurchasingPanel() {
   async function persistChecks(
     order: PurchasingOrder,
     nextChecks: Record<string, InkoopRegelStatus>,
-    opts?: { reload?: boolean }
+    opts?: { reload?: boolean; askLeverdatum?: boolean }
   ) {
     const items = order.items.map((i) => ({
       ...i,
@@ -260,6 +284,21 @@ export function PurchasingPanel() {
       (i) => i.status === "besteld" || i.status === "geleverd"
     );
     const allGeleverd = items.every((i) => i.status === "geleverd");
+    const wasAlreadyBesteld =
+      order.summary.overall === "besteld" ||
+      order.summary.overall === "geleverd";
+
+    let leverdatumYmd: string | null | undefined;
+    if (
+      allBesteldOrMore &&
+      !allGeleverd &&
+      (opts?.askLeverdatum || !wasAlreadyBesteld || !order.materiaal_leverdatum)
+    ) {
+      leverdatumYmd = askLeverdatum(order.materiaal_leverdatum);
+      if (leverdatumYmd === null) {
+        throw new Error("Geannuleerd — geen leverdatum opgegeven.");
+      }
+    }
 
     const body: Record<string, unknown> = {
       materiaal_checks: nextChecks,
@@ -267,6 +306,9 @@ export function PurchasingPanel() {
     if (allBesteldOrMore && order.status === "restfactuur_betaald") {
       body.status = "materiaal_besteld";
       body.materiaal_volledig_afgevinkt = true;
+    }
+    if (leverdatumYmd) {
+      body.materiaal_leverdatum = leverdatumYmd;
     }
 
     const res = await fetch(`/api/projecten/${order.id}`, {
@@ -305,6 +347,9 @@ export function PurchasingPanel() {
               allBesteldOrMore && o.status === "restfactuur_betaald"
                 ? "materiaal_besteld"
                 : o.status,
+            materiaal_leverdatum: leverdatumYmd
+              ? `${leverdatumYmd}T09:00:00.000Z`
+              : o.materiaal_leverdatum,
             items,
             summary: { te_kopen, besteld, geleverd, overall },
           };
@@ -316,7 +361,9 @@ export function PurchasingPanel() {
       setOkMsg(`${order.project_nummer || "Order"} · alles geleverd.`);
     } else if (allBesteldOrMore) {
       setOkMsg(
-        `${order.project_nummer || "Order"} · besteld bij ${leverancier}.`
+        `${order.project_nummer || "Order"} · besteld bij ${leverancier}${
+          leverdatumYmd ? ` · levering ${leverdatumYmd}` : ""
+        }.`
       );
     }
   }
@@ -349,7 +396,10 @@ export function PurchasingPanel() {
     try {
       const nextChecks: Record<string, InkoopRegelStatus> = {};
       for (const item of order.items) nextChecks[item.key] = status;
-      await persistChecks(order, nextChecks, { reload: true });
+      await persistChecks(order, nextChecks, {
+        reload: true,
+        askLeverdatum: status === "besteld",
+      });
       setOpenId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
@@ -617,6 +667,12 @@ export function PurchasingPanel() {
                                 Bestellen pas na rapport
                               </span>
                             ) : null}
+                            {order.materiaal_leverdatum ? (
+                              <span className="font-semibold text-[#EA580C]">
+                                Levering{" "}
+                                {order.materiaal_leverdatum.slice(0, 10)}
+                              </span>
+                            ) : null}
                           </div>
                           <div className="flex flex-wrap gap-2">
                             {canOrder && isOpenInkoop(order) ? (
@@ -627,6 +683,17 @@ export function PurchasingPanel() {
                                 className="bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
                               >
                                 Alles besteld
+                              </button>
+                            ) : null}
+                            {order.summary.overall === "besteld" &&
+                            !order.materiaal_leverdatum ? (
+                              <button
+                                type="button"
+                                disabled={busyKey === `${order.id}:all`}
+                                onClick={() => void markAll(order, "besteld")}
+                                className="border border-[#EA580C] bg-white px-3 py-1.5 text-xs font-semibold text-[#EA580C] disabled:opacity-60"
+                              >
+                                Zet leverdatum
                               </button>
                             ) : null}
                             {order.summary.overall === "besteld" ||

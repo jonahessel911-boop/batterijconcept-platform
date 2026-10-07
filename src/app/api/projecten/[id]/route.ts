@@ -17,11 +17,13 @@ import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { projectHeeftOpleveringsrapport } from "@/lib/project-na-oplevering";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
+import { fromZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 
 export const runtime = "nodejs";
 
 const PROJECT_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)";
+  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
 
 /** GET /api/projecten/[id] — projectdetail (ook via lead_id als fallback). */
 export async function GET(
@@ -102,6 +104,8 @@ export async function PATCH(
     schouw_week?: number | null;
     leveradres?: string | null;
     materiaal_checks?: Record<string, boolean | string> | null;
+    /** Verwachte leverdatum inkoop (Planbord). */
+    materiaal_leverdatum?: string | null;
     /** Client signaleert: alle inkoop-vinkjes net afgevinkt. */
     materiaal_volledig_afgevinkt?: boolean;
     notities?: string | null;
@@ -119,6 +123,7 @@ export async function PATCH(
     btw_terugvragen_aangevraagd_at?: string | null;
     overstap_dynamische_leverancier_at?: string | null;
     review_gevraagd_at?: string | null;
+    aangetekende_brief_verstuurd_at?: string | null;
   };
   try {
     body = await req.json();
@@ -139,6 +144,7 @@ export async function PATCH(
       patch.schouw_week = null;
       patch.installatie_at = null;
       patch.service_at = null;
+      patch.materiaal_leverdatum = null;
     }
   }
   if (body.betaalwijze !== undefined) {
@@ -217,6 +223,7 @@ export async function PATCH(
     "btw_terugvragen_aangevraagd_at",
     "overstap_dynamische_leverancier_at",
     "review_gevraagd_at",
+    "aangetekende_brief_verstuurd_at",
   ] as const) {
     const val = body[key];
     if (val === undefined) continue;
@@ -299,6 +306,28 @@ export async function PATCH(
       body.materiaal_checks && typeof body.materiaal_checks === "object"
         ? body.materiaal_checks
         : {};
+  }
+  if (body.materiaal_leverdatum !== undefined) {
+    if (body.materiaal_leverdatum === null || body.materiaal_leverdatum === "") {
+      patch.materiaal_leverdatum = null;
+    } else {
+      const raw = String(body.materiaal_leverdatum).trim();
+      // yyyy-MM-dd → 09:00 Amsterdam
+      let iso: string;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        iso = fromZonedTime(`${raw}T09:00:00`, AMSTERDAM_TZ).toISOString();
+      } else {
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) {
+          return NextResponse.json(
+            { error: "Ongeldige leverdatum" },
+            { status: 400 }
+          );
+        }
+        iso = d.toISOString();
+      }
+      patch.materiaal_leverdatum = iso;
+    }
   }
   if (body.notities !== undefined) {
     patch.notities = body.notities?.trim() || null;
@@ -389,7 +418,7 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
+        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)"
       )
       .single();
 

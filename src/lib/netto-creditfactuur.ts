@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   NETTO_AANBETALING_COMMISSIE,
+  commissieTrancheA,
   commissieTrancheB,
   isAanbetalingFactuur,
 } from "@/lib/netto-boord";
@@ -23,13 +24,66 @@ function offerteTrancheBTag(offerteNummer: string) {
   return `ref_offerte_tranche_b:${offerteNummer}`;
 }
 
+async function omzetExFromOfferte(
+  sb: SupabaseClient,
+  offerteId: string | null | undefined,
+  fallback?: {
+    subtotaal_ex_btw?: number | null;
+    totaal_inc_btw?: number | null;
+  }
+): Promise<number> {
+  let omzetEx = Number(fallback?.subtotaal_ex_btw) || 0;
+  if (!(omzetEx > 0) && Number(fallback?.totaal_inc_btw) > 0) {
+    omzetEx =
+      Math.round((Number(fallback!.totaal_inc_btw) / 1.21) * 100) / 100;
+  }
+  if (!(omzetEx > 0) && offerteId) {
+    const { data: off } = await sb
+      .from("offertes")
+      .select("id, subtotaal_ex_btw, totaal_inc_btw")
+      .eq("id", offerteId)
+      .maybeSingle();
+    omzetEx = Number(off?.subtotaal_ex_btw) || 0;
+    if (!(omzetEx > 0) && Number(off?.totaal_inc_btw) > 0) {
+      omzetEx =
+        Math.round((Number(off!.totaal_inc_btw) / 1.21) * 100) / 100;
+    }
+    if (!(omzetEx > 0) && off?.id) {
+      const { data: regels } = await sb
+        .from("offerte_regels")
+        .select("totaal_ex_btw")
+        .eq("offerte_id", off.id);
+      omzetEx =
+        Math.round(
+          (regels || []).reduce(
+            (s, r) => s + (Number(r.totaal_ex_btw) || 0),
+            0
+          ) * 100
+        ) / 100;
+    }
+  }
+  return omzetEx;
+}
+
+function applyMaxFee(
+  fee: number,
+  maxBedrag: number | null | undefined
+): number {
+  const max =
+    maxBedrag != null && Number(maxBedrag) > 0 ? Number(maxBedrag) : null;
+  if (max != null && fee > max) return max;
+  return fee;
+}
+
 /**
- * Concept commissiefactuur (€250 excl. + 21% btw) bij getekende order.
- * Nog niet versturen — dat gebeurt bij betaalde aanbetaling.
+ * @deprecated Premature concepten bij order-sign veroorzaakten woensdag-mails
+ * vóór betaalde aanbetaling. Tranche A wordt aangemaakt via
+ * `ensureNettoAanbetalingCreditfactuur` (of handmatig vanuit NettoBoord).
+ * Deze functie blijft als no-op voor bestaande callers.
  */
 export async function ensureAdviseurOrderCommissieConcept(
-  sb: SupabaseClient,
-  opts: {
+  _sb: SupabaseClient,
+  _opts: {
     leadId: string;
     offerteId: string;
     offerteNummer: string;
@@ -42,109 +96,11 @@ export async function ensureAdviseurOrderCommissieConcept(
   skipped?: string;
   error?: string;
 }> {
-  const { data: lead } = await sb
-    .from("leads")
-    .select("id, naam, adviseur_id")
-    .eq("id", opts.leadId)
-    .maybeSingle();
-
-  if (!lead?.adviseur_id) {
-    return { ok: true, skipped: "geen_adviseur" };
-  }
-
-  const { data: adv } = await sb
-    .from("adviseurs")
-    .select(
-      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief"
-    )
-    .eq("id", lead.adviseur_id)
-    .maybeSingle();
-
-  if (!adv) return { ok: true, skipped: "adviseur_ontbreekt" };
-  if (!adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
-    return { ok: true, skipped: "zzp_gegevens_incompleet" };
-  }
-
-  const tag = offerteRefTag(opts.offerteNummer);
-  const { data: existing } = await sb
-    .from("adviseur_creditfacturen")
-    .select("id, status")
-    .eq("adviseur_id", adv.id)
-    .neq("status", "geannuleerd")
-    .ilike("notities", `%${tag}%`)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (existing?.id) {
-    return {
-      ok: true,
-      created: false,
-      creditfactuur_id: existing.id as string,
-      skipped: "al_bestaat",
-    };
-  }
-
-  let fee = NETTO_AANBETALING_COMMISSIE;
-  const max =
-    adv.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0
-      ? Number(adv.max_factuur_bedrag)
-      : null;
-  if (max != null && fee > max) fee = max;
-  const amounts = bedragenMetBtw(fee);
-
-  const weekInfo = creditWeekFromDate(new Date());
-  const factuurNummer = formatCreditFactuurNummer(
-    weekInfo.jaar,
-    "aanbetaling",
-    opts.offerteNummer
-  );
-  const betaaldag = weekInfo.betaalWoensdag;
-
-  const { data: created, error: createErr } = await sb
-    .from("adviseur_creditfacturen")
-    .insert({
-      adviseur_id: adv.id,
-      factuur_nummer: factuurNummer,
-      status: "concept",
-      week_jaar: weekInfo.jaar,
-      week_nummer: weekInfo.week,
-      periode_van: weekInfo.van,
-      periode_tot: weekInfo.tot,
-      aantal_aanbetalingen: 0,
-      bedrag_ex_btw: amounts.bedrag_ex_btw,
-      btw_bedrag: amounts.btw_bedrag,
-      bedrag_inc_btw: amounts.bedrag_inc_btw,
-      factuurdatum: betaaldag,
-      notities: [
-        tag,
-        `Commissie 1e deel (€${fee} excl. btw) · Offerte ${opts.offerteNummer}`,
-        opts.projectNummer ? `Project ${opts.projectNummer}` : null,
-        lead.naam ? `Klant ${lead.naam}` : null,
-        `Verwerking woensdag ${betaaldag} · + 21% btw op factuur`,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    })
-    .select("id")
-    .single();
-
-  if (createErr || !created) {
-    return {
-      ok: false,
-      error: createErr?.message || "Concept commissiefactuur mislukt",
-    };
-  }
-
-  return {
-    ok: true,
-    created: true,
-    creditfactuur_id: created.id as string,
-  };
+  return { ok: true, skipped: "deferred_tot_aanbetaling" };
 }
 
 /**
- * Koppel betaalde aanbetalingsfactuur aan commissie-CF (concept).
+ * Tranche A: koppel betaalde klant-aanbetaling aan commissie-CF (concept).
  * Versturen gebeurt woensdag via `runWoensdagCommissieBatch` (niet direct).
  */
 export async function ensureNettoAanbetalingCreditfactuur(
@@ -226,7 +182,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
   const { data: off } = fac.offerte_id
     ? await sb
         .from("offertes")
-        .select("offerte_nummer")
+        .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw")
         .eq("id", fac.offerte_id)
         .maybeSingle()
     : { data: null };
@@ -239,12 +195,14 @@ export async function ensureNettoAanbetalingCreditfactuur(
     .limit(1)
     .maybeSingle();
 
-  let fee = NETTO_AANBETALING_COMMISSIE;
-  const max =
-    adv.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0
-      ? Number(adv.max_factuur_bedrag)
-      : null;
-  if (max != null && fee > max) fee = max;
+  const omzetEx = await omzetExFromOfferte(sb, fac.offerte_id, off || undefined);
+  let fee =
+    omzetEx > 0
+      ? commissieTrancheA(omzetEx)
+      : NETTO_AANBETALING_COMMISSIE;
+  fee = applyMaxFee(fee, adv.max_factuur_bedrag);
+  if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_a" };
+
   const amounts = bedragenMetBtw(fee);
 
   const weekInfo = creditWeekFromDate(
@@ -252,20 +210,41 @@ export async function ensureNettoAanbetalingCreditfactuur(
   );
   const betaaldag = weekInfo.betaalWoensdag;
 
-  // Zoek bestaand concept voor deze order
+  // Zoek bestaande CF voor deze order (ook als al verzonden — dan alleen regel koppelen)
   let creditId: string | null = null;
+  let creditStatus: string | null = null;
   if (off?.offerte_nummer) {
     const tag = offerteRefTag(off.offerte_nummer);
     const { data: orderCf } = await sb
       .from("adviseur_creditfacturen")
       .select("id, status")
       .eq("adviseur_id", adv.id)
-      .eq("status", "concept")
+      .neq("status", "geannuleerd")
       .ilike("notities", `%${tag}%`)
+      .not("notities", "ilike", "%ref_offerte_tranche_b:%")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (orderCf?.id) creditId = orderCf.id as string;
+    if (orderCf?.id) {
+      creditId = orderCf.id as string;
+      creditStatus = orderCf.status as string;
+    }
+    // Fallback op factuurnummer
+    if (!creditId) {
+      const { data: byNr } = await sb
+        .from("adviseur_creditfacturen")
+        .select("id, status")
+        .eq("adviseur_id", adv.id)
+        .neq("status", "geannuleerd")
+        .ilike("factuur_nummer", `%/AANBETALING/${off.offerte_nummer}`)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (byNr?.id) {
+        creditId = byNr.id as string;
+        creditStatus = byNr.status as string;
+      }
+    }
   }
 
   let created = false;
@@ -298,7 +277,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
         notities: [
           tag,
           `Commissie aanbetaling · verwerking woensdag ${betaaldag}`,
-          off?.offerte_nummer ? `Offerte ${off.offerte_nummer}` : null,
+          `Offerte ${off.offerte_nummer}`,
           project?.project_nummer ? `Project ${project.project_nummer}` : null,
         ]
           .filter(Boolean)
@@ -308,11 +287,41 @@ export async function ensureNettoAanbetalingCreditfactuur(
       .single();
 
     if (createErr || !newCf) {
-      return { ok: false, error: createErr?.message || "CF aanmaken mislukt" };
+      // Unieke factuurnummer: pak bestaande rij
+      if (createErr?.code === "23505") {
+        const { data: again } = await sb
+          .from("adviseur_creditfacturen")
+          .select("id, status")
+          .eq("factuur_nummer", factuurNummer)
+          .maybeSingle();
+        if (again?.id) {
+          creditId = again.id as string;
+          creditStatus = again.status as string;
+        } else {
+          return {
+            ok: false,
+            error: createErr?.message || "CF aanmaken mislukt",
+          };
+        }
+      } else {
+        return {
+          ok: false,
+          error: createErr?.message || "CF aanmaken mislukt",
+        };
+      }
+    } else {
+      creditId = newCf.id as string;
+      creditStatus = "concept";
+      created = true;
     }
-    creditId = newCf.id as string;
-    created = true;
-  } else {
+  }
+
+  if (!creditId) {
+    return { ok: false, error: "Geen creditfactuur-id" };
+  }
+
+  // Alleen concepten herberekenen / week zetten
+  if (creditStatus === "concept") {
     await sb
       .from("adviseur_creditfacturen")
       .update({
@@ -383,7 +392,6 @@ async function tryVerstuur(
     if (!fac || (fac.status !== "concept" && fac.status !== "verzonden")) {
       return false;
     }
-    // Alleen concept → versturen (opnieuw versturen mag ook bij verzonden)
     if (fac.status === "concept") {
       const result = await verstuurAdviseurCreditfactuur(sb, creditId);
       return result.ok;
@@ -395,8 +403,25 @@ async function tryVerstuur(
   }
 }
 
+/** Mag deze concept-CF woensdag worden gemaild? */
+export function magWoensdagVersturen(cf: {
+  factuur_nummer?: string | null;
+  aantal_aanbetalingen?: number | null;
+  has_regels?: boolean;
+}): boolean {
+  const nr = String(cf.factuur_nummer || "");
+  if (/\/RESTBETALING\//i.test(nr)) return true;
+  if (/\/AANBETALING\//i.test(nr)) {
+    return (
+      Number(cf.aantal_aanbetalingen) > 0 || Boolean(cf.has_regels)
+    );
+  }
+  // Handmatige / week-batch concepten: alleen met bedrag-regels of expliciet aantal
+  return Number(cf.aantal_aanbetalingen) > 0 || Boolean(cf.has_regels);
+}
+
 /**
- * Rest-commissie (tranche B = 10% omzet ex − €250) bij installatie voltooid.
+ * Rest-commissie (tranche B = 10% omzet ex − tranche A) bij installatie voltooid.
  * Maakt concept; versturen gebeurt woensdag via `runWoensdagCommissieBatch`.
  */
 export async function ensureAdviseurCommissieTrancheB(
@@ -451,23 +476,7 @@ export async function ensureAdviseurCommissieTrancheB(
   if (!lead?.adviseur_id) return { ok: true, skipped: "geen_adviseur" };
   if (!off?.offerte_nummer) return { ok: true, skipped: "geen_offerte" };
 
-  let omzetEx = Number(off.subtotaal_ex_btw) || 0;
-  if (!(omzetEx > 0) && Number(off.totaal_inc_btw) > 0) {
-    omzetEx = Math.round((Number(off.totaal_inc_btw) / 1.21) * 100) / 100;
-  }
-  if (!(omzetEx > 0) && off.id) {
-    const { data: regels } = await sb
-      .from("offerte_regels")
-      .select("totaal_ex_btw")
-      .eq("offerte_id", off.id);
-    omzetEx = Math.round(
-      (regels || []).reduce(
-        (s, r) => s + (Number(r.totaal_ex_btw) || 0),
-        0
-      ) * 100
-    ) / 100;
-  }
-
+  const omzetEx = await omzetExFromOfferte(sb, off.id || project.offerte_id, off);
   let fee = commissieTrancheB(omzetEx);
   if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_b", bedrag: 0 };
 
@@ -484,11 +493,7 @@ export async function ensureAdviseurCommissieTrancheB(
     return { ok: true, skipped: "zzp_gegevens_incompleet" };
   }
 
-  const max =
-    adv.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0
-      ? Number(adv.max_factuur_bedrag)
-      : null;
-  if (max != null && fee > max) fee = max;
+  fee = applyMaxFee(fee, adv.max_factuur_bedrag);
 
   const tag = offerteTrancheBTag(off.offerte_nummer);
   const { data: existing } = await sb
@@ -533,6 +538,7 @@ export async function ensureAdviseurCommissieTrancheB(
     off.offerte_nummer
   );
   const betaaldag = weekInfo.betaalWoensdag;
+  const trancheA = commissieTrancheA(omzetEx);
 
   const { data: created, error: createErr } = await sb
     .from("adviseur_creditfacturen")
@@ -544,14 +550,14 @@ export async function ensureAdviseurCommissieTrancheB(
       week_nummer: weekInfo.week,
       periode_van: weekInfo.van,
       periode_tot: weekInfo.tot,
-      aantal_aanbetalingen: 0,
+      aantal_aanbetalingen: 1,
       bedrag_ex_btw: amounts.bedrag_ex_btw,
       btw_bedrag: amounts.btw_bedrag,
       bedrag_inc_btw: amounts.bedrag_inc_btw,
       factuurdatum: betaaldag,
       notities: [
         tag,
-        `Commissie restant (€${fee} excl. btw = 10% omzet − €250) · Offerte ${off.offerte_nummer}`,
+        `Commissie restant (€${fee} excl. btw = 10% − €${trancheA}) · Offerte ${off.offerte_nummer}`,
         project.project_nummer
           ? `Project ${project.project_nummer}`
           : null,
@@ -565,6 +571,22 @@ export async function ensureAdviseurCommissieTrancheB(
     .single();
 
   if (createErr || !created) {
+    if (createErr?.code === "23505") {
+      const { data: again } = await sb
+        .from("adviseur_creditfacturen")
+        .select("id")
+        .eq("factuur_nummer", factuurNummer)
+        .maybeSingle();
+      if (again?.id) {
+        return {
+          ok: true,
+          created: false,
+          creditfactuur_id: again.id as string,
+          skipped: "al_bestaat",
+          bedrag: fee,
+        };
+      }
+    }
     return {
       ok: false,
       error: createErr?.message || "Tranche B creditfactuur mislukt",
@@ -589,7 +611,7 @@ export type WoensdagCommissieBatchResult = {
   betaalWoensdag: string;
   aanbetalingen: { checked: number; created: number; errors: string[] };
   netto: { checked: number; created: number; errors: string[] };
-  verstuurd: { count: number; ids: string[]; errors: string[] };
+  verstuurd: { count: number; ids: string[]; errors: string[]; skipped: number };
   skipped?: string;
 };
 
@@ -597,7 +619,7 @@ export type WoensdagCommissieBatchResult = {
  * Elke woensdag: verwerk commissie van de vorige ISO-week.
  * - Aanbetalingen betaald in die week → tranche A concepten
  * - Netto sales (installatie uitgevoerd) in die week → tranche B concepten
- * - Alle concepten van die week versturen ter goedkeuring (factuurdatum = woensdag)
+ * - Alleen rijpe concepten van die week versturen (A met betaalde regel, of B)
  */
 export async function runWoensdagCommissieBatch(
   sb: SupabaseClient,
@@ -616,7 +638,7 @@ export async function runWoensdagCommissieBatch(
     betaalWoensdag,
     aanbetalingen: { checked: 0, created: 0, errors: [] },
     netto: { checked: 0, created: 0, errors: [] },
-    verstuurd: { count: 0, ids: [], errors: [] },
+    verstuurd: { count: 0, ids: [], errors: [], skipped: 0 },
   };
 
   // 1) Aanbetalingen betaald in vorige week
@@ -650,7 +672,7 @@ export async function runWoensdagCommissieBatch(
     }
   }
 
-  // 2) Netto sales = installatie uitgevoerd in vorige week (Amsterdam-grenzen)
+  // 2) Netto sales = installatie uitgevoerd in vorige week
   const weekStartIso = fromZonedTime(
     `${week.van}T00:00:00`,
     AMSTERDAM_TZ
@@ -668,7 +690,6 @@ export async function runWoensdagCommissieBatch(
     .lte("installatie_voltooid_at", weekEndIso)
     .limit(2000);
 
-  // Fallback zonder kolom: status voltooid + updated_at in week
   if (
     nettoErr &&
     (nettoErr.message?.includes("installatie_voltooid_at") ||
@@ -700,14 +721,18 @@ export async function runWoensdagCommissieBatch(
         );
       } else if (r.created) {
         result.netto.created += 1;
+      } else if (r.skipped === "zzp_gegevens_incompleet") {
+        result.netto.errors.push(
+          `${p.project_nummer || p.id}: ZZP-gegevens incompleet (bedrijfsnaam/KvK/IBAN)`
+        );
       }
     }
   }
 
-  // 3) Concepten van die week → factuurdatum woensdag + versturen
+  // 3) Rijpe concepten van die week → versturen
   const { data: concepts, error: cfErr } = await sb
     .from("adviseur_creditfacturen")
-    .select("id, factuur_nummer, status")
+    .select("id, factuur_nummer, status, aantal_aanbetalingen")
     .eq("status", "concept")
     .eq("week_jaar", week.jaar)
     .eq("week_nummer", week.week)
@@ -720,6 +745,22 @@ export async function runWoensdagCommissieBatch(
   }
 
   for (const cf of concepts || []) {
+    const { count: regelCount } = await sb
+      .from("adviseur_creditfactuur_regels")
+      .select("id", { count: "exact", head: true })
+      .eq("creditfactuur_id", cf.id);
+
+    const ready = magWoensdagVersturen({
+      factuur_nummer: cf.factuur_nummer as string,
+      aantal_aanbetalingen: cf.aantal_aanbetalingen as number,
+      has_regels: (regelCount || 0) > 0,
+    });
+
+    if (!ready) {
+      result.verstuurd.skipped += 1;
+      continue;
+    }
+
     await sb
       .from("adviseur_creditfacturen")
       .update({

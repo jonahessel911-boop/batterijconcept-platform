@@ -201,6 +201,34 @@ export async function POST(
     const pdfBytes = Buffer.from(await blob.arrayBuffer());
     const filename = `${isCredit ? "credit-" : ""}${factuur.factuur_nummer}.pdf`;
 
+    let trackUrl: string | null = null;
+    try {
+      const offerteId = factuur.offerte_id as string | null;
+      if (offerteId) {
+        const { ensureOfferteTrackToken } = await import(
+          "@/lib/ensure-track-token"
+        );
+        const { data: offTrack } = await sb
+          .from("offertes")
+          .select("id, track_token")
+          .eq("id", offerteId)
+          .maybeSingle();
+        if (offTrack?.id) {
+          const trackToken = await ensureOfferteTrackToken(
+            sb,
+            offTrack.id,
+            offTrack.track_token
+          );
+          if (trackToken) {
+            const { appBaseUrl } = await import("@/lib/email/postmark");
+            trackUrl = `${appBaseUrl()}/track/${trackToken}`;
+          }
+        }
+      }
+    } catch {
+      /* track optioneel */
+    }
+
     const co = companyInfo();
     const html = factuurVerzondenEmail({
       naam: factuur.leads?.naam || "klant",
@@ -212,6 +240,7 @@ export async function POST(
       betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
       isCredit,
       creditVanNummer,
+      trackUrl,
     });
 
     const sent = await sendEmail({

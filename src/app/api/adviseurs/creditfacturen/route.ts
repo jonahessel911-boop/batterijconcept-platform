@@ -16,7 +16,11 @@ import {
 } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
-import { ensureAdviseurOrderCommissieConcept } from "@/lib/netto-creditfactuur";
+import {
+  ensureAdviseurCommissieTrancheB,
+  ensureNettoAanbetalingCreditfactuur,
+} from "@/lib/netto-creditfactuur";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 
 export const runtime = "nodejs";
 
@@ -228,7 +232,7 @@ export async function GET(req: NextRequest) {
  * POST /api/adviseurs/creditfacturen
  * Maak creditfactuur-concept.
  * Body:
- * - { offerte_id } → commissie tranche A (€250) voor die deal
+ * - { offerte_id, tranche?: 'a'|'b' } → A (aanbetaling) of B (rest na netto)
  * - { adviseur_id, bedrag_ex_btw, omschrijving?, offerte_id? } → handmatig
  * - { adviseur_id, jaar?, week? } → uit openstaande aanbetalingen in de week
  */
@@ -236,6 +240,7 @@ export async function POST(req: NextRequest) {
   let body: {
     adviseur_id?: string;
     offerte_id?: string;
+    tranche?: string;
     jaar?: number;
     week?: number;
     mark_paid?: boolean;
@@ -258,11 +263,13 @@ export async function POST(req: NextRequest) {
     body.bedrag_ex_btw != null ? Number(body.bedrag_ex_btw) : null;
   const useManual =
     manualBedrag != null && Number.isFinite(manualBedrag) && manualBedrag > 0;
+  const tranche =
+    body.tranche === "b" || body.tranche === "rest" ? "b" : "a";
 
   try {
     const sb = getSupabaseAdmin();
 
-    // Vanuit deal: standaard tranche A-concept (€250) tenzij handmatig bedrag meegegeven
+    // Vanuit deal: tranche A (aanbetaling) of B (rest-commissie)
     if (body.offerte_id && !useManual) {
       const { data: offerte, error: offErr } = await sb
         .from("offertes")
@@ -283,18 +290,56 @@ export async function POST(req: NextRequest) {
       }
       const { data: project } = await sb
         .from("projecten")
-        .select("project_nummer")
+        .select("id, project_nummer, status, installatie_voltooid_at")
         .eq("offerte_id", offerte.id)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      const result = await ensureAdviseurOrderCommissieConcept(sb, {
-        leadId: offerte.lead_id as string,
-        offerteId: offerte.id as string,
-        offerteNummer: (offerte.offerte_nummer as string) || offerte.id,
-        projectNummer: (project?.project_nummer as string | null) || null,
-      });
+      let result: {
+        ok: boolean;
+        created?: boolean;
+        creditfactuur_id?: string;
+        skipped?: string;
+        error?: string;
+      };
+
+      if (tranche === "b") {
+        if (!project?.id) {
+          return NextResponse.json(
+            { error: "Geen project bij deze deal — rest-commissie pas na project." },
+            { status: 400 }
+          );
+        }
+        result = await ensureAdviseurCommissieTrancheB(sb, project.id as string);
+      } else {
+        // Tranche A: alleen via betaalde aanbetalingsfactuur
+        const { data: facs } = await sb
+          .from("facturen")
+          .select("id, status, omschrijving, offerte_id, lead_id")
+          .eq("lead_id", offerte.lead_id)
+          .eq("status", "betaald")
+          .order("betaald_op", { ascending: false })
+          .limit(50);
+        const aanbetaling = (facs || []).find(
+          (f) =>
+            isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+            (!f.offerte_id || f.offerte_id === offerte.id)
+        );
+        if (!aanbetaling) {
+          return NextResponse.json(
+            {
+              error:
+                "Nog geen betaalde aanbetaling — tranche A volgt automatisch zodra die binnen is.",
+            },
+            { status: 400 }
+          );
+        }
+        result = await ensureNettoAanbetalingCreditfactuur(
+          sb,
+          aanbetaling.id as string
+        );
+      }
 
       if (!result.ok) {
         return NextResponse.json(
@@ -317,6 +362,12 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+      if (result.skipped === "geen_tranche_b") {
+        return NextResponse.json(
+          { error: "Geen rest-commissie voor deze deal (al volledig via tranche A)." },
+          { status: 400 }
+        );
+      }
 
       const { data: factuur } = result.creditfactuur_id
         ? await sb
@@ -332,6 +383,7 @@ export async function POST(req: NextRequest) {
           created: Boolean(result.created),
           skipped: result.skipped || null,
           vanuit_deal: true,
+          tranche,
           mail_sent: false,
         },
         { status: result.created ? 201 : 200 }

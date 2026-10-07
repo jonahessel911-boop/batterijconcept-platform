@@ -65,8 +65,12 @@ export type NettoBoardRow = {
   factuur_betaald_at: string | null;
   aanbetaling_betaald: boolean;
   aanbetaling_factuur_id: string | null;
+  /** Tranche A creditfactuur (aanbetaling). */
   creditfactuur_id: string | null;
   creditfactuur_nummer: string | null;
+  /** Tranche B creditfactuur (rest na netto sale). */
+  creditfactuur_b_id: string | null;
+  creditfactuur_b_nummer: string | null;
   commissie_verwacht: number;
   commissie_tranche_a: number;
   commissie_tranche_b: number;

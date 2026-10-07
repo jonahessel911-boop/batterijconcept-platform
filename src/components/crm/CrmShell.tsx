@@ -865,8 +865,8 @@ export function CrmShell() {
 
   const titles: Record<CrmTab, { title: string; sub: string }> = {
     taken: {
-      title: "Taken",
-      sub: "Jouw fix-lijst · deadline met tijd",
+      title: "Agenda & taken",
+      sub: "Persoonlijke agenda · taken en afspraken",
     },
     leads: {
       title: "Leads",
@@ -933,7 +933,7 @@ export function CrmShell() {
                 ? `${schouwweekCount} openstaande schouwweek${schouwweekCount === 1 ? "" : "en"}`
                 : "Orders met schouwweek · nog geen definitieve schouwdag"
               : boView === "service"
-                ? "Serviceverzoeken · inplannen op het planbord"
+                ? "Service-desk · tickets inplannen op het planbord"
                 : filterLabel
                   ? `Backoffice van ${filterLabel}`
                   : "Backoffice in planning en uitvoering",
@@ -1257,6 +1257,14 @@ export function CrmShell() {
                         : adviseurFilter || undefined
                     }
                     lockAdviseur={alleenEigenLeads(userRol)}
+                    projecten={scopedProjecten}
+                    onProjectUpdated={(project) => {
+                      setProjecten((prev) =>
+                        prev.map((p) =>
+                          p.id === project.id ? { ...p, ...project } : p
+                        )
+                      );
+                    }}
                   />
                 )}
                 {tab === "leaderboard" && <SalesLeaderboardPanel />}

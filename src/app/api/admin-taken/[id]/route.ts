@@ -49,6 +49,8 @@ export async function PATCH(
       titel?: string;
       inhoud?: string | null;
       due_at?: string;
+      end_at?: string | null;
+      soort?: string;
       status?: string;
     };
 
@@ -67,15 +69,33 @@ export async function PATCH(
       patch.inhoud =
         typeof body.inhoud === "string" ? body.inhoud.trim() || null : null;
     }
+    if (body.soort === "taak" || body.soort === "afspraak") {
+      patch.soort = body.soort;
+      if (body.soort === "taak") patch.end_at = null;
+    }
     if ("due_at" in body) {
       const due = parseDueAt(body.due_at);
       if (!due) {
         return NextResponse.json(
-          { error: "Ongeldige deadline" },
+          { error: "Ongeldige datum/tijd" },
           { status: 400 }
         );
       }
       patch.due_at = due;
+    }
+    if ("end_at" in body) {
+      if (body.end_at == null || body.end_at === "") {
+        patch.end_at = null;
+      } else {
+        const end = parseDueAt(body.end_at);
+        if (!end) {
+          return NextResponse.json(
+            { error: "Ongeldige eindtijd" },
+            { status: 400 }
+          );
+        }
+        patch.end_at = end;
+      }
     }
     if (body.status === "todo" || body.status === "done") {
       patch.status = body.status;

@@ -104,13 +104,42 @@ export async function GET(_req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
-    const { data: projecten, error: pErr } = await sb
-      .from("projecten")
-      .select(
-        "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
-      )
-      .order("updated_at", { ascending: false })
-      .limit(400);
+    type ProjRow = Record<string, unknown> & {
+      id: string;
+      status?: string | null;
+      lead_id?: string | null;
+      materiaal_leverdatum?: string | null;
+    };
+    let projecten: ProjRow[] | null = null;
+    let pErr: { message?: string; code?: string } | null = null;
+
+    {
+      const first = await sb
+        .from("projecten")
+        .select(
+          "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
+        )
+        .order("updated_at", { ascending: false })
+        .limit(400);
+      if (
+        first.error &&
+        (first.error.code === "42703" ||
+          first.error.message?.includes("materiaal_leverdatum"))
+      ) {
+        const retry = await sb
+          .from("projecten")
+          .select(
+            "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
+          )
+          .order("updated_at", { ascending: false })
+          .limit(400);
+        projecten = (retry.data || []) as ProjRow[];
+        pErr = retry.error;
+      } else {
+        projecten = (first.data || []) as ProjRow[];
+        pErr = first.error;
+      }
+    }
 
     if (pErr) throw pErr;
 
@@ -367,6 +396,9 @@ export async function GET(_req: NextRequest) {
           formulier_naam: foto?.bestandsnaam || null,
         },
         installatie_at: (p.installatie_at as string | null) || null,
+        materiaal_leverdatum:
+          ((p as { materiaal_leverdatum?: string | null })
+            .materiaal_leverdatum as string | null) || null,
         summary,
         items: items.map((item) => {
           const lineStatus: InkoopRegelStatus = resolveInkoopRegelStatus(

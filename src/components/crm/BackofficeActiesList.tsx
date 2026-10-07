@@ -42,6 +42,7 @@ type SectionId =
   | "warmtefonds"
   | "stap1"
   | "factuur"
+  | "aangetekend"
   | "handmatig";
 
 type TaskRow = {
@@ -55,7 +56,8 @@ type TaskRow = {
     | "financiering"
     | "factuur_versturen"
     | "schouw_week"
-    | "nabellen";
+    | "nabellen"
+    | "aangetekende_brief";
   titel: string;
   klant: string;
   meta?: string;
@@ -92,6 +94,10 @@ const SECTION_META: Record<
     label: "Facturen",
     accent: "bg-[#FFF0E6] text-[#C45A12]",
   },
+  aangetekend: {
+    label: "Aangetekende brief",
+    accent: "bg-[#FFF0E6] text-[#9A3B1A]",
+  },
   handmatig: {
     label: "Handmatige acties",
     accent: "bg-[#F3F0FF] text-[#5B21B6]",
@@ -127,6 +133,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     nabellen: {
       label: "Nabellen",
       className: "bg-[#FFF8D6] text-[#8A6D00]",
+    },
+    aangetekende_brief: {
+      label: "Aangetekend",
+      className: "bg-[#FFF0E6] text-[#9A3B1A]",
     },
   };
 
@@ -282,6 +292,21 @@ function buildTaskRows(
       });
       continue;
     }
+    if (actie.soort === "aangetekende_brief") {
+      rows.push({
+        key: `${actie.id}-brief`,
+        section: "aangetekend",
+        actie,
+        kind: "aangetekende_brief",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.offerteNummer || actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
     if (actie.soort === "schakel_financiering") {
       rows.push({
         key: `${actie.id}-fin`,
@@ -409,6 +434,7 @@ export function BackofficeActiesList({
   const [handmatigeTaken, setHandmatigeTaken] = useState<ProjectTaak[]>([]);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     herplan: true,
+    aangetekend: true,
     volgende: true,
     inkoop: true,
     warmtefonds: true,
@@ -482,6 +508,7 @@ export function BackofficeActiesList({
   const sections = useMemo(() => {
     const order: SectionId[] = [
       "herplan",
+      "aangetekend",
       "inkoop",
       "volgende",
       "warmtefonds",
@@ -765,6 +792,31 @@ export function BackofficeActiesList({
         deadlineAt: actie.deadlineAt,
         completedAt,
       });
+    }
+  }
+
+  async function markAangetekendeBriefAfgerond(actie: BackofficeActie) {
+    if (
+      !confirm(
+        "Aangetekende brief markeren als verstuurd/afgerond? De actie verdwijnt dan uit de lijst."
+      )
+    ) {
+      return;
+    }
+    const completedAt = new Date().toISOString();
+    const project = await patchProject(actie, {
+      aangetekende_brief_verstuurd_at: completedAt,
+    });
+    if (project) {
+      void logBackofficeActieEvent({
+        soort: "aangetekende_brief",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
+      });
+      setMsg("Aangetekende brief gemarkeerd als afgerond.");
     }
   }
 
@@ -1590,6 +1642,32 @@ export function BackofficeActiesList({
                               >
                                 {isOpen ? "Sluiten" : "Open"}
                               </button>
+                              {row.kind === "aangetekende_brief" ? (
+                                <>
+                                  {actie.projectId ? (
+                                    <a
+                                      href={`/api/projecten/${actie.projectId}/aangetekende-brief`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="min-h-8 bg-[#9A3B1A] px-2.5 text-[11px] font-semibold leading-8 text-white hover:bg-[#7A2E14]"
+                                    >
+                                      Download PDF
+                                    </a>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    disabled={busyId === actie.id}
+                                    onClick={() =>
+                                      void markAangetekendeBriefAfgerond(actie)
+                                    }
+                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                  >
+                                    {busyId === actie.id
+                                      ? "…"
+                                      : "Brief verstuurd"}
+                                  </button>
+                                </>
+                              ) : null}
                               {row.kind === "financiering" && isOpen ? (
                                 <>
                                   <a

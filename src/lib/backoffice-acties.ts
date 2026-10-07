@@ -19,6 +19,7 @@ import {
   INKOOP_DAGEN_VOOR_INSTALLATIE,
   materiaalNogTeBestellen,
 } from "@/lib/inkoop-sla";
+import { resolveFinancieringStatus } from "@/lib/financiering-status";
 
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
@@ -26,7 +27,8 @@ export type BackofficeActieSoort =
   | "nabellen_factuur"
   | "herplan_afspraak"
   | "volgende_stap"
-  | "bestel_materiaal";
+  | "bestel_materiaal"
+  | "aangetekende_brief";
 
 /** Edwin van Veenendaal — plant Warmtefonds-afspraken / aanvragen. */
 export const FINANCIERINGSMAN_NAAM = "Edwin van Veenendaal";
@@ -185,6 +187,50 @@ export function isSchakelFinancieringActieOpen(project: Project): boolean {
   return true;
 }
 
+/** Dagen zonder WF-voortgang → aangetekende brief. */
+export const AANGETEKENDE_BRIEF_NA_DAGEN = 14;
+
+/**
+ * Warmtefonds-klant die niet meewerkt / HOLD, nog niet officieel geannuleerd.
+ * Actie: aangetekende brief (meewerken of 50% annuleringskosten).
+ */
+export function isAangetekendeBriefActieOpen(
+  project: Project,
+  now = new Date()
+): boolean {
+  if (project.status === "annulering") return false;
+  if (project.aangetekende_brief_verstuurd_at) return false;
+  if (!isWarmtefondsProject(project)) return false;
+
+  const fs = resolveFinancieringStatus(project);
+  if (fs === "aanvraag_goedgekeurd" || fs === "uitbetaald") return false;
+
+  // HOLD sales: altijd open zolang niet afgehandeld
+  if (project.status === "hold_sales_actie") return true;
+
+  // Financiering gestart maar nog niet goedgekeurd — na X dagen
+  const stuckStatuses = new Set([
+    "doorgestuurd_naar_edwin",
+    "afspraak_ingepland",
+    "aanvraag_gedaan",
+  ]);
+  if (!fs || !stuckStatuses.has(fs)) return false;
+
+  const anchor =
+    project.financiering_geschakeld_at ||
+    project.warmtefonds_afspraak_at ||
+    project.warmtefonds_aangevraagd_at ||
+    project.backoffice_afgerond_at ||
+    projectOfferte(project)?.ondertekend_op ||
+    project.created_at;
+  if (!anchor) return false;
+  const since = new Date(anchor).getTime();
+  if (Number.isNaN(since)) return false;
+  const days =
+    (now.getTime() - since) / (1000 * 60 * 60 * 24);
+  return days >= AANGETEKENDE_BRIEF_NA_DAGEN;
+}
+
 export function belSchouwActieTitel(project: Project): string {
   return isWarmtefondsProject(project)
     ? "Lead bellen voor schouw + aanbetaling"
@@ -335,6 +381,45 @@ export function openSchakelFinancieringActies(
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
+export function openAangetekendeBriefActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isAangetekendeBriefActieOpen(project, now)) continue;
+    const saleAt = saleMomentVanProject(project);
+    const deadlineAt = addDays(now, 3);
+    deadlineAt.setHours(17, 0, 0, 0);
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    items.push({
+      id: `aangetekende-brief-${project.id}`,
+      soort: "aangetekende_brief",
+      titel:
+        "Aangetekende brief: annuleringskosten of installatie doorzetten",
+      detail:
+        "Download de aangetekende brief (PDF), verstuur per post, en markeer afgerond. Klant kiest: Warmtefonds meewerken of 50% annuleringskosten.",
+      reden:
+        "Klant werkt (nog) niet mee aan Warmtefonds — formeel aanzeggen vóór officiële annulering.",
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleAt.toISOString(),
+      overdue: false,
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -617,6 +702,7 @@ export function openBackofficeActies(
       opts?.afspraken || [],
       now
     ),
+    ...openAangetekendeBriefActies(projecten, now),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, now),
     ...openVolgendeStapActies(projecten, facturen, now),

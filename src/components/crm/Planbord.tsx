@@ -57,7 +57,7 @@ type AgendaView = "week" | "dag" | "maand" | "lijst";
 type PlanbordBar = {
   key: string;
   project: Project;
-  kind: "schouwweek" | "schouw" | "installatie" | "service";
+  kind: "schouwweek" | "schouw" | "installatie" | "service" | "levering";
   /** Inclusive day keys in the visible week */
   dayKeys: string[];
   label: string;
@@ -210,6 +210,23 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
         });
       }
     }
+
+    if (p.materiaal_leverdatum) {
+      const key = dayKeyAmsterdam(p.materiaal_leverdatum);
+      if (daySet.has(key)) {
+        bars.push({
+          key: `${p.id}-levering`,
+          project: p,
+          kind: "levering",
+          dayKeys: [key],
+          label: `LEVERING - INKOOP - ${title}`,
+          whenLabel: formatDateShort(p.materiaal_leverdatum),
+          at: p.materiaal_leverdatum,
+          duurMinuten: duurMinutenVoorKind("levering"),
+          partnerId,
+        });
+      }
+    }
   }
 
   return bars;
@@ -354,6 +371,19 @@ function allTimedBars(projects: Project[]): PlanbordBar[] {
         partnerId,
       });
     }
+    if (p.materiaal_leverdatum) {
+      bars.push({
+        key: `${p.id}-levering`,
+        project: p,
+        kind: "levering",
+        dayKeys: [dayKeyAmsterdam(p.materiaal_leverdatum)],
+        label: `LEVERING - INKOOP - ${title}`,
+        whenLabel: formatDateShort(p.materiaal_leverdatum),
+        at: p.materiaal_leverdatum,
+        duurMinuten: duurMinutenVoorKind("levering"),
+        partnerId,
+      });
+    }
   }
   return bars.sort((a, b) => (a.at || "").localeCompare(b.at || ""));
 }
@@ -385,7 +415,7 @@ const KIND_STYLE: Record<
     accent: "bg-[#022C22]",
     muted: "text-white/85",
   },
-  /** Service = oranje */
+  /** Service = terracotta */
   service: {
     bg: "bg-[#C45A12]",
     text: "text-white",
@@ -393,7 +423,33 @@ const KIND_STYLE: Record<
     accent: "bg-[#7C3A0D]",
     muted: "text-white/85",
   },
+  /** Levering inkoop = oranje */
+  levering: {
+    bg: "bg-[#EA580C]",
+    text: "text-white",
+    border: "border-[#C2410C]",
+    accent: "bg-[#9A3412]",
+    muted: "text-white/85",
+  },
 };
+
+function planbordKindLabel(
+  kind: PlanbordBar["kind"],
+  short = false
+): string {
+  switch (kind) {
+    case "installatie":
+      return short ? "Inst." : "Installatie";
+    case "service":
+      return "Service";
+    case "levering":
+      return short ? "LEVERING - INKOOP" : "Levering";
+    case "schouwweek":
+      return "Schouwweek";
+    default:
+      return "Schouw";
+  }
+}
 
 function endAtFromStart(at: string, duurMinuten: number): Date {
   return new Date(new Date(at).getTime() + Math.max(duurMinuten, 0) * 60_000);
@@ -1012,14 +1068,7 @@ function EventCard({
   const partner = hidePartner ? null : partnerOf(bar.project);
   const isSchouwBar = bar.kind === "schouw" || bar.kind === "schouwweek";
   const past = isBarPast(bar);
-  const kindLabel =
-    bar.kind === "installatie"
-      ? "Installatie"
-      : bar.kind === "service"
-        ? "Service"
-        : bar.kind === "schouwweek"
-          ? "Schouwweek"
-          : "Schouw";
+  const kindLabel = planbordKindLabel(bar.kind);
   const timeRange = formatTimeRangeNl(bar.at, bar.duurMinuten);
   const naam = klantNaam(bar.project);
   const plaats = klantPlaats(bar.project);
@@ -1027,7 +1076,10 @@ function EventCard({
   const tel = lead?.telefoon?.trim() || null;
   const duurLabel =
     bar.duurMinuten > 0 ? formatDuurLabel(bar.duurMinuten) : null;
-  const isSolid = bar.kind === "installatie" || bar.kind === "service";
+  const isSolid =
+    bar.kind === "installatie" ||
+    bar.kind === "service" ||
+    bar.kind === "levering";
   const titleCls = isSolid ? "text-white" : "text-ink";
   const mutedCls = isSolid ? "text-white/85" : "text-muted";
 
@@ -1410,22 +1462,17 @@ function AgendaItemSidebar({
     partners.find((p) => p.id === (bar.partnerId || project.installatie_partner_id)) ||
     partnerJoined ||
     null;
-  const kindLabel =
-    bar.kind === "installatie"
-      ? "Installatie"
-      : bar.kind === "service"
-        ? "Service"
-        : bar.kind === "schouwweek"
-          ? "Schouwweek"
-          : "Schouw";
+  const kindLabel = planbordKindLabel(bar.kind);
   const when =
     bar.kind === "installatie"
       ? project.installatie_at
       : bar.kind === "service"
         ? project.service_at
-        : bar.kind === "schouw"
-          ? project.schouw_at
-          : null;
+        : bar.kind === "levering"
+          ? project.materiaal_leverdatum
+          : bar.kind === "schouw"
+            ? project.schouw_at
+            : null;
   const tel = lead?.telefoon?.trim() || null;
   const email = lead?.email?.trim() || null;
   const adresLines = leadAdresLines(lead);
@@ -1435,7 +1482,9 @@ function AgendaItemSidebar({
       ? project.installatie_notities?.trim()
       : bar.kind === "service"
         ? project.service_notities?.trim()
-        : project.schouw_notities?.trim();
+        : bar.kind === "levering"
+          ? null
+          : project.schouw_notities?.trim();
   const duurLabel =
     bar.duurMinuten > 0 ? formatDuurLabel(bar.duurMinuten) : null;
   const showSchouwForm =
@@ -1616,6 +1665,7 @@ function AgendaItemSidebar({
     setNoteBusy(true);
     setNoteMsg(null);
     try {
+      if (bar.kind === "levering") return;
       const body =
         bar.kind === "installatie"
           ? { installatie_notities: noteDraft.trim() || null }
@@ -1670,9 +1720,11 @@ function AgendaItemSidebar({
                 "text-xs font-semibold uppercase tracking-[0.08em]",
                 bar.kind === "installatie"
                   ? "text-[#047857]"
-                  : bar.kind === "service"
-                    ? "text-[#C45A12]"
-                    : "text-[#854D0E]",
+                  : bar.kind === "levering"
+                    ? "text-[#EA580C]"
+                    : bar.kind === "service"
+                      ? "text-[#C45A12]"
+                      : "text-[#854D0E]",
               ].join(" ")}
             >
               {kindLabel}
@@ -1935,17 +1987,15 @@ function TimedDayBlock({
   const height = Math.min(rawH, Math.max(HOUR_PX * 0.4, gridHeight - top - 4));
   const compact = height < HOUR_PX * 0.85;
   const past = isBarPast(bar);
-  const kindLabel =
-    bar.kind === "installatie"
-      ? "Installatie"
-      : bar.kind === "service"
-        ? "Service"
-        : "Schouw";
+  const kindLabel = planbordKindLabel(bar.kind);
   const timeRange = formatTimeRangeNl(bar.at, bar.duurMinuten);
   const naam = klantNaam(bar.project);
   const plaats = klantPlaats(bar.project);
   const tel = lead?.telefoon?.trim() || null;
-  const isSolid = bar.kind === "installatie" || bar.kind === "service";
+  const isSolid =
+    bar.kind === "installatie" ||
+    bar.kind === "service" ||
+    bar.kind === "levering";
   const titleCls = isSolid ? "text-white" : "text-ink";
   const mutedCls = isSolid ? "text-white/85" : "text-muted";
   const cols = Math.max(1, colCount);
@@ -2448,6 +2498,10 @@ export function Planbord({
               <span className="h-2.5 w-2.5 bg-[#047857]" aria-hidden />
               Installatie
             </span>
+            <span className="inline-flex items-center gap-1.5 text-[#EA580C]">
+              <span className="h-2.5 w-2.5 bg-[#EA580C]" aria-hidden />
+              Levering
+            </span>
             <span className="inline-flex items-center gap-1.5 text-muted">
               <span className="h-2.5 w-2.5 bg-line opacity-60" aria-hidden />
               Geweest = grijs / doorgestreept
@@ -2760,13 +2814,10 @@ export function Planbord({
                         const past = isBarPast(bar);
                         const range = formatTimeRangeNl(bar.at, bar.duurMinuten);
                         const isSolid =
-                          bar.kind === "installatie" || bar.kind === "service";
-                        const kindShort =
-                          bar.kind === "installatie"
-                            ? "Inst."
-                            : bar.kind === "service"
-                              ? "Service"
-                              : "Schouw";
+                          bar.kind === "installatie" ||
+                          bar.kind === "service" ||
+                          bar.kind === "levering";
+                        const kindShort = planbordKindLabel(bar.kind, true);
                         const naam = klantNaam(bar.project);
                         const plaats = klantPlaats(bar.project);
                         const tel = leadOf(bar.project)?.telefoon?.trim() || null;

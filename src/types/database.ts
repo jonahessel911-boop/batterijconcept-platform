@@ -408,6 +408,14 @@ export interface Offerte {
   totaal_inc_btw: number;
   geldig_tot: string | null;
   sign_token: string | null;
+  /** Magic-link voor klant track & trace (/track/{token}). */
+  track_token?: string | null;
+  /** Intro-mail track & trace verstuurd (kickoff). */
+  track_mail_verstuurd_at?: string | null;
+  /** Laatste bezoek klant aan /track/{token}. */
+  track_last_seen_at?: string | null;
+  /** Aantal portaalbezoeken. */
+  track_view_count?: number | null;
   ondertekend_naam: string | null;
   ondertekend_handtekening: string | null;
   ondertekend_op: string | null;
@@ -525,12 +533,16 @@ export interface Project {
    * Waarden: true/"besteld" | "geleverd" | false/"te_kopen".
    */
   materiaal_checks?: Record<string, boolean | string> | null;
+  /** Verwachte leverdatum besteld materiaal (Planbord: oranje LEVERING). */
+  materiaal_leverdatum?: string | null;
   /** Moment waarop BTW-teruggave is aangevraagd. */
   btw_terugvragen_aangevraagd_at?: string | null;
   /** Overstap naar dynamische energieleverancier aangevraagd. */
   overstap_dynamische_leverancier_at?: string | null;
   /** Review-verzoek verstuurd. */
   review_gevraagd_at?: string | null;
+  /** Aangetekende brief (WF-medewerking / annuleringskosten) afgehandeld. */
+  aangetekende_brief_verstuurd_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -567,6 +579,10 @@ export interface Project {
     | "btw_bedrag"
     | "totaal_inc_btw"
     | "ondertekend_op"
+    | "track_token"
+    | "track_mail_verstuurd_at"
+    | "track_last_seen_at"
+    | "track_view_count"
   > | null;
 }
 
@@ -741,7 +757,8 @@ export type BackofficeActieEventSoort =
   | "bel_schouw_aanbetaling"
   | "schakel_financiering"
   | "nabellen_factuur"
-  | "herplan_afspraak";
+  | "herplan_afspraak"
+  | "aangetekende_brief";
 
 export interface BackofficeActieEvent {
   id: string;
@@ -770,8 +787,29 @@ export interface ServiceVerzoek {
   afgehandeld_op: string | null;
   created_at: string;
   updated_at: string;
-  leads?: Pick<Lead, "naam" | "lead_number"> | null;
-  projecten?: Pick<Project, "id" | "project_nummer" | "titel" | "status"> | null;
+  leads?: Pick<
+    Lead,
+    | "naam"
+    | "lead_number"
+    | "telefoon"
+    | "email"
+    | "straat"
+    | "huisnummer"
+    | "toevoeging"
+    | "postcode"
+    | "plaats"
+  > | null;
+  projecten?: (Pick<
+    Project,
+    | "id"
+    | "project_nummer"
+    | "titel"
+    | "status"
+    | "service_at"
+    | "installatie_partner_id"
+  > & {
+    installatie_partners?: { id: string; naam: string } | { id: string; naam: string }[] | null;
+  }) | null;
 }
 
 export interface Factuur {

@@ -22,6 +22,8 @@ import {
   type NettoTimelineKind,
 } from "@/lib/netto-boord-detail";
 import { projectStatusLabel } from "@/lib/labels";
+import type { Project } from "@/types/database";
+import { Planbord } from "./Planbord";
 
 type Totals = {
   aantal: number;
@@ -38,6 +40,17 @@ type AdviseurOpt = { id: string; naam: string };
 type StatusFilter = "alles" | "actief" | "netto" | "geannuleerd";
 type VormFilter = "" | "EM" | "WF";
 type DrawerTab = "fases" | "tijdlijn" | "taken" | "acties";
+type BoardTab = "netto" | "agenda";
+
+const BOARD_TABS: { id: BoardTab; label: string }[] = [
+  { id: "netto", label: "Netto" },
+  { id: "agenda", label: "Schouw en installatie agenda" },
+];
+
+function projectAdviseurId(p: Project): string | null {
+  const lead = Array.isArray(p.leads) ? p.leads[0] : p.leads;
+  return lead?.adviseur_id || null;
+}
 
 function defaultDueDateLocal(): string {
   const d = new Date();
@@ -288,7 +301,9 @@ function DetailDrawer({
   const [actieNotitie, setActieNotitie] = useState("");
   const [actieDue, setActieDue] = useState(defaultDueDateLocal);
   const [actieSaving, setActieSaving] = useState(false);
-  const [creatingCredit, setCreatingCredit] = useState(false);
+  const [creatingCredit, setCreatingCredit] = useState<"a" | "b" | null>(
+    null
+  );
 
   const loadDetail = useCallback(async () => {
     setDetailLoading(true);
@@ -431,18 +446,18 @@ function DetailDrawer({
     }
   }
 
-  async function createCreditFromDeal() {
+  async function createCreditFromDeal(tranche: "a" | "b") {
     if (row.geannuleerd) {
       setMsg("Geen commissiefactuur bij annulering.");
       return;
     }
-    setCreatingCredit(true);
+    setCreatingCredit(tranche);
     setMsg(null);
     try {
       const res = await fetch("/api/adviseurs/creditfacturen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offerte_id: row.offerte_id }),
+        body: JSON.stringify({ offerte_id: row.offerte_id, tranche }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -454,16 +469,18 @@ function DetailDrawer({
         (data as { factuur?: { factuur_nummer?: string } }).factuur
           ?.factuur_nummer || "concept";
       const created = (data as { created?: boolean }).created !== false;
+      const label =
+        tranche === "b" ? "Rest-commissie" : "Aanbetalingscommissie";
       setMsg(
         created
-          ? `Creditfactuur ${nummer} aangemaakt.`
-          : `Creditfactuur ${nummer} bestond al.`
+          ? `${label} ${nummer} aangemaakt (concept → woensdag mail).`
+          : `${label} ${nummer} bestond al.`
       );
       onRefresh?.();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Aanmaken mislukt");
     } finally {
-      setCreatingCredit(false);
+      setCreatingCredit(null);
     }
   }
 
@@ -754,56 +771,113 @@ function DetailDrawer({
                   {!row.commissie_tranche_b_triggered &&
                   row.commissie_tranche_b > 0 ? (
                     <p className="text-[11px] text-muted">
-                      Nog niet getriggerd — na restfactuur betaald / installatie
-                      voltooid.
+                      Rest volgt bij installatie voltooid (netto sale).
                     </p>
                   ) : null}
 
-                  {row.creditfactuur_id ? (
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
-                      <div>
-                        <p className="text-[11px] font-medium text-green-deeper">
-                          Creditfactuur{" "}
-                          {row.creditfactuur_nummer || "aangemaakt"}
-                        </p>
-                        <p className="text-[10px] text-muted">
-                          Tranche A · woensdag na de week van aanbetaling
-                        </p>
+                  {row.geannuleerd ? null : (
+                    <div className="space-y-3 border-t border-line pt-3">
+                      {/* Tranche A */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] font-medium text-ink">
+                            Factuur A · aanbetaling
+                          </p>
+                          <p className="text-[10px] text-muted">
+                            {row.creditfactuur_nummer ||
+                              (row.aanbetaling_betaald
+                                ? "Nog niet aangemaakt"
+                                : "Wacht op betaalde aanbetaling")}
+                          </p>
+                        </div>
+                        {row.creditfactuur_id ? (
+                          <button
+                            type="button"
+                            disabled={busyId === `cf-${row.creditfactuur_id}`}
+                            onClick={() => {
+                              if (!row.creditfactuur_id) return;
+                              void downloadCreditPdf(
+                                row.creditfactuur_id,
+                                row.creditfactuur_nummer || "commissie-a"
+                              );
+                            }}
+                            className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
+                          >
+                            {busyId === `cf-${row.creditfactuur_id}`
+                              ? "Downloaden…"
+                              : "Download A"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={
+                              creatingCredit !== null ||
+                              !row.adviseur_id ||
+                              !row.aanbetaling_betaald
+                            }
+                            onClick={() => void createCreditFromDeal("a")}
+                            className="shrink-0 border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                          >
+                            {creatingCredit === "a"
+                              ? "Bezig…"
+                              : "Maak factuur A"}
+                          </button>
+                        )}
                       </div>
-                      <button
-                        type="button"
-                        disabled={busyId === `cf-${row.creditfactuur_id}`}
-                        onClick={() => {
-                          if (!row.creditfactuur_id) return;
-                          void downloadCreditPdf(
-                            row.creditfactuur_id,
-                            row.creditfactuur_nummer || "creditfactuur"
-                          );
-                        }}
-                        className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
-                      >
-                        {busyId === `cf-${row.creditfactuur_id}`
-                          ? "Downloaden…"
-                          : "Download creditfactuur"}
-                      </button>
-                    </div>
-                  ) : row.geannuleerd ? null : (
-                    <div className="space-y-2 border-t border-line pt-3">
-                      <p className="text-[11px] text-muted">
-                        Nog geen verkopersfactuur. Maak tranche A (€
-                        {NETTO_AANBETALING_COMMISSIE} excl.) nu aan, of wacht
-                        tot het automatisch gebeurt.
-                      </p>
-                      <button
-                        type="button"
-                        disabled={creatingCredit || !row.adviseur_id}
-                        onClick={() => void createCreditFromDeal()}
-                        className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
-                      >
-                        {creatingCredit
-                          ? "Bezig…"
-                          : "Maak creditfactuur"}
-                      </button>
+
+                      {/* Tranche B */}
+                      {row.commissie_tranche_b > 0 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-[11px] font-medium text-ink">
+                              Factuur B · rest na netto
+                            </p>
+                            <p className="text-[10px] text-muted">
+                              {row.creditfactuur_b_nummer ||
+                                (row.commissie_tranche_b_triggered
+                                  ? "Nog niet aangemaakt"
+                                  : "Wacht op installatie voltooid")}
+                            </p>
+                          </div>
+                          {row.creditfactuur_b_id ? (
+                            <button
+                              type="button"
+                              disabled={
+                                busyId === `cf-${row.creditfactuur_b_id}`
+                              }
+                              onClick={() => {
+                                if (!row.creditfactuur_b_id) return;
+                                void downloadCreditPdf(
+                                  row.creditfactuur_b_id,
+                                  row.creditfactuur_b_nummer || "commissie-b"
+                                );
+                              }}
+                              className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
+                            >
+                              {busyId === `cf-${row.creditfactuur_b_id}`
+                                ? "Downloaden…"
+                                : "Download B"}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={
+                                creatingCredit !== null ||
+                                !row.adviseur_id ||
+                                !row.commissie_tranche_b_triggered ||
+                                !row.project_id
+                              }
+                              onClick={() => void createCreditFromDeal("b")}
+                              className="shrink-0 border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                            >
+                              {creatingCredit === "b"
+                                ? "Bezig…"
+                                : "Maak factuur B"}
+                            </button>
+                          )}
+                        </div>
+                      ) : null}
+
                       {!row.adviseur_id ? (
                         <p className="text-[11px] text-[#C45A12]">
                           Deal heeft geen adviseur.
@@ -1093,10 +1167,16 @@ function DetailDrawer({
 export function NettoBoord({
   adviseurId: adviseurIdProp,
   lockAdviseur = false,
+  projecten = [],
+  onProjectUpdated,
 }: {
   adviseurId?: string;
   lockAdviseur?: boolean;
+  /** Orders voor schouw/installatie-agenda (zelfde bron als Planbord). */
+  projecten?: Project[];
+  onProjectUpdated?: (project: Project) => void;
 }) {
+  const [boardTab, setBoardTab] = useState<BoardTab>("netto");
   const [items, setItems] = useState<NettoBoardRow[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
   const [adviseurs, setAdviseurs] = useState<AdviseurOpt[]>([]);
@@ -1153,253 +1233,321 @@ export function NettoBoord({
     [items, selectedId]
   );
 
+  const agendaProjects = useMemo(() => {
+    // Adviseur: projecten komen al gescoopt uit CrmShell.
+    if (lockAdviseur || !adviseurId) return projecten;
+    return projecten.filter((p) => projectAdviseurId(p) === adviseurId);
+  }, [projecten, adviseurId, lockAdviseur]);
+
   return (
     <div className="flex flex-col">
-      <div className="flex flex-wrap items-end gap-3 border-b border-line bg-wash/40 px-4 py-3">
-        <div className="min-w-[10rem] flex-1">
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Zoeken
-          </label>
-          <input
-            type="search"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Klant, plaats, offerte…"
-            className="w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-          />
-        </div>
-
-        {!lockAdviseur ? (
-          <div>
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Adviseur
-            </label>
-            <select
-              value={adviseurId}
-              onChange={(e) => setAdviseurId(e.target.value)}
-              className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-            >
-              <option value="">Alle adviseurs</option>
-              {adviseurs.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.naam}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
-
-        <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Status
-          </label>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as StatusFilter)}
-            className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+      <div className="flex border-b border-line bg-white px-4 pt-3">
+        {BOARD_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setBoardTab(t.id)}
+            className={[
+              "relative px-4 pb-3 text-sm font-semibold transition",
+              boardTab === t.id
+                ? "text-green-deeper"
+                : "text-muted hover:text-ink",
+            ].join(" ")}
           >
-            <option value="alles">Alles (zonder annulering)</option>
-            <option value="actief">Actief</option>
-            <option value="netto">Netto</option>
-            <option value="geannuleerd">Annulering door klant</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Vorm
-          </label>
-          <select
-            value={vorm}
-            onChange={(e) => setVorm(e.target.value as VormFilter)}
-            className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-          >
-            <option value="">Alles</option>
-            <option value="EM">EM</option>
-            <option value="WF">WF</option>
-          </select>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="border border-line bg-white px-3 py-2 text-sm text-muted hover:bg-white hover:text-ink"
-        >
-          Vernieuwen
-        </button>
+            {t.label}
+            {boardTab === t.id ? (
+              <span className="absolute inset-x-2 bottom-0 h-0.5 bg-green" />
+            ) : null}
+          </button>
+        ))}
       </div>
 
-      {totals ? (
-        <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-5">
-          {[
-            { label: "Deals", value: String(totals.aantal) },
-            { label: "Omzet ex btw", value: formatEuro(totals.omzet_ex_btw) },
-            {
-              label: "Commissie verwacht",
-              value: formatEuro(totals.commissie_verwacht),
-              accent: true,
-            },
-            {
-              label: "Getriggerd (€250)",
-              value: formatEuro(totals.commissie_verdiend),
-            },
-            {
-              label: "Annulering klant",
-              value: String(totals.geannuleerd),
-            },
-          ].map((kpi) => (
-            <div key={kpi.label} className="bg-white px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {kpi.label}
-              </p>
-              <p
-                className={[
-                  "mt-0.5 font-display text-lg font-semibold tabular-nums",
-                  kpi.accent ? "text-green-deeper" : "text-ink",
-                ].join(" ")}
-              >
-                {kpi.value}
-              </p>
+      {boardTab === "agenda" ? (
+        <div className="px-5 pb-5 pt-5">
+          {!lockAdviseur ? (
+            <div className="mb-4 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Adviseur
+                </label>
+                <select
+                  value={adviseurId}
+                  onChange={(e) => setAdviseurId(e.target.value)}
+                  className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Alle adviseurs</option>
+                  {adviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-          ))}
+          ) : null}
+          <Planbord
+            projecten={agendaProjects}
+            onProjectUpdated={onProjectUpdated}
+            title="Schouw en installatie agenda"
+            projectHref={(id) => `/projecten/${id}?from=netto`}
+          />
         </div>
-      ) : null}
-
-      {error ? (
-        <div className="m-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
-          {error}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
-      ) : items.length === 0 ? (
-        <p className="px-6 py-14 text-center text-sm text-muted">
-          Geen sales gevonden voor deze filters.
-        </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1160px] border-collapse text-left">
-            <thead>
-              <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                <th className="px-4 py-3 font-semibold">Klant</th>
-                <th className="px-3 py-3 font-semibold">Vorm</th>
-                <th className="px-3 py-3 font-semibold">Bedrag</th>
-                <th className="px-2 py-3 text-center font-semibold">F1</th>
-                <th className="px-2 py-3 text-center font-semibold">F2</th>
-                <th className="px-2 py-3 text-center font-semibold">F3</th>
-                <th className="px-2 py-3 text-center font-semibold">F4</th>
-                <th className="px-3 py-3 font-semibold">Voortgang</th>
-                <th className="px-3 py-3 font-semibold">Schouwweek</th>
-                <th className="px-3 py-3 font-semibold">Schouwdatum</th>
-                <th className="px-3 py-3 font-semibold">Installatie</th>
-                <th className="px-3 py-3 font-semibold">Factuur</th>
-                <th className="px-3 py-3 font-semibold">Betaald</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((row) => {
-                const f1 = row.fases.find((f) => f.key === "f1")!;
-                const f2 = row.fases.find((f) => f.key === "f2")!;
-                const f3 = row.fases.find((f) => f.key === "f3")!;
-                const f4 = row.fases.find((f) => f.key === "f4")!;
-                return (
-                  <tr
-                    key={row.id}
-                    onClick={() => setSelectedId(row.id)}
+        <>
+          <div className="flex flex-wrap items-end gap-3 border-b border-line bg-wash/40 px-4 py-3">
+            <div className="min-w-[10rem] flex-1">
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Zoeken
+              </label>
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Klant, plaats, offerte…"
+                className="w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+              />
+            </div>
+
+            {!lockAdviseur ? (
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Adviseur
+                </label>
+                <select
+                  value={adviseurId}
+                  onChange={(e) => setAdviseurId(e.target.value)}
+                  className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Alle adviseurs</option>
+                  {adviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Status
+              </label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as StatusFilter)}
+                className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+              >
+                <option value="alles">Alles (zonder annulering)</option>
+                <option value="actief">Actief</option>
+                <option value="netto">Netto</option>
+                <option value="geannuleerd">Annulering door klant</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Vorm
+              </label>
+              <select
+                value={vorm}
+                onChange={(e) => setVorm(e.target.value as VormFilter)}
+                className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+              >
+                <option value="">Alles</option>
+                <option value="EM">EM</option>
+                <option value="WF">WF</option>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="border border-line bg-white px-3 py-2 text-sm text-muted hover:bg-white hover:text-ink"
+            >
+              Vernieuwen
+            </button>
+          </div>
+
+          {totals ? (
+            <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-5">
+              {[
+                { label: "Deals", value: String(totals.aantal) },
+                {
+                  label: "Omzet ex btw",
+                  value: formatEuro(totals.omzet_ex_btw),
+                },
+                {
+                  label: "Commissie verwacht",
+                  value: formatEuro(totals.commissie_verwacht),
+                  accent: true,
+                },
+                {
+                  label: "Getriggerd (€250)",
+                  value: formatEuro(totals.commissie_verdiend),
+                },
+                {
+                  label: "Annulering klant",
+                  value: String(totals.geannuleerd),
+                },
+              ].map((kpi) => (
+                <div key={kpi.label} className="bg-white px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    {kpi.label}
+                  </p>
+                  <p
                     className={[
-                      "cursor-pointer border-b border-line transition-colors hover:bg-green-soft/40",
-                      selectedId === row.id ? "bg-green-soft/50" : "bg-white",
-                      row.geannuleerd ? "opacity-70" : "",
+                      "mt-0.5 font-display text-lg font-semibold tabular-nums",
+                      kpi.accent ? "text-green-deeper" : "text-ink",
                     ].join(" ")}
                   >
-                    <td className="px-4 py-3">
-                      <p className="text-sm font-semibold text-ink">
-                        {row.klant_naam}
-                      </p>
-                      <p className="text-xs text-muted">
-                        {row.plaats || "—"}
-                        {row.adviseur_naam && !adviseurId
-                          ? ` · ${row.adviseur_naam}`
-                          : ""}
-                      </p>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className="inline-flex rounded-full bg-[#eef1ef] px-2.5 py-0.5 text-xs font-medium text-muted">
-                        {row.vorm}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-sm font-medium tabular-nums text-ink">
-                      {formatEuro(row.bedrag_ex_btw)}
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      <FaseCell fase={f1} />
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      <FaseCell fase={f2} />
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      <FaseCell fase={f3} />
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      <FaseCell fase={f4} />
-                    </td>
-                    <td className="px-3 py-3">
-                      <p className="text-xs font-medium tabular-nums text-ink">
-                        {row.progress_done}/{row.progress_total} (
-                        {row.progress_pct}%)
-                      </p>
-                      <div className="mt-1.5 h-1.5 w-28 overflow-hidden rounded-full bg-line">
-                        <div
-                          className="h-full rounded-full bg-green transition-[width]"
-                          style={{ width: `${row.progress_pct}%` }}
-                        />
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {formatSchouwWeek(row.schouw_jaar, row.schouw_week) ||
-                        "—"}
-                    </td>
-                    <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {formatNettoPlanMoment(row.schouw_at) || "—"}
-                    </td>
-                    <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {formatNettoPlanMoment(row.installatie_at) || "—"}
-                    </td>
-                    <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {row.factuur_verstuurd_at
-                        ? formatSinds(row.factuur_verstuurd_at)
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-3 text-xs tabular-nums text-muted">
-                      {row.factuur_betaald_at ? (
-                        <span className="inline-flex items-center gap-1 text-green">
-                          <CheckIcon className="h-3 w-3" />
-                          {formatSinds(row.factuur_betaald_at)}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge row={row} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+                    {kpi.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
-      {selected ? (
-        <DetailDrawer
-          row={selected}
-          onClose={() => setSelectedId(null)}
-          onRefresh={() => void load()}
-        />
-      ) : null}
+          {error ? (
+            <div className="m-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
+              {error}
+            </div>
+          ) : null}
+
+          {loading ? (
+            <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
+          ) : items.length === 0 ? (
+            <p className="px-6 py-14 text-center text-sm text-muted">
+              Geen sales gevonden voor deze filters.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1160px] border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    <th className="px-4 py-3 font-semibold">Klant</th>
+                    <th className="px-3 py-3 font-semibold">Vorm</th>
+                    <th className="px-3 py-3 font-semibold">Bedrag</th>
+                    <th className="px-2 py-3 text-center font-semibold">F1</th>
+                    <th className="px-2 py-3 text-center font-semibold">F2</th>
+                    <th className="px-2 py-3 text-center font-semibold">F3</th>
+                    <th className="px-2 py-3 text-center font-semibold">F4</th>
+                    <th className="px-3 py-3 font-semibold">Voortgang</th>
+                    <th className="px-3 py-3 font-semibold">Schouwweek</th>
+                    <th className="px-3 py-3 font-semibold">Schouwdatum</th>
+                    <th className="px-3 py-3 font-semibold">Installatie</th>
+                    <th className="px-3 py-3 font-semibold">Factuur</th>
+                    <th className="px-3 py-3 font-semibold">Betaald</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((row) => {
+                    const f1 = row.fases.find((f) => f.key === "f1")!;
+                    const f2 = row.fases.find((f) => f.key === "f2")!;
+                    const f3 = row.fases.find((f) => f.key === "f3")!;
+                    const f4 = row.fases.find((f) => f.key === "f4")!;
+                    return (
+                      <tr
+                        key={row.id}
+                        onClick={() => setSelectedId(row.id)}
+                        className={[
+                          "cursor-pointer border-b border-line transition-colors hover:bg-green-soft/40",
+                          selectedId === row.id
+                            ? "bg-green-soft/50"
+                            : "bg-white",
+                          row.geannuleerd ? "opacity-70" : "",
+                        ].join(" ")}
+                      >
+                        <td className="px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">
+                            {row.klant_naam}
+                          </p>
+                          <p className="text-xs text-muted">
+                            {row.plaats || "—"}
+                            {row.adviseur_naam && !adviseurId
+                              ? ` · ${row.adviseur_naam}`
+                              : ""}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className="inline-flex rounded-full bg-[#eef1ef] px-2.5 py-0.5 text-xs font-medium text-muted">
+                            {row.vorm}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-sm font-medium tabular-nums text-ink">
+                          {formatEuro(row.bedrag_ex_btw)}
+                        </td>
+                        <td className="px-2 py-3 text-center">
+                          <FaseCell fase={f1} />
+                        </td>
+                        <td className="px-2 py-3 text-center">
+                          <FaseCell fase={f2} />
+                        </td>
+                        <td className="px-2 py-3 text-center">
+                          <FaseCell fase={f3} />
+                        </td>
+                        <td className="px-2 py-3 text-center">
+                          <FaseCell fase={f4} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <p className="text-xs font-medium tabular-nums text-ink">
+                            {row.progress_done}/{row.progress_total} (
+                            {row.progress_pct}%)
+                          </p>
+                          <div className="mt-1.5 h-1.5 w-28 overflow-hidden rounded-full bg-line">
+                            <div
+                              className="h-full rounded-full bg-green transition-[width]"
+                              style={{ width: `${row.progress_pct}%` }}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 text-xs tabular-nums text-muted">
+                          {formatSchouwWeek(
+                            row.schouw_jaar,
+                            row.schouw_week
+                          ) || "—"}
+                        </td>
+                        <td className="px-3 py-3 text-xs tabular-nums text-muted">
+                          {formatNettoPlanMoment(row.schouw_at) || "—"}
+                        </td>
+                        <td className="px-3 py-3 text-xs tabular-nums text-muted">
+                          {formatNettoPlanMoment(row.installatie_at) || "—"}
+                        </td>
+                        <td className="px-3 py-3 text-xs tabular-nums text-muted">
+                          {row.factuur_verstuurd_at
+                            ? formatSinds(row.factuur_verstuurd_at)
+                            : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-xs tabular-nums text-muted">
+                          {row.factuur_betaald_at ? (
+                            <span className="inline-flex items-center gap-1 text-green">
+                              <CheckIcon className="h-3 w-3" />
+                              {formatSinds(row.factuur_betaald_at)}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusBadge row={row} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {selected ? (
+            <DetailDrawer
+              row={selected}
+              onClose={() => setSelectedId(null)}
+              onRefresh={() => void load()}
+            />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

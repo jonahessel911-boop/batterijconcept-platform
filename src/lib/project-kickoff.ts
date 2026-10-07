@@ -1,8 +1,10 @@
 /**
  * Kickoff na getekende order: 2–3 dingen tegelijk, geen lineaire statussen.
  *
- * Warmtefonds: aanbetalingsfactuur + WF-afspraak + schouwweek
- * Eigen middelen: aanbetalingsfactuur + schouwweek
+ * Warmtefonds: BTW-factuur + WF-afspraak + schouwweek (incl. track & trace-mail)
+ * Eigen middelen: BTW-factuur + schouwweek (incl. track & trace-mail)
+ *
+ * Track & trace is géén aparte taak — zit in de schouwweek-klantmail.
  */
 import type { Factuur, Project } from "@/types/database";
 import {
@@ -13,10 +15,7 @@ import { isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { resolveFinancieringStatus } from "@/lib/financiering-status";
 import { formatProjectSchouwWeek } from "@/lib/schouw-week";
 
-export type KickoffItemId =
-  | "aanbetaling"
-  | "wf_afspraak"
-  | "schouwweek";
+export type KickoffItemId = "aanbetaling" | "wf_afspraak" | "schouwweek";
 
 export type KickoffItem = {
   id: KickoffItemId;
@@ -68,7 +67,7 @@ export function projectKickoffItems(
   const items: KickoffItem[] = [
     {
       id: "aanbetaling",
-      label: "Aanbetalingsfactuur versturen",
+      label: "BTW-factuur versturen",
       done: aanbetalingDone,
       detail: aanbetalingBetaald
         ? "Verstuurd én betaald"
@@ -83,8 +82,8 @@ export function projectKickoffItems(
       detail: schouwDone
         ? formatProjectSchouwWeek(project) || "Ingepland"
         : wf
-          ? "Meestal ±5 weken vooruit"
-          : "Zo snel mogelijk",
+          ? "Incl. track & trace-mail · meestal ±5 weken vooruit"
+          : "Incl. track & trace-mail naar de klant",
     },
   ];
 

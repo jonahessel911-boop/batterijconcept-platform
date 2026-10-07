@@ -358,6 +358,8 @@ export function ProjectPage() {
   const [newDue, setNewDue] = useState("");
   const [creatingTaak, setCreatingTaak] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [trackLinkCopied, setTrackLinkCopied] = useState(false);
+  const [trackLinkBusy, setTrackLinkBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
   const [gegevensDraft, setGegevensDraft] = useState<GegevensDraft | null>(
@@ -1029,6 +1031,22 @@ export function ProjectPage() {
         }
         const updated = (data as { project?: Project }).project;
         if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      } else if (soort === "aangetekende_brief") {
+        const res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            aangetekende_brief_verstuurd_at: new Date().toISOString(),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Voltooien mislukt"
+          );
+        }
+        const updated = (data as { project?: Project }).project;
+        if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
       } else if (soort === "nabellen_factuur") {
         const actie = openActiesVoorProject(project, facturen).find(
           (a) => a.id === actieId
@@ -1149,6 +1167,53 @@ export function ProjectPage() {
       setError(e instanceof Error ? e.message : "Upload mislukt");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function copyTrackLink() {
+    if (!project) return;
+    setTrackLinkBusy(true);
+    setError(null);
+    try {
+      const off = resolveOfferte(project);
+      let token = off?.track_token || null;
+      let url: string | null = token
+        ? `${window.location.origin}/track/${token}`
+        : null;
+
+      if (!url) {
+        const res = await fetch(`/api/projecten/${project.id}/track-link`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Track-link ophalen mislukt"
+          );
+        }
+        url = (data as { url?: string }).url || null;
+        token = (data as { track_token?: string }).track_token || token;
+        if (token) {
+          setProject((prev) => {
+            if (!prev) return prev;
+            const prevOff = resolveOfferte(prev);
+            if (!prevOff) return prev;
+            return {
+              ...prev,
+              offertes: { ...prevOff, track_token: token },
+            };
+          });
+        }
+      }
+
+      if (!url) throw new Error("Geen track-link beschikbaar");
+      await navigator.clipboard.writeText(url);
+      setTrackLinkCopied(true);
+      window.setTimeout(() => setTrackLinkCopied(false), 2000);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Kopiëren mislukt"
+      );
+    } finally {
+      setTrackLinkBusy(false);
     }
   }
 
@@ -1279,7 +1344,7 @@ export function ProjectPage() {
 
   const openBoActies = openActiesVoorProject(project, facturen).filter(
     (a) =>
-      a.soort === "schakel_financiering"
+      a.soort === "schakel_financiering" || a.soort === "aangetekende_brief"
   );
 
   const openActieCount = openTaken.length + openBoActies.length;
@@ -1758,6 +1823,58 @@ export function ProjectPage() {
                     </span>
                   ) : null}
                 </div>
+                {(() => {
+                  const off = resolveOfferte(project);
+                  const track = off?.track_token || null;
+                  const lastSeen = off?.track_last_seen_at || null;
+                  const mailed = off?.track_mail_verstuurd_at || null;
+                  const views = off?.track_view_count ?? 0;
+                  const hasOfferte = Boolean(off?.id || project.offerte_id);
+                  if (!hasOfferte) return null;
+                  return (
+                    <div className="mt-2 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {track ? (
+                          <a
+                            href={`/track/${track}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex text-xs font-semibold text-green-dark underline-offset-2 hover:underline"
+                          >
+                            Klant track &amp; trace →
+                          </a>
+                        ) : (
+                          <span className="text-xs font-semibold text-muted">
+                            Track &amp; trace
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          disabled={trackLinkBusy}
+                          onClick={() => void copyTrackLink()}
+                          className="border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                        >
+                          {trackLinkBusy
+                            ? "…"
+                            : trackLinkCopied
+                              ? "Gekopieerd!"
+                              : "Copy link"}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-muted">
+                        {mailed
+                          ? `Mail ${formatDateTimeNl(mailed)}`
+                          : "Nog niet gemaild"}
+                        {" · "}
+                        {lastSeen
+                          ? `Laatst geopend ${formatDateTimeNl(lastSeen)}${
+                              views > 1 ? ` (${views}×)` : ""
+                            }`
+                          : "Nog niet geopend"}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
               {isWarmtefondsProject(project) ? (
                 <img
@@ -2069,6 +2186,24 @@ export function ProjectPage() {
                   void refreshLeadEvents(p.lead_id);
                   setOkMsg("Doorgestuurd naar Edwin.");
                 }}
+                onProjectUpdated={(p) => {
+                  setProject((prev) => (prev ? { ...prev, ...p } : p));
+                  void refreshLeadEvents(p.lead_id);
+                  setOkMsg("Schouwweek gezet.");
+                }}
+                onFacturenChanged={() => {
+                  void (async () => {
+                    const fRes = await fetch(
+                      `/api/projecten/${project.id}/facturen`
+                    );
+                    const fData = await fRes.json().catch(() => ({}));
+                    if (fRes.ok) {
+                      setFacturen((fData.facturen as Factuur[]) || []);
+                    }
+                    void refreshLeadEvents(project.lead_id);
+                    setOkMsg("Aanbetalingsfactuur verstuurd.");
+                  })();
+                }}
               />
 
               <ProjectAfrondingChecklist
@@ -2253,18 +2388,30 @@ export function ProjectPage() {
                             </p>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          disabled={completingId === a.id}
-                          onClick={() =>
-                            void completeBoActie(a.id, a.titel, a.soort)
-                          }
-                          className="flex h-9 w-9 shrink-0 items-center justify-center border border-[#0D5C32]/25 bg-[#E8F6EC] text-lg leading-none hover:bg-[#d4eedc] disabled:opacity-50"
-                          title="Afronden"
-                          aria-label="Afronden"
-                        >
-                          {completingId === a.id ? "…" : "✅"}
-                        </button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {a.soort === "aangetekende_brief" ? (
+                            <a
+                              href={`/api/projecten/${project.id}/aangetekende-brief`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="border border-[#9A3B1A]/30 bg-[#FFF6F2] px-2.5 py-1.5 text-[11px] font-semibold text-[#9A3B1A] hover:bg-[#FFE8DF]"
+                            >
+                              Download PDF
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={completingId === a.id}
+                            onClick={() =>
+                              void completeBoActie(a.id, a.titel, a.soort)
+                            }
+                            className="flex h-9 w-9 shrink-0 items-center justify-center border border-[#0D5C32]/25 bg-[#E8F6EC] text-lg leading-none hover:bg-[#d4eedc] disabled:opacity-50"
+                            title="Afronden"
+                            aria-label="Afronden"
+                          >
+                            {completingId === a.id ? "…" : "✅"}
+                          </button>
+                        </div>
                       </li>
                     ))}
                     {openTaken.map((t) => {

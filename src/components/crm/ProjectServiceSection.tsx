@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   InstallatiePartner,
   Project,
   ServiceVerzoek,
 } from "@/types/database";
-import { formatDateTimeNl } from "@/lib/format";
-import { serviceVerzoekStatusLabel } from "@/lib/labels";
+import { formatDateTimeNl, formatTimeNl } from "@/lib/format";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -15,6 +14,19 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function defaultPlanAt(): string {
+  const d = new Date();
+  d.setHours(9, 0, 0, 0);
+  if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
+  return toDatetimeLocalValue(d.toISOString());
+}
+
+function dagenOpen(iso: string): number {
+  const start = new Date(iso).getTime();
+  if (Number.isNaN(start)) return 0;
+  return Math.max(0, Math.floor((Date.now() - start) / 86_400_000));
 }
 
 export function ProjectServiceSection({
@@ -36,19 +48,43 @@ export function ProjectServiceSection({
   );
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [planAt, setPlanAt] = useState(
-    toDatetimeLocalValue(project.service_at)
+    () => toDatetimeLocalValue(project.service_at) || defaultPlanAt()
   );
   const [planPartnerId, setPlanPartnerId] = useState(
     project.installatie_partner_id || ""
   );
   const [planNotes, setPlanNotes] = useState(project.service_notities || "");
   const [planVerzoekId, setPlanVerzoekId] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => verzoeken.find((v) => v.status === "open")?.id || verzoeken[0]?.id || null
+  );
+  const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
     setNotes(
       Object.fromEntries(verzoeken.map((v) => [v.id, v.interne_notitie || ""]))
     );
+    setSelectedId((prev) => {
+      if (prev && verzoeken.some((v) => v.id === prev)) return prev;
+      return (
+        verzoeken.find((v) => v.status === "open")?.id ||
+        verzoeken[0]?.id ||
+        null
+      );
+    });
   }, [verzoeken]);
+
+  useEffect(() => {
+    setPlanAt(toDatetimeLocalValue(project.service_at) || defaultPlanAt());
+    setPlanNotes(project.service_notities || "");
+    if (project.installatie_partner_id) {
+      setPlanPartnerId(project.installatie_partner_id);
+    }
+  }, [
+    project.service_at,
+    project.service_notities,
+    project.installatie_partner_id,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,11 +113,21 @@ export function ProjectServiceSection({
     };
   }, [project.installatie_partner_id]);
 
+  const openVerzoeken = useMemo(
+    () => verzoeken.filter((v) => v.status === "open"),
+    [verzoeken]
+  );
+  const selected = useMemo(
+    () => verzoeken.find((v) => v.id === selectedId) || null,
+    [verzoeken, selectedId]
+  );
+
   async function createVerzoek(e: React.FormEvent) {
     e.preventDefault();
     if (!onderwerp.trim()) return;
     setSaving(true);
     setError(null);
+    setOkMsg(null);
     try {
       const res = await fetch("/api/service-verzoeken", {
         method: "POST",
@@ -96,6 +142,8 @@ export function ProjectServiceSection({
       if (!res.ok) throw new Error(data.error || "Aanmaken mislukt");
       setOnderwerp("");
       setOmschrijving("");
+      setShowAdd(false);
+      setOkMsg("Serviceverzoek toegevoegd.");
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -110,6 +158,7 @@ export function ProjectServiceSection({
   ) {
     setSaving(true);
     setError(null);
+    setOkMsg(null);
     try {
       const res = await fetch(`/api/service-verzoeken/${id}`, {
         method: "PATCH",
@@ -118,6 +167,9 @@ export function ProjectServiceSection({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Bijwerken mislukt");
+      if (body.status === "afgehandeld") {
+        setOkMsg("Verzoek afgehandeld.");
+      }
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -158,7 +210,7 @@ export function ProjectServiceSection({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
       setOkMsg(
-        `Service gepland · ${formatDateTimeNl(parsed.toISOString())} — zichtbaar op planbord.`
+        `Service gepland · ${formatDateTimeNl(parsed.toISOString())} · oranje op Planbord`
       );
       onChanged();
     } catch (err) {
@@ -168,208 +220,370 @@ export function ProjectServiceSection({
     }
   }
 
-  const openVerzoeken = verzoeken.filter((v) => v.status === "open");
+  function useVerzoekForPlan(v: ServiceVerzoek) {
+    setSelectedId(v.id);
+    setPlanVerzoekId(v.id);
+    setPlanNotes(v.onderwerp || planNotes);
+  }
 
   return (
     <div className="space-y-4">
-      <section className="border border-line bg-white">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Service inplannen
-          </h2>
-          <p className="mt-0.5 text-sm text-muted">
-            Afspraak komt oranje op het planbord te staan.
-            {project.service_at
-              ? ` Nu gepland: ${formatDateTimeNl(project.service_at)}.`
-              : ""}
+      {/* Status strip */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <div className="border border-line bg-white px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+            Open verzoeken
+          </p>
+          <p
+            className={[
+              "mt-1 font-display text-2xl font-semibold tabular-nums",
+              openVerzoeken.length > 0 ? "text-[#C45A12]" : "text-ink",
+            ].join(" ")}
+          >
+            {openVerzoeken.length}
           </p>
         </div>
-        <form
-          onSubmit={planService}
-          className="grid gap-3 px-5 py-4 sm:grid-cols-2"
-        >
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-            Datum + tijd
-            <input
-              type="datetime-local"
-              value={planAt}
-              onChange={(e) => setPlanAt(e.target.value)}
-              required
-              className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-            />
-          </label>
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-            Installatiepartner
-            <select
-              value={planPartnerId}
-              onChange={(e) => setPlanPartnerId(e.target.value)}
-              required
-              className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-            >
-              <option value="">Kies partner…</option>
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.naam}
-                </option>
-              ))}
-            </select>
-          </label>
-          {openVerzoeken.length > 0 ? (
-            <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted sm:col-span-2">
-              Koppel aan verzoek (optioneel)
-              <select
-                value={planVerzoekId}
-                onChange={(e) => setPlanVerzoekId(e.target.value)}
-                className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-              >
-                <option value="">Geen specifiek verzoek</option>
-                {openVerzoeken.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.onderwerp}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted sm:col-span-2">
-            Notitie
-            <input
-              value={planNotes}
-              onChange={(e) => setPlanNotes(e.target.value)}
-              className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-              placeholder="Wat moet er gebeuren…"
-            />
-          </label>
-          <div className="sm:col-span-2">
+        <div className="border border-line bg-white px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+            Op planbord
+          </p>
+          <p className="mt-1 font-display text-sm font-semibold text-ink">
+            {project.service_at
+              ? formatDateTimeNl(project.service_at)
+              : "Nog niet gepland"}
+          </p>
+        </div>
+        <div className="col-span-2 border border-line bg-white px-4 py-3 sm:col-span-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+            Partner
+          </p>
+          <p className="mt-1 truncate text-sm font-semibold text-ink">
+            {partners.find((p) => p.id === planPartnerId)?.naam ||
+              "Nog niet gekozen"}
+          </p>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </p>
+      ) : null}
+      {okMsg ? (
+        <p className="border border-green/30 bg-green-soft px-3 py-2 text-sm text-green-dark">
+          {okMsg}
+        </p>
+      ) : null}
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.92fr)]">
+        {/* Tickets */}
+        <section className="border border-line bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Service-tickets
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Via e-mail/webhook of handmatig · koppel bij inplannen
+              </p>
+            </div>
             <button
-              type="submit"
-              disabled={saving}
-              className="bg-[#C45A12] px-4 py-2 text-sm font-semibold text-white hover:bg-[#9A4510] disabled:opacity-50"
+              type="button"
+              onClick={() => setShowAdd((v) => !v)}
+              className={[
+                "px-3 py-1.5 text-xs font-semibold",
+                showAdd
+                  ? "border border-line bg-wash text-muted"
+                  : "bg-[#C45A12] text-white hover:bg-[#9A4510]",
+              ].join(" ")}
             >
-              {saving ? "Bezig…" : "Service op planbord zetten"}
+              {showAdd ? "Annuleren" : "+ Verzoek"}
             </button>
           </div>
-        </form>
-      </section>
 
-      <section className="border border-line bg-white">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Service verzoeken
-          </h2>
-          <p className="mt-0.5 text-sm text-muted">
-            Binnenkomende verzoeken (via e-mail/webhook) worden hier gekoppeld.
-            Open → status Service · Afhandelen → Installatie voltooid.
-          </p>
-        </div>
+          {showAdd ? (
+            <form
+              onSubmit={(e) => void createVerzoek(e)}
+              className="space-y-3 border-b border-line bg-[#FFF7ED]/40 px-4 py-4"
+            >
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Onderwerp *
+                </span>
+                <input
+                  value={onderwerp}
+                  onChange={(e) => setOnderwerp(e.target.value)}
+                  placeholder="Bijv. Batterij ontlaadt niet"
+                  required
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Melding
+                </span>
+                <textarea
+                  value={omschrijving}
+                  onChange={(e) => setOmschrijving(e.target.value)}
+                  rows={2}
+                  placeholder="Wat speelt er bij de klant…"
+                  className="mt-1.5 w-full resize-y border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={saving || !onderwerp.trim()}
+                className="bg-[#0a4727] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-50"
+              >
+                {saving ? "Bezig…" : "Verzoek opslaan"}
+              </button>
+            </form>
+          ) : null}
 
-        <form
-          onSubmit={createVerzoek}
-          className="grid gap-3 border-b border-line px-5 py-4 sm:grid-cols-[1fr_1fr_auto]"
-        >
-          <input
-            value={onderwerp}
-            onChange={(e) => setOnderwerp(e.target.value)}
-            placeholder="Onderwerp *"
-            className="border border-line px-3 py-2 text-sm outline-none focus:border-green"
-            required
-          />
-          <input
-            value={omschrijving}
-            onChange={(e) => setOmschrijving(e.target.value)}
-            placeholder="Korte omschrijving"
-            className="border border-line px-3 py-2 text-sm outline-none focus:border-green"
-          />
-          <button
-            type="submit"
-            disabled={saving || !onderwerp.trim()}
-            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
-          >
-            Verzoek toevoegen
-          </button>
-        </form>
+          {verzoeken.length === 0 ? (
+            <div className="px-5 py-14 text-center">
+              <p className="font-display text-base font-semibold text-ink">
+                Geen tickets
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Voeg een verzoek toe of wacht op binnenkomende melding.
+              </p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-line">
+              {verzoeken.map((v) => {
+                const active = selectedId === v.id;
+                const days = dagenOpen(v.created_at);
+                const urgent = v.status === "open" && days >= 3;
+                return (
+                  <li key={v.id}>
+                    <button
+                      type="button"
+                      onClick={() => useVerzoekForPlan(v)}
+                      className={[
+                        "flex w-full gap-3 px-4 py-3.5 text-left transition-colors",
+                        active
+                          ? "bg-[#0a4727]/[0.04] ring-inset ring-1 ring-[#0a4727]/20"
+                          : "hover:bg-wash/80",
+                      ].join(" ")}
+                    >
+                      <span
+                        className={[
+                          "mt-1 h-10 w-1 shrink-0",
+                          v.status === "afgehandeld"
+                            ? "bg-[#0D5C32]/40"
+                            : urgent
+                              ? "bg-[#C45A12]"
+                              : "bg-[#EA580C]",
+                        ].join(" ")}
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-semibold text-ink">
+                            {v.onderwerp}
+                          </p>
+                          {v.status === "open" ? (
+                            <span
+                              className={[
+                                "shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                                urgent
+                                  ? "bg-[#C45A12] text-white"
+                                  : "bg-[#FFF0E6] text-[#C45A12]",
+                              ].join(" ")}
+                            >
+                              {urgent ? `${days}d open` : "Open"}
+                            </span>
+                          ) : (
+                            <span className="shrink-0 bg-[#E8F6EC] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#0D5C32]">
+                              Klaar
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-muted">
+                          {formatDateTimeNl(v.created_at)}
+                          {v.klant_email ? ` · ${v.klant_email}` : ""}
+                        </p>
+                        {v.omschrijving ? (
+                          <p className="mt-1 line-clamp-2 text-sm text-ink/80">
+                            {v.omschrijving}
+                          </p>
+                        ) : null}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
-        {error ? (
-          <p className="px-5 py-2 text-sm text-[#C45A12]">{error}</p>
-        ) : null}
-        {okMsg ? (
-          <p className="px-5 py-2 text-sm text-green-dark">{okMsg}</p>
-        ) : null}
+        {/* Plan + detail */}
+        <div className="space-y-3 lg:sticky lg:top-20 lg:self-start">
+          <section className="overflow-hidden border border-line bg-white">
+            <div className="bg-[#0a4727] px-5 py-4 text-white">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/60">
+                Inplannen
+              </p>
+              <h3 className="mt-1 font-display text-lg font-semibold">
+                Service op planbord
+              </h3>
+              <p className="mt-1 text-sm text-white/70">
+                Verschijnt oranje ·{" "}
+                {planAt
+                  ? formatTimeNl(new Date(planAt).toISOString())
+                  : "kies tijd"}
+              </p>
+            </div>
 
-        {verzoeken.length === 0 ? (
-          <p className="px-5 py-6 text-sm text-muted">Nog geen verzoeken.</p>
-        ) : (
-          <ul className="divide-y divide-line">
-            {verzoeken.map((v) => (
-              <li key={v.id} className="px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium text-ink">{v.onderwerp}</p>
-                    <p className="mt-0.5 text-[11px] text-muted">
-                      {formatDateTimeNl(v.created_at)}
-                      {v.klant_email ? ` · ${v.klant_email}` : ""}
-                      {v.omschrijving ? ` · ${v.omschrijving}` : ""}
-                    </p>
-                  </div>
-                  <span
-                    className={[
-                      "inline-block border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                      v.status === "open"
-                        ? "border-[#C45A12]/25 bg-[#FFF0E6] text-[#C45A12]"
-                        : "border-[#0D5C32]/25 bg-[#E8F6EC] text-[#0D5C32]",
-                    ].join(" ")}
-                  >
-                    {serviceVerzoekStatusLabel[v.status]}
+            <form
+              onSubmit={(e) => void planService(e)}
+              className="space-y-3 px-5 py-4"
+            >
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Datum + tijd
+                </span>
+                <input
+                  type="datetime-local"
+                  value={planAt}
+                  onChange={(e) => setPlanAt(e.target.value)}
+                  required
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Installatiepartner
+                </span>
+                <select
+                  value={planPartnerId}
+                  onChange={(e) => setPlanPartnerId(e.target.value)}
+                  required
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Kies partner…</option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {openVerzoeken.length > 0 ? (
+                <label className="block">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Koppel ticket
                   </span>
-                </div>
-
-                <label className="mt-3 block text-[11px] font-medium text-muted">
-                  Interne notitie
-                  <textarea
-                    value={notes[v.id] ?? v.interne_notitie ?? ""}
-                    onChange={(e) =>
-                      setNotes((prev) => ({ ...prev, [v.id]: e.target.value }))
-                    }
-                    rows={2}
-                    className="mt-1 w-full border border-line px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                    placeholder="Wat is er gedaan / afgesproken…"
-                  />
+                  <select
+                    value={planVerzoekId}
+                    onChange={(e) => setPlanVerzoekId(e.target.value)}
+                    className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                  >
+                    <option value="">Geen specifiek verzoek</option>
+                    {openVerzoeken.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.onderwerp}
+                      </option>
+                    ))}
+                  </select>
                 </label>
+              ) : null}
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Werkbon / notitie
+                </span>
+                <textarea
+                  value={planNotes}
+                  onChange={(e) => setPlanNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Wat moet de monteur doen…"
+                  className="mt-1.5 w-full resize-y border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={saving || !planAt || !planPartnerId}
+                className="w-full bg-[#C45A12] px-4 py-3 text-sm font-semibold text-white hover:bg-[#9A4510] disabled:opacity-50"
+              >
+                {saving
+                  ? "Bezig…"
+                  : project.service_at
+                    ? "Herplan op planbord"
+                    : "Zet op planbord"}
+              </button>
+            </form>
+          </section>
 
-                <div className="mt-2 flex flex-wrap gap-2">
+          {selected ? (
+            <section className="border border-line bg-white px-5 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                    Geselecteerd ticket
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-ink">
+                    {selected.onderwerp}
+                  </p>
+                </div>
+                {selected.status === "open" ? (
                   <button
                     type="button"
                     disabled={saving}
                     onClick={() =>
-                      patch(v.id, {
-                        interne_notitie: notes[v.id] ?? "",
+                      void patch(selected.id, {
+                        status: "afgehandeld",
+                        interne_notitie: notes[selected.id] ?? "",
                       })
                     }
-                    className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash disabled:opacity-50"
+                    className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
                   >
-                    Notitie opslaan
+                    Afhandelen
                   </button>
-                  {v.status === "open" ? (
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() =>
-                        patch(v.id, {
-                          status: "afgehandeld",
-                          interne_notitie: notes[v.id] ?? "",
-                        })
-                      }
-                      className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                    >
-                      Afhandelen → Installatie voltooid
-                    </button>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                ) : (
+                  <span className="text-xs font-semibold text-[#0D5C32]">
+                    Afgehandeld
+                  </span>
+                )}
+              </div>
+              {selected.omschrijving ? (
+                <p className="mt-3 whitespace-pre-wrap border border-line bg-wash/50 px-3 py-2.5 text-sm text-ink">
+                  {selected.omschrijving}
+                </p>
+              ) : null}
+              <label className="mt-3 block">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Interne notitie
+                </span>
+                <textarea
+                  value={notes[selected.id] ?? selected.interne_notitie ?? ""}
+                  onChange={(e) =>
+                    setNotes((prev) => ({
+                      ...prev,
+                      [selected.id]: e.target.value,
+                    }))
+                  }
+                  rows={2}
+                  className="mt-1.5 w-full resize-y border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                  placeholder="Wat is er gedaan / afgesproken…"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  void patch(selected.id, {
+                    interne_notitie: notes[selected.id] ?? "",
+                  })
+                }
+                className="mt-2 border border-line px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+              >
+                Notitie opslaan
+              </button>
+            </section>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

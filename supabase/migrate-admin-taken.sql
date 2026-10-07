@@ -1,10 +1,13 @@
--- Persoonlijke admin-taken (CRM-tab Taken, alleen admin).
+-- Persoonlijke admin-agenda: taken + afspraken (CRM-tab Taken, alleen admin).
 
 create table if not exists public.admin_taken (
   id uuid primary key default gen_random_uuid(),
   titel text not null,
   inhoud text null,
+  soort text not null default 'taak'
+    check (soort in ('taak', 'afspraak')),
   due_at timestamptz not null,
+  end_at timestamptz null,
   status text not null default 'todo'
     check (status in ('todo', 'done')),
   created_by_id uuid null references public.adviseurs(id) on delete set null,
@@ -21,4 +24,4 @@ create index if not exists admin_taken_status_idx
   on public.admin_taken (status, due_at);
 
 comment on table public.admin_taken is
-  'Admin-taken: wat te fixen, wanneer/voor hoe laat, en inhoud';
+  'Persoonlijke admin-agenda: taken (deadline) + eigen afspraken (start/eind)';
