@@ -19,6 +19,10 @@
     {
       "path": "/api/cron/fonio-dialer",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/woensdag-commissie",
+      "schedule": "0 7 * * 3"
     }
   ]
 }

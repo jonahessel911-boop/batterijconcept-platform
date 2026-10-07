@@ -51,14 +51,32 @@ export async function maybeAdvanceProjectNaOplevering(
   }
 
   const to: ProjectStatus = "installatie_voltooid";
-  const { data: updated, error: updErr } = await sb
+  const selectCols =
+    "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon), offertes(id, offerte_nummer, totaal_inc_btw)";
+  let { data: updated, error: updErr } = await sb
     .from("projecten")
-    .update({ status: to })
+    .update({
+      status: to,
+      installatie_voltooid_at: new Date().toISOString(),
+    })
     .eq("id", projectId)
-    .select(
-      "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon), offertes(id, offerte_nummer, totaal_inc_btw)"
-    )
+    .select(selectCols)
     .maybeSingle();
+
+  if (
+    updErr &&
+    (updErr.message?.includes("installatie_voltooid_at") ||
+      updErr.code === "42703")
+  ) {
+    const retry = await sb
+      .from("projecten")
+      .update({ status: to })
+      .eq("id", projectId)
+      .select(selectCols)
+      .maybeSingle();
+    updated = retry.data;
+    updErr = retry.error;
+  }
 
   if (updErr) {
     console.error("maybeAdvanceProjectNaOplevering:", updErr.message);

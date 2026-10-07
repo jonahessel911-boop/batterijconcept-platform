@@ -135,6 +135,11 @@ const ICONS: Record<string, React.ReactNode> = {
 
 const GROUPS: SidebarGroup[] = [
   {
+    id: "mijn",
+    label: "Mijn werk",
+    items: [{ id: "taken", label: "Taken", icon: ICONS.admin }],
+  },
+  {
     id: "sales",
     label: "Sales",
     items: [

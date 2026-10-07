@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { adresRegel } from "@/lib/format";
+import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { schouwKlantEmail, schouwPartnerEmail } from "@/lib/email/templates";
 import {
@@ -320,20 +320,20 @@ export async function POST(
         leadId: updated.lead_id,
         soort: "schouw",
         titel: exactSchouwAt
-          ? "Schouwdag gepland"
+          ? "Schouwdatum gepland"
           : `Schouwweek gezet (W${schouwWeek})`,
-        detail: [
-          exactSchouwAt
-            ? null
-            : schouwJaar && schouwWeek
-              ? `${schouwJaar}-W${String(schouwWeek).padStart(2, "0")}`
-              : null,
-          updated.project_nummer
-            ? `Project ${updated.project_nummer}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · ") || null,
+        detail: exactSchouwAt
+          ? `Schouwdatum is gepland op ${formatDateTimeNl(schouwAtIso)}`
+          : [
+              schouwJaar && schouwWeek
+                ? `${schouwJaar}-W${String(schouwWeek).padStart(2, "0")}`
+                : null,
+              updated.project_nummer
+                ? `Project ${updated.project_nummer}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
         meta: {
           project_id: id,
           schouw_jaar: schouwJaar,

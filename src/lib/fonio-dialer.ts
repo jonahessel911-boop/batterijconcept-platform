@@ -6,11 +6,7 @@
 import { formatInTimeZone } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import {
-  cancelledAppointmentLeadIds,
-  inBelQueue,
-  sortBelQueue,
-} from "@/lib/bel-queue";
+import { inBelQueue, sortBelQueue } from "@/lib/bel-queue";
 import type { Afspraak, Lead } from "@/types/database";
 import {
   buildFonioLeadContext,
@@ -140,7 +136,6 @@ async function openCallLeadIds(sb: SupabaseClient): Promise<Set<string>> {
 
 async function loadAppointmentSets(sb: SupabaseClient): Promise<{
   appointmentLeadIds: Set<string>;
-  cancelledIds: Set<string>;
 }> {
   const from = new Date();
   from.setDate(from.getDate() - 90);
@@ -159,10 +154,7 @@ async function loadAppointmentSets(sb: SupabaseClient): Promise<{
     appointmentLeadIds.add(a.lead_id);
     void now;
   }
-  return {
-    appointmentLeadIds,
-    cancelledIds: cancelledAppointmentLeadIds(afspraken),
-  };
+  return { appointmentLeadIds };
 }
 
 async function pickNextLeads(
@@ -172,7 +164,7 @@ async function pickNextLeads(
 ): Promise<Lead[]> {
   if (limit <= 0) return [];
 
-  const { appointmentLeadIds, cancelledIds } = await loadAppointmentSets(sb);
+  const { appointmentLeadIds } = await loadAppointmentSets(sb);
 
   const { data, error } = await sb
     .from("leads")
@@ -182,13 +174,13 @@ async function pickNextLeads(
     .in("status", ["nieuw", "geen_contact", "vervolg_geen_contact"])
     .not("telefoon", "is", null)
     .order("created_at", { ascending: false })
-    .limit(400);
+    .limit(2000);
 
   if (error) throw error;
 
   const filtered = ((data || []) as Lead[]).filter((l) => {
     if (excludeLeadIds.has(l.id)) return false;
-    return inBelQueue(l, appointmentLeadIds, cancelledIds);
+    return inBelQueue(l, appointmentLeadIds);
   });
 
   return sortBelQueue(filtered).slice(0, limit);

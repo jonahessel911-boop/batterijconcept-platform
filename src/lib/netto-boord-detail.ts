@@ -3,6 +3,7 @@ import { isSchouwFormulier } from "@/lib/project-documenten";
 import { normalizeProjectStatus, projectStatusLabel } from "@/lib/labels";
 import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export type NettoTimelineKind =
   | "notitie"
@@ -216,10 +217,13 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     string,
     { created_at: string; detail: string | null }
   >();
+  const schouwDagEvByProject = new Map<
+    string,
+    { created_at: string; detail: string | null }
+  >();
   for (const ev of input.events) {
-    if (ev.soort !== "schouw" || !/Schouwweek gezet/i.test(ev.titel || "")) {
-      continue;
-    }
+    if (ev.soort !== "schouw") continue;
+    const titel = ev.titel || "";
     const meta = (ev.meta || {}) as {
       project_id?: string;
       schouw_week?: number;
@@ -227,19 +231,36 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     };
     const pid = meta.project_id;
     if (!pid) continue;
-    const prev = schouwWeekEvByProject.get(pid);
-    if (!prev || ev.created_at < prev.created_at) {
-      schouwWeekEvByProject.set(pid, {
-        created_at: ev.created_at,
-        detail: ev.detail,
-      });
+    if (/Schouwweek gezet/i.test(titel)) {
+      const prev = schouwWeekEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        schouwWeekEvByProject.set(pid, {
+          created_at: ev.created_at,
+          detail: ev.detail,
+        });
+      }
+      continue;
+    }
+    if (/Schouwdag gepland|Schouwdatum gepland/i.test(titel)) {
+      const prev = schouwDagEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        schouwDagEvByProject.set(pid, {
+          created_at: ev.created_at,
+          detail: ev.detail,
+        });
+      }
     }
   }
 
   for (const ev of input.events) {
     const soort = (ev.soort || "overig") as NettoTimelineKind;
     const kind: NettoTimelineKind = EVENT_KINDS.has(soort) ? soort : "overig";
-    if (soort === "schouw" && /Schouwweek gezet/i.test(ev.titel || "")) {
+    const titel = ev.titel || "";
+    if (
+      soort === "schouw" &&
+      (/Schouwweek gezet/i.test(titel) ||
+        /Schouwdag gepland|Schouwdatum gepland/i.test(titel))
+    ) {
       continue;
     }
     items.push({
@@ -394,13 +415,16 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       });
     }
 
-    if (p.schouw_at) {
+    if (p.schouw_at && isSchouwdagDefinitief(p)) {
+      const dagEv = schouwDagEvByProject.get(p.id);
       items.push({
         id: `schouw-datum-${p.id}`,
-        at: p.schouw_at,
+        at: dagEv?.created_at || p.updated_at || p.created_at,
         kind: "schouw",
         titel: "Schouwdatum gepland",
-        detail: formatDateTimeNl(p.schouw_at),
+        detail:
+          dagEv?.detail ||
+          `Schouwdatum is gepland op ${formatDateTimeNl(p.schouw_at)}`,
         action: {
           type: "link",
           href: `/projecten/${p.id}`,
@@ -435,14 +459,14 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     if (p.installatie_at || st === "installatie_ingepland" || st === "installatie_voltooid") {
       items.push({
         id: `inst-plan-${p.id}`,
-        at: p.installatie_at || p.updated_at || p.created_at,
+        at: p.updated_at || p.created_at,
         kind: "installatie",
         titel:
           st === "installatie_voltooid"
             ? "Installatie uitgevoerd"
             : "Installatie gepland",
         detail: p.installatie_at
-          ? formatDateTimeNl(p.installatie_at)
+          ? `Installatiedatum is gepland op ${formatDateTimeNl(p.installatie_at)}`
           : statusLabel(p.status),
         action: {
           type: "link",

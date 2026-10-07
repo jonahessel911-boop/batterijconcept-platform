@@ -1341,6 +1341,23 @@ export function ProjectPage() {
     );
   })();
 
+  const schouwDagLeadEv = (() => {
+    if (!project.schouw_at || !schouwDagDefinitief) return null;
+    const matches = leadEvents.filter((ev) => {
+      if (ev.soort !== "schouw") return false;
+      if (!/Schouwdag gepland|Schouwdatum gepland/i.test(ev.titel || "")) {
+        return false;
+      }
+      const meta = (ev.meta || {}) as Record<string, unknown>;
+      if (meta.project_id && meta.project_id !== project.id) return false;
+      return true;
+    });
+    return (
+      matches.sort((a, b) => a.created_at.localeCompare(b.created_at))[0] ||
+      null
+    );
+  })();
+
   if (project.schouw_jaar && project.schouw_week) {
     feed.push({
       key: "schouw-week",
@@ -1361,9 +1378,14 @@ export function ProjectPage() {
   if (project.schouw_at && schouwDagDefinitief) {
     feed.push({
       key: "schouw-datum",
-      at: project.schouw_at,
+      at:
+        schouwDagLeadEv?.created_at ||
+        project.updated_at ||
+        project.created_at,
       title: "Schouwdatum gepland",
-      body: formatDateTimeNl(project.schouw_at),
+      body:
+        schouwDagLeadEv?.detail ||
+        `Schouwdatum is gepland op ${formatDateTimeNl(project.schouw_at)}`,
       kind: "event",
       icon: "calendar",
     });
@@ -1387,9 +1409,13 @@ export function ProjectPage() {
   if (project.installatie_at) {
     feed.push({
       key: "installatie",
-      at: project.installatie_at,
+      at: project.updated_at || project.created_at,
       title: "Installatie gepland",
-      body: project.installatie_partners?.naam || project.monteur || undefined,
+      body: `Installatiedatum is gepland op ${formatDateTimeNl(project.installatie_at)}${
+        project.installatie_partners?.naam || project.monteur
+          ? ` · ${project.installatie_partners?.naam || project.monteur}`
+          : ""
+      }`,
       kind: "event",
       icon: "installatie",
     });
@@ -1511,7 +1537,7 @@ export function ProjectPage() {
     if (soort === "schouw" && /Schouwweek gezet/i.test(titel)) continue;
     if (
       soort === "schouw" &&
-      /Schouwdag gepland/i.test(titel) &&
+      /Schouwdag gepland|Schouwdatum gepland/i.test(titel) &&
       project.schouw_at &&
       schouwDagDefinitief
     ) {

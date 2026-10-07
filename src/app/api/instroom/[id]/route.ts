@@ -78,44 +78,38 @@ export async function PATCH(
       .single();
     if (curErr) throw curErr;
 
-    if (patch.status === SOLLICITATIE_STATUS_MET_VERVOLG) {
-      const wasAlready =
-        parseSollicitatieStatus(current?.status) ===
-        SOLLICITATIE_STATUS_MET_VERVOLG;
-
-      if (!wasAlready) {
-        if (!notitieAppend) {
-          return NextResponse.json(
-            { error: "Notitie is verplicht bij beoordeling" },
-            { status: 400 }
-          );
-        }
-        if (!vervolgTitel || !vervolgDue) {
-          return NextResponse.json(
-            { error: "Vervolgtaak met deadline is verplicht bij beoordeling" },
-            { status: 400 }
-          );
-        }
-      }
-    }
-
-    if (patch.status === SOLLICITATIE_STATUS_MET_TRAINING) {
-      const wasAlready =
-        parseSollicitatieStatus(current?.status) ===
-        SOLLICITATIE_STATUS_MET_TRAINING;
-      const trainingId =
-        patch.training_moment_id ??
-        (current?.training_moment_id as string | null) ??
-        null;
-      if (!wasAlready && !trainingId) {
+    // Beoordeling-popup (notitie + vervolgtaak): alleen verplicht als die
+    // velden meegestuurd worden. Pure status-drag mag zonder.
+    if (
+      patch.status === SOLLICITATIE_STATUS_MET_VERVOLG &&
+      (notitieAppend || vervolgTitel || vervolgDue)
+    ) {
+      if (!notitieAppend) {
         return NextResponse.json(
-          { error: "Kies een trainingmoment" },
+          { error: "Notitie is verplicht bij beoordeling" },
           { status: 400 }
         );
       }
-      if (patch.training_moment_id === undefined && trainingId) {
-        patch.training_moment_id = trainingId;
+      if (!vervolgTitel || !vervolgDue) {
+        return NextResponse.json(
+          { error: "Vervolgtaak met deadline is verplicht bij beoordeling" },
+          { status: 400 }
+        );
       }
+    }
+
+    // Trainingmoment is optioneel bij status-drag; verplicht alleen als je
+    // bewust een moment koppelt via training_moment_id.
+    if (
+      "training_moment_id" in body &&
+      patch.status === SOLLICITATIE_STATUS_MET_TRAINING &&
+      !patch.training_moment_id &&
+      !(current?.training_moment_id as string | null)
+    ) {
+      return NextResponse.json(
+        { error: "Kies een trainingmoment" },
+        { status: 400 }
+      );
     }
 
     if (notitieAppend) {
@@ -182,14 +176,14 @@ export async function PATCH(
     let mailSkipped = false;
     let mailError: string | null = null;
 
-    const enteringTraining =
-      patch.status === SOLLICITATIE_STATUS_MET_TRAINING &&
-      parseSollicitatieStatus(current?.status) !==
-        SOLLICITATIE_STATUS_MET_TRAINING;
+    // Mail alleen bij bewuste training-koppeling (training_moment_id in body),
+    // niet bij alleen status verslepen op het kanban.
+    const trainingExplicitlySet = "training_moment_id" in body;
     const trainingChanged =
-      patch.training_moment_id &&
+      trainingExplicitlySet &&
+      Boolean(patch.training_moment_id) &&
       patch.training_moment_id !== current?.training_moment_id;
-    const shouldMailTraining = enteringTraining || Boolean(trainingChanged);
+    const shouldMailTraining = Boolean(trainingChanged);
 
     if (shouldMailTraining && data?.training_moment_id) {
       const to = (data.email as string | null)?.trim() || null;

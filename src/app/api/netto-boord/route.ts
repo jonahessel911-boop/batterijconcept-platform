@@ -76,6 +76,7 @@ type ProjectRow = {
   schouw_jaar: number | null;
   schouw_week: number | null;
   installatie_at: string | null;
+  installatie_voltooid_at?: string | null;
   warmtefonds_aangevraagd_at?: string | null;
   warmtefonds_afspraak_at?: string | null;
   btw_terugvragen_aangevraagd_at?: string | null;
@@ -86,7 +87,7 @@ type ProjectRow = {
 };
 
 const PROJECT_SELECT_FULL =
-  "id, offerte_id, lead_id, project_nummer, status, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, created_at, updated_at";
+  "id, offerte_id, lead_id, project_nummer, status, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, installatie_voltooid_at, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, created_at, updated_at";
 
 /** Zonder optionele migratie-kolommen — altijd beschikbaar voor Planbord-data. */
 const PROJECT_SELECT_CORE =
@@ -364,6 +365,7 @@ export async function GET(req: NextRequest) {
         schouwJaar: project?.schouw_jaar || null,
         schouwWeek: project?.schouw_week || null,
         installatieAt: project?.installatie_at || null,
+        installatieVoltooidAt: project?.installatie_voltooid_at || null,
         warmtefondsAfgewezen:
           normalizeProjectStatus(project?.status) === "warmtefonds_afgewezen",
         warmtefondsAangevraagdOp: project?.warmtefonds_aangevraagd_at || null,
@@ -404,7 +406,9 @@ export async function GET(req: NextRequest) {
       const statusSinds = geannuleerd
         ? project?.updated_at || (o.updated_at as string | null)
         : board_status === "netto"
-          ? project?.updated_at || (o.ondertekend_op as string | null)
+          ? project?.installatie_voltooid_at ||
+            project?.updated_at ||
+            (o.ondertekend_op as string | null)
           : (o.ondertekend_op as string | null) ||
             (o.created_at as string | null);
 

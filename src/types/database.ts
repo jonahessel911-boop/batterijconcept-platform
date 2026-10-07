@@ -74,6 +74,7 @@ export type SollicitatieStatus =
   | "aangenomen_actief";
 
 export type CrmTab =
+  | "taken"
   | "leads"
   | "bellen"
   | "agenda"
@@ -477,6 +478,8 @@ export interface Project {
   schouw_mail_klant_verstuurd?: boolean;
   schouw_mail_partner_verstuurd?: boolean;
   installatie_at?: string | null;
+  /** Moment waarop installatie uitgevoerd / status installatie_voltooid (netto sale). */
+  installatie_voltooid_at?: string | null;
   installatie_notities?: string | null;
   installatie_mail_klant_verstuurd?: boolean;
   installatie_mail_partner_verstuurd?: boolean;

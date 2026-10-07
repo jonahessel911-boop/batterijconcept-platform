@@ -43,7 +43,7 @@ import { InkomendPanel } from "./InkomendPanel";
 import { AdminTargetsPanel } from "./AdminTargetsPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES } from "@/lib/labels";
-import { cancelledAppointmentLeadIds, inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
+import { inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { openBackofficeActies } from "@/lib/backoffice-acties";
@@ -62,8 +62,10 @@ import { CRM_TABS } from "./TabNav";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import { NettoBoord } from "./NettoBoord";
 import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
+import { AdminTakenPanel } from "./AdminTakenPanel";
 
 const VALID_TABS: CrmTab[] = [
+  "taken",
   "leads",
   "bellen",
   "agenda",
@@ -115,9 +117,6 @@ export function CrmShell() {
     // Oude losse Service-tab → Backoffice › Service
     if (searchParams.get("tab") === "service") {
       setBoViewStore("service");
-    }
-    if (searchParams.get("tab") === "ai") {
-      setBoViewStore("ai");
     }
     // Oude Instellingen-tab → Partners › Team
     if (searchParams.get("tab") === "instellingen") {
@@ -355,12 +354,24 @@ export function CrmShell() {
     if (userRol && !magTab(userRol, next)) return;
     setTab(next);
     const params = new URLSearchParams(searchParams.toString());
-    if (next === "leads") params.delete("tab");
+    // Admin-home is Taken; leads altijd expliciet in de URL
+    if (next === "leads" && userRol !== "admin") params.delete("tab");
     else params.set("tab", next);
     if (next !== "projecten") params.delete("bo");
     const qs = params.toString();
     router.push(qs ? `/?${qs}` : "/", { scroll: false });
   }
+
+  // Admin: start op Taken als er geen tab in de URL staat
+  useEffect(() => {
+    if (!sessionReady || userRol !== "admin") return;
+    if (searchParams.get("tab")) return;
+    if (searchParams.get("status")) return;
+    if (searchParams.get("bo")) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "taken");
+    router.replace(`/?${params.toString()}`, { scroll: false });
+  }, [sessionReady, userRol, searchParams, router]);
 
   function changeStatusFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -528,6 +539,23 @@ export function CrmShell() {
     return leads.filter((l) => l.adviseur_id === adviseurFilter);
   }, [leads, adviseurFilter, adviseurs, userRol, sessionUser]);
 
+  /**
+   * Bellijst: team-queue. “Bekijk als” (adviseur-filter) mag die niet leegtrekken —
+   * anders zie je bv. alleen de 3 leads van één adviseur i.p.v. alle belbare.
+   * Bellers blijven beperkt tot hun toegewezen leads.
+   */
+  const belLeads = useMemo(() => {
+    if (!userRol) return [];
+    if (isBellerRol(userRol) && sessionUser?.id) {
+      return leads.filter((l) => l.beller_id === sessionUser.id);
+    }
+    if (alleenEigenLeads(userRol) && sessionUser?.id) {
+      return leads.filter((l) => l.adviseur_id === sessionUser.id);
+    }
+    // Admin/backoffice: volle bellijst, ongeacht Bekijk-als
+    return leads;
+  }, [leads, userRol, sessionUser]);
+
   const scopedLeadIds = useMemo(
     () => new Set(scopedLeads.map((l) => l.id)),
     [scopedLeads]
@@ -657,27 +685,21 @@ export function CrmShell() {
     return ids;
   }, [afspraken]);
 
-  const cancelledOutOfBelIds = useMemo(
-    () => cancelledAppointmentLeadIds(afspraken),
-    [afspraken]
-  );
-
   const terugbelDueCount = useMemo(() => {
     const due = new Set(
       afspraken.filter((a) => isTerugbelDue(a)).map((a) => a.lead_id)
     );
     return [...due].filter((id) => {
-      const lead = scopedLeads.find((l) => l.id === id);
+      const lead = belLeads.find((l) => l.id === id);
       return Boolean(lead?.telefoon?.trim());
     }).length;
-  }, [afspraken, scopedLeads]);
+  }, [afspraken, belLeads]);
 
   const belQueueCount = useMemo(
     () =>
-      scopedLeads.filter((l) =>
-        inBelQueue(l, appointmentLeadIds, cancelledOutOfBelIds)
-      ).length + terugbelDueCount,
-    [scopedLeads, appointmentLeadIds, cancelledOutOfBelIds, terugbelDueCount]
+      belLeads.filter((l) => inBelQueue(l, appointmentLeadIds)).length +
+      terugbelDueCount,
+    [belLeads, appointmentLeadIds, terugbelDueCount]
   );
 
   const backofficeActieCount = useMemo(
@@ -842,6 +864,10 @@ export function CrmShell() {
     adviseurs.find((a) => a.id === adviseurFilter)?.naam || null;
 
   const titles: Record<CrmTab, { title: string; sub: string }> = {
+    taken: {
+      title: "Taken",
+      sub: "Jouw fix-lijst · deadline met tijd",
+    },
     leads: {
       title: "Leads",
       sub: filterLabel
@@ -890,15 +916,11 @@ export function CrmShell() {
           ? "Planbord"
           : boView === "acties"
             ? "Acties"
-            : boView === "taken"
-              ? "Toekomstige taken"
-              : boView === "schouwweek"
-                ? "Schouwweek"
-                : boView === "service"
-                  ? "Service"
-                  : boView === "ai"
-                    ? "AI"
-                    : "Projecten",
+            : boView === "schouwweek"
+              ? "Schouwweek"
+              : boView === "service"
+                ? "Service"
+                : "Projecten",
       sub:
         boView === "agenda"
           ? "Schouw, installatie en service per week"
@@ -906,19 +928,15 @@ export function CrmShell() {
             ? backofficeActieCount > 0
               ? `${backofficeActieCount} openstaande ${backofficeActieCount === 1 ? "actie" : "acties"}`
               : "Herplannen, schouw, financiering en facturen"
-            : boView === "taken"
-              ? "Alle openstaande taken · op due date"
-              : boView === "schouwweek"
-                ? schouwweekCount > 0
-                  ? `${schouwweekCount} openstaande schouwweek${schouwweekCount === 1 ? "" : "en"}`
-                  : "Orders met schouwweek · nog geen definitieve schouwdag"
-                : boView === "service"
-                  ? "Serviceverzoeken · inplannen op het planbord"
-                  : boView === "ai"
-                    ? "Typ of spreek in · acties bevestig je zelf"
-                    : filterLabel
-                      ? `Backoffice van ${filterLabel}`
-                      : "Backoffice in planning en uitvoering",
+            : boView === "schouwweek"
+              ? schouwweekCount > 0
+                ? `${schouwweekCount} openstaande schouwweek${schouwweekCount === 1 ? "" : "en"}`
+                : "Orders met schouwweek · nog geen definitieve schouwdag"
+              : boView === "service"
+                ? "Serviceverzoeken · inplannen op het planbord"
+                : filterLabel
+                  ? `Backoffice van ${filterLabel}`
+                  : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
@@ -1139,6 +1157,7 @@ export function CrmShell() {
               !hasCrmBootstrapCache() &&
               projecten.length === 0 &&
               leads.length === 0 &&
+              tab !== "taken" &&
               tab !== "partners" &&
               tab !== "purchasing" &&
               tab !== "ai" &&
@@ -1153,6 +1172,7 @@ export function CrmShell() {
               </p>
             ) : (
               <>
+                {tab === "taken" && <AdminTakenPanel />}
                 {tab === "leads" && (
                   <LeadsTable
                     leads={filteredLeads}
@@ -1171,17 +1191,16 @@ export function CrmShell() {
                 )}
                 {tab === "bellen" && (
                   <BelPanel
-                    leads={scopedLeads}
+                    leads={belLeads}
                     afspraken={afspraken}
                     adviseurs={adviseurs}
                     appointmentLeadIds={appointmentLeadIds}
-                    cancelledAppointmentLeadIds={cancelledOutOfBelIds}
                     defaultAdviseurId={
                       isBellerRol(userRol)
                         ? undefined
                         : alleenEigenLeads(userRol)
                           ? sessionUser?.id
-                          : adviseurFilter || undefined
+                          : undefined
                     }
                     onLeadUpdated={(id, patch) => {
                       setLeads((prev) =>

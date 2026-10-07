@@ -3,14 +3,17 @@ import {
   NETTO_AANBETALING_COMMISSIE,
   commissieTrancheB,
   isAanbetalingFactuur,
-  nextWednesdayYmd,
 } from "@/lib/netto-boord";
 import {
   creditWeekFromDate,
+  previousCreditWeek,
   formatCreditFactuurNummer,
 } from "@/lib/adviseur-creditfactuur";
 import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { fromZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 
 function offerteRefTag(offerteNummer: string) {
   return `ref_offerte:${offerteNummer}`;
@@ -96,7 +99,7 @@ export async function ensureAdviseurOrderCommissieConcept(
     "aanbetaling",
     opts.offerteNummer
   );
-  const betaaldag = nextWednesdayYmd(new Date());
+  const betaaldag = weekInfo.betaalWoensdag;
 
   const { data: created, error: createErr } = await sb
     .from("adviseur_creditfacturen")
@@ -118,7 +121,7 @@ export async function ensureAdviseurOrderCommissieConcept(
         `Commissie 1e deel (€${fee} excl. btw) · Offerte ${opts.offerteNummer}`,
         opts.projectNummer ? `Project ${opts.projectNummer}` : null,
         lead.naam ? `Klant ${lead.naam}` : null,
-        `10% omzet excl. btw · 1e deel bij aanbetaling · + 21% btw op factuur`,
+        `Verwerking woensdag ${betaaldag} · + 21% btw op factuur`,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -141,11 +144,13 @@ export async function ensureAdviseurOrderCommissieConcept(
 }
 
 /**
- * Koppel betaalde aanbetalingsfactuur aan commissie-CF en verstuur naar adviseur.
+ * Koppel betaalde aanbetalingsfactuur aan commissie-CF (concept).
+ * Versturen gebeurt woensdag via `runWoensdagCommissieBatch` (niet direct).
  */
 export async function ensureNettoAanbetalingCreditfactuur(
   sb: SupabaseClient,
-  factuurId: string
+  factuurId: string,
+  opts?: { autoVerstuur?: boolean }
 ): Promise<{
   ok: boolean;
   created?: boolean;
@@ -154,6 +159,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
   skipped?: string;
   error?: string;
 }> {
+  const autoVerstuur = opts?.autoVerstuur === true;
   const { data: fac, error: facErr } = await sb
     .from("facturen")
     .select(
@@ -182,8 +188,9 @@ export async function ensureNettoAanbetalingCreditfactuur(
     .maybeSingle();
 
   if (existingRegel?.creditfactuur_id) {
-    // Al gekoppeld — als nog concept, alsnog versturen
-    const mailed = await tryVerstuur(sb, existingRegel.creditfactuur_id as string);
+    const mailed = autoVerstuur
+      ? await tryVerstuur(sb, existingRegel.creditfactuur_id as string)
+      : false;
     return {
       ok: true,
       created: false,
@@ -240,12 +247,10 @@ export async function ensureNettoAanbetalingCreditfactuur(
   if (max != null && fee > max) fee = max;
   const amounts = bedragenMetBtw(fee);
 
-  const betaaldag = nextWednesdayYmd(
-    fac.betaald_op ? new Date(fac.betaald_op) : new Date()
-  );
   const weekInfo = creditWeekFromDate(
     fac.betaald_op ? new Date(fac.betaald_op) : new Date()
   );
+  const betaaldag = weekInfo.betaalWoensdag;
 
   // Zoek bestaand concept voor deze order
   let creditId: string | null = null;
@@ -292,7 +297,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
         factuurdatum: betaaldag,
         notities: [
           tag,
-          `Commissie aanbetaling · uitbetaling woensdag ${betaaldag}`,
+          `Commissie aanbetaling · verwerking woensdag ${betaaldag}`,
           off?.offerte_nummer ? `Offerte ${off.offerte_nummer}` : null,
           project?.project_nummer ? `Project ${project.project_nummer}` : null,
         ]
@@ -315,6 +320,10 @@ export async function ensureNettoAanbetalingCreditfactuur(
         bedrag_ex_btw: amounts.bedrag_ex_btw,
         btw_bedrag: amounts.btw_bedrag,
         bedrag_inc_btw: amounts.bedrag_inc_btw,
+        week_jaar: weekInfo.jaar,
+        week_nummer: weekInfo.week,
+        periode_van: weekInfo.van,
+        periode_tot: weekInfo.tot,
         factuurdatum: betaaldag,
         updated_at: new Date().toISOString(),
       })
@@ -340,7 +349,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
 
   if (regelErr) {
     if (regelErr.code === "23505") {
-      const mailed = await tryVerstuur(sb, creditId);
+      const mailed = autoVerstuur ? await tryVerstuur(sb, creditId) : false;
       return {
         ok: true,
         created: false,
@@ -352,7 +361,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
     return { ok: false, error: regelErr.message };
   }
 
-  const mailed = await tryVerstuur(sb, creditId);
+  const mailed = autoVerstuur ? await tryVerstuur(sb, creditId) : false;
   return {
     ok: true,
     created,
@@ -388,11 +397,12 @@ async function tryVerstuur(
 
 /**
  * Rest-commissie (tranche B = 10% omzet ex − €250) bij installatie voltooid.
- * Maakt concept + verstuurt naar adviseur ter goedkeuring in het platform.
+ * Maakt concept; versturen gebeurt woensdag via `runWoensdagCommissieBatch`.
  */
 export async function ensureAdviseurCommissieTrancheB(
   sb: SupabaseClient,
-  projectId: string
+  projectId: string,
+  opts?: { autoVerstuur?: boolean }
 ): Promise<{
   ok: boolean;
   created?: boolean;
@@ -402,10 +412,11 @@ export async function ensureAdviseurCommissieTrancheB(
   error?: string;
   bedrag?: number;
 }> {
+  const autoVerstuur = opts?.autoVerstuur === true;
   const { data: project, error: pErr } = await sb
     .from("projecten")
     .select(
-      "id, project_nummer, status, lead_id, offerte_id, leads(id, naam, adviseur_id), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
+      "id, project_nummer, status, lead_id, offerte_id, installatie_voltooid_at, leads(id, naam, adviseur_id), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -491,7 +502,7 @@ export async function ensureAdviseurCommissieTrancheB(
     .maybeSingle();
 
   if (existing?.id) {
-    if (existing.status === "concept") {
+    if (existing.status === "concept" && autoVerstuur) {
       const mailed = await tryVerstuur(sb, existing.id as string);
       return {
         ok: true,
@@ -512,13 +523,16 @@ export async function ensureAdviseurCommissieTrancheB(
   }
 
   const amounts = bedragenMetBtw(fee);
-  const weekInfo = creditWeekFromDate(new Date());
+  const eventAt =
+    (project as { installatie_voltooid_at?: string | null })
+      .installatie_voltooid_at || new Date().toISOString();
+  const weekInfo = creditWeekFromDate(new Date(eventAt));
   const factuurNummer = formatCreditFactuurNummer(
     weekInfo.jaar,
     "restbetaling",
     off.offerte_nummer
   );
-  const betaaldag = nextWednesdayYmd(new Date());
+  const betaaldag = weekInfo.betaalWoensdag;
 
   const { data: created, error: createErr } = await sb
     .from("adviseur_creditfacturen")
@@ -542,7 +556,7 @@ export async function ensureAdviseurCommissieTrancheB(
           ? `Project ${project.project_nummer}`
           : null,
         lead.naam ? `Klant ${lead.naam}` : null,
-        `Na installatie voltooid · + 21% btw op factuur`,
+        `Netto sale · verwerking woensdag ${betaaldag} · + 21% btw`,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -557,7 +571,9 @@ export async function ensureAdviseurCommissieTrancheB(
     };
   }
 
-  const mailed = await tryVerstuur(sb, created.id as string);
+  const mailed = autoVerstuur
+    ? await tryVerstuur(sb, created.id as string)
+    : false;
   return {
     ok: true,
     created: true,
@@ -565,4 +581,171 @@ export async function ensureAdviseurCommissieTrancheB(
     mailed,
     bedrag: fee,
   };
+}
+
+export type WoensdagCommissieBatchResult = {
+  ok: boolean;
+  week: { jaar: number; week: number; van: string; tot: string };
+  betaalWoensdag: string;
+  aanbetalingen: { checked: number; created: number; errors: string[] };
+  netto: { checked: number; created: number; errors: string[] };
+  verstuurd: { count: number; ids: string[]; errors: string[] };
+  skipped?: string;
+};
+
+/**
+ * Elke woensdag: verwerk commissie van de vorige ISO-week.
+ * - Aanbetalingen betaald in die week → tranche A concepten
+ * - Netto sales (installatie uitgevoerd) in die week → tranche B concepten
+ * - Alle concepten van die week versturen ter goedkeuring (factuurdatum = woensdag)
+ */
+export async function runWoensdagCommissieBatch(
+  sb: SupabaseClient,
+  now: Date = new Date()
+): Promise<WoensdagCommissieBatchResult> {
+  const week = previousCreditWeek(now);
+  const betaalWoensdag = week.betaalWoensdag;
+  const result: WoensdagCommissieBatchResult = {
+    ok: true,
+    week: {
+      jaar: week.jaar,
+      week: week.week,
+      van: week.van,
+      tot: week.tot,
+    },
+    betaalWoensdag,
+    aanbetalingen: { checked: 0, created: 0, errors: [] },
+    netto: { checked: 0, created: 0, errors: [] },
+    verstuurd: { count: 0, ids: [], errors: [] },
+  };
+
+  // 1) Aanbetalingen betaald in vorige week
+  const { data: aanbetalingen, error: aanbErr } = await sb
+    .from("facturen")
+    .select(
+      "id, factuur_nummer, lead_id, status, omschrijving, betaald_op, offerte_id"
+    )
+    .eq("status", "betaald")
+    .gte("betaald_op", week.van)
+    .lte("betaald_op", week.tot)
+    .limit(2000);
+
+  if (aanbErr) {
+    result.ok = false;
+    result.aanbetalingen.errors.push(aanbErr.message);
+  } else {
+    for (const fac of aanbetalingen || []) {
+      if (!isAanbetalingFactuurOmschrijving(fac.omschrijving)) continue;
+      result.aanbetalingen.checked += 1;
+      const r = await ensureNettoAanbetalingCreditfactuur(sb, fac.id as string, {
+        autoVerstuur: false,
+      });
+      if (!r.ok) {
+        result.aanbetalingen.errors.push(
+          `${fac.factuur_nummer || fac.id}: ${r.error || "fout"}`
+        );
+      } else if (r.created) {
+        result.aanbetalingen.created += 1;
+      }
+    }
+  }
+
+  // 2) Netto sales = installatie uitgevoerd in vorige week (Amsterdam-grenzen)
+  const weekStartIso = fromZonedTime(
+    `${week.van}T00:00:00`,
+    AMSTERDAM_TZ
+  ).toISOString();
+  const weekEndIso = fromZonedTime(
+    `${week.tot}T23:59:59.999`,
+    AMSTERDAM_TZ
+  ).toISOString();
+
+  let { data: nettoProjects, error: nettoErr } = await sb
+    .from("projecten")
+    .select("id, project_nummer, status, installatie_voltooid_at")
+    .not("installatie_voltooid_at", "is", null)
+    .gte("installatie_voltooid_at", weekStartIso)
+    .lte("installatie_voltooid_at", weekEndIso)
+    .limit(2000);
+
+  // Fallback zonder kolom: status voltooid + updated_at in week
+  if (
+    nettoErr &&
+    (nettoErr.message?.includes("installatie_voltooid_at") ||
+      nettoErr.code === "42703")
+  ) {
+    const retry = await sb
+      .from("projecten")
+      .select("id, project_nummer, status, updated_at")
+      .in("status", ["installatie_voltooid", "review_gevraagd", "service"])
+      .gte("updated_at", weekStartIso)
+      .lte("updated_at", weekEndIso)
+      .limit(2000);
+    nettoProjects = retry.data as typeof nettoProjects;
+    nettoErr = retry.error;
+  }
+
+  if (nettoErr) {
+    result.ok = false;
+    result.netto.errors.push(nettoErr.message);
+  } else {
+    for (const p of nettoProjects || []) {
+      result.netto.checked += 1;
+      const r = await ensureAdviseurCommissieTrancheB(sb, p.id as string, {
+        autoVerstuur: false,
+      });
+      if (!r.ok) {
+        result.netto.errors.push(
+          `${p.project_nummer || p.id}: ${r.error || "fout"}`
+        );
+      } else if (r.created) {
+        result.netto.created += 1;
+      }
+    }
+  }
+
+  // 3) Concepten van die week → factuurdatum woensdag + versturen
+  const { data: concepts, error: cfErr } = await sb
+    .from("adviseur_creditfacturen")
+    .select("id, factuur_nummer, status")
+    .eq("status", "concept")
+    .eq("week_jaar", week.jaar)
+    .eq("week_nummer", week.week)
+    .limit(2000);
+
+  if (cfErr) {
+    result.ok = false;
+    result.verstuurd.errors.push(cfErr.message);
+    return result;
+  }
+
+  for (const cf of concepts || []) {
+    await sb
+      .from("adviseur_creditfacturen")
+      .update({
+        factuurdatum: betaalWoensdag,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", cf.id);
+
+    const mailed = await tryVerstuur(sb, cf.id as string);
+    if (mailed) {
+      result.verstuurd.count += 1;
+      result.verstuurd.ids.push(cf.id as string);
+    } else {
+      result.verstuurd.errors.push(
+        `${cf.factuur_nummer || cf.id}: versturen mislukt`
+      );
+    }
+  }
+
+  if (
+    result.aanbetalingen.errors.length ||
+    result.netto.errors.length ||
+    result.verstuurd.errors.length
+  ) {
+    result.ok = result.verstuurd.count > 0 || result.aanbetalingen.created > 0;
+  }
+
+  return result;
 }

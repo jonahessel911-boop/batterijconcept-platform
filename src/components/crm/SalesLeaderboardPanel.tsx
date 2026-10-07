@@ -3,27 +3,36 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatEuro } from "@/lib/format";
 
+type SalesLeaderboardKind = "sale" | "netto";
+
 type SalesLeaderboardSale = {
   id: string;
+  kind: SalesLeaderboardKind;
   offerte_nummer: string | null;
   adviseur_naam: string;
   klant_naam: string | null;
   bedrag_inc: number;
-  ondertekend_op: string;
+  event_at: string;
 };
 
 type Celebration = {
   id: string;
+  kind: SalesLeaderboardKind | "test";
   adviseur_naam: string;
   bedrag_inc: number;
   klant_naam?: string | null;
-  test?: boolean;
 };
 
 const POLL_MS = 4000;
 const CELEBRATION_MS = 14000;
 const BG = "/sales/leaderboard-bg.png";
 const MONEY_SOUND = "/sales/money.mp3";
+
+function celebrationLabel(kind: Celebration["kind"]): string {
+  if (kind === "netto") return "Netto sale";
+  if (kind === "test") return "Test sale";
+  return "Sale";
+}
 
 function ConfettiBurst() {
   const pieces = Array.from({ length: 48 }, (_, i) => i);
@@ -57,7 +66,6 @@ function ConfettiBurst() {
 }
 
 export function SalesLeaderboardPanel() {
-  const [sales, setSales] = useState<SalesLeaderboardSale[]>([]);
   const [celebration, setCelebration] = useState<Celebration | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(true);
@@ -65,6 +73,8 @@ export function SalesLeaderboardPanel() {
   const bootstrapped = useRef(false);
   const sinceRef = useRef<string | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queueRef = useRef<Celebration[]>([]);
+  const celebratingRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const stopMoneySound = useCallback(() => {
@@ -85,14 +95,28 @@ export function SalesLeaderboardPanel() {
     });
   }, []);
 
-  const showCelebration = useCallback(
+  const playNext = useCallback(() => {
+    const next = queueRef.current.shift();
+    if (!next) {
+      celebratingRef.current = false;
+      setCelebration(null);
+      return;
+    }
+    celebratingRef.current = true;
+    setCelebration(next);
+    playMoneySound();
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      playNext();
+    }, CELEBRATION_MS);
+  }, [playMoneySound]);
+
+  const enqueueCelebration = useCallback(
     (c: Celebration) => {
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-      setCelebration(c);
-      playMoneySound();
-      hideTimer.current = setTimeout(() => setCelebration(null), CELEBRATION_MS);
+      queueRef.current.push(c);
+      if (!celebratingRef.current) playNext();
     },
-    [playMoneySound]
+    [playNext]
   );
 
   const load = useCallback(
@@ -117,7 +141,6 @@ export function SalesLeaderboardPanel() {
 
         if (!bootstrapped.current) {
           for (const s of list) seenIds.current.add(s.id);
-          setSales(list);
           sinceRef.current = serverTime;
           bootstrapped.current = true;
           setError(null);
@@ -125,29 +148,22 @@ export function SalesLeaderboardPanel() {
         }
 
         if (opts?.poll) {
-          const fresh = list.filter((s) => !seenIds.current.has(s.id));
+          const fresh = list
+            .filter((s) => !seenIds.current.has(s.id))
+            .sort((a, b) => a.event_at.localeCompare(b.event_at));
           for (const s of fresh) {
             seenIds.current.add(s.id);
-            showCelebration({
+            enqueueCelebration({
               id: s.id,
+              kind: s.kind,
               adviseur_naam: s.adviseur_naam,
               bedrag_inc: s.bedrag_inc,
               klant_naam: s.klant_naam,
             });
           }
-          if (fresh.length) {
-            setSales((prev) => {
-              const map = new Map(prev.map((p) => [p.id, p]));
-              for (const s of fresh) map.set(s.id, s);
-              return [...map.values()].sort((a, b) =>
-                b.ondertekend_op.localeCompare(a.ondertekend_op)
-              );
-            });
-          }
           sinceRef.current = serverTime;
         } else {
           for (const s of list) seenIds.current.add(s.id);
-          setSales(list);
           sinceRef.current = serverTime;
         }
         setError(null);
@@ -155,7 +171,7 @@ export function SalesLeaderboardPanel() {
         setError(e instanceof Error ? e.message : "Laden mislukt");
       }
     },
-    [showCelebration]
+    [enqueueCelebration]
   );
 
   useEffect(() => {
@@ -179,15 +195,17 @@ export function SalesLeaderboardPanel() {
     };
   }, [stopMoneySound]);
 
-  function fireTestSale() {
-    showCelebration({
-      id: `test-${Date.now()}`,
+  function fireTestSale(kind: SalesLeaderboardKind = "sale") {
+    enqueueCelebration({
+      id: `test-${kind}-${Date.now()}`,
+      kind: kind === "netto" ? "netto" : "test",
       adviseur_naam: "Jona Hessel",
-      bedrag_inc: 8500,
-      klant_naam: "Test sale",
-      test: true,
+      bedrag_inc: kind === "netto" ? 10250 : 8500,
+      klant_naam: kind === "netto" ? "Netto test" : "Test sale",
     });
   }
+
+  const isNetto = celebration?.kind === "netto";
 
   return (
     <div className="relative min-h-[calc(100dvh-7.5rem)] w-full overflow-hidden bg-black text-white sm:min-h-[calc(100dvh-8.5rem)]">
@@ -271,9 +289,11 @@ export function SalesLeaderboardPanel() {
       <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/25 to-black/70" />
       <audio ref={audioRef} src={MONEY_SOUND} preload="auto" />
 
-      {/* Idle chrome — alleen orders + knoppen */}
       <div className="relative z-10 flex h-full min-h-[inherit] flex-col">
-        <div className="flex justify-end gap-2 px-4 pt-4 sm:px-6 sm:pt-5">
+        <div className="flex flex-wrap items-start justify-end gap-2 px-4 pt-4 sm:px-6 sm:pt-5">
+          {error ? (
+            <p className="mr-auto max-w-sm text-sm text-[#FCA5A5]">{error}</p>
+          ) : null}
           <button
             type="button"
             onClick={() => setLive((v) => !v)}
@@ -283,71 +303,65 @@ export function SalesLeaderboardPanel() {
           </button>
           <button
             type="button"
-            onClick={fireTestSale}
-            className="bg-[#F5C518] px-4 py-2.5 text-sm font-black uppercase tracking-wide text-black shadow-[0_0_24px_rgba(245,197,24,0.55)] hover:bg-[#ffd84a]"
+            onClick={() => fireTestSale("sale")}
+            className="border border-white/30 bg-black/40 px-3 py-2 text-xs font-semibold text-white backdrop-blur hover:bg-black/55"
           >
             Test sale
           </button>
+          <button
+            type="button"
+            onClick={() => fireTestSale("netto")}
+            className="bg-[#F5C518] px-4 py-2.5 text-sm font-black uppercase tracking-wide text-black shadow-[0_0_24px_rgba(245,197,24,0.55)] hover:bg-[#ffd84a]"
+          >
+            Test netto
+          </button>
         </div>
-
-        {!celebration ? (
-          <div className="mt-auto px-4 pb-5 sm:px-6 sm:pb-6">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
-              Orders
-            </p>
-            {error ? (
-              <p className="text-sm text-[#FCA5A5]">{error}</p>
-            ) : sales.filter((s) => s.klant_naam?.trim()).length === 0 ? (
-              <p className="text-sm text-white/65">
-                Nog geen getekende orders — druk op Test sale voor een preview.
-              </p>
-            ) : (
-              <ul className="grid max-h-[38vh] gap-2 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
-                {sales
-                  .filter((s) => s.klant_naam?.trim())
-                  .slice(0, 12)
-                  .map((s) => (
-                    <li
-                      key={s.id}
-                      className="border border-white/15 bg-black/45 px-3 py-2.5 backdrop-blur-sm"
-                    >
-                      <p className="truncate text-sm font-bold text-white">
-                        {s.klant_naam}
-                      </p>
-                      <p className="mt-0.5 text-lg font-black tabular-nums text-[#F5C518]">
-                        {formatEuro(s.bedrag_inc)}
-                      </p>
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </div>
-        ) : null}
       </div>
 
-      {/* Celebration overlay */}
       {celebration ? (
         <div
           key={celebration.id}
           className="sale-celebrate-root absolute inset-0 z-20 flex items-center justify-center"
         >
           <div className="sale-flash pointer-events-none absolute inset-0 bg-white" />
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#7f1d1d]/50 via-black/40 to-black/75" />
+          <div
+            className={[
+              "pointer-events-none absolute inset-0 bg-gradient-to-b to-black/75",
+              isNetto
+                ? "from-[#14532d]/60 via-black/45"
+                : "from-[#7f1d1d]/50 via-black/40",
+            ].join(" ")}
+          />
           <ConfettiBurst />
 
-          <div className="pointer-events-none absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-[#F5C518]/70 sale-ring sm:h-56 sm:w-56" />
+          <div
+            className={[
+              "pointer-events-none absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 sale-ring sm:h-56 sm:w-56",
+              isNetto ? "border-emerald-400/80" : "border-[#F5C518]/70",
+            ].join(" ")}
+          />
 
           <div className="relative mx-4 max-w-[95vw] text-center">
-            <p className="sale-pop text-sm font-black uppercase tracking-[0.45em] text-[#F5C518] sm:text-base">
-              {celebration.test ? "Test sale" : "Sale"}
+            <p
+              className={[
+                "sale-pop text-sm font-black uppercase tracking-[0.45em] sm:text-base",
+                isNetto ? "text-emerald-300" : "text-[#F5C518]",
+              ].join(" ")}
+            >
+              {celebrationLabel(celebration.kind)}
             </p>
             <p className="sale-pop-delay sale-glow-text mt-3 font-display text-[clamp(2.6rem,12vw,7.5rem)] font-black leading-[0.95] tracking-tight text-white">
               {celebration.adviseur_naam}
             </p>
-            <p className="sale-pop-delay-2 mt-4 font-display text-[clamp(2.2rem,10vw,6rem)] font-black tabular-nums leading-none text-[#F5C518] drop-shadow-[0_6px_0_rgba(0,0,0,0.45)]">
+            <p
+              className={[
+                "sale-pop-delay-2 mt-4 font-display text-[clamp(2.2rem,10vw,6rem)] font-black tabular-nums leading-none drop-shadow-[0_6px_0_rgba(0,0,0,0.45)]",
+                isNetto ? "text-emerald-300" : "text-[#F5C518]",
+              ].join(" ")}
+            >
               {formatEuro(celebration.bedrag_inc)}
             </p>
-            {celebration.klant_naam && !celebration.test ? (
+            {celebration.klant_naam && celebration.kind !== "test" ? (
               <p className="sale-pop-delay-2 mt-3 text-base font-semibold text-white/80 sm:text-lg">
                 {celebration.klant_naam}
               </p>
@@ -356,7 +370,10 @@ export function SalesLeaderboardPanel() {
 
           <button
             type="button"
-            onClick={() => setCelebration(null)}
+            onClick={() => {
+              if (hideTimer.current) clearTimeout(hideTimer.current);
+              playNext();
+            }}
             className="absolute bottom-5 right-5 z-30 border border-white/30 bg-black/50 px-3 py-2 text-xs font-semibold text-white backdrop-blur hover:bg-black/70"
           >
             Sluiten

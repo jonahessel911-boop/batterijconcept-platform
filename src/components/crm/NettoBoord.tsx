@@ -767,7 +767,7 @@ function DetailDrawer({
                           {row.creditfactuur_nummer || "aangemaakt"}
                         </p>
                         <p className="text-[10px] text-muted">
-                          Tranche A · uitbetaling eerstvolgende woensdag
+                          Tranche A · woensdag na de week van aanbetaling
                         </p>
                       </div>
                       <button

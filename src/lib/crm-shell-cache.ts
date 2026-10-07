@@ -8,7 +8,7 @@ import type {
 } from "@/types/database";
 import type { GebruikerRol } from "@/lib/rollen";
 
-const BOOTSTRAP_KEY = "bc_crm_bootstrap_v1";
+const BOOTSTRAP_KEY = "bc_crm_bootstrap_v2";
 const SESSION_KEY = "bc_crm_session_v1";
 const MAX_AGE_MS = 30 * 60 * 1000;
 

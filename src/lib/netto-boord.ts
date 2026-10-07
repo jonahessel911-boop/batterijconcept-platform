@@ -315,6 +315,8 @@ type BuildCtx = {
   schouwJaar: number | null;
   schouwWeek: number | null;
   installatieAt: string | null;
+  /** Moment waarop installatie als uitgevoerd is gemarkeerd (netto sale). */
+  installatieVoltooidAt?: string | null;
   warmtefondsAfgewezen: boolean;
   warmtefondsAangevraagdOp: string | null;
   warmtefondsHistory?: Iterable<string> | null;
@@ -438,18 +440,13 @@ export function buildNettoFases(ctx: BuildCtx): NettoFase[] {
         (schouwDefinitief ||
           reached(st, "schouwdag_ingepland") ||
           reached(st, "schouw_voltooid")),
-      schouwDefinitief ? ctx.schouwAt : null,
+      // Datum staat al in het label — niet nog eens bij “Afgerond”
+      null,
       null
     ),
     taak(
       "schouw_done",
-      withPlanMoment(
-        "2.3 Schouw uitgevoerd",
-        ctx.schouwFormulierGeupload
-          ? ctx.schouwFormulierAt ||
-              (schouwDefinitief ? ctx.schouwAt : null)
-          : null
-      ),
+      "2.3 Schouw uitgevoerd",
       !cancelled && ctx.schouwFormulierGeupload,
       ctx.schouwFormulierAt,
       ctx.schouwFormulierGeupload ? "Schouwformulier geüpload" : null
@@ -474,12 +471,10 @@ export function buildNettoFases(ctx: BuildCtx): NettoFase[] {
     ),
     taak(
       "installatie_done",
-      withPlanMoment(
-        "3.3 Installatie uitgevoerd",
-        reached(st, "installatie_voltooid") ? ctx.installatieAt : null
-      ),
+      "3.3 Installatie uitgevoerd",
       !cancelled && reached(st, "installatie_voltooid"),
-      null,
+      ctx.installatieVoltooidAt ||
+        (reached(st, "installatie_voltooid") ? ctx.installatieAt : null),
       null
     ),
   ];
@@ -553,13 +548,20 @@ export function summarizeFases(fases: NettoFase[]): {
   return { done, total, pct, allDone: total > 0 && done === total };
 }
 
+/**
+ * Netto sale = installatie uitgevoerd (fase 3.3).
+ * Afronding (BTW / overstap / review) mag open blijven.
+ */
 export function boardStatusOf(opts: {
   geannuleerd: boolean;
   fases: NettoFase[];
 }): NettoBoardStatus {
   if (opts.geannuleerd) return "geannuleerd";
-  const s = summarizeFases(opts.fases);
-  if (s.allDone) return "netto";
+  const f3 = opts.fases.find((f) => f.key === "f3");
+  const installatieUitgevoerd = Boolean(
+    f3?.taken.some((t) => t.id === "installatie_done" && t.done)
+  );
+  if (installatieUitgevoerd) return "netto";
   return "actief";
 }
 

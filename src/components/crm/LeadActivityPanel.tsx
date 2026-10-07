@@ -12,6 +12,7 @@ import type {
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
 type ActivityKind =
@@ -132,10 +133,10 @@ function buildFromEntities(opts: {
   }
 
   const schouwWeekEvByProject = new Map<string, LeadEvent>();
+  const schouwDagEvByProject = new Map<string, LeadEvent>();
   for (const ev of opts.events) {
-    if (ev.soort !== "schouw" || !/Schouwweek gezet/i.test(ev.titel || "")) {
-      continue;
-    }
+    if (ev.soort !== "schouw") continue;
+    const titel = ev.titel || "";
     const meta = (ev.meta || {}) as {
       project_id?: string;
       schouw_week?: number;
@@ -143,16 +144,30 @@ function buildFromEntities(opts: {
     };
     const pid = meta.project_id;
     if (!pid) continue;
-    const prev = schouwWeekEvByProject.get(pid);
-    if (!prev || ev.created_at < prev.created_at) {
-      schouwWeekEvByProject.set(pid, ev);
+    if (/Schouwweek gezet/i.test(titel)) {
+      const prev = schouwWeekEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        schouwWeekEvByProject.set(pid, ev);
+      }
+      continue;
+    }
+    if (/Schouwdag gepland|Schouwdatum gepland/i.test(titel)) {
+      const prev = schouwDagEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        schouwDagEvByProject.set(pid, ev);
+      }
     }
   }
 
   for (const ev of opts.events) {
     const soort = (ev.soort || "overig") as ActivityKind;
     const kind: ActivityKind = EVENT_KINDS.has(soort) ? soort : "overig";
-    if (soort === "schouw" && /Schouwweek gezet/i.test(ev.titel || "")) {
+    const titel = ev.titel || "";
+    if (
+      soort === "schouw" &&
+      (/Schouwweek gezet/i.test(titel) ||
+        /Schouwdag gepland|Schouwdatum gepland/i.test(titel))
+    ) {
       continue;
     }
     items.push({
@@ -320,13 +335,16 @@ function buildFromEntities(opts: {
       });
     }
 
-    if (p.schouw_at) {
+    if (p.schouw_at && isSchouwdagDefinitief(p)) {
+      const dagEv = schouwDagEvByProject.get(p.id);
       items.push({
         id: `schouw-datum-${p.id}`,
-        at: p.schouw_at,
+        at: dagEv?.created_at || p.updated_at || p.created_at,
         kind: "schouw",
         titel: "Schouwdatum gepland",
-        detail: formatDateTimeNl(p.schouw_at),
+        detail:
+          dagEv?.detail ||
+          `Schouwdatum is gepland op ${formatDateTimeNl(p.schouw_at)}`,
         action: {
           type: "link",
           href: `/projecten/${p.id}`,
@@ -342,13 +360,13 @@ function buildFromEntities(opts: {
     ) {
       items.push({
         id: `inst-${p.id}`,
-        at: p.installatie_at || p.updated_at || p.created_at,
+        at: p.updated_at || p.created_at,
         kind: "installatie",
         titel: p.status === "installatie_voltooid"
           ? "Installatie uitgevoerd"
           : "Installatie gepland",
         detail: p.installatie_at
-          ? formatDateTimeNl(p.installatie_at)
+          ? `Installatiedatum is gepland op ${formatDateTimeNl(p.installatie_at)}`
           : PROJECT_STATUS_LABEL[p.status] || null,
         action: {
           type: "link",

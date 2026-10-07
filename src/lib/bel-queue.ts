@@ -201,15 +201,17 @@ export function annuleringsNotitieFromAfspraak(
 export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>,
-  /** Leads met geannuleerde afspraak → uit de bellijst */
-  cancelledAppointmentLeadIds?: Set<string>
+  /**
+   * @deprecated Genegeerd. Annuleringen horen via leadstatus
+   * (`afspraak_afgezegd_klant` → backoffice herplannen), niet via deze filter —
+   * die haalde belbare nieuw/geen_contact-leads ten onrechte uit de queue.
+   */
+  _cancelledAppointmentLeadIds?: Set<string>
 ): boolean {
   if (isSollicitatieLead(lead)) return false;
   if (!lead.telefoon?.trim()) return false;
   if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
   if (appointmentLeadIds?.has(lead.id)) return false;
-  // Geannuleerde huisbezoek-afspraak zonder nieuwe afspraak: niet bellen
-  if (cancelledAppointmentLeadIds?.has(lead.id)) return false;
 
   if (!QUEUE_STATUSES.includes(lead.status)) return false;
   if (lead.status === "na_afspraak") return false;

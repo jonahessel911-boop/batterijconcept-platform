@@ -137,7 +137,6 @@ export function BelPanel({
   afspraken = [],
   adviseurs,
   appointmentLeadIds,
-  cancelledAppointmentLeadIds,
   defaultAdviseurId,
   onLeadUpdated,
   onNeedReload,
@@ -146,7 +145,6 @@ export function BelPanel({
   afspraken?: Afspraak[];
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
-  cancelledAppointmentLeadIds?: Set<string>;
   defaultAdviseurId?: string;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
   onNeedReload?: () => void;
@@ -196,13 +194,8 @@ export function BelPanel({
   );
 
   const normalQueue = useMemo(
-    () =>
-      sortBelQueue(
-        leads.filter((l) =>
-          inBelQueue(l, appointmentLeadIds, cancelledAppointmentLeadIds)
-        )
-      ),
-    [leads, appointmentLeadIds, cancelledAppointmentLeadIds]
+    () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
+    [leads, appointmentLeadIds]
   );
 
   /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld). */

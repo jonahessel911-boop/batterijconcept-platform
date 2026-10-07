@@ -1043,7 +1043,7 @@ export function CreditfacturenPanel() {
           <p className="px-5 py-10 text-center text-sm text-muted">
             {q || queue !== "open" || typeFilter !== "alles"
               ? "Geen facturen voor deze filter."
-              : "Geen openstaande uitbetalingen. Nieuwe concepten verschijnen hier automatisch."}
+              : "Geen openstaande uitbetalingen. Concepten worden woensdag verstuurd (vorige week: aanbetalingen + netto sales)."}
           </p>
         ) : (
           <>

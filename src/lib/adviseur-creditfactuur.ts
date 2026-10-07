@@ -18,30 +18,34 @@ export type CreditWeek = {
   week: number;
   van: string;
   tot: string;
-  /** Maandag waarop deze week wordt uitbetaald (= maandag na de week). */
+  /** Maandag na de week (legacy). */
   betaalMaandag: string;
+  /** Woensdag na de week — vaste uitbetalingsdag. */
+  betaalWoensdag: string;
 };
 
 function ymdAmsterdam(d: Date): string {
   return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
-/** ISO-week (ma–zo) in Amsterdam, plus de maandag erna als betaaldag. */
+/** ISO-week (ma–zo) in Amsterdam + betaaldagen erna. */
 export function creditWeekFromDate(anchor: Date = new Date()): CreditWeek {
   const local = toZonedTime(anchor, AMSTERDAM_TZ);
   const monday = startOfISOWeek(local);
   const sunday = endOfISOWeek(local);
   const payMonday = addDays(sunday, 1);
+  const payWednesday = addDays(sunday, 3); // zo + 3 = wo
   return {
     jaar: getISOWeekYear(monday),
     week: getISOWeek(monday),
     van: ymdAmsterdam(monday),
     tot: ymdAmsterdam(sunday),
     betaalMaandag: ymdAmsterdam(payMonday),
+    betaalWoensdag: ymdAmsterdam(payWednesday),
   };
 }
 
-/** Vorige volledige ISO-week (typisch: op maandag de afgelopen ma–zo uitbetalen). */
+/** Vorige volledige ISO-week (op woensdag: afgelopen ma–zo verwerken). */
 export function previousCreditWeek(now: Date = new Date()): CreditWeek {
   return creditWeekFromDate(subWeeks(toZonedTime(now, AMSTERDAM_TZ), 1));
 }
@@ -58,6 +62,7 @@ export function creditWeekByYearWeek(jaar: number, week: number): CreditWeek {
     van: ymdAmsterdam(monday),
     tot: ymdAmsterdam(sunday),
     betaalMaandag: ymdAmsterdam(addDays(sunday, 1)),
+    betaalWoensdag: ymdAmsterdam(addDays(sunday, 3)),
   };
 }
 

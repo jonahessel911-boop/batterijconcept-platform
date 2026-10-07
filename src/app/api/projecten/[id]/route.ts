@@ -345,7 +345,7 @@ export async function PATCH(
     const { data: before } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status"
+        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at"
       )
       .eq("id", id)
       .maybeSingle();
@@ -371,6 +371,12 @@ export async function PATCH(
           },
           { status: 400 }
         );
+      }
+      if (
+        !(before as { installatie_voltooid_at?: string | null } | null)
+          ?.installatie_voltooid_at
+      ) {
+        patch.installatie_voltooid_at = new Date().toISOString();
       }
     }
 
@@ -398,12 +404,13 @@ export async function PATCH(
         error.message?.includes("btw_terugvragen_aangevraagd_at") ||
         error.message?.includes("overstap_dynamische_leverancier_at") ||
         error.message?.includes("review_gevraagd_at") ||
+        error.message?.includes("installatie_voltooid_at") ||
         error.code === "42703")
     ) {
       return NextResponse.json(
         {
           error:
-            "Voer supabase/migrate-project-afronding.sql (en eventueel eerdere migraties) uit in Supabase.",
+            "Voer supabase/migrate-installatie-voltooid-at.sql (en eventueel migrate-project-afronding.sql) uit in Supabase.",
         },
         { status: 500 }
       );

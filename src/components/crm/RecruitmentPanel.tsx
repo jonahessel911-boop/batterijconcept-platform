@@ -1517,6 +1517,7 @@ export function RecruitmentPanel() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [functieFilter, setFunctieFilter] = useState("");
+  const [searchQ, setSearchQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [planForId, setPlanForId] = useState<string | null>(null);
@@ -1529,7 +1530,10 @@ export function RecruitmentPanel() {
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const draggedRef = useRef(false);
+  /** Alleen echte sleep (>6px) mag de volgende click onderdrukken. */
+  const cardPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const cardDidDragRef = useRef(false);
+  const suppressCardClickRef = useRef(false);
   const {
     trainingen,
     setTrainingen,
@@ -1670,12 +1674,34 @@ export function RecruitmentPanel() {
   }, [items]);
 
   const filtered = useMemo(() => {
-    if (!functieFilter) return items;
-    return items.filter(
-      (s) =>
-        (s.functie || "").trim().toLowerCase() === functieFilter.toLowerCase()
-    );
-  }, [items, functieFilter]);
+    const q = searchQ.trim().toLowerCase();
+    const digits = searchQ.replace(/\D/g, "");
+    return items.filter((s) => {
+      if (
+        functieFilter &&
+        (s.functie || "").trim().toLowerCase() !== functieFilter.toLowerCase()
+      ) {
+        return false;
+      }
+      if (!q && !digits) return true;
+      const hay = [
+        s.naam,
+        s.email,
+        s.telefoon,
+        s.functie,
+        s.notitie,
+        SOLLICITATIE_STATUS_LABEL[normalizeSollicitatieStatus(s.status)],
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (q && hay.includes(q)) return true;
+      if (digits && (s.telefoon || "").replace(/\D/g, "").includes(digits)) {
+        return true;
+      }
+      return false;
+    });
+  }, [items, functieFilter, searchQ]);
 
   const byStatus = useMemo(() => {
     const map = new Map<SollicitatieStatus, Sollicitatie[]>();
@@ -1765,20 +1791,8 @@ export function RecruitmentPanel() {
     setDragId(null);
     setOverStatus(null);
     if (!item || normalizeSollicitatieStatus(item.status) === status) return;
-    if (
-      status === SOLLICITATIE_STATUS_MET_VERVOLG &&
-      normalizeSollicitatieStatus(item.status) !== SOLLICITATIE_STATUS_MET_VERVOLG
-    ) {
-      setBeoordelingId(item.id);
-      return;
-    }
-    if (
-      status === SOLLICITATIE_STATUS_MET_TRAINING &&
-      normalizeSollicitatieStatus(item.status) !== SOLLICITATIE_STATUS_MET_TRAINING
-    ) {
-      setTrainingAssignId(item.id);
-      return;
-    }
+    // Kanban-schuiven = alleen status, geen mail/popup (training/beoordeling
+    // koppel je bewust via de kandidaatkaart).
     void patchKandidaat(item.id, { status }).catch(() => {
       /* error state is al gezet */
     });
@@ -2056,26 +2070,34 @@ export function RecruitmentPanel() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="Zoek naam, telefoon, e-mail…"
+            className="min-w-[12rem] flex-1 border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green sm:max-w-xs"
+            aria-label="Zoek kandidaten"
+          />
           {view === "kanban" && (
-            <>
-              <select
-                value={functieFilter}
-                onChange={(e) => setFunctieFilter(e.target.value)}
-                className="border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                aria-label="Filter op functie"
-              >
-                <option value="">Alle functies</option>
-                {functies.map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
-              <span className="text-xs tabular-nums text-muted">
-                {filtered.length} kandidaat{filtered.length === 1 ? "" : "en"}
-              </span>
-            </>
+            <select
+              value={functieFilter}
+              onChange={(e) => setFunctieFilter(e.target.value)}
+              className="border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              aria-label="Filter op functie"
+            >
+              <option value="">Alle functies</option>
+              {functies.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
           )}
+          <span className="text-xs tabular-nums text-muted">
+            {filtered.length}
+            {filtered.length !== items.length ? ` / ${items.length}` : ""}{" "}
+            kandidaat{filtered.length === 1 ? "" : "en"}
+          </span>
           <button
             type="button"
             onClick={() => openPlan()}
@@ -2162,19 +2184,47 @@ export function RecruitmentPanel() {
                       <li
                         key={s.id}
                         draggable={!busy}
+                        onPointerDown={(e) => {
+                          cardPointerRef.current = {
+                            x: e.clientX,
+                            y: e.clientY,
+                          };
+                          cardDidDragRef.current = false;
+                        }}
                         onDragStart={() => {
-                          draggedRef.current = false;
+                          cardDidDragRef.current = false;
                           setDragId(s.id);
                         }}
-                        onDrag={() => {
-                          draggedRef.current = true;
+                        onDrag={(e) => {
+                          const start = cardPointerRef.current;
+                          if (!start) return;
+                          // clientX/Y zijn 0 in sommige browsers tijdens drag
+                          if (e.clientX === 0 && e.clientY === 0) return;
+                          const dx = Math.abs(e.clientX - start.x);
+                          const dy = Math.abs(e.clientY - start.y);
+                          if (dx > 6 || dy > 6) cardDidDragRef.current = true;
                         }}
                         onDragEnd={() => {
                           setDragId(null);
                           setOverStatus(null);
+                          if (cardDidDragRef.current) {
+                            suppressCardClickRef.current = true;
+                            window.setTimeout(() => {
+                              suppressCardClickRef.current = false;
+                              cardDidDragRef.current = false;
+                            }, 50);
+                          } else {
+                            cardDidDragRef.current = false;
+                          }
+                          cardPointerRef.current = null;
                         }}
                         onClick={() => {
-                          if (draggedRef.current) return;
+                          if (
+                            suppressCardClickRef.current ||
+                            cardDidDragRef.current
+                          ) {
+                            return;
+                          }
                           openKandidaat(s.id);
                         }}
                         className={[
@@ -2224,9 +2274,16 @@ export function RecruitmentPanel() {
                           </div>
                         </div>
                         <div className="mt-2.5 flex items-center justify-between border-t border-line/80 pt-2">
-                          <span className="text-[11px] font-medium text-muted group-hover:text-green-deeper">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openKandidaat(s.id);
+                            }}
+                            className="text-[11px] font-medium text-muted hover:text-green-deeper"
+                          >
                             Openen →
-                          </span>
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -2271,7 +2328,14 @@ export function RecruitmentPanel() {
           </div>
         ) : (
           <RecruitmentAgendaView
-            afspraken={afspraken}
+            afspraken={
+              searchQ.trim()
+                ? afspraken.filter((a) => {
+                    const ids = new Set(filtered.map((s) => s.id));
+                    return ids.has(a.sollicitatie_id);
+                  })
+                : afspraken
+            }
             onOpen={openKandidaat}
             onDelete={(id) => void deleteAfspraak(id)}
             onPlan={() => openPlan()}
@@ -2280,7 +2344,14 @@ export function RecruitmentPanel() {
 
       {view === "acties" && (
         <RecruitmentActiesView
-          taken={taken}
+          taken={
+            searchQ.trim()
+              ? taken.filter((t) => {
+                  const ids = new Set(filtered.map((s) => s.id));
+                  return ids.has(t.sollicitatie_id);
+                })
+              : taken
+          }
           loading={takenLoading}
           onOpen={openKandidaat}
           onVoltooi={(id) => void voltooiTaak(id)}

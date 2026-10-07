@@ -8,8 +8,6 @@ import { BackofficeTable } from "./BackofficeTable";
 import { Planbord } from "./Planbord";
 import { SchouwweekList } from "./SchouwweekList";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
-import { ToekomstigeTakenPanel } from "./ToekomstigeTakenPanel";
-import { AiPanel } from "./AiPanel";
 
 export type { BoView };
 export { parseBoView, backofficeHref };
@@ -71,18 +69,6 @@ export function BackofficePanel({
         <ServiceVerzoekenPanel />
       </div>
     );
-  }
-
-  if (view === "taken") {
-    return (
-      <div className="px-5 pb-5 pt-5">
-        <ToekomstigeTakenPanel />
-      </div>
-    );
-  }
-
-  if (view === "ai") {
-    return <AiPanel />;
   }
 
   return (
