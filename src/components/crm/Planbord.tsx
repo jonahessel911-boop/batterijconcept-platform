@@ -3177,16 +3177,25 @@ export function Planbord({
             </div>
             <div className="grid grid-cols-7">
               {monthDays.map((d) => {
+                const inMonth = isSameMonthKey(d.key, anchor);
+                // Alleen dagen van deze maand — geen uitloop vorige/volgende maand
+                if (!inMonth) {
+                  return (
+                    <div
+                      key={d.key}
+                      className="min-h-[14rem] border-b border-r border-line bg-[#F4F6F5] last:border-r-0"
+                      aria-hidden
+                    />
+                  );
+                }
                 const list = timedAll.filter((b) => b.dayKeys[0] === d.key);
                 const isToday = d.key === todayKey;
-                const inMonth = isSameMonthKey(d.key, anchor);
                 const visible = list.slice(0, 4);
                 return (
                   <div
                     key={d.key}
                     className={[
-                      "min-h-[14rem] border-b border-r border-line p-2.5 text-left last:border-r-0 align-top",
-                      !inMonth ? "bg-[#F8FAFC] text-muted/50" : "bg-white",
+                      "min-h-[14rem] border-b border-r border-line bg-white p-2.5 text-left last:border-r-0 align-top",
                       isToday ? "bg-[#F0FDFA]" : "",
                     ].join(" ")}
                   >
@@ -3197,9 +3206,7 @@ export function Planbord({
                         "inline-flex h-9 min-w-9 items-center justify-center font-display text-lg font-semibold tabular-nums leading-none hover:opacity-80",
                         isToday
                           ? "bg-[#0D9488] px-2 text-white"
-                          : inMonth
-                            ? "text-ink"
-                            : "text-muted/40",
+                          : "text-ink",
                       ].join(" ")}
                       title="Open dagoverzicht"
                     >
