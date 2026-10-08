@@ -84,7 +84,8 @@ export function LeadAfspraakPlannen({
       const self = list.find((a) => a.id === defaultAdviseurId);
       if (self) return [self];
       const raw = adviseurs.find((a) => a.id === defaultAdviseurId);
-      return raw ? [raw] : list;
+      // Nooit terugvallen op alle adviseurs — alleen eigen agenda.
+      return raw ? [raw] : [];
     }
     return list;
   }, [adviseurs, lockAdviseur, defaultAdviseurId]);
@@ -220,8 +221,19 @@ export function LeadAfspraakPlannen({
   }, [open]);
 
   function selectBestSlot(slot: BestSlotOption) {
+    if (
+      lockAdviseur &&
+      defaultAdviseurId &&
+      slot.adviseur_id !== defaultAdviseurId
+    ) {
+      return;
+    }
     setSelectedBestSlotId(slot.slot_id);
-    setAdviseurId(slot.adviseur_id);
+    setAdviseurId(
+      lockAdviseur && defaultAdviseurId
+        ? defaultAdviseurId
+        : slot.adviseur_id
+    );
     setUseCustomTime(false);
     setCustomStart("");
     setStartAt(slot.start_at);
@@ -255,7 +267,9 @@ export function LeadAfspraakPlannen({
         resolvedStart = parsed.toISOString();
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
-      if (!adviseurId) throw new Error("Kies een adviseur");
+      const planAdviseurId =
+        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId;
+      if (!planAdviseurId) throw new Error("Kies een adviseur");
       if (partnerAanwezig === null) {
         throw new Error("Beantwoord: Partner aanwezig?");
       }
@@ -268,7 +282,7 @@ export function LeadAfspraakPlannen({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead_id: lead.id,
-          adviseur_id: adviseurId,
+          adviseur_id: planAdviseurId,
           start_at: resolvedStart,
           notities: notities || undefined,
           soort: "nieuw",

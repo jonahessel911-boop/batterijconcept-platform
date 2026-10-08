@@ -361,6 +361,8 @@ export async function loadBestSlotsForLead(
     diversifyHours?: boolean;
     /** Grootte van de kandidaat-pool bij diversifyHours (default 14). */
     poolSize?: number;
+    /** Beperk tot één adviseur (eigen agenda). */
+    adviseurId?: string | null;
   }
 ): Promise<
   | {
@@ -464,7 +466,16 @@ export async function loadBestSlotsForLead(
     }
   }
 
-  const adviseurs = adviseursList.filter((a) => isPlanbaarAdviseur(a));
+  let adviseurs = adviseursList.filter((a) => isPlanbaarAdviseur(a));
+  const onlyAdviseurId = opts.adviseurId?.trim() || "";
+  if (onlyAdviseurId) {
+    adviseurs = adviseurs.filter((a) => a.id === onlyAdviseurId);
+    if (adviseurs.length === 0) {
+      // Eigen account mag altijd — ook als rol/filter anders zou uitsluiten.
+      const self = adviseursList.find((a) => a.id === onlyAdviseurId);
+      if (self) adviseurs = [self];
+    }
+  }
   if (adviseurs.length === 0) {
     return { ok: false, status: 404, error: "Geen actieve adviseurs" };
   }

@@ -1206,6 +1206,7 @@ export function CrmShell() {
                           ? sessionUser?.id
                           : undefined
                     }
+                    lockAdviseur={userRol === "adviseur"}
                     onLeadUpdated={(id, patch) => {
                       setLeads((prev) =>
                         prev.map((l) => (l.id === id ? { ...l, ...patch } : l))

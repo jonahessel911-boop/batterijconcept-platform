@@ -929,9 +929,9 @@ export function LeadPage() {
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
-                  lockAdviseur={eigenLeadsOnly}
+                  lockAdviseur={rol === "adviseur"}
                   defaultAdviseurId={
-                    eigenLeadsOnly
+                    rol === "adviseur"
                       ? session?.id
                       : lead.adviseur_id || undefined
                   }

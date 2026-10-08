@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { loadBestSlotsForLead } from "@/lib/api-v1/best-slots";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { normalizeRol } from "@/lib/rollen";
 
 export const runtime = "nodejs";
 
 /**
- * GET /api/best-slots?lead_id=…&limit=5
- * Top momenten over alle adviseurs: gelijke vulling → reistijd → conversie.
- * Voor BelPanel / CRM (sessie-auth via middleware).
+ * GET /api/best-slots?lead_id=…&limit=5&adviseur_id=…
+ * Top momenten over adviseurs: gelijke vulling → reistijd → conversie.
+ * Adviseur-rol: altijd alleen eigen agenda (adviseur_id genegeerd/overschreven).
  */
 export async function GET(req: NextRequest) {
   const leadId = req.nextUrl.searchParams.get("lead_id")?.trim() || "";
@@ -27,12 +30,23 @@ export async function GET(req: NextRequest) {
     60
   );
 
+  let adviseurId =
+    req.nextUrl.searchParams.get("adviseur_id")?.trim() || null;
+
   try {
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    if (session && normalizeRol(session.rol) === "adviseur") {
+      // Adviseur mag nooit slots van anderen zien/plannen.
+      adviseurId = session.adviseurId;
+    }
+
     const sb = getSupabaseAdmin();
     const result = await loadBestSlotsForLead(sb, {
       leadId,
       daysAhead,
       limit,
+      adviseurId,
     });
     if (!result.ok) {
       return NextResponse.json(

@@ -138,6 +138,7 @@ export function BelPanel({
   adviseurs,
   appointmentLeadIds,
   defaultAdviseurId,
+  lockAdviseur = false,
   onLeadUpdated,
   onNeedReload,
 }: {
@@ -146,6 +147,8 @@ export function BelPanel({
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
   defaultAdviseurId?: string;
+  /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
+  lockAdviseur?: boolean;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
   onNeedReload?: () => void;
 }) {
@@ -185,13 +188,18 @@ export function BelPanel({
   const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
   const [timelineTick, setTimelineTick] = useState(0);
 
-  const planAdviseurs = useMemo(
-    () =>
-      adviseurs.filter(
-        (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
-      ),
-    [adviseurs]
-  );
+  const planAdviseurs = useMemo(() => {
+    const list = adviseurs.filter(
+      (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
+    );
+    if (lockAdviseur && defaultAdviseurId) {
+      const self = list.find((a) => a.id === defaultAdviseurId);
+      if (self) return [self];
+      const raw = adviseurs.find((a) => a.id === defaultAdviseurId);
+      return raw ? [raw] : [];
+    }
+    return list;
+  }, [adviseurs, lockAdviseur, defaultAdviseurId]);
 
   const normalQueue = useMemo(
     () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
@@ -291,12 +299,16 @@ export function BelPanel({
     setBestSlotsMode(null);
     setShowHandmatig(false);
     setTimelineTick((t) => t + 1);
-    const preferred = current.adviseur_id || defaultAdviseurId || "";
+    const preferred =
+      (lockAdviseur && defaultAdviseurId) ||
+      current.adviseur_id ||
+      defaultAdviseurId ||
+      "";
     const allowed = planAdviseurs.some((a) => a.id === preferred)
       ? preferred
       : planAdviseurs[0]?.id || "";
     setAdviseurId(allowed);
-  }, [current?.id, defaultAdviseurId, planAdviseurs]);
+  }, [current?.id, defaultAdviseurId, lockAdviseur, planAdviseurs]);
 
   useEffect(() => {
     if (!current?.id) {
@@ -316,9 +328,14 @@ export function BelPanel({
     setBestSlotsError(null);
     queueMicrotask(async () => {
       try {
-        const res = await fetch(
-          `/api/best-slots?lead_id=${encodeURIComponent(current.id)}&limit=5`
-        );
+        const qs = new URLSearchParams({
+          lead_id: current.id,
+          limit: "5",
+        });
+        if (lockAdviseur && defaultAdviseurId) {
+          qs.set("adviseur_id", defaultAdviseurId);
+        }
+        const res = await fetch(`/api/best-slots?${qs}`);
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (!res.ok) {
@@ -329,7 +346,11 @@ export function BelPanel({
           setBestSlotsMode(null);
           return;
         }
-        setBestSlots((data.slots || []) as BestSlotOption[]);
+        let slots = (data.slots || []) as BestSlotOption[];
+        if (lockAdviseur && defaultAdviseurId) {
+          slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
+        }
+        setBestSlots(slots);
         setBestSlotsMode(
           data.mode === "route" || data.mode === "calendar" ? data.mode : null
         );
@@ -346,7 +367,15 @@ export function BelPanel({
     return () => {
       cancelled = true;
     };
-  }, [current?.id, current?.straat, current?.huisnummer, current?.postcode, current?.plaats]);
+  }, [
+    current?.id,
+    current?.straat,
+    current?.huisnummer,
+    current?.postcode,
+    current?.plaats,
+    lockAdviseur,
+    defaultAdviseurId,
+  ]);
 
   useEffect(() => {
     if (!adviseurId) {
@@ -365,8 +394,19 @@ export function BelPanel({
   }, [adviseurId]);
 
   function selectBestSlot(slot: BestSlotOption) {
+    if (
+      lockAdviseur &&
+      defaultAdviseurId &&
+      slot.adviseur_id !== defaultAdviseurId
+    ) {
+      return;
+    }
     setSelectedBestSlotId(slot.slot_id);
-    setAdviseurId(slot.adviseur_id);
+    setAdviseurId(
+      lockAdviseur && defaultAdviseurId
+        ? defaultAdviseurId
+        : slot.adviseur_id
+    );
     setUseCustomTime(false);
     setCustomStart("");
     setStartAt(slot.start_at);
@@ -587,7 +627,9 @@ export function BelPanel({
         resolvedStart = parsed.toISOString();
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
-      if (!adviseurId) throw new Error("Kies een adviseur");
+      const planAdviseurId =
+        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId;
+      if (!planAdviseurId) throw new Error("Kies een adviseur");
       if (partnerAanwezig === null) {
         throw new Error("Beantwoord: Partner aanwezig?");
       }
@@ -600,7 +642,7 @@ export function BelPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead_id: current.id,
-          adviseur_id: adviseurId,
+          adviseur_id: planAdviseurId,
           start_at: resolvedStart,
           notities: notities || undefined,
           soort: "nieuw",
@@ -631,7 +673,9 @@ export function BelPanel({
       if (!terugbelAt) throw new Error("Kies datum en tijd");
       const parsed = new Date(terugbelAt);
       if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
-      if (!adviseurId) throw new Error("Kies een adviseur");
+      const planAdviseurId =
+        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId;
+      if (!planAdviseurId) throw new Error("Kies een adviseur");
       const note = terugbelNotitie.trim();
       if (!note) throw new Error("Vul een notitie in");
 
@@ -642,7 +686,7 @@ export function BelPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead_id: current.id,
-          adviseur_id: adviseurId,
+          adviseur_id: planAdviseurId,
           start_at: parsed.toISOString(),
           notities: note,
           soort: terugbelWarm ? "warme_bel" : "bel",
@@ -1002,22 +1046,32 @@ export function BelPanel({
                   ? "Prioriteit in de bellijst — bijv. klant pakt agenda erbij maar wil al een afspraak. Intern, geen mail."
                   : "Alleen intern — de klant krijgt geen mail. De lead verdwijnt uit de belwachtrij; vanaf de geplande dag staat er bovenaan een chip (klik → lead) tot je afvinkt."}
               </p>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                Adviseur
-                <select
-                  required
-                  value={adviseurId}
-                  onChange={(e) => setAdviseurId(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-                >
-                  <option value="">Kies adviseur…</option>
-                  {planAdviseurs.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.naam}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {lockAdviseur ? (
+                <p className="text-xs text-muted">
+                  Agenda:{" "}
+                  <span className="font-semibold text-ink">
+                    {planAdviseurs.find((a) => a.id === adviseurId)?.naam ||
+                      "Jij"}
+                  </span>
+                </p>
+              ) : (
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Adviseur
+                  <select
+                    required
+                    value={adviseurId}
+                    onChange={(e) => setAdviseurId(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                  >
+                    <option value="">Kies adviseur…</option>
+                    {planAdviseurs.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.naam}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                 Datum &amp; tijd
                 <input
@@ -1166,11 +1220,22 @@ export function BelPanel({
             >
               {showHandmatig
                 ? "Handmatig verbergen"
-                : "Handmatig adviseur + tijd kiezen…"}
+                : lockAdviseur
+                  ? "Handmatig tijdstip…"
+                  : "Handmatig adviseur + tijd kiezen…"}
             </button>
 
             {showHandmatig ? (
               <>
+            {lockAdviseur ? (
+              <p className="text-xs text-muted">
+                Agenda:{" "}
+                <span className="font-semibold text-ink">
+                  {planAdviseurs.find((a) => a.id === adviseurId)?.naam ||
+                    "Jij"}
+                </span>
+              </p>
+            ) : (
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Adviseur
               <select
@@ -1192,6 +1257,7 @@ export function BelPanel({
                   ))}
               </select>
             </label>
+            )}
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted">

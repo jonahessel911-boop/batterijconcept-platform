@@ -1793,13 +1793,8 @@ export function AgendaPanel({
           (x) => !isAdminAdviseur(x)
         );
         setAdviseurId((prev) => {
+          if (defaultAdviseurId) return defaultAdviseurId;
           if (prev && planAdviseurs.some((x) => x.id === prev)) return prev;
-          if (
-            defaultAdviseurId &&
-            planAdviseurs.some((x) => x.id === defaultAdviseurId)
-          ) {
-            return defaultAdviseurId;
-          }
           return planAdviseurs[0]?.id || "";
         });
       }

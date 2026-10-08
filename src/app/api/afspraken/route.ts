@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addMinutes, differenceInMinutes } from "date-fns";
+import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import {
@@ -15,6 +16,8 @@ import {
   afspraakStuurtMail,
 } from "@/lib/afspraak-soort";
 import { planAfspraak } from "@/lib/plan-afspraak";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { normalizeRol } from "@/lib/rollen";
 
 export const runtime = "nodejs";
 
@@ -395,6 +398,22 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    // Adviseur mag alleen in eigen agenda plannen — nooit voor een collega.
+    if (session && normalizeRol(session.rol) === "adviseur") {
+      if (
+        body.adviseur_id &&
+        body.adviseur_id !== session.adviseurId
+      ) {
+        return NextResponse.json(
+          { error: "Je kunt alleen in je eigen agenda plannen" },
+          { status: 403 }
+        );
+      }
+      body.adviseur_id = session.adviseurId;
+    }
+
     const sb = getSupabaseAdmin();
     const result = await planAfspraak(sb, body);
     if (!result.ok) {
