@@ -16,7 +16,10 @@ import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { useCrmSession } from "@/hooks/useCrmSession";
 import { alleenEigenLeads } from "@/lib/rollen";
-import { stripPartnerFromTimelineDetail } from "@/lib/netto-boord-detail";
+import {
+  dedupeTimelineItems,
+  stripPartnerFromTimelineDetail,
+} from "@/lib/netto-boord-detail";
 
 type ActivityKind =
   | "notitie"
@@ -162,6 +165,14 @@ function buildFromEntities(opts: {
     }
   }
 
+  const hasInstallatieEntity = opts.projecten.some(
+    (p) =>
+      Boolean(p.installatie_at) ||
+      p.status === "installatie_ingepland" ||
+      p.status === "installatie_voltooid" ||
+      p.status === "materiaal_besteld"
+  );
+
   for (const ev of opts.events) {
     const soort = (ev.soort || "overig") as ActivityKind;
     const kind: ActivityKind = EVENT_KINDS.has(soort) ? soort : "overig";
@@ -171,6 +182,15 @@ function buildFromEntities(opts: {
       (/Schouwweek gezet/i.test(titel) ||
         /Schouwdag gepland|Schouwdatum gepland/i.test(titel))
     ) {
+      continue;
+    }
+    if (
+      hasInstallatieEntity &&
+      /Installatie gepland|Installatie uitgevoerd/i.test(titel)
+    ) {
+      continue;
+    }
+    if (/Schouwformulier geüpload|Schouw uitgevoerd/i.test(titel)) {
       continue;
     }
     items.push({
@@ -397,17 +417,19 @@ function buildFromEntities(opts: {
     });
   }
 
-  // Deduplicate near-identical afspraak events from lead_events vs afspraken:
-  // keep entity-based afspraak rows; drop event rows that are pure "Afspraak gepland" duplicates is hard —
-  // instead drop lead_events with soort afspraak if we have afspraken loaded.
   const filtered = items.filter((item) => {
-    if (item.id.startsWith("ev-") && item.kind === "afspraak" && opts.afspraken.length) {
+    if (
+      item.id.startsWith("ev-") &&
+      item.kind === "afspraak" &&
+      opts.afspraken.length
+    ) {
       return false;
     }
     return true;
   });
 
-  return filtered.sort(
+  // ActivityItem ↔ NettoTimelineItem: zelfde vorm voor dedupe
+  return dedupeTimelineItems(filtered).sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
   );
 }

@@ -214,6 +214,69 @@ export function stripPartnerFromTimelineDetail(
   return cleaned || null;
 }
 
+function normalizeTimelineTitel(titel: string): string {
+  return titel
+    .replace(/PRJ-\d+-\d+/gi, "")
+    .replace(/OFF-\d+-\d+/gi, "")
+    .replace(/FAC-\d+-\d+/gi, "")
+    .replace(/\bW\d+\b/gi, "W")
+    .replace(/\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/g, "")
+    .replace(/\d{1,2}:\d{2}/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function timelineDayKey(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toISOString().slice(0, 10);
+}
+
+type TimelineDedupeItem = {
+  id: string;
+  at: string;
+  kind: string;
+  titel: string;
+  detail?: string | null;
+  action?: unknown;
+};
+
+function timelinePreferScore(item: TimelineDedupeItem): number {
+  let s = 0;
+  if (!item.id.startsWith("ev-")) s += 10;
+  if (item.action) s += 5;
+  if (item.detail?.trim()) s += Math.min(item.detail.trim().length, 40) / 10;
+  if (item.kind === "document") s += 3; // liever upload met download dan "Schouw uitgevoerd"
+  return s;
+}
+
+/**
+ * Verwijder bijna-dubbele tijdlijnregels (zelfde dag + soort + titel).
+ * Voorkeur: entity-rij (project/foto) boven lead_event.
+ */
+export function dedupeTimelineItems<T extends TimelineDedupeItem>(
+  items: T[]
+): T[] {
+  const best = new Map<string, T>();
+  for (const item of items) {
+    const key = `${timelineDayKey(item.at)}|${item.kind}|${normalizeTimelineTitel(item.titel)}`;
+    const prev = best.get(key);
+    if (!prev || timelinePreferScore(item) > timelinePreferScore(prev)) {
+      best.set(key, item);
+    }
+  }
+  return [...best.values()];
+}
+
+function isInstallatieMilestoneTitel(titel: string): boolean {
+  return /Installatie gepland|Installatie uitgevoerd/i.test(titel);
+}
+
+function isSchouwFormulierTitel(titel: string): boolean {
+  return /Schouwformulier geüpload|Schouw uitgevoerd/i.test(titel);
+}
+
 export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
   const items: NettoTimelineItem[] = [];
 
@@ -265,6 +328,16 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     }
   }
 
+  const hasInstallatieEntity = input.projecten.some(
+    (p) =>
+      Boolean(p.installatie_at) ||
+      normalizeProjectStatus(p.status) === "installatie_ingepland" ||
+      normalizeProjectStatus(p.status) === "installatie_voltooid"
+  );
+  const hasSchouwFormulierFoto = input.fotos.some((f) =>
+    isSchouwFormulier(f.omschrijving)
+  );
+
   for (const ev of input.events) {
     const soort = (ev.soort || "overig") as NettoTimelineKind;
     const kind: NettoTimelineKind = EVENT_KINDS.has(soort) ? soort : "overig";
@@ -274,6 +347,13 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       (/Schouwweek gezet/i.test(titel) ||
         /Schouwdag gepland|Schouwdatum gepland/i.test(titel))
     ) {
+      continue;
+    }
+    // Entity-rijen dekken deze milestones al
+    if (hasInstallatieEntity && isInstallatieMilestoneTitel(titel)) {
+      continue;
+    }
+    if (hasSchouwFormulierFoto && isSchouwFormulierTitel(titel)) {
       continue;
     }
     items.push({
@@ -446,26 +526,7 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       });
     }
 
-    const schouwFormulieren = input.fotos.filter((f) =>
-      isSchouwFormulier(f.omschrijving)
-    );
-    if (schouwFormulieren.length > 0) {
-      const eerste = [...schouwFormulieren].sort((a, b) =>
-        a.created_at.localeCompare(b.created_at)
-      )[0];
-      items.push({
-        id: `schouw-done-${p.id}`,
-        at: eerste?.created_at || p.updated_at || p.created_at,
-        kind: "schouw",
-        titel: "Schouw uitgevoerd",
-        detail: "Schouwformulier geüpload",
-        action: {
-          type: "link",
-          href: `/projecten/${p.id}`,
-          label: "Open project",
-        },
-      });
-    }
+    // Geen aparte "Schouw uitgevoerd" — document-rij "Schouwformulier geüpload" volstaat
 
     const st = normalizeProjectStatus(p.status);
 
@@ -594,7 +655,7 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     return true;
   });
 
-  return filtered.sort(
+  return dedupeTimelineItems(filtered).sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
   );
 }
