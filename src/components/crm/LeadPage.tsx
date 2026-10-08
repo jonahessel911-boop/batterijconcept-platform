@@ -332,7 +332,7 @@ export function LeadPage() {
   const salesAdviseurs = adviseurs.filter(
     (a) =>
       a.actief !== false &&
-      (a.rol == null || a.rol === "" || a.rol === "adviseur" || a.rol === "admin")
+      (a.rol == null || a.rol === "adviseur" || a.rol === "admin")
   );
 
   async function updateAdviseur(adviseurId: string | null) {
