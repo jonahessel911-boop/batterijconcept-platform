@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type {
   Adviseur,
@@ -979,13 +978,7 @@ export function LeadPage() {
               placeholder="Nieuwe notitie…"
               className="w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
             />
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <Link
-                href={`/advies/${lead.id}`}
-                className="text-xs font-semibold text-green-dark hover:underline"
-              >
-                Start adviesproces →
-              </Link>
+            <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => void addNotitie()}
