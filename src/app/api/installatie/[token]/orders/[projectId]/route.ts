@@ -24,6 +24,7 @@ async function resolvePartner(token: string) {
 }
 
 const ORDER_SELECT = `id, project_nummer, titel, status, offerte_id, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
+         service_at, service_notities,
          installateur_notitie, installateur_notitie_door,
          monteur, startdatum, opleverdatum, created_at,
          leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
@@ -163,6 +164,7 @@ export async function PATCH(
     status?: ProjectStatus;
     schouw_notities?: string | null;
     installatie_notities?: string | null;
+    service_notities?: string | null;
   };
   try {
     body = await req.json();
@@ -210,6 +212,9 @@ export async function PATCH(
     }
     if (body.installatie_notities !== undefined) {
       patch.installatie_notities = body.installatie_notities?.trim() || null;
+    }
+    if (body.service_notities !== undefined) {
+      patch.service_notities = body.service_notities?.trim() || null;
     }
 
     if (Object.keys(patch).length === 0) {

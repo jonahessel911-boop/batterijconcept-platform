@@ -45,6 +45,19 @@ export async function PATCH(
       patch.omschrijving = body.omschrijving.trim() || null;
     }
     if (body.status === "afgehandeld" || body.status === "open") {
+      if (body.status === "afgehandeld") {
+        const note =
+          typeof body.interne_notitie === "string"
+            ? body.interne_notitie.trim()
+            : "";
+        if (!note) {
+          return NextResponse.json(
+            { error: "Notitie is verplicht bij afhandelen" },
+            { status: 400 }
+          );
+        }
+        patch.interne_notitie = note;
+      }
       patch.status = body.status;
       patch.afgehandeld_op =
         body.status === "afgehandeld" ? new Date().toISOString() : null;

@@ -19,6 +19,10 @@ import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import {
+  isMateriaalLeverdatumColumnError,
+  withLeverdatumInChecks,
+} from "@/lib/materiaal-leverdatum";
 
 export const runtime = "nodejs";
 
@@ -422,6 +426,40 @@ export async function PATCH(
       )
       .single();
 
+    // Kolom materiaal_leverdatum nog niet gemigreerd → bewaar in materiaal_checks.
+    if (error && isMateriaalLeverdatumColumnError(error)) {
+      const { materiaal_leverdatum: leverIso, ...rest } = patch;
+      const prevChecks =
+        (rest.materiaal_checks as Record<string, unknown> | undefined) ||
+        ((before as { materiaal_checks?: Record<string, unknown> | null } | null)
+          ?.materiaal_checks as Record<string, unknown> | null) ||
+        {};
+      const fallbackPatch = {
+        ...rest,
+        materiaal_checks: withLeverdatumInChecks(
+          prevChecks,
+          typeof leverIso === "string" || leverIso === null
+            ? (leverIso as string | null)
+            : null
+        ),
+      };
+      const retryLever = await sb
+        .from("projecten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
+        )
+        .single();
+      data = retryLever.data;
+      error = retryLever.error;
+      if (!error && data) {
+        // Virtualiseer kolom voor clients
+        (data as { materiaal_leverdatum?: string | null }).materiaal_leverdatum =
+          typeof leverIso === "string" ? leverIso : null;
+      }
+    }
+
     if (
       error &&
       (error.message?.includes("bel_schouw_aanbetaling_at") ||
@@ -440,6 +478,7 @@ export async function PATCH(
         {
           error:
             "Voer supabase/migrate-installatie-voltooid-at.sql (en eventueel migrate-project-afronding.sql) uit in Supabase.",
+          detail: error.message,
         },
         { status: 500 }
       );

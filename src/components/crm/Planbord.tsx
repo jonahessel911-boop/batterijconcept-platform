@@ -34,7 +34,9 @@ import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import {
   isOpleveringsrapport,
   isSchouwFormulier,
+  isServiceFoto,
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
+  SERVICE_FOTO_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
 import { toOperationalStatus } from "@/lib/project-status-config";
@@ -42,6 +44,7 @@ import {
   duurMinutenVoorKind,
   formatDuurLabel,
 } from "@/lib/planning-duur";
+import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
 import {
   agendaWeekJumpOptions,
   isSchouwdagDefinitief,
@@ -211,8 +214,9 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
       }
     }
 
-    if (p.materiaal_leverdatum) {
-      const key = dayKeyAmsterdam(p.materiaal_leverdatum);
+    const leverdatum = resolveMateriaalLeverdatum(p);
+    if (leverdatum) {
+      const key = dayKeyAmsterdam(leverdatum);
       if (daySet.has(key)) {
         bars.push({
           key: `${p.id}-levering`,
@@ -220,8 +224,8 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
           kind: "levering",
           dayKeys: [key],
           label: `LEVERING - INKOOP - ${title}`,
-          whenLabel: formatDateShort(p.materiaal_leverdatum),
-          at: p.materiaal_leverdatum,
+          whenLabel: formatDateShort(leverdatum),
+          at: leverdatum,
           duurMinuten: duurMinutenVoorKind("levering"),
           partnerId,
         });
@@ -371,15 +375,16 @@ function allTimedBars(projects: Project[]): PlanbordBar[] {
         partnerId,
       });
     }
-    if (p.materiaal_leverdatum) {
+    const leverdatum = resolveMateriaalLeverdatum(p);
+    if (leverdatum) {
       bars.push({
         key: `${p.id}-levering`,
         project: p,
         kind: "levering",
-        dayKeys: [dayKeyAmsterdam(p.materiaal_leverdatum)],
+        dayKeys: [dayKeyAmsterdam(leverdatum)],
         label: `LEVERING - INKOOP - ${title}`,
-        whenLabel: formatDateShort(p.materiaal_leverdatum),
-        at: p.materiaal_leverdatum,
+        whenLabel: formatDateShort(leverdatum),
+        at: leverdatum,
         duurMinuten: duurMinutenVoorKind("levering"),
         partnerId,
       });
@@ -1375,18 +1380,22 @@ function RequiredDocUploadBlock({
       {onSaveNote ? (
         <div className="space-y-2 border-t border-line pt-3">
           <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
-            {noteTitle}
+            {noteTitle} *
             <textarea
               value={noteDraft}
               onChange={(e) => onNoteChange(e.target.value)}
               rows={3}
+              required
               placeholder={notePlaceholder}
               className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-[#0D9488]"
             />
           </label>
+          <p className="text-[11px] text-muted">
+            Notitie is verplicht bij afronden.
+          </p>
           <button
             type="button"
-            disabled={noteBusy}
+            disabled={noteBusy || !noteDraft.trim()}
             onClick={onSaveNote}
             className="border border-line px-3 py-1.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
@@ -1396,7 +1405,9 @@ function RequiredDocUploadBlock({
             <p
               className={[
                 "text-sm",
-                noteMsg.includes("mislukt") || noteMsg.includes("Fout")
+                noteMsg.includes("mislukt") ||
+                noteMsg.includes("Fout") ||
+                noteMsg.includes("verplicht")
                   ? "text-[#C45A12]"
                   : "text-green-dark",
               ].join(" ")}
@@ -1428,6 +1439,7 @@ function AgendaItemSidebar({
   hidePartner = false,
   allowSchouwUpload = false,
   allowOpleveringUpload = false,
+  allowServiceComplete = false,
   fotosUploadUrl,
   notesPatchUrl,
   onSchouwDocChange,
@@ -1443,6 +1455,8 @@ function AgendaItemSidebar({
   hidePartner?: boolean;
   allowSchouwUpload?: boolean;
   allowOpleveringUpload?: boolean;
+  /** Service afvinken + optionele foto’s. */
+  allowServiceComplete?: boolean;
   /** Override upload endpoint (portal token API). */
   fotosUploadUrl?: string | null;
   /** Override notes PATCH endpoint (portal token API). */
@@ -1469,7 +1483,7 @@ function AgendaItemSidebar({
       : bar.kind === "service"
         ? project.service_at
         : bar.kind === "levering"
-          ? project.materiaal_leverdatum
+          ? resolveMateriaalLeverdatum(project)
           : bar.kind === "schouw"
             ? project.schouw_at
             : null;
@@ -1490,12 +1504,14 @@ function AgendaItemSidebar({
   const showSchouwForm =
     bar.kind === "schouw" || bar.kind === "schouwweek";
   const showOplevering = bar.kind === "installatie";
+  const showService = bar.kind === "service";
   const [localDoc, setLocalDoc] = useState<SchouwDocInfo | null | undefined>(
     schouwDoc
   );
   const [localOplevering, setLocalOplevering] = useState<
     SchouwDocInfo | null | undefined
   >(opleveringDoc);
+  const [serviceFotos, setServiceFotos] = useState<SchouwDocInfo[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadOk, setUploadOk] = useState<string | null>(null);
@@ -1504,6 +1520,7 @@ function AgendaItemSidebar({
   const [noteDraft, setNoteDraft] = useState(notities || "");
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
+  const [serviceDoneLocal, setServiceDoneLocal] = useState(false);
 
   useEffect(() => {
     setLocalDoc(schouwDoc);
@@ -1516,7 +1533,45 @@ function AgendaItemSidebar({
   useEffect(() => {
     setNoteDraft(notities || "");
     setNoteMsg(null);
+    setServiceDoneLocal(false);
+    setUploadError(null);
+    setUploadOk(null);
   }, [notities, bar.key]);
+
+  useEffect(() => {
+    if (!showService) {
+      setServiceFotos([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url =
+          fotosUploadUrl || `/api/projecten/${project.id}/fotos`;
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const fotos = (data.fotos || []) as Array<{
+          url?: string | null;
+          bestandsnaam?: string | null;
+          omschrijving?: string | null;
+        }>;
+        setServiceFotos(
+          fotos
+            .filter((f) => isServiceFoto(f.omschrijving) && f.url)
+            .map((f) => ({
+              url: f.url!,
+              bestandsnaam: f.bestandsnaam || null,
+            }))
+        );
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showService, project.id, fotosUploadUrl, bar.key]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1583,16 +1638,34 @@ function AgendaItemSidebar({
     opStatus === "installatie_voltooid" ||
     opStatus === "review_gevraagd" ||
     opStatus === "service";
+  const serviceAfgerond =
+    serviceDoneLocal ||
+    (Boolean(project.service_at) &&
+      Boolean(project.service_notities?.trim()) &&
+      opStatus !== "service");
   const orderVolledigBetaald = orderBetaald === true;
+  const notesEndpoint =
+    notesPatchUrl ||
+    (allowSchouwUpload || allowOpleveringUpload || allowServiceComplete
+      ? `/api/projecten/${project.id}`
+      : null);
 
   async function uploadRequiredDoc(
     file: File,
     kind: "schouw" | "oplevering"
   ) {
+    if (!noteDraft.trim()) {
+      setUploadError("Notitie is verplicht bij afronden.");
+      setNoteMsg("Notitie is verplicht bij afronden.");
+      return;
+    }
     setUploading(true);
     setUploadError(null);
     setUploadOk(null);
     try {
+      if (notesEndpoint) {
+        await saveSidebarNotitie(false);
+      }
       const form = new FormData();
       form.append("file", file);
       form.append(
@@ -1631,13 +1704,6 @@ function AgendaItemSidebar({
       if (data.project && typeof data.project === "object") {
         onProjectUpdated?.(data.project as Project);
       }
-      if (noteDraft.trim() && notesPatchUrl) {
-        try {
-          await saveSidebarNotitie(false);
-        } catch {
-          /* upload is gelukt; notitie apart */
-        }
-      }
       if (kind === "oplevering") {
         setUploadOk(
           adv?.advanced
@@ -1660,19 +1726,92 @@ function AgendaItemSidebar({
     }
   }
 
+  async function uploadServiceFoto(file: File) {
+    setUploading(true);
+    setUploadError(null);
+    setUploadOk(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("omschrijving", SERVICE_FOTO_OMSCHRIJVING);
+      const url =
+        fotosUploadUrl || `/api/projecten/${project.id}/fotos`;
+      const res = await fetch(url, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      const foto = data.foto as {
+        url?: string | null;
+        bestandsnaam?: string | null;
+      } | null;
+      if (foto?.url) {
+        setServiceFotos((prev) => [
+          ...prev,
+          { url: foto.url!, bestandsnaam: foto.bestandsnaam || null },
+        ]);
+      }
+      setUploadOk("Foto geüpload (optioneel).");
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload mislukt");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function afrondService() {
+    if (!noteDraft.trim()) {
+      setNoteMsg("Notitie is verplicht bij afronden.");
+      return;
+    }
+    setNoteBusy(true);
+    setNoteMsg(null);
+    setUploadError(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}/service`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_notities: noteDraft.trim(),
+          afronden: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Afronden mislukt"
+        );
+      }
+      const updated = (data as { project?: Project }).project;
+      if (updated) onProjectUpdated?.(updated);
+      setServiceDoneLocal(true);
+      setNoteMsg("Service afgevinkt.");
+      setUploadOk("Service afgerond · zichtbaar als geweest op Planbord.");
+    } catch (err) {
+      setNoteMsg(err instanceof Error ? err.message : "Afronden mislukt");
+    } finally {
+      setNoteBusy(false);
+    }
+  }
+
   async function saveSidebarNotitie(showOk = true) {
-    if (!notesPatchUrl) return;
+    if (!notesEndpoint) return;
+    if (!noteDraft.trim()) {
+      setNoteMsg("Notitie is verplicht bij afronden.");
+      throw new Error("Notitie is verplicht bij afronden.");
+    }
     setNoteBusy(true);
     setNoteMsg(null);
     try {
       if (bar.kind === "levering") return;
       const body =
         bar.kind === "installatie"
-          ? { installatie_notities: noteDraft.trim() || null }
+          ? { installatie_notities: noteDraft.trim() }
           : bar.kind === "service"
-            ? { service_notities: noteDraft.trim() || null }
-            : { schouw_notities: noteDraft.trim() || null };
-      const res = await fetch(notesPatchUrl, {
+            ? { service_notities: noteDraft.trim() }
+            : { schouw_notities: noteDraft.trim() };
+      const res = await fetch(notesEndpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1690,15 +1829,16 @@ function AgendaItemSidebar({
         onProjectUpdated?.({
           ...project,
           ...(bar.kind === "installatie"
-            ? { installatie_notities: noteDraft.trim() || null }
+            ? { installatie_notities: noteDraft.trim() }
             : bar.kind === "service"
-              ? { service_notities: noteDraft.trim() || null }
-              : { schouw_notities: noteDraft.trim() || null }),
+              ? { service_notities: noteDraft.trim() }
+              : { schouw_notities: noteDraft.trim() }),
         } as Project);
       }
       if (showOk) setNoteMsg("Notitie opgeslagen.");
     } catch (err) {
       setNoteMsg(err instanceof Error ? err.message : "Opslaan mislukt");
+      throw err;
     } finally {
       setNoteBusy(false);
     }
@@ -1798,6 +1938,13 @@ function AgendaItemSidebar({
                       label="Opleveringsrapport (handtekening)"
                     />
                   ) : null}
+                  {showService ? (
+                    <StatusCheckRow
+                      ok={serviceAfgerond}
+                      loading={false}
+                      label="Service afgevinkt"
+                    />
+                  ) : null}
                 </div>
               </div>
             </DetailRow>
@@ -1895,8 +2042,8 @@ function AgendaItemSidebar({
                   noteBusy={noteBusy}
                   noteMsg={noteMsg}
                   onSaveNote={
-                    allowSchouwUpload && notesPatchUrl
-                      ? () => void saveSidebarNotitie()
+                    allowSchouwUpload && notesEndpoint
+                      ? () => void saveSidebarNotitie().catch(() => undefined)
                       : null
                   }
                   notePlaceholder="Bijv. meterkast, kabelroute, bijzonderheden…"
@@ -1925,14 +2072,113 @@ function AgendaItemSidebar({
                   noteBusy={noteBusy}
                   noteMsg={noteMsg}
                   onSaveNote={
-                    allowOpleveringUpload && notesPatchUrl
-                      ? () => void saveSidebarNotitie()
+                    allowOpleveringUpload && notesEndpoint
+                      ? () => void saveSidebarNotitie().catch(() => undefined)
                       : null
                   }
                   notePlaceholder="Bijv. kabels door klant, bijzonderheden oplevering…"
                   noteTitle="Notitie bij installatie"
                   fallbackNotities={notities || null}
                 />
+              </DetailRow>
+            ) : showService ? (
+              <DetailRow label="Service afronden">
+                <div className="space-y-3">
+                  {serviceAfgerond ? (
+                    <p className="text-sm font-semibold text-[#0D5C32]">
+                      Service is afgevinkt
+                      {notities ? " · notitie opgeslagen" : ""}.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted">
+                      Notitie verplicht · foto’s optioneel. Daarna afvinken.
+                    </p>
+                  )}
+
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                    Notitie bij service *
+                    <textarea
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      rows={3}
+                      disabled={serviceAfgerond}
+                      placeholder="Wat is gedaan / bevindingen…"
+                      className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-[#0D9488] disabled:bg-wash"
+                    />
+                  </label>
+
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                      Foto’s (optioneel)
+                    </p>
+                    {serviceFotos.length > 0 ? (
+                      <ul className="space-y-1.5">
+                        {serviceFotos.map((f) => (
+                          <li key={f.url}>
+                            <a
+                              href={f.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-sm font-semibold text-[#0F766E] hover:underline"
+                            >
+                              {f.bestandsnaam || "Servicefoto openen"}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted">Nog geen foto’s.</p>
+                    )}
+                    {allowServiceComplete && !serviceAfgerond ? (
+                      <label className="inline-flex cursor-pointer border border-line px-3 py-2 text-sm font-semibold text-[#0F766E] hover:bg-wash">
+                        {uploading ? "Uploaden…" : "Foto uploaden"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={uploading}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) void uploadServiceFoto(file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+
+                  {uploadOk ? (
+                    <p className="text-sm text-green-dark">{uploadOk}</p>
+                  ) : null}
+                  {uploadError ? (
+                    <p className="text-sm text-[#C45A12]">{uploadError}</p>
+                  ) : null}
+                  {noteMsg ? (
+                    <p
+                      className={[
+                        "text-sm",
+                        noteMsg.includes("mislukt") ||
+                        noteMsg.includes("Fout") ||
+                        noteMsg.includes("verplicht")
+                          ? "text-[#C45A12]"
+                          : "text-green-dark",
+                      ].join(" ")}
+                    >
+                      {noteMsg}
+                    </p>
+                  ) : null}
+
+                  {allowServiceComplete && !serviceAfgerond ? (
+                    <button
+                      type="button"
+                      disabled={noteBusy || !noteDraft.trim()}
+                      onClick={() => void afrondService()}
+                      className="w-full bg-[#C45A12] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#9A4510] disabled:opacity-50"
+                    >
+                      {noteBusy ? "Bezig…" : "Service afvinken"}
+                    </button>
+                  ) : null}
+                </div>
               </DetailRow>
             ) : notities ? (
               <DetailRow label="Notities">
@@ -2498,6 +2744,10 @@ export function Planbord({
               <span className="h-2.5 w-2.5 bg-[#047857]" aria-hidden />
               Installatie
             </span>
+            <span className="inline-flex items-center gap-1.5 text-[#C45A12]">
+              <span className="h-2.5 w-2.5 bg-[#C45A12]" aria-hidden />
+              Service
+            </span>
             <span className="inline-flex items-center gap-1.5 text-[#EA580C]">
               <span className="h-2.5 w-2.5 bg-[#EA580C]" aria-hidden />
               Levering
@@ -2983,12 +3233,19 @@ export function Planbord({
             !readOnly ||
             (Boolean(portalToken) && selectedBar.kind === "installatie")
           }
+          allowServiceComplete={
+            !readOnly && selectedBar.kind === "service"
+          }
           fotosUploadUrl={portalFotosUrl(selectedBar.project.id)}
           notesPatchUrl={
             selectedBar.kind === "schouw" ||
             selectedBar.kind === "schouwweek" ||
-            selectedBar.kind === "installatie"
-              ? portalNotesUrl(selectedBar.project.id)
+            selectedBar.kind === "installatie" ||
+            selectedBar.kind === "service"
+              ? portalNotesUrl(selectedBar.project.id) ||
+                (!readOnly
+                  ? `/api/projecten/${selectedBar.project.id}`
+                  : null)
               : null
           }
           onSchouwDocChange={(projectId, doc) => {

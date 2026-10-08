@@ -44,7 +44,7 @@ type BoardTab = "netto" | "agenda";
 
 const BOARD_TABS: { id: BoardTab; label: string }[] = [
   { id: "netto", label: "Netto" },
-  { id: "agenda", label: "Schouw en installatie agenda" },
+  { id: "agenda", label: "Schouw, installatie en service" },
 ];
 
 function projectAdviseurId(p: Project): string | null {
@@ -1288,7 +1288,7 @@ export function NettoBoord({
           <Planbord
             projecten={agendaProjects}
             onProjectUpdated={onProjectUpdated}
-            title="Schouw en installatie agenda"
+            title="Schouw, installatie en service"
             projectHref={(id) => `/projecten/${id}?from=netto`}
           />
         </div>

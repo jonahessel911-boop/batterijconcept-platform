@@ -25,6 +25,7 @@ import {
   defaultInkoopVoorSku,
   type ProductInkoop,
 } from "@/lib/inkoop";
+import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
 
 export const runtime = "nodejs";
 
@@ -396,9 +397,13 @@ export async function GET(_req: NextRequest) {
           formulier_naam: foto?.bestandsnaam || null,
         },
         installatie_at: (p.installatie_at as string | null) || null,
-        materiaal_leverdatum:
-          ((p as { materiaal_leverdatum?: string | null })
-            .materiaal_leverdatum as string | null) || null,
+        materiaal_leverdatum: resolveMateriaalLeverdatum({
+          materiaal_leverdatum:
+            ((p as { materiaal_leverdatum?: string | null })
+              .materiaal_leverdatum as string | null) || null,
+          materiaal_checks:
+            (p.materiaal_checks as Record<string, unknown> | null) || null,
+        }),
         summary,
         items: items.map((item) => {
           const lineStatus: InkoopRegelStatus = resolveInkoopRegelStatus(

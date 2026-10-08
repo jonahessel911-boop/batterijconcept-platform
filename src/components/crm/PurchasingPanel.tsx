@@ -318,8 +318,9 @@ export function PurchasingPanel() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      const err = data as { error?: string; detail?: string };
       throw new Error(
-        (data as { error?: string }).error || "Opslaan mislukt"
+        [err.error || "Opslaan mislukt", err.detail].filter(Boolean).join(" — ")
       );
     }
 

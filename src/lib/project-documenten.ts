@@ -4,6 +4,18 @@ export const SCHOUW_FORMULIER_OMSCHRIJVING = "Schouw formulier";
 /** Vaste omschrijving voor opleveringsrapport met klant-handtekening. */
 export const OPLEVERINGSRAPPORT_OMSCHRIJVING = "Opleveringsrapport";
 
+/** Optionele foto’s bij service-afspraak (niet verplicht). */
+export const SERVICE_FOTO_OMSCHRIJVING = "Service foto";
+
+export function isServiceFoto(
+  omschrijving: string | null | undefined
+): boolean {
+  return (
+    (omschrijving || "").trim().toLowerCase() ===
+    SERVICE_FOTO_OMSCHRIJVING.toLowerCase()
+  );
+}
+
 export function isSchouwFormulier(
   omschrijving: string | null | undefined
 ): boolean {

@@ -241,3 +241,137 @@ export async function POST(
     );
   }
 }
+
+/**
+ * PATCH /api/projecten/[id]/service
+ * Rond service-afspraak af: notitie verplicht, open tickets → afgehandeld.
+ */
+export async function PATCH(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  let body: {
+    service_notities?: string | null;
+    afronden?: boolean;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
+  }
+
+  const notitie = (body.service_notities || "").trim();
+  if (!notitie) {
+    return NextResponse.json(
+      { error: "Notitie is verplicht bij afronden van service" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const sb = getSupabaseAdmin();
+    const { data: project, error: projErr } = await sb
+      .from("projecten")
+      .select("id, lead_id, project_nummer, service_at, status")
+      .eq("id", id)
+      .single();
+
+    if (projErr || !project) {
+      return NextResponse.json(
+        { error: "Project niet gevonden" },
+        { status: 404 }
+      );
+    }
+
+    if (!project.service_at) {
+      return NextResponse.json(
+        { error: "Geen service-afspraak om af te ronden" },
+        { status: 400 }
+      );
+    }
+
+    const { data: updated, error: updateErr } = await sb
+      .from("projecten")
+      .update({ service_notities: notitie })
+      .eq("id", id)
+      .select(
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+      )
+      .single();
+
+    if (updateErr || !updated) {
+      return NextResponse.json(
+        {
+          error: "Service-notitie opslaan mislukt",
+          detail: updateErr?.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    if (body.afronden !== false) {
+      const now = new Date().toISOString();
+      const { data: openTickets } = await sb
+        .from("service_verzoeken")
+        .select("id, interne_notitie")
+        .eq("project_id", id)
+        .eq("status", "open");
+
+      for (const t of openTickets || []) {
+        const prev = (t.interne_notitie || "").trim();
+        await sb
+          .from("service_verzoeken")
+          .update({
+            status: "afgehandeld",
+            afgehandeld_op: now,
+            interne_notitie: prev
+              ? `${prev}\n${notitie}`
+              : notitie,
+          })
+          .eq("id", t.id);
+      }
+
+      const { syncProjectServiceStatus } = await import(
+        "@/lib/service-verzoek"
+      );
+      await syncProjectServiceStatus(sb, id);
+    }
+
+    if (updated.lead_id) {
+      await logLeadEvent({
+        leadId: updated.lead_id,
+        soort: "service",
+        titel: "Service afgerond",
+        detail: [
+          notitie,
+          updated.project_nummer
+            ? `Project ${updated.project_nummer}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        meta: {
+          project_id: id,
+          service_at: project.service_at,
+          afronden: body.afronden !== false,
+        },
+      });
+    }
+
+    const { data: refreshed } = await sb
+      .from("projecten")
+      .select(
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+      )
+      .eq("id", id)
+      .single();
+
+    return NextResponse.json({ project: refreshed || updated });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Fout") },
+      { status: 500 }
+    );
+  }
+}

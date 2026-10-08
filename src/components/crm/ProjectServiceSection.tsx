@@ -529,13 +529,25 @@ export function ProjectServiceSection({
                 {selected.status === "open" ? (
                   <button
                     type="button"
-                    disabled={saving}
-                    onClick={() =>
+                    disabled={
+                      saving ||
+                      !(notes[selected.id] ?? selected.interne_notitie ?? "").trim()
+                    }
+                    onClick={() => {
+                      const note = (
+                        notes[selected.id] ??
+                        selected.interne_notitie ??
+                        ""
+                      ).trim();
+                      if (!note) {
+                        setError("Notitie is verplicht bij afhandelen");
+                        return;
+                      }
                       void patch(selected.id, {
                         status: "afgehandeld",
-                        interne_notitie: notes[selected.id] ?? "",
-                      })
-                    }
+                        interne_notitie: note,
+                      });
+                    }}
                     className="shrink-0 bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
                   >
                     Afhandelen
@@ -553,7 +565,7 @@ export function ProjectServiceSection({
               ) : null}
               <label className="mt-3 block">
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Interne notitie
+                  Interne notitie {selected.status === "open" ? "*" : ""}
                 </span>
                 <textarea
                   value={notes[selected.id] ?? selected.interne_notitie ?? ""}
