@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     let q = sb
       .from("service_verzoeken")
       .select(
-        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, installatie_partner_id, installatie_partners(id, naam))"
+        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
       )
       .order("created_at", { ascending: false });
 
@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
       .from("service_verzoeken")
       .insert(insertRow)
       .select(
-        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, installatie_partner_id, installatie_partners(id, naam))"
+        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
       )
       .single();
 
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
         .from("service_verzoeken")
         .insert(insertRow)
         .select(
-          "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, installatie_partner_id, installatie_partners(id, naam))"
+          "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
         )
         .single());
     }
@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
     const { data: refreshed } = await sb
       .from("service_verzoeken")
       .select(
-        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, installatie_partner_id, installatie_partners(id, naam))"
+        "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
       )
       .eq("id", data.id)
       .single();

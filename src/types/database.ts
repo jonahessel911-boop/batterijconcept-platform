@@ -806,6 +806,9 @@ export interface ServiceVerzoek {
     | "titel"
     | "status"
     | "service_at"
+    | "service_notities"
+    | "installateur_notitie"
+    | "installateur_notitie_door"
     | "installatie_partner_id"
   > & {
     installatie_partners?: { id: string; naam: string } | { id: string; naam: string }[] | null;

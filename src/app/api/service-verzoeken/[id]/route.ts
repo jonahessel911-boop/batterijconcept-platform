@@ -72,7 +72,7 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status)"
+        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
       )
       .single();
 
@@ -88,7 +88,7 @@ export async function PATCH(
     const { data: refreshed } = await sb
       .from("service_verzoeken")
       .select(
-        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status)"
+        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
       )
       .eq("id", id)
       .single();
