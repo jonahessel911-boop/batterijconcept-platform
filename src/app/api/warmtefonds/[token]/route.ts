@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
+  isMissingWfProjectColumn,
   isWarmtefondsPortalProject,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
+  WF_PORTAL_PROJECT_SELECT_MIN,
 } from "@/lib/warmtefonds-portal";
 
 export const runtime = "nodejs";
@@ -25,7 +27,7 @@ export async function GET(
       );
     }
 
-    const { data: rows, error } = await sb
+    const primary = await sb
       .from("projecten")
       .select(WF_PORTAL_PROJECT_SELECT)
       .neq("status", "annulering")
@@ -34,18 +36,24 @@ export async function GET(
         nullsFirst: false,
       });
 
-    if (error) {
-      // Kolom warmtefonds_notities ontbreekt mogelijk vóór migratie
-      if (
-        error.code === "42703" ||
-        error.message?.includes("warmtefonds_notities")
-      ) {
-        const fallback = await sb
+    let rows: unknown[] | null = primary.data;
+    let error = primary.error;
+
+    if (error && isMissingWfProjectColumn(error)) {
+      const fallback = await sb
+        .from("projecten")
+        .select(WF_PORTAL_PROJECT_SELECT_MIN)
+        .neq("status", "annulering")
+        .order("warmtefonds_afspraak_at", {
+          ascending: true,
+          nullsFirst: false,
+        });
+      if (fallback.error && isMissingWfProjectColumn(fallback.error)) {
+        const bare = await sb
           .from("projecten")
           .select(
             `
             id, project_nummer, titel, status, betaalwijze, lead_id, offerte_id,
-            financiering_status, warmtefonds_afspraak_at, warmtefonds_aangevraagd_at,
             notities, created_at, updated_at,
             leads(
               id, naam, email, telefoon, lead_number,
@@ -55,25 +63,23 @@ export async function GET(
           `
           )
           .neq("status", "annulering")
-          .order("warmtefonds_afspraak_at", {
-            ascending: true,
-            nullsFirst: false,
-          });
-        if (fallback.error) throw fallback.error;
-        const orders = (fallback.data || []).filter(isWarmtefondsPortalProject);
-        return NextResponse.json({
-          operator: {
-            id: operator.id,
-            naam: operator.naam,
-            email: operator.email,
-          },
-          orders,
-        });
+          .order("created_at", { ascending: false });
+        if (bare.error) throw bare.error;
+        rows = bare.data;
+        error = null;
+      } else if (fallback.error) {
+        throw fallback.error;
+      } else {
+        rows = fallback.data;
+        error = null;
       }
-      throw error;
     }
 
-    const orders = (rows || []).filter(isWarmtefondsPortalProject);
+    if (error) throw error;
+
+    const orders = ((rows || []) as Parameters<
+      typeof isWarmtefondsPortalProject
+    >[0][]).filter(isWarmtefondsPortalProject);
 
     return NextResponse.json({
       operator: {

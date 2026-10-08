@@ -73,6 +73,35 @@ export const WF_PORTAL_PROJECT_SELECT = `
   offertes(id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud)
 `;
 
+/** Zonder optionele WF-kolommen (vóór migraties). */
+export const WF_PORTAL_PROJECT_SELECT_MIN = `
+  id, project_nummer, titel, status, betaalwijze, lead_id, offerte_id,
+  financiering_status, warmtefonds_afspraak_at,
+  notities, created_at, updated_at,
+  leads(
+    id, naam, email, telefoon, lead_number,
+    postcode, huisnummer, toevoeging, straat, plaats, notities
+  ),
+  offertes(id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud)
+`;
+
+export function isMissingWfProjectColumn(error: {
+  code?: string;
+  message?: string;
+} | null): boolean {
+  if (!error) return false;
+  const msg = error.message || "";
+  return (
+    error.code === "42703" ||
+    /warmtefonds_aangevraagd_at/i.test(msg) ||
+    /warmtefonds_notities/i.test(msg) ||
+    /warmtefonds_afspraak_at/i.test(msg) ||
+    /financiering_status/i.test(msg) ||
+    /schema cache/i.test(msg) ||
+    /does not exist/i.test(msg)
+  );
+}
+
 export function isWarmtefondsPortalProject(row: {
   betaalwijze?: string | null;
   financiering_status?: string | null;

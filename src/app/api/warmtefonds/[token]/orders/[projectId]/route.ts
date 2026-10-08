@@ -7,9 +7,11 @@ import {
   type FinancieringStatus,
 } from "@/lib/financiering-status";
 import {
+  isMissingWfProjectColumn,
   isWarmtefondsPortalProject,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
+  WF_PORTAL_PROJECT_SELECT_MIN,
   wfPortalStatusLabel,
 } from "@/lib/warmtefonds-portal";
 
@@ -22,16 +24,20 @@ async function loadOrder(sb: ReturnType<typeof getSupabaseAdmin>, projectId: str
     .eq("id", projectId)
     .maybeSingle();
 
-  if (
-    error &&
-    (error.code === "42703" || error.message?.includes("warmtefonds_notities"))
-  ) {
+  if (error && isMissingWfProjectColumn(error)) {
+    ({ data: order, error } = await sb
+      .from("projecten")
+      .select(WF_PORTAL_PROJECT_SELECT_MIN)
+      .eq("id", projectId)
+      .maybeSingle());
+  }
+
+  if (error && isMissingWfProjectColumn(error)) {
     ({ data: order, error } = await sb
       .from("projecten")
       .select(
         `
         id, project_nummer, titel, status, betaalwijze, lead_id, offerte_id,
-        financiering_status, warmtefonds_afspraak_at, warmtefonds_aangevraagd_at,
         notities, created_at, updated_at,
         leads(
           id, naam, email, telefoon, lead_number,
@@ -201,17 +207,44 @@ export async function PATCH(
         .update(patch)
         .eq("id", projectId);
       if (updErr) {
-        if (
-          updErr.message?.includes("warmtefonds_notities") ||
-          updErr.code === "42703"
-        ) {
-          const { warmtefonds_notities: _n, ...rest } = patch;
-          if (Object.keys(rest).length > 0) {
+        if (isMissingWfProjectColumn(updErr)) {
+          const slim = { ...patch };
+          if (updErr.message?.includes("warmtefonds_notities")) {
+            delete slim.warmtefonds_notities;
+          }
+          if (updErr.message?.includes("warmtefonds_aangevraagd_at")) {
+            delete slim.warmtefonds_aangevraagd_at;
+          }
+          if (updErr.message?.includes("warmtefonds_afspraak_at")) {
+            delete slim.warmtefonds_afspraak_at;
+          }
+          if (Object.keys(slim).length === 0) {
+            /* optionele kolom — update overslaan */
+          } else if (Object.keys(slim).length < Object.keys(patch).length) {
             const { error: retryErr } = await sb
               .from("projecten")
-              .update(rest)
+              .update(slim)
               .eq("id", projectId);
-            if (retryErr) throw retryErr;
+            if (retryErr) {
+              if (isMissingWfProjectColumn(retryErr)) {
+                const slimmer = { ...slim };
+                delete slimmer.warmtefonds_notities;
+                delete slimmer.warmtefonds_aangevraagd_at;
+                if (Object.keys(slimmer).length === 0) {
+                  /* ok */
+                } else {
+                  const { error: third } = await sb
+                    .from("projecten")
+                    .update(slimmer)
+                    .eq("id", projectId);
+                  if (third) throw third;
+                }
+              } else {
+                throw retryErr;
+              }
+            }
+          } else {
+            throw updErr;
           }
         } else {
           throw updErr;
