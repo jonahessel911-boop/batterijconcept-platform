@@ -26,6 +26,7 @@ async function resolvePartner(token: string) {
 const ORDER_SELECT = `id, project_nummer, titel, status, offerte_id, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
          service_at, service_notities,
          installateur_notitie, installateur_notitie_door,
+         backoffice_notitie, backoffice_notitie_door,
          monteur, startdatum, opleverdatum, created_at,
          leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
          offertes(id, offerte_nummer, status, ondertekend_op)`;

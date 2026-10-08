@@ -238,6 +238,51 @@ export function InstallatieOrderDetailPage() {
           </p>
         )}
 
+        {(order.installateur_notitie?.trim() ||
+          order.backoffice_notitie?.trim()) && (
+          <section className="space-y-3 border border-[#B7D9C4] bg-[#F4FBF7] p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0D5C32]">
+              Notities van Batterijconcept
+            </p>
+            {order.installateur_notitie?.trim() ? (
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Voor installateur
+                </p>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                  {order.installateur_notitie.trim()}
+                </p>
+                {order.installateur_notitie_door?.trim() ? (
+                  <p className="mt-1.5 text-[11px] text-muted">
+                    — {order.installateur_notitie_door.trim()}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            {order.backoffice_notitie?.trim() ? (
+              <div
+                className={
+                  order.installateur_notitie?.trim()
+                    ? "border-t border-[#B7D9C4]/70 pt-3"
+                    : ""
+                }
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Voor backoffice
+                </p>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                  {order.backoffice_notitie.trim()}
+                </p>
+                {order.backoffice_notitie_door?.trim() ? (
+                  <p className="mt-1.5 text-[11px] text-muted">
+                    — {order.backoffice_notitie_door.trim()}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        )}
+
         <section className="border border-line bg-white p-5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
             Installatie status
@@ -470,21 +515,6 @@ export function InstallatieOrderDetailPage() {
           )}
         </section>
 
-        {order.installateur_notitie?.trim() && (
-          <section className="border border-line bg-white p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              Notitie van Batterijconcept
-            </p>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-              {order.installateur_notitie}
-            </p>
-            {order.installateur_notitie_door?.trim() && (
-              <p className="mt-2 text-[11px] text-muted">
-                — {order.installateur_notitie_door}
-              </p>
-            )}
-          </section>
-        )}
       </main>
     </div>
   );

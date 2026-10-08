@@ -2024,6 +2024,40 @@ function AgendaItemSidebar({
               </DetailRow>
             ) : null}
 
+            <DetailRow label="Notitie voor installateur">
+              {project.installateur_notitie?.trim() ? (
+                <div className="space-y-1">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                    {project.installateur_notitie.trim()}
+                  </p>
+                  {project.installateur_notitie_door?.trim() ? (
+                    <p className="text-[11px] text-muted">
+                      — {project.installateur_notitie_door.trim()}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <span className="text-muted">Geen notitie</span>
+              )}
+            </DetailRow>
+
+            <DetailRow label="Notitie voor backoffice">
+              {project.backoffice_notitie?.trim() ? (
+                <div className="space-y-1">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                    {project.backoffice_notitie.trim()}
+                  </p>
+                  {project.backoffice_notitie_door?.trim() ? (
+                    <p className="text-[11px] text-muted">
+                      — {project.backoffice_notitie_door.trim()}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <span className="text-muted">Geen notitie</span>
+              )}
+            </DetailRow>
+
             {showSchouwForm && (allowSchouwUpload || localDoc !== undefined) ? (
               <DetailRow label="Schouwformulier *">
                 <RequiredDocUploadBlock
