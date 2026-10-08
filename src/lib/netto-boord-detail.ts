@@ -289,6 +289,24 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     if (ev.soort === "betaling") loggedPaidIds.add(fid);
   }
 
+  const projectByNummer = new Map(
+    input.projecten
+      .filter((p) => p.project_nummer)
+      .map((p) => [p.project_nummer as string, p.id])
+  );
+
+  function resolveEventProjectId(ev: BuildInput["events"][number]): string | null {
+    const meta = (ev.meta || {}) as { project_id?: string };
+    if (meta.project_id) return meta.project_id;
+    const fromDetail = (ev.detail || "").match(/Project\s+(PRJ-[\w-]+)/i);
+    if (fromDetail?.[1] && projectByNummer.has(fromDetail[1])) {
+      return projectByNummer.get(fromDetail[1]) || null;
+    }
+    // Eén project op deze offerte → veilig koppelen
+    if (input.projecten.length === 1) return input.projecten[0].id;
+    return null;
+  }
+
   const schouwWeekEvByProject = new Map<
     string,
     { created_at: string; detail: string | null }
@@ -297,17 +315,17 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
     string,
     { created_at: string; detail: string | null }
   >();
+  const installatieEvByProject = new Map<
+    string,
+    { created_at: string; detail: string | null }
+  >();
+
   for (const ev of input.events) {
-    if (ev.soort !== "schouw") continue;
     const titel = ev.titel || "";
-    const meta = (ev.meta || {}) as {
-      project_id?: string;
-      schouw_week?: number;
-      schouw_jaar?: number;
-    };
-    const pid = meta.project_id;
+    const pid = resolveEventProjectId(ev);
     if (!pid) continue;
-    if (/Schouwweek gezet/i.test(titel)) {
+
+    if (ev.soort === "schouw" && /Schouwweek gezet/i.test(titel)) {
       const prev = schouwWeekEvByProject.get(pid);
       if (!prev || ev.created_at < prev.created_at) {
         schouwWeekEvByProject.set(pid, {
@@ -317,10 +335,23 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       }
       continue;
     }
-    if (/Schouwdag gepland|Schouwdatum gepland/i.test(titel)) {
+    if (
+      ev.soort === "schouw" &&
+      /Schouwdag gepland|Schouwdatum gepland/i.test(titel)
+    ) {
       const prev = schouwDagEvByProject.get(pid);
       if (!prev || ev.created_at < prev.created_at) {
         schouwDagEvByProject.set(pid, {
+          created_at: ev.created_at,
+          detail: stripPartnerFromTimelineDetail(ev.detail),
+        });
+      }
+      continue;
+    }
+    if (isInstallatieMilestoneTitel(titel)) {
+      const prev = installatieEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        installatieEvByProject.set(pid, {
           created_at: ev.created_at,
           detail: stripPartnerFromTimelineDetail(ev.detail),
         });
@@ -490,64 +521,78 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       },
     });
 
+    // Nooit project.updated_at: die verspringt bij elke latere actie (bv. installatie).
     if (p.schouw_jaar && p.schouw_week) {
       const weekEv = schouwWeekEvByProject.get(p.id);
-      items.push({
-        id: `schouw-week-${p.id}`,
-        at: weekEv?.created_at || p.updated_at || p.created_at,
-        kind: "schouw",
-        titel: `Schouwweek gezet (W${p.schouw_week})`,
-        detail:
-          weekEv?.detail ||
-          `${p.schouw_jaar}-W${String(p.schouw_week).padStart(2, "0")}`,
-        action: {
-          type: "link",
-          href: `/projecten/${p.id}`,
-          label: "Open project",
-        },
-      });
+      if (weekEv) {
+        items.push({
+          id: `schouw-week-${p.id}`,
+          at: weekEv.created_at,
+          kind: "schouw",
+          titel: `Schouwweek gezet (W${p.schouw_week})`,
+          detail:
+            weekEv.detail ||
+            `${p.schouw_jaar}-W${String(p.schouw_week).padStart(2, "0")}`,
+          action: {
+            type: "link",
+            href: `/projecten/${p.id}`,
+            label: "Open project",
+          },
+        });
+      }
     }
 
     if (p.schouw_at && isSchouwdagDefinitief(p)) {
       const dagEv = schouwDagEvByProject.get(p.id);
-      items.push({
-        id: `schouw-datum-${p.id}`,
-        at: dagEv?.created_at || p.updated_at || p.created_at,
-        kind: "schouw",
-        titel: "Schouwdatum gepland",
-        detail:
-          dagEv?.detail ||
-          `Schouwdatum is gepland op ${formatDateTimeNl(p.schouw_at)}`,
-        action: {
-          type: "link",
-          href: `/projecten/${p.id}`,
-          label: "Open project",
-        },
-      });
+      if (dagEv) {
+        items.push({
+          id: `schouw-datum-${p.id}`,
+          at: dagEv.created_at,
+          kind: "schouw",
+          titel: "Schouwdatum gepland",
+          detail:
+            dagEv.detail ||
+            `Schouwdatum is gepland op ${formatDateTimeNl(p.schouw_at)}`,
+          action: {
+            type: "link",
+            href: `/projecten/${p.id}`,
+            label: "Open project",
+          },
+        });
+      }
     }
 
     // Geen aparte "Schouw uitgevoerd" — document-rij "Schouwformulier geüpload" volstaat
 
     const st = normalizeProjectStatus(p.status);
+    const instEv = installatieEvByProject.get(p.id);
 
-    if (p.installatie_at || st === "installatie_ingepland" || st === "installatie_voltooid") {
-      items.push({
-        id: `inst-plan-${p.id}`,
-        at: p.updated_at || p.created_at,
-        kind: "installatie",
-        titel:
-          st === "installatie_voltooid"
-            ? "Installatie uitgevoerd"
-            : "Installatie gepland",
-        detail: p.installatie_at
-          ? `Installatiedatum is gepland op ${formatDateTimeNl(p.installatie_at)}`
-          : statusLabel(p.status),
-        action: {
-          type: "link",
-          href: `/projecten/${p.id}`,
-          label: "Open project",
-        },
-      });
+    if (
+      instEv ||
+      p.installatie_at ||
+      st === "installatie_ingepland" ||
+      st === "installatie_voltooid"
+    ) {
+      // Alleen tonen met echte plantijd (event); anders lijkt het alsof het net gezet is
+      if (instEv) {
+        items.push({
+          id: `inst-plan-${p.id}`,
+          at: instEv.created_at,
+          kind: "installatie",
+          titel:
+            st === "installatie_voltooid"
+              ? "Installatie uitgevoerd"
+              : "Installatie gepland",
+          detail: p.installatie_at
+            ? `Installatiedatum is gepland op ${formatDateTimeNl(p.installatie_at)}`
+            : instEv.detail || statusLabel(p.status),
+          action: {
+            type: "link",
+            href: `/projecten/${p.id}`,
+            label: "Open project",
+          },
+        });
+      }
     }
 
     if (st === "annulering") {

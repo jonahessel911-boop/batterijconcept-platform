@@ -138,40 +138,54 @@ function buildFromEntities(opts: {
     if (ev.soort === "betaling") loggedPaidIds.add(fid);
   }
 
+  const projectByNummer = new Map(
+    opts.projecten
+      .filter((p) => p.project_nummer)
+      .map((p) => [p.project_nummer as string, p.id])
+  );
+
+  function resolveEventProjectId(ev: LeadEvent): string | null {
+    const meta = (ev.meta || {}) as { project_id?: string };
+    if (meta.project_id) return meta.project_id;
+    const fromDetail = (ev.detail || "").match(/Project\s+(PRJ-[\w-]+)/i);
+    if (fromDetail?.[1] && projectByNummer.has(fromDetail[1])) {
+      return projectByNummer.get(fromDetail[1]) || null;
+    }
+    if (opts.projecten.length === 1) return opts.projecten[0].id;
+    return null;
+  }
+
   const schouwWeekEvByProject = new Map<string, LeadEvent>();
   const schouwDagEvByProject = new Map<string, LeadEvent>();
+  const installatieEvByProject = new Map<string, LeadEvent>();
   for (const ev of opts.events) {
-    if (ev.soort !== "schouw") continue;
     const titel = ev.titel || "";
-    const meta = (ev.meta || {}) as {
-      project_id?: string;
-      schouw_week?: number;
-      schouw_jaar?: number;
-    };
-    const pid = meta.project_id;
+    const pid = resolveEventProjectId(ev);
     if (!pid) continue;
-    if (/Schouwweek gezet/i.test(titel)) {
+    if (ev.soort === "schouw" && /Schouwweek gezet/i.test(titel)) {
       const prev = schouwWeekEvByProject.get(pid);
       if (!prev || ev.created_at < prev.created_at) {
         schouwWeekEvByProject.set(pid, ev);
       }
       continue;
     }
-    if (/Schouwdag gepland|Schouwdatum gepland/i.test(titel)) {
+    if (
+      ev.soort === "schouw" &&
+      /Schouwdag gepland|Schouwdatum gepland/i.test(titel)
+    ) {
       const prev = schouwDagEvByProject.get(pid);
       if (!prev || ev.created_at < prev.created_at) {
         schouwDagEvByProject.set(pid, ev);
       }
+      continue;
+    }
+    if (/Installatie gepland|Installatie uitgevoerd/i.test(titel)) {
+      const prev = installatieEvByProject.get(pid);
+      if (!prev || ev.created_at < prev.created_at) {
+        installatieEvByProject.set(pid, ev);
+      }
     }
   }
-
-  const hasInstallatieEntity = opts.projecten.some(
-    (p) =>
-      Boolean(p.installatie_at) ||
-      p.status === "installatie_ingepland" ||
-      p.status === "installatie_voltooid" ||
-      p.status === "materiaal_besteld"
-  );
 
   for (const ev of opts.events) {
     const soort = (ev.soort || "overig") as ActivityKind;
@@ -184,10 +198,7 @@ function buildFromEntities(opts: {
     ) {
       continue;
     }
-    if (
-      hasInstallatieEntity &&
-      /Installatie gepland|Installatie uitgevoerd/i.test(titel)
-    ) {
+    if (/Installatie gepland|Installatie uitgevoerd/i.test(titel)) {
       continue;
     }
     if (/Schouwformulier geüpload|Schouw uitgevoerd/i.test(titel)) {
@@ -340,15 +351,16 @@ function buildFromEntities(opts: {
       },
     });
 
-    if (p.schouw_jaar && p.schouw_week) {
-      const weekEv = schouwWeekEvByProject.get(p.id);
+    // Nooit updated_at — die verspringt bij latere acties (installatie etc.)
+    const weekEv = schouwWeekEvByProject.get(p.id);
+    if (p.schouw_jaar && p.schouw_week && weekEv) {
       items.push({
         id: `schouw-week-${p.id}`,
-        at: weekEv?.created_at || p.updated_at || p.created_at,
+        at: weekEv.created_at,
         kind: "schouw",
         titel: `Schouwweek gezet (W${p.schouw_week})`,
         detail:
-          weekEv?.detail ||
+          stripPartnerFromTimelineDetail(weekEv.detail) ||
           `${p.schouw_jaar}-W${String(p.schouw_week).padStart(2, "0")}`,
         action: {
           type: "link",
@@ -358,15 +370,15 @@ function buildFromEntities(opts: {
       });
     }
 
-    if (p.schouw_at && isSchouwdagDefinitief(p)) {
-      const dagEv = schouwDagEvByProject.get(p.id);
+    const dagEv = schouwDagEvByProject.get(p.id);
+    if (p.schouw_at && isSchouwdagDefinitief(p) && dagEv) {
       items.push({
         id: `schouw-datum-${p.id}`,
-        at: dagEv?.created_at || p.updated_at || p.created_at,
+        at: dagEv.created_at,
         kind: "schouw",
         titel: "Schouwdatum gepland",
         detail:
-          dagEv?.detail ||
+          stripPartnerFromTimelineDetail(dagEv.detail) ||
           `Schouwdatum is gepland op ${formatDateTimeNl(p.schouw_at)}`,
         action: {
           type: "link",
@@ -376,31 +388,25 @@ function buildFromEntities(opts: {
       });
     }
 
-    if (
-      p.installatie_at ||
-      p.status === "installatie_ingepland" ||
-      p.status === "materiaal_besteld"
-    ) {
+    const instEv = installatieEvByProject.get(p.id);
+    if (instEv) {
       items.push({
         id: `inst-${p.id}`,
-        at: p.updated_at || p.created_at,
+        at: instEv.created_at,
         kind: "installatie",
-        titel: p.status === "installatie_voltooid"
-          ? "Installatie uitgevoerd"
-          : "Installatie gepland",
+        titel:
+          p.status === "installatie_voltooid"
+            ? "Installatie uitgevoerd"
+            : "Installatie gepland",
         detail: p.installatie_at
           ? `Installatiedatum is gepland op ${formatDateTimeNl(p.installatie_at)}`
-          : PROJECT_STATUS_LABEL[p.status] || null,
+          : stripPartnerFromTimelineDetail(instEv.detail),
         action: {
           type: "link",
           href: `/projecten/${p.id}`,
           label: "Open project",
         },
       });
-    }
-
-    if (p.status === "installatie_voltooid" && !p.installatie_at) {
-      // already covered above when status is voltooid with installatie_at missing — ok
     }
   }
 
