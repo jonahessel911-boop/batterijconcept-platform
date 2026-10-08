@@ -38,6 +38,20 @@ export function dayKeyAmsterdam(date: Date | string): string {
   return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
+/** Zondag (Amsterdam) is standaard altijd geblokkeerd voor adviseur-slots. */
+export function isZondagAmsterdam(dateOrDayKey: Date | string): boolean {
+  if (typeof dateOrDayKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateOrDayKey)) {
+    const [y, m, d] = dateOrDayKey.split("-").map(Number);
+    // Wall-clock zondag op die kalenderdag (geen TZ-shift)
+    return new Date(y, m - 1, d).getDay() === 0;
+  }
+  const zoned = toZonedTime(
+    typeof dateOrDayKey === "string" ? new Date(dateOrDayKey) : dateOrDayKey,
+    AMSTERDAM_TZ
+  );
+  return zoned.getDay() === 0;
+}
+
 /** Nearest vaste slot-hour (10/13/16/19) voor een starttijd. */
 export function nearestSlotHour(startAt: string | Date): SlotHour {
   const t = Number(formatInTimeZone(new Date(startAt), AMSTERDAM_TZ, "H"));
@@ -147,6 +161,8 @@ export async function isSlotAfgeblokt(
   adviseurId: string,
   startAt: Date
 ): Promise<boolean> {
+  if (isZondagAmsterdam(startAt)) return true;
+
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);
   const { data, error } = await sb
@@ -164,14 +180,14 @@ export async function isSlotAfgeblokt(
   return Boolean(data);
 }
 
-/** Filter slots die als tijdsblok zijn afgeblokt. */
+/** Filter slots die als tijdsblok zijn afgeblokt (incl. standaard zondag). */
 export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
   slots: T[],
   adviseurId: string,
   blocked: Set<string>
 ): T[] {
-  if (blocked.size === 0) return slots;
   return slots.filter((s) => {
+    if (isZondagAmsterdam(s.start_at)) return false;
     const dag = dayKeyAmsterdam(s.start_at);
     const hour = nearestSlotHour(s.start_at);
     return !blocked.has(afblokKey(adviseurId, dag, hour));

@@ -32,7 +32,7 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
-import { afblokKey } from "@/lib/adviseur-beschikbaarheid";
+import { afblokKey, isZondagAmsterdam } from "@/lib/adviseur-beschikbaarheid";
 import { LeadZoekVeld } from "./LeadZoekVeld";
 import { AfspraakDetail } from "./AgendaPanel";
 import { LeadsTable } from "./LeadsTable";
@@ -654,6 +654,7 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ): boolean {
+    if (isZondagAmsterdam(dayKey)) return true;
     return afblokkingen.has(afblokKey(adviseurId, dayKey, hour));
   }
 
@@ -662,6 +663,10 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ) {
+    if (isZondagAmsterdam(dayKey)) {
+      setError("Zondag is standaard geblokkeerd en kan niet worden geopend.");
+      return;
+    }
     const key = afblokKey(adviseurId, dayKey, hour);
     const currentlyBlocked = afblokkingen.has(key);
     const nextBlocked = !currentlyBlocked;
@@ -770,6 +775,10 @@ export function AgendaPanel({
   function openPlan(adviseurId: string, dayKey: string, slotIdx: number) {
     if (isWeekBlocked(adviseurId)) {
       setError("Deze week is geblokkeerd voor deze adviseur");
+      return;
+    }
+    if (isZondagAmsterdam(dayKey)) {
+      setError("Zondag is standaard geblokkeerd");
       return;
     }
     const row = SLOT_ROWS[slotIdx];
@@ -1118,26 +1127,33 @@ export function AgendaPanel({
                           {blocked && items.length === 0 ? (
                             <GeblokkeerdCell
                               onClick={
-                                afblokMode && !blockBusy && !weekBlocked
+                                isZondagAmsterdam(day.key)
                                   ? () =>
-                                      void toggleSlotAfblok(
-                                        adv.id,
-                                        day.key,
-                                        row.hour
+                                      setError(
+                                        "Zondag is standaard geblokkeerd"
                                       )
-                                  : afblokMode && weekBlocked
+                                  : afblokMode && !blockBusy && !weekBlocked
                                     ? () =>
-                                        setError(
-                                          "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                        void toggleSlotAfblok(
+                                          adv.id,
+                                          day.key,
+                                          row.hour
                                         )
-                                    : undefined
+                                    : afblokMode && weekBlocked
+                                      ? () =>
+                                          setError(
+                                            "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                          )
+                                      : undefined
                               }
                               hint={
-                                afblokMode
-                                  ? slotBlocked
-                                    ? "Klik om dit slot weer te openen"
-                                    : "Week geblokkeerd"
-                                  : undefined
+                                isZondagAmsterdam(day.key)
+                                  ? "Zondag standaard geblokkeerd"
+                                  : afblokMode
+                                    ? slotBlocked
+                                      ? "Klik om dit slot weer te openen"
+                                      : "Week geblokkeerd"
+                                    : undefined
                               }
                             />
                           ) : items.length > 0 ? (
