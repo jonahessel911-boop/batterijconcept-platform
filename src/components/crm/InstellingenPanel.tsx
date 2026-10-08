@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Adviseur, InstallatiePartner } from "@/types/database";
+import type { WarmtefondsOperator } from "@/lib/warmtefonds-portal";
 import {
   GEBRUIKER_ROLLEN,
   gebruikerRolLabel,
@@ -13,7 +14,7 @@ import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import Link from "next/link";
 
-type ListFilter = "medewerkers" | "partners";
+type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
 function isSalesRol(rol: string | null | undefined): boolean {
   return normalizeRol(rol) === "adviseur";
@@ -53,6 +54,7 @@ export function InstellingenPanel({
   const [filter, setFilter] = useState<ListFilter>("medewerkers");
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
+  const [wfOperators, setWfOperators] = useState<WarmtefondsOperator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -68,6 +70,9 @@ export function InstellingenPanel({
   const [selectedKind, setSelectedKind] = useState<ListFilter | null>(null);
   const [draft, setDraft] = useState<Partial<Adviseur> | null>(null);
   const [partnerDraft, setPartnerDraft] = useState<Partial<InstallatiePartner> | null>(
+    null
+  );
+  const [wfDraft, setWfDraft] = useState<Partial<WarmtefondsOperator> | null>(
     null
   );
   const [detailSaving, setDetailSaving] = useState(false);
@@ -90,21 +95,30 @@ export function InstellingenPanel({
     selectedKind === "partners"
       ? partners.find((p) => p.id === selectedId) || null
       : null;
+  const selectedWf =
+    selectedKind === "warmtefonds"
+      ? wfOperators.find((o) => o.id === selectedId) || null
+      : null;
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [aRes, pRes] = await Promise.all([
+      const [aRes, pRes, wRes] = await Promise.all([
         fetch("/api/adviseurs?include_inactive=1"),
         fetch("/api/installatie-partners?include_inactive=1"),
+        fetch("/api/warmtefonds-operators?include_inactive=1"),
       ]);
       const aData = await aRes.json();
       const pData = await pRes.json();
+      const wData = await wRes.json();
       if (!aRes.ok) throw new Error(aData.error || "Medewerkers laden mislukt");
       if (!pRes.ok) throw new Error(pData.error || "Partners laden mislukt");
+      if (!wRes.ok)
+        throw new Error(wData.error || "Warmtefondspartners laden mislukt");
       setAdviseurs(aData.adviseurs || []);
       setPartners(pData.partners || []);
+      setWfOperators(wData.operators || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -128,6 +142,7 @@ export function InstellingenPanel({
     setSelectedKind("medewerkers");
     setSelectedId(a.id);
     setPartnerDraft(null);
+    setWfDraft(null);
     setDraft({
       naam: a.naam,
       email: a.email,
@@ -161,6 +176,7 @@ export function InstellingenPanel({
     setSelectedKind("partners");
     setSelectedId(p.id);
     setDraft(null);
+    setWfDraft(null);
     setPartnerDraft({
       naam: p.naam,
       email: p.email,
@@ -181,11 +197,28 @@ export function InstellingenPanel({
     setOkMsg(null);
   }
 
+  function openWarmtefonds(o: WarmtefondsOperator) {
+    setSelectedKind("warmtefonds");
+    setSelectedId(o.id);
+    setDraft(null);
+    setPartnerDraft(null);
+    setWfDraft({
+      naam: o.naam,
+      email: o.email,
+      telefoon: o.telefoon,
+      actief: o.actief !== false,
+      portal_token: o.portal_token,
+    });
+    setError(null);
+    setOkMsg(null);
+  }
+
   function closeDetail() {
     setSelectedId(null);
     setSelectedKind(null);
     setDraft(null);
     setPartnerDraft(null);
+    setWfDraft(null);
     setNewPassword("");
     setConfirmPassword("");
   }
@@ -216,6 +249,27 @@ export function InstellingenPanel({
             : `${data.adviseur.naam} toegevoegd${data.mail_error ? ` (mail: ${data.mail_error})` : ""}.`
         );
         onAdviseursChange?.();
+      } else if (activeFilter === "warmtefonds") {
+        const res = await fetch("/api/warmtefonds-operators", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ naam, email, telefoon }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+        const op = data.operator as WarmtefondsOperator | undefined;
+        setOkMsg(
+          op
+            ? `${op.naam} toegevoegd als Warmtefondspartner.`
+            : "Warmtefondspartner toegevoegd."
+        );
+        if (op?.portal_token) {
+          const url = `${portalBase()}/warmtefonds/${op.portal_token}`;
+          void navigator.clipboard.writeText(url).catch(() => {});
+          setOkMsg(
+            `${op.naam} toegevoegd — portaallink gekopieerd.`
+          );
+        }
       } else {
         const res = await fetch("/api/installatie-partners", {
           method: "POST",
@@ -330,6 +384,57 @@ export function InstellingenPanel({
     }
   }
 
+  async function saveWarmtefonds() {
+    if (!selectedWf || !wfDraft) return;
+    setDetailSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/warmtefonds-operators", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: selectedWf.id,
+          naam: (wfDraft.naam || "").trim(),
+          email: wfDraft.email?.toString().trim().toLowerCase() || null,
+          telefoon: wfDraft.telefoon?.toString().trim() || null,
+          actief: wfDraft.actief !== false,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Bijwerken mislukt");
+      setOkMsg("Opgeslagen.");
+      await load();
+      if (data.operator) openWarmtefonds(data.operator as WarmtefondsOperator);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setDetailSaving(false);
+    }
+  }
+
+  async function regenerateWfToken(o: WarmtefondsOperator) {
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/warmtefonds-operators", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: o.id, regenerate_token: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Token vernieuwen mislukt");
+      const op = data.operator as WarmtefondsOperator;
+      setOkMsg(`Nieuwe portaallink voor ${op.naam}.`);
+      await load();
+      openWarmtefonds(op);
+      const url = `${portalBase()}/warmtefonds/${op.portal_token}`;
+      void navigator.clipboard.writeText(url).catch(() => {});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    }
+  }
+
   async function resendInvite(a: Adviseur) {
     setError(null);
     setOkMsg(null);
@@ -421,9 +526,30 @@ export function InstellingenPanel({
     );
   }
 
+  function wfPortalUrl(o: WarmtefondsOperator): string {
+    return `${portalBase()}/warmtefonds/${o.portal_token}`;
+  }
+
+  function copyWfPortalLink(o: WarmtefondsOperator) {
+    void navigator.clipboard.writeText(wfPortalUrl(o)).then(
+      () => setOkMsg(`Warmtefonds-portaallink gekopieerd voor ${o.naam}.`),
+      () => setError("Kopiëren mislukt")
+    );
+  }
+
+  function openWfPortal(o: WarmtefondsOperator) {
+    window.open(wfPortalUrl(o), "_blank", "noopener,noreferrer");
+  }
+
   const rows = useMemo(() => {
     if (activeFilter === "medewerkers") {
       return [...adviseurs].sort((a, b) => {
+        if (a.actief !== b.actief) return a.actief ? -1 : 1;
+        return a.naam.localeCompare(b.naam, "nl");
+      });
+    }
+    if (activeFilter === "warmtefonds") {
+      return [...wfOperators].sort((a, b) => {
         if (a.actief !== b.actief) return a.actief ? -1 : 1;
         return a.naam.localeCompare(b.naam, "nl");
       });
@@ -432,12 +558,14 @@ export function InstellingenPanel({
       if (a.actief !== b.actief) return a.actief ? -1 : 1;
       return a.naam.localeCompare(b.naam, "nl");
     });
-  }, [activeFilter, adviseurs, partners]);
+  }, [activeFilter, adviseurs, partners, wfOperators]);
 
   const countLabel =
     activeFilter === "medewerkers"
       ? `${adviseurs.length} adviseur${adviseurs.length === 1 ? "" : "s"} / team`
-      : `${partners.length} installatiepartner${partners.length === 1 ? "" : "s"}`;
+      : activeFilter === "warmtefonds"
+        ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
+        : `${partners.length} installatiepartner${partners.length === 1 ? "" : "s"}`;
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (selectedAdviseur && draft) {
@@ -1088,6 +1216,184 @@ export function InstellingenPanel({
     );
   }
 
+  if (selectedWf && wfDraft) {
+    const liveToken = wfDraft.portal_token || selectedWf.portal_token;
+    const liveOp: WarmtefondsOperator = {
+      ...selectedWf,
+      portal_token: liveToken,
+      naam: wfDraft.naam || selectedWf.naam,
+      email: (wfDraft.email as string) || selectedWf.email,
+      telefoon: (wfDraft.telefoon as string | null) ?? selectedWf.telefoon,
+      actief: wfDraft.actief !== false,
+    };
+    return (
+      <div className="relative border border-line bg-white pb-24">
+        <div className="border-b border-line px-4 py-3 sm:px-5">
+          <button
+            type="button"
+            onClick={closeDetail}
+            className="text-xs font-semibold text-green hover:underline"
+          >
+            ← Terug naar overzicht
+          </button>
+          <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display text-xl font-semibold text-ink">
+                {selectedWf.naam}
+              </h2>
+              <p className="mt-0.5 text-sm text-muted">Warmtefondspartner</p>
+            </div>
+            <span
+              className={
+                wfDraft.actief !== false
+                  ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
+                  : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
+              }
+            >
+              {wfDraft.actief !== false ? "Actief" : "Inactief"}
+            </span>
+          </div>
+        </div>
+
+        {(error || okMsg) && (
+          <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
+            {error && (
+              <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+                {error}
+              </p>
+            )}
+            {okMsg && (
+              <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+                {okMsg}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-5 p-4 sm:p-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Naam">
+              <input
+                value={wfDraft.naam || ""}
+                onChange={(e) =>
+                  setWfDraft((d) => ({ ...d, naam: e.target.value }))
+                }
+                className={inputCls}
+              />
+            </Field>
+            <Field label="E-mail">
+              <input
+                type="email"
+                value={wfDraft.email || ""}
+                onChange={(e) =>
+                  setWfDraft((d) => ({ ...d, email: e.target.value }))
+                }
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Telefoon">
+              <input
+                value={wfDraft.telefoon || ""}
+                onChange={(e) =>
+                  setWfDraft((d) => ({ ...d, telefoon: e.target.value }))
+                }
+                className={inputCls}
+              />
+            </Field>
+            <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Status
+              </p>
+              <div className="mt-2 flex border border-line p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setWfDraft((d) => ({ ...d, actief: true }))}
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    wfDraft.actief !== false
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Actief
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWfDraft((d) => ({ ...d, actief: false }))}
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    wfDraft.actief === false
+                      ? "bg-[#C45A12] text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Inactief
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                Actieve Warmtefondspartners krijgen toegang tot alle
+                Warmtefonds-orders via hun portaallink.
+              </p>
+            </div>
+          </div>
+
+          <div className="border border-line p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Warmtefonds-account
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Login via magic link — geen wachtwoord. Deel de portaallink met de
+              partner.
+            </p>
+            <p className="mt-3 break-all rounded border border-line bg-wash/50 px-3 py-2 font-mono text-[11px] text-ink">
+              {wfPortalUrl(liveOp)}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => openWfPortal(liveOp)}
+                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+              >
+                Open portaal
+              </button>
+              <button
+                type="button"
+                onClick={() => copyWfPortalLink(liveOp)}
+                className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
+              >
+                Kopieer portaallink
+              </button>
+              <button
+                type="button"
+                onClick={() => void regenerateWfToken(selectedWf)}
+                className="border border-line bg-white px-4 py-2 text-sm font-medium text-muted hover:bg-wash hover:text-ink"
+              >
+                Vernieuw token
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted">
+              Wijzigingen worden pas bewaard als je{" "}
+              <strong className="text-ink">Opslaan</strong> klikt.
+            </p>
+            <button
+              type="button"
+              disabled={detailSaving}
+              onClick={() => void saveWarmtefonds()}
+              className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+            >
+              {detailSaving ? "Opslaan…" : "Opslaan"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── List view ────────────────────────────────────────────────────────────
   return (
     <div className="border border-line bg-white">
@@ -1123,6 +1429,18 @@ export function InstellingenPanel({
               >
                 Installatiepartners
               </button>
+              <button
+                type="button"
+                onClick={() => setFilter("warmtefonds")}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold",
+                  activeFilter === "warmtefonds"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Warmtefonds
+              </button>
             </div>
           )}
           <p className="text-xs text-muted">{countLabel}</p>
@@ -1138,7 +1456,9 @@ export function InstellingenPanel({
         >
           {activeFilter === "medewerkers"
             ? "+ Adviseur"
-            : "+ Installatiepartner"}
+            : activeFilter === "warmtefonds"
+              ? "+ Warmtefondspartner"
+              : "+ Installatiepartner"}
         </button>
       </div>
 
@@ -1164,12 +1484,16 @@ export function InstellingenPanel({
           <p className="font-display text-base font-semibold text-ink">
             {activeFilter === "medewerkers"
               ? "Nog geen adviseurs"
-              : "Nog geen installatiepartners"}
+              : activeFilter === "warmtefonds"
+                ? "Nog geen Warmtefondspartners"
+                : "Nog geen installatiepartners"}
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
               ? "Voeg een adviseur toe — standaard 10% commissie, Actief = wordt ingepland."
-              : "Voeg een installatiepartner toe voor schouw/installatie en portaallink."}
+              : activeFilter === "warmtefonds"
+                ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
+                : "Voeg een installatiepartner toe voor schouw/installatie en portaallink."}
           </p>
         </div>
       ) : activeFilter === "medewerkers" ? (
@@ -1282,6 +1606,67 @@ export function InstellingenPanel({
             </tbody>
           </table>
         </div>
+      ) : activeFilter === "warmtefonds" ? (
+        <div className="overflow-x-auto">
+          <table className="crm-table w-full">
+            <thead>
+              <tr>
+                <th>Naam</th>
+                <th>E-mail</th>
+                <th>Telefoon</th>
+                <th>Status</th>
+                <th className="w-36" />
+              </tr>
+            </thead>
+            <tbody>
+              {(rows as WarmtefondsOperator[]).map((o) => (
+                <tr
+                  key={o.id}
+                  onClick={() => openWarmtefonds(o)}
+                  className="cursor-pointer hover:bg-[#f7faf8]"
+                >
+                  <td className="font-medium text-ink">{o.naam}</td>
+                  <td className="text-muted">{o.email || "—"}</td>
+                  <td className="text-muted">{o.telefoon || "—"}</td>
+                  <td>
+                    <span
+                      className={
+                        o.actief !== false
+                          ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
+                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
+                      }
+                    >
+                      {o.actief !== false ? "Actief" : "Inactief"}
+                    </span>
+                  </td>
+                  <td
+                    className="text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openWfPortal(o)}
+                        className="border border-green/40 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:bg-green hover:text-white"
+                        title="Open Warmtefonds-portaal"
+                      >
+                        Open account
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openWarmtefonds(o)}
+                        className="text-muted hover:text-ink"
+                        aria-label={`${o.naam} bewerken`}
+                      >
+                        <PencilIcon />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="crm-table w-full">
@@ -1343,7 +1728,9 @@ export function InstellingenPanel({
               <h3 className="font-display text-lg font-semibold text-ink">
                 {activeFilter === "medewerkers"
                   ? "Adviseur toevoegen"
-                  : "Installatiepartner toevoegen"}
+                  : activeFilter === "warmtefonds"
+                    ? "Warmtefondspartner toevoegen"
+                    : "Installatiepartner toevoegen"}
               </h3>
               <button
                 type="button"
@@ -1360,7 +1747,11 @@ export function InstellingenPanel({
                 onChange={(e) => setNaam(e.target.value)}
                 className={inputCls}
                 placeholder={
-                  activeFilter === "medewerkers" ? "Bijv. Huub" : "Bijv. Installatie BV"
+                  activeFilter === "medewerkers"
+                    ? "Bijv. Huub"
+                    : activeFilter === "warmtefonds"
+                      ? "Bijv. Edwin"
+                      : "Bijv. Installatie BV"
                 }
               />
             </Field>
@@ -1408,6 +1799,12 @@ export function InstellingenPanel({
                 ) : null}
               </>
             )}
+            {activeFilter === "warmtefonds" ? (
+              <p className="border border-green/30 bg-green-soft/50 px-3 py-2 text-[11px] text-green-dark">
+                Na toevoegen krijg je een <strong>portaallink</strong> (magic
+                link) naar het Warmtefonds-account — geen wachtwoord.
+              </p>
+            ) : null}
             {error && (
               <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
                 {error}

@@ -58,7 +58,7 @@ export function PartnersPanel({
           </div>
           <p className="text-xs text-muted">
             {view === "team"
-              ? "Actief = wordt ingepland · Inactief = niet · commissie standaard 10%"
+              ? "Adviseurs · installatiepartners · Warmtefondspartners"
               : "Commissie- en partnerfacturen"}
           </p>
         </div>
