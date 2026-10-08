@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { InstallatiePartner, Product } from "@/types/database";
+import type { Product } from "@/types/database";
 import { formatEuro } from "@/lib/format";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import {
@@ -107,9 +107,7 @@ export function MaakOfferteModal({
   onCreated: (offerteId: string) => void;
 }) {
   const [producten, setProducten] = useState<Product[]>([]);
-  const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [productId, setProductId] = useState("");
-  const [partnerId, setPartnerId] = useState("");
   const [aantal, setAantal] = useState(1);
   const [customOmschrijving, setCustomOmschrijving] = useState("");
   const [customAantal, setCustomAantal] = useState(1);
@@ -130,13 +128,13 @@ export function MaakOfferteModal({
     let cancelled = false;
     queueMicrotask(async () => {
       const sb = getSupabaseBrowser();
-      const [prodRes, partnerRes] = await Promise.all([
-        sb.from("producten").select("*").eq("actief", true).order("naam"),
-        fetch("/api/installatie-partners").then((r) => r.json()),
-      ]);
+      const prodRes = await sb
+        .from("producten")
+        .select("*")
+        .eq("actief", true)
+        .order("naam");
       if (!cancelled) {
         setProducten((prodRes.data as Product[]) || []);
-        setPartners((partnerRes.partners as InstallatiePartner[]) || []);
       }
     });
     return () => {
@@ -314,10 +312,6 @@ export function MaakOfferteModal({
       setError("Voeg minstens één regel toe (product of eigen regel).");
       return;
     }
-    if (!partnerId) {
-      setError("Kies een installateur (intern).");
-      return;
-    }
     if (useKorting) {
       if (kortingInput <= 0) {
         setError("Vul een geldig kortingsbedrag of nieuw totaal in.");
@@ -368,7 +362,6 @@ export function MaakOfferteModal({
           lead_id: leadId,
           titel: `Offerte voor ${leadNaam}`,
           financiering_voorbehoud: financiering,
-          installatie_partner_id: partnerId,
           regels,
         }),
       });
@@ -382,7 +375,6 @@ export function MaakOfferteModal({
       setKortingBtw("incl");
       setKorting("");
       setFinanciering(false);
-      setPartnerId("");
       setCustomOmschrijving("");
       setCustomAantal(1);
       setCustomPrijs("");
@@ -755,31 +747,6 @@ export function MaakOfferteModal({
                   aanvraag service” op de offerte.
                 </span>
               </span>
-            </label>
-
-            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-              Installateur (intern)
-              <span className="ml-1 font-normal normal-case tracking-normal text-muted/80">
-                — klant ziet dit niet
-              </span>
-              <select
-                required
-                value={partnerId}
-                onChange={(e) => setPartnerId(e.target.value)}
-                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              >
-                <option value="">Kies installateur…</option>
-                {partners.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.naam}
-                  </option>
-                ))}
-              </select>
-              {partners.length === 0 && (
-                <span className="mt-1 block text-xs font-normal normal-case tracking-normal text-[#C45A12]">
-                  Voeg eerst een installatiepartner toe onder Partners.
-                </span>
-              )}
             </label>
 
             <div className="border-t border-line pt-3 text-right space-y-1">
