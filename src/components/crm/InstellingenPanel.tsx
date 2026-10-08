@@ -10,6 +10,7 @@ import {
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
+import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import Link from "next/link";
 
 type ListFilter = "medewerkers" | "partners";
@@ -73,6 +74,7 @@ export function InstellingenPanel({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [loginAlsId, setLoginAlsId] = useState<string | null>(null);
 
   useEffect(() => {
     if (teamOnly) setFilter("medewerkers");
@@ -346,6 +348,38 @@ export function InstellingenPanel({
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
+    }
+  }
+
+  async function loginAls(a: Adviseur) {
+    setError(null);
+    setOkMsg(null);
+    if (a.actief === false) {
+      setError("Zet de gebruiker eerst op Actief om in te loggen als.");
+      return;
+    }
+    if (!a.email?.trim()) {
+      setError("Gebruiker heeft geen e-mailadres.");
+      return;
+    }
+    setLoginAlsId(a.id);
+    try {
+      const res = await fetch("/api/auth/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adviseur_id: a.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Inloggen als mislukt"
+        );
+      }
+      clearCrmShellCache();
+      window.location.href = "/";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+      setLoginAlsId(null);
     }
   }
 
@@ -708,8 +742,8 @@ export function InstellingenPanel({
             }}
           />
 
-          {selectedAdviseur.email ? (
-            <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
+            {selectedAdviseur.email ? (
               <button
                 type="button"
                 onClick={() => void resendInvite(selectedAdviseur)}
@@ -717,8 +751,29 @@ export function InstellingenPanel({
               >
                 Stuur loginmail
               </button>
-            </div>
-          ) : null}
+            ) : null}
+            <button
+              type="button"
+              disabled={
+                loginAlsId === selectedAdviseur.id ||
+                selectedAdviseur.actief === false ||
+                !selectedAdviseur.email
+              }
+              onClick={() => void loginAls(selectedAdviseur)}
+              className="border border-green bg-green-soft px-4 py-2 text-sm font-semibold text-green-dark hover:bg-green hover:text-white disabled:opacity-50"
+              title={
+                selectedAdviseur.actief === false
+                  ? "Eerst Actief zetten"
+                  : !selectedAdviseur.email
+                    ? "Geen e-mailadres"
+                    : "Bekijk CRM als deze gebruiker"
+              }
+            >
+              {loginAlsId === selectedAdviseur.id
+                ? "Bezig…"
+                : "Login als"}
+            </button>
+          </div>
 
           <div className="border-t border-line pt-5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -1129,13 +1184,15 @@ export function InstellingenPanel({
                 <th>KvK</th>
                 <th>Contract</th>
                 <th>Status</th>
-                <th className="w-10" />
+                <th className="w-28" />
               </tr>
             </thead>
             <tbody>
               {(rows as Adviseur[]).map((a) => {
                 const sales = isSalesRol(a.rol);
                 const kvkOk = Boolean(a.bedrijfsnaam && a.kvk_nummer && a.iban);
+                const canLoginAls =
+                  a.actief !== false && Boolean(a.email?.trim());
                 return (
                   <tr
                     key={a.id}
@@ -1189,8 +1246,35 @@ export function InstellingenPanel({
                         {a.actief !== false ? "Actief" : "Inactief"}
                       </span>
                     </td>
-                    <td className="text-muted">
-                      <PencilIcon />
+                    <td
+                      className="text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={!canLoginAls || loginAlsId === a.id}
+                          onClick={() => void loginAls(a)}
+                          className="border border-green/40 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:bg-green hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            !canLoginAls
+                              ? a.actief === false
+                                ? "Eerst Actief zetten"
+                                : "Geen e-mailadres"
+                              : `Login als ${a.naam}`
+                          }
+                        >
+                          {loginAlsId === a.id ? "…" : "Login als"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openMedewerker(a)}
+                          className="text-muted hover:text-ink"
+                          aria-label={`${a.naam} bewerken`}
+                        >
+                          <PencilIcon />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
