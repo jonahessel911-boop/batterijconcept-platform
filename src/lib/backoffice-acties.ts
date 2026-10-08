@@ -8,6 +8,7 @@ import { annuleringsNotitieFromAfspraak } from "@/lib/bel-queue";
 import {
   defaultSchouwWeekAfterSale,
   formatSchouwWeekLabel,
+  isSchouwdagDefinitief,
   schouwWeekOffsetVoorSale,
   type SchouwWeek,
 } from "@/lib/schouw-week";
@@ -582,6 +583,19 @@ export function openVolgendeStapActies(
     const stap = resolveProjectVolgendeStap(project, now);
     if (!stap) continue;
 
+    // Feiten winnen: geen “inplannen”-actie als de datum al staat.
+    if (
+      project.installatie_at &&
+      /installatiedatum inplannen|installatie inplannen/i.test(stap.titel)
+    ) {
+      continue;
+    }
+    if (
+      isSchouwdagDefinitief(project) &&
+      /schouwdag inplannen/i.test(stap.titel)
+    ) {
+      continue;
+    }
     if (
       project.installatie_at &&
       materiaalNogTeBestellen(project) &&

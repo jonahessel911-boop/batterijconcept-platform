@@ -270,6 +270,66 @@ function volgendeStapVanTaak(
   };
 }
 
+/** Pipeline-rang zodat feiten (installatie_at) achtergebleven status inhalen. */
+const OP_RANK: ProjectStatusKey[] = [
+  "schouwweek_inplannen",
+  "schouwdag_ingepland",
+  "schouw_voltooid",
+  "restfactuur_verstuurd",
+  "restfactuur_betaald",
+  "materiaal_besteld",
+  "installatie_ingepland",
+  "installatie_voltooid",
+  "review_gevraagd",
+];
+
+function opRank(status: ProjectStatusKey): number {
+  const i = OP_RANK.indexOf(status);
+  return i >= 0 ? i : -1;
+}
+
+type EffectiveStatusProject = {
+  status: string;
+  installatie_at?: string | null;
+  installatie_voltooid_at?: string | null;
+  schouw_jaar?: number | null;
+  schouw_week?: number | null;
+  schouw_at?: string | null;
+};
+
+/**
+ * Effectieve status voor “volgende stap”: datumvelden winnen van vastgelopen status.
+ * Voorbeeld: installatie_at gezet maar status nog materiaal_besteld → behandel als ingepland.
+ */
+export function effectiveOperationalStatus(
+  project: EffectiveStatusProject
+): ProjectStatusKey {
+  let status = toOperationalStatus(project.status);
+  if (
+    status === "annulering" ||
+    status === "service" ||
+    status === "hold_sales_actie"
+  ) {
+    return status;
+  }
+
+  if (project.installatie_voltooid_at) {
+    const min: ProjectStatusKey = "installatie_voltooid";
+    if (opRank(status) < opRank(min)) status = min;
+  } else if (project.installatie_at) {
+    const min: ProjectStatusKey = "installatie_ingepland";
+    if (opRank(status) < opRank(min)) status = min;
+  } else if (isSchouwdagDefinitief(project)) {
+    const min: ProjectStatusKey = "schouwdag_ingepland";
+    if (opRank(status) < opRank(min) && status === "schouwweek_inplannen") {
+      // Alleen bump binnen opstart — verdere pipeline blijft via expliciete status
+      status = min;
+    }
+  }
+
+  return status;
+}
+
 /**
  * Bepaal de volgende operationele stap (niet financiering — die loopt parallel).
  */
@@ -279,7 +339,7 @@ export function resolveProjectVolgendeStap(
 ): ProjectVolgendeStapInfo | null {
   if (project.status === "annulering") return null;
 
-  const status = toOperationalStatus(project.status);
+  const status = effectiveOperationalStatus(project);
   const betaalwijze = betaalwijzeVanProject(project);
 
   if (status === "schouwweek_inplannen") {

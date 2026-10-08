@@ -171,6 +171,12 @@ export function ServiceVerzoekenPanel() {
       setError("Kies een installatiepartner");
       return;
     }
+    if (!planNotes.trim()) {
+      setError(
+        "Notitie is verplicht bij inplannen — de installateur ziet dit op de afspraak"
+      );
+      return;
+    }
     const parsed = new Date(planAt);
     if (Number.isNaN(parsed.getTime())) {
       setError("Ongeldige datum");
@@ -186,7 +192,7 @@ export function ServiceVerzoekenPanel() {
         body: JSON.stringify({
           service_at: parsed.toISOString(),
           installatie_partner_id: planPartnerId,
-          service_notities: planNotes.trim() || null,
+          service_notities: planNotes.trim(),
           service_verzoek_id: v.id,
         }),
       });
@@ -760,20 +766,26 @@ function DetailPanel({
                 </div>
                 <label className="block">
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Werkbon voor monteur
+                    Notitie voor installateur *
                   </span>
                   <textarea
                     value={planNotes}
                     onChange={(e) => setPlanNotes(e.target.value)}
-                    rows={2}
-                    placeholder="Wat moet de monteur doen…"
+                    rows={3}
+                    required
+                    placeholder="Wat moet de monteur doen / weten bij deze service…"
                     className="mt-1.5 w-full resize-y border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
                   />
+                  <span className="mt-1 block text-[11px] text-muted">
+                    Verplicht — zichtbaar op de service-afspraak in de agenda.
+                  </span>
                 </label>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    disabled={busy || !planAt || !planPartnerId}
+                    disabled={
+                      busy || !planAt || !planPartnerId || !planNotes.trim()
+                    }
                     onClick={onPlan}
                     className="flex-1 bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#9A4510] disabled:opacity-50"
                   >

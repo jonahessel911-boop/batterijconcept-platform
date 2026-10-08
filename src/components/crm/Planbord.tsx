@@ -21,7 +21,11 @@ import {
 } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import type { InstallatiePartner, Project } from "@/types/database";
+import type {
+  InstallatiePartner,
+  Project,
+  ServiceVerzoek,
+} from "@/types/database";
 import {
   AMSTERDAM_TZ,
   adresRegel,
@@ -711,13 +715,18 @@ function PlanInplannenPanel({
         );
       }
       if (soort === "service") {
+        if (!notities.trim()) {
+          throw new Error(
+            "Notitie is verplicht bij inplannen van een service-afspraak"
+          );
+        }
         const res = await fetch(`/api/projecten/${selected.id}/service`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             service_at: parsed.toISOString(),
             installatie_partner_id: partnerId,
-            service_notities: notities.trim() || null,
+            service_notities: notities.trim(),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -945,15 +954,32 @@ function PlanInplannenPanel({
                 </select>
               </label>
 
-              <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                Label / notities
-                <input
-                  value={notities}
-                  onChange={(e) => setNotities(e.target.value)}
-                  placeholder="Optioneel"
-                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
-                />
-              </label>
+              {soort === "service" ? (
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Notitie voor installateur *
+                  <textarea
+                    value={notities}
+                    onChange={(e) => setNotities(e.target.value)}
+                    required
+                    rows={3}
+                    placeholder="Wat moet de monteur doen / weten bij deze service…"
+                    className="mt-1.5 w-full resize-y border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                  />
+                  <span className="mt-1 block text-[11px] font-normal normal-case tracking-normal text-muted">
+                    Verplicht — zichtbaar op de service-afspraak in de agenda.
+                  </span>
+                </label>
+              ) : (
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Label / notities
+                  <input
+                    value={notities}
+                    onChange={(e) => setNotities(e.target.value)}
+                    placeholder="Optioneel"
+                    className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                  />
+                </label>
+              )}
 
               {error ? (
                 <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
@@ -1028,7 +1054,11 @@ function PlanInplannenPanel({
             </button>
             <button
               type="submit"
-              disabled={busy || !selected}
+              disabled={
+                busy ||
+                !selected ||
+                (soort === "service" && !notities.trim())
+              }
               className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
             >
               {busy ? "Bezig…" : "Opslaan"}
@@ -1491,11 +1521,19 @@ function AgendaItemSidebar({
   const email = lead?.email?.trim() || null;
   const adresLines = leadAdresLines(lead);
   const status = normalizeProjectStatus(project.status);
+  const SERVICE_AFROND_MARKER = "— Afronding —";
+  const rawServiceNotities = project.service_notities?.trim() || "";
+  const serviceWerkbon = rawServiceNotities
+    ? rawServiceNotities.split(SERVICE_AFROND_MARKER)[0].trim()
+    : "";
+  const serviceAfrondBestaand = rawServiceNotities.includes(SERVICE_AFROND_MARKER)
+    ? rawServiceNotities.split(SERVICE_AFROND_MARKER).slice(1).join(SERVICE_AFROND_MARKER).trim()
+    : "";
   const notities =
     bar.kind === "installatie"
       ? project.installatie_notities?.trim()
       : bar.kind === "service"
-        ? project.service_notities?.trim()
+        ? serviceWerkbon || null
         : bar.kind === "levering"
           ? null
           : project.schouw_notities?.trim();
@@ -1517,10 +1555,18 @@ function AgendaItemSidebar({
   const [uploadOk, setUploadOk] = useState<string | null>(null);
   const [orderBetaald, setOrderBetaald] = useState<boolean | null>(null);
   const [betaaldLoading, setBetaaldLoading] = useState(true);
-  const [noteDraft, setNoteDraft] = useState(notities || "");
+  const [noteDraft, setNoteDraft] = useState(
+    bar.kind === "service" ? serviceAfrondBestaand : notities || ""
+  );
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
   const [serviceDoneLocal, setServiceDoneLocal] = useState(false);
+  const [serviceVerzoeken, setServiceVerzoeken] = useState<
+    Pick<
+      ServiceVerzoek,
+      "id" | "onderwerp" | "omschrijving" | "interne_notitie" | "status"
+    >[]
+  >([]);
 
   useEffect(() => {
     setLocalDoc(schouwDoc);
@@ -1531,16 +1577,19 @@ function AgendaItemSidebar({
   }, [opleveringDoc, bar.key]);
 
   useEffect(() => {
-    setNoteDraft(notities || "");
+    setNoteDraft(
+      bar.kind === "service" ? serviceAfrondBestaand : notities || ""
+    );
     setNoteMsg(null);
     setServiceDoneLocal(false);
     setUploadError(null);
     setUploadOk(null);
-  }, [notities, bar.key]);
+  }, [notities, serviceAfrondBestaand, bar.key, bar.kind]);
 
   useEffect(() => {
     if (!showService) {
       setServiceFotos([]);
+      setServiceVerzoeken([]);
       return;
     }
     let cancelled = false;
@@ -1566,6 +1615,33 @@ function AgendaItemSidebar({
         );
       } catch {
         /* ignore */
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/service-verzoeken?project_id=${encodeURIComponent(project.id)}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const list = (data.verzoeken || []) as ServiceVerzoek[];
+        // Open eerst; anders recentste afgehandelde (na afronden nog zichtbaar).
+        const open = list.filter((v) => v.status === "open");
+        const shown =
+          open.length > 0
+            ? open
+            : list.slice(0, 1);
+        setServiceVerzoeken(
+          shown.map((v) => ({
+            id: v.id,
+            onderwerp: v.onderwerp,
+            omschrijving: v.omschrijving,
+            interne_notitie: v.interne_notitie,
+            status: v.status,
+          }))
+        );
+      } catch {
+        if (!cancelled) setServiceVerzoeken([]);
       }
     })();
     return () => {
@@ -1641,8 +1717,9 @@ function AgendaItemSidebar({
   const serviceAfgerond =
     serviceDoneLocal ||
     (Boolean(project.service_at) &&
-      Boolean(project.service_notities?.trim()) &&
-      opStatus !== "service");
+      (Boolean(serviceAfrondBestaand) ||
+        (Boolean(project.service_notities?.trim()) &&
+          opStatus !== "service")));
   const orderVolledigBetaald = orderBetaald === true;
   const notesEndpoint =
     notesPatchUrl ||
@@ -2129,8 +2206,44 @@ function AgendaItemSidebar({
                     </p>
                   )}
 
+                  {serviceVerzoeken.map((v) => {
+                    const klant =
+                      [v.onderwerp?.trim(), v.omschrijving?.trim()]
+                        .filter(Boolean)
+                        .join("\n\n") || null;
+                    if (!klant) return null;
+                    return (
+                      <div
+                        key={v.id}
+                        className="border border-line bg-[#FAFBFA] px-3 py-2.5"
+                      >
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                          Melding van de klant
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                          {klant}
+                        </p>
+                      </div>
+                    );
+                  })}
+
+                  {serviceWerkbon ? (
+                    <div className="border border-[#FDBA74]/60 bg-[#FFF7ED] px-3 py-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[#9A4510]">
+                        Notitie van backoffice
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                        {serviceWerkbon}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[#C45A12]">
+                      Geen notitie van backoffice op deze afspraak.
+                    </p>
+                  )}
+
                   <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
-                    Notitie bij service *
+                    Notitie bij afronden *
                     <textarea
                       value={noteDraft}
                       onChange={(e) => setNoteDraft(e.target.value)}

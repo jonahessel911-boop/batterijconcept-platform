@@ -43,6 +43,17 @@ export async function POST(
     );
   }
 
+  const serviceNotities = body.service_notities?.trim() || "";
+  if (!serviceNotities) {
+    return NextResponse.json(
+      {
+        error:
+          "Notitie is verplicht bij inplannen van een service-afspraak (voor de installateur)",
+      },
+      { status: 400 }
+    );
+  }
+
   try {
     const sb = getSupabaseAdmin();
 
@@ -80,8 +91,6 @@ export async function POST(
         { status: 404 }
       );
     }
-
-    const serviceNotities = body.service_notities?.trim() || null;
     const whenIso = serviceAt.toISOString();
 
     const patch: Record<string, unknown> = {
@@ -273,7 +282,7 @@ export async function PATCH(
     const sb = getSupabaseAdmin();
     const { data: project, error: projErr } = await sb
       .from("projecten")
-      .select("id, lead_id, project_nummer, service_at, status")
+      .select("id, lead_id, project_nummer, service_at, service_notities, status")
       .eq("id", id)
       .single();
 
@@ -291,9 +300,17 @@ export async function PATCH(
       );
     }
 
+    // Bewaar werkbon van backoffice; afrondnotitie monteur eronder.
+    const AFROND = "— Afronding —";
+    const prev = String(project.service_notities || "").trim();
+    const werkbon = prev.split(AFROND)[0].trim();
+    const combined = werkbon
+      ? `${werkbon}\n\n${AFROND}\n${notitie}`
+      : notitie;
+
     const { data: updated, error: updateErr } = await sb
       .from("projecten")
-      .update({ service_notities: notitie })
+      .update({ service_notities: combined })
       .eq("id", id)
       .select(
         "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"

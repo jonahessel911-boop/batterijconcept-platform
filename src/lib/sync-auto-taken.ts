@@ -13,9 +13,9 @@ import {
 import {
   remapLegacyProjectStatus,
   resolveBetaalwijze,
-  toOperationalStatus,
   type Betaalwijze,
 } from "@/lib/project-status-config";
+import { effectiveOperationalStatus } from "@/lib/project-volgende-stap";
 import {
   resolveFinancieringStatus,
   type FinancieringStatus,
@@ -39,6 +39,7 @@ type ProjectSchouwFields = {
   schouw_week?: number | null;
   schouw_at?: string | null;
   installatie_at?: string | null;
+  installatie_voltooid_at?: string | null;
   leads?: { status?: string | null } | { status?: string | null }[] | null;
   offertes?: {
     financiering_voorbehoud?: boolean | null;
@@ -153,7 +154,7 @@ export async function syncAutoTakenVoorProject(
   };
 
   const betaalwijze = betaalwijzeOf(project);
-  const operational = toOperationalStatus(status);
+  const operational = effectiveOperationalStatus(project);
   const defs: (AutoTaakDef & { dueAt?: string | null })[] = autoTakenVoorStatus(
     operational,
     betaalwijze,
