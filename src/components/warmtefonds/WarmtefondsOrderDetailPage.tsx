@@ -48,6 +48,31 @@ type LeadEvent = {
   created_at: string;
 };
 
+const inputCls =
+  "mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green";
+
+function Field({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <label
+      className={[
+        "block text-[10px] font-semibold uppercase tracking-wide text-muted",
+        className || "",
+      ].join(" ")}
+    >
+      {label}
+      {children}
+    </label>
+  );
+}
+
 function leadOf(o: OrderDetail): LeadLite | null {
   if (!o.leads) return null;
   return Array.isArray(o.leads) ? o.leads[0] || null : o.leads;
@@ -58,7 +83,6 @@ function toLocalInputValue(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
-  // datetime-local in local browser TZ
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
@@ -197,7 +221,7 @@ export function WarmtefondsOrderDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-wash">
+      <div className="crm-bg flex min-h-screen items-center justify-center">
         <p className="text-sm text-muted">Aanvraag laden…</p>
       </div>
     );
@@ -205,14 +229,14 @@ export function WarmtefondsOrderDetailPage() {
 
   if (error && !order) {
     return (
-      <div className="min-h-screen bg-wash px-4 py-16">
-        <div className="mx-auto max-w-3xl">
+      <div className="crm-bg min-h-screen px-4 py-10 sm:px-6">
+        <div className="mx-auto max-w-[900px]">
           <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
             {error}
           </p>
           <Link
             href={`/warmtefonds/${token}`}
-            className="mt-4 inline-block text-sm font-semibold text-green-dark hover:underline"
+            className="mt-4 inline-block text-xs font-semibold text-green hover:underline"
           >
             ← Terug naar overzicht
           </Link>
@@ -229,53 +253,65 @@ export function WarmtefondsOrderDetailPage() {
     : order.offertes;
 
   return (
-    <div className="min-h-screen bg-wash">
-      <header className="border-b border-line bg-green-dark px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-3xl">
-          <Link
-            href={`/warmtefonds/${token}`}
-            className="text-sm font-medium text-white/70 hover:text-white"
-          >
-            ← Overzicht
-          </Link>
-          <h1 className="mt-2 font-display text-xl font-semibold text-white sm:text-2xl">
-            {lead?.naam || order.titel || "Warmtefonds-aanvraag"}
-          </h1>
-          <p className="mt-1 text-sm text-white/70">
+    <div className="crm-bg flex min-h-screen flex-col pb-8">
+      <header className="sticky top-0 z-40 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex h-14 w-full max-w-[900px] items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="min-w-0">
+            <Link
+              href={`/warmtefonds/${token}`}
+              className="text-[11px] font-semibold text-white/70 hover:text-white"
+            >
+              ← Overzicht
+            </Link>
+            <h1 className="truncate font-display text-sm font-semibold text-white">
+              {lead?.naam || order.titel || "Warmtefonds-aanvraag"}
+            </h1>
+          </div>
+          <p className="shrink-0 text-[11px] text-white/55">
             {order.project_nummer}
-            {off?.offerte_nummer ? ` · ${off.offerte_nummer}` : ""}
           </p>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 sm:px-6">
-        {okMsg ? (
-          <p className="border border-[#0D9488]/25 bg-[#F0FDFA] px-4 py-2 text-sm text-[#115E59]">
-            {okMsg}
-          </p>
-        ) : null}
-        {error ? (
-          <p className="border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-            {error}
-          </p>
-        ) : null}
+      <main className="mx-auto w-full max-w-[900px] space-y-4 px-4 py-5 sm:px-6">
+        {(error || okMsg) && (
+          <div className="space-y-2">
+            {error ? (
+              <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+                {error}
+              </p>
+            ) : null}
+            {okMsg ? (
+              <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+                {okMsg}
+              </p>
+            ) : null}
+          </div>
+        )}
 
-        <section className="rounded-xl border border-line bg-white p-4 sm:p-5">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Klant
-          </h2>
-          <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Naam
-              </dt>
-              <dd className="mt-0.5 text-ink">{lead?.naam || "—"}</dd>
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-3 sm:px-5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink">
+                  {lead?.naam || order.titel || "Klant"}
+                </h2>
+                <p className="mt-0.5 text-sm text-muted">
+                  {order.project_nummer}
+                  {off?.offerte_nummer ? ` · ${off.offerte_nummer}` : ""}
+                </p>
+              </div>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-green-dark">
+                {wfPortalStatusLabel(order.financiering_status)}
+              </span>
             </div>
+          </div>
+          <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
             <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                 Telefoon
-              </dt>
-              <dd className="mt-0.5 text-ink">
+              </p>
+              <p className="mt-0.5 text-sm text-ink">
                 {lead?.telefoon ? (
                   <a
                     href={`tel:${lead.telefoon.replace(/\s/g, "")}`}
@@ -286,175 +322,194 @@ export function WarmtefondsOrderDetailPage() {
                 ) : (
                   "—"
                 )}
-              </dd>
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                E-mail
+              </p>
+              <p className="mt-0.5 text-sm text-ink">{lead?.email || "—"}</p>
             </div>
             <div className="sm:col-span-2">
-              <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                 Adres
-              </dt>
-              <dd className="mt-0.5 text-ink">
+              </p>
+              <p className="mt-0.5 text-sm text-ink">
                 {lead ? adresRegel(lead) || "—" : "—"}
-              </dd>
+              </p>
             </div>
-            {lead?.email ? (
-              <div className="sm:col-span-2">
-                <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  E-mail
-                </dt>
-                <dd className="mt-0.5 text-ink">{lead.email}</dd>
+            {lead?.notities ? (
+              <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-2.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Klantnotities (CRM)
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
+                  {lead.notities}
+                </p>
               </div>
             ) : null}
-          </dl>
-          {lead?.notities ? (
-            <div className="mt-4 rounded-lg border border-line bg-[#FAFCFA] px-3 py-2.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                Klantnotities (CRM)
-              </p>
-              <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
-                {lead.notities}
-              </p>
-            </div>
-          ) : null}
+          </div>
         </section>
 
-        <section className="rounded-xl border border-line bg-white p-4 sm:p-5">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Status Warmtefonds
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Huidig:{" "}
-            <strong className="text-ink">
-              {wfPortalStatusLabel(order.financiering_status)}
-            </strong>
-          </p>
-          <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted">
-            Nieuwe status
-            <select
-              value={status}
-              onChange={(e) =>
-                setStatus(e.target.value as FinancieringStatus)
-              }
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-            >
-              {wfPortalStatusOptions().map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            disabled={busy === "status"}
-            onClick={() => void saveStatus()}
-            className="mt-3 bg-green-dark px-4 py-2 text-sm font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-          >
-            {busy === "status" ? "Bezig…" : "Status opslaan"}
-          </button>
-        </section>
-
-        <section className="rounded-xl border border-line bg-white p-4 sm:p-5">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Afspraak
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Datum/tijd voor de Warmtefonds-aanvraagafspraak (zichtbaar in je
-            agenda).
-          </p>
-          <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted">
-            Datum &amp; tijd
-            <input
-              type="datetime-local"
-              value={afspraakLocal}
-              onChange={(e) => setAfspraakLocal(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-            />
-          </label>
-          {order.warmtefonds_afspraak_at ? (
-            <p className="mt-2 text-xs text-muted">
-              Nu gezet: {formatDateTimeNl(order.warmtefonds_afspraak_at)}
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-3 sm:px-5">
+            <h2 className="font-display text-base font-semibold text-ink">
+              Status Warmtefonds
+            </h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Huidig: {wfPortalStatusLabel(order.financiering_status)}
             </p>
-          ) : null}
-          <button
-            type="button"
-            disabled={busy === "afspraak"}
-            onClick={() => void saveAfspraak()}
-            className="mt-3 bg-green-dark px-4 py-2 text-sm font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-          >
-            {busy === "afspraak" ? "Bezig…" : "Afspraak opslaan"}
-          </button>
-        </section>
-
-        <section className="rounded-xl border border-line bg-white p-4 sm:p-5">
-          <h2 className="font-display text-base font-semibold text-ink">
-            Notities bij deze klant
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Vaste notities voor deze Warmtefonds-order + korte updates op de
-            tijdlijn.
-          </p>
-          <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted">
-            Warmtefonds-notities
-            <textarea
-              value={wfNotities}
-              onChange={(e) => setWfNotities(e.target.value)}
-              rows={4}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-              placeholder="Bijv. documenten ontvangen, bijzonderheden…"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={busy === "notities"}
-            onClick={() => void saveNotities()}
-            className="mt-3 bg-green-dark px-4 py-2 text-sm font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-          >
-            {busy === "notities" ? "Bezig…" : "Notities opslaan"}
-          </button>
-
-          <div className="mt-6 border-t border-line pt-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-              Nieuwe notitie (tijdlijn)
-            </p>
-            <textarea
-              value={nieuweNotitie}
-              onChange={(e) => setNieuweNotitie(e.target.value)}
-              rows={2}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-              placeholder="Korte update…"
-            />
+          </div>
+          <div className="space-y-3 p-4 sm:p-5">
+            <Field label="Nieuwe status">
+              <select
+                value={status}
+                onChange={(e) =>
+                  setStatus(e.target.value as FinancieringStatus)
+                }
+                className={inputCls}
+              >
+                {wfPortalStatusOptions().map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <button
               type="button"
-              disabled={busy === "notitie" || !nieuweNotitie.trim()}
-              onClick={() => void addNotitie()}
-              className="mt-2 border border-green-dark px-4 py-2 text-sm font-semibold text-green-dark hover:bg-[#F4F8F5] disabled:opacity-60"
+              disabled={busy === "status"}
+              onClick={() => void saveStatus()}
+              className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
-              {busy === "notitie" ? "Bezig…" : "Notitie toevoegen"}
+              {busy === "status" ? "Bezig…" : "Status opslaan"}
             </button>
           </div>
+        </section>
 
-          {events.length > 0 ? (
-            <ul className="mt-5 space-y-2">
-              {events.map((ev) => (
-                <li
-                  key={ev.id}
-                  className="rounded-lg border border-line bg-[#FAFCFA] px-3 py-2"
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-3 sm:px-5">
+            <h2 className="font-display text-base font-semibold text-ink">
+              Afspraak
+            </h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Datum/tijd voor de Warmtefonds-aanvraagafspraak
+            </p>
+          </div>
+          <div className="space-y-3 p-4 sm:p-5">
+            <Field label="Datum & tijd">
+              <input
+                type="datetime-local"
+                value={afspraakLocal}
+                onChange={(e) => setAfspraakLocal(e.target.value)}
+                className={inputCls}
+              />
+            </Field>
+            {order.warmtefonds_afspraak_at ? (
+              <p className="text-xs text-muted">
+                Nu gezet: {formatDateTimeNl(order.warmtefonds_afspraak_at)}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy === "afspraak"}
+                onClick={() => void saveAfspraak()}
+                className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              >
+                {busy === "afspraak" ? "Bezig…" : "Afspraak opslaan"}
+              </button>
+              {afspraakLocal ? (
+                <button
+                  type="button"
+                  disabled={busy === "afspraak"}
+                  onClick={() => {
+                    setAfspraakLocal("");
+                    void patch(
+                      { warmtefonds_afspraak_at: null },
+                      "afspraak",
+                      "Afspraak gewist."
+                    );
+                  }}
+                  className="border border-line bg-white px-4 py-2.5 text-sm font-medium hover:bg-wash disabled:opacity-60"
                 >
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <p className="text-sm font-semibold text-ink">{ev.titel}</p>
-                    <p className="text-[11px] text-muted">
-                      {formatDateTimeNl(ev.created_at)}
-                    </p>
-                  </div>
-                  {ev.detail ? (
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-muted">
-                      {ev.detail}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+                  Wissen
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="border border-line bg-white">
+          <div className="border-b border-line px-4 py-3 sm:px-5">
+            <h2 className="font-display text-base font-semibold text-ink">
+              Notities
+            </h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Vaste notities bij deze order + updates op de tijdlijn
+            </p>
+          </div>
+          <div className="space-y-4 p-4 sm:p-5">
+            <Field label="Warmtefonds-notities">
+              <textarea
+                value={wfNotities}
+                onChange={(e) => setWfNotities(e.target.value)}
+                rows={4}
+                className={inputCls}
+                placeholder="Bijv. documenten ontvangen, bijzonderheden…"
+              />
+            </Field>
+            <button
+              type="button"
+              disabled={busy === "notities"}
+              onClick={() => void saveNotities()}
+              className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+            >
+              {busy === "notities" ? "Bezig…" : "Notities opslaan"}
+            </button>
+
+            <div className="border-t border-line pt-4">
+              <Field label="Nieuwe notitie (tijdlijn)">
+                <textarea
+                  value={nieuweNotitie}
+                  onChange={(e) => setNieuweNotitie(e.target.value)}
+                  rows={2}
+                  className={inputCls}
+                  placeholder="Korte update…"
+                />
+              </Field>
+              <button
+                type="button"
+                disabled={busy === "notitie" || !nieuweNotitie.trim()}
+                onClick={() => void addNotitie()}
+                className="mt-2 border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash disabled:opacity-60"
+              >
+                {busy === "notitie" ? "Bezig…" : "Notitie toevoegen"}
+              </button>
+            </div>
+
+            {events.length > 0 ? (
+              <ul className="space-y-2 border-t border-line pt-4">
+                {events.map((ev) => (
+                  <li key={ev.id} className="border border-line bg-wash/40 px-3 py-2">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-semibold text-ink">
+                        {ev.titel}
+                      </p>
+                      <p className="text-[11px] text-muted">
+                        {formatDateTimeNl(ev.created_at)}
+                      </p>
+                    </div>
+                    {ev.detail ? (
+                      <p className="mt-1 whitespace-pre-wrap text-sm text-muted">
+                        {ev.detail}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         </section>
       </main>
     </div>

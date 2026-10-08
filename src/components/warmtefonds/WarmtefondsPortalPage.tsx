@@ -1,12 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import {
-  wfPortalStatusLabel,
-} from "@/lib/warmtefonds-portal";
+import { wfPortalStatusLabel } from "@/lib/warmtefonds-portal";
 
 type LeadLite = {
   naam?: string | null;
@@ -41,15 +38,15 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   const label = wfPortalStatusLabel(status);
   const tone =
     status === "afgewezen"
-      ? "bg-red-50 text-red-800 border-red-200"
+      ? "text-[#C45A12]"
       : status === "uitbetaald" || status === "aanvraag_goedgekeurd"
-        ? "bg-[#E8F5EE] text-[#0D5C32] border-[#B7D9C4]"
+        ? "text-green-dark"
         : status === "afspraak_ingepland" || status === "aanvraag_gedaan"
-          ? "bg-[#FFF4E8] text-[#C45A12] border-[#FDBA74]"
-          : "bg-[#F4F8F5] text-[#5A6B60] border-[#D8E4DC]";
+          ? "text-[#C45A12]"
+          : "text-muted";
   return (
     <span
-      className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
+      className={`text-[11px] font-semibold uppercase tracking-wide ${tone}`}
     >
       {label}
     </span>
@@ -58,7 +55,8 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
 
 export function WarmtefondsPortalPage() {
   const { token } = useParams<{ token: string }>();
-  const [tab, setTab] = useState<TabId>("agenda");
+  const router = useRouter();
+  const [tab, setTab] = useState<TabId>("aanvragen");
   const [operatorNaam, setOperatorNaam] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -111,173 +109,217 @@ export function WarmtefondsPortalPage() {
     });
   }, [orders]);
 
+  const openCount = openQueue.filter(
+    (o) =>
+      !o.financiering_status ||
+      o.financiering_status === "doorgestuurd_naar_edwin" ||
+      o.financiering_status === "afspraak_ingepland" ||
+      o.financiering_status === "aanvraag_gedaan"
+  ).length;
+
   return (
-    <div className="min-h-screen bg-wash">
-      <header className="border-b border-line bg-green-dark px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-5xl">
-          <p className="font-display text-lg font-bold text-white">
-            Batterij<span className="text-orange">concept</span>
-          </p>
-          <h1 className="mt-2 font-display text-xl font-semibold text-white sm:text-2xl">
-            Warmtefonds-portaal
-          </h1>
-          {operatorNaam ? (
-            <p className="mt-1 text-sm text-white/70">{operatorNaam}</p>
-          ) : null}
+    <div className="crm-bg flex min-h-screen flex-col">
+      <header className="sticky top-0 z-40 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex h-14 w-full max-w-[1200px] items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="min-w-0">
+            <p className="font-display text-sm font-bold text-white">
+              Batterij<span className="text-orange">concept</span>
+              <span className="ml-2 text-xs font-medium text-white/60">
+                Warmtefonds
+              </span>
+            </p>
+            {operatorNaam ? (
+              <p className="truncate text-[11px] text-white/55">
+                {operatorNaam}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="shrink-0 border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/15 disabled:opacity-50"
+          >
+            {loading ? "…" : "Vernieuwen"}
+          </button>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mb-5 flex border border-line bg-white p-0.5">
-          {(
-            [
-              { id: "agenda", label: "Agenda" },
-              { id: "aanvragen", label: "Aanvragen" },
-            ] as const
-          ).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={`flex-1 px-3 py-2.5 text-sm font-semibold transition ${
-                tab === t.id
-                  ? "bg-green-dark text-white"
-                  : "bg-transparent text-muted hover:text-ink"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+      <main className="mx-auto w-full max-w-[1200px] flex-1 px-4 py-5 sm:px-6 sm:py-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex border border-line p-0.5">
+              {(
+                [
+                  { id: "aanvragen" as const, label: "Aanvragen" },
+                  { id: "agenda" as const, label: "Agenda" },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  className={[
+                    "px-3 py-1.5 text-xs font-semibold",
+                    tab === t.id
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted">
+              {tab === "aanvragen"
+                ? `${orders.length} aanvraag${orders.length === 1 ? "" : "en"} · ${openCount} open`
+                : `${agendaItems.length} afspraak${agendaItems.length === 1 ? "" : "en"}`}
+            </p>
+          </div>
         </div>
 
         {error ? (
-          <p className="mb-4 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
             {error}
           </p>
         ) : null}
 
         {loading ? (
-          <p className="py-12 text-center text-sm text-muted">Laden…</p>
+          <p className="border border-line bg-white px-5 py-14 text-center text-sm text-muted">
+            Laden…
+          </p>
         ) : tab === "agenda" ? (
-          <section>
-            <h2 className="font-display text-lg font-semibold text-ink">
-              Warmtefonds-afspraken
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Afspraken die je hebt ingepland bij klanten.
-            </p>
-            {agendaItems.length === 0 ? (
-              <p className="mt-6 rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
-                Nog geen afspraken gezet. Open een aanvraag om een datum in te
-                plannen.
+          <section className="border border-line bg-white">
+            <div className="border-b border-line px-4 py-3 sm:px-5">
+              <h2 className="font-display text-base font-semibold text-ink">
+                Warmtefonds-afspraken
+              </h2>
+              <p className="mt-0.5 text-xs text-muted">
+                Afspraken die je hebt ingepland bij klanten
               </p>
+            </div>
+            {agendaItems.length === 0 ? (
+              <div className="px-5 py-14 text-center">
+                <p className="font-display text-base font-semibold text-ink">
+                  Nog geen afspraken
+                </p>
+                <p className="mt-1 text-sm text-muted">
+                  Open een aanvraag om een datum in te plannen.
+                </p>
+              </div>
             ) : (
-              <ul className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-white">
-                {agendaItems.map((o) => {
-                  const lead = leadOf(o);
-                  const at = o.warmtefonds_afspraak_at!;
-                  const d = new Date(at);
-                  const day = new Intl.DateTimeFormat("nl-NL", {
-                    day: "numeric",
-                    timeZone: "Europe/Amsterdam",
-                  }).format(d);
-                  const month = new Intl.DateTimeFormat("nl-NL", {
-                    month: "short",
-                    timeZone: "Europe/Amsterdam",
-                  }).format(d);
-                  const weekday = new Intl.DateTimeFormat("nl-NL", {
-                    weekday: "short",
-                    timeZone: "Europe/Amsterdam",
-                  }).format(d);
-                  const time = new Intl.DateTimeFormat("nl-NL", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "Europe/Amsterdam",
-                  }).format(d);
-                  return (
-                    <li key={o.id}>
-                      <Link
-                        href={`/warmtefonds/${token}/orders/${o.id}`}
-                        className="flex gap-0 hover:bg-[#FAFCFA]"
-                      >
-                        <div className="flex w-[4.5rem] shrink-0 flex-col items-center justify-center border-r border-line bg-[#FAFCFA] px-2 py-4 text-center">
-                          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                            {month}
-                          </span>
-                          <span className="font-display text-2xl font-semibold leading-none text-green-dark">
-                            {day}
-                          </span>
-                          <span className="mt-1 text-[10px] capitalize text-muted">
-                            {weekday}
-                          </span>
-                        </div>
-                        <div className="min-w-0 flex-1 px-4 py-4">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold text-ink">
-                              {lead?.naam || o.titel || o.project_nummer}
-                            </p>
+              <div className="overflow-x-auto">
+                <table className="crm-table w-full">
+                  <thead>
+                    <tr>
+                      <th>Wanneer</th>
+                      <th>Klant</th>
+                      <th>Project</th>
+                      <th>Adres</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agendaItems.map((o) => {
+                      const lead = leadOf(o);
+                      const href = `/warmtefonds/${token}/orders/${o.id}`;
+                      return (
+                        <tr
+                          key={o.id}
+                          onClick={() => router.push(href)}
+                        >
+                          <td className="font-semibold text-ink">
+                            {formatDateTimeNl(o.warmtefonds_afspraak_at)}
+                          </td>
+                          <td className="font-medium text-ink">
+                            {lead?.naam || o.titel || "—"}
+                          </td>
+                          <td className="text-muted">{o.project_nummer}</td>
+                          <td className="text-muted">
+                            {lead ? adresRegel(lead) || "—" : "—"}
+                          </td>
+                          <td>
                             <StatusBadge status={o.financiering_status} />
-                          </div>
-                          <p className="mt-1 text-sm font-medium text-green-dark">
-                            {time}
-                          </p>
-                          <p className="mt-0.5 text-xs text-muted">
-                            {o.project_nummer}
-                            {lead
-                              ? ` · ${adresRegel(lead) || "geen adres"}`
-                              : ""}
-                          </p>
-                          <p className="mt-1 text-xs text-muted">
-                            {formatDateTimeNl(at)}
-                          </p>
-                        </div>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         ) : (
-          <section>
-            <h2 className="font-display text-lg font-semibold text-ink">
-              Alle Warmtefonds-aanvragen
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              {orders.length} openstaande / lopende orders
-            </p>
-            {openQueue.length === 0 ? (
-              <p className="mt-6 rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
-                Geen Warmtefonds-aanvragen gevonden.
+          <section className="border border-line bg-white">
+            <div className="border-b border-line px-4 py-3 sm:px-5">
+              <h2 className="font-display text-base font-semibold text-ink">
+                Warmtefonds-aanvragen
+              </h2>
+              <p className="mt-0.5 text-xs text-muted">
+                Alle lopende Warmtefonds-orders
               </p>
+            </div>
+            {openQueue.length === 0 ? (
+              <div className="px-5 py-14 text-center">
+                <p className="font-display text-base font-semibold text-ink">
+                  Geen aanvragen
+                </p>
+                <p className="mt-1 text-sm text-muted">
+                  Er staan nog geen Warmtefonds-orders klaar.
+                </p>
+              </div>
             ) : (
-              <ul className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-white">
-                {openQueue.map((o) => {
-                  const lead = leadOf(o);
-                  return (
-                    <li key={o.id}>
-                      <Link
-                        href={`/warmtefonds/${token}/orders/${o.id}`}
-                        className="block px-4 py-3.5 hover:bg-[#FAFCFA]"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="font-semibold text-ink">
+              <div className="overflow-x-auto">
+                <table className="crm-table w-full">
+                  <thead>
+                    <tr>
+                      <th>Klant</th>
+                      <th>Project</th>
+                      <th>Telefoon</th>
+                      <th>Afspraak</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openQueue.map((o) => {
+                      const lead = leadOf(o);
+                      const href = `/warmtefonds/${token}/orders/${o.id}`;
+                      return (
+                        <tr
+                          key={o.id}
+                          onClick={() => router.push(href)}
+                        >
+                          <td className="font-medium text-ink">
                             {lead?.naam || o.titel || "Klant"}
-                          </p>
-                          <StatusBadge status={o.financiering_status} />
-                        </div>
-                        <p className="mt-1 text-xs text-muted">
-                          {o.project_nummer}
-                          {lead?.telefoon ? ` · ${lead.telefoon}` : ""}
-                          {o.warmtefonds_afspraak_at
-                            ? ` · afspraak ${formatDateTimeNl(o.warmtefonds_afspraak_at)}`
-                            : " · nog geen afspraak"}
-                        </p>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+                          </td>
+                          <td className="text-muted">{o.project_nummer}</td>
+                          <td className="text-muted">
+                            {lead?.telefoon ? (
+                              <a
+                                href={`tel:${lead.telefoon.replace(/\s/g, "")}`}
+                                className="hover:text-green-dark"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {lead.telefoon}
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="text-muted">
+                            {o.warmtefonds_afspraak_at
+                              ? formatDateTimeNl(o.warmtefonds_afspraak_at)
+                              : "—"}
+                          </td>
+                          <td>
+                            <StatusBadge status={o.financiering_status} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         )}
