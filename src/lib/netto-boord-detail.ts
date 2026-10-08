@@ -201,6 +201,19 @@ function statusLabel(status: string): string {
   return projectStatusLabel[st] || status;
 }
 
+/** Tijdlijn is inzicht — installatiepartner niet tonen. */
+export function stripPartnerFromTimelineDetail(
+  detail: string | null | undefined
+): string | null {
+  if (detail == null) return null;
+  const cleaned = detail
+    .split(" · ")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && !/^Partner:\s*/i.test(p))
+    .join(" · ");
+  return cleaned || null;
+}
+
 export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
   const items: NettoTimelineItem[] = [];
 
@@ -236,7 +249,7 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       if (!prev || ev.created_at < prev.created_at) {
         schouwWeekEvByProject.set(pid, {
           created_at: ev.created_at,
-          detail: ev.detail,
+          detail: stripPartnerFromTimelineDetail(ev.detail),
         });
       }
       continue;
@@ -246,7 +259,7 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       if (!prev || ev.created_at < prev.created_at) {
         schouwDagEvByProject.set(pid, {
           created_at: ev.created_at,
-          detail: ev.detail,
+          detail: stripPartnerFromTimelineDetail(ev.detail),
         });
       }
     }
@@ -268,7 +281,7 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
       at: ev.created_at,
       kind,
       titel: ev.titel,
-      detail: ev.detail,
+      detail: stripPartnerFromTimelineDetail(ev.detail),
     });
   }
 

@@ -250,7 +250,6 @@ export async function POST(
         titel: "Installatie gepland",
         detail: [
           formatDateTimeNl(whenIso),
-          partner.naam ? `Partner: ${partner.naam}` : null,
           updated.project_nummer
             ? `Project ${updated.project_nummer}`
             : null,

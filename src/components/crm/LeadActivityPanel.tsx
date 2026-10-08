@@ -16,6 +16,7 @@ import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { useCrmSession } from "@/hooks/useCrmSession";
 import { alleenEigenLeads } from "@/lib/rollen";
+import { stripPartnerFromTimelineDetail } from "@/lib/netto-boord-detail";
 
 type ActivityKind =
   | "notitie"
@@ -177,7 +178,7 @@ function buildFromEntities(opts: {
       at: ev.created_at,
       kind,
       titel: ev.titel,
-      detail: ev.detail,
+      detail: stripPartnerFromTimelineDetail(ev.detail),
     });
   }
 
