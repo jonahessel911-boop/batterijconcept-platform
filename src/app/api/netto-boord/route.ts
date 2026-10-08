@@ -5,7 +5,10 @@ import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { normalizeProjectStatus } from "@/lib/labels";
-import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  isAanbetalingFactuurOmschrijving,
+  isOrderVolledigBetaald,
+} from "@/lib/aanbetaling";
 import { isSchouwFormulierBewijs } from "@/lib/project-documenten";
 import {
   boardStatusOf,
@@ -63,6 +66,7 @@ type Fac = {
   factuurdatum: string | null;
   betaald_op: string | null;
   bedrag_inc_btw: number | null;
+  credit_van_factuur_id?: string | null;
 };
 
 type ProjectRow = {
@@ -164,7 +168,7 @@ export async function GET(req: NextRequest) {
         ? sb
             .from("facturen")
             .select(
-              "id, lead_id, offerte_id, project_id, status, omschrijving, factuurdatum, betaald_op, bedrag_inc_btw, created_at"
+              "id, lead_id, offerte_id, project_id, status, omschrijving, factuurdatum, betaald_op, bedrag_inc_btw, credit_van_factuur_id, created_at"
             )
             .in("lead_id", leadIds)
         : Promise.resolve({ data: [] as Fac[] }),
@@ -492,8 +496,22 @@ export async function GET(req: NextRequest) {
           restVerstuurd?.factuurdatum ||
           aanbetalingen.find((f) => f.factuurdatum)?.factuurdatum ||
           null,
-        factuur_betaald_at:
-          restBetaald?.betaald_op || aanbetalingBetaald?.betaald_op || null,
+        // Alleen groen als het volledige offertebedrag (incl. btw) betaald is
+        factuur_betaald_at: (() => {
+          if (
+            !isOrderVolledigBetaald({
+              facturen: related,
+              orderIncBtw: bedragInc,
+            })
+          ) {
+            return null;
+          }
+          const dates = related
+            .filter((f) => f.status === "betaald" && f.betaald_op)
+            .map((f) => f.betaald_op as string)
+            .sort();
+          return dates[dates.length - 1] || null;
+        })(),
         aanbetaling_betaald: Boolean(aanbetalingBetaald),
         aanbetaling_factuur_id: aanbetalingBetaald?.id || null,
         creditfactuur_id: creditId,
