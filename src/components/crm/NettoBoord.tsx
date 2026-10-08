@@ -24,6 +24,8 @@ import {
 import { projectStatusLabel } from "@/lib/labels";
 import type { Project } from "@/types/database";
 import { Planbord } from "./Planbord";
+import { useCrmSession } from "@/hooks/useCrmSession";
+import { alleenEigenLeads } from "@/lib/rollen";
 
 type Totals = {
   aantal: number;
@@ -284,6 +286,9 @@ function DetailDrawer({
   onClose: () => void;
   onRefresh?: () => void;
 }) {
+  const { rol } = useCrmSession();
+  /** Adviseur: tijdlijn puur inzicht — geen factuur-PDF of andere acties. */
+  const insightOnly = Boolean(rol && alleenEigenLeads(rol));
   const [tab, setTab] = useState<DrawerTab>("fases");
   const [timeline, setTimeline] = useState<NettoTimelineItem[]>([]);
   const [openTaken, setOpenTaken] = useState<NettoOpenTaak[]>([]);
@@ -926,7 +931,7 @@ function DetailDrawer({
                         {item.detail}
                       </p>
                     ) : null}
-                    {item.action ? (
+                    {item.action && !insightOnly ? (
                       <div className="mt-2">
                         {item.action.type === "factuur_pdf" ? (
                           <button

@@ -14,6 +14,8 @@ import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { useCrmSession } from "@/hooks/useCrmSession";
+import { alleenEigenLeads } from "@/lib/rollen";
 
 type ActivityKind =
   | "notitie"
@@ -416,6 +418,9 @@ export function LeadActivityPanel({
   leadId: string;
   refreshKey?: number;
 }) {
+  const { rol } = useCrmSession();
+  /** Adviseur: tijdlijn is puur inzicht — geen downloads/links. */
+  const insightOnly = Boolean(rol && alleenEigenLeads(rol));
   const [events, setEvents] = useState<LeadEvent[]>([]);
   const [offertes, setOffertes] = useState<Offerte[]>([]);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -600,7 +605,7 @@ export function LeadActivityPanel({
                     {item.detail}
                   </p>
                 )}
-                {item.action && (
+                {item.action && !insightOnly ? (
                   <div className="mt-2">
                     {item.action.type === "factuur_pdf" ? (
                       <button
@@ -639,7 +644,7 @@ export function LeadActivityPanel({
                       </Link>
                     )}
                   </div>
-                )}
+                ) : null}
               </li>
             ))}
           </ol>

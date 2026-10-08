@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
 import { sendEmail } from "@/lib/email/postmark";
@@ -13,8 +14,36 @@ import {
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { isAdminEmail } from "@/lib/admin-adviseur";
+import { normalizeRol } from "@/lib/rollen";
 
 export const runtime = "nodejs";
+
+/** Klantfactuur-PDF: admin/backoffice. Adviseur ziet tijdlijn zonder download. */
+async function requireFactuurPdfAccess() {
+  const jar = await cookies();
+  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+  if (!session) {
+    return {
+      error: NextResponse.json({ error: "Niet ingelogd" }, { status: 401 }),
+    };
+  }
+  const rol = normalizeRol(session.rol);
+  const ok =
+    rol === "admin" ||
+    rol === "backoffice" ||
+    isAdminEmail(session.email);
+  if (!ok) {
+    return {
+      error: NextResponse.json(
+        { error: "Geen toegang tot klantfacturen." },
+        { status: 403 }
+      ),
+    };
+  }
+  return { session };
+}
 
 async function loadFactuur(id: string) {
   const sb = getSupabaseAdmin();
@@ -39,6 +68,9 @@ export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireFactuurPdfAccess();
+  if (auth.error) return auth.error;
+
   const { id } = await ctx.params;
   try {
     const factuur = await loadFactuur(id);
@@ -97,6 +129,9 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireFactuurPdfAccess();
+  if (auth.error) return auth.error;
+
   const { id } = await ctx.params;
   let body: { action?: string } = {};
   try {
