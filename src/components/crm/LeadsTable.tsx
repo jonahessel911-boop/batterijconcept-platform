@@ -225,6 +225,7 @@ export function LeadsTable({
   statusFilter = "",
   onStatusFilterChange,
   onStatusChange,
+  onAdviseurChange,
   onBellerChange,
   showBellerColumn = false,
   /** Agenda “Leads vandaag”: toon afspraaktijd als eerste kolom. */
@@ -251,6 +252,16 @@ export function LeadsTable({
       adviseurs.filter((a) => a.actief && isBellerRol(normalizeRol(a.rol))),
     [adviseurs]
   );
+  const salesAdviseurs = useMemo(
+    () =>
+      adviseurs.filter((a) => {
+        if (a.actief === false) return false;
+        const r = normalizeRol(a.rol);
+        return r === "adviseur" || r === "admin";
+      }),
+    [adviseurs]
+  );
+  const showAdviseurColumn = Boolean(onAdviseurChange);
 
   function openLeadRow(lead: Lead) {
     rememberCrmReturnUrl();
@@ -312,7 +323,9 @@ export function LeadsTable({
   }, [rows, page]);
 
   const colSpan =
-    (showBellerColumn ? 10 : 9) + (showAfspraakTijdFirst ? 1 : 0);
+    (showBellerColumn ? 10 : 9) +
+    (showAdviseurColumn ? 1 : 0) +
+    (showAfspraakTijdFirst ? 1 : 0);
 
   const empty = (
     <div className="px-5 py-14 text-center">
@@ -410,6 +423,33 @@ export function LeadsTable({
                       </p>
                     );
                   })()}
+                  {showAdviseurColumn && onAdviseurChange && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Adviseur
+                        <select
+                          value={lead.adviseur_id || ""}
+                          onChange={(e) =>
+                            onAdviseurChange(
+                              lead.id,
+                              e.target.value ? e.target.value : null
+                            )
+                          }
+                          className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-xs outline-none focus:border-green"
+                        >
+                          <option value="">Geen adviseur</option>
+                          {salesAdviseurs.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.naam}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  )}
                   {showBellerColumn && onBellerChange && (
                     <div
                       onClick={(e) => e.stopPropagation()}
@@ -486,6 +526,7 @@ export function LeadsTable({
                 <th>Tel nr</th>
                 <th>Email</th>
                 <th>Afspraak</th>
+                {showAdviseurColumn && <th>Adviseur</th>}
                 {showBellerColumn && <th>Beller</th>}
                 <th>
                   <div className="flex items-center gap-2">
@@ -584,6 +625,28 @@ export function LeadsTable({
                         );
                       })()}
                     </td>
+                    {showAdviseurColumn && (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <select
+                          value={lead.adviseur_id || ""}
+                          onChange={(e) =>
+                            onAdviseurChange?.(
+                              lead.id,
+                              e.target.value ? e.target.value : null
+                            )
+                          }
+                          className="max-w-[9rem] cursor-pointer border border-line bg-white px-2 py-1 text-xs outline-none focus:border-green"
+                          aria-label="Adviseur toewijzen"
+                        >
+                          <option value="">—</option>
+                          {salesAdviseurs.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.naam}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    )}
                     {showBellerColumn && (
                       <td onClick={(e) => e.stopPropagation()}>
                         <select

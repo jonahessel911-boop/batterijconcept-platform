@@ -1181,7 +1181,11 @@ export function CrmShell() {
                     statusFilter={statusFilter}
                     onStatusFilterChange={changeStatusFilter}
                     onStatusChange={updateLeadStatus}
-                    onAdviseurChange={updateLeadAdviseur}
+                    onAdviseurChange={
+                      userRol && magBekijkAls(userRol)
+                        ? updateLeadAdviseur
+                        : undefined
+                    }
                     onBellerChange={
                       userRol === "admin" ? updateLeadBeller : undefined
                     }
@@ -1327,7 +1331,11 @@ export function CrmShell() {
       <LeadToevoegenModal
         open={addLeadOpen}
         onClose={() => setAddLeadOpen(false)}
-        defaultAdviseurId={adviseurFilter || undefined}
+        defaultAdviseurId={
+          userRol && alleenEigenLeads(userRol)
+            ? sessionUser?.id
+            : adviseurFilter || sessionUser?.id || undefined
+        }
         onCreated={(lead) => {
           setLeads((prev) => [lead, ...prev]);
         }}

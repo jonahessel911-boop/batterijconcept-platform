@@ -30,6 +30,8 @@ import {
   NotFoundState,
   TerugButton,
 } from "./DetailChrome";
+import { useCrmSession } from "@/hooks/useCrmSession";
+import { alleenEigenLeads, magBekijkAls } from "@/lib/rollen";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -166,6 +168,9 @@ export function LeadPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
+  const { session, rol } = useCrmSession();
+  const eigenLeadsOnly = rol ? alleenEigenLeads(rol) : false;
+  const kanToewijzen = rol ? magBekijkAls(rol) || rol === "backoffice" : false;
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
@@ -184,6 +189,7 @@ export function LeadPage() {
   const [completingAfspraakId, setCompletingAfspraakId] = useState<string | null>(
     null
   );
+  const [claimBusy, setClaimBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -197,52 +203,30 @@ export function LeadPage() {
     try {
       const sb = getSupabaseBrowser();
       const [l, a, advRes] = await Promise.all([
-        sb.from("leads").select("*").eq("id", id).single(),
+        sb
+          .from("leads")
+          .select("*, adviseurs!adviseur_id(id, naam)")
+          .eq("id", id)
+          .single(),
         sb
           .from("afspraken")
           .select("*, adviseurs!adviseur_id(naam)")
           .eq("lead_id", id)
           .order("start_at", { ascending: false })
           .limit(20),
-        fetch("/api/adviseurs").then((r) => r.json()),
+        fetch("/api/adviseurs?include_inactive=1").then((r) => r.json()),
       ]);
 
       if (l.error || !l.data) {
-        setNotFound(true);
-      } else {
-        let leadData = l.data as Lead;
+        // Fallback zonder join (oudere schema's)
+        const plain = await sb.from("leads").select("*").eq("id", id).single();
+        if (plain.error || !plain.data) {
+          setNotFound(true);
+          return;
+        }
+        const leadData = plain.data as Lead;
         const advList = (advRes.adviseurs as Adviseur[]) || [];
         const linked = advList.find((x) => x.id === leadData.adviseur_id);
-
-        if (
-          (!leadData.straat?.trim() || !leadData.plaats?.trim()) &&
-          leadData.postcode?.trim() &&
-          leadData.huisnummer?.trim()
-        ) {
-          try {
-            const qs = new URLSearchParams({
-              postcode: leadData.postcode,
-              number: leadData.huisnummer,
-            });
-            if (leadData.toevoeging?.trim()) {
-              qs.set("toevoeging", leadData.toevoeging.trim());
-            }
-            const pcRes = await fetch(`/api/postcode?${qs}`);
-            if (pcRes.ok) {
-              const pc = await pcRes.json();
-              const patch: Partial<Lead> = {};
-              if (!leadData.straat?.trim() && pc.straat) patch.straat = pc.straat;
-              if (!leadData.plaats?.trim() && pc.plaats) patch.plaats = pc.plaats;
-              if (Object.keys(patch).length > 0) {
-                await sb.from("leads").update(patch).eq("id", leadData.id);
-                leadData = { ...leadData, ...patch };
-              }
-            }
-          } catch {
-            /* non-blocking */
-          }
-        }
-
         setLead({
           ...leadData,
           adviseurs: linked ? { id: linked.id, naam: linked.naam } : null,
@@ -250,7 +234,53 @@ export function LeadPage() {
         setNoteDraft("");
         setAfspraken((a.data as Afspraak[]) || []);
         setAdviseurs(advList);
+        return;
       }
+
+      let leadData = l.data as Lead;
+      const advList = (advRes.adviseurs as Adviseur[]) || [];
+      const joined = leadData.adviseurs;
+      const linked =
+        joined?.id && joined.naam
+          ? joined
+          : advList.find((x) => x.id === leadData.adviseur_id) || null;
+
+      if (
+        (!leadData.straat?.trim() || !leadData.plaats?.trim()) &&
+        leadData.postcode?.trim() &&
+        leadData.huisnummer?.trim()
+      ) {
+        try {
+          const qs = new URLSearchParams({
+            postcode: leadData.postcode,
+            number: leadData.huisnummer,
+          });
+          if (leadData.toevoeging?.trim()) {
+            qs.set("toevoeging", leadData.toevoeging.trim());
+          }
+          const pcRes = await fetch(`/api/postcode?${qs}`);
+          if (pcRes.ok) {
+            const pc = await pcRes.json();
+            const patch: Partial<Lead> = {};
+            if (!leadData.straat?.trim() && pc.straat) patch.straat = pc.straat;
+            if (!leadData.plaats?.trim() && pc.plaats) patch.plaats = pc.plaats;
+            if (Object.keys(patch).length > 0) {
+              await sb.from("leads").update(patch).eq("id", leadData.id);
+              leadData = { ...leadData, ...patch };
+            }
+          }
+        } catch {
+          /* non-blocking */
+        }
+      }
+
+      setLead({
+        ...leadData,
+        adviseurs: linked ? { id: linked.id, naam: linked.naam } : null,
+      });
+      setNoteDraft("");
+      setAfspraken((a.data as Afspraak[]) || []);
+      setAdviseurs(advList);
     } catch {
       setNotFound(true);
     } finally {
@@ -300,11 +330,21 @@ export function LeadPage() {
     }
   }
 
+  const salesAdviseurs = adviseurs.filter(
+    (a) =>
+      a.actief !== false &&
+      (a.rol == null || a.rol === "" || a.rol === "adviseur" || a.rol === "admin")
+  );
+
   async function updateAdviseur(adviseurId: string | null) {
     if (!lead) return;
     const prevId = lead.adviseur_id;
     const prevJoin = lead.adviseurs;
-    const adv = adviseurs.find((a) => a.id === adviseurId) || null;
+    const adv =
+      adviseurs.find((a) => a.id === adviseurId) ||
+      (session && session.id === adviseurId
+        ? ({ id: session.id, naam: session.naam } as Adviseur)
+        : null);
     setLead({
       ...lead,
       adviseur_id: adviseurId,
@@ -331,9 +371,26 @@ export function LeadPage() {
             ? "Adviseur bijgewerkt — 1 afspraak staat nu in die agenda."
             : `Adviseur bijgewerkt — ${moved} afspraken staan nu in die agenda.`
         );
+      } else {
+        setOkMsg(
+          adviseurId
+            ? `Toegewezen aan ${adv?.naam || "adviseur"}.`
+            : "Adviseur verwijderd."
+        );
       }
     } catch {
       setLead({ ...lead, adviseur_id: prevId, adviseurs: prevJoin });
+      setOkMsg(null);
+    }
+  }
+
+  async function claimLead() {
+    if (!lead || !session) return;
+    setClaimBusy(true);
+    try {
+      await updateAdviseur(session.id);
+    } finally {
+      setClaimBusy(false);
     }
   }
 
@@ -617,10 +674,56 @@ export function LeadPage() {
             <h1 className="mt-0.5 font-display text-2xl font-semibold tracking-tight text-ink sm:text-[1.75rem]">
               {lead.naam}
             </h1>
-            <p className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <UserIcon className="h-3.5 w-3.5 shrink-0 text-muted/80" />
-              {lead.adviseurs?.naam || "Geen adviseur"}
-            </p>
+              {kanToewijzen ? (
+                <select
+                  value={lead.adviseur_id || ""}
+                  onChange={(e) =>
+                    void updateAdviseur(e.target.value ? e.target.value : null)
+                  }
+                  className="max-w-[14rem] cursor-pointer border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+                  aria-label="Adviseur toewijzen"
+                >
+                  <option value="">Geen adviseur</option>
+                  {salesAdviseurs.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                      {session?.id === a.id ? " (jij)" : ""}
+                    </option>
+                  ))}
+                  {lead.adviseur_id &&
+                  !salesAdviseurs.some((a) => a.id === lead.adviseur_id) ? (
+                    <option value={lead.adviseur_id}>
+                      {lead.adviseurs?.naam || "Onbekend"} (inactief)
+                    </option>
+                  ) : null}
+                </select>
+              ) : eigenLeadsOnly && session ? (
+                lead.adviseur_id === session.id ? (
+                  <span className="text-sm font-medium text-ink">
+                    Jij · {session.naam}
+                  </span>
+                ) : lead.adviseur_id ? (
+                  <span className="text-sm text-muted">
+                    {lead.adviseurs?.naam || "Andere adviseur"}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={claimBusy}
+                    onClick={() => void claimLead()}
+                    className="border border-green bg-green-soft px-2.5 py-1 text-xs font-semibold text-green-dark hover:bg-green hover:text-white disabled:opacity-60"
+                  >
+                    {claimBusy ? "Bezig…" : "Neem deze lead over"}
+                  </button>
+                )
+              ) : (
+                <span className="text-sm text-muted">
+                  {lead.adviseurs?.naam || "Geen adviseur"}
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -675,23 +778,11 @@ export function LeadPage() {
                 setLead((prev) => (prev ? { ...prev, ...patch } : prev))
               }
             />
-            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Adviseur
-              <select
-                value={lead.adviseur_id || ""}
-                onChange={(e) =>
-                  void updateAdviseur(e.target.value ? e.target.value : null)
-                }
-                className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
-              >
-                <option value="">Geen adviseur</option>
-                {adviseurs.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.naam}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {kanToewijzen ? (
+              <p className="text-xs text-muted">
+                Adviseur pas je aan in de header hierboven.
+              </p>
+            ) : null}
           </div>
         ) : (
           <div className="relative border-t border-line">
@@ -839,6 +930,12 @@ export function LeadPage() {
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
+                  lockAdviseur={eigenLeadsOnly}
+                  defaultAdviseurId={
+                    eigenLeadsOnly
+                      ? session?.id
+                      : lead.adviseur_id || undefined
+                  }
                   onPlanned={() => {
                     setOkMsg("Afspraak gepland.");
                     setPlanOpen(false);

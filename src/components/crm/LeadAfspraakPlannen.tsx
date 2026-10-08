@@ -66,20 +66,34 @@ export function LeadAfspraakPlannen({
   lead,
   adviseurs,
   onPlanned,
+  lockAdviseur = false,
+  defaultAdviseurId,
 }: {
   lead: Lead;
   adviseurs: Adviseur[];
   onPlanned: () => void;
+  /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
+  lockAdviseur?: boolean;
+  defaultAdviseurId?: string | null;
 }) {
-  const planAdviseurs = useMemo(
-    () =>
-      adviseurs.filter(
-        (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
-      ),
-    [adviseurs]
-  );
+  const planAdviseurs = useMemo(() => {
+    const list = adviseurs.filter(
+      (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
+    );
+    if (lockAdviseur && defaultAdviseurId) {
+      const self = list.find((a) => a.id === defaultAdviseurId);
+      if (self) return [self];
+      const raw = adviseurs.find((a) => a.id === defaultAdviseurId);
+      return raw ? [raw] : list;
+    }
+    return list;
+  }, [adviseurs, lockAdviseur, defaultAdviseurId]);
 
   const preferred =
+    (lockAdviseur && defaultAdviseurId) ||
+    (defaultAdviseurId &&
+      planAdviseurs.some((a) => a.id === defaultAdviseurId) &&
+      defaultAdviseurId) ||
     (lead.adviseur_id &&
       planAdviseurs.some((a) => a.id === lead.adviseur_id) &&
       lead.adviseur_id) ||
@@ -139,9 +153,14 @@ export function LeadAfspraakPlannen({
     setBestSlotsError(null);
     queueMicrotask(async () => {
       try {
-        const res = await fetch(
-          `/api/best-slots?lead_id=${encodeURIComponent(lead.id)}&limit=5`
-        );
+        const qs = new URLSearchParams({
+          lead_id: lead.id,
+          limit: "5",
+        });
+        if (lockAdviseur && defaultAdviseurId) {
+          qs.set("adviseur_id", defaultAdviseurId);
+        }
+        const res = await fetch(`/api/best-slots?${qs}`);
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (!res.ok) {
@@ -151,7 +170,11 @@ export function LeadAfspraakPlannen({
           );
           return;
         }
-        setBestSlots((data.slots || []) as BestSlotOption[]);
+        let slots = (data.slots || []) as BestSlotOption[];
+        if (lockAdviseur && defaultAdviseurId) {
+          slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
+        }
+        setBestSlots(slots);
         setBestSlotsError(null);
       } catch {
         if (!cancelled) {
@@ -165,7 +188,7 @@ export function LeadAfspraakPlannen({
     return () => {
       cancelled = true;
     };
-  }, [open, lead]);
+  }, [open, lead, lockAdviseur, defaultAdviseurId]);
 
   useEffect(() => {
     if (!open || !adviseurId) {
@@ -297,14 +320,17 @@ export function LeadAfspraakPlannen({
         </button>
       </div>
       <p className="text-xs text-muted">
-        Top-opties vullen adviseurs gelijk (minste druk eerst), daarna
-        reistijd. Bevestigingsmail gaat mee.
+        {lockAdviseur
+          ? "Opties in jouw agenda · bevestigingsmail gaat mee."
+          : "Top-opties vullen adviseurs gelijk (minste druk eerst), daarna reistijd. Bevestigingsmail gaat mee."}
       </p>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Beste opties (alle adviseurs)
+            {lockAdviseur
+              ? "Beste opties (jouw agenda)"
+              : "Beste opties (alle adviseurs)"}
           </span>
         </div>
         {bestSlotsLoading ? (
@@ -370,33 +396,46 @@ export function LeadAfspraakPlannen({
           onClick={() => setShowHandmatig((v) => !v)}
           className="text-xs font-medium text-green hover:underline"
         >
-          {showHandmatig ? "Handmatig verbergen" : "Handmatig andere adviseur/tijd…"}
+          {showHandmatig
+            ? "Handmatig verbergen"
+            : lockAdviseur
+              ? "Handmatig tijdstip…"
+              : "Handmatig andere adviseur/tijd…"}
         </button>
       </div>
 
       {showHandmatig ? (
         <>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-            Adviseur
-            <select
-              required
-              value={adviseurId}
-              onChange={(e) => {
-                setAdviseurId(e.target.value);
-                setStartAt("");
-                setCustomStart("");
-                setSelectedBestSlotId(null);
-              }}
-              className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-            >
-              <option value="">Kies adviseur…</option>
-              {planAdviseurs.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.naam}
-                </option>
-              ))}
-            </select>
-          </label>
+          {lockAdviseur ? (
+            <p className="text-xs text-muted">
+              Agenda:{" "}
+              <span className="font-semibold text-ink">
+                {selectedAdviseur?.naam || "Jij"}
+              </span>
+            </p>
+          ) : (
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Adviseur
+              <select
+                required
+                value={adviseurId}
+                onChange={(e) => {
+                  setAdviseurId(e.target.value);
+                  setStartAt("");
+                  setCustomStart("");
+                  setSelectedBestSlotId(null);
+                }}
+                className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+              >
+                <option value="">Kies adviseur…</option>
+                {planAdviseurs.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.naam}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
