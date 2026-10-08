@@ -5,9 +5,24 @@ import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import type { Adviseur, Afspraak, Lead } from "@/types/database";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
-import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
+import { isBelPlanAdviseur } from "@/lib/rollen";
+import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { ReistijdHint } from "./ReistijdHint";
+
+type BestSlotOption = {
+  slot_id: string;
+  start_at: string;
+  end_at: string;
+  label_nl: string;
+  label_kort: string;
+  adviseur_id: string;
+  adviseur_naam: string;
+  feasible: boolean;
+  reason: string | null;
+  conversie_pct: number | null;
+  reistijd_min: number | null;
+};
 
 function JaNeeField({
   label,
@@ -57,7 +72,10 @@ export function LeadAfspraakPlannen({
   onPlanned: () => void;
 }) {
   const planAdviseurs = useMemo(
-    () => adviseurs.filter((a) => a.actief && !isAdminAdviseur(a)),
+    () =>
+      adviseurs.filter(
+        (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
+      ),
     [adviseurs]
   );
 
@@ -82,6 +100,13 @@ export function LeadAfspraakPlannen({
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
+  const [bestSlotsLoading, setBestSlotsLoading] = useState(false);
+  const [bestSlotsError, setBestSlotsError] = useState<string | null>(null);
+  const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
+    null
+  );
+  const [showHandmatig, setShowHandmatig] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -93,7 +118,54 @@ export function LeadAfspraakPlannen({
     setCustomStart("");
     setUseCustomTime(false);
     setError(null);
+    setSelectedBestSlotId(null);
+    setShowHandmatig(false);
   }, [open, lead.id, preferred, lead.notities]);
+
+  useEffect(() => {
+    if (!open) {
+      setBestSlots([]);
+      return;
+    }
+    if (adresRegel(lead) === "—") {
+      setBestSlots([]);
+      setBestSlotsError(
+        "Lead heeft geen volledig adres — top-opties niet beschikbaar."
+      );
+      return;
+    }
+    let cancelled = false;
+    setBestSlotsLoading(true);
+    setBestSlotsError(null);
+    queueMicrotask(async () => {
+      try {
+        const res = await fetch(
+          `/api/best-slots?lead_id=${encodeURIComponent(lead.id)}&limit=5`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setBestSlots([]);
+          setBestSlotsError(
+            (data as { error?: string }).error || "Beste opties laden mislukt"
+          );
+          return;
+        }
+        setBestSlots((data.slots || []) as BestSlotOption[]);
+        setBestSlotsError(null);
+      } catch {
+        if (!cancelled) {
+          setBestSlots([]);
+          setBestSlotsError("Beste opties laden mislukt");
+        }
+      } finally {
+        if (!cancelled) setBestSlotsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, lead]);
 
   useEffect(() => {
     if (!open || !adviseurId) {
@@ -123,6 +195,15 @@ export function LeadAfspraakPlannen({
       cancelled = true;
     };
   }, [open]);
+
+  function selectBestSlot(slot: BestSlotOption) {
+    setSelectedBestSlotId(slot.slot_id);
+    setAdviseurId(slot.adviseur_id);
+    setUseCustomTime(false);
+    setCustomStart("");
+    setStartAt(slot.start_at);
+    setShowHandmatig(false);
+  }
 
   const slotsByDay = useMemo(() => {
     const map = new Map<
@@ -216,126 +297,209 @@ export function LeadAfspraakPlannen({
         </button>
       </div>
       <p className="text-xs text-muted">
-        Zelfde flow als bij Bellen — bevestigingsmail gaat mee.
+        Top-opties vullen adviseurs gelijk (minste druk eerst), daarna
+        reistijd. Bevestigingsmail gaat mee.
       </p>
-
-      <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-        Adviseur
-        <select
-          required
-          value={adviseurId}
-          onChange={(e) => {
-            setAdviseurId(e.target.value);
-            setStartAt("");
-            setCustomStart("");
-          }}
-          className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-        >
-          <option value="">Kies adviseur…</option>
-          {planAdviseurs.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.naam}
-            </option>
-          ))}
-        </select>
-      </label>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Tijdstip
+            Beste opties (alle adviseurs)
           </span>
-          <button
-            type="button"
-            onClick={() => {
-              setUseCustomTime((v) => !v);
-              setStartAt("");
-              setCustomStart("");
-            }}
-            className="text-xs font-medium text-green hover:underline"
-          >
-            {useCustomTime ? "Kies vast slot" : "Ander tijdstip…"}
-          </button>
         </div>
-        {useCustomTime ? (
-          <input
-            type="datetime-local"
-            required
-            value={customStart}
-            onChange={(e) => setCustomStart(e.target.value)}
-            className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-          />
-        ) : !adviseurId ? (
-          <p className="text-sm text-muted">Kies eerst een adviseur.</p>
-        ) : slotsByDay.length === 0 ? (
-          <p className="text-sm text-muted">Geen slots.</p>
+        {bestSlotsLoading ? (
+          <p className="text-sm text-muted">Beste opties berekenen…</p>
+        ) : bestSlotsError ? (
+          <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+            {bestSlotsError}
+          </p>
+        ) : bestSlots.length === 0 ? (
+          <p className="text-sm text-muted">
+            Geen gezamenlijke opties — kies handmatig hieronder.
+          </p>
         ) : (
-          <div className="max-h-56 space-y-3 overflow-y-auto pr-0.5">
-            <p className="text-[11px] text-muted">
-              Groen = vrij · rood = al ingepland
-            </p>
-            {slotsByDay.map(([day, daySlots]) => (
-              <div key={day}>
-                <p className="mb-1.5 text-[11px] font-semibold capitalize text-muted">
-                  {formatInTimeZone(
-                    daySlots[0].start_at,
-                    AMSTERDAM_TZ,
-                    "EEE d MMM",
-                    { locale: nl }
-                  )}
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {daySlots.map((s) => {
-                    const taken = Boolean(s.busy);
-                    const selected = !taken && startAt === s.start_at;
-                    return (
-                      <button
-                        key={s.start_at}
-                        type="button"
-                        disabled={taken}
-                        onClick={() => setStartAt(s.start_at)}
-                        className={[
-                          "min-h-9 min-w-[3.5rem] border px-2.5 py-1.5 text-sm font-semibold tabular-nums disabled:cursor-not-allowed",
-                          taken
-                            ? "border-[#C62828]/40 bg-[#FDECEA] text-[#C62828]"
-                            : selected
-                              ? "border-green bg-green text-white"
-                              : "border-green/40 bg-green-soft text-green-dark hover:border-green",
-                        ].join(" ")}
-                      >
-                        {formatTimeNl(s.start_at)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
+          <ul className="space-y-1.5">
+            {bestSlots.map((slot, idx) => {
+              const selected = selectedBestSlotId === slot.slot_id;
+              return (
+                <li key={slot.slot_id}>
+                  <button
+                    type="button"
+                    onClick={() => selectBestSlot(slot)}
+                    className={[
+                      "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
+                      selected
+                        ? "border-green bg-green-soft"
+                        : "border-line bg-white hover:border-green/50",
+                    ].join(" ")}
+                  >
+                    <span
+                      className={[
+                        "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
+                        selected
+                          ? "bg-green text-white"
+                          : "bg-wash text-muted",
+                      ].join(" ")}
+                    >
+                      {idx + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-ink">
+                        {slot.label_kort || slot.label_nl}
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+                        <span className="font-medium text-ink">
+                          {slot.adviseur_naam}
+                        </span>
+                        {slot.reistijd_min != null ? (
+                          <span>~{slot.reistijd_min} min route</span>
+                        ) : null}
+                        {!slot.feasible ? (
+                          <span className="text-[#C45A12]">Strak</span>
+                        ) : null}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
+        <button
+          type="button"
+          onClick={() => setShowHandmatig((v) => !v)}
+          className="text-xs font-medium text-green hover:underline"
+        >
+          {showHandmatig ? "Handmatig verbergen" : "Handmatig andere adviseur/tijd…"}
+        </button>
       </div>
 
-      {adviseurId && !useCustomTime && (
-        <FastDirectionButton
-          key={`${lead.id}-${adviseurId}`}
-          adviseurId={adviseurId}
-          lead={lead}
-          afspraken={allAfspraken}
-          allLeads={[lead]}
-          startAdres={selectedAdviseur?.start_adres || null}
-          startAdresLabel={selectedAdviseur?.naam || null}
-          freeSlots={slots
-            .filter((s) => !s.busy)
-            .map((s) => ({
-              start_at: s.start_at,
-              end_at: s.end_at,
-            }))}
-          onSelectSlot={(iso) => {
-            setUseCustomTime(false);
-            setCustomStart("");
-            setStartAt(iso);
-          }}
-        />
-      )}
+      {showHandmatig ? (
+        <>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+            Adviseur
+            <select
+              required
+              value={adviseurId}
+              onChange={(e) => {
+                setAdviseurId(e.target.value);
+                setStartAt("");
+                setCustomStart("");
+                setSelectedBestSlotId(null);
+              }}
+              className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+            >
+              <option value="">Kies adviseur…</option>
+              {planAdviseurs.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.naam}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Tijdstip
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setUseCustomTime((v) => !v);
+                  setStartAt("");
+                  setCustomStart("");
+                }}
+                className="text-xs font-medium text-green hover:underline"
+              >
+                {useCustomTime ? "Kies vast slot" : "Ander tijdstip…"}
+              </button>
+            </div>
+            {useCustomTime ? (
+              <input
+                type="datetime-local"
+                required
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+              />
+            ) : !adviseurId ? (
+              <p className="text-sm text-muted">Kies eerst een adviseur.</p>
+            ) : slotsByDay.length === 0 ? (
+              <p className="text-sm text-muted">Geen slots.</p>
+            ) : (
+              <div className="max-h-56 space-y-3 overflow-y-auto pr-0.5">
+                <p className="text-[11px] text-muted">
+                  Groen = vrij · rood = al ingepland
+                </p>
+                {slotsByDay.map(([day, daySlots]) => (
+                  <div key={day}>
+                    <p className="mb-1.5 text-[11px] font-semibold capitalize text-muted">
+                      {formatInTimeZone(
+                        daySlots[0].start_at,
+                        AMSTERDAM_TZ,
+                        "EEE d MMM",
+                        { locale: nl }
+                      )}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {daySlots.map((s) => {
+                        const taken = Boolean(s.busy);
+                        const selected = !taken && startAt === s.start_at;
+                        return (
+                          <button
+                            key={s.start_at}
+                            type="button"
+                            disabled={taken}
+                            onClick={() => {
+                              setStartAt(s.start_at);
+                              setSelectedBestSlotId(null);
+                            }}
+                            className={[
+                              "min-h-9 min-w-[3.5rem] border px-2.5 py-1.5 text-sm font-semibold tabular-nums disabled:cursor-not-allowed",
+                              taken
+                                ? "border-[#C62828]/40 bg-[#FDECEA] text-[#C62828]"
+                                : selected
+                                  ? "border-green bg-green text-white"
+                                  : "border-green/40 bg-green-soft text-green-dark hover:border-green",
+                            ].join(" ")}
+                          >
+                            {formatTimeNl(s.start_at)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {adviseurId && !useCustomTime ? (
+            <FastDirectionButton
+              key={`${lead.id}-${adviseurId}`}
+              adviseurId={adviseurId}
+              lead={lead}
+              afspraken={allAfspraken}
+              allLeads={[lead]}
+              startAdres={selectedAdviseur?.start_adres || null}
+              startAdresLabel={selectedAdviseur?.naam || null}
+              freeSlots={slots
+                .filter((s) => !s.busy)
+                .map((s) => ({
+                  start_at: s.start_at,
+                  end_at: s.end_at,
+                }))}
+              onSelectSlot={(iso) => {
+                setUseCustomTime(false);
+                setCustomStart("");
+                setStartAt(iso);
+                setSelectedBestSlotId(null);
+              }}
+            />
+          ) : null}
+        </>
+      ) : null}
 
       <ReistijdHint
         adviseurId={adviseurId}

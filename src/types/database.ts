@@ -117,6 +117,11 @@ export interface Adviseur {
   werktijd_eind: string;
   /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
   start_adres?: string | null;
+  /**
+   * Meedoen in bel-systeem / beste slots om agenda te vullen.
+   * false = niet automatisch inplannen (wel eigen agenda/beschikbaarheid).
+   */
+  bel_planning?: boolean | null;
   /** CRM-rol */
   rol?: GebruikerRol | null;
   /** Commissie over omzet excl. btw (%) — saleskosten in Financial Dashboard */

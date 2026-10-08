@@ -34,7 +34,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_MID =
@@ -79,6 +79,7 @@ function isSchemaCompatError(error: SbError): boolean {
     /could not find/i.test(msg) ||
     msg.includes("adviseurs_rol_check") ||
     msg.includes("start_adres") ||
+    msg.includes("bel_planning") ||
     msg.includes("commissie_pct") ||
     msg.includes("bedrijfsnaam") ||
     msg.includes("kvk_nummer") ||
@@ -114,6 +115,7 @@ export async function GET(req: NextRequest) {
       error &&
       (error.code === "42703" ||
         error.message?.includes("start_adres") ||
+        error.message?.includes("bel_planning") ||
         error.message?.includes("rol") ||
         error.message?.includes("commissie_pct") ||
         error.message?.includes("bedrijfsnaam") ||
@@ -251,6 +253,7 @@ export async function POST(req: NextRequest) {
     email?: string;
     telefoon?: string;
     rol?: string;
+    commissie_pct?: number | null;
     bedrijfsnaam?: string | null;
     kvk_nummer?: string | null;
     btw_nummer?: string | null;
@@ -291,6 +294,23 @@ export async function POST(req: NextRequest) {
     iban: body.iban?.trim().toUpperCase() || null,
   };
 
+  // Standaard 10% commissie voor sales-adviseurs; anders null/0.
+  const isSales = rol === "adviseur";
+  let commissiePct: number | null = null;
+  if (isSales) {
+    const raw =
+      body.commissie_pct === undefined || body.commissie_pct === null
+        ? 10
+        : Number(body.commissie_pct);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 100) {
+      return NextResponse.json(
+        { error: "Commissie moet tussen 0 en 100% zijn" },
+        { status: 400 }
+      );
+    }
+    commissiePct = Math.round(raw * 100) / 100;
+  }
+
   try {
     const sb = getSupabaseAdmin();
     const password = generatePassword(12);
@@ -305,6 +325,7 @@ export async function POST(req: NextRequest) {
         password_hash,
         actief: true,
         rol,
+        ...(commissiePct != null ? { commissie_pct: commissiePct } : {}),
         ...kvkFields,
       })
       .select(ADVISEUR_PUBLIC)
@@ -393,6 +414,7 @@ export async function PATCH(req: NextRequest) {
     telefoon?: string | null;
     actief?: boolean;
     start_adres?: string | null;
+    bel_planning?: boolean;
     rol?: string;
     commissie_pct?: number | null;
     bedrijfsnaam?: string | null;
@@ -519,6 +541,9 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;
+    }
+    if (typeof body.bel_planning === "boolean") {
+      patch.bel_planning = body.bel_planning;
     }
     if (body.rol !== undefined) {
       const r = normalizeRol(body.rol);
@@ -654,6 +679,20 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      if (
+        patch.bel_planning !== undefined &&
+        isMissingColumn(error, "bel_planning")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-bel-planning.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
       // Update ok / select faalt op optionele kolommen → retry met smaller select.
       // Strip ook optionele patch-velden die nog niet bestaan.
       const slimPatch = { ...patch };
@@ -663,6 +702,9 @@ export async function PATCH(req: NextRequest) {
       }
       if (isMissingColumn(error, "start_adres")) {
         delete slimPatch.start_adres;
+      }
+      if (isMissingColumn(error, "bel_planning")) {
+        delete slimPatch.bel_planning;
       }
       if (isMissingColumn(error, "rol")) {
         delete slimPatch.rol;

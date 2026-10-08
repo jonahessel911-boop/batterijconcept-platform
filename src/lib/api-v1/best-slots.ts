@@ -246,6 +246,8 @@ type AdviseurRow = {
   email: string | null;
   actief: boolean | null;
   start_adres: string | null;
+  rol?: string | null;
+  bel_planning?: boolean | null;
 };
 
 type LeadRow = {
@@ -412,16 +414,17 @@ export async function loadBestSlotsForLead(
 
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
-    .select("id, naam, email, actief, start_adres")
+    .select("id, naam, email, actief, start_adres, rol")
     .eq("actief", true)
     .order("naam");
 
   let adviseursList = (adviseursRaw || []) as AdviseurRow[];
   if (advErr) {
-    const missingStart =
+    const missingCol =
       advErr.message?.includes("start_adres") ||
+      advErr.message?.includes("rol") ||
       advErr.code === "42703";
-    if (!missingStart) {
+    if (!missingCol) {
       return {
         ok: false,
         status: 500,
@@ -431,21 +434,34 @@ export async function loadBestSlotsForLead(
     }
     const { data: fallback, error: fbErr } = await sb
       .from("adviseurs")
-      .select("id, naam, email, actief")
+      .select("id, naam, email, actief, start_adres")
       .eq("actief", true)
       .order("naam");
     if (fbErr) {
-      return {
-        ok: false,
-        status: 500,
-        error: "Adviseurs laden mislukt",
-        detail: fbErr.message,
-      };
+      const { data: minFb, error: minErr } = await sb
+        .from("adviseurs")
+        .select("id, naam, email, actief")
+        .eq("actief", true)
+        .order("naam");
+      if (minErr) {
+        return {
+          ok: false,
+          status: 500,
+          error: "Adviseurs laden mislukt",
+          detail: minErr.message,
+        };
+      }
+      adviseursList = ((minFb || []) as AdviseurRow[]).map((a) => ({
+        ...a,
+        start_adres: null,
+        rol: "adviseur",
+      }));
+    } else {
+      adviseursList = ((fallback || []) as AdviseurRow[]).map((a) => ({
+        ...a,
+        rol: "adviseur",
+      }));
     }
-    adviseursList = ((fallback || []) as AdviseurRow[]).map((a) => ({
-      ...a,
-      start_adres: null,
-    }));
   }
 
   const adviseurs = adviseursList.filter((a) => isPlanbaarAdviseur(a));
@@ -484,7 +500,27 @@ export async function loadBestSlotsForLead(
     dayKey: string;
     preferred: boolean;
     conversie: number;
+    /** Open agenda-druk in venster (lager = eerder vullen). */
+    workload: number;
   };
+
+  // Agenda-druk per adviseur: open afspraken in het venster (gelijke vulling).
+  const workloadByAdviseur = new Map<string, number>();
+  for (const a of adviseurs) workloadByAdviseur.set(a.id, 0);
+  for (const row of afsprakenRaw || []) {
+    const r = row as {
+      adviseur_id?: string | null;
+      status?: string | null;
+      soort?: string | null;
+    };
+    if (!r.adviseur_id) continue;
+    if (r.status === "geannuleerd" || r.status === "voltooid") continue;
+    if (!afspraakBlokkeertAgenda(r.soort)) continue;
+    workloadByAdviseur.set(
+      r.adviseur_id,
+      (workloadByAdviseur.get(r.adviseur_id) || 0) + 1
+    );
+  }
 
   const candidates: Candidate[] = [];
   let usedRoute = false;
@@ -501,6 +537,7 @@ export async function loadBestSlotsForLead(
     const preferred = leadRow.adviseur_id === adv.id;
     const conversie = conversieRate(adv.id);
     const convPct = conversiePct(adv.id);
+    const workload = workloadByAdviseur.get(adv.id) || 0;
 
     let scored:
       | ReturnType<typeof pickTopFastDirectionSlots>
@@ -562,6 +599,7 @@ export async function loadBestSlotsForLead(
           dayKey: s.dayKey,
           preferred,
           conversie,
+          workload,
         });
       }
     }
@@ -602,6 +640,7 @@ export async function loadBestSlotsForLead(
           dayKey,
           preferred,
           conversie,
+          workload,
         });
       }
     }
@@ -615,29 +654,33 @@ export async function loadBestSlotsForLead(
     };
   }
 
-  // Per wandklok-moment: beste adviseur
-  // (feasible → hoogste conversie → preferred → laagste reistijd)
+  /** Vergelijk: haalbaar → minder drukke agenda → reistijd → conversie. */
+  function betterCandidate(a: Candidate, b: Candidate): number {
+    return (
+      Number(a.feasible) - Number(b.feasible) ||
+      b.workload - a.workload ||
+      b.scoreSec - a.scoreSec ||
+      a.conversie - b.conversie ||
+      Number(a.preferred) - Number(b.preferred) ||
+      b.start_at.localeCompare(a.start_at)
+    );
+  }
+
+  // Per wandklok-moment: adviseur met minste druk (dan route / conversie)
   const byMoment = new Map<string, Candidate>();
   for (const c of candidates) {
     const cur = byMoment.get(c.start_at);
-    if (!cur) {
+    if (!cur || betterCandidate(c, cur) > 0) {
       byMoment.set(c.start_at, c);
-      continue;
     }
-    const better =
-      Number(c.feasible) - Number(cur.feasible) ||
-      c.conversie - cur.conversie ||
-      Number(c.preferred) - Number(cur.preferred) ||
-      cur.scoreSec - c.scoreSec;
-    if (better > 0) byMoment.set(c.start_at, c);
   }
 
   const ranked = [...byMoment.values()].sort((a, b) => {
-    // Feasible → hoogste conversie → vroegste dag → laagste reistijd → preferred
     if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
-    if (a.conversie !== b.conversie) return b.conversie - a.conversie;
+    if (a.workload !== b.workload) return a.workload - b.workload;
     if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
     if (a.scoreSec !== b.scoreSec) return a.scoreSec - b.scoreSec;
+    if (a.conversie !== b.conversie) return b.conversie - a.conversie;
     if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
     return a.start_at.localeCompare(b.start_at);
   });
@@ -646,28 +689,49 @@ export async function loadBestSlotsForLead(
 
   if (diversifyHours) {
     // Pool over ~2 weken → top 3: ochtend + middag + avond op 3 dagen
+    // Prefer ook spreiding over adviseurs in de pool.
     const chronological = [...ranked].sort((a, b) => {
       if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
-      if (a.conversie !== b.conversie) return b.conversie - a.conversie;
+      if (a.workload !== b.workload) return a.workload - b.workload;
       return a.start_at.localeCompare(b.start_at);
     });
     const pool = chronological.slice(0, Math.max(poolSize, 40));
     chosen = pickFonioDaypartSlots(pool);
   } else {
-    // Max 1 slot per dag in de top (zoals Fast Direction)
+    // Max 1 slot per dag + spreid over adviseurs (gelijke agenda-vulling)
     const onePerDay: Candidate[] = [];
     const seenDays = new Set<string>();
-    for (const c of ranked) {
-      if (seenDays.has(c.dayKey)) continue;
+    const pickedPerAdv = new Map<string, number>();
+    const maxPerAdv = Math.max(1, Math.ceil(limit / Math.max(adviseurs.length, 1)));
+
+    const tryPick = (c: Candidate): boolean => {
+      if (seenDays.has(c.dayKey)) return false;
+      const n = pickedPerAdv.get(c.adviseur_id) || 0;
+      if (n >= maxPerAdv && onePerDay.length + 1 < limit) {
+        // Bewaar ruimte voor andere adviseurs zolang we nog moeten vullen
+        const othersHaveRoom = adviseurs.some((a) => {
+          if (a.id === c.adviseur_id) return false;
+          return (pickedPerAdv.get(a.id) || 0) < maxPerAdv;
+        });
+        if (othersHaveRoom) return false;
+      }
       seenDays.add(c.dayKey);
+      pickedPerAdv.set(c.adviseur_id, n + 1);
       onePerDay.push(c);
+      return true;
+    };
+
+    for (const c of ranked) {
+      tryPick(c);
       if (onePerDay.length >= limit) break;
     }
 
-    // Vul aan met volgende beste momenten als we te weinig dagen hebben
+    // Vul aan als spreiding te strikt was
     if (onePerDay.length < limit) {
       for (const c of ranked) {
-        if (onePerDay.some((x) => x.start_at === c.start_at)) continue;
+        if (onePerDay.some((x) => x.slot_id === c.slot_id)) continue;
+        if (!seenDays.has(c.dayKey)) seenDays.add(c.dayKey);
+        else if (onePerDay.length >= Math.min(3, limit)) continue;
         onePerDay.push(c);
         if (onePerDay.length >= limit) break;
       }
@@ -681,6 +745,7 @@ export async function loadBestSlotsForLead(
       dayKey: _d,
       preferred: _p,
       conversie: _c,
+      workload: _w,
       ...rest
     }) => rest
   );
@@ -696,6 +761,6 @@ export async function loadBestSlotsForLead(
     slots_tekst: slots_tekst || "Geen vrije momenten gevonden",
     mode: usedRoute ? "route" : "calendar",
     note:
-      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: conversie → reistijd (Google Maps).",
+      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: gelijke agenda-vulling → reistijd → conversie.",
   };
 }

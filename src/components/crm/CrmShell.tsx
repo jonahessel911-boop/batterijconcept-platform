@@ -973,7 +973,7 @@ export function CrmShell() {
     },
     partners: {
       title: "Partners",
-      sub: "Relaties, uitbetalingen en team (login · rollen)",
+      sub: "Team (adviseurs · installatiepartners) en uitbetalingen",
     },
     instellingen: {
       title: "Partners",

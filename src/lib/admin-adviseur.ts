@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeRol } from "@/lib/rollen";
 
 /** Primaire bootstrap-admin (env of default) — catch-all voor ongekoppelde leads. */
 export function adminEmail(): string {
@@ -45,6 +46,7 @@ export function isAdminAdviseur(a: {
 
 /**
  * Mag in klantgerichte slot-planning (Fonio / v1 slots).
+ * Alleen actieve sales-adviseurs. Inactief = niet automatisch inplannen.
  * Systeem-Admin én CRM-admins (o.a. jona@) uit — die hebben lege agenda's
  * waardoor "vrije" slots ontstaan die in de echte adviseur-agenda bezet zijn.
  */
@@ -52,10 +54,14 @@ export function isPlanbaarAdviseur(a: {
   naam: string;
   email?: string | null;
   actief?: boolean | null;
+  rol?: string | null;
 }): boolean {
   if (a.actief === false) return false;
   if (isAdminAdviseur(a)) return false;
   if (isAdminEmail(a.email)) return false;
+  if (a.rol != null && a.rol !== "" && normalizeRol(a.rol) !== "adviseur") {
+    return false;
+  }
   return true;
 }
 

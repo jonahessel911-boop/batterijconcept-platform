@@ -9,6 +9,7 @@ import {
   type GebruikerRol,
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
+import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import Link from "next/link";
 
 type ListFilter = "medewerkers" | "partners";
@@ -42,7 +43,7 @@ function PencilIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
 
 export function InstellingenPanel({
   onAdviseursChange,
-  /** Alleen medewerkers — geen installatiepartners (die zitten onder Partners → Relaties). */
+  /** Alleen adviseurs/team — geen installatiepartners. */
   teamOnly = false,
 }: {
   onAdviseursChange?: () => void;
@@ -131,8 +132,11 @@ export function InstellingenPanel({
       telefoon: a.telefoon,
       rol: normalizeRol(a.rol),
       start_adres: a.start_adres ?? null,
-      commissie_pct: a.commissie_pct ?? 0,
-      actief: a.actief,
+      commissie_pct:
+        a.commissie_pct != null && Number.isFinite(Number(a.commissie_pct))
+          ? Number(a.commissie_pct)
+          : 10,
+      actief: a.actief !== false,
       bedrijfsnaam: a.bedrijfsnaam ?? "",
       kvk_nummer: a.kvk_nummer ?? "",
       btw_nummer: a.btw_nummer ?? "",
@@ -159,7 +163,7 @@ export function InstellingenPanel({
       naam: p.naam,
       email: p.email,
       telefoon: p.telefoon,
-      actief: p.actief,
+      actief: p.actief !== false,
       bedrijfsnaam: p.bedrijfsnaam ?? "",
       kvk_nummer: p.kvk_nummer ?? "",
       btw_nummer: p.btw_nummer ?? "",
@@ -194,7 +198,13 @@ export function InstellingenPanel({
         const res = await fetch("/api/adviseurs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ naam, email, telefoon, rol }),
+          body: JSON.stringify({
+            naam,
+            email,
+            telefoon,
+            rol,
+            ...(rol === "adviseur" ? { commissie_pct: 10 } : {}),
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
@@ -318,43 +328,6 @@ export function InstellingenPanel({
     }
   }
 
-  async function toggleMedewerker(a: Adviseur) {
-    try {
-      const res = await fetch("/api/adviseurs", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: a.id, actief: !a.actief }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Bijwerken mislukt");
-      await load();
-      onAdviseursChange?.();
-      if (selectedId === a.id && data.adviseur) {
-        openMedewerker(data.adviseur as Adviseur);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  async function togglePartner(p: InstallatiePartner) {
-    try {
-      const res = await fetch("/api/installatie-partners", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: p.id, actief: !p.actief }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Bijwerken mislukt");
-      await load();
-      if (selectedId === p.id && data.partner) {
-        openPartner(data.partner as InstallatiePartner);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
   async function resendInvite(a: Adviseur) {
     setError(null);
     setOkMsg(null);
@@ -429,13 +402,13 @@ export function InstellingenPanel({
 
   const countLabel =
     activeFilter === "medewerkers"
-      ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
-      : `${partners.length} partner${partners.length === 1 ? "" : "s"}`;
+      ? `${adviseurs.length} adviseur${adviseurs.length === 1 ? "" : "s"} / team`
+      : `${partners.length} installatiepartner${partners.length === 1 ? "" : "s"}`;
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (selectedAdviseur && draft) {
     return (
-      <div className="border border-line bg-white">
+      <div className="relative border border-line bg-white pb-24">
         <div className="border-b border-line px-4 py-3 sm:px-5">
           <button
             type="button"
@@ -450,17 +423,20 @@ export function InstellingenPanel({
                 {selectedAdviseur.naam}
               </h2>
               <p className="mt-0.5 text-sm text-muted">
-                {gebruikerRolLabel[normalizeRol(selectedAdviseur.rol)]} · Medewerker
+                {gebruikerRolLabel[normalizeRol(selectedAdviseur.rol)]}
+                {isSalesRol(draft.rol)
+                  ? ` · commissie ${Number(draft.commissie_pct) || 0}%`
+                  : ""}
               </p>
             </div>
             <span
               className={
-                selectedAdviseur.actief
+                draft.actief !== false
                   ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                  : "text-[11px] font-semibold uppercase tracking-wide text-muted"
+                  : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
               }
             >
-              {selectedAdviseur.actief ? "Actief" : "Uit"}
+              {draft.actief !== false ? "Actief" : "Inactief"}
             </span>
           </div>
         </div>
@@ -521,40 +497,90 @@ export function InstellingenPanel({
                 ))}
               </select>
             </Field>
-            <Field label="Startadres (reistijd)" className="sm:col-span-2">
-              <input
+            <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Status
+              </p>
+              <div className="mt-2 flex border border-line p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, actief: true }))}
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    draft.actief !== false
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Actief
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, actief: false }))}
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    draft.actief === false
+                      ? "bg-[#C45A12] text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Inactief
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                <strong>Actief</strong> = wordt ingepland via bellen / beste
+                slots. <strong>Inactief</strong> = niet automatisch inplannen.
+                Beschikbaarheid (week/slots) regel je op de Agenda.
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <StartAdresPostcodeField
                 value={draft.start_adres || ""}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, start_adres: e.target.value }))
+                onChange={(next) =>
+                  setDraft((d) => ({ ...d, start_adres: next }))
                 }
-                className={inputCls}
+                inputClassName={inputCls}
               />
-            </Field>
+            </div>
           </div>
 
           {isSalesRol(draft.rol) && (
             <>
-              <div className="border border-line bg-wash/50 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <div className="border border-green/40 bg-green-soft/40 p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-green-dark">
                   Commissie
                 </p>
-                <label className="mt-2 flex items-center gap-2 text-sm">
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.5}
-                    value={draft.commissie_pct ?? 0}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        commissie_pct: parseFloat(e.target.value) || 0,
-                      }))
-                    }
-                    className="w-24 border border-line bg-white px-3 py-2 text-sm tabular-nums outline-none focus:border-green"
-                  />
-                  % over omzet excl. btw
-                </label>
+                <p className="mt-1 text-xs text-muted">
+                  Standaard 10% over omzet excl. btw — pas aan als nodig.
+                  Gebruikt voor creditfacturen / uitbetalingen.
+                </p>
+                <div className="mt-3 flex flex-wrap items-end gap-3">
+                  <label className="block">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Percentage
+                    </span>
+                    <div className="mt-1 flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={draft.commissie_pct ?? 10}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            commissie_pct: parseFloat(e.target.value) || 0,
+                          }))
+                        }
+                        className="w-28 border border-line bg-white px-3 py-2.5 text-lg font-semibold tabular-nums text-ink outline-none focus:border-green"
+                      />
+                      <span className="text-sm font-semibold text-ink">%</span>
+                    </div>
+                  </label>
+                  <p className="pb-2 text-xs text-muted">
+                    Bijv. 10% op €10.000 excl. = €1.000 commissie
+                  </p>
+                </div>
               </div>
               <div className="border border-line p-4">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -682,23 +708,8 @@ export function InstellingenPanel({
             }}
           />
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={detailSaving}
-              onClick={() => void saveMedewerker()}
-              className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
-            >
-              {detailSaving ? "Opslaan…" : "Opslaan"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void toggleMedewerker(selectedAdviseur)}
-              className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
-            >
-              {selectedAdviseur.actief ? "Deactiveren" : "Activeren"}
-            </button>
-            {selectedAdviseur.email && (
+          {selectedAdviseur.email ? (
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => void resendInvite(selectedAdviseur)}
@@ -706,8 +717,8 @@ export function InstellingenPanel({
               >
                 Stuur loginmail
               </button>
-            )}
-          </div>
+            </div>
+          ) : null}
 
           <div className="border-t border-line pt-5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -738,7 +749,28 @@ export function InstellingenPanel({
               >
                 {passwordSaving ? "Bezig…" : "Wachtwoord opslaan"}
               </button>
+              <p className="text-[11px] text-muted">
+                Wachtwoord heeft een eigen knop — overige velden via Opslaan
+                onderaan.
+              </p>
             </div>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted">
+              Status, commissie en gegevens worden pas bewaard als je{" "}
+              <strong className="text-ink">Opslaan</strong> klikt.
+            </p>
+            <button
+              type="button"
+              disabled={detailSaving}
+              onClick={() => void saveMedewerker()}
+              className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+            >
+              {detailSaving ? "Opslaan…" : "Opslaan"}
+            </button>
           </div>
         </div>
       </div>
@@ -747,7 +779,7 @@ export function InstellingenPanel({
 
   if (selectedPartner && partnerDraft) {
     return (
-      <div className="border border-line bg-white">
+      <div className="relative border border-line bg-white pb-24">
         <div className="border-b border-line px-4 py-3 sm:px-5">
           <button
             type="button"
@@ -765,12 +797,12 @@ export function InstellingenPanel({
             </div>
             <span
               className={
-                selectedPartner.actief
+                partnerDraft.actief !== false
                   ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                  : "text-[11px] font-semibold uppercase tracking-wide text-muted"
+                  : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
               }
             >
-              {selectedPartner.actief ? "Actief" : "Uit"}
+              {partnerDraft.actief !== false ? "Actief" : "Inactief"}
             </span>
           </div>
         </div>
@@ -820,6 +852,41 @@ export function InstellingenPanel({
                 className={inputCls}
               />
             </Field>
+            <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Status
+              </p>
+              <div className="mt-2 flex border border-line p-0.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPartnerDraft((d) => ({ ...d, actief: true }))
+                  }
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    partnerDraft.actief !== false
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Actief
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPartnerDraft((d) => ({ ...d, actief: false }))
+                  }
+                  className={[
+                    "flex-1 px-3 py-2 text-sm font-semibold",
+                    partnerDraft.actief === false
+                      ? "bg-[#C45A12] text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Inactief
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="border border-line p-4">
@@ -938,25 +1005,27 @@ export function InstellingenPanel({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={detailSaving}
-              onClick={() => void savePartner()}
-              className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
-            >
-              {detailSaving ? "Opslaan…" : "Opslaan"}
-            </button>
-            <button
-              type="button"
               onClick={() => copyPortalLink(selectedPartner)}
               className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
             >
               Kopieer portaallink
             </button>
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted">
+              Wijzigingen worden pas bewaard als je{" "}
+              <strong className="text-ink">Opslaan</strong> klikt.
+            </p>
             <button
               type="button"
-              onClick={() => void togglePartner(selectedPartner)}
-              className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
+              disabled={detailSaving}
+              onClick={() => void savePartner()}
+              className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
-              {selectedPartner.actief ? "Deactiveren" : "Activeren"}
+              {detailSaving ? "Opslaan…" : "Opslaan"}
             </button>
           </div>
         </div>
@@ -985,7 +1054,7 @@ export function InstellingenPanel({
                     : "bg-white text-muted hover:bg-wash",
                 ].join(" ")}
               >
-                Medewerkers
+                Adviseurs
               </button>
               <button
                 type="button"
@@ -1013,8 +1082,8 @@ export function InstellingenPanel({
           className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
         >
           {activeFilter === "medewerkers"
-            ? "Medewerker toevoegen"
-            : "Partner toevoegen"}
+            ? "+ Adviseur"
+            : "+ Installatiepartner"}
         </button>
       </div>
 
@@ -1039,11 +1108,13 @@ export function InstellingenPanel({
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
             {activeFilter === "medewerkers"
-              ? "Nog geen medewerkers"
+              ? "Nog geen adviseurs"
               : "Nog geen installatiepartners"}
           </p>
           <p className="mt-1 text-sm text-muted">
-            Klik op toevoegen om de eerste aan te maken.
+            {activeFilter === "medewerkers"
+              ? "Voeg een adviseur toe — standaard 10% commissie, Actief = wordt ingepland."
+              : "Voeg een installatiepartner toe voor schouw/installatie en portaallink."}
           </p>
         </div>
       ) : activeFilter === "medewerkers" ? (
@@ -1064,7 +1135,6 @@ export function InstellingenPanel({
             <tbody>
               {(rows as Adviseur[]).map((a) => {
                 const sales = isSalesRol(a.rol);
-                const pct = Number(a.commissie_pct) || 0;
                 const kvkOk = Boolean(a.bedrijfsnaam && a.kvk_nummer && a.iban);
                 return (
                   <tr
@@ -1080,7 +1150,12 @@ export function InstellingenPanel({
                     <td className="tabular-nums">
                       {sales ? (
                         <span className="font-semibold">
-                          {pct.toLocaleString("nl-NL", {
+                          {(
+                            a.commissie_pct != null &&
+                            Number.isFinite(Number(a.commissie_pct))
+                              ? Number(a.commissie_pct)
+                              : 10
+                          ).toLocaleString("nl-NL", {
                             maximumFractionDigits: 1,
                           })}
                           %
@@ -1106,12 +1181,12 @@ export function InstellingenPanel({
                     <td>
                       <span
                         className={
-                          a.actief
+                          a.actief !== false
                             ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                            : "text-[11px] font-semibold uppercase tracking-wide text-muted"
+                            : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
                         }
                       >
-                        {a.actief ? "Actief" : "Uit"}
+                        {a.actief !== false ? "Actief" : "Inactief"}
                       </span>
                     </td>
                     <td className="text-muted">
@@ -1156,12 +1231,12 @@ export function InstellingenPanel({
                   <td>
                     <span
                       className={
-                        p.actief
+                        p.actief !== false
                           ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                          : "text-[11px] font-semibold uppercase tracking-wide text-muted"
+                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
                       }
                     >
-                      {p.actief ? "Actief" : "Uit"}
+                      {p.actief !== false ? "Actief" : "Inactief"}
                     </span>
                   </td>
                   <td className="text-muted">
@@ -1183,7 +1258,7 @@ export function InstellingenPanel({
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold text-ink">
                 {activeFilter === "medewerkers"
-                  ? "Medewerker toevoegen"
+                  ? "Adviseur toevoegen"
                   : "Installatiepartner toevoegen"}
               </h3>
               <button
@@ -1240,6 +1315,13 @@ export function InstellingenPanel({
                   Beller: alleen Bellen · Adviseur: sales · Backoffice:
                   Backoffice, Facturen en Inkomend · Admin: alles
                 </p>
+                {rol === "adviseur" ? (
+                  <p className="border border-green/30 bg-green-soft/50 px-3 py-2 text-[11px] text-green-dark">
+                    Start als <strong>Actief</strong> met{" "}
+                    <strong>10% commissie</strong> — na toevoegen kun je dat
+                    aanpassen en opslaan.
+                  </p>
+                ) : null}
               </>
             )}
             {error && (
@@ -1303,7 +1385,7 @@ function AdviseurCreditFacturenBlock() {
           href="/?tab=partners&partners=uitbetalingen"
           className="inline-flex bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper"
         >
-          Open Partners → Uitbetalingen
+          Open Uitbetalingen
         </Link>
       </div>
     </div>

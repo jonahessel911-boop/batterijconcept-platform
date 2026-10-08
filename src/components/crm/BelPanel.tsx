@@ -8,7 +8,7 @@ import { nl } from "date-fns/locale";
 import { getSupabaseBrowser } from "@/lib/supabase";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
-import { isPlanbareAdviseur } from "@/lib/rollen";
+import { isBelPlanAdviseur } from "@/lib/rollen";
 import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import {
   MAX_BELPOGINGEN,
@@ -188,7 +188,7 @@ export function BelPanel({
   const planAdviseurs = useMemo(
     () =>
       adviseurs.filter(
-        (a) => a.actief && !isAdminAdviseur(a) && isPlanbareAdviseur(a)
+        (a) => a.actief && !isAdminAdviseur(a) && isBelPlanAdviseur(a)
       ),
     [adviseurs]
   );
@@ -1075,8 +1075,8 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top 5 over alle adviseurs: hoogste conversie eerst, daarna
-              reistijd (Google Maps) en agenda.
+              Top 5 over alle adviseurs: eerst gelijke agenda-vulling, daarna
+              reistijd (Google Maps) en conversie.
             </p>
 
             <div className="space-y-2">

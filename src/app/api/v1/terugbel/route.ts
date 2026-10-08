@@ -23,7 +23,7 @@ import {
   pickStr,
 } from "@/lib/api-v1/http";
 import { planAfspraak, parseJaNee } from "@/lib/plan-afspraak";
-import { isPlanbareAdviseur } from "@/lib/rollen";
+import { isBelPlanAdviseur } from "@/lib/rollen";
 import { isTerugbelSoort } from "@/lib/afspraak-soort";
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ, formatDateTimeLongNl } from "@/lib/format";
@@ -47,7 +47,7 @@ async function resolveAdviseurId(
     .eq("actief", true);
 
   const planbaar = (rows || []).filter(
-    (a) => !isAdminAdviseur(a) && isPlanbareAdviseur(a)
+    (a) => !isAdminAdviseur(a) && isBelPlanAdviseur(a)
   );
 
   if (preferred && planbaar.some((a) => a.id === preferred)) {

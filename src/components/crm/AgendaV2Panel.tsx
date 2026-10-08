@@ -36,6 +36,7 @@ import { afblokKey } from "@/lib/adviseur-beschikbaarheid";
 import { LeadZoekVeld } from "./LeadZoekVeld";
 import { AfspraakDetail } from "./AgendaPanel";
 import { LeadsTable } from "./LeadsTable";
+import { ReistijdHint } from "./ReistijdHint";
 
 /** Vaste afspraakblokken: 10:00, 13:00, 16:00, 19:00 */
 const SLOT_ROWS: { label: string; hour: number; minute: number }[] =
@@ -1301,6 +1302,20 @@ export function AgendaPanel({
                 <option value="bel">Belafspraak</option>
               </select>
             </label>
+            <ReistijdHint
+              adviseurId={planSlot.adviseurId}
+              startAt={planSlot.startAt}
+              lead={pickedLead}
+              afspraken={afspraken}
+              allLeads={leads}
+              startAdres={
+                adviseurs.find((a) => a.id === planSlot.adviseurId)
+                  ?.start_adres || null
+              }
+              startAdresLabel={
+                adviseurNaam.get(planSlot.adviseurId) || "Startadres"
+              }
+            />
             <button
               type="submit"
               disabled={saving || !pickedLead}

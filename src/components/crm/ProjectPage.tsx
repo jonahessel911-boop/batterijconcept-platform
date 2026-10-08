@@ -360,6 +360,7 @@ export function ProjectPage() {
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [trackLinkCopied, setTrackLinkCopied] = useState(false);
   const [trackLinkBusy, setTrackLinkBusy] = useState(false);
+  const [wfPortalBusy, setWfPortalBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
   const [gegevensDraft, setGegevensDraft] = useState<GegevensDraft | null>(
@@ -1217,6 +1218,33 @@ export function ProjectPage() {
     }
   }
 
+  async function openWarmtefondsPortaal() {
+    if (!project) return;
+    setWfPortalBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/warmtefonds-link`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error ||
+            "Warmtefonds-portaal openen mislukt"
+        );
+      }
+      const url = (data as { url?: string }).url;
+      if (!url) throw new Error("Geen portaal-link beschikbaar");
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Warmtefonds-portaal openen mislukt"
+      );
+    } finally {
+      setWfPortalBusy(false);
+    }
+  }
+
   async function uploadSchouwFormulier(file: File) {
     if (!project) return;
     setUploadingSchouw(true);
@@ -1860,6 +1888,18 @@ export function ProjectPage() {
                               ? "Gekopieerd!"
                               : "Copy link"}
                         </button>
+                        {isWarmtefondsProject(project) ? (
+                          <button
+                            type="button"
+                            disabled={wfPortalBusy}
+                            onClick={() => void openWarmtefondsPortaal()}
+                            className="border border-line bg-white px-2 py-1 text-[11px] font-semibold text-[#0F766E] hover:bg-wash disabled:opacity-50"
+                          >
+                            {wfPortalBusy
+                              ? "…"
+                              : "Warmtefonds portaal →"}
+                          </button>
+                        ) : null}
                       </div>
                       <p className="text-[11px] text-muted">
                         {mailed

@@ -100,7 +100,7 @@ export function magInkomend(rol: GebruikerRol): boolean {
   return rol === "admin" || rol === "backoffice";
 }
 
-/** Sales-adviseurs die afspraken kunnen krijgen (geen beller/admin/installateur). */
+/** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */
 export function isPlanbareAdviseur(a: {
   actief?: boolean;
   rol?: string | null;
@@ -108,10 +108,20 @@ export function isPlanbareAdviseur(a: {
   email?: string | null;
 }): boolean {
   if (a.actief === false) return false;
-  const rol = normalizeRol(a.rol);
-  if (rol === "beller" || rol === "installateur") return false;
-  // systeem-Admin catch-all uitsluiten gebeurt elders via isAdminAdviseur
-  return rol === "adviseur" || rol === "admin" || rol === "backoffice";
+  return normalizeRol(a.rol) === "adviseur";
+}
+
+/**
+ * Planbaar via bel-systeem / beste slots.
+ * Inactief (`actief === false`) → niet automatisch inplannen.
+ */
+export function isBelPlanAdviseur(a: {
+  actief?: boolean;
+  rol?: string | null;
+  naam: string;
+  email?: string | null;
+}): boolean {
+  return isPlanbareAdviseur(a);
 }
 
 /** Alleen cijfers — voor telefoonzoek. */

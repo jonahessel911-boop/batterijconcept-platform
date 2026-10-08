@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/best-slots?lead_id=…&limit=5
- * Top momenten over alle adviseurs: conversie → reistijd (Google Maps).
+ * Top momenten over alle adviseurs: gelijke vulling → reistijd → conversie.
  * Voor BelPanel / CRM (sessie-auth via middleware).
  */
 export async function GET(req: NextRequest) {
