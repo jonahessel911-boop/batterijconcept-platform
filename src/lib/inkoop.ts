@@ -1,12 +1,108 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 /**
  * Inkoopprijzen — defaults + berekening.
  * Bron van waarheid na migratie: tabel producten + inkoop_instellingen.
  */
+
 export const DEFAULT_INSTALLATIE_STANDAARD = 675;
 export const DEFAULT_WARMTEFONDS_AANVRAAG = 175;
 export const DEFAULT_BATTERIJ_PER_MODULE = 1499.73;
 export const DEFAULT_OMVORMER = 1089.62;
 export const MODULE_KWH = 9.3;
+
+/** Productselect zonder inkoop-kolommen (werkt altijd). */
+export const PRODUCT_SELECT_BASE =
+  "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief";
+
+/** Volledige select — alleen als migrate-inkoop.sql is gedraaid. */
+export const PRODUCT_SELECT_INKOOP =
+  "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief, inkoop_batterij, inkoop_omvormer, inkoop_installatie, inkoop_warmtefonds";
+
+/**
+ * Process-cache: voorkomt eindeloze PostgREST 42703/PGRST205 spam.
+ * Start op `false` (veilig zonder migratie). Na geslaagde write of
+ * expliciete probe → `true`. Herstart na migrate-inkoop.sql pikt DB op
+ * via `probeInkoopSchemaOnce`.
+ */
+let inkoopColumnsReady = false;
+let inkoopInstellingenReady = false;
+let didProbeInkoopSchema = false;
+
+function isMissingInkoopSchema(
+  error: { code?: string; message?: string } | null
+): boolean {
+  if (!error) return false;
+  const msg = error.message || "";
+  return (
+    error.code === "42703" ||
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    /inkoop_/i.test(msg) ||
+    /inkoop_instellingen/i.test(msg) ||
+    /schema cache/i.test(msg) ||
+    /does not exist/i.test(msg)
+  );
+}
+
+/**
+ * Eenmalige stille probe per process — alleen als nog niemand heeft
+ * gemarkeerd. Geen herhaalde fails in Supabase-logs.
+ */
+export async function probeInkoopSchemaOnce(
+  sb: SupabaseClient
+): Promise<void> {
+  if (didProbeInkoopSchema) return;
+  didProbeInkoopSchema = true;
+
+  const cols = await sb.from("producten").select("inkoop_batterij").limit(1);
+  inkoopColumnsReady = !cols.error;
+
+  const inst = await sb.from("inkoop_instellingen").select("id").limit(1);
+  if (!inst.error) {
+    inkoopInstellingenReady = true;
+  } else if (isMissingInkoopSchema(inst.error)) {
+    inkoopInstellingenReady = false;
+  }
+}
+
+/** true als producten.inkoop_* kolommen bestaan. */
+export async function hasInkoopProductColumns(
+  sb: SupabaseClient
+): Promise<boolean> {
+  await probeInkoopSchemaOnce(sb);
+  return inkoopColumnsReady;
+}
+
+/** true als tabel inkoop_instellingen bestaat. */
+export async function hasInkoopInstellingenTable(
+  sb: SupabaseClient
+): Promise<boolean> {
+  await probeInkoopSchemaOnce(sb);
+  return inkoopInstellingenReady;
+}
+
+/** Markeer schema als beschikbaar (na geslaagde write). */
+export function markInkoopSchemaReady(opts?: {
+  columns?: boolean;
+  instellingen?: boolean;
+}): void {
+  didProbeInkoopSchema = true;
+  if (opts?.columns) inkoopColumnsReady = true;
+  if (opts?.instellingen) inkoopInstellingenReady = true;
+}
+
+/** Markeer schema als ontbrekend (na 42703/PGRST205). */
+export function markInkoopSchemaMissing(opts?: {
+  columns?: boolean;
+  instellingen?: boolean;
+}): void {
+  didProbeInkoopSchema = true;
+  if (opts?.columns) inkoopColumnsReady = false;
+  if (opts?.instellingen) inkoopInstellingenReady = false;
+}
+
+export { isMissingInkoopSchema };
 
 /** Standaard G3-accessoires (ex. btw). */
 export const DEFAULT_BASEPLATE_EX_BTW = 60;

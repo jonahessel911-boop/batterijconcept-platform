@@ -4,15 +4,19 @@ import { errMessage } from "@/lib/errors";
 import {
   DEFAULT_INSTALLATIE_STANDAARD,
   DEFAULT_WARMTEFONDS_AANVRAAG,
+  PRODUCT_SELECT_BASE,
+  PRODUCT_SELECT_INKOOP,
   defaultInkoopVoorSku,
+  hasInkoopInstellingenTable,
+  hasInkoopProductColumns,
+  isMissingInkoopSchema,
+  markInkoopSchemaMissing,
+  markInkoopSchemaReady,
   type InkoopInstellingen,
   type ProductInkoop,
 } from "@/lib/inkoop";
 
 export const runtime = "nodejs";
-
-const PRODUCT_SELECT =
-  "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief, inkoop_batterij, inkoop_omvormer, inkoop_installatie, inkoop_warmtefonds";
 
 function num(v: unknown, fallback = 0): number {
   const n = Number(v);
@@ -47,13 +51,30 @@ function mapProduct(row: Record<string, unknown>): ProductInkoop {
 async function loadInstellingen(
   sb: ReturnType<typeof getSupabaseAdmin>
 ): Promise<InkoopInstellingen> {
+  const ready = await hasInkoopInstellingenTable(sb);
+  if (!ready) {
+    return {
+      installatie_standaard: DEFAULT_INSTALLATIE_STANDAARD,
+      warmtefonds_aanvraag: DEFAULT_WARMTEFONDS_AANVRAAG,
+    };
+  }
+
   const { data, error } = await sb
     .from("inkoop_instellingen")
     .select("installatie_standaard, warmtefonds_aanvraag")
     .eq("id", 1)
     .maybeSingle();
 
-  if (error || !data) {
+  if (error) {
+    if (isMissingInkoopSchema(error)) {
+      markInkoopSchemaMissing({ instellingen: true });
+    }
+    return {
+      installatie_standaard: DEFAULT_INSTALLATIE_STANDAARD,
+      warmtefonds_aanvraag: DEFAULT_WARMTEFONDS_AANVRAAG,
+    };
+  }
+  if (!data) {
     return {
       installatie_standaard: DEFAULT_INSTALLATIE_STANDAARD,
       warmtefonds_aanvraag: DEFAULT_WARMTEFONDS_AANVRAAG,
@@ -71,53 +92,49 @@ async function loadInstellingen(
   };
 }
 
+async function loadProducten(sb: ReturnType<typeof getSupabaseAdmin>) {
+  const withInkoop = await hasInkoopProductColumns(sb);
+  const select = (
+    withInkoop ? PRODUCT_SELECT_INKOOP : PRODUCT_SELECT_BASE
+  ) as typeof PRODUCT_SELECT_BASE;
+  const { data, error } = await sb
+    .from("producten")
+    .select(select)
+    .order("sku", { ascending: true });
+
+  if (error && withInkoop && isMissingInkoopSchema(error)) {
+    markInkoopSchemaMissing({ columns: true });
+    const retry = await sb
+      .from("producten")
+      .select(PRODUCT_SELECT_BASE)
+      .order("sku", { ascending: true });
+    if (retry.error) throw retry.error;
+    return retry.data || [];
+  }
+  if (error) throw error;
+  return data || [];
+}
+
 /** GET /api/inkoop — instellingen + producten met inkoop */
 export async function GET() {
   try {
     const sb = getSupabaseAdmin();
-    const instellingen = await loadInstellingen(sb);
+    const [instellingen, rows] = await Promise.all([
+      loadInstellingen(sb),
+      loadProducten(sb),
+    ]);
 
-    let { data, error } = await sb
-      .from("producten")
-      .select(PRODUCT_SELECT)
-      .order("sku", { ascending: true });
-
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("inkoop_"))
-    ) {
-      const retry = await sb
-        .from("producten")
-        .select(
-          "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief"
-        )
-        .order("sku", { ascending: true });
-      if (retry.error) throw retry.error;
-      data = (retry.data || []).map((p) => {
-        const d = defaultInkoopVoorSku(p.sku);
-        return { ...p, ...d };
-      }) as typeof data;
-      error = null;
-    }
-
-    if (error) throw error;
-
-    const producten = (data || []).map((r) =>
+    const producten = rows.map((r) =>
       mapProduct(r as Record<string, unknown>)
     );
 
     return NextResponse.json({
       instellingen,
       producten,
-      migrationHint:
-        producten.some(
-          (p) =>
-            p.inkoop_batterij === 0 &&
-            p.sku?.startsWith("AE-G3")
-        )
-          ? "Run supabase/migrate-inkoop.sql voor standaard inkoopprijzen"
-          : null,
+      // Alleen hint als schema echt ontbreekt — geen harde fout.
+      migrationHint: (await hasInkoopProductColumns(sb))
+        ? null
+        : "Optioneel: run supabase/migrate-inkoop.sql voor persistente inkoopprijzen",
     });
   } catch (e) {
     return NextResponse.json(
@@ -153,7 +170,9 @@ export async function PATCH(req: NextRequest) {
     const sb = getSupabaseAdmin();
 
     if (body.instellingen) {
-      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
       if (body.instellingen.installatie_standaard != null) {
         patch.installatie_standaard = num(
           body.instellingen.installatie_standaard,
@@ -170,7 +189,8 @@ export async function PATCH(req: NextRequest) {
         .from("inkoop_instellingen")
         .upsert({ id: 1, ...patch });
       if (error) {
-        if (error.code === "42P01" || error.message?.includes("inkoop_instellingen")) {
+        if (isMissingInkoopSchema(error)) {
+          markInkoopSchemaMissing({ instellingen: true });
           return NextResponse.json(
             {
               error:
@@ -181,6 +201,7 @@ export async function PATCH(req: NextRequest) {
         }
         throw error;
       }
+      markInkoopSchemaReady({ instellingen: true });
     }
 
     if (body.producten?.length) {
@@ -204,10 +225,8 @@ export async function PATCH(req: NextRequest) {
           .update(patch)
           .eq("id", p.id);
         if (error) {
-          if (
-            error.code === "42703" ||
-            error.message?.includes("inkoop_")
-          ) {
+          if (isMissingInkoopSchema(error)) {
+            markInkoopSchemaMissing({ columns: true });
             return NextResponse.json(
               {
                 error:
@@ -219,22 +238,16 @@ export async function PATCH(req: NextRequest) {
           throw error;
         }
       }
+      markInkoopSchemaReady({ columns: true });
     }
 
-    // Herlaad
     const instellingen = await loadInstellingen(sb);
-    const { data, error } = await sb
-      .from("producten")
-      .select(PRODUCT_SELECT)
-      .order("sku", { ascending: true });
-    if (error) throw error;
+    const rows = await loadProducten(sb);
 
     return NextResponse.json({
       ok: true,
       instellingen,
-      producten: (data || []).map((r) =>
-        mapProduct(r as Record<string, unknown>)
-      ),
+      producten: rows.map((r) => mapProduct(r as Record<string, unknown>)),
     });
   } catch (e) {
     return NextResponse.json(

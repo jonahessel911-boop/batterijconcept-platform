@@ -22,7 +22,12 @@ import {
   type MateriaalChecks,
 } from "@/lib/project-inkoop-checklist";
 import {
+  PRODUCT_SELECT_BASE,
+  PRODUCT_SELECT_INKOOP,
   defaultInkoopVoorSku,
+  hasInkoopProductColumns,
+  isMissingInkoopSchema,
+  markInkoopSchemaMissing,
   type ProductInkoop,
 } from "@/lib/inkoop";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
@@ -221,26 +226,25 @@ export async function GET(_req: NextRequest) {
       ),
     ];
 
-    let productenQuery = await sb
+    const withInkoop = await hasInkoopProductColumns(sb);
+    const productSelect = (
+      withInkoop ? PRODUCT_SELECT_INKOOP : PRODUCT_SELECT_BASE
+    ) as typeof PRODUCT_SELECT_BASE;
+    let { data: productenRows, error: productenErr } = await sb
       .from("producten")
-      .select(
-        "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief, inkoop_batterij, inkoop_omvormer, inkoop_installatie, inkoop_warmtefonds"
-      )
+      .select(productSelect)
       .eq("actief", true);
 
-    if (
-      productenQuery.error &&
-      (productenQuery.error.code === "42703" ||
-        productenQuery.error.message?.includes("inkoop_"))
-    ) {
-      productenQuery = (await sb
+    if (productenErr && isMissingInkoopSchema(productenErr)) {
+      markInkoopSchemaMissing({ columns: true });
+      const retry = await sb
         .from("producten")
-        .select(
-          "id, sku, naam, omschrijving, prijs_ex_btw, btw_percentage, eenheid, actief"
-        )
-        .eq("actief", true)) as typeof productenQuery;
+        .select(PRODUCT_SELECT_BASE)
+        .eq("actief", true);
+      productenRows = retry.data;
+      productenErr = retry.error;
     }
-    if (productenQuery.error) throw productenQuery.error;
+    if (productenErr) throw productenErr;
 
     const regelsRes = offerteIds.length
       ? await sb
@@ -295,7 +299,7 @@ export async function GET(_req: NextRequest) {
       }
     }
 
-    const producten = (productenQuery.data || []).map((r) =>
+    const producten = (productenRows || []).map((r) =>
       mapProduct(r as Record<string, unknown>)
     );
     const regelsByOfferte = new Map<
