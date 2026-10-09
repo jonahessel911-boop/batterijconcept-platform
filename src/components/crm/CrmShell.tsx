@@ -658,14 +658,6 @@ export function CrmShell() {
     });
   }, [facturen, adviseurFilter, scopedLeadIds, offertes]);
 
-  const projectIdByLeadId = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of projecten) {
-      if (p.lead_id && !m.has(p.lead_id)) m.set(p.lead_id, p.id);
-    }
-    return m;
-  }, [projecten]);
-
   const appointmentLeadIds = useMemo(() => {
     const ids = new Set<string>();
     const now = Date.now();
@@ -1190,7 +1182,6 @@ export function CrmShell() {
                       userRol === "admin" ? updateLeadBeller : undefined
                     }
                     showBellerColumn={userRol === "admin"}
-                    projectIdByLeadId={projectIdByLeadId}
                   />
                 )}
                 {tab === "bellen" && (

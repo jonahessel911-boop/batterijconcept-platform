@@ -230,8 +230,6 @@ export function LeadsTable({
   showBellerColumn = false,
   /** Agenda “Leads vandaag”: toon afspraaktijd als eerste kolom. */
   showAfspraakTijdFirst = false,
-  /** Sale-leads met project → open project i.p.v. lead. */
-  projectIdByLeadId,
 }: {
   leads: Lead[];
   adviseurs?: Adviseur[];
@@ -243,7 +241,6 @@ export function LeadsTable({
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
   showBellerColumn?: boolean;
   showAfspraakTijdFirst?: boolean;
-  projectIdByLeadId?: Map<string, string>;
 }) {
   const router = useRouter();
   const [page, setPage] = useState(1);
@@ -265,15 +262,6 @@ export function LeadsTable({
 
   function openLeadRow(lead: Lead) {
     rememberCrmReturnUrl();
-    const projectId = projectIdByLeadId?.get(lead.id);
-    const isSale =
-      lead.status === "sale_financiering" ||
-      lead.status === "sale_eigen_middelen" ||
-      lead.status === "deal";
-    if (projectId && isSale) {
-      router.push(`/projecten/${projectId}?from=orders`);
-      return;
-    }
     router.push(`/leads/${lead.id}`);
   }
 
