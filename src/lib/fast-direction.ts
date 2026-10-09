@@ -81,25 +81,31 @@ export function googleMapsMultiStopUrl(addresses: string[]): string | null {
   return url;
 }
 
+export type PickFastDirectionOptions = {
+  targetAddress: string;
+  freeSlots: FastDirectionSlot[];
+  stops: FastDirectionStop[];
+  depotAddress?: string | null;
+  depotLabel?: string | null;
+  durationSecBetween: (from: string, to: string) => number | null;
+  distanceMBetween?: (from: string, to: string) => number | null;
+};
+
 /**
- * Score alle vrije slots: per dag het beste passend slot (rijtijd),
- * daarna dagen op volgorde (vroeger eerst). Max `limit` opties.
+ * Score alle vrije slots op reistijd.
+ * Vertrekpunt: vorige fysieke afspraak diezelfde dag, anders startadres.
+ * Standaard: per dag het beste slot, vroegste dagen eerst.
+ * Met `collapsePerDay: false` blijven alle gescoorde slots behouden.
  */
 export function pickTopFastDirectionSlots(
-  opts: {
-    targetAddress: string;
-    freeSlots: FastDirectionSlot[];
-    stops: FastDirectionStop[];
-    depotAddress?: string | null;
-    depotLabel?: string | null;
-    durationSecBetween: (from: string, to: string) => number | null;
-    distanceMBetween?: (from: string, to: string) => number | null;
-  },
-  limit = 3
+  opts: PickFastDirectionOptions,
+  limit = 3,
+  flags?: { collapsePerDay?: boolean }
 ): FastDirectionSuggestion[] {
   const target = opts.targetAddress.trim();
   if (!target || target === "—" || opts.freeSlots.length === 0) return [];
 
+  const collapsePerDay = flags?.collapsePerDay !== false;
   const depot = (opts.depotAddress || "").trim();
   const hasDepot = Boolean(depot && depot !== "—");
   const depotName = opts.depotLabel?.trim() || "adviseur";
@@ -130,12 +136,18 @@ export function pickTopFastDirectionSlots(
     const slotStart = new Date(slot.start_at).getTime();
     const slotEnd = new Date(slot.end_at).getTime();
 
+    // Vorige stop = laatste afspraak die eerder die dag begon en eindigt
+    // vóór dit slot (bv. 13:00 → reistijd naar 16:00, niet vanaf huis).
     const prevStop =
       [...dayStops]
-        .filter((s) => new Date(s.end_at).getTime() <= slotStart)
+        .filter((s) => {
+          const sStart = new Date(s.start_at).getTime();
+          const sEnd = new Date(s.end_at || s.start_at).getTime();
+          return sStart < slotStart && sEnd <= slotStart;
+        })
         .sort(
           (a, b) =>
-            new Date(b.end_at).getTime() - new Date(a.end_at).getTime()
+            new Date(b.start_at).getTime() - new Date(a.start_at).getTime()
         )[0] || null;
     const next =
       dayStops.find((s) => new Date(s.start_at).getTime() >= slotEnd) || null;
@@ -271,15 +283,21 @@ export function pickTopFastDirectionSlots(
     });
   }
 
-  const bestByDay = new Map<string, Scored>();
-  for (const s of scored) {
-    const cur = bestByDay.get(s.dayKey);
-    if (!cur || s.dayFitKey < cur.dayFitKey) bestByDay.set(s.dayKey, s);
-  }
+  const pool = collapsePerDay
+    ? (() => {
+        const bestByDay = new Map<string, Scored>();
+        for (const s of scored) {
+          const cur = bestByDay.get(s.dayKey);
+          if (!cur || s.dayFitKey < cur.dayFitKey) bestByDay.set(s.dayKey, s);
+        }
+        return [...bestByDay.values()];
+      })()
+    : scored;
 
-  const ranked = [...bestByDay.values()].sort((a, b) => {
+  const ranked = pool.sort((a, b) => {
+    if (a.dayFitKey !== b.dayFitKey) return a.dayFitKey - b.dayFitKey;
     if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
-    return a.dayFitKey - b.dayFitKey;
+    return a.start_at.localeCompare(b.start_at);
   });
 
   return ranked.slice(0, limit).map(({ dayFitKey: _d, ...rest }) => rest);
@@ -302,7 +320,9 @@ export function uniqueAddresses(
   target: string,
   stops: FastDirectionStop[],
   depotAddress?: string | null,
-  limit = 10
+  limit = 25,
+  /** Dagen (yyyy-MM-dd) waarvan stops voorrang krijgen — bv. dagen met vrije slots. */
+  preferDayKeys?: Set<string> | string[]
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -314,6 +334,17 @@ export function uniqueAddresses(
   };
   push(target);
   if (depotAddress) push(depotAddress);
-  for (const s of stops) push(s.address);
+
+  const prefer =
+    preferDayKeys instanceof Set
+      ? preferDayKeys
+      : new Set(preferDayKeys || []);
+  const prioritized = [...stops].sort((a, b) => {
+    const aP = prefer.size === 0 ? 0 : prefer.has(dayKeyOf(a.start_at)) ? 0 : 1;
+    const bP = prefer.size === 0 ? 0 : prefer.has(dayKeyOf(b.start_at)) ? 0 : 1;
+    if (aP !== bP) return aP - bP;
+    return new Date(a.start_at).getTime() - new Date(b.start_at).getTime();
+  });
+  for (const s of prioritized) push(s.address);
   return out.slice(0, limit);
 }

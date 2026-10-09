@@ -5,7 +5,7 @@
  */
 
 import { addDays, getISOWeekYear } from "date-fns";
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
@@ -50,6 +50,8 @@ export type BestSlotOption = {
   conversie_pct: number | null;
   /** Echte reistijd in minuten vanaf startadres/vorige stop (null = onbekend) */
   reistijd_min: number | null;
+  /** true = vanaf startadres; false = vanaf vorige afspraak die dag; null = onbekend */
+  reistijd_vanaf_startadres: boolean | null;
 };
 
 function b64urlEncode(json: string): string {
@@ -514,7 +516,13 @@ export async function loadBestSlotsForLead(
     return row.pct;
   };
 
-  const fromIso = new Date().toISOString();
+  // Vanaf middernacht vandaag (NL): ochtendafspraken tellen mee als
+  // vertrekpunt voor middag/avond-slots dezelfde dag.
+  const todayKey = dayKeyAmsterdam(new Date());
+  const fromIso = fromZonedTime(
+    `${todayKey}T00:00:00`,
+    AMSTERDAM_TZ
+  ).toISOString();
   const toIso = addDays(new Date(), daysAhead + 2).toISOString();
   const { data: afsprakenRaw } = await sb
     .from("afspraken")
@@ -526,7 +534,8 @@ export async function loadBestSlotsForLead(
     .in(
       "adviseur_id",
       adviseurs.map((a) => a.id)
-    );
+    )
+    .order("start_at");
 
   type Candidate = BestSlotOption & {
     scoreSec: number;
@@ -578,14 +587,22 @@ export async function loadBestSlotsForLead(
 
     const depotAddress = resolveDepotAddress(adv);
     try {
+      const freeDayKeys = new Set(
+        free.map((s) =>
+          formatInTimeZone(new Date(s.start_at), AMSTERDAM_TZ, "yyyy-MM-dd")
+        )
+      );
       const addresses = uniqueAddresses(
         targetAddress,
         stops,
         depotAddress,
-        12
+        25,
+        freeDayKeys
       );
       if (addresses.length >= 1) {
         const { durationMap, distanceMap } = await buildDurationMap(addresses);
+        // Alle vrije slots scoren (niet 1 per dag): zo krijgt 16:00 na een
+        // 13:00-stop de reistijd vanaf die stop, niet vanaf huis.
         scored = pickTopFastDirectionSlots(
           {
             targetAddress,
@@ -602,7 +619,8 @@ export async function loadBestSlotsForLead(
               return distanceMap.get(`${from}|||${to}`) ?? null;
             },
           },
-          diversifyHours ? 14 : 5
+          diversifyHours ? 80 : 40,
+          { collapsePerDay: false }
         );
         if (scored.some((s) => s.fromDurationSec != null || s.toDurationSec != null)) {
           usedRoute = true;
@@ -638,6 +656,8 @@ export async function loadBestSlotsForLead(
               : s.toDurationSec != null
                 ? Math.round(s.toDurationSec / 60)
                 : null,
+          reistijd_vanaf_startadres:
+            s.fromDurationSec != null ? s.fromDepot : null,
           scoreSec: s.scoreSec,
           dayKey: s.dayKey,
           preferred,
@@ -678,6 +698,7 @@ export async function loadBestSlotsForLead(
           reason: null,
           conversie_pct: convPct,
           reistijd_min: null,
+          reistijd_vanaf_startadres: null,
           // Iets slechter dan route-score zodat FD blijft winnen als die er is
           scoreSec: scored && scored.length > 0 ? 50_000 : 0,
           dayKey,

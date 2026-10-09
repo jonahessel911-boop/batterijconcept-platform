@@ -45,6 +45,8 @@ type BestSlotOption = {
   reason: string | null;
   conversie_pct: number | null;
   reistijd_min: number | null;
+  /** true = vanaf startadres; false = vanaf vorige afspraak die dag */
+  reistijd_vanaf_startadres: boolean | null;
 };
 async function clientLogLeadEvent(
   leadId: string,
@@ -1255,7 +1257,14 @@ export function BelPanel({
                                 <span>Nog geen conversie</span>
                               )}
                               {slot.reistijd_min != null ? (
-                                <span>~{slot.reistijd_min} min route</span>
+                                <span>
+                                  ~{slot.reistijd_min} min
+                                  {slot.reistijd_vanaf_startadres === false
+                                    ? " vanaf vorige afspraak"
+                                    : slot.reistijd_vanaf_startadres === true
+                                      ? " vanaf startadres"
+                                      : " route"}
+                                </span>
                               ) : null}
                               {!slot.feasible ? (
                                 <span className="text-[#C45A12]">Strak</span>
