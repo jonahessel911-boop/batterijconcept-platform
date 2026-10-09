@@ -28,7 +28,7 @@ import {
   weekKeyFromDate,
   weekKeyString,
   isSlotAfgeblokt,
-  isZondagAmsterdam,
+  standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
 import type { AfspraakSoort } from "@/types/database";
 
@@ -177,9 +177,9 @@ export async function planAfspraak(
       return {
         ok: false,
         status: 409,
-        error: isZondagAmsterdam(start)
-          ? "Zondag is standaard geblokkeerd voor afspraken"
-          : "Dit tijdsblok is afgeblokt voor deze adviseur",
+        error:
+          standaardBlokkadeLabel(start) ||
+          "Dit tijdsblok is afgeblokt voor deze adviseur",
       };
     }
   }

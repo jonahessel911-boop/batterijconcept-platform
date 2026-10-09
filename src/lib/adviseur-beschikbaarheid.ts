@@ -38,18 +38,25 @@ export function dayKeyAmsterdam(date: Date | string): string {
   return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
-/** Zondag (Amsterdam) is standaard altijd geblokkeerd voor adviseur-slots. */
-export function isZondagAmsterdam(dateOrDayKey: Date | string): boolean {
-  if (typeof dateOrDayKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateOrDayKey)) {
+function amsterdamWeekday(dateOrDayKey: Date | string): number {
+  if (
+    typeof dateOrDayKey === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(dateOrDayKey)
+  ) {
     const [y, m, d] = dateOrDayKey.split("-").map(Number);
-    // Wall-clock zondag op die kalenderdag (geen TZ-shift)
-    return new Date(y, m - 1, d).getDay() === 0;
+    // Wall-clock weekdag op die kalenderdag (geen TZ-shift)
+    return new Date(y, m - 1, d).getDay();
   }
   const zoned = toZonedTime(
     typeof dateOrDayKey === "string" ? new Date(dateOrDayKey) : dateOrDayKey,
     AMSTERDAM_TZ
   );
-  return zoned.getDay() === 0;
+  return zoned.getDay();
+}
+
+/** Zondag (Amsterdam) is standaard altijd geblokkeerd voor adviseur-slots. */
+export function isZondagAmsterdam(dateOrDayKey: Date | string): boolean {
+  return amsterdamWeekday(dateOrDayKey) === 0;
 }
 
 /** Nearest vaste slot-hour (10/13/16/19) voor een starttijd. */
@@ -67,6 +74,47 @@ export function nearestSlotHour(startAt: string | Date): SlotHour {
     }
   }
   return best;
+}
+
+/**
+ * Maandag 10:00 (Amsterdam) — weekmeeting op kantoor.
+ * Altijd standaard geblokkeerd, net als zondag.
+ * @param hour — verplicht bij dayKey `yyyy-MM-dd`; anders uit starttijd gehaald.
+ */
+export function isMaandagTienAmsterdam(
+  dateOrDayKey: Date | string,
+  hour?: number
+): boolean {
+  if (amsterdamWeekday(dateOrDayKey) !== 1) return false;
+  if (
+    typeof dateOrDayKey === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(dateOrDayKey)
+  ) {
+    return hour === 10;
+  }
+  return nearestSlotHour(dateOrDayKey) === 10;
+}
+
+/** Standaard geblokkeerd: hele zondag, of maandag 10:00 (weekmeeting). */
+export function isStandaardGeblokkeerdSlot(
+  dateOrDayKey: Date | string,
+  hour?: number
+): boolean {
+  if (isZondagAmsterdam(dateOrDayKey)) return true;
+  return isMaandagTienAmsterdam(dateOrDayKey, hour);
+}
+
+export function standaardBlokkadeLabel(
+  dateOrDayKey: Date | string,
+  hour?: number
+): string | null {
+  if (isZondagAmsterdam(dateOrDayKey)) {
+    return "Zondag is standaard geblokkeerd";
+  }
+  if (isMaandagTienAmsterdam(dateOrDayKey, hour)) {
+    return "Maandag 10:00 is standaard geblokkeerd (weekmeeting)";
+  }
+  return null;
 }
 
 function isMissingAfblokTable(error: {
@@ -161,7 +209,7 @@ export async function isSlotAfgeblokt(
   adviseurId: string,
   startAt: Date
 ): Promise<boolean> {
-  if (isZondagAmsterdam(startAt)) return true;
+  if (isStandaardGeblokkeerdSlot(startAt)) return true;
 
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);
@@ -180,14 +228,14 @@ export async function isSlotAfgeblokt(
   return Boolean(data);
 }
 
-/** Filter slots die als tijdsblok zijn afgeblokt (incl. standaard zondag). */
+/** Filter slots die als tijdsblok zijn afgeblokt (incl. standaard zondag + ma 10:00). */
 export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
   slots: T[],
   adviseurId: string,
   blocked: Set<string>
 ): T[] {
   return slots.filter((s) => {
-    if (isZondagAmsterdam(s.start_at)) return false;
+    if (isStandaardGeblokkeerdSlot(s.start_at)) return false;
     const dag = dayKeyAmsterdam(s.start_at);
     const hour = nearestSlotHour(s.start_at);
     return !blocked.has(afblokKey(adviseurId, dag, hour));
