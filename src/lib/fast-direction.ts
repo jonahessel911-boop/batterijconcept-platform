@@ -195,7 +195,9 @@ export function pickTopFastDirectionSlots(
     }
 
     if (!prev && !next) {
-      scoreSec = 40 * 60;
+      // Geen startadres én geen andere stops: geen echte reistijd.
+      // Hoge score zodat dit verliest van adviseurs mét startadres / route.
+      scoreSec = 4 * 60 * 60;
       feasible = true;
     }
 

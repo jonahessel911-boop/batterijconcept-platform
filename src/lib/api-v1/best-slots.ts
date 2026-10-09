@@ -48,7 +48,7 @@ export type BestSlotOption = {
   reason: string | null;
   /** Sales-conversie (voltooid → deal), % over ~90 dagen; null = onbekend */
   conversie_pct: number | null;
-  /** Geschatte totale reistijd-score in minuten (Google Maps / fallback) */
+  /** Echte reistijd in minuten vanaf startadres/vorige stop (null = onbekend) */
   reistijd_min: number | null;
 };
 
@@ -246,9 +246,28 @@ type AdviseurRow = {
   email: string | null;
   actief: boolean | null;
   start_adres: string | null;
+  factuur_adres?: string | null;
+  factuur_postcode?: string | null;
+  factuur_plaats?: string | null;
   rol?: string | null;
   bel_planning?: boolean | null;
 };
+
+/** Vertrekpunt voor reistijd: startadres, anders factuuradres. */
+function resolveDepotAddress(adv: AdviseurRow): string | null {
+  const start = adv.start_adres?.trim() || "";
+  if (start && start !== "—") return start;
+  const straat = adv.factuur_adres?.trim() || "";
+  const pc = adv.factuur_postcode?.trim() || "";
+  const plaats = adv.factuur_plaats?.trim() || "";
+  if (!straat && !pc && !plaats) return null;
+  // Placeholder/junk like "straat"/"Postcode" overslaan
+  const junk = /^(straat|adres|postcode|plaats)$/i;
+  if (junk.test(straat) || junk.test(pc) || junk.test(plaats)) return null;
+  const cityLine = [pc, plaats].filter(Boolean).join(" ");
+  const composed = [straat, cityLine].filter(Boolean).join(", ");
+  return composed || null;
+}
 
 type LeadRow = {
   id: string;
@@ -416,7 +435,9 @@ export async function loadBestSlotsForLead(
 
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
-    .select("id, naam, email, actief, start_adres, rol")
+    .select(
+      "id, naam, email, actief, start_adres, factuur_adres, factuur_postcode, factuur_plaats, rol"
+    )
     .eq("actief", true)
     .order("naam");
 
@@ -424,6 +445,7 @@ export async function loadBestSlotsForLead(
   if (advErr) {
     const missingCol =
       advErr.message?.includes("start_adres") ||
+      advErr.message?.includes("factuur_") ||
       advErr.message?.includes("rol") ||
       advErr.code === "42703";
     if (!missingCol) {
@@ -554,11 +576,12 @@ export async function loadBestSlotsForLead(
       | ReturnType<typeof pickTopFastDirectionSlots>
       | null = null;
 
+    const depotAddress = resolveDepotAddress(adv);
     try {
       const addresses = uniqueAddresses(
         targetAddress,
         stops,
-        adv.start_adres,
+        depotAddress,
         12
       );
       if (addresses.length >= 1) {
@@ -568,7 +591,7 @@ export async function loadBestSlotsForLead(
             targetAddress,
             freeSlots: free,
             stops,
-            depotAddress: adv.start_adres,
+            depotAddress,
             depotLabel: adv.naam,
             durationSecBetween: (from, to) => {
               if (from === to) return 0;
@@ -581,7 +604,9 @@ export async function loadBestSlotsForLead(
           },
           diversifyHours ? 14 : 5
         );
-        if (scored.length > 0) usedRoute = true;
+        if (scored.some((s) => s.fromDurationSec != null || s.toDurationSec != null)) {
+          usedRoute = true;
+        }
       }
     } catch {
       scored = null;
@@ -605,7 +630,14 @@ export async function loadBestSlotsForLead(
           feasible: s.feasible,
           reason: s.reason || null,
           conversie_pct: convPct,
-          reistijd_min: Math.round(s.scoreSec / 60),
+          // Alleen echte route-minuten (vanaf startadres of vorige stop),
+          // nooit de ranking-placeholder.
+          reistijd_min:
+            s.fromDurationSec != null
+              ? Math.round(s.fromDurationSec / 60)
+              : s.toDurationSec != null
+                ? Math.round(s.toDurationSec / 60)
+                : null,
           scoreSec: s.scoreSec,
           dayKey: s.dayKey,
           preferred,
