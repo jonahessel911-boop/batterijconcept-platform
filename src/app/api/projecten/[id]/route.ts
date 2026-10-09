@@ -749,3 +749,143 @@ export async function PATCH(
     );
   }
 }
+
+/**
+ * DELETE /api/projecten/[id]
+ * Verwijdert project (+ cascaded taken/foto's/service). Conceptfacturen worden
+ * ontkoppeld; verstuurde/betaalde facturen blokkeren.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  if (!id?.trim()) {
+    return NextResponse.json({ error: "Ontbrekend id" }, { status: 400 });
+  }
+
+  try {
+    const sb = getSupabaseAdmin();
+
+    const { data: project, error: projErr } = await sb
+      .from("projecten")
+      .select("id, project_nummer, titel, lead_id")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (projErr) throw projErr;
+    if (!project) {
+      return NextResponse.json(
+        { error: "Project niet gevonden" },
+        { status: 404 }
+      );
+    }
+
+    const { data: facturen, error: facErr } = await sb
+      .from("facturen")
+      .select("id, factuur_nummer, status")
+      .eq("project_id", id);
+    if (facErr && facErr.code !== "42P01") throw facErr;
+
+    const blockedFac = (facturen || []).find((f) => {
+      const s = String(f.status || "").toLowerCase();
+      return s === "betaald" || s === "verstuurd" || s === "deels_betaald";
+    });
+    if (blockedFac) {
+      return NextResponse.json(
+        {
+          error: `Project heeft factuur ${blockedFac.factuur_nummer} (${blockedFac.status}) — die moet eerst weg of op concept.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Concept-/overige facturen ontkoppelen (blijven op de lead)
+    if ((facturen || []).length > 0) {
+      const { error: unlinkFac } = await sb
+        .from("facturen")
+        .update({ project_id: null })
+        .eq("project_id", id);
+      if (unlinkFac) {
+        if (
+          unlinkFac.code === "23503" ||
+          /foreign key|violates foreign key/i.test(unlinkFac.message || "")
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Facturen blokkeren verwijderen. Zet ze op concept of ontkoppel ze eerst.",
+              detail: unlinkFac.message,
+            },
+            { status: 409 }
+          );
+        }
+        throw unlinkFac;
+      }
+    }
+
+    // Optioneel: inkomende facturen / actie-events ontkoppelen als cascade ontbreekt
+    for (const table of ["inkomende_facturen", "backoffice_actie_events"] as const) {
+      const { error: unlink } = await sb
+        .from(table)
+        .update({ project_id: null })
+        .eq("project_id", id);
+      if (
+        unlink &&
+        unlink.code !== "42P01" &&
+        !/does not exist|schema cache/i.test(unlink.message || "")
+      ) {
+        // Geen harde fail — cascade/SET NULL kan al genoeg zijn
+        console.warn(`Unlink ${table} bij project-delete:`, unlink.message);
+      }
+    }
+
+    const { error: delProj } = await sb.from("projecten").delete().eq("id", id);
+    if (delProj) {
+      if (
+        delProj.code === "23503" ||
+        /foreign key|violates foreign key/i.test(delProj.message || "")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Project is gekoppeld aan andere gegevens en kan niet worden verwijderd.",
+            detail: delProj.message,
+          },
+          { status: 409 }
+        );
+      }
+      throw delProj;
+    }
+
+    if (project.lead_id) {
+      await logLeadEvent({
+        leadId: project.lead_id,
+        soort: "status",
+        titel: "Project verwijderd",
+        detail: project.project_nummer
+          ? `Project ${project.project_nummer} verwijderd`
+          : "Project verwijderd",
+        meta: {
+          project_id: id,
+          project_nummer: project.project_nummer,
+        },
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      deleted: {
+        id: project.id,
+        project_nummer: project.project_nummer,
+        titel: project.titel,
+        lead_id: project.lead_id,
+      },
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Verwijderen mislukt") },
+      { status: 500 }
+    );
+  }
+}

@@ -368,6 +368,7 @@ export function ProjectPage() {
   );
   const [gegevensSaving, setGegevensSaving] = useState(false);
   const [gegevensError, setGegevensError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [afspraakOpenRequest, setAfspraakOpenRequest] = useState<{
     soort: "schouwweek" | "schouwdag" | "installatie";
     nonce: number;
@@ -1314,6 +1315,35 @@ export function ProjectPage() {
     }
   }
 
+  async function deleteProject() {
+    if (!project) return;
+    if (
+      !confirm(
+        `Project ${project.project_nummer} definitief verwijderen?\n\nTaken, foto’s en serviceverzoeken gaan mee. Conceptfacturen blijven op de lead. Dit kan niet ongedaan worden.`
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      router.push(backHref);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+      setDeleteBusy(false);
+    }
+  }
+
   if (loading && !project) {
     return (
       <DetailShell activeTab="projecten">
@@ -1962,7 +1992,7 @@ export function ProjectPage() {
                   );
                 })}
               </div>
-              <div className="shrink-0 py-1.5">
+              <div className="flex shrink-0 items-center gap-2 py-1.5">
                 <ProjectStatusSelect
                   project={project}
                   onUpdated={(p) => {
@@ -1970,6 +2000,15 @@ export function ProjectPage() {
                     void refreshLeadEvents(p.lead_id);
                   }}
                 />
+                <button
+                  type="button"
+                  disabled={deleteBusy}
+                  onClick={() => void deleteProject()}
+                  className="border border-[#C45A12]/40 bg-white px-3 py-2 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
+                  title="Project definitief verwijderen"
+                >
+                  {deleteBusy ? "Bezig…" : "Verwijderen"}
+                </button>
               </div>
             </div>
           </section>
