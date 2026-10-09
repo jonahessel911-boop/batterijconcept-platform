@@ -1,5 +1,6 @@
 import type { DashboardV2Goals } from "./goals";
 import type { DashboardV2Forecast } from "./forecast";
+import type { DashboardV2Capacity } from "./capacity";
 
 export type DashboardV2Period =
   | "last_7_days"
@@ -123,4 +124,9 @@ export type DashboardV2Data = {
   people: { id: string; naam: string; rol: string }[];
   /** Laatste 3 ISO-weken + forecast-op-forecast vooruit */
   forecast: DashboardV2Forecast;
+  /**
+   * Agenda-capaciteit komende weken → leads nodig bij 25% L2A.
+   * Houdt rekening met afblokkingen, week-uit en geplande huisbezoeken.
+   */
+  capacity: DashboardV2Capacity;
 };

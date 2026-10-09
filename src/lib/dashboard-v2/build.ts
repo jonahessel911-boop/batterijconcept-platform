@@ -40,6 +40,7 @@ import {
   type DashboardV2Goals,
 } from "./goals";
 import { buildDashboardV2Forecast } from "./forecast";
+import { emptyDashboardV2Capacity } from "./capacity";
 import {
   parseAdminTargetsStore,
   resolvePersonTargets,
@@ -815,6 +816,8 @@ export function buildDashboardV2(
     ),
     people,
     forecast: buildDashboardV2Forecast(scopedRaw, now),
+    // API vult echte capaciteit (afblokkingen + week-uit); hier lege default.
+    capacity: emptyDashboardV2Capacity(),
   };
 }
 

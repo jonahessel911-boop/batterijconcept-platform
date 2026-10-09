@@ -4,7 +4,9 @@ import { errMessage } from "@/lib/errors";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
   buildDashboardV2,
+  buildDashboardV2Capacity,
   buildDashboardV2Drilldown,
+  emptyDashboardV2Capacity,
   parseDashboardV2Kpi,
   parseDashboardV2Period,
   storeWeeklyGoals,
@@ -12,6 +14,12 @@ import {
   type DashboardV2Raw,
   type DrilldownRaw,
 } from "@/lib/dashboard-v2";
+import {
+  dayKeyAmsterdam,
+  loadAfblokkingen,
+  weekKeyString,
+} from "@/lib/adviseur-beschikbaarheid";
+import { addDays, getISOWeekYear } from "date-fns";
 
 export const runtime = "nodejs";
 
@@ -63,20 +71,65 @@ async function loadAfsprakenRows(sb: Sb): Promise<Record<string, unknown>[]> {
       sb
         .from("afspraken")
         .select(
-          "id, lead_id, adviseur_id, start_at, created_at, status, soort, leads(naam, lead_number, plaats, status)"
+          "id, lead_id, adviseur_id, start_at, end_at, created_at, status, soort, leads(naam, lead_number, plaats, status)"
         )
         .order("created_at", { ascending: true })
         .range(from, to)
     );
   } catch {
-    return fetchAllRows((from, to) =>
-      sb
-        .from("afspraken")
-        .select("id, lead_id, adviseur_id, start_at, created_at, status")
-        .order("created_at", { ascending: true })
-        .range(from, to)
-    );
+    try {
+      return await fetchAllRows((from, to) =>
+        sb
+          .from("afspraken")
+          .select(
+            "id, lead_id, adviseur_id, start_at, end_at, created_at, status, soort"
+          )
+          .order("created_at", { ascending: true })
+          .range(from, to)
+      );
+    } catch {
+      return fetchAllRows((from, to) =>
+        sb
+          .from("afspraken")
+          .select("id, lead_id, adviseur_id, start_at, created_at, status")
+          .order("created_at", { ascending: true })
+          .range(from, to)
+      );
+    }
   }
+}
+
+async function loadUnavailableByAdviseur(
+  sb: Sb,
+  adviseurIds: string[],
+  jaren: number[]
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (adviseurIds.length === 0 || jaren.length === 0) return map;
+  const { data, error } = await sb
+    .from("adviseur_beschikbaarheid")
+    .select("adviseur_id, jaar, week, beschikbaar")
+    .in("adviseur_id", adviseurIds)
+    .in("jaar", jaren)
+    .eq("beschikbaar", false);
+  if (error) {
+    if (
+      error.code === "42703" ||
+      error.code === "42P01" ||
+      error.message?.includes("adviseur_beschikbaarheid") ||
+      error.message?.includes("schema cache")
+    ) {
+      return map;
+    }
+    throw error;
+  }
+  for (const row of data || []) {
+    const id = row.adviseur_id as string;
+    const set = map.get(id) || new Set<string>();
+    set.add(weekKeyString(Number(row.jaar), Number(row.week)));
+    map.set(id, set);
+  }
+  return map;
 }
 
 async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
@@ -110,7 +163,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
           .not("offerte_id", "is", null)
           .range(from, to)
       ),
-      sb.from("adviseurs").select("id, naam, actief, rol"),
+      sb.from("adviseurs").select("id, naam, email, actief, rol"),
     ]);
 
   if (adviseursRes.error) throw adviseursRes.error;
@@ -150,6 +203,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
       lead_id: a.lead_id as string,
       adviseur_id: (a.adviseur_id as string) || null,
       start_at: a.start_at as string,
+      end_at: ((a as { end_at?: string | null }).end_at as string) || null,
       created_at: (a.created_at as string) || null,
       status: a.status as string,
       soort: ((a as { soort?: string | null }).soort as string) || null,
@@ -188,6 +242,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
     naam: a.naam as string,
     actief: Boolean(a.actief),
     rol: ((a as { rol?: string | null }).rol as string | null) || "adviseur",
+    email: ((a as { email?: string | null }).email as string | null) || null,
   }));
 
   return {
@@ -278,15 +333,50 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ detail });
     }
 
+    const now = new Date();
     const dashboard = buildDashboardV2(
       toDashboardRaw(raw),
       period,
       goalsRaw,
-      new Date(),
+      now,
       rangeOpts,
       scopeOpts
     );
-    return NextResponse.json({ dashboard });
+
+    // Capaciteit: vrije slots (incl. afblokkingen) → leads @ 25% L2A
+    let capacity = emptyDashboardV2Capacity(4);
+    try {
+      const weeksAhead = 4;
+      const daysAhead = weeksAhead * 7;
+      const van = dayKeyAmsterdam(now);
+      const tot = dayKeyAmsterdam(addDays(now, daysAhead + 2));
+      const y = getISOWeekYear(now);
+      const adviseurIds = raw.adviseurs.map((a) => a.id);
+      const [unavailableByAdviseur, afblokkingen] = await Promise.all([
+        loadUnavailableByAdviseur(sb, adviseurIds, [y - 1, y, y + 1]),
+        loadAfblokkingen(sb, { adviseurIds, van, tot }),
+      ]);
+      capacity = buildDashboardV2Capacity({
+        adviseurs: raw.adviseurs,
+        afspraken: raw.afspraken.map((a) => ({
+          adviseur_id: a.adviseur_id,
+          start_at: a.start_at,
+          end_at: a.end_at ?? null,
+          status: a.status,
+          soort: a.soort,
+        })),
+        unavailableByAdviseur,
+        afblokkingen,
+        weeksAhead,
+        now,
+      });
+    } catch {
+      capacity = emptyDashboardV2Capacity(4);
+    }
+
+    return NextResponse.json({
+      dashboard: { ...dashboard, capacity },
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Dashboard v2 laden mislukt") },

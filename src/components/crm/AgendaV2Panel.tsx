@@ -421,6 +421,20 @@ export function AgendaPanel({
     return list.filter((a) => !hiddenIds.has(a.id));
   }, [planAdviseurs, defaultAdviseurId, hiddenIds]);
 
+  /** Aantal geplande (niet-geannuleerde) agenda-afspraken per adviseur in deze week. */
+  const afsprakenCountByAdviseur = useMemo(() => {
+    const dayKeys = new Set(days.map((d) => d.key));
+    const counts = new Map<string, number>();
+    for (const a of afspraken) {
+      if (a.status === "geannuleerd") continue;
+      if (!afspraakZichtbaarInAgenda(a, afspraken)) continue;
+      if (!dayKeys.has(dayKeyAmsterdam(a.start_at))) continue;
+      if (!a.adviseur_id) continue;
+      counts.set(a.adviseur_id, (counts.get(a.adviseur_id) || 0) + 1);
+    }
+    return counts;
+  }, [afspraken, days]);
+
   /** Leads met een zichtbare agenda-afspraak vandaag (op starttijd). */
   const leadsVandaag = useMemo(() => {
     const visibleAdvIds = new Set(visibleAdviseurs.map((a) => a.id));
@@ -1074,21 +1088,27 @@ export function AgendaPanel({
               }}
             >
               <div className="border-r border-line bg-[#FAFBFA]" />
-              {visibleAdviseurs.map((a) => (
-                <div
-                  key={a.id}
-                  className="border-r border-line px-2 py-2.5 text-center"
-                >
-                  <p className="truncate text-xs font-semibold text-ink">
-                    {a.naam}
-                  </p>
-                  {isWeekBlocked(a.id) && (
-                    <p className="mt-0.5 text-[10px] font-semibold text-[#B91C1C]">
-                      Week geblokkeerd
+              {visibleAdviseurs.map((a) => {
+                const weekCount = afsprakenCountByAdviseur.get(a.id) || 0;
+                return (
+                  <div
+                    key={a.id}
+                    className="border-r border-line px-2 py-2.5 text-center"
+                  >
+                    <p className="truncate text-xs font-semibold text-ink">
+                      {a.naam}
+                      <span className="ml-1 font-medium tabular-nums text-muted">
+                        ({weekCount})
+                      </span>
                     </p>
-                  )}
-                </div>
-              ))}
+                    {isWeekBlocked(a.id) && (
+                      <p className="mt-0.5 text-[10px] font-semibold text-[#B91C1C]">
+                        Week geblokkeerd
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {visibleDays.map((day) => (

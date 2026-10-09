@@ -131,6 +131,7 @@ export type DrilldownRaw = {
     lead_id: string;
     adviseur_id: string | null;
     start_at: string;
+    end_at?: string | null;
     created_at: string | null;
     status: string;
     soort: string | null;
@@ -151,7 +152,13 @@ export type DrilldownRaw = {
     lead_number: string | null;
     geannuleerd?: boolean;
   }[];
-  adviseurs: { id: string; naam: string; actief: boolean; rol: string | null }[];
+  adviseurs: {
+    id: string;
+    naam: string;
+    actief: boolean;
+    rol: string | null;
+    email?: string | null;
+  }[];
 };
 
 export function parseDashboardV2Kpi(v: string | null): DashboardV2Kpi | null {

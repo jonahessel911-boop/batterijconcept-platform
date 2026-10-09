@@ -6,6 +6,7 @@ import { formatEuro } from "@/lib/format";
 import {
   DASHBOARD_V2_PERIOD_LABELS,
   type DashboardV2AdviseurBar,
+  type DashboardV2Capacity,
   type DashboardV2Data,
   type DashboardV2Forecast,
   type DashboardV2Kpi,
@@ -665,6 +666,182 @@ function ForecastGroupedBars({
   );
 }
 
+function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
+  const l2aPct = Math.round(capacity.targetLeadToAppt * 100);
+  const [showAdviseurs, setShowAdviseurs] = useState(false);
+  const sorted = [...capacity.adviseurs].sort(
+    (a, b) => b.leadsNodig - a.leadsNodig || a.naam.localeCompare(b.naam, "nl")
+  );
+
+  return (
+    <section className="mt-8">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Leads nodig · agenda-capaciteit
+          </h3>
+          <p className="mt-1 text-sm text-muted">
+            Komende {capacity.weeksAhead} weken · {capacity.adviseurCount}{" "}
+            planbare adviseurs · doel {l2aPct}% lead→afspraak. Afgeblokte
+            tijden en week-uit tellen niet mee.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAdviseurs((v) => !v)}
+          className="text-xs font-semibold text-green hover:underline"
+        >
+          {showAdviseurs ? "Verberg per adviseur" : "Per adviseur"}
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-line bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Vrije slots
+          </p>
+          <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+            {num(capacity.slotsVrij)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            van {num(capacity.slotsOpen)} open · {num(capacity.slotsGepland)}{" "}
+            gepland
+          </p>
+        </div>
+        <div className="rounded-2xl border border-green/30 bg-green-soft/40 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Leads nodig
+          </p>
+          <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-green-deeper">
+            {num(capacity.leadsNodig)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            ≈ {num(capacity.leadsNodigPerWeek, 1)}/week bij {l2aPct}% L2A
+          </p>
+        </div>
+        <div className="rounded-2xl border border-line bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Afgeblokt
+          </p>
+          <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+            {num(capacity.slotsAfgeblokt)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            slots (incl. ma 10:00 weekmeeting)
+          </p>
+        </div>
+        <div className="rounded-2xl border border-line bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Gepland
+          </p>
+          <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+            {num(capacity.slotsGepland)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            huisbezoeken in het venster
+          </p>
+        </div>
+      </div>
+
+      {capacity.weeks.length > 0 ? (
+        <div className="mt-3 overflow-x-auto rounded-2xl border border-line bg-white">
+          <table className="w-full min-w-[520px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-line text-[11px] uppercase tracking-wide text-muted">
+                <th className="px-3 py-2 font-semibold">Week</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Open</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Afgeblokt
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Gepland
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Vrij</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Leads nodig
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {capacity.weeks.map((w) => (
+                <tr
+                  key={`${w.jaar}-W${w.week}`}
+                  className="border-b border-line/70 last:border-0"
+                >
+                  <td className="px-3 py-2 font-medium text-ink">{w.label}</td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(w.slotsOpen)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(w.slotsAfgeblokt)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(w.slotsGepland)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums font-semibold text-ink">
+                    {num(w.slotsVrij)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
+                    {num(w.leadsNodig)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {showAdviseurs && sorted.length > 0 ? (
+        <div className="mt-3 overflow-x-auto rounded-2xl border border-line bg-white">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-line text-[11px] uppercase tracking-wide text-muted">
+                <th className="px-3 py-2 font-semibold">Adviseur</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Open</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Afgeblokt
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Gepland
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Vrij</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Leads nodig
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((a) => (
+                <tr
+                  key={a.id}
+                  className="border-b border-line/70 last:border-0"
+                >
+                  <td className="px-3 py-2 font-medium text-ink">{a.naam}</td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(a.slotsOpen)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(a.slotsAfgeblokt)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(a.slotsGepland)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums font-semibold text-ink">
+                    {num(a.slotsVrij)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
+                    {num(a.leadsNodig)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function ForecastSection({ forecast }: { forecast: DashboardV2Forecast }) {
   const weeks = forecast.weeks;
   const b = forecast.baseline;
@@ -1181,6 +1358,10 @@ export function DashboardV2() {
               />
             </div>
           </section>
+
+          {data.capacity ? (
+            <CapacitySection capacity={data.capacity} />
+          ) : null}
 
           {data.forecast ? <ForecastSection forecast={data.forecast} /> : null}
         </>

@@ -40,3 +40,13 @@ export type {
   ForecastWeekMetrics,
 } from "./forecast";
 export { buildDashboardV2Forecast } from "./forecast";
+export type {
+  DashboardV2Capacity,
+  CapacityWeekRow,
+  CapacityAdviseurRow,
+} from "./capacity";
+export {
+  buildDashboardV2Capacity,
+  emptyDashboardV2Capacity,
+  CAPACITY_TARGET_L2A,
+} from "./capacity";
