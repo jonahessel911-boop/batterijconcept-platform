@@ -189,6 +189,8 @@ export function LeadPage() {
     null
   );
   const [claimBusy, setClaimBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -480,6 +482,33 @@ export function LeadPage() {
   }
 
   /** Alleen de terugbellen-vlag wissen (als er geen openstaande terugbel meer is). */
+  async function deleteLead() {
+    if (!lead) return;
+    if (
+      !confirm(
+        `Lead ${lead.lead_number} (${lead.naam}) definitief verwijderen?\n\nAfspraken, notities, offertes en conceptfacturen gaan mee. Dit kan niet ongedaan worden.`
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(true);
+    setErrorMsg(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      router.push("/?tab=leads");
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Verwijderen mislukt");
+      setDeleteBusy(false);
+    }
+  }
+
   async function wisTerugbelVlag() {
     if (!lead) return;
     setCompletingAfspraakId("flag");
@@ -628,6 +657,11 @@ export function LeadPage() {
           {okMsg}
         </div>
       )}
+      {errorMsg && (
+        <div className="mb-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-2.5 text-sm text-[#C45A12]">
+          {errorMsg}
+        </div>
+      )}
 
       {showTerugbelBanner && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
@@ -746,6 +780,15 @@ export function LeadPage() {
             >
               <FileIcon />
               Maak offerte
+            </button>
+            <button
+              type="button"
+              disabled={deleteBusy}
+              onClick={() => void deleteLead()}
+              className="border border-[#C45A12]/40 bg-white px-3 py-2 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
+              title="Lead definitief verwijderen"
+            >
+              {deleteBusy ? "Bezig…" : "Verwijderen"}
             </button>
           </div>
         </div>

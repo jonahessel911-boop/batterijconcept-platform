@@ -159,3 +159,161 @@ export async function PATCH(
     );
   }
 }
+
+/**
+ * DELETE /api/leads/[id]
+ * Verwijdert lead + gekoppelde afspraken/events (cascade).
+ * Offertes/conceptfacturen worden meegenomen als er géén project is.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  try {
+    const sb = getSupabaseAdmin();
+
+    const { data: lead, error: leadErr } = await sb
+      .from("leads")
+      .select("id, naam, lead_number")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (leadErr) throw leadErr;
+    if (!lead) {
+      return NextResponse.json({ error: "Lead niet gevonden" }, { status: 404 });
+    }
+
+    const { count: projectCount, error: projErr } = await sb
+      .from("projecten")
+      .select("id", { count: "exact", head: true })
+      .eq("lead_id", id);
+    if (projErr && projErr.code !== "42P01") throw projErr;
+    if ((projectCount || 0) > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Deze lead heeft een project en kan niet worden verwijderd. Archiveer of verwijder eerst het project.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const { data: facturen, error: facErr } = await sb
+      .from("facturen")
+      .select("id, factuur_nummer, status")
+      .eq("lead_id", id);
+    if (facErr && facErr.code !== "42P01") throw facErr;
+
+    const blockedFac = (facturen || []).find((f) => {
+      const s = String(f.status || "").toLowerCase();
+      return s === "betaald" || s === "verstuurd" || s === "deels_betaald";
+    });
+    if (blockedFac) {
+      return NextResponse.json(
+        {
+          error: `Lead heeft factuur ${blockedFac.factuur_nummer} (${blockedFac.status}) — die moet eerst weg of op concept.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Concept-/overige facturen
+    if ((facturen || []).length > 0) {
+      const { error: delFac } = await sb
+        .from("facturen")
+        .delete()
+        .eq("lead_id", id);
+      if (delFac) {
+        if (
+          delFac.code === "23503" ||
+          /foreign key|violates foreign key/i.test(delFac.message || "")
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Facturen zijn gekoppeld aan andere gegevens en blokkeren verwijderen.",
+              detail: delFac.message,
+            },
+            { status: 409 }
+          );
+        }
+        throw delFac;
+      }
+    }
+
+    const { data: offertes, error: offErr } = await sb
+      .from("offertes")
+      .select("id")
+      .eq("lead_id", id);
+    if (offErr && offErr.code !== "42P01") throw offErr;
+
+    const offerteIds = (offertes || []).map((o) => o.id as string);
+    if (offerteIds.length > 0) {
+      const { error: delRegels } = await sb
+        .from("offerte_regels")
+        .delete()
+        .in("offerte_id", offerteIds);
+      if (
+        delRegels &&
+        delRegels.code !== "42P01" &&
+        !/does not exist|schema cache/i.test(delRegels.message || "")
+      ) {
+        throw delRegels;
+      }
+
+      const { error: delOff } = await sb
+        .from("offertes")
+        .delete()
+        .eq("lead_id", id);
+      if (delOff) {
+        if (
+          delOff.code === "23503" ||
+          /foreign key|violates foreign key/i.test(delOff.message || "")
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Offertes zijn gekoppeld aan andere gegevens en blokkeren verwijderen.",
+              detail: delOff.message,
+            },
+            { status: 409 }
+          );
+        }
+        throw delOff;
+      }
+    }
+
+    const { error: delLead } = await sb.from("leads").delete().eq("id", id);
+    if (delLead) {
+      if (
+        delLead.code === "23503" ||
+        /foreign key|violates foreign key/i.test(delLead.message || "")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Lead is gekoppeld aan andere gegevens en kan niet worden verwijderd.",
+            detail: delLead.message,
+          },
+          { status: 409 }
+        );
+      }
+      throw delLead;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      deleted: {
+        id: lead.id,
+        naam: lead.naam,
+        lead_number: lead.lead_number,
+      },
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Verwijderen mislukt") },
+      { status: 500 }
+    );
+  }
+}
