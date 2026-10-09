@@ -31,6 +31,7 @@ import {
   standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
 import type { AfspraakSoort } from "@/types/database";
+import { normalizeRol } from "@/lib/rollen";
 
 export const AFSPRAAK_SELECT =
   "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)";
@@ -284,14 +285,26 @@ async function afterCreate(
   }
 
   if (soort === "bel" || soort === "warme_bel") {
-    await sb
-      .from("leads")
-      .update({
-        terugbellen: true,
-        terugbel_notitie: afspraak.notities || null,
-        ...(body.adviseur_id ? { adviseur_id: body.adviseur_id } : {}),
-      })
-      .eq("id", body.lead_id);
+    const leadPatch: Record<string, unknown> = {
+      terugbellen: true,
+      terugbel_notitie: afspraak.notities || null,
+    };
+    // Alleen sales-adviseur → lead.adviseur_id; callcenter → beller_id.
+    // Backoffice krijgt de afspraak via afspraak.adviseur_id, zonder lead te claimen.
+    if (body.adviseur_id) {
+      const { data: assignee } = await sb
+        .from("adviseurs")
+        .select("id, rol")
+        .eq("id", body.adviseur_id)
+        .maybeSingle();
+      const rol = normalizeRol(assignee?.rol);
+      if (rol === "adviseur") {
+        leadPatch.adviseur_id = body.adviseur_id;
+      } else if (rol === "beller") {
+        leadPatch.beller_id = body.adviseur_id;
+      }
+    }
+    await sb.from("leads").update(leadPatch).eq("id", body.lead_id);
   } else if (body.adviseur_id) {
     await sb
       .from("leads")

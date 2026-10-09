@@ -8,7 +8,13 @@ import { nl } from "date-fns/locale";
 import { getSupabaseBrowser } from "@/lib/supabase";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
-import { isBelPlanAdviseur } from "@/lib/rollen";
+import {
+  gebruikerRolLabel,
+  isBelPlanAdviseur,
+  isTerugbelPlanbaar,
+  normalizeRol,
+  type GebruikerRol,
+} from "@/lib/rollen";
 import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import {
   MAX_BELPOGINGEN,
@@ -200,6 +206,45 @@ export function BelPanel({
     }
     return list;
   }, [adviseurs, lockAdviseur, defaultAdviseurId]);
+
+  /** Terugbel/warme terugbel: adviseur, callcenter én backoffice. */
+  const terugbelMedewerkers = useMemo(() => {
+    const list = adviseurs.filter(
+      (a) => a.actief && !isAdminAdviseur(a) && isTerugbelPlanbaar(a)
+    );
+    if (lockAdviseur && defaultAdviseurId) {
+      const self = list.find((a) => a.id === defaultAdviseurId);
+      if (self) return [self];
+      const raw = adviseurs.find((a) => a.id === defaultAdviseurId);
+      return raw ? [raw] : [];
+    }
+    return list.sort((a, b) => {
+      const order = (rol: string | null | undefined) => {
+        const r = normalizeRol(rol);
+        if (r === "beller") return 0;
+        if (r === "backoffice") return 1;
+        return 2;
+      };
+      const d = order(a.rol) - order(b.rol);
+      if (d !== 0) return d;
+      return a.naam.localeCompare(b.naam, "nl");
+    });
+  }, [adviseurs, lockAdviseur, defaultAdviseurId]);
+
+  const terugbelGroepen = useMemo(() => {
+    const groups: { rol: GebruikerRol; label: string; items: Adviseur[] }[] = [
+      { rol: "beller", label: "Callcenter", items: [] },
+      { rol: "backoffice", label: "Backoffice", items: [] },
+      { rol: "adviseur", label: "Adviseurs", items: [] },
+    ];
+    for (const a of terugbelMedewerkers) {
+      const rol = normalizeRol(a.rol);
+      const g = groups.find((x) => x.rol === rol);
+      if (g) g.items.push(a);
+      else groups[2].items.push(a);
+    }
+    return groups.filter((g) => g.items.length > 0);
+  }, [terugbelMedewerkers]);
 
   const normalQueue = useMemo(
     () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
@@ -675,7 +720,7 @@ export function BelPanel({
       if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
       const planAdviseurId =
         lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId;
-      if (!planAdviseurId) throw new Error("Kies een adviseur");
+      if (!planAdviseurId) throw new Error("Kies een medewerker");
       const note = terugbelNotitie.trim();
       if (!note) throw new Error("Vul een notitie in");
 
@@ -704,11 +749,16 @@ export function BelPanel({
       }
 
       const now = new Date().toISOString();
+      const assignee = terugbelMedewerkers.find((a) => a.id === planAdviseurId);
+      const assigneeRol = normalizeRol(assignee?.rol);
       const leadPatch: Partial<Lead> = {
         terugbellen: true,
         terugbel_notitie: note,
         laatst_gebeld_at: now,
       };
+      if (assigneeRol === "beller") {
+        leadPatch.beller_id = planAdviseurId;
+      }
       if (!current.eerste_gebeld_at) {
         leadPatch.eerste_gebeld_at = now;
       }
@@ -1050,24 +1100,31 @@ export function BelPanel({
                 <p className="text-xs text-muted">
                   Agenda:{" "}
                   <span className="font-semibold text-ink">
-                    {planAdviseurs.find((a) => a.id === adviseurId)?.naam ||
-                      "Jij"}
+                    {terugbelMedewerkers.find((a) => a.id === adviseurId)
+                      ?.naam || "Jij"}
                   </span>
                 </p>
               ) : (
                 <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                  Adviseur
+                  Toewijzen aan
                   <select
                     required
                     value={adviseurId}
                     onChange={(e) => setAdviseurId(e.target.value)}
                     className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
                   >
-                    <option value="">Kies adviseur…</option>
-                    {planAdviseurs.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.naam}
-                      </option>
+                    <option value="">Kies medewerker…</option>
+                    {terugbelGroepen.map((g) => (
+                      <optgroup key={g.rol} label={g.label}>
+                        {g.items.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.naam}
+                            {g.rol !== "adviseur"
+                              ? ` (${gebruikerRolLabel[g.rol]})`
+                              : ""}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </label>

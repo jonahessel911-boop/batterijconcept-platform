@@ -112,7 +112,7 @@ export function isPlanbareAdviseur(a: {
 }
 
 /**
- * Planbaar via bel-systeem / beste slots.
+ * Planbaar via bel-systeem / beste slots (fysieke afspraken).
  * Inactief (`actief === false`) → niet automatisch inplannen.
  */
 export function isBelPlanAdviseur(a: {
@@ -122,6 +122,19 @@ export function isBelPlanAdviseur(a: {
   email?: string | null;
 }): boolean {
   return isPlanbareAdviseur(a);
+}
+
+/**
+ * Mag een terugbel / warme terugbel toegewezen krijgen:
+ * sales-adviseur, callcenter (beller) of backoffice.
+ */
+export function isTerugbelPlanbaar(a: {
+  actief?: boolean;
+  rol?: string | null;
+}): boolean {
+  if (a.actief === false) return false;
+  const rol = normalizeRol(a.rol);
+  return rol === "adviseur" || rol === "beller" || rol === "backoffice";
 }
 
 /** Alleen cijfers — voor telefoonzoek. */
