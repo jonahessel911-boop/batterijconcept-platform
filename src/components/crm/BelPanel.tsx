@@ -161,6 +161,10 @@ export function BelPanel({
   onNeedReload?: () => void;
 }) {
   const [currentId, setCurrentId] = useState<string | null>(null);
+  /** Snapshot van geclaimde lead (server is bron van waarheid). */
+  const [claimedLead, setClaimedLead] = useState<Lead | null>(null);
+  const [claiming, setClaiming] = useState(true);
+  const [claimError, setClaimError] = useState<string | null>(null);
   /** null = Volgende-knop · status = uitkomsten · terugbel = interne terugbel-afspraak */
   const [nextMode, setNextMode] = useState<"status" | "terugbel" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -288,11 +292,13 @@ export function BelPanel({
   }, [terugbelDue, normalQueue, uitgesteldIds]);
 
   const current = useMemo(() => {
-    if (currentId) {
-      return queue.find((l) => l.id === currentId) || null;
-    }
-    return queue[0] || null;
-  }, [queue, currentId]);
+    if (!currentId) return null;
+    return (
+      leads.find((l) => l.id === currentId) ||
+      queue.find((l) => l.id === currentId) ||
+      (claimedLead?.id === currentId ? claimedLead : null)
+    );
+  }, [leads, queue, currentId, claimedLead]);
 
   const currentTerugbel = current
     ? activeBelAfspraak(afspraken, current.id)
@@ -315,15 +321,87 @@ export function BelPanel({
     return [...map.entries()];
   }, [slots]);
 
+  async function releaseClaim(leadId?: string | null) {
+    try {
+      await fetch("/api/bel/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: leadId || null }),
+        keepalive: true,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function claimNext(excludeLeadId?: string | null) {
+    setClaiming(true);
+    setClaimError(null);
+    try {
+      const res = await fetch("/api/bel/claim-next", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exclude_lead_id: excludeLeadId || null,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        lead?: Lead | null;
+        error?: string;
+      };
+      if (!res.ok) {
+        setCurrentId(null);
+        setClaimedLead(null);
+        setClaimError(data.error || "Claimen mislukt");
+        return;
+      }
+      const lead = data.lead || null;
+      if (lead) {
+        setClaimedLead(lead);
+        setCurrentId(lead.id);
+        onLeadUpdated(lead.id, lead);
+      } else {
+        setClaimedLead(null);
+        setCurrentId(null);
+      }
+    } catch {
+      setClaimError("Claimen mislukt");
+      setCurrentId(null);
+      setClaimedLead(null);
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  // Soft claim bij openen Bel-tab; loslaten bij verlaten
   useEffect(() => {
-    if (queue.length === 0) {
-      if (currentId !== null) setCurrentId(null);
-      return;
-    }
-    if (!currentId || !queue.some((l) => l.id === currentId)) {
-      setCurrentId(queue[0].id);
-    }
-  }, [queue, currentId]);
+    void claimNext();
+    const onUnload = () => {
+      void releaseClaim();
+    };
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      window.removeEventListener("pagehide", onUnload);
+      void releaseClaim();
+    };
+    // alleen mount/unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Heartbeat: claim verlengen zolang lead open staat
+  useEffect(() => {
+    if (!currentId) return;
+    const tick = () => {
+      void fetch("/api/bel/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: currentId }),
+      });
+    };
+    tick();
+    const id = window.setInterval(tick, 2 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [currentId]);
 
   useEffect(() => {
     if (!current) return;
@@ -465,11 +543,11 @@ export function BelPanel({
       next.add(excludeId);
       return next;
     });
-    const skip = new Set(uitgesteldIds);
-    skip.add(excludeId);
-    const rest = queue.filter((l) => l.id !== excludeId && !skip.has(l.id));
-    setCurrentId(rest[0]?.id || null);
     setNextMode(null);
+    void (async () => {
+      await releaseClaim(excludeId);
+      await claimNext(excludeId);
+    })();
   }
 
   async function completeTerugbelAfspraak(leadId: string) {
@@ -783,7 +861,35 @@ export function BelPanel({
     }
   }
 
-  if (queue.length === 0 && terugbelDue.length === 0) {
+  if (claiming && !current) {
+    return (
+      <div className="px-6 py-14 text-center">
+        <p className="text-sm text-muted">Volgende lead ophalen…</p>
+      </div>
+    );
+  }
+
+  if (claimError && !current) {
+    return (
+      <div className="px-6 py-14 text-center">
+        <p className="font-display text-lg font-semibold text-ink">
+          Bel-claim mislukt
+        </p>
+        <p className="mx-auto mt-2 max-w-md text-sm text-[#C45A12]">
+          {claimError}
+        </p>
+        <button
+          type="button"
+          onClick={() => void claimNext()}
+          className="mt-4 border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+        >
+          Opnieuw proberen
+        </button>
+      </div>
+    );
+  }
+
+  if (!current && queue.length === 0 && terugbelDue.length === 0) {
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
@@ -795,7 +901,8 @@ export function BelPanel({
           {MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later
           terug. Na {MAX_BELPOGINGEN} keer geen contact vallen ze eruit.
           Terugbel-afspraken verschijnen bovenaan als chip (klik → lead), niet
-          in deze belwachtrij.
+          in deze belwachtrij. Meerdere bellers delen deze lijst — elke lead
+          gaat naar één persoon.
         </p>
       </div>
     );
@@ -843,12 +950,24 @@ export function BelPanel({
         {terugbelBanner}
         <div className="px-6 py-14 text-center">
           <p className="font-display text-lg font-semibold text-ink">
-            Geen leads in de bellijst
+            {queue.length > 0
+              ? "Geen vrije lead"
+              : "Geen leads in de bellijst"}
           </p>
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-            Openstaande terugbel-afspraken staan hierboven — klik om naar de
-            lead te gaan.
+            {queue.length > 0
+              ? "Andere bellers hebben de openstaande leads nu vast. Klik op opnieuw om de volgende vrije te pakken."
+              : "Openstaande terugbel-afspraken staan hierboven — klik om naar de lead te gaan."}
           </p>
+          {queue.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => void claimNext()}
+              className="mt-4 border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+            >
+              Opnieuw proberen
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -867,7 +986,10 @@ export function BelPanel({
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {`${position} van ${queue.length} in de bellijst`}
+          {`${position > 0 ? position : "—"} van ${queue.length} in de bellijst`}
+          <span className="ml-2 font-normal normal-case tracking-normal">
+            · van jou (andere bellers krijgen de volgende)
+          </span>
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">

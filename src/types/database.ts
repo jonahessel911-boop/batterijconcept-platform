@@ -295,6 +295,9 @@ export interface Lead {
   adviseur_id: string | null;
   /** Toegewezen beller (CRM-rol beller). */
   beller_id?: string | null;
+  /** Soft claim: wie heeft deze lead nu open in de Bel-tab. */
+  bel_claimed_by?: string | null;
+  bel_claimed_at?: string | null;
   /** Meta CAPI events al verstuurd (QualifiedLead, Schedule, Purchase). */
   capi_events_sent?: string[] | null;
   meta_fbc?: string | null;

@@ -37,7 +37,7 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
     case "adviseur":
       return ["leads", "agenda", "offertes", "netto", "facturen"];
     case "beller":
-      return ["bellen"];
+      return ["leads", "bellen"];
     case "backoffice":
       return ["projecten", "facturen", "inkomend", "purchasing"];
     case "installateur":
@@ -68,9 +68,12 @@ export function magTab(rol: GebruikerRol, tab: CrmTab): boolean {
   return tabsVoorRol(rol).includes(tab);
 }
 
-/** Alleen eigen leads (geen “Bekijk als”). */
+/**
+ * Alleen eigen leads (geen “Bekijk als”).
+ * Beller deelt de team-bellijst (soft claim) — geen vaste beller_id-split.
+ */
 export function alleenEigenLeads(rol: GebruikerRol): boolean {
-  return rol === "adviseur" || rol === "beller";
+  return rol === "adviseur";
 }
 
 export function isBellerRol(rol: GebruikerRol | string | null | undefined): boolean {

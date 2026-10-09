@@ -516,13 +516,13 @@ export function CrmShell() {
 
   const scopedLeads = useMemo(() => {
     if (!userRol) return [];
-    // Beller: alleen leads die aan hen zijn toegewezen
-    if (isBellerRol(userRol) && sessionUser?.id) {
-      return leads.filter((l) => l.beller_id === sessionUser.id);
-    }
     // Adviseur: strikt alleen eigen leads
     if (alleenEigenLeads(userRol) && sessionUser?.id) {
       return leads.filter((l) => l.adviseur_id === sessionUser.id);
+    }
+    // Beller: team-leads (zelfde pool als Bel-tab; dubbel voorkomen via claim)
+    if (isBellerRol(userRol)) {
+      return leads;
     }
     if (!adviseurFilter) return leads;
     const selected = adviseurs.find((a) => a.id === adviseurFilter);
@@ -540,19 +540,16 @@ export function CrmShell() {
   }, [leads, adviseurFilter, adviseurs, userRol, sessionUser]);
 
   /**
-   * Bellijst: team-queue. “Bekijk als” (adviseur-filter) mag die niet leegtrekken —
-   * anders zie je bv. alleen de 3 leads van één adviseur i.p.v. alle belbare.
-   * Bellers blijven beperkt tot hun toegewezen leads.
+   * Bellijst: gedeelde team-queue voor admin én beller.
+   * Soft claim (BelPanel) voorkomt dat twee mensen dezelfde lead bellen.
+   * “Bekijk als” mag de admin-bellijst niet leegtrekken.
    */
   const belLeads = useMemo(() => {
     if (!userRol) return [];
-    if (isBellerRol(userRol) && sessionUser?.id) {
-      return leads.filter((l) => l.beller_id === sessionUser.id);
-    }
     if (alleenEigenLeads(userRol) && sessionUser?.id) {
       return leads.filter((l) => l.adviseur_id === sessionUser.id);
     }
-    // Admin/backoffice: volle bellijst, ongeacht Bekijk-als
+    // Admin / beller / backoffice: volle bellijst
     return leads;
   }, [leads, userRol, sessionUser]);
 
@@ -1199,9 +1196,17 @@ export function CrmShell() {
                     }
                     lockAdviseur={userRol === "adviseur"}
                     onLeadUpdated={(id, patch) => {
-                      setLeads((prev) =>
-                        prev.map((l) => (l.id === id ? { ...l, ...patch } : l))
-                      );
+                      setLeads((prev) => {
+                        const i = prev.findIndex((l) => l.id === id);
+                        if (i < 0) {
+                          return patch && typeof patch === "object" && "id" in patch
+                            ? [patch as Lead, ...prev]
+                            : prev;
+                        }
+                        return prev.map((l) =>
+                          l.id === id ? { ...l, ...patch } : l
+                        );
+                      });
                     }}
                     onNeedReload={() => void load()}
                   />
