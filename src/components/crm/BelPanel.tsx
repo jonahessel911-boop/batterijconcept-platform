@@ -1314,8 +1314,8 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top 5 over alle adviseurs: eerst kortste reistijd (Google Maps),
-              daarna agenda-druk en conversie.
+              Top 5: kortste reistijd én zo vroeg mogelijk — liever snel inplannen
+              als de rit niet veel langer is.
             </p>
 
             <div className="space-y-2">

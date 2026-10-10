@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/best-slots?lead_id=…&limit=5&adviseur_id=…
- * Top momenten over adviseurs: reistijd → agenda-druk → conversie.
+ * Top momenten over adviseurs: reistijd + zo vroeg mogelijk (logische balans).
  * Adviseur-rol: altijd alleen eigen agenda (adviseur_id genegeerd/overschreven).
  */
 export async function GET(req: NextRequest) {

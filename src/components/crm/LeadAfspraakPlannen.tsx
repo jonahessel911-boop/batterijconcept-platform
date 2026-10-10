@@ -338,7 +338,7 @@ export function LeadAfspraakPlannen({
       <p className="text-xs text-muted">
         {lockAdviseur
           ? "Opties in jouw agenda · bevestigingsmail gaat mee."
-          : "Top-opties op kortste reistijd, daarna agenda-druk. Bevestigingsmail gaat mee."}
+          : "Top-opties: kortste reistijd én zo vroeg mogelijk. Bevestigingsmail gaat mee."}
       </p>
 
       <div className="space-y-2">
