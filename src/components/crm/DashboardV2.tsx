@@ -8,6 +8,7 @@ import {
   type DashboardV2AdviseurBar,
   type DashboardV2Capacity,
   type DashboardV2Data,
+  type DashboardV2Finance,
   type DashboardV2Forecast,
   type DashboardV2Kpi,
   type DashboardV2Period,
@@ -663,6 +664,113 @@ function ForecastGroupedBars({
         <span className="text-muted">· gestippeld = forecast</span>
       </div>
     </div>
+  );
+}
+
+const FINANCE_BARS = [
+  { key: "omzet", label: "Omzet", color: "#1a8a3e", get: (t: DashboardV2Finance["totals"]) => t.omzet },
+  {
+    key: "sales",
+    label: "Saleskosten",
+    color: "#64748b",
+    get: (t: DashboardV2Finance["totals"]) => t.salesKosten,
+  },
+  {
+    key: "inkoop",
+    label: "Inkoopkosten",
+    color: "#C45A12",
+    get: (t: DashboardV2Finance["totals"]) => t.inkoopkosten,
+  },
+  {
+    key: "lead",
+    label: "Leadkosten",
+    color: "#1A4A6E",
+    get: (t: DashboardV2Finance["totals"]) => t.leadKosten,
+  },
+] as const;
+
+function FinanceBarsSection({ finance }: { finance: DashboardV2Finance }) {
+  const t = finance.totals;
+  const max = Math.max(
+    1,
+    ...FINANCE_BARS.map((b) => b.get(t)),
+    Math.abs(t.resultaat)
+  );
+
+  return (
+    <section className="mt-8">
+      <div className="mb-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+          Omzet &amp; kosten
+        </h3>
+        <p className="mt-1 text-sm text-muted">
+          Omzet (groen) · saleskosten · inkoopkosten (betaalde orders die nog
+          besteld moeten worden) · leadkosten. Open te bestellen:{" "}
+          <span className="tabular-nums text-ink">
+            {money(finance.inkoopTeBestellenTotaal)}
+          </span>{" "}
+          ({num(finance.inkoopTeBestellenOrders)} orders).
+        </p>
+      </div>
+
+      <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {(
+          [
+            ["Omzet", t.omzet, "#1a8a3e"],
+            ["Saleskosten", t.salesKosten, "#64748b"],
+            ["Inkoopkosten", t.inkoopkosten, "#C45A12"],
+            ["Leadkosten", t.leadKosten, "#1A4A6E"],
+            ["Resultaat", t.resultaat, t.resultaat >= 0 ? "#1a8a3e" : "#C62828"],
+          ] as const
+        ).map(([label, value, color]) => (
+          <div
+            key={label}
+            className="rounded-2xl border border-line bg-white px-4 py-3"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              {label}
+            </p>
+            <p
+              className="mt-1 font-display text-2xl font-semibold tabular-nums"
+              style={{ color }}
+            >
+              {money(value)}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-2xl border border-line bg-white p-5">
+        <div className="flex h-52 items-end justify-center gap-3 sm:gap-6">
+          {FINANCE_BARS.map((b) => {
+            const v = b.get(t);
+            const pct = Math.max(v > 0 ? 2 : 0, (v / max) * 100);
+            return (
+              <div
+                key={b.key}
+                className="flex h-full w-14 flex-col items-center justify-end sm:w-20"
+                title={`${b.label}: ${money(v)}`}
+              >
+                <p className="mb-1 text-[11px] font-semibold tabular-nums text-ink">
+                  {money(v)}
+                </p>
+                <div
+                  className="w-full rounded-t-md transition-[height]"
+                  style={{
+                    height: `${pct}%`,
+                    background: b.color,
+                    minHeight: v > 0 ? 4 : 0,
+                  }}
+                />
+                <p className="mt-2 text-center text-[11px] font-medium text-muted">
+                  {b.label}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1358,6 +1466,10 @@ export function DashboardV2() {
               />
             </div>
           </section>
+
+          {data.finance ? (
+            <FinanceBarsSection finance={data.finance} />
+          ) : null}
 
           {data.capacity ? (
             <CapacitySection capacity={data.capacity} />

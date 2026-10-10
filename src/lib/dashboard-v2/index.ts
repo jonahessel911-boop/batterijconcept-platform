@@ -50,3 +50,11 @@ export {
   emptyDashboardV2Capacity,
   CAPACITY_TARGET_L2A,
 } from "./capacity";
+export type {
+  DashboardV2Finance,
+  FinancePoint,
+} from "./finance";
+export {
+  buildDashboardV2Finance,
+  emptyDashboardV2Finance,
+} from "./finance";

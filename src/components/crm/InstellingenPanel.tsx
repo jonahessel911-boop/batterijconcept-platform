@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Adviseur, InstallatiePartner } from "@/types/database";
 import type { WarmtefondsOperator } from "@/lib/warmtefonds-portal";
 import {
-  GEBRUIKER_ROLLEN,
+  TEAM_ROLLEN,
   gebruikerRolLabel,
   normalizeRol,
+  teamRolUitleg,
   type GebruikerRol,
+  type TeamRol,
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
@@ -47,11 +49,21 @@ export function InstellingenPanel({
   onAdviseursChange,
   /** Alleen adviseurs/team — geen installatiepartners. */
   teamOnly = false,
+  /** Extern gestuurd filter (bijv. via PartnersPanel-tabs). */
+  listFilter,
+  /** Verberg Team/Installatie/Warmtefonds-tabs (nav zit in parent). */
+  hideListTabs = false,
 }: {
   onAdviseursChange?: () => void;
   teamOnly?: boolean;
+  listFilter?: ListFilter;
+  hideListTabs?: boolean;
 }) {
-  const [filter, setFilter] = useState<ListFilter>("medewerkers");
+  const [filter, setFilter] = useState<ListFilter>(
+    listFilter ?? "medewerkers"
+  );
+  /** Rolfilter binnen Team: all of een specifieke login-rol. */
+  const [teamRolFilter, setTeamRolFilter] = useState<"all" | TeamRol>("all");
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [wfOperators, setWfOperators] = useState<WarmtefondsOperator[]>([]);
@@ -61,10 +73,11 @@ export function InstellingenPanel({
 
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
   const [telefoon, setTelefoon] = useState("");
-  const [rol, setRol] = useState<GebruikerRol>("adviseur");
+  const [rol, setRol] = useState<GebruikerRol>("beller");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<ListFilter | null>(null);
@@ -85,7 +98,20 @@ export function InstellingenPanel({
     if (teamOnly) setFilter("medewerkers");
   }, [teamOnly]);
 
-  const activeFilter: ListFilter = teamOnly ? "medewerkers" : filter;
+  useEffect(() => {
+    if (!listFilter) return;
+    setFilter(listFilter);
+    setSelectedId(null);
+    setSelectedKind(null);
+    setDraft(null);
+    setPartnerDraft(null);
+    setWfDraft(null);
+    setAddOpen(false);
+  }, [listFilter]);
+
+  const activeFilter: ListFilter = teamOnly
+    ? "medewerkers"
+    : listFilter ?? filter;
 
   const selectedAdviseur =
     selectedKind === "medewerkers"
@@ -131,11 +157,49 @@ export function InstellingenPanel({
     return () => cancelAnimationFrame(id);
   }, [load]);
 
-  function resetAddForm() {
+  function resetAddForm(prefRol?: GebruikerRol) {
     setNaam("");
     setEmail("");
     setTelefoon("");
-    setRol("adviseur");
+    const next =
+      prefRol &&
+      (TEAM_ROLLEN as readonly string[]).includes(prefRol)
+        ? prefRol
+        : teamRolFilter !== "all"
+          ? teamRolFilter
+          : "beller";
+    setRol(next);
+  }
+
+  async function deleteMedewerker(a: Adviseur) {
+    const ok = window.confirm(
+      `Account “${a.naam}” verwijderen?\n\nKan niet meer inloggen. Gekoppelde leads blijven bestaan.`
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(
+        `/api/adviseurs?id=${encodeURIComponent(a.id)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Verwijderen mislukt");
+      clearCrmShellCache();
+      onAdviseursChange?.();
+      closeDetail();
+      await load();
+      setOkMsg(
+        data.mode === "deactivated"
+          ? `${a.naam} gedeactiveerd (had gekoppelde data).`
+          : `${a.naam} verwijderd.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function openMedewerker(a: Adviseur) {
@@ -459,10 +523,6 @@ export function InstellingenPanel({
   async function loginAls(a: Adviseur) {
     setError(null);
     setOkMsg(null);
-    if (a.actief === false) {
-      setError("Zet de gebruiker eerst op Actief om in te loggen als.");
-      return;
-    }
     if (!a.email?.trim()) {
       setError("Gebruiker heeft geen e-mailadres.");
       return;
@@ -543,10 +603,15 @@ export function InstellingenPanel({
 
   const rows = useMemo(() => {
     if (activeFilter === "medewerkers") {
-      return [...adviseurs].sort((a, b) => {
-        if (a.actief !== b.actief) return a.actief ? -1 : 1;
-        return a.naam.localeCompare(b.naam, "nl");
-      });
+      return [...adviseurs]
+        .filter((a) => {
+          if (teamRolFilter === "all") return true;
+          return normalizeRol(a.rol) === teamRolFilter;
+        })
+        .sort((a, b) => {
+          if (a.actief !== b.actief) return a.actief ? -1 : 1;
+          return a.naam.localeCompare(b.naam, "nl");
+        });
     }
     if (activeFilter === "warmtefonds") {
       return [...wfOperators].sort((a, b) => {
@@ -558,11 +623,27 @@ export function InstellingenPanel({
       if (a.actief !== b.actief) return a.actief ? -1 : 1;
       return a.naam.localeCompare(b.naam, "nl");
     });
-  }, [activeFilter, adviseurs, partners, wfOperators]);
+  }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators]);
+
+  const teamRolCounts = useMemo(() => {
+    const counts: Record<TeamRol, number> = {
+      admin: 0,
+      adviseur: 0,
+      beller: 0,
+      backoffice: 0,
+    };
+    for (const a of adviseurs) {
+      const r = normalizeRol(a.rol);
+      if (r in counts) counts[r as TeamRol] += 1;
+    }
+    return counts;
+  }, [adviseurs]);
 
   const countLabel =
     activeFilter === "medewerkers"
-      ? `${adviseurs.length} adviseur${adviseurs.length === 1 ? "" : "s"} / team`
+      ? teamRolFilter === "all"
+        ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
+        : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
       : activeFilter === "warmtefonds"
         ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
         : `${partners.length} installatiepartner${partners.length === 1 ? "" : "s"}`;
@@ -652,12 +733,16 @@ export function InstellingenPanel({
                 }
                 className={inputCls}
               >
-                {GEBRUIKER_ROLLEN.map((r) => (
+                {TEAM_ROLLEN.map((r) => (
                   <option key={r} value={r}>
                     {gebruikerRolLabel[r]}
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] font-normal normal-case tracking-normal text-muted">
+                {teamRolUitleg[normalizeRol(draft.rol) as TeamRol] ||
+                  teamRolUitleg.adviseur}
+              </p>
             </Field>
             <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -690,9 +775,10 @@ export function InstellingenPanel({
                 </button>
               </div>
               <p className="mt-2 text-xs text-muted">
-                <strong>Actief</strong> = wordt ingepland via bellen / beste
-                slots. <strong>Inactief</strong> = niet automatisch inplannen.
-                Beschikbaarheid (week/slots) regel je op de Agenda.
+                <strong>Actief</strong> = verschijnt in de planning (bellen /
+                beste slots). <strong>Inactief</strong> = kan nog wel inloggen,
+                maar komt niet meer voor om in te plannen. Beschikbaarheid
+                (week/slots) regel je op de Agenda.
               </p>
             </div>
             <div className="sm:col-span-2">
@@ -884,17 +970,14 @@ export function InstellingenPanel({
               type="button"
               disabled={
                 loginAlsId === selectedAdviseur.id ||
-                selectedAdviseur.actief === false ||
                 !selectedAdviseur.email
               }
               onClick={() => void loginAls(selectedAdviseur)}
               className="border border-green bg-green-soft px-4 py-2 text-sm font-semibold text-green-dark hover:bg-green hover:text-white disabled:opacity-50"
               title={
-                selectedAdviseur.actief === false
-                  ? "Eerst Actief zetten"
-                  : !selectedAdviseur.email
-                    ? "Geen e-mailadres"
-                    : "Bekijk CRM als deze gebruiker"
+                !selectedAdviseur.email
+                  ? "Geen e-mailadres"
+                  : "Bekijk CRM als deze gebruiker"
               }
             >
               {loginAlsId === selectedAdviseur.id
@@ -942,18 +1025,28 @@ export function InstellingenPanel({
 
         <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-muted">
-              Status, commissie en gegevens worden pas bewaard als je{" "}
-              <strong className="text-ink">Opslaan</strong> klikt.
-            </p>
             <button
               type="button"
-              disabled={detailSaving}
-              onClick={() => void saveMedewerker()}
-              className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              disabled={deleting || detailSaving}
+              onClick={() => void deleteMedewerker(selectedAdviseur)}
+              className="border border-[#C45A12]/40 bg-[#FFF0E6] px-4 py-2.5 text-sm font-semibold text-[#C45A12] hover:bg-[#ffe4d4] disabled:opacity-60"
             >
-              {detailSaving ? "Opslaan…" : "Opslaan"}
+              {deleting ? "Verwijderen…" : "Account verwijderen"}
             </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-xs text-muted">
+                Wijzigingen pas actief na{" "}
+                <strong className="text-ink">Opslaan</strong>.
+              </p>
+              <button
+                type="button"
+                disabled={detailSaving || deleting}
+                onClick={() => void saveMedewerker()}
+                className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              >
+                {detailSaving ? "Opslaan…" : "Opslaan"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1395,71 +1488,108 @@ export function InstellingenPanel({
   }
 
   // ── List view ────────────────────────────────────────────────────────────
+  const showListTabs = !teamOnly && !hideListTabs;
+
   return (
     <div className="border border-line bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center gap-2">
-          {teamOnly ? (
-            <p className="text-sm font-medium text-ink">
-              Team · login, rollen en toegangsrechten
-            </p>
-          ) : (
-            <div className="flex border border-line p-0.5">
-              <button
-                type="button"
-                onClick={() => setFilter("medewerkers")}
-                className={[
-                  "px-3 py-1.5 text-xs font-semibold",
-                  activeFilter === "medewerkers"
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                Adviseurs
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("partners")}
-                className={[
-                  "px-3 py-1.5 text-xs font-semibold",
-                  activeFilter === "partners"
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                Installatiepartners
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("warmtefonds")}
-                className={[
-                  "px-3 py-1.5 text-xs font-semibold",
-                  activeFilter === "warmtefonds"
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                Warmtefonds
-              </button>
-            </div>
-          )}
-          <p className="text-xs text-muted">{countLabel}</p>
+      <div className="space-y-3 border-b border-line px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {showListTabs ? (
+              <div className="flex border border-line p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setFilter("medewerkers")}
+                  className={[
+                    "px-3 py-1.5 text-xs font-semibold",
+                    activeFilter === "medewerkers"
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Team
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilter("partners")}
+                  className={[
+                    "px-3 py-1.5 text-xs font-semibold",
+                    activeFilter === "partners"
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Installatiepartners
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilter("warmtefonds")}
+                  className={[
+                    "px-3 py-1.5 text-xs font-semibold",
+                    activeFilter === "warmtefonds"
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Warmtefonds
+                </button>
+              </div>
+            ) : null}
+            <p className="text-xs text-muted">{countLabel}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              resetAddForm(
+                teamRolFilter !== "all" ? teamRolFilter : undefined
+              );
+              setAddOpen(true);
+              setError(null);
+            }}
+            className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+          >
+            {activeFilter === "medewerkers"
+              ? teamRolFilter !== "all"
+                ? `+ ${gebruikerRolLabel[teamRolFilter]}`
+                : "+ Medewerker"
+              : activeFilter === "warmtefonds"
+                ? "+ Warmtefondspartner"
+                : "+ Installatiepartner"}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            resetAddForm();
-            setAddOpen(true);
-            setError(null);
-          }}
-          className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
-        >
-          {activeFilter === "medewerkers"
-            ? "+ Adviseur"
-            : activeFilter === "warmtefonds"
-              ? "+ Warmtefondspartner"
-              : "+ Installatiepartner"}
-        </button>
+
+        {activeFilter === "medewerkers" ? (
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setTeamRolFilter("all")}
+              className={[
+                "border px-2.5 py-1 text-[11px] font-semibold",
+                teamRolFilter === "all"
+                  ? "border-green bg-green text-white"
+                  : "border-line bg-white text-muted hover:bg-wash",
+              ].join(" ")}
+            >
+              Alle ({adviseurs.length})
+            </button>
+            {TEAM_ROLLEN.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setTeamRolFilter(r)}
+                className={[
+                  "border px-2.5 py-1 text-[11px] font-semibold",
+                  teamRolFilter === r
+                    ? "border-green bg-green text-white"
+                    : "border-line bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+                title={teamRolUitleg[r]}
+              >
+                {gebruikerRolLabel[r]} ({teamRolCounts[r]})
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {(error || okMsg) && (
@@ -1483,14 +1613,16 @@ export function InstellingenPanel({
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
             {activeFilter === "medewerkers"
-              ? "Nog geen adviseurs"
+              ? teamRolFilter === "all"
+                ? "Nog geen medewerkers"
+                : `Nog geen ${gebruikerRolLabel[teamRolFilter].toLowerCase()}-accounts`
               : activeFilter === "warmtefonds"
                 ? "Nog geen Warmtefondspartners"
                 : "Nog geen installatiepartners"}
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
-              ? "Voeg een adviseur toe — standaard 10% commissie, Actief = wordt ingepland."
+              ? "Kies een rol (Admin, Adviseur, Beller of Backoffice) en voeg een account toe."
               : activeFilter === "warmtefonds"
                 ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
                 : "Voeg een installatiepartner toe voor schouw/installatie en portaallink."}
@@ -1515,8 +1647,7 @@ export function InstellingenPanel({
               {(rows as Adviseur[]).map((a) => {
                 const sales = isSalesRol(a.rol);
                 const kvkOk = Boolean(a.bedrijfsnaam && a.kvk_nummer && a.iban);
-                const canLoginAls =
-                  a.actief !== false && Boolean(a.email?.trim());
+                const canLoginAls = Boolean(a.email?.trim());
                 return (
                   <tr
                     key={a.id}
@@ -1582,9 +1713,7 @@ export function InstellingenPanel({
                           className="border border-green/40 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:bg-green hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                           title={
                             !canLoginAls
-                              ? a.actief === false
-                                ? "Eerst Actief zetten"
-                                : "Geen e-mailadres"
+                              ? "Geen e-mailadres"
                               : `Login als ${a.naam}`
                           }
                         >
@@ -1727,7 +1856,7 @@ export function InstellingenPanel({
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold text-ink">
                 {activeFilter === "medewerkers"
-                  ? "Adviseur toevoegen"
+                  ? `${gebruikerRolLabel[normalizeRol(rol)]} toevoegen`
                   : activeFilter === "warmtefonds"
                     ? "Warmtefondspartner toevoegen"
                     : "Installatiepartner toevoegen"}
@@ -1748,7 +1877,7 @@ export function InstellingenPanel({
                 className={inputCls}
                 placeholder={
                   activeFilter === "medewerkers"
-                    ? "Bijv. Huub"
+                    ? "Bijv. Thub"
                     : activeFilter === "warmtefonds"
                       ? "Bijv. Edwin"
                       : "Bijv. Installatie BV"
@@ -1779,16 +1908,21 @@ export function InstellingenPanel({
                     onChange={(e) => setRol(normalizeRol(e.target.value))}
                     className={inputCls}
                   >
-                    {GEBRUIKER_ROLLEN.map((r) => (
+                    {TEAM_ROLLEN.map((r) => (
                       <option key={r} value={r}>
                         {gebruikerRolLabel[r]}
                       </option>
                     ))}
                   </select>
                 </Field>
-                <p className="text-[11px] leading-relaxed text-muted">
-                  Beller: alleen Bellen · Adviseur: sales · Backoffice:
-                  Backoffice, Facturen en Inkomend · Admin: alles
+                <p className="border border-line bg-wash px-3 py-2 text-[11px] leading-relaxed text-muted">
+                  {
+                    teamRolUitleg[
+                      (TEAM_ROLLEN as readonly string[]).includes(rol)
+                        ? (rol as TeamRol)
+                        : "beller"
+                    ]
+                  }
                 </p>
                 {rol === "adviseur" ? (
                   <p className="border border-green/30 bg-green-soft/50 px-3 py-2 text-[11px] text-green-dark">

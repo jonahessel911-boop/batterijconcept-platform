@@ -1,6 +1,7 @@
 import type { DashboardV2Goals } from "./goals";
 import type { DashboardV2Forecast } from "./forecast";
 import type { DashboardV2Capacity } from "./capacity";
+import type { DashboardV2Finance } from "./finance";
 
 export type DashboardV2Period =
   | "last_7_days"
@@ -129,4 +130,6 @@ export type DashboardV2Data = {
    * Houdt rekening met afblokkingen, week-uit en geplande huisbezoeken.
    */
   capacity: DashboardV2Capacity;
+  /** Omzet / sales / inkoop / leadkosten voor staafgrafiek */
+  finance: DashboardV2Finance;
 };

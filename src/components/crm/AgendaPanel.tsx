@@ -2226,7 +2226,9 @@ export function AgendaPanel({
           className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green sm:py-2"
         >
           <option value="">Kies adviseur…</option>
-          {adviseurs.filter((a) => !isAdminAdviseur(a)).map((a) => (
+          {adviseurs
+            .filter((a) => a.actief !== false && !isAdminAdviseur(a))
+            .map((a) => (
             <option key={a.id} value={a.id}>
               {a.naam}
             </option>

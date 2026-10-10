@@ -11,12 +11,14 @@ import {
   generatePassword,
   hashPassword,
 } from "@/lib/auth-password";
+import { cookies } from "next/headers";
 import { errMessage } from "@/lib/errors";
 import type { Adviseur } from "@/types/database";
 import {
   GEBRUIKER_ROLLEN,
   normalizeRol,
 } from "@/lib/rollen";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import {
   afblokKey,
   dayKeyAmsterdam,
@@ -753,6 +755,106 @@ export async function PATCH(req: NextRequest) {
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/adviseurs?id=…
+ * Verwijdert een team-account. Alleen admin. Je kunt jezelf niet verwijderen.
+ * Bij gekoppelde data: deactiveert + login uit (soft delete).
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    if (!session?.adviseurId) {
+      return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
+    }
+    if (normalizeRol(session.rol) !== "admin") {
+      return NextResponse.json(
+        { error: "Alleen admin mag accounts verwijderen" },
+        { status: 403 }
+      );
+    }
+
+    const id = req.nextUrl.searchParams.get("id")?.trim() || "";
+    if (!id) {
+      return NextResponse.json({ error: "id is verplicht" }, { status: 400 });
+    }
+    if (id === session.adviseurId) {
+      return NextResponse.json(
+        { error: "Je kunt je eigen account niet verwijderen" },
+        { status: 400 }
+      );
+    }
+
+    const sb = getSupabaseAdmin();
+    const { data: row, error: findErr } = await sb
+      .from("adviseurs")
+      .select("id, naam, email, rol")
+      .eq("id", id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!row) {
+      return NextResponse.json(
+        { error: "Account niet gevonden" },
+        { status: 404 }
+      );
+    }
+
+    const { error: delErr } = await sb.from("adviseurs").delete().eq("id", id);
+    if (!delErr) {
+      return NextResponse.json({
+        ok: true,
+        mode: "deleted",
+        naam: row.naam as string,
+      });
+    }
+
+    // FK-koppelingen → soft delete: geen login meer
+    const { error: softErr } = await sb
+      .from("adviseurs")
+      .update({
+        actief: false,
+        password_hash: null,
+        email: row.email
+          ? `verwijderd+${id.slice(0, 8)}@invalid.local`
+          : null,
+      })
+      .eq("id", id);
+
+    if (softErr) {
+      // password_hash/email update kan falen → alleen actief uit
+      const { error: minErr } = await sb
+        .from("adviseurs")
+        .update({ actief: false })
+        .eq("id", id);
+      if (minErr) {
+        return NextResponse.json(
+          {
+            error:
+              delErr.message ||
+              softErr.message ||
+              minErr.message ||
+              "Verwijderen mislukt",
+          },
+          { status: 500 }
+        );
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      mode: "deactivated",
+      naam: row.naam as string,
+      detail:
+        "Account had gekoppelde data en is gedeactiveerd (kan niet meer inloggen).",
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Verwijderen mislukt") },
       { status: 500 }
     );
   }

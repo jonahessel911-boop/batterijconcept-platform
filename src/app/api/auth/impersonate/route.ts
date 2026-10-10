@@ -74,12 +74,6 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
-    if (!target.actief) {
-      return NextResponse.json(
-        { error: "Deze gebruiker is niet actief." },
-        { status: 400 }
-      );
-    }
     if (!target.email?.trim()) {
       return NextResponse.json(
         { error: "Gebruiker heeft geen e-mailadres." },

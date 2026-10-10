@@ -73,9 +73,11 @@ async function findAdviseur(email: string) {
     rows = withHash.data as Row[];
   }
 
-  return (rows || []).find(
-    (a) => a.email?.toLowerCase() === email && a.actief
+  // Inactief mag inloggen; actief=false betekent alleen: niet inplannen.
+  const matches = (rows || []).filter(
+    (a) => a.email?.toLowerCase() === email
   );
+  return matches.find((a) => a.actief) || matches[0];
 }
 
 async function ensureAdminPersisted(adviseurId: string, password: string) {

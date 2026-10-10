@@ -10,12 +10,29 @@ export const GEBRUIKER_ROLLEN = [
 
 export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
 
+/** Login-accounts in Partners → Team (geen installateur-portaalrol). */
+export const TEAM_ROLLEN = [
+  "admin",
+  "adviseur",
+  "beller",
+  "backoffice",
+] as const;
+
+export type TeamRol = (typeof TEAM_ROLLEN)[number];
+
 export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   adviseur: "Adviseur",
   beller: "Beller",
   backoffice: "Backoffice",
   admin: "Admin",
   installateur: "Installateur",
+};
+
+export const teamRolUitleg: Record<TeamRol, string> = {
+  admin: "Alles: leads, bellen, agenda, backoffice, rapportage, partners",
+  adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen",
+  beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
+  backoffice: "Projecten, facturen, inkomend, purchasing",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {

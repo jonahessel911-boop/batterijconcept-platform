@@ -6,7 +6,9 @@ import {
   buildDashboardV2,
   buildDashboardV2Capacity,
   buildDashboardV2Drilldown,
+  buildDashboardV2Finance,
   emptyDashboardV2Capacity,
+  emptyDashboardV2Finance,
   parseDashboardV2Kpi,
   parseDashboardV2Period,
   storeWeeklyGoals,
@@ -19,6 +21,7 @@ import {
   loadAfblokkingen,
   weekKeyString,
 } from "@/lib/adviseur-beschikbaarheid";
+import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import { addDays, getISOWeekYear } from "date-fns";
 
 export const runtime = "nodejs";
@@ -374,8 +377,139 @@ export async function GET(req: NextRequest) {
       capacity = emptyDashboardV2Capacity(4);
     }
 
+    // Finance: omzet / sales / inkoop / leadkosten
+    let finance = emptyDashboardV2Finance();
+    try {
+      const [
+        offertesFinRes,
+        facturenRes,
+        projectenFinRes,
+        kostenRes,
+        metaRes,
+        advComRes,
+      ] = await Promise.all([
+        sb
+          .from("offertes")
+          .select(
+            "id, lead_id, status, ondertekend_op, subtotaal_ex_btw, totaal_inc_btw, leads(adviseur_id), offerte_regels(omschrijving, aantal)"
+          )
+          .in("status", ["ondertekend", "afgewezen"])
+          .not("ondertekend_op", "is", null),
+        sb
+          .from("facturen")
+          .select(
+            "id, offerte_id, lead_id, status, bedrag_inc_btw, betaald_op, omschrijving, credit_van_factuur_id"
+          ),
+        sb
+          .from("projecten")
+          .select("id, offerte_id, status, materiaal_checks")
+          .not("offerte_id", "is", null),
+        sb
+          .from("rapportage_kosten")
+          .select("datum, soort, bedrag")
+          .order("datum", { ascending: true }),
+        sb
+          .from("meta_ad_spend")
+          .select("datum, spend, campaign_id")
+          .eq("campaign_id", META_LEAD_CAMPAIGN_ID),
+        sb.from("adviseurs").select("id, commissie_pct"),
+      ]);
+
+      const geannuleerdOfferteIds = new Set(
+        (projectenFinRes.data || [])
+          .filter(
+            (p) =>
+              normalizeProjectStatus(p.status as string | null) === "annulering"
+          )
+          .map((p) => p.offerte_id as string)
+          .filter(Boolean)
+      );
+
+      const commissieByAdviseur = new Map<string, number>();
+      for (const a of advComRes.data || []) {
+        const pct = Number((a as { commissie_pct?: number }).commissie_pct);
+        if (Number.isFinite(pct) && pct > 0) {
+          commissieByAdviseur.set(a.id as string, pct);
+        }
+      }
+
+      finance = buildDashboardV2Finance(
+        {
+          offertes: (offertesFinRes.data || []).map((o) => {
+            const lead = o.leads as { adviseur_id?: string | null } | null;
+            const status = (o.status as string) || "";
+            return {
+              id: o.id as string,
+              lead_id: o.lead_id as string,
+              adviseur_id: lead?.adviseur_id ?? null,
+              ondertekend_op: (o.ondertekend_op as string) || null,
+              subtotaal_ex_btw: Number(o.subtotaal_ex_btw) || 0,
+              totaal_inc_btw: Number(o.totaal_inc_btw) || null,
+              geannuleerd:
+                status === "afgewezen" ||
+                geannuleerdOfferteIds.has(o.id as string),
+              regels: ((o as { offerte_regels?: { omschrijving?: string; aantal?: number }[] })
+                .offerte_regels || []) as {
+                omschrijving?: string | null;
+                aantal?: number | null;
+              }[],
+            };
+          }),
+          facturen: (facturenRes.error ? [] : facturenRes.data || []).map(
+            (f) => ({
+              id: f.id as string,
+              offerte_id: (f.offerte_id as string) || null,
+              lead_id: f.lead_id as string,
+              status: f.status as string,
+              bedrag_inc_btw:
+                f.bedrag_inc_btw != null ? Number(f.bedrag_inc_btw) : null,
+              betaald_op: (f.betaald_op as string) || null,
+              omschrijving: (f.omschrijving as string) || null,
+              credit_van_factuur_id:
+                (f as { credit_van_factuur_id?: string | null })
+                  .credit_van_factuur_id ?? null,
+            })
+          ),
+          projecten: (projectenFinRes.error
+            ? []
+            : projectenFinRes.data || []
+          ).map((p) => ({
+            id: p.id as string,
+            offerte_id: (p.offerte_id as string) || null,
+            status: (p.status as string) || null,
+            materiaal_checks:
+              ((p as { materiaal_checks?: Record<string, unknown> | null })
+                .materiaal_checks as Record<string, unknown> | null) ?? null,
+          })),
+          kosten: (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
+            datum: k.datum as string,
+            soort: k.soort as string,
+            bedrag: Number(k.bedrag) || 0,
+          })),
+          metaSpend: (metaRes.error ? [] : metaRes.data || []).map((m) => ({
+            datum: m.datum as string,
+            spend: Number(m.spend) || 0,
+            campaign_id: (m.campaign_id as string) || null,
+          })),
+          commissieByAdviseur,
+        },
+        {
+          rangeStart: dashboard.rangeStart,
+          rangeEnd: dashboard.rangeEnd,
+          buckets: dashboard.buckets.map((b) => ({
+            key: b.key,
+            label: b.label,
+            start: b.start,
+            end: b.end,
+          })),
+        }
+      );
+    } catch {
+      finance = emptyDashboardV2Finance();
+    }
+
     return NextResponse.json({
-      dashboard: { ...dashboard, capacity },
+      dashboard: { ...dashboard, capacity, finance },
     });
   } catch (e) {
     return NextResponse.json(
