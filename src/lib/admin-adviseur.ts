@@ -17,7 +17,10 @@ export function usesCrmSidebar(
   return true;
 }
 
-/** E-mails die altijd CRM-rol admin krijgen (ook als DB-rol ontbreekt/verkeerd is). */
+/**
+ * Bekende admin-e-mails (rechten-fallback als DB-rol ontbreekt).
+ * Expliciete DB-rol (beller/adviseur/…) wint altijd in de login-sessie.
+ */
 export function adminEmails(): string[] {
   const primary = adminEmail();
   const extras = [CRM_SIDEBAR_EMAIL];

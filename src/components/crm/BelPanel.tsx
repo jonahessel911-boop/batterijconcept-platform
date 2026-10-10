@@ -373,18 +373,22 @@ export function BelPanel({
     }
   }
 
-  // Soft claim bij openen Bel-tab; loslaten bij verlaten
+  // Soft claim bij openen Bel-tab.
+  // Geen release bij React-unmount (tab wissel/remount) — dat liet claims
+  // los waardoor twee bellers tegelijk dezelfde lead kregen.
+  // Release alleen bij tabblad sluiten / pagina verlaten, of via Volgende.
   useEffect(() => {
     void claimNext();
     const onUnload = () => {
       void releaseClaim();
     };
     window.addEventListener("pagehide", onUnload);
+    window.addEventListener("beforeunload", onUnload);
     return () => {
       window.removeEventListener("pagehide", onUnload);
-      void releaseClaim();
+      window.removeEventListener("beforeunload", onUnload);
     };
-    // alleen mount/unmount
+    // alleen mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

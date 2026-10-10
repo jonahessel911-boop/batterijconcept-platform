@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Kolommen bel_claimed_by/at ontbreken — voer supabase/migrate-bel-claim.sql uit in Supabase",
+            "Bel-claim staat nog niet aan in de database. Voer supabase/migrate-bel-claim.sql uit in de Supabase SQL Editor (opnieuw mag).",
           lead: null,
         },
         { status: 500 }

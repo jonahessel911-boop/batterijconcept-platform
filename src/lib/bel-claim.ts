@@ -9,6 +9,7 @@ import { isTerugbelSoort } from "@/lib/afspraak-soort";
 
 /** Claim verloopt zonder heartbeat. */
 export const BEL_CLAIM_TTL_MS = 15 * 60 * 1000;
+const BEL_CLAIM_TTL_SEC = Math.floor(BEL_CLAIM_TTL_MS / 1000);
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -41,7 +42,8 @@ function claimColumnsMissing(error: {
   return (
     error.code === "42703" ||
     msg.includes("bel_claimed_by") ||
-    msg.includes("bel_claimed_at")
+    msg.includes("bel_claimed_at") ||
+    msg.includes("try_claim_bel_lead")
   );
 }
 
@@ -63,7 +65,6 @@ async function loadAppointmentLeadIds(
     "lead_id" | "status" | "soort" | "start_at"
   >[]) {
     if (!ACTIEVE_AFSPRAAK.has(row.status)) continue;
-    // Terugbel altijd uit normale queue; fysiek alleen toekomstig
     if (isTerugbelSoort(row.soort)) {
       out.add(row.lead_id);
       continue;
@@ -87,7 +88,8 @@ async function loadFonioBusyLeadIds(
   );
 }
 
-async function tryClaimLead(
+/** JS-fallback als RPC nog niet gedeployed is. */
+async function tryClaimLeadJs(
   sb: SupabaseClient,
   leadId: string,
   callerId: string
@@ -97,7 +99,6 @@ async function tryClaimLead(
     bel_claimed_at: new Date().toISOString(),
   };
 
-  // 1) Vrij (nog niemand)
   {
     const { data, error } = await sb
       .from("leads")
@@ -106,19 +107,13 @@ async function tryClaimLead(
       .is("bel_claimed_by", null)
       .select("*")
       .maybeSingle();
-    if (claimColumnsMissing(error)) {
-      const { data: row } = await sb
-        .from("leads")
-        .select("*")
-        .eq("id", leadId)
-        .maybeSingle();
-      return (row as Lead) || null;
-    }
+    if (claimColumnsMissing(error)) return null;
     if (error) throw error;
-    if (data) return data as Lead;
+    if (data && (data as Lead).bel_claimed_by === callerId) {
+      return data as Lead;
+    }
   }
 
-  // 2) Al van mij
   {
     const { data, error } = await sb
       .from("leads")
@@ -128,10 +123,11 @@ async function tryClaimLead(
       .select("*")
       .maybeSingle();
     if (error) throw error;
-    if (data) return data as Lead;
+    if (data && (data as Lead).bel_claimed_by === callerId) {
+      return data as Lead;
+    }
   }
 
-  // 3) Verlopen claim van een ander — compare-and-swap op bel_claimed_at
   {
     const { data: row, error: readErr } = await sb
       .from("leads")
@@ -151,9 +147,42 @@ async function tryClaimLead(
       .select("*")
       .maybeSingle();
     if (error) throw error;
-    if (data) return data as Lead;
+    if (data && (data as Lead).bel_claimed_by === callerId) {
+      return data as Lead;
+    }
   }
 
+  return null;
+}
+
+async function tryClaimLead(
+  sb: SupabaseClient,
+  leadId: string,
+  callerId: string
+): Promise<Lead | null> {
+  const { data, error } = await sb.rpc("try_claim_bel_lead", {
+    p_lead_id: leadId,
+    p_caller_id: callerId,
+    p_ttl_seconds: BEL_CLAIM_TTL_SEC,
+  });
+
+  if (!error && data) {
+    const lead = data as Lead;
+    if (lead.bel_claimed_by === callerId) return lead;
+    return null;
+  }
+
+  // Functie/kolom ontbreekt → JS-fallback (nooit lead zonder claim teruggeven)
+  if (
+    error &&
+    (claimColumnsMissing(error) ||
+      error.code === "PGRST202" ||
+      error.message?.includes("Could not find the function"))
+  ) {
+    return tryClaimLeadJs(sb, leadId, callerId);
+  }
+
+  if (error) throw error;
   return null;
 }
 
@@ -167,7 +196,10 @@ export async function claimNextBelLead(
   opts?: {
     excludeLeadIds?: string[];
   }
-): Promise<{ lead: Lead | null; mode: "existing" | "new" | "empty" | "nocolumn" }> {
+): Promise<{
+  lead: Lead | null;
+  mode: "existing" | "new" | "empty" | "nocolumn";
+}> {
   const now = new Date();
   const exclude = new Set(opts?.excludeLeadIds || []);
 
@@ -179,29 +211,44 @@ export async function claimNextBelLead(
     .order("bel_claimed_at", { ascending: false })
     .limit(5);
 
-  if (!claimColumnsMissing(mineErr) && !mineErr) {
-    for (const row of (mine || []) as Lead[]) {
-      if (exclude.has(row.id)) continue;
-      if (!isBelClaimActive(row.bel_claimed_at, now)) continue;
-      // Verleng heartbeat
-      const { data: refreshed } = await sb
-        .from("leads")
-        .update({ bel_claimed_at: now.toISOString() })
-        .eq("id", row.id)
-        .eq("bel_claimed_by", callerId)
-        .select("*")
-        .maybeSingle();
-      return {
-        lead: (refreshed as Lead) || row,
-        mode: "existing",
-      };
-    }
-  } else if (claimColumnsMissing(mineErr)) {
-    // Zonder kolommen: geen echte claim mogelijk
+  if (claimColumnsMissing(mineErr)) {
     return { lead: null, mode: "nocolumn" };
   }
+  if (mineErr) throw mineErr;
 
-  // 2) Kandidaten laden en sorteren (zelfde regels als BelPanel)
+  const staleMineIds: string[] = [];
+  for (const row of (mine || []) as Lead[]) {
+    if (exclude.has(row.id)) {
+      staleMineIds.push(row.id);
+      continue;
+    }
+    if (!isBelClaimActive(row.bel_claimed_at, now)) {
+      staleMineIds.push(row.id);
+      continue;
+    }
+    const { data: refreshed } = await sb
+      .from("leads")
+      .update({ bel_claimed_at: now.toISOString() })
+      .eq("id", row.id)
+      .eq("bel_claimed_by", callerId)
+      .select("*")
+      .maybeSingle();
+    return {
+      lead: (refreshed as Lead) || row,
+      mode: "existing",
+    };
+  }
+
+  // Verlopen / excluded claims loslaten — anders blokkeert unique index nieuwe claim
+  if (staleMineIds.length > 0) {
+    await sb
+      .from("leads")
+      .update({ bel_claimed_by: null, bel_claimed_at: null })
+      .eq("bel_claimed_by", callerId)
+      .in("id", staleMineIds);
+  }
+
+  // 2) Kandidaten laden en sorteren
   const [appointmentLeadIds, fonioBusy] = await Promise.all([
     loadAppointmentLeadIds(sb),
     loadFonioBusyLeadIds(sb),
@@ -214,7 +261,12 @@ export async function claimNextBelLead(
     .order("created_at", { ascending: false })
     .limit(2000);
 
-  if (leadsErr) throw leadsErr;
+  if (leadsErr) {
+    if (claimColumnsMissing(leadsErr)) {
+      return { lead: null, mode: "nocolumn" };
+    }
+    throw leadsErr;
+  }
 
   const candidates = sortBelQueue(
     ((rawLeads || []) as Lead[]).filter((l) => {
@@ -249,7 +301,7 @@ export async function heartbeatBelClaim(
     .select("id")
     .maybeSingle();
 
-  if (claimColumnsMissing(error)) return true;
+  if (claimColumnsMissing(error)) return false;
   if (error) throw error;
   return Boolean(data);
 }

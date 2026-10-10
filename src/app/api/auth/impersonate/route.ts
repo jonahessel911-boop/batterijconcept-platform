@@ -8,7 +8,6 @@ import {
   sessionCookieOptions,
   verifySessionToken,
 } from "@/lib/auth-session";
-import { isAdminEmail } from "@/lib/admin-adviseur";
 import { normalizeRol } from "@/lib/rollen";
 
 export const runtime = "nodejs";
@@ -19,9 +18,7 @@ function isAdminSession(session: {
   impersonatorId?: string;
 }): boolean {
   if (session.impersonatorId) return false;
-  return (
-    normalizeRol(session.rol) === "admin" || isAdminEmail(session.email)
-  );
+  return normalizeRol(session.rol) === "admin";
 }
 
 /**
@@ -81,8 +78,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let rol = normalizeRol(target.rol || "adviseur");
-    if (isAdminEmail(target.email)) rol = "admin";
+    // DB-rol respecteren (beller ziet alleen leads + bellen)
+    const rol = normalizeRol(target.rol || "adviseur");
 
     const token = await createSessionToken({
       adviseurId: target.id,
@@ -146,10 +143,9 @@ export async function DELETE() {
       admin?.naam || session.impersonatorNaam || "Admin";
     const email =
       (admin?.email || session.impersonatorEmail || "").trim();
-    let rol = normalizeRol(
+    const rol = normalizeRol(
       admin?.rol || session.impersonatorRol || "admin"
     );
-    if (isAdminEmail(email)) rol = "admin";
 
     if (error && !session.impersonatorEmail) {
       return NextResponse.json(

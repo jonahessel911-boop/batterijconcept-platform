@@ -190,17 +190,22 @@ export async function POST(req: NextRequest) {
       void ensureAdminPersisted(adviseur.id, password);
     }
 
+    // Expliciete DB-rol wint (ook beller/backoffice). Fallback alleen als rol leeg is.
     const rol = normalizeRol(
       adviseur.rol ||
-        (isAdminEmail(adviseur.email) ||
+        (isBootstrap ||
         isAdminAdviseur(adviseur) ||
-        isBootstrap
+        isAdminEmail(adviseur.email)
           ? "admin"
           : "adviseur")
     );
 
-    // Zorg dat bekende admins (o.a. jona@) ook in DB admin blijven
-    if (rol === "admin" && adviseur.rol !== "admin") {
+    // Alleen het bootstrap/systeem-Admin-account terugzetten — niet jona@ forceren.
+    if (
+      rol === "admin" &&
+      adviseur.rol !== "admin" &&
+      (isBootstrap || isAdminAdviseur(adviseur))
+    ) {
       void (async () => {
         try {
           const sb = getSupabaseAdmin();
@@ -248,7 +253,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
-  // Rol + e-mail live uit DB (wijzigingen in Instellingen meteen actief)
+  // Rol + e-mail live uit DB (wijzigingen in Instellingen meteen actief).
+  // DB-rol wint altijd — anders ziet een beller-account alles als admin.
   let rol = normalizeRol(session.rol);
   let data: { rol?: string | null; naam?: string; email?: string | null } | null =
     null;
@@ -272,22 +278,13 @@ export async function GET(req: NextRequest) {
     } else if (!withRol.error) {
       data = withRol.data;
     }
-    if (
-      data &&
-      (isAdminEmail(data.email) ||
-        isAdminAdviseur({
-          naam: data.naam || session.naam,
-          email: data.email ?? session.email,
-        }))
-    ) {
-      rol = "admin";
-    } else if (data?.rol) {
+    if (data?.rol) {
       rol = normalizeRol(data.rol);
     } else if (
-      isAdminEmail(session.email) ||
+      isAdminEmail(data?.email ?? session.email) ||
       isAdminAdviseur({
-        naam: session.naam,
-        email: session.email,
+        naam: data?.naam || session.naam,
+        email: data?.email ?? session.email,
       })
     ) {
       rol = "admin";

@@ -865,9 +865,7 @@ export function CrmShell() {
     },
     bellen: {
       title: "Bellen",
-      sub: userRol && isBellerRol(userRol)
-        ? "Alleen leads die aan jou zijn toegewezen"
-        : "Bel, plan in, daarna Volgende en kies de status",
+      sub: "Gedeelde bellijst · 1 lead tegelijk per beller · daarna Volgende",
     },
     agenda: {
       title: userRol && agendaIsInstallatie(userRol)
