@@ -1187,10 +1187,12 @@ export function CrmShell() {
                     appointmentLeadIds={appointmentLeadIds}
                     defaultAdviseurId={
                       isBellerRol(userRol)
-                        ? undefined
+                        ? sessionUser?.id
                         : alleenEigenLeads(userRol)
                           ? sessionUser?.id
-                          : undefined
+                          : userRol === "backoffice" || userRol === "admin"
+                            ? sessionUser?.id
+                            : undefined
                     }
                     lockAdviseur={userRol === "adviseur"}
                     onLeadUpdated={(id, patch) => {

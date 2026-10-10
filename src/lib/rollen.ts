@@ -32,7 +32,7 @@ export const teamRolUitleg: Record<TeamRol, string> = {
   admin: "Alles: leads, bellen, agenda, backoffice, rapportage, partners",
   adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen",
   beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
-  backoffice: "Projecten, facturen, inkomend, purchasing",
+  backoffice: "Leads, bellen (terugbel), projecten, facturen, inkomend, purchasing",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -56,7 +56,7 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
     case "beller":
       return ["leads", "bellen"];
     case "backoffice":
-      return ["projecten", "facturen", "inkomend", "purchasing"];
+      return ["leads", "bellen", "projecten", "facturen", "inkomend", "purchasing"];
     case "installateur":
       return [];
     case "admin":
@@ -146,7 +146,7 @@ export function isBelPlanAdviseur(a: {
 
 /**
  * Mag een terugbel / warme terugbel toegewezen krijgen:
- * sales-adviseur, callcenter (beller) of backoffice.
+ * sales-adviseur, callcenter (beller), backoffice of admin.
  */
 export function isTerugbelPlanbaar(a: {
   actief?: boolean;
@@ -154,7 +154,12 @@ export function isTerugbelPlanbaar(a: {
 }): boolean {
   if (a.actief === false) return false;
   const rol = normalizeRol(a.rol);
-  return rol === "adviseur" || rol === "beller" || rol === "backoffice";
+  return (
+    rol === "adviseur" ||
+    rol === "beller" ||
+    rol === "backoffice" ||
+    rol === "admin"
+  );
 }
 
 /** Alleen cijfers — voor telefoonzoek. */

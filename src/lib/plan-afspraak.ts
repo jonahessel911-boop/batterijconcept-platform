@@ -285,12 +285,22 @@ async function afterCreate(
   }
 
   if (soort === "bel" || soort === "warme_bel") {
+    // Oude open terugbels voor deze lead afronden (één actieve tegelijk)
+    await sb
+      .from("afspraken")
+      .update({ status: "voltooid" })
+      .eq("lead_id", body.lead_id)
+      .in("soort", ["bel", "warme_bel"])
+      .in("status", ["gepland", "bevestigd", "verzet"])
+      .neq("id", afspraak.id);
+
     const leadPatch: Record<string, unknown> = {
       terugbellen: true,
       terugbel_notitie: afspraak.notities || null,
+      laatst_gebeld_at: new Date().toISOString(),
     };
     // Alleen sales-adviseur → lead.adviseur_id; callcenter → beller_id.
-    // Backoffice krijgt de afspraak via afspraak.adviseur_id, zonder lead te claimen.
+    // Backoffice/admin: afspraak.adviseur_id is genoeg voor het bel-systeem.
     if (body.adviseur_id) {
       const { data: assignee } = await sb
         .from("adviseurs")

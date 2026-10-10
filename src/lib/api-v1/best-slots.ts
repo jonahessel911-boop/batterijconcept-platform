@@ -720,27 +720,41 @@ export async function loadBestSlotsForLead(
 
   const nowMs = Date.now();
   const DAY_MS = 24 * 60 * 60 * 1000;
-  /** ~12 min wachten ≈ 1 min reistijd — liever snel als reistijd niet veel beter is. */
-  const DAY_PENALTY_SEC = 12 * 60;
+  /**
+   * Reistijd weegt zwaar; sneller inplannen telt mee maar lichter.
+   * ~5 min wachten ≈ 1 min reistijd → een week eerder wint alleen als de
+   * rit niet veel langer is (bijv. 58 vs 23 min: korte rit wint).
+   */
+  const DAY_PENALTY_SEC = 5 * 60;
+  /** Ritten boven ~45 min krijgen extra straf (altijd “goede” reistijd). */
+  const LONG_DRIVE_FROM_MIN = 45;
+  const LONG_DRIVE_EXTRA_PER_MIN = 1.25;
 
   /**
    * Lagere score = beter.
-   * Combineert echte reistijd + hoe ver weg in de tijd (zo snel mogelijk).
-   * Bonus als slot aansluit op een eerdere afspraak die dag.
+   * Primair: reistijd (lange ritten extra zwaar). Secundair: zo vroeg mogelijk.
+   * Klein plusje als slot aansluit op een eerdere afspraak die dag.
    */
   function rankCostSec(c: Candidate): number {
-    const travelSec =
+    const travelMin =
       c.reistijd_min != null
-        ? c.reistijd_min * 60
+        ? c.reistijd_min
         : c.scoreSec > 0 && c.scoreSec < 40_000
-          ? c.scoreSec
-          : 50 * 60;
+          ? c.scoreSec / 60
+          : 50;
+    const overLong = Math.max(0, travelMin - LONG_DRIVE_FROM_MIN);
+    const travelWeightedMin =
+      travelMin + overLong * LONG_DRIVE_EXTRA_PER_MIN;
     const daysAhead = Math.max(
       0,
       (new Date(c.start_at).getTime() - nowMs) / DAY_MS
     );
-    const routeBonus = c.reistijd_vanaf_startadres === false ? -5 * 60 : 0;
-    return travelSec + daysAhead * DAY_PENALTY_SEC + routeBonus;
+    const routeBonusMin =
+      c.reistijd_vanaf_startadres === false ? -3 : 0;
+    return (
+      (travelWeightedMin + daysAhead * (DAY_PENALTY_SEC / 60) + routeBonusMin) *
+      60
+    );
   }
 
   /** Vergelijk: haalbaar → reistijd+snelheid → druk → conversie. */
@@ -829,6 +843,6 @@ export async function loadBestSlotsForLead(
     slots_tekst: slots_tekst || "Geen vrije momenten gevonden",
     mode: usedRoute ? "route" : "calendar",
     note:
-      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: reistijd + zo vroeg mogelijk (logische balans).",
+      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: reistijd zwaar (lange rit extra), daarna zo vroeg mogelijk.",
   };
 }

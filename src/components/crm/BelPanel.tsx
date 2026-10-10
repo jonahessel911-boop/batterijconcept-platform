@@ -241,16 +241,27 @@ export function BelPanel({
     const groups: { rol: GebruikerRol; label: string; items: Adviseur[] }[] = [
       { rol: "beller", label: "Callcenter", items: [] },
       { rol: "backoffice", label: "Backoffice", items: [] },
+      { rol: "admin", label: "Admin", items: [] },
       { rol: "adviseur", label: "Adviseurs", items: [] },
     ];
     for (const a of terugbelMedewerkers) {
       const rol = normalizeRol(a.rol);
       const g = groups.find((x) => x.rol === rol);
       if (g) g.items.push(a);
-      else groups[2].items.push(a);
+      else groups[3].items.push(a);
     }
     return groups.filter((g) => g.items.length > 0);
   }, [terugbelMedewerkers]);
+
+  function pickTerugbelAssignee(preferred?: string | null): string {
+    if (preferred && terugbelMedewerkers.some((a) => a.id === preferred)) {
+      return preferred;
+    }
+    if (defaultAdviseurId && terugbelMedewerkers.some((a) => a.id === defaultAdviseurId)) {
+      return defaultAdviseurId;
+    }
+    return terugbelMedewerkers[0]?.id || "";
+  }
 
   const normalQueue = useMemo(
     () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
@@ -800,36 +811,30 @@ export function BelPanel({
     setError(null);
     try {
       if (!terugbelAt) throw new Error("Kies datum en tijd");
-      const parsed = new Date(terugbelAt);
-      if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum/tijd");
-      const planAdviseurId =
-        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId;
+      const planAdviseurId = pickTerugbelAssignee(
+        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId
+      );
       if (!planAdviseurId) throw new Error("Kies een medewerker");
       const note = terugbelNotitie.trim();
       if (!note) throw new Error("Vul een notitie in");
 
-      const oudeTerugbelId = activeBelAfspraak(afspraken, current.id)?.id;
-
+      // Amsterdam-lokale string → server parseert correct (geen browser-Date-offset)
       const res = await fetch("/api/afspraken", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead_id: current.id,
           adviseur_id: planAdviseurId,
-          start_at: parsed.toISOString(),
+          start_at: terugbelAt,
           notities: note,
           soort: terugbelWarm ? "warme_bel" : "bel",
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Terugbel-afspraak mislukt");
-
-      const sb = getSupabaseBrowser();
-      if (oudeTerugbelId) {
-        await sb
-          .from("afspraken")
-          .update({ status: "voltooid" })
-          .eq("id", oudeTerugbelId);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Terugbel-afspraak mislukt"
+        );
       }
 
       const now = new Date().toISOString();
@@ -846,7 +851,6 @@ export function BelPanel({
       if (!current.eerste_gebeld_at) {
         leadPatch.eerste_gebeld_at = now;
       }
-      await sb.from("leads").update(leadPatch).eq("id", current.id);
 
       onLeadUpdated(current.id, leadPatch);
       void clientLogLeadEvent(current.id, {
@@ -854,7 +858,7 @@ export function BelPanel({
         titel: terugbelWarm
           ? "Warme terugbelafspraak gepland"
           : "Terugbelafspraak gepland",
-        detail: `${note} · ${parsed.toLocaleString("nl-NL")}`,
+        detail: `${note} · ${terugbelAt.replace("T", " ")}`,
       });
       onNeedReload?.();
       goNextLead(current.id);
@@ -1180,6 +1184,7 @@ export function BelPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => {
+                  setAdviseurId(pickTerugbelAssignee(adviseurId));
                   setNextMode("terugbel");
                   setTerugbelWarm(false);
                   setError(null);
@@ -1194,6 +1199,7 @@ export function BelPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => {
+                  setAdviseurId(pickTerugbelAssignee(adviseurId));
                   setNextMode("terugbel");
                   setTerugbelWarm(true);
                   setError(null);
@@ -1314,8 +1320,8 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top 5: kortste reistijd én zo vroeg mogelijk — liever snel inplannen
-              als de rit niet veel langer is.
+              Top 5: eerst goede/korte reistijd (lange rit zwaarder), daarna zo
+              vroeg mogelijk.
             </p>
 
             <div className="space-y-2">
