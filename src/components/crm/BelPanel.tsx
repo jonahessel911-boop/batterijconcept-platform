@@ -1310,8 +1310,8 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top 5 over alle adviseurs: eerst gelijke agenda-vulling, daarna
-              reistijd (Google Maps) en conversie.
+              Top 5 over alle adviseurs: eerst kortste reistijd (Google Maps),
+              daarna agenda-druk en conversie.
             </p>
 
             <div className="space-y-2">

@@ -718,19 +718,19 @@ export async function loadBestSlotsForLead(
     };
   }
 
-  /** Vergelijk: haalbaar → minder drukke agenda → reistijd → conversie. */
+  /** Vergelijk: haalbaar → korte reistijd → minder drukke agenda → conversie. */
   function betterCandidate(a: Candidate, b: Candidate): number {
     return (
       Number(a.feasible) - Number(b.feasible) ||
-      b.workload - a.workload ||
       b.scoreSec - a.scoreSec ||
+      b.workload - a.workload ||
       a.conversie - b.conversie ||
       Number(a.preferred) - Number(b.preferred) ||
       b.start_at.localeCompare(a.start_at)
     );
   }
 
-  // Per wandklok-moment: adviseur met minste druk (dan route / conversie)
+  // Per wandklok-moment: adviseur met kortste reistijd (dan druk / conversie)
   const byMoment = new Map<string, Candidate>();
   for (const c of candidates) {
     const cur = byMoment.get(c.start_at);
@@ -741,9 +741,9 @@ export async function loadBestSlotsForLead(
 
   const ranked = [...byMoment.values()].sort((a, b) => {
     if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
+    if (a.scoreSec !== b.scoreSec) return a.scoreSec - b.scoreSec;
     if (a.workload !== b.workload) return a.workload - b.workload;
     if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
-    if (a.scoreSec !== b.scoreSec) return a.scoreSec - b.scoreSec;
     if (a.conversie !== b.conversie) return b.conversie - a.conversie;
     if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
     return a.start_at.localeCompare(b.start_at);
@@ -756,13 +756,14 @@ export async function loadBestSlotsForLead(
     // Prefer ook spreiding over adviseurs in de pool.
     const chronological = [...ranked].sort((a, b) => {
       if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
+      if (a.scoreSec !== b.scoreSec) return a.scoreSec - b.scoreSec;
       if (a.workload !== b.workload) return a.workload - b.workload;
       return a.start_at.localeCompare(b.start_at);
     });
     const pool = chronological.slice(0, Math.max(poolSize, 40));
     chosen = pickFonioDaypartSlots(pool);
   } else {
-    // Max 1 slot per dag + spreid over adviseurs (gelijke agenda-vulling)
+    // Max 1 slot per dag; reistijd is al de primaire volgorde in ranked
     const onePerDay: Candidate[] = [];
     const seenDays = new Set<string>();
     const pickedPerAdv = new Map<string, number>();
@@ -825,6 +826,6 @@ export async function loadBestSlotsForLead(
     slots_tekst: slots_tekst || "Geen vrije momenten gevonden",
     mode: usedRoute ? "route" : "calendar",
     note:
-      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: gelijke agenda-vulling → reistijd → conversie.",
+      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: reistijd → agenda-druk → conversie.",
   };
 }
