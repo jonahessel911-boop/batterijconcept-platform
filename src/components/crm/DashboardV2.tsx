@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import Link from "next/link";
 import { formatEuro } from "@/lib/format";
 import {
@@ -667,49 +673,163 @@ function ForecastGroupedBars({
   );
 }
 
-const FINANCE_BARS = [
-  { key: "omzet", label: "Omzet", color: "#1a8a3e", get: (t: DashboardV2Finance["totals"]) => t.omzet },
+const FINANCE_STACK = [
+  {
+    key: "omzet",
+    label: "Omzet",
+    color: "#1a8a3e",
+    get: (p: { omzet: number }) => p.omzet,
+  },
   {
     key: "sales",
     label: "Saleskosten",
     color: "#64748b",
-    get: (t: DashboardV2Finance["totals"]) => t.salesKosten,
+    get: (p: { salesKosten: number }) => p.salesKosten,
   },
   {
     key: "inkoop",
     label: "Inkoopkosten",
     color: "#C45A12",
-    get: (t: DashboardV2Finance["totals"]) => t.inkoopkosten,
+    get: (p: { inkoopkosten: number }) => p.inkoopkosten,
   },
   {
     key: "lead",
     label: "Leadkosten",
     color: "#1A4A6E",
-    get: (t: DashboardV2Finance["totals"]) => t.leadKosten,
+    get: (p: { leadKosten: number }) => p.leadKosten,
   },
 ] as const;
 
-function FinanceBarsSection({ finance }: { finance: DashboardV2Finance }) {
+function financeStackTotal(p: {
+  omzet: number;
+  salesKosten: number;
+  inkoopkosten: number;
+  leadKosten: number;
+}): number {
+  return FINANCE_STACK.reduce((s, seg) => s + Math.max(0, seg.get(p)), 0);
+}
+
+function FinanceBarsSection({
+  finance,
+  granularity,
+}: {
+  finance: DashboardV2Finance;
+  granularity?: "day" | "week" | "month";
+}) {
   const t = finance.totals;
-  const max = Math.max(
-    1,
-    ...FINANCE_BARS.map((b) => b.get(t)),
-    Math.abs(t.resultaat)
-  );
+  const [hover, setHover] = useState<{
+    pi: number;
+    key: string;
+  } | null>(null);
+
+  const points = useMemo(() => {
+    if (finance.points.length > 0) return finance.points;
+    return [
+      {
+        key: "totaal",
+        label: "Periode",
+        omzet: t.omzet,
+        salesKosten: t.salesKosten,
+        inkoopkosten: t.inkoopkosten,
+        leadKosten: t.leadKosten,
+      },
+    ];
+  }, [finance.points, t]);
+
+  const maxStack = Math.max(1, ...points.map((p) => financeStackTotal(p)));
+
+  const granLabel =
+    granularity === "month"
+      ? "per maand"
+      : granularity === "week"
+        ? "per week"
+        : granularity === "day"
+          ? "per dag"
+          : "per periode";
+
+  const tip =
+    hover != null
+      ? (() => {
+          const p = points[hover.pi];
+          const seg = FINANCE_STACK.find((s) => s.key === hover.key);
+          if (!p || !seg) return null;
+          return {
+            period: p.label,
+            series: seg.label,
+            value: money(seg.get(p)),
+            stack: money(financeStackTotal(p)),
+          };
+        })()
+      : null;
+
+  const cash = finance.cash || {
+    klantenOpenstaandInc: 0,
+    klantenOpenstaandCount: 0,
+    leverancierOpKredietEx: 0,
+    leverancierOpKredietCount: 0,
+  };
 
   return (
     <section className="mt-8">
       <div className="mb-3">
         <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+          Nog te betalen / ontvangen
+        </h3>
+        <p className="mt-1 text-sm text-muted">
+          Openstaande bedragen nu — los van de periodefilter. Wat klanten nog
+          moeten betalen, wat jij nog aan leveranciers moet, en wat nog
+          besteld moet worden.
+        </p>
+      </div>
+
+      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-line bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Klanten openstaand
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
+            {money(cash.klantenOpenstaandInc)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {num(cash.klantenOpenstaandCount)} open factuur
+            {cash.klantenOpenstaandCount === 1 ? "" : "en"} · inc. btw
+          </p>
+        </div>
+        <div className="rounded-2xl border border-[#C45A12]/30 bg-[#C45A12]/5 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Leverancier op krediet
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-[#C45A12]">
+            {money(cash.leverancierOpKredietEx)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {num(cash.leverancierOpKredietCount)} order
+            {cash.leverancierOpKredietCount === 1 ? "" : "s"} · ex. btw · nog te
+            betalen
+          </p>
+        </div>
+        <div className="rounded-2xl border border-line bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Te bestellen (inkoop)
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
+            {money(finance.inkoopTeBestellenTotaal)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {num(finance.inkoopTeBestellenOrders)} order
+            {finance.inkoopTeBestellenOrders === 1 ? "" : "s"} · klant betaald,
+            materiaal open
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
           Omzet &amp; kosten
         </h3>
         <p className="mt-1 text-sm text-muted">
-          Omzet (groen) · saleskosten · inkoopkosten (betaalde orders die nog
-          besteld moeten worden) · leadkosten. Open te bestellen:{" "}
-          <span className="tabular-nums text-ink">
-            {money(finance.inkoopTeBestellenTotaal)}
-          </span>{" "}
-          ({num(finance.inkoopTeBestellenOrders)} orders).
+          Gestapelde staaf {granLabel}: omzet · sales · inkoop · leadkosten over
+          de gekozen periode.
         </p>
       </div>
 
@@ -741,33 +861,86 @@ function FinanceBarsSection({ finance }: { finance: DashboardV2Finance }) {
       </div>
 
       <div className="rounded-2xl border border-line bg-white p-5">
-        <div className="flex h-52 items-end justify-center gap-3 sm:gap-6">
-          {FINANCE_BARS.map((b) => {
-            const v = b.get(t);
-            const pct = Math.max(v > 0 ? 2 : 0, (v / max) * 100);
-            return (
-              <div
-                key={b.key}
-                className="flex h-full w-14 flex-col items-center justify-end sm:w-20"
-                title={`${b.label}: ${money(v)}`}
-              >
-                <p className="mb-1 text-[11px] font-semibold tabular-nums text-ink">
-                  {money(v)}
-                </p>
+        <div className="relative">
+          <div
+            className="flex h-56 items-end justify-start gap-1.5 overflow-x-auto pb-1 sm:gap-2"
+            onMouseLeave={() => setHover(null)}
+          >
+            {points.map((p, pi) => {
+              const stack = financeStackTotal(p);
+              const barH = Math.max(
+                stack > 0 ? 8 : 0,
+                (stack / maxStack) * 100
+              );
+              const shortLabel =
+                p.label.length > 12 ? `${p.label.slice(0, 10)}…` : p.label;
+              return (
                 <div
-                  className="w-full rounded-t-md transition-[height]"
-                  style={{
-                    height: `${pct}%`,
-                    background: b.color,
-                    minHeight: v > 0 ? 4 : 0,
-                  }}
-                />
-                <p className="mt-2 text-center text-[11px] font-medium text-muted">
-                  {b.label}
-                </p>
-              </div>
-            );
-          })}
+                  key={p.key}
+                  className="flex h-full min-w-[2.25rem] flex-1 flex-col items-center justify-end sm:min-w-[2.75rem]"
+                >
+                  <p className="mb-1 text-[10px] font-semibold tabular-nums text-ink">
+                    {stack > 0 ? money(stack) : ""}
+                  </p>
+                  <div
+                    className="flex w-full max-w-[3.25rem] flex-col-reverse overflow-hidden rounded-t-md"
+                    style={{
+                      height: `${barH}%`,
+                      minHeight: stack > 0 ? 8 : 0,
+                    }}
+                  >
+                    {FINANCE_STACK.map((seg) => {
+                      const v = Math.max(0, seg.get(p));
+                      if (v <= 0 || stack <= 0) return null;
+                      const segPct = (v / stack) * 100;
+                      return (
+                        <div
+                          key={seg.key}
+                          className="w-full cursor-pointer"
+                          style={{
+                            height: `${segPct}%`,
+                            minHeight: v > 0 ? 3 : 0,
+                            background: seg.color,
+                          }}
+                          title={`${p.label} · ${seg.label}: ${money(v)}`}
+                          onMouseEnter={() =>
+                            setHover({ pi, key: seg.key })
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                  <p
+                    className="mt-2 w-full truncate text-center text-[10px] font-medium text-muted"
+                    title={p.label}
+                  >
+                    {shortLabel}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+          {tip ? (
+            <div className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 rounded-lg border border-line bg-white px-3 py-1.5 text-xs shadow-md">
+              <p className="font-semibold text-ink">{tip.series}</p>
+              <p className="tabular-nums text-ink">{tip.value}</p>
+              <p className="text-muted">
+                {tip.period} · stapel {tip.stack}
+              </p>
+            </div>
+          ) : null}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+          {FINANCE_STACK.map((s) => (
+            <span key={s.key} className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-sm"
+                style={{ background: s.color }}
+              />
+              {s.label}
+            </span>
+          ))}
+          <span className="text-muted">· {granLabel}</span>
         </div>
       </div>
     </section>
@@ -776,31 +949,53 @@ function FinanceBarsSection({ finance }: { finance: DashboardV2Finance }) {
 
 function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
   const l2aPct = Math.round(capacity.targetLeadToAppt * 100);
-  const [showAdviseurs, setShowAdviseurs] = useState(false);
-  const sorted = [...capacity.adviseurs].sort(
-    (a, b) => b.leadsNodig - a.leadsNodig || a.naam.localeCompare(b.naam, "nl")
+  const [openWeekKey, setOpenWeekKey] = useState<string | null>(null);
+  const [openAdviseurId, setOpenAdviseurId] = useState<string | null>(null);
+
+  const sorted = useMemo(
+    () =>
+      [...capacity.adviseurs].sort(
+        (a, b) =>
+          b.leadsNodig - a.leadsNodig || a.naam.localeCompare(b.naam, "nl")
+      ),
+    [capacity.adviseurs]
   );
+
+  function adviseursForWeek(jaar: number, week: number) {
+    return sorted
+      .map((a) => {
+        const w = a.weeks.find((x) => x.jaar === jaar && x.week === week);
+        return w
+          ? {
+              id: a.id,
+              naam: a.naam,
+              slotsOpen: w.slotsOpen,
+              slotsAfgeblokt: w.slotsAfgeblokt,
+              slotsGepland: w.slotsGepland,
+              slotsVrij: w.slotsVrij,
+              leadsNodig: w.leadsNodig,
+            }
+          : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null)
+      .sort(
+        (a, b) =>
+          b.leadsNodig - a.leadsNodig || a.naam.localeCompare(b.naam, "nl")
+      );
+  }
 
   return (
     <section className="mt-8">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-            Leads nodig · agenda-capaciteit
-          </h3>
-          <p className="mt-1 text-sm text-muted">
-            Komende {capacity.weeksAhead} weken · {capacity.adviseurCount}{" "}
-            planbare adviseurs · doel {l2aPct}% lead→afspraak. Afgeblokte
-            tijden en week-uit tellen niet mee.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShowAdviseurs((v) => !v)}
-          className="text-xs font-semibold text-green hover:underline"
-        >
-          {showAdviseurs ? "Verberg per adviseur" : "Per adviseur"}
-        </button>
+      <div className="mb-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+          Leads nodig · agenda-capaciteit
+        </h3>
+        <p className="mt-1 text-sm text-muted">
+          Komende {capacity.weeksAhead} weken · {capacity.adviseurCount}{" "}
+          planbare adviseurs · doel {l2aPct}% lead→afspraak. Klik een week of
+          adviseur open voor de uitsplitsing. Afgeblokte tijden en week-uit
+          tellen niet mee.
+        </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -853,7 +1048,7 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
 
       {capacity.weeks.length > 0 ? (
         <div className="mt-3 overflow-x-auto rounded-2xl border border-line bg-white">
-          <table className="w-full min-w-[520px] text-left text-sm">
+          <table className="w-full min-w-[560px] text-left text-sm">
             <thead>
               <tr className="border-b border-line text-[11px] uppercase tracking-wide text-muted">
                 <th className="px-3 py-2 font-semibold">Week</th>
@@ -871,36 +1066,80 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
               </tr>
             </thead>
             <tbody>
-              {capacity.weeks.map((w) => (
-                <tr
-                  key={`${w.jaar}-W${w.week}`}
-                  className="border-b border-line/70 last:border-0"
-                >
-                  <td className="px-3 py-2 font-medium text-ink">{w.label}</td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(w.slotsOpen)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(w.slotsAfgeblokt)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(w.slotsGepland)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums font-semibold text-ink">
-                    {num(w.slotsVrij)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
-                    {num(w.leadsNodig)}
-                  </td>
-                </tr>
-              ))}
+              {capacity.weeks.map((w) => {
+                const wk = `${w.jaar}-W${w.week}`;
+                const open = openWeekKey === wk;
+                const perAdv = open ? adviseursForWeek(w.jaar, w.week) : [];
+                return (
+                  <Fragment key={wk}>
+                    <tr
+                      className="cursor-pointer border-b border-line/70 hover:bg-wash/60"
+                      onClick={() =>
+                        setOpenWeekKey((cur) => (cur === wk ? null : wk))
+                      }
+                    >
+                      <td className="px-3 py-2 font-medium text-ink">
+                        <span className="mr-1.5 inline-block w-3 text-muted">
+                          {open ? "▾" : "▸"}
+                        </span>
+                        {w.label}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(w.slotsOpen)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(w.slotsAfgeblokt)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(w.slotsGepland)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums font-semibold text-ink">
+                        {num(w.slotsVrij)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
+                        {num(w.leadsNodig)}
+                      </td>
+                    </tr>
+                    {open
+                      ? perAdv.map((a) => (
+                          <tr
+                            key={`${wk}-${a.id}`}
+                            className="border-b border-line/40 bg-wash/40 last:border-0"
+                          >
+                            <td className="px-3 py-1.5 pl-9 text-ink">
+                              {a.naam}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(a.slotsOpen)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(a.slotsAfgeblokt)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(a.slotsGepland)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums font-medium text-ink">
+                              {num(a.slotsVrij)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums font-semibold text-green-deeper">
+                              {num(a.leadsNodig)}
+                            </td>
+                          </tr>
+                        ))
+                      : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
       ) : null}
 
-      {showAdviseurs && sorted.length > 0 ? (
+      {sorted.length > 0 ? (
         <div className="mt-3 overflow-x-auto rounded-2xl border border-line bg-white">
+          <p className="border-b border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Per adviseur · klik open voor weken
+          </p>
           <table className="w-full min-w-[560px] text-left text-sm">
             <thead>
               <tr className="border-b border-line text-[11px] uppercase tracking-wide text-muted">
@@ -919,29 +1158,70 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((a) => (
-                <tr
-                  key={a.id}
-                  className="border-b border-line/70 last:border-0"
-                >
-                  <td className="px-3 py-2 font-medium text-ink">{a.naam}</td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(a.slotsOpen)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(a.slotsAfgeblokt)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-muted">
-                    {num(a.slotsGepland)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums font-semibold text-ink">
-                    {num(a.slotsVrij)}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
-                    {num(a.leadsNodig)}
-                  </td>
-                </tr>
-              ))}
+              {sorted.map((a) => {
+                const open = openAdviseurId === a.id;
+                return (
+                  <Fragment key={a.id}>
+                    <tr
+                      className="cursor-pointer border-b border-line/70 hover:bg-wash/60"
+                      onClick={() =>
+                        setOpenAdviseurId((cur) =>
+                          cur === a.id ? null : a.id
+                        )
+                      }
+                    >
+                      <td className="px-3 py-2 font-medium text-ink">
+                        <span className="mr-1.5 inline-block w-3 text-muted">
+                          {open ? "▾" : "▸"}
+                        </span>
+                        {a.naam}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(a.slotsOpen)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(a.slotsAfgeblokt)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-muted">
+                        {num(a.slotsGepland)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums font-semibold text-ink">
+                        {num(a.slotsVrij)}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums font-semibold text-green-deeper">
+                        {num(a.leadsNodig)}
+                      </td>
+                    </tr>
+                    {open
+                      ? a.weeks.map((w) => (
+                          <tr
+                            key={`${a.id}-${w.jaar}-W${w.week}`}
+                            className="border-b border-line/40 bg-wash/40 last:border-0"
+                          >
+                            <td className="px-3 py-1.5 pl-9 text-muted">
+                              {w.label}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(w.slotsOpen)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(w.slotsAfgeblokt)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums text-muted">
+                              {num(w.slotsGepland)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums font-medium text-ink">
+                              {num(w.slotsVrij)}
+                            </td>
+                            <td className="px-3 py-1.5 tabular-nums font-semibold text-green-deeper">
+                              {num(w.leadsNodig)}
+                            </td>
+                          </tr>
+                        ))
+                      : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1468,7 +1748,10 @@ export function DashboardV2() {
           </section>
 
           {data.finance ? (
-            <FinanceBarsSection finance={data.finance} />
+            <FinanceBarsSection
+              finance={data.finance}
+              granularity={data.granularity}
+            />
           ) : null}
 
           {data.capacity ? (

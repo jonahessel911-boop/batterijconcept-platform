@@ -132,6 +132,19 @@ export function isPlanbareAdviseur(a: {
 }
 
 /**
+ * Zichtbaar in Agenda (eigen rooster, afblokken).
+ * Inactief mag wél — alleen bel/auto-planning sluit hen uit.
+ */
+export function isAgendaAdviseur(a: {
+  actief?: boolean;
+  rol?: string | null;
+  naam: string;
+  email?: string | null;
+}): boolean {
+  return normalizeRol(a.rol) === "adviseur";
+}
+
+/**
  * Planbaar via bel-systeem / beste slots (fysieke afspraken).
  * Inactief (`actief === false`) → niet automatisch inplannen.
  */

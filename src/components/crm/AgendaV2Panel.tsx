@@ -18,7 +18,7 @@ import type {
 } from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
-import { isPlanbareAdviseur } from "@/lib/rollen";
+import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakZichtbaarInAgenda,
   needsVervolgPunt,
@@ -405,10 +405,12 @@ export function AgendaPanel({
   const weekInfo = useMemo(() => schouwWeekFromDate(weekAnchor), [weekAnchor]);
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
 
+  // Inactieve adviseurs blijven zichtbaar (afblokken / eigen agenda),
+  // bel-systeem filtert hen apart op actief.
   const planAdviseurs = useMemo(
     () =>
       adviseurs.filter(
-        (a) => a.actief && !isAdminAdviseur(a) && isPlanbareAdviseur(a)
+        (a) => !isAdminAdviseur(a) && isAgendaAdviseur(a)
       ),
     [adviseurs]
   );

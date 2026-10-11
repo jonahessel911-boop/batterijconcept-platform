@@ -30,6 +30,25 @@ export const INKOOP_REGEL_STATUS_LABEL: Record<InkoopRegelStatus, string> = {
   geleverd: "Geleverd",
 };
 
+/** Leverancierbetaling per project (kolommen op projecten). */
+export type InkoopLeverancierStatus = "geen" | "betaald" | "op_krediet";
+
+export const INKOOP_LEVERANCIER_STATUS_LABEL: Record<
+  InkoopLeverancierStatus,
+  string
+> = {
+  geen: "—",
+  betaald: "Betaald",
+  op_krediet: "Op krediet",
+};
+
+export function parseInkoopLeverancierStatus(
+  value: unknown
+): InkoopLeverancierStatus {
+  if (value === "betaald" || value === "op_krediet") return value;
+  return "geen";
+}
+
 export type MateriaalChecks = Record<
   string,
   boolean | string | InkoopRegelStatus | null | undefined
@@ -272,6 +291,32 @@ export function isInkoopItemBesteld(
 ): boolean {
   const s = resolveInkoopRegelStatus(item, checks);
   return s === "besteld" || s === "geleverd";
+}
+
+/** Som ex. btw van regels die minstens besteld zijn (zelfde eenheid als checklist-totaal). */
+export function inkoopBesteldTotaalExBtw(
+  items: InkoopChecklistItem[],
+  checks: MateriaalChecks | null | undefined
+): number {
+  return round2(
+    items.reduce((s, item) => {
+      if (!isInkoopItemBesteld(item, checks)) return s;
+      return s + (Number(item.inkoopExBtw) || 0);
+    }, 0)
+  );
+}
+
+/** Som ex. btw van regels die nog te_kopen zijn. */
+export function inkoopTeBestellenTotaalExBtw(
+  items: InkoopChecklistItem[],
+  checks: MateriaalChecks | null | undefined
+): number {
+  return round2(
+    items.reduce((s, item) => {
+      if (resolveInkoopRegelStatus(item, checks) !== "te_kopen") return s;
+      return s + (Number(item.inkoopExBtw) || 0);
+    }, 0)
+  );
 }
 
 function guessSkuFromText(text: string): string | null {

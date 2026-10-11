@@ -15,8 +15,49 @@ import { rememberCrmReturnUrl } from "./DetailChrome";
 
 type StatusFilter = "actief" | "alles" | "betaald" | "open" | "concept";
 
+type BtwKwartaal = {
+  key: string;
+  jaar: number;
+  kwartaal: number;
+  label: string;
+  btw: number;
+  count: number;
+};
+
 function isCreditFactuur(f: Factuur): boolean {
   return Boolean(f.credit_van_factuur_id);
+}
+
+/** Amsterdam-kalenderdag → ISO yyyy-mm-dd. */
+function factuurDayAms(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso.length <= 10 ? `${iso}T12:00:00` : iso);
+  if (Number.isNaN(d.getTime())) {
+    const s = String(iso).slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  }
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Amsterdam",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+function kwartaalVanDag(day: string): { jaar: number; kwartaal: number } | null {
+  const m = day.match(/^(\d{4})-(\d{2})-/);
+  if (!m) return null;
+  const jaar = Number(m[1]);
+  const maand = Number(m[2]);
+  if (!jaar || !(maand >= 1 && maand <= 12)) return null;
+  return { jaar, kwartaal: Math.ceil(maand / 3) };
+}
+
+function currentKwartaalKey(now = new Date()): string {
+  const day = factuurDayAms(now.toISOString());
+  if (!day) return "";
+  const k = kwartaalVanDag(day);
+  return k ? `${k.jaar}-Q${k.kwartaal}` : "";
 }
 
 export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
@@ -65,6 +106,10 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
     let openstaandInc = 0;
     let betaaldCount = 0;
     let openCount = 0;
+    const perKwartaal = new Map<
+      string,
+      { jaar: number; kwartaal: number; btw: number; count: number }
+    >();
 
     for (const f of facturen) {
       const b = factuurBtwBuckets(f);
@@ -74,6 +119,51 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
       openstaandInc += b.openstaandInc;
       if (b.betaald) betaaldCount += 1;
       if (b.open) openCount += 1;
+
+      // Af te dragen per kwartaal op factuurdatum (betaald + credits die verlagen)
+      if (b.ontvangenBtw !== 0) {
+        const day = factuurDayAms(f.factuurdatum);
+        const k = day ? kwartaalVanDag(day) : null;
+        if (k) {
+          const key = `${k.jaar}-Q${k.kwartaal}`;
+          const cur = perKwartaal.get(key) || {
+            jaar: k.jaar,
+            kwartaal: k.kwartaal,
+            btw: 0,
+            count: 0,
+          };
+          cur.btw += b.ontvangenBtw;
+          cur.count += 1;
+          perKwartaal.set(key, cur);
+        }
+      }
+    }
+
+    const huidigeKey = currentKwartaalKey();
+    const jaren = [
+      ...new Set([...perKwartaal.values()].map((v) => v.jaar)),
+    ].sort((a, b) => a - b);
+    // Toon minstens het lopende jaar (Q1–Q4), plus eerdere jaren met data
+    const nowYear = Number(huidigeKey.slice(0, 4)) || new Date().getFullYear();
+    if (!jaren.includes(nowYear)) jaren.push(nowYear);
+    jaren.sort((a, b) => a - b);
+
+    const kwartalen: BtwKwartaal[] = [];
+    for (const jaar of jaren) {
+      for (let q = 1; q <= 4; q += 1) {
+        const key = `${jaar}-Q${q}`;
+        const cur = perKwartaal.get(key);
+        // Sla lege kwartalen over behalve het lopende jaar
+        if (!cur && jaar !== nowYear) continue;
+        kwartalen.push({
+          key,
+          jaar,
+          kwartaal: q,
+          label: `Q${q} ${jaar}`,
+          btw: Math.round((cur?.btw || 0) * 100) / 100,
+          count: cur?.count || 0,
+        });
+      }
     }
 
     return {
@@ -83,6 +173,8 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
       openstaandInc,
       betaaldCount,
       openCount,
+      kwartalen,
+      huidigeKwartaalKey: huidigeKey,
     };
   }, [facturen]);
 
@@ -103,14 +195,71 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
 
   return (
     <div>
-      <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
+      <div className="border-b border-line bg-white px-4 py-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Af te dragen BTW per kwartaal
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted">
+              Op factuurdatum · betaald (credits verlagen) ·{" "}
+              {overview.betaaldCount} betaald
+            </p>
+          </div>
+          <p className="text-[11px] text-muted">
+            Totaal{" "}
+            <span className="font-semibold tabular-nums text-ink">
+              {formatEuro(overview.ontvangenBtw)}
+            </span>
+          </p>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {overview.kwartalen.map((k) => {
+            const current = k.key === overview.huidigeKwartaalKey;
+            return (
+              <div
+                key={k.key}
+                className={[
+                  "border px-3 py-2.5",
+                  current
+                    ? "border-green/40 bg-green-soft/40"
+                    : "border-line bg-wash/40",
+                ].join(" ")}
+              >
+                <p
+                  className={[
+                    "text-[10px] font-semibold uppercase tracking-wide",
+                    current ? "text-green-deeper" : "text-muted",
+                  ].join(" ")}
+                >
+                  {k.label}
+                  {current ? " · nu" : ""}
+                </p>
+                <p
+                  className={[
+                    "mt-0.5 font-display text-lg font-semibold tabular-nums",
+                    k.btw < 0
+                      ? "text-[#C45A12]"
+                      : current
+                        ? "text-green-deeper"
+                        : "text-ink",
+                  ].join(" ")}
+                >
+                  {formatEuro(k.btw)}
+                </p>
+                <p className="mt-0.5 text-[10px] text-muted">
+                  {k.count
+                    ? `${k.count} factuur${k.count === 1 ? "" : "en"}`
+                    : "geen"}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-3">
         {[
-          {
-            label: "Af te dragen BTW",
-            value: formatEuro(overview.ontvangenBtw),
-            hint: `${overview.betaaldCount} betaald · credits verlagen`,
-            accent: true,
-          },
           {
             label: "Openstaande BTW",
             value: formatEuro(overview.openstaandeBtw),
@@ -131,12 +280,7 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
               {kpi.label}
             </p>
-            <p
-              className={[
-                "mt-0.5 font-display text-lg font-semibold tabular-nums",
-                kpi.accent ? "text-green-deeper" : "text-ink",
-              ].join(" ")}
-            >
+            <p className="mt-0.5 font-display text-lg font-semibold tabular-nums text-ink">
               {kpi.value}
             </p>
             {kpi.hint ? (

@@ -52,6 +52,7 @@ export {
 } from "./capacity";
 export type {
   DashboardV2Finance,
+  DashboardV2FinanceCash,
   FinancePoint,
 } from "./finance";
 export {

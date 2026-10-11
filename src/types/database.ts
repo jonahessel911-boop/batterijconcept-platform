@@ -56,6 +56,10 @@ export type ProjectStatus =
   | "hold_sales_actie";
 
 export type Betaalwijze = "warmtefonds" | "eigen_middelen";
+
+/** Leverancierbetaling voor materiaalinkoop (Apex e.d.). */
+export type InkoopLeverancierStatus = "geen" | "betaald" | "op_krediet";
+
 export type FactuurStatus =
   | "concept"
   | "verzonden"
@@ -543,6 +547,13 @@ export interface Project {
   materiaal_checks?: Record<string, boolean | string> | null;
   /** Verwachte leverdatum besteld materiaal (Planbord: oranje LEVERING). */
   materiaal_leverdatum?: string | null;
+  /**
+   * Of de inkoop bij de leverancier al is betaald of op krediet/factuur staat.
+   * `geen` = nog niet besteld / n.v.t.
+   */
+  inkoop_leverancier_status?: InkoopLeverancierStatus | null;
+  /** Moment waarop leverancier is betaald. */
+  inkoop_leverancier_betaald_op?: string | null;
   /** Moment waarop BTW-teruggave is aangevraagd. */
   btw_terugvragen_aangevraagd_at?: string | null;
   /** Overstap naar dynamische energieleverancier aangevraagd. */

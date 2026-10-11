@@ -385,7 +385,8 @@ export function CrmShell() {
 
   const loadAdviseurs = useCallback(async () => {
     try {
-      const res = await fetch("/api/adviseurs");
+      // Incl. inactief: agenda/afblokken; bel-systeem filtert zelf op actief.
+      const res = await fetch("/api/adviseurs?include_inactive=1");
       const data = await res.json();
       if (res.ok) setAdviseurs(data.adviseurs || []);
     } catch {
@@ -420,7 +421,7 @@ export function CrmShell() {
         setFacturen(nextFacturen);
         setInstroomCount(nextInstroom);
         let nextAdviseurs: Adviseur[] = [];
-        const advRes = await fetch("/api/adviseurs");
+        const advRes = await fetch("/api/adviseurs?include_inactive=1");
         const advData = await advRes.json();
         if (advRes.ok) {
           nextAdviseurs = (advData.adviseurs as Adviseur[]) || [];
@@ -485,7 +486,7 @@ export function CrmShell() {
       setFacturen(nextFacturen);
       setInstroomCount(nextInstroom);
       let nextAdviseurs: Adviseur[] = [];
-      const advRes = await fetch("/api/adviseurs");
+      const advRes = await fetch("/api/adviseurs?include_inactive=1");
       const advData = await advRes.json();
       if (advRes.ok) {
         nextAdviseurs = (advData.adviseurs as Adviseur[]) || [];

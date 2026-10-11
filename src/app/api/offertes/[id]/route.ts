@@ -285,3 +285,198 @@ export async function PATCH(
     );
   }
 }
+
+function isBlockingFactuurStatus(status: string | null | undefined): boolean {
+  const s = String(status || "").toLowerCase();
+  return s === "betaald" || s === "verstuurd" || s === "deels_betaald";
+}
+
+/**
+ * DELETE /api/offertes/[id]
+ * Verwijdert offerte + regels. Conceptfacturen mee; verstuurde/betaalde
+ * facturen of gekoppelde projecten met harde facturen blokkeren.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  if (!id?.trim()) {
+    return NextResponse.json({ error: "Ontbrekend id" }, { status: 400 });
+  }
+
+  try {
+    const sb = getSupabaseAdmin();
+
+    const { data: offerte, error: offErr } = await sb
+      .from("offertes")
+      .select("id, offerte_nummer, status, lead_id, titel")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (offErr) throw offErr;
+    if (!offerte) {
+      return NextResponse.json(
+        { error: "Offerte niet gevonden" },
+        { status: 404 }
+      );
+    }
+
+    const { data: projecten, error: projErr } = await sb
+      .from("projecten")
+      .select("id, project_nummer")
+      .eq("offerte_id", id);
+    if (projErr && projErr.code !== "42P01") throw projErr;
+    const projectIds = (projecten || []).map((p) => p.id as string);
+
+    const { data: facturenOff, error: facOffErr } = await sb
+      .from("facturen")
+      .select("id, factuur_nummer, status")
+      .eq("offerte_id", id);
+    if (facOffErr && facOffErr.code !== "42P01") throw facOffErr;
+
+    let facturenProj: { id: string; factuur_nummer: string; status: string }[] =
+      [];
+    if (projectIds.length > 0) {
+      const { data, error } = await sb
+        .from("facturen")
+        .select("id, factuur_nummer, status")
+        .in("project_id", projectIds);
+      if (error && error.code !== "42P01") throw error;
+      facturenProj = (data || []) as typeof facturenProj;
+    }
+
+    const allFac = [...(facturenOff || []), ...facturenProj];
+    const blocked = allFac.find((f) => isBlockingFactuurStatus(f.status));
+    if (blocked) {
+      return NextResponse.json(
+        {
+          error: `Offerte heeft factuur ${blocked.factuur_nummer} (${blocked.status}) — die moet eerst weg of op concept.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Concept-/overige facturen op offerte
+    if ((facturenOff || []).length > 0) {
+      const { error: delFac } = await sb
+        .from("facturen")
+        .delete()
+        .eq("offerte_id", id);
+      if (delFac) {
+        if (
+          delFac.code === "23503" ||
+          /foreign key|violates foreign key/i.test(delFac.message || "")
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Facturen zijn gekoppeld en blokkeren verwijderen. Verwijder of ontkoppel ze eerst.",
+              detail: delFac.message,
+            },
+            { status: 409 }
+          );
+        }
+        throw delFac;
+      }
+    }
+
+    // Projecten: conceptfacturen weg, overige ontkoppelen, daarna project
+    for (const pid of projectIds) {
+      const { error: delFacProj } = await sb
+        .from("facturen")
+        .delete()
+        .eq("project_id", pid);
+      if (
+        delFacProj &&
+        delFacProj.code !== "42P01" &&
+        (delFacProj.code === "23503" ||
+          /foreign key|violates foreign key/i.test(delFacProj.message || ""))
+      ) {
+        // Probeer ontkoppelen i.p.v. hard delete
+        const { error: unlinkFac } = await sb
+          .from("facturen")
+          .update({ project_id: null, offerte_id: null })
+          .eq("project_id", pid);
+        if (unlinkFac) {
+          return NextResponse.json(
+            {
+              error:
+                "Projectfacturen blokkeren verwijderen. Verwijder die facturen eerst.",
+              detail: delFacProj.message,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
+      for (const table of ["inkomende_facturen", "backoffice_actie_events"] as const) {
+        await sb
+          .from(table)
+          .update({ project_id: null })
+          .eq("project_id", pid);
+      }
+
+      const { error: delProj } = await sb
+        .from("projecten")
+        .delete()
+        .eq("id", pid);
+      if (delProj) {
+        if (
+          delProj.code === "23503" ||
+          /foreign key|violates foreign key/i.test(delProj.message || "")
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Gekoppeld project blokkeert verwijderen. Verwijder eerst het project.",
+              detail: delProj.message,
+            },
+            { status: 409 }
+          );
+        }
+        throw delProj;
+      }
+    }
+
+    const { error: delRegels } = await sb
+      .from("offerte_regels")
+      .delete()
+      .eq("offerte_id", id);
+    if (
+      delRegels &&
+      delRegels.code !== "42P01" &&
+      !/does not exist|schema cache/i.test(delRegels.message || "")
+    ) {
+      throw delRegels;
+    }
+
+    const { error: delOff } = await sb.from("offertes").delete().eq("id", id);
+    if (delOff) {
+      if (
+        delOff.code === "23503" ||
+        /foreign key|violates foreign key/i.test(delOff.message || "")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Offerte is gekoppeld aan andere gegevens en kan niet worden verwijderd.",
+            detail: delOff.message,
+          },
+          { status: 409 }
+        );
+      }
+      throw delOff;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      offerte_nummer: offerte.offerte_nummer,
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Offerte verwijderen mislukt") },
+      { status: 500 }
+    );
+  }
+}

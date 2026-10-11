@@ -10,9 +10,15 @@ import {
   isInkoopItemBesteld,
   batterijPurchasingStatus,
   resolveInkoopRegelStatus,
+  INKOOP_LEVERANCIER_STATUS_LABEL,
   type InkoopChecklistItem,
+  type InkoopLeverancierStatus,
   type MateriaalChecks,
 } from "@/lib/project-inkoop-checklist";
+import {
+  resolveInkoopLeverancierBetaaldOp,
+  resolveInkoopLeverancierStatus,
+} from "@/lib/inkoop-leverancier-betaling";
 import type { ProductInkoop } from "@/lib/inkoop";
 
 type Props = {
@@ -68,6 +74,12 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
   const [checks, setChecks] = useState<MateriaalChecks>(
     () => project.materiaal_checks || {}
   );
+  const [levStatus, setLevStatus] = useState<InkoopLeverancierStatus>(() =>
+    resolveInkoopLeverancierStatus(project)
+  );
+  const [levBetaaldOp, setLevBetaaldOp] = useState<string | null>(() =>
+    resolveInkoopLeverancierBetaaldOp(project)
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +131,14 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
 
   useEffect(() => {
     setChecks(project.materiaal_checks || {});
-  }, [project.materiaal_checks, project.id]);
+    setLevStatus(resolveInkoopLeverancierStatus(project));
+    setLevBetaaldOp(resolveInkoopLeverancierBetaaldOp(project));
+  }, [
+    project.materiaal_checks,
+    project.inkoop_leverancier_status,
+    project.inkoop_leverancier_betaald_op,
+    project.id,
+  ]);
 
   const regels = useMemo(
     () => (offerte?.offerte_regels || []) as OfferteRegel[],
@@ -190,7 +209,9 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
     const nuVolledig =
       items.length > 0 &&
       items.every((i) => isInkoopItemBesteld(i, nextChecks));
+    const setKredietDefault = nuVolledig && !wasVolledig && levStatus === "geen";
     setChecks(nextChecks);
+    if (setKredietDefault) setLevStatus("op_krediet");
     setSaving(true);
     setError(null);
     try {
@@ -200,7 +221,12 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
         body: JSON.stringify({
           materiaal_checks: nextChecks,
           ...(nuVolledig && !wasVolledig
-            ? { materiaal_volledig_afgevinkt: true }
+            ? {
+                materiaal_volledig_afgevinkt: true,
+                ...(setKredietDefault
+                  ? { inkoop_leverancier_status: "op_krediet" }
+                  : {}),
+              }
             : {}),
         }),
       });
@@ -210,9 +236,42 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
           (data as { error?: string }).error || "Opslaan mislukt"
         );
       }
-      onProjectUpdated?.(data.project as Project);
+      const p = data.project as Project;
+      onProjectUpdated?.(p);
+      setLevStatus(resolveInkoopLeverancierStatus(p));
+      setLevBetaaldOp(resolveInkoopLeverancierBetaaldOp(p));
     } catch (e) {
       setChecks(checks);
+      setLevStatus(resolveInkoopLeverancierStatus(project));
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setLeverancierStatus(status: InkoopLeverancierStatus) {
+    setSaving(true);
+    setError(null);
+    const prev = levStatus;
+    setLevStatus(status);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inkoop_leverancier_status: status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      const p = data.project as Project;
+      onProjectUpdated?.(p);
+      setLevStatus(resolveInkoopLeverancierStatus(p));
+      setLevBetaaldOp(resolveInkoopLeverancierBetaaldOp(p));
+    } catch (e) {
+      setLevStatus(prev);
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
       setSaving(false);
@@ -307,6 +366,59 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
                   {batterijStatus.geleverd ? "ja" : "nee"}
                 </span>
               </p>
+
+              <div className="mt-3 rounded-xl border border-line bg-wash/40 px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Leverancierbetaling
+                    </p>
+                    <p
+                      className={[
+                        "mt-0.5 text-sm font-semibold",
+                        levStatus === "op_krediet"
+                          ? "text-[#C45A12]"
+                          : levStatus === "betaald"
+                            ? "text-green-dark"
+                            : "text-muted",
+                      ].join(" ")}
+                    >
+                      {INKOOP_LEVERANCIER_STATUS_LABEL[levStatus]}
+                      {levStatus === "betaald" && levBetaaldOp
+                        ? ` · ${levBetaaldOp.slice(0, 10)}`
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      disabled={saving || levStatus === "op_krediet"}
+                      onClick={() => void setLeverancierStatus("op_krediet")}
+                      className="border border-[#C45A12]/40 bg-white px-2.5 py-1 text-xs font-semibold text-[#C45A12] disabled:opacity-50"
+                    >
+                      Op krediet
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving || levStatus === "betaald"}
+                      onClick={() => void setLeverancierStatus("betaald")}
+                      className="border border-green/40 bg-white px-2.5 py-1 text-xs font-semibold text-green-dark disabled:opacity-50"
+                    >
+                      Betaald
+                    </button>
+                    {levStatus !== "geen" ? (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => void setLeverancierStatus("geen")}
+                        className="border border-line bg-white px-2.5 py-1 text-xs font-semibold text-muted disabled:opacity-50"
+                      >
+                        Reset
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
 
               <ul className="mt-2 divide-y divide-line border border-line">
                 {items.length === 0 ? (

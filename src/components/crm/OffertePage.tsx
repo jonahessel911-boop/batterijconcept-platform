@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type {
   Factuur,
   Offerte,
@@ -41,6 +41,7 @@ import {
 
 export function OffertePage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [offerte, setOfferte] = useState<Offerte | null>(null);
   const [regels, setRegels] = useState<OfferteRegel[]>([]);
@@ -52,6 +53,7 @@ export function OffertePage() {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [verstuurBusy, setVerstuurBusy] = useState(false);
   const [verstuurMsg, setVerstuurMsg] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [actieOpen, setActieOpen] = useState(false);
   const [aanbetalingModus, setAanbetalingModus] =
     useState<AanbetalingModus>("btw");
@@ -338,6 +340,34 @@ export function OffertePage() {
     }
   }
 
+  async function deleteOfferte() {
+    if (!offerte) return;
+    if (
+      !confirm(
+        `Offerte ${offerte.offerte_nummer} definitief verwijderen?\n\nRegels, conceptfacturen en gekoppeld project (indien aanwezig) gaan mee. Verstuurde of betaalde facturen blokkeren dit.\n\nDit kan niet ongedaan worden.`
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(true);
+    setPdfError(null);
+    try {
+      const res = await fetch(`/api/offertes/${offerte.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      router.push("/?tab=offertes");
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "Verwijderen mislukt");
+      setDeleteBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <DetailShell activeTab="offertes">
@@ -493,6 +523,15 @@ export function OffertePage() {
               </button>
             </>
           )}
+          <button
+            type="button"
+            disabled={deleteBusy || pdfBusy || verstuurBusy}
+            onClick={() => void deleteOfferte()}
+            className="border border-[#C45A12]/40 bg-white px-4 py-2 text-sm font-semibold text-[#C45A12] hover:bg-[#FFF0E6] disabled:opacity-60"
+            title="Offerte definitief verwijderen"
+          >
+            {deleteBusy ? "Bezig…" : "Verwijderen"}
+          </button>
         </div>
         {verstuurMsg && (
           <p className="mt-3 text-sm font-medium text-green-dark">{verstuurMsg}</p>

@@ -383,7 +383,7 @@ export async function GET(req: NextRequest) {
       const [
         offertesFinRes,
         facturenRes,
-        projectenFinRes,
+        projectenFinResRaw,
         kostenRes,
         metaRes,
         advComRes,
@@ -402,7 +402,9 @@ export async function GET(req: NextRequest) {
           ),
         sb
           .from("projecten")
-          .select("id, offerte_id, status, materiaal_checks")
+          .select(
+            "id, offerte_id, status, materiaal_checks, inkoop_leverancier_status"
+          )
           .not("offerte_id", "is", null),
         sb
           .from("rapportage_kosten")
@@ -415,8 +417,30 @@ export async function GET(req: NextRequest) {
         sb.from("adviseurs").select("id, commissie_pct"),
       ]);
 
+      type ProjectFinRow = {
+        id: string;
+        offerte_id: string | null;
+        status: string | null;
+        materiaal_checks?: Record<string, unknown> | null;
+        inkoop_leverancier_status?: string | null;
+      };
+      let projectenFinData: ProjectFinRow[] = (
+        projectenFinResRaw.error ? [] : projectenFinResRaw.data || []
+      ) as ProjectFinRow[];
+      if (
+        projectenFinResRaw.error &&
+        (projectenFinResRaw.error.code === "42703" ||
+          projectenFinResRaw.error.message?.includes("inkoop_leverancier"))
+      ) {
+        const retry = await sb
+          .from("projecten")
+          .select("id, offerte_id, status, materiaal_checks")
+          .not("offerte_id", "is", null);
+        projectenFinData = (retry.error ? [] : retry.data || []) as ProjectFinRow[];
+      }
+
       const geannuleerdOfferteIds = new Set(
-        (projectenFinRes.data || [])
+        projectenFinData
           .filter(
             (p) =>
               normalizeProjectStatus(p.status as string | null) === "annulering"
@@ -470,16 +494,12 @@ export async function GET(req: NextRequest) {
                   .credit_van_factuur_id ?? null,
             })
           ),
-          projecten: (projectenFinRes.error
-            ? []
-            : projectenFinRes.data || []
-          ).map((p) => ({
-            id: p.id as string,
-            offerte_id: (p.offerte_id as string) || null,
-            status: (p.status as string) || null,
-            materiaal_checks:
-              ((p as { materiaal_checks?: Record<string, unknown> | null })
-                .materiaal_checks as Record<string, unknown> | null) ?? null,
+          projecten: projectenFinData.map((p) => ({
+            id: p.id,
+            offerte_id: p.offerte_id || null,
+            status: p.status || null,
+            materiaal_checks: p.materiaal_checks ?? null,
+            inkoop_leverancier_status: p.inkoop_leverancier_status ?? null,
           })),
           kosten: (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
             datum: k.datum as string,

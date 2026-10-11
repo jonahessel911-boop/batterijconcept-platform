@@ -65,6 +65,38 @@ function authorizeInbound(req: NextRequest): boolean {
   return false;
 }
 
+async function persistAiError(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  factuurId: string,
+  err: unknown
+) {
+  try {
+    const { data: row } = await sb
+      .from("inkomende_facturen")
+      .select("raw_payload, status")
+      .eq("id", factuurId)
+      .maybeSingle();
+    const prev =
+      row?.raw_payload && typeof row.raw_payload === "object"
+        ? (row.raw_payload as Record<string, unknown>)
+        : {};
+    await sb
+      .from("inkomende_facturen")
+      .update({
+        status: row?.status === "nieuw" ? "in_behandeling" : row?.status,
+        raw_payload: {
+          ...prev,
+          ai_error: errMessage(err),
+          ai_error_at: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", factuurId);
+  } catch (e) {
+    console.error("[inkomend] persist AI error failed", factuurId, e);
+  }
+}
+
 function attachmentBytes(
   att: PostmarkInboundAttachment
 ): Buffer | null {
@@ -148,18 +180,47 @@ export async function POST(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
-    // Idempotent: zelfde MessageID → bestaande rij teruggeven
+    // Idempotent: zelfde MessageID → bestaande rij. Als AI eerder
+    // werd afgekapt (fire-and-forget / Postmark-retry), scan alsnog.
     if (messageId) {
       const { data: existing } = await sb
         .from("inkomende_facturen")
-        .select("id, postmark_message_id, status, created_at")
+        .select(
+          "id, postmark_message_id, status, created_at, bedrag_inc_btw, bedrag_ex_btw, factuurdatum, raw_payload"
+        )
         .eq("postmark_message_id", messageId)
         .maybeSingle();
       if (existing) {
+        const raw =
+          existing.raw_payload && typeof existing.raw_payload === "object"
+            ? (existing.raw_payload as Record<string, unknown>)
+            : {};
+        const alreadyScanned = Boolean(raw.ai_scanned_at || raw.ai_extract);
+        const hasAmount =
+          existing.bedrag_inc_btw != null || existing.bedrag_ex_btw != null;
+        let aiRescanned = false;
+        if (!alreadyScanned || !hasAmount) {
+          try {
+            const { openaiConfigured, scanAndPersistInkomendeFactuur } =
+              await import("@/lib/inkomende-factuur-ai");
+            if (openaiConfigured()) {
+              await scanAndPersistInkomendeFactuur(sb, existing.id);
+              aiRescanned = true;
+            }
+          } catch (err) {
+            console.error(
+              "[inkomend] AI-scan retry on duplicate failed",
+              existing.id,
+              err
+            );
+            await persistAiError(sb, existing.id, err);
+          }
+        }
         return NextResponse.json({
           ok: true,
           duplicate: true,
           id: existing.id,
+          ai_rescanned: aiRescanned,
         });
       }
     }
@@ -232,20 +293,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // AI-scan op de achtergrond (alleen als OPENAI_API_KEY gezet is)
-    let aiQueued = false;
+    // AI-scan AWAITEN — fire-and-forget sterft op Vercel zodra de response
+    // terug is; Postmark-retries zien dan een duplicate zonder bedragen.
+    let aiScanned = false;
+    let aiError: string | null = null;
     if (uploaded.length > 0) {
       try {
         const { openaiConfigured, scanAndPersistInkomendeFactuur } =
           await import("@/lib/inkomende-factuur-ai");
         if (openaiConfigured()) {
-          aiQueued = true;
-          void scanAndPersistInkomendeFactuur(sb, row.id).catch((err) => {
-            console.error("[inkomend] AI-scan failed", row.id, err);
-          });
+          await scanAndPersistInkomendeFactuur(sb, row.id);
+          aiScanned = true;
+        } else {
+          aiError = "OPENAI_API_KEY ontbreekt";
         }
       } catch (err) {
-        console.error("[inkomend] AI-scan import failed", err);
+        console.error("[inkomend] AI-scan failed", row.id, err);
+        aiError = errMessage(err);
+        await persistAiError(sb, row.id, err);
       }
     }
 
@@ -254,7 +319,8 @@ export async function POST(req: NextRequest) {
         ok: true,
         id: row.id,
         attachments: uploaded.length,
-        ai_queued: aiQueued,
+        ai_scanned: aiScanned,
+        ai_error: aiError || undefined,
         upload_errors: uploadErrors.length ? uploadErrors : undefined,
       },
       { status: uploadErrors.length ? 207 : 201 }

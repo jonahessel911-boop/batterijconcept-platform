@@ -14,10 +14,13 @@ import {
 } from "@/lib/schouw-week";
 import {
   buildInkoopChecklist,
+  inkoopBesteldTotaalExBtw,
   inkoopChecklistTotaalExBtw,
+  inkoopTeBestellenTotaalExBtw,
   INKOOP_LEVERANCIER,
   orderInkoopSamenvatting,
   resolveInkoopRegelStatus,
+  type InkoopLeverancierStatus,
   type InkoopRegelStatus,
   type MateriaalChecks,
 } from "@/lib/project-inkoop-checklist";
@@ -31,6 +34,10 @@ import {
   type ProductInkoop,
 } from "@/lib/inkoop";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
+import {
+  resolveInkoopLeverancierBetaaldOp,
+  resolveInkoopLeverancierStatus,
+} from "@/lib/inkoop-leverancier-betaling";
 
 export const runtime = "nodejs";
 
@@ -115,32 +122,52 @@ export async function GET(_req: NextRequest) {
       status?: string | null;
       lead_id?: string | null;
       materiaal_leverdatum?: string | null;
+      inkoop_leverancier_status?: string | null;
+      inkoop_leverancier_betaald_op?: string | null;
     };
     let projecten: ProjRow[] | null = null;
     let pErr: { message?: string; code?: string } | null = null;
 
+    const selectFull =
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, inkoop_leverancier_status, inkoop_leverancier_betaald_op, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+    const selectNoLev =
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+    const selectMinimal =
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+
     {
       const first = await sb
         .from("projecten")
-        .select(
-          "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
-        )
+        .select(selectFull)
         .order("updated_at", { ascending: false })
         .limit(400);
       if (
         first.error &&
         (first.error.code === "42703" ||
+          first.error.message?.includes("inkoop_leverancier") ||
           first.error.message?.includes("materiaal_leverdatum"))
       ) {
-        const retry = await sb
+        const mid = await sb
           .from("projecten")
-          .select(
-            "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
-          )
+          .select(selectNoLev)
           .order("updated_at", { ascending: false })
           .limit(400);
-        projecten = (retry.data || []) as ProjRow[];
-        pErr = retry.error;
+        if (
+          mid.error &&
+          (mid.error.code === "42703" ||
+            mid.error.message?.includes("materiaal_leverdatum"))
+        ) {
+          const retry = await sb
+            .from("projecten")
+            .select(selectMinimal)
+            .order("updated_at", { ascending: false })
+            .limit(400);
+          projecten = (retry.data || []) as ProjRow[];
+          pErr = retry.error;
+        } else {
+          projecten = (mid.data || []) as ProjRow[];
+          pErr = mid.error;
+        }
       } else {
         projecten = (first.data || []) as ProjRow[];
         pErr = first.error;
@@ -381,6 +408,19 @@ export async function GET(_req: NextRequest) {
             ? "week"
             : "niet";
 
+      const levStatus: InkoopLeverancierStatus = resolveInkoopLeverancierStatus({
+        inkoop_leverancier_status: p.inkoop_leverancier_status,
+        materiaal_checks:
+          (p.materiaal_checks as Record<string, unknown> | null) || null,
+      });
+      const levBetaaldOp = resolveInkoopLeverancierBetaaldOp({
+        inkoop_leverancier_betaald_op: p.inkoop_leverancier_betaald_op,
+        materiaal_checks:
+          (p.materiaal_checks as Record<string, unknown> | null) || null,
+      });
+      const teBestellenEx = inkoopTeBestellenTotaalExBtw(items, checks);
+      const besteldEx = inkoopBesteldTotaalExBtw(items, checks);
+
       return {
         id: p.id as string,
         project_nummer: p.project_nummer as string | null,
@@ -393,6 +433,10 @@ export async function GET(_req: NextRequest) {
         offerte_nummer: off?.offerte_nummer || null,
         updated_at: p.updated_at as string,
         inkoop_totaal_ex_btw: inkoopChecklistTotaalExBtw(items),
+        te_bestellen_ex_btw: teBestellenEx,
+        besteld_ex_btw: besteldEx,
+        inkoop_leverancier_status: levStatus,
+        inkoop_leverancier_betaald_op: levBetaaldOp,
         schouw: {
           kind: schouwKind,
           at: dagDefinitief ? schouwProj.schouw_at : null,
@@ -453,14 +497,38 @@ export async function GET(_req: NextRequest) {
       return (b.updated_at || "").localeCompare(a.updated_at || "");
     });
 
+    let teBestellenEuro = 0;
+    let opKredietEuro = 0;
+    let opKredietCount = 0;
+    let betaaldEuro = 0;
+    let betaaldCount = 0;
+    for (const o of orders) {
+      teBestellenEuro += o.te_bestellen_ex_btw;
+      if (o.inkoop_leverancier_status === "op_krediet") {
+        opKredietEuro += o.besteld_ex_btw;
+        opKredietCount += 1;
+      } else if (o.inkoop_leverancier_status === "betaald") {
+        betaaldEuro += o.besteld_ex_btw;
+        betaaldCount += 1;
+      }
+    }
+
     return NextResponse.json({
       leverancier: INKOOP_LEVERANCIER,
       orders,
+      totals: {
+        te_bestellen_ex_btw: Math.round(teBestellenEuro * 100) / 100,
+        op_krediet_ex_btw: Math.round(opKredietEuro * 100) / 100,
+        op_krediet_count: opKredietCount,
+        betaald_ex_btw: Math.round(betaaldEuro * 100) / 100,
+        betaald_count: betaaldCount,
+      },
       counts: {
         te_kopen: orders.filter((o) => o.summary.overall === "te_kopen").length,
         deels: orders.filter((o) => o.summary.overall === "deels").length,
         besteld: orders.filter((o) => o.summary.overall === "besteld").length,
         geleverd: orders.filter((o) => o.summary.overall === "geleverd").length,
+        op_krediet: opKredietCount,
       },
     });
   } catch (e) {

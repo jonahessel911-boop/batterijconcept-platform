@@ -5,6 +5,8 @@ import Link from "next/link";
 import { formatEuro, formatSlotLabelNl } from "@/lib/format";
 import {
   INKOOP_LEVERANCIER,
+  INKOOP_LEVERANCIER_STATUS_LABEL,
+  type InkoopLeverancierStatus,
   type InkoopRegelStatus,
 } from "@/lib/project-inkoop-checklist";
 import { bestelDeadlineVoorInstallatie } from "@/lib/inkoop-sla";
@@ -38,6 +40,10 @@ type PurchasingOrder = {
   offerte_nummer: string | null;
   updated_at: string;
   inkoop_totaal_ex_btw: number;
+  te_bestellen_ex_btw?: number;
+  besteld_ex_btw?: number;
+  inkoop_leverancier_status: InkoopLeverancierStatus;
+  inkoop_leverancier_betaald_op: string | null;
   schouw: SchouwInfo;
   installatie_at: string | null;
   materiaal_leverdatum: string | null;
@@ -48,6 +54,22 @@ type PurchasingOrder = {
     overall: InkoopRegelStatus | "deels";
   };
   items: OrderLine[];
+};
+
+type PurchasingTotals = {
+  te_bestellen_ex_btw: number;
+  op_krediet_ex_btw: number;
+  op_krediet_count: number;
+  betaald_ex_btw: number;
+  betaald_count: number;
+};
+
+const EMPTY_TOTALS: PurchasingTotals = {
+  te_bestellen_ex_btw: 0,
+  op_krediet_ex_btw: 0,
+  op_krediet_count: 0,
+  betaald_ex_btw: 0,
+  betaald_count: 0,
 };
 
 function defaultLeverdatumYmd(daysAhead = 7): string {
@@ -74,10 +96,10 @@ function askLeverdatum(existingIso?: string | null): string | null {
 }
 
 /** Werkvoorraad-fases van de inkoopdesk. */
-type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd";
+type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd" | "te_betalen";
 
 const ROW =
-  "grid grid-cols-[7.5rem_minmax(0,1.1fr)_minmax(0,1.15fr)_minmax(0,1.15fr)_3.5rem_6.5rem] items-center gap-x-3";
+  "grid grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_4.5rem_3.5rem_6.5rem] items-center gap-x-3";
 
 function defaultSchouw(): SchouwInfo {
   return {
@@ -101,11 +123,30 @@ function openEuro(o: PurchasingOrder): number {
   return Math.round(n * 100) / 100;
 }
 
-function deskOf(o: PurchasingOrder): Desk {
+function deskOf(o: PurchasingOrder): Exclude<Desk, "te_betalen"> {
   if (o.summary.overall === "geleverd") return "geleverd";
   if (o.summary.overall === "besteld") return "onderweg";
   if (o.schouw.kind === "voltooid") return "bestellen";
   return "pipeline";
+}
+
+function levBadge(status: InkoopLeverancierStatus): {
+  label: string;
+  className: string;
+} {
+  if (status === "op_krediet") {
+    return {
+      label: INKOOP_LEVERANCIER_STATUS_LABEL.op_krediet,
+      className: "text-[#C45A12]",
+    };
+  }
+  if (status === "betaald") {
+    return {
+      label: INKOOP_LEVERANCIER_STATUS_LABEL.betaald,
+      className: "text-green-dark",
+    };
+  }
+  return { label: "—", className: "text-muted" };
 }
 
 function schouwWhen(schouw: SchouwInfo): string {
@@ -159,6 +200,7 @@ function pipelineSortKey(o: PurchasingOrder): string {
 
 export function PurchasingPanel() {
   const [orders, setOrders] = useState<PurchasingOrder[]>([]);
+  const [totals, setTotals] = useState<PurchasingTotals>(EMPTY_TOTALS);
   const [leverancier, setLeverancier] = useState(INKOOP_LEVERANCIER);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -181,8 +223,18 @@ export function PurchasingPanel() {
           ...o,
           schouw: o.schouw || defaultSchouw(),
           installatie_at: o.installatie_at || null,
+          inkoop_leverancier_status: o.inkoop_leverancier_status || "geen",
+          inkoop_leverancier_betaald_op:
+            o.inkoop_leverancier_betaald_op || null,
         }))
       );
+      setTotals({
+        te_bestellen_ex_btw: Number(data.totals?.te_bestellen_ex_btw) || 0,
+        op_krediet_ex_btw: Number(data.totals?.op_krediet_ex_btw) || 0,
+        op_krediet_count: Number(data.totals?.op_krediet_count) || 0,
+        betaald_ex_btw: Number(data.totals?.betaald_ex_btw) || 0,
+        betaald_count: Number(data.totals?.betaald_count) || 0,
+      });
       setLeverancier(data.leverancier || INKOOP_LEVERANCIER);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
@@ -202,9 +254,13 @@ export function PurchasingPanel() {
       pipeline: [],
       onderweg: [],
       geleverd: [],
+      te_betalen: [],
     };
     for (const o of orders) {
       buckets[deskOf(o)].push(o);
+      if (o.inkoop_leverancier_status === "op_krediet") {
+        buckets.te_betalen.push(o);
+      }
     }
     buckets.bestellen.sort(
       (a, b) =>
@@ -220,6 +276,12 @@ export function PurchasingPanel() {
     buckets.geleverd.sort((a, b) =>
       (b.updated_at || "").localeCompare(a.updated_at || "")
     );
+    buckets.te_betalen.sort(
+      (a, b) =>
+        (b.besteld_ex_btw || b.inkoop_totaal_ex_btw) -
+          (a.besteld_ex_btw || a.inkoop_totaal_ex_btw) ||
+        (b.updated_at || "").localeCompare(a.updated_at || "")
+    );
     return buckets;
   }, [orders]);
 
@@ -229,6 +291,7 @@ export function PurchasingPanel() {
       pipeline: byDesk.pipeline.length,
       onderweg: byDesk.onderweg.length,
       geleverd: byDesk.geleverd.length,
+      te_betalen: byDesk.te_betalen.length,
     }),
     [byDesk]
   );
@@ -247,6 +310,8 @@ export function PurchasingPanel() {
     let euro = 0;
     for (const o of list) {
       if (desk === "bestellen" || desk === "pipeline") euro += openEuro(o);
+      else if (desk === "te_betalen")
+        euro += o.besteld_ex_btw ?? o.inkoop_totaal_ex_btw;
       else euro += o.inkoop_totaal_ex_btw;
     }
     return Math.round(euro * 100) / 100;
@@ -274,7 +339,11 @@ export function PurchasingPanel() {
   async function persistChecks(
     order: PurchasingOrder,
     nextChecks: Record<string, InkoopRegelStatus>,
-    opts?: { reload?: boolean; askLeverdatum?: boolean }
+    opts?: {
+      reload?: boolean;
+      askLeverdatum?: boolean;
+      leverancierStatus?: InkoopLeverancierStatus;
+    }
   ) {
     const items = order.items.map((i) => ({
       ...i,
@@ -300,6 +369,19 @@ export function PurchasingPanel() {
       }
     }
 
+    let nextLevStatus = order.inkoop_leverancier_status;
+    if (opts?.leverancierStatus) {
+      nextLevStatus = opts.leverancierStatus;
+    } else if (
+      allBesteldOrMore &&
+      order.inkoop_leverancier_status === "geen"
+    ) {
+      // Veilig default: op krediet tot expliciet betaald
+      nextLevStatus = "op_krediet";
+    } else if (!allBesteldOrMore && order.summary.te_kopen === items.length) {
+      nextLevStatus = "geen";
+    }
+
     const body: Record<string, unknown> = {
       materiaal_checks: nextChecks,
     };
@@ -309,6 +391,9 @@ export function PurchasingPanel() {
     }
     if (leverdatumYmd) {
       body.materiaal_leverdatum = leverdatumYmd;
+    }
+    if (nextLevStatus !== order.inkoop_leverancier_status || opts?.leverancierStatus) {
+      body.inkoop_leverancier_status = nextLevStatus;
     }
 
     const res = await fetch(`/api/projecten/${order.id}`, {
@@ -351,6 +436,13 @@ export function PurchasingPanel() {
             materiaal_leverdatum: leverdatumYmd
               ? `${leverdatumYmd}T09:00:00.000Z`
               : o.materiaal_leverdatum,
+            inkoop_leverancier_status: nextLevStatus,
+            inkoop_leverancier_betaald_op:
+              nextLevStatus === "betaald"
+                ? new Date().toISOString()
+                : nextLevStatus === "op_krediet"
+                  ? null
+                  : o.inkoop_leverancier_betaald_op,
             items,
             summary: { te_kopen, besteld, geleverd, overall },
           };
@@ -361,11 +453,63 @@ export function PurchasingPanel() {
     if (allGeleverd) {
       setOkMsg(`${order.project_nummer || "Order"} · alles geleverd.`);
     } else if (allBesteldOrMore) {
+      const levLabel =
+        nextLevStatus === "betaald"
+          ? " · betaald"
+          : nextLevStatus === "op_krediet"
+            ? " · op krediet"
+            : "";
       setOkMsg(
-        `${order.project_nummer || "Order"} · besteld bij ${leverancier}${
+        `${order.project_nummer || "Order"} · besteld bij ${leverancier}${levLabel}${
           leverdatumYmd ? ` · levering ${leverdatumYmd}` : ""
         }.`
       );
+    }
+  }
+
+  async function setLeverancierBetaling(
+    order: PurchasingOrder,
+    status: InkoopLeverancierStatus
+  ) {
+    setBusyKey(`${order.id}:lev`);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(`/api/projecten/${order.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inkoop_leverancier_status: status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === order.id
+            ? {
+                ...o,
+                inkoop_leverancier_status: status,
+                inkoop_leverancier_betaald_op:
+                  status === "betaald"
+                    ? new Date().toISOString()
+                    : null,
+              }
+            : o
+        )
+      );
+      await load();
+      setOkMsg(
+        status === "betaald"
+          ? `${order.project_nummer || "Order"} · leverancier betaald.`
+          : `${order.project_nummer || "Order"} · op krediet gezet.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setBusyKey(null);
     }
   }
 
@@ -390,7 +534,11 @@ export function PurchasingPanel() {
     }
   }
 
-  async function markAll(order: PurchasingOrder, status: InkoopRegelStatus) {
+  async function markAll(
+    order: PurchasingOrder,
+    status: InkoopRegelStatus,
+    leverancierStatus?: InkoopLeverancierStatus
+  ) {
     setBusyKey(`${order.id}:all`);
     setError(null);
     setOkMsg(null);
@@ -400,6 +548,10 @@ export function PurchasingPanel() {
       await persistChecks(order, nextChecks, {
         reload: true,
         askLeverdatum: status === "besteld",
+        leverancierStatus:
+          status === "besteld"
+            ? leverancierStatus || "op_krediet"
+            : undefined,
       });
       setOpenId(null);
     } catch (e) {
@@ -415,6 +567,7 @@ export function PurchasingPanel() {
     pipeline: "Geen betaalde orders die nog op schouw wachten.",
     onderweg: "Geen bestellingen onderweg.",
     geleverd: "Nog geen geleverde orders.",
+    te_betalen: "Geen openstaande leveranciersfacturen (op krediet).",
   };
 
   const euroLabel: Record<Desk, string> = {
@@ -422,6 +575,7 @@ export function PurchasingPanel() {
     pipeline: "in pipeline",
     onderweg: "besteld",
     geleverd: "geleverd",
+    te_betalen: "nog te betalen",
   };
 
   return (
@@ -462,12 +616,51 @@ export function PurchasingPanel() {
         </div>
       </div>
 
+      {!loading ? (
+        <div className="grid gap-2 border-b border-line px-4 py-3 sm:grid-cols-3 sm:px-5">
+          <div className="rounded-xl border border-line bg-wash/40 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Te bestellen
+            </p>
+            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-ink">
+              {formatEuro(totals.te_bestellen_ex_btw)}
+            </p>
+            <p className="text-[11px] text-muted">ex. btw · nog in te kopen</p>
+          </div>
+          <div className="rounded-xl border border-[#C45A12]/30 bg-[#C45A12]/5 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Op krediet open
+            </p>
+            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-[#C45A12]">
+              {formatEuro(totals.op_krediet_ex_btw)}
+            </p>
+            <p className="text-[11px] text-muted">
+              {totals.op_krediet_count} order
+              {totals.op_krediet_count === 1 ? "" : "s"} · nog te betalen
+            </p>
+          </div>
+          <div className="rounded-xl border border-green/30 bg-green-soft/30 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Betaald aan leverancier
+            </p>
+            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-green-deeper">
+              {formatEuro(totals.betaald_ex_btw)}
+            </p>
+            <p className="text-[11px] text-muted">
+              {totals.betaald_count} order
+              {totals.betaald_count === 1 ? "" : "s"}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap border-b border-line">
         {(
           [
             ["bestellen", "Te bestellen", counts.bestellen],
             ["pipeline", "Pipeline", counts.pipeline],
             ["onderweg", "Onderweg", counts.onderweg],
+            ["te_betalen", "Nog te betalen", counts.te_betalen],
             ["geleverd", "Geleverd", counts.geleverd],
           ] as const
         ).map(([id, label, count]) => {
@@ -491,8 +684,10 @@ export function PurchasingPanel() {
                   "ml-1.5 tabular-nums",
                   active
                     ? "text-ink"
-                    : id === "bestellen" && count > 0
-                      ? "text-green-dark"
+                    : (id === "bestellen" || id === "te_betalen") && count > 0
+                      ? id === "te_betalen"
+                        ? "text-[#C45A12]"
+                        : "text-green-dark"
                       : "text-muted",
                 ].join(" ")}
               >
@@ -500,7 +695,10 @@ export function PurchasingPanel() {
               </span>
               {active ? (
                 <span
-                  className="absolute inset-x-0 bottom-0 h-0.5 bg-green"
+                  className={[
+                    "absolute inset-x-0 bottom-0 h-0.5",
+                    id === "te_betalen" ? "bg-[#C45A12]" : "bg-green",
+                  ].join(" ")}
                   aria-hidden
                 />
               ) : null}
@@ -530,7 +728,7 @@ export function PurchasingPanel() {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[820px]">
+          <div className="min-w-[920px]">
             <div
               className={[
                 ROW,
@@ -541,6 +739,7 @@ export function PurchasingPanel() {
               <span>Klant</span>
               <span>Schouw</span>
               <span>Installatie</span>
+              <span>Betaling</span>
               <span className="text-right">Open</span>
               <span className="text-right">Bedrag</span>
             </div>
@@ -548,12 +747,14 @@ export function PurchasingPanel() {
             <ul>
               {filtered.map((order) => {
                 const open = openId === order.id;
-                const d = deskOf(order);
                 const euro =
-                  d === "bestellen" || d === "pipeline"
+                  desk === "bestellen" || desk === "pipeline"
                     ? openEuro(order)
-                    : order.inkoop_totaal_ex_btw;
+                    : desk === "te_betalen"
+                      ? order.besteld_ex_btw ?? order.inkoop_totaal_ex_btw
+                      : order.inkoop_totaal_ex_btw;
                 const canOrder = order.schouw.kind === "voltooid";
+                const badge = levBadge(order.inkoop_leverancier_status);
 
                 return (
                   <li key={order.id} className="border-b border-line">
@@ -626,6 +827,16 @@ export function PurchasingPanel() {
                           );
                         })()}
                       </div>
+                      <div className="min-w-0">
+                        <p
+                          className={[
+                            "truncate text-xs font-semibold",
+                            badge.className,
+                          ].join(" ")}
+                        >
+                          {badge.label}
+                        </p>
+                      </div>
                       <div className="text-right tabular-nums text-sm text-ink">
                         {order.summary.te_kopen > 0
                           ? order.summary.te_kopen
@@ -677,13 +888,57 @@ export function PurchasingPanel() {
                           </div>
                           <div className="flex flex-wrap gap-2">
                             {canOrder && isOpenInkoop(order) ? (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={busyKey === `${order.id}:all`}
+                                  onClick={() =>
+                                    void markAll(order, "besteld", "op_krediet")
+                                  }
+                                  className="bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                                >
+                                  Besteld · op krediet
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busyKey === `${order.id}:all`}
+                                  onClick={() =>
+                                    void markAll(order, "besteld", "betaald")
+                                  }
+                                  className="border border-green bg-white px-3 py-1.5 text-xs font-semibold text-green-dark disabled:opacity-60"
+                                >
+                                  Besteld · betaald
+                                </button>
+                              </>
+                            ) : null}
+                            {order.inkoop_leverancier_status === "op_krediet" ? (
                               <button
                                 type="button"
-                                disabled={busyKey === `${order.id}:all`}
-                                onClick={() => void markAll(order, "besteld")}
-                                className="bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                                disabled={busyKey === `${order.id}:lev`}
+                                onClick={() =>
+                                  void setLeverancierBetaling(order, "betaald")
+                                }
+                                className="bg-green px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
                               >
-                                Alles besteld
+                                Markeer als betaald
+                              </button>
+                            ) : null}
+                            {order.inkoop_leverancier_status === "betaald" &&
+                            (order.summary.overall === "besteld" ||
+                              order.summary.overall === "geleverd" ||
+                              order.summary.overall === "deels") ? (
+                              <button
+                                type="button"
+                                disabled={busyKey === `${order.id}:lev`}
+                                onClick={() =>
+                                  void setLeverancierBetaling(
+                                    order,
+                                    "op_krediet"
+                                  )
+                                }
+                                className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-60"
+                              >
+                                Zet op krediet
                               </button>
                             ) : null}
                             {order.summary.overall === "besteld" &&

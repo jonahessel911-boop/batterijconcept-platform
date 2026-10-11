@@ -9,6 +9,8 @@ import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import { materiaalNogTeBestellen } from "@/lib/inkoop-sla";
+import { factuurBtwBuckets } from "@/lib/factuur-betaling";
+import { resolveInkoopLeverancierStatus } from "@/lib/inkoop-leverancier-betaling";
 import type { Project } from "@/types/database";
 import type { DashboardV2Bucket } from "./types";
 
@@ -21,6 +23,15 @@ export type FinancePoint = {
   salesKosten: number;
   inkoopkosten: number;
   leadKosten: number;
+};
+
+export type DashboardV2FinanceCash = {
+  /** Openstaande klantfacturen (inc. btw) */
+  klantenOpenstaandInc: number;
+  klantenOpenstaandCount: number;
+  /** Besteld op krediet — nog te betalen aan leverancier (ex. btw) */
+  leverancierOpKredietEx: number;
+  leverancierOpKredietCount: number;
 };
 
 export type DashboardV2Finance = {
@@ -39,6 +50,8 @@ export type DashboardV2Finance = {
    */
   inkoopTeBestellenTotaal: number;
   inkoopTeBestellenOrders: number;
+  /** Cash: wie moet nog betalen / ontvangen (los van periodefilter) */
+  cash: DashboardV2FinanceCash;
   /** Per bucket (zelfde keys als dashboard buckets) */
   points: FinancePoint[];
 };
@@ -69,6 +82,7 @@ export type FinanceRaw = {
     offerte_id: string | null;
     status: string | null;
     materiaal_checks?: Record<string, unknown> | null;
+    inkoop_leverancier_status?: string | null;
   }[];
   kosten: {
     datum: string;
@@ -160,6 +174,19 @@ export function buildDashboardV2Finance(
   let leadT = 0;
   let inkoopTeBestellenTotaal = 0;
   let inkoopTeBestellenOrders = 0;
+  let leverancierOpKredietEx = 0;
+  let leverancierOpKredietCount = 0;
+
+  // ── Klanten openstaand (alle open facturen) ─────────────────────────
+  let klantenOpenstaandInc = 0;
+  let klantenOpenstaandCount = 0;
+  for (const f of raw.facturen) {
+    const b = factuurBtwBuckets(f);
+    if (b.open && b.openstaandInc > 0) {
+      klantenOpenstaandInc = round2(klantenOpenstaandInc + b.openstaandInc);
+      klantenOpenstaandCount += 1;
+    }
+  }
 
   // ── Omzet + sales commissie + inkoop (betaalde orders) ─────────────
   for (const o of raw.offertes) {
@@ -186,6 +213,22 @@ export function buildDashboardV2Finance(
     if (volledigBetaald && nogTeBestellen && inkoop > 0) {
       inkoopTeBestellenTotaal = round2(inkoopTeBestellenTotaal + inkoop);
       inkoopTeBestellenOrders += 1;
+    }
+
+    // Leverancier op krediet (besteld, nog te betalen)
+    if (
+      project &&
+      resolveInkoopLeverancierStatus({
+        inkoop_leverancier_status: project.inkoop_leverancier_status,
+        materiaal_checks: (project.materiaal_checks || {}) as Record<
+          string,
+          unknown
+        >,
+      }) === "op_krediet" &&
+      inkoop > 0
+    ) {
+      leverancierOpKredietEx = round2(leverancierOpKredietEx + inkoop);
+      leverancierOpKredietCount += 1;
     }
 
     // Omzet + commissie op ondertekening in periode
@@ -284,6 +327,12 @@ export function buildDashboardV2Finance(
     },
     inkoopTeBestellenTotaal,
     inkoopTeBestellenOrders,
+    cash: {
+      klantenOpenstaandInc,
+      klantenOpenstaandCount,
+      leverancierOpKredietEx,
+      leverancierOpKredietCount,
+    },
     points: opts.buckets.map(
       (b) => byKey.get(b.key) || emptyPoint(b.key, b.label)
     ),
@@ -301,6 +350,12 @@ export function emptyDashboardV2Finance(): DashboardV2Finance {
     },
     inkoopTeBestellenTotaal: 0,
     inkoopTeBestellenOrders: 0,
+    cash: {
+      klantenOpenstaandInc: 0,
+      klantenOpenstaandCount: 0,
+      leverancierOpKredietEx: 0,
+      leverancierOpKredietCount: 0,
+    },
     points: [],
   };
 }

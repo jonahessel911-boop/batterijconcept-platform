@@ -23,6 +23,11 @@ import {
   isMateriaalLeverdatumColumnError,
   withLeverdatumInChecks,
 } from "@/lib/materiaal-leverdatum";
+import {
+  isInkoopLeverancierColumnError,
+  withLeverancierBetalingInChecks,
+} from "@/lib/inkoop-leverancier-betaling";
+import type { InkoopLeverancierStatus } from "@/lib/project-inkoop-checklist";
 
 export const runtime = "nodejs";
 
@@ -110,6 +115,9 @@ export async function PATCH(
     materiaal_checks?: Record<string, boolean | string> | null;
     /** Verwachte leverdatum inkoop (Planbord). */
     materiaal_leverdatum?: string | null;
+    /** Leverancierbetaling: geen | betaald | op_krediet. */
+    inkoop_leverancier_status?: "geen" | "betaald" | "op_krediet" | null;
+    inkoop_leverancier_betaald_op?: string | null;
     /** Client signaleert: alle inkoop-vinkjes net afgevinkt. */
     materiaal_volledig_afgevinkt?: boolean;
     notities?: string | null;
@@ -333,6 +341,31 @@ export async function PATCH(
       patch.materiaal_leverdatum = iso;
     }
   }
+  if (body.inkoop_leverancier_status !== undefined) {
+    const raw = body.inkoop_leverancier_status;
+    if (raw === null || raw === "geen" || raw === "betaald" || raw === "op_krediet") {
+      const status = raw === null ? "geen" : raw;
+      patch.inkoop_leverancier_status = status;
+      if (status === "betaald") {
+        if (body.inkoop_leverancier_betaald_op !== undefined) {
+          patch.inkoop_leverancier_betaald_op =
+            body.inkoop_leverancier_betaald_op?.trim() || new Date().toISOString();
+        } else if (!patch.inkoop_leverancier_betaald_op) {
+          patch.inkoop_leverancier_betaald_op = new Date().toISOString();
+        }
+      } else {
+        patch.inkoop_leverancier_betaald_op = null;
+      }
+    } else {
+      return NextResponse.json(
+        { error: "Ongeldige inkoop_leverancier_status" },
+        { status: 400 }
+      );
+    }
+  } else if (body.inkoop_leverancier_betaald_op !== undefined) {
+    patch.inkoop_leverancier_betaald_op =
+      body.inkoop_leverancier_betaald_op?.trim() || null;
+  }
   if (body.notities !== undefined) {
     patch.notities = body.notities?.trim() || null;
   }
@@ -457,6 +490,57 @@ export async function PATCH(
         // Virtualiseer kolom voor clients
         (data as { materiaal_leverdatum?: string | null }).materiaal_leverdatum =
           typeof leverIso === "string" ? leverIso : null;
+      }
+    }
+
+    // Kolommen inkoop_leverancier_* nog niet gemigreerd → bewaar in materiaal_checks.
+    if (error && isInkoopLeverancierColumnError(error)) {
+      const {
+        inkoop_leverancier_status: levStatus,
+        inkoop_leverancier_betaald_op: levBetaaldOp,
+        ...rest
+      } = patch;
+      const prevChecks =
+        (rest.materiaal_checks as Record<string, unknown> | undefined) ||
+        ((before as { materiaal_checks?: Record<string, unknown> | null } | null)
+          ?.materiaal_checks as Record<string, unknown> | null) ||
+        {};
+      const status: InkoopLeverancierStatus =
+        levStatus === "betaald" ||
+        levStatus === "op_krediet" ||
+        levStatus === "geen"
+          ? levStatus
+          : "geen";
+      const betaaldOp =
+        typeof levBetaaldOp === "string" ? levBetaaldOp : null;
+      const fallbackPatch = {
+        ...rest,
+        materiaal_checks: withLeverancierBetalingInChecks(
+          prevChecks,
+          status,
+          betaaldOp
+        ),
+      };
+      const retryLev = await sb
+        .from("projecten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
+        )
+        .single();
+      data = retryLev.data;
+      error = retryLev.error;
+      if (!error && data) {
+        (
+          data as {
+            inkoop_leverancier_status?: string | null;
+            inkoop_leverancier_betaald_op?: string | null;
+          }
+        ).inkoop_leverancier_status = status;
+        (
+          data as { inkoop_leverancier_betaald_op?: string | null }
+        ).inkoop_leverancier_betaald_op = betaaldOp;
       }
     }
 

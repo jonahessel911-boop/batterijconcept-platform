@@ -462,14 +462,18 @@ export async function scanInkomendeFactuur(
       ? (row.raw_payload as Record<string, unknown>)
       : {};
 
+  const nextRaw: Record<string, unknown> = {
+    ...prevRaw,
+    ai_extract: extract,
+    ai_scanned_at: new Date().toISOString(),
+    ai_bestand_ids: selected.map((s) => s.id),
+  };
+  delete nextRaw.ai_error;
+  delete nextRaw.ai_error_at;
+
   const itemPatch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
-    raw_payload: {
-      ...prevRaw,
-      ai_extract: extract,
-      ai_scanned_at: new Date().toISOString(),
-      ai_bestand_ids: selected.map((s) => s.id),
-    },
+    raw_payload: nextRaw,
   };
 
   if (extract.leverancier) itemPatch.leverancier = extract.leverancier;
