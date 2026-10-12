@@ -63,8 +63,11 @@ import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import { NettoBoord } from "./NettoBoord";
 import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
 import { AdminTakenPanel } from "./AdminTakenPanel";
+import { TodayPanel } from "./TodayPanel";
+import { magTodayDashboard } from "@/lib/admin-adviseur";
 
 const VALID_TABS: CrmTab[] = [
+  "today",
   "taken",
   "leads",
   "bellen",
@@ -197,7 +200,9 @@ export function CrmShell() {
   const userRol: GebruikerRol | null = sessionUser
     ? normalizeRol(sessionUser.rol)
     : null;
-  const visibleTabIds = userRol ? tabsVoorRol(userRol) : [];
+  const visibleTabIds = userRol
+    ? tabsVoorRol(userRol, { email: sessionUser?.email })
+    : [];
   const visibleTabs = CRM_TABS.filter((t) => visibleTabIds.includes(t.id));
 
   useEffect(() => {
@@ -266,7 +271,7 @@ export function CrmShell() {
   // Rol: ongeldige tab → eerste toegestane tab
   useEffect(() => {
     if (!sessionUser || !userRol) return;
-    if (magTab(userRol, tab)) return;
+    if (magTab(userRol, tab, { email: sessionUser.email })) return;
     const first = visibleTabIds[0];
     if (!first) return;
     const params = new URLSearchParams(searchParams.toString());
@@ -356,10 +361,15 @@ export function CrmShell() {
   }, [sessionUser, userRol, adviseurFilter, adviseurs]);
 
   function changeTab(next: CrmTab) {
-    if (userRol && !magTab(userRol, next)) return;
+    if (
+      userRol &&
+      !magTab(userRol, next, { email: sessionUser?.email })
+    ) {
+      return;
+    }
     setTab(next);
     const params = new URLSearchParams(searchParams.toString());
-    // Admin-home is Taken; leads altijd expliciet in de URL
+    // Admin-home is Today (jona) of Taken; leads altijd expliciet in de URL
     if (next === "leads" && userRol !== "admin") params.delete("tab");
     else params.set("tab", next);
     if (next !== "projecten") params.delete("bo");
@@ -367,16 +377,19 @@ export function CrmShell() {
     router.push(qs ? `/?${qs}` : "/", { scroll: false });
   }
 
-  // Admin: start op Taken als er geen tab in de URL staat
+  // Admin (jona@): start op Today; overige admins op Taken
   useEffect(() => {
     if (!sessionReady || userRol !== "admin") return;
     if (searchParams.get("tab")) return;
     if (searchParams.get("status")) return;
     if (searchParams.get("bo")) return;
     const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", "taken");
+    params.set(
+      "tab",
+      magTodayDashboard(sessionUser?.email) ? "today" : "taken"
+    );
     router.replace(`/?${params.toString()}`, { scroll: false });
-  }, [sessionReady, userRol, searchParams, router]);
+  }, [sessionReady, userRol, sessionUser?.email, searchParams, router]);
 
   function changeStatusFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -913,6 +926,10 @@ export function CrmShell() {
     adviseurs.find((a) => a.id === adviseurFilter)?.naam || null;
 
   const titles: Record<CrmTab, { title: string; sub: string }> = {
+    today: {
+      title: "Today",
+      sub: "Dagelijkse stand · offertes, orders, leads, afspraken",
+    },
     taken: {
       title: "Agenda & taken",
       sub: "Persoonlijke agenda · taken en afspraken",
@@ -1206,6 +1223,7 @@ export function CrmShell() {
               !hasCrmBootstrapCache() &&
               projecten.length === 0 &&
               leads.length === 0 &&
+              tab !== "today" &&
               tab !== "taken" &&
               tab !== "partners" &&
               tab !== "purchasing" &&
@@ -1215,12 +1233,14 @@ export function CrmShell() {
               tab !== "leaderboard" &&
               tab !== "instroom" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
-            ) : !userRol || !magTab(userRol, tab) ? (
+            ) : !userRol ||
+              !magTab(userRol, tab, { email: sessionUser?.email }) ? (
               <p className="px-6 py-14 text-center text-sm text-muted">
                 Geen toegang tot dit menu.
               </p>
             ) : (
               <>
+                {tab === "today" && <TodayPanel />}
                 {tab === "taken" && <AdminTakenPanel />}
                 {tab === "leads" && (
                   <LeadsTable

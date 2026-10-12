@@ -50,14 +50,20 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
 }
 
 /** Tabs die deze rol mag zien (volgorde = menuvvolgorde). */
-export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
+export function tabsVoorRol(
+  rol: GebruikerRol,
+  opts?: { email?: string | null }
+): CrmTab[] {
+  let tabs: CrmTab[];
   switch (rol) {
     case "adviseur":
-      return ["leads", "agenda", "offertes", "netto", "facturen"];
+      tabs = ["leads", "agenda", "offertes", "netto", "facturen"];
+      break;
     case "beller":
-      return ["leads", "bellen"];
+      tabs = ["leads", "bellen"];
+      break;
     case "backoffice":
-      return [
+      tabs = [
         "leads",
         "bellen",
         "agenda",
@@ -65,11 +71,13 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "facturen",
         "purchasing",
       ];
+      break;
     case "installateur":
-      return [];
+      tabs = [];
+      break;
     case "admin":
     default:
-      return [
+      tabs = [
         "taken",
         "leads",
         "bellen",
@@ -85,11 +93,23 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "admin",
         "partners",
       ];
+      break;
   }
+  // Today alleen voor jona@ — als eerste tab
+  if (
+    opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl"
+  ) {
+    tabs = ["today", ...tabs.filter((t) => t !== "today")];
+  }
+  return tabs;
 }
 
-export function magTab(rol: GebruikerRol, tab: CrmTab): boolean {
-  return tabsVoorRol(rol).includes(tab);
+export function magTab(
+  rol: GebruikerRol,
+  tab: CrmTab,
+  opts?: { email?: string | null }
+): boolean {
+  return tabsVoorRol(rol, opts).includes(tab);
 }
 
 /**

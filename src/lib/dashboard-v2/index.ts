@@ -61,3 +61,10 @@ export {
   buildDashboardV2Finance,
   emptyDashboardV2Finance,
 } from "./finance";
+export {
+  buildDashboardV2Vandaag,
+  type DashboardV2Vandaag,
+  type VandaagAfspraakRow,
+  type VandaagVerkoperRow,
+  type VandaagRaw,
+} from "./vandaag";

@@ -9,6 +9,13 @@ export function adminEmail(): string {
 /** Bekende admin-e-mail (o.a. rechten / catch-all), geen UI-gate meer. */
 export const CRM_SIDEBAR_EMAIL = "jona@batterijconcept.nl";
 
+/** Alleen jona@ ziet de Today-tab (dagelijks stuuroverzicht). */
+export function magTodayDashboard(
+  email: string | null | undefined
+): boolean {
+  return email?.trim().toLowerCase() === CRM_SIDEBAR_EMAIL;
+}
+
 /** CRM gebruikt overal de sidebar i.p.v. de oude tab-balk. */
 export function usesCrmSidebar(
   _email?: string | null,

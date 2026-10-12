@@ -7,6 +7,7 @@ import {
   buildDashboardV2Capacity,
   buildDashboardV2Drilldown,
   buildDashboardV2Finance,
+  buildDashboardV2Vandaag,
   capacitySteeringGoals,
   emptyDashboardV2Capacity,
   emptyDashboardV2Finance,
@@ -567,9 +568,53 @@ export async function GET(req: NextRequest) {
       finance = emptyDashboardV2Finance();
     }
 
+    // Verzonden offertes (voor “offertes verstuurd vandaag”)
+    let offertesVerzonden: {
+      id: string;
+      adviseur_id: string | null;
+      updated_at: string;
+      created_at: string;
+    }[] = [];
+    try {
+      const verzondenRows = await fetchAllRows((from, to) =>
+        sb
+          .from("offertes")
+          .select(
+            "id, lead_id, status, updated_at, created_at, leads(adviseur_id)"
+          )
+          .eq("status", "verzonden")
+          .order("updated_at", { ascending: false })
+          .range(from, to)
+      );
+      offertesVerzonden = verzondenRows.map((o) => {
+        const lead = o.leads as { adviseur_id?: string | null } | null;
+        return {
+          id: o.id as string,
+          adviseur_id: lead?.adviseur_id ?? null,
+          updated_at: (o.updated_at as string) || (o.created_at as string),
+          created_at: o.created_at as string,
+        };
+      });
+    } catch {
+      offertesVerzonden = [];
+    }
+
+    const vandaag = buildDashboardV2Vandaag(
+      {
+        leads: raw.leads,
+        afspraken: raw.afspraken,
+        offertes: toDashboardRaw(raw).offertes,
+        offertesVerzonden,
+        adviseurs: raw.adviseurs,
+      },
+      now,
+      scope !== "team" ? personId : null
+    );
+
     return NextResponse.json(
       {
         dashboard: { ...dashboard, capacity, finance },
+        vandaag,
       },
       {
         headers: {

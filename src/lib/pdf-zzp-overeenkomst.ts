@@ -94,11 +94,51 @@ async function embedDataUrl(
   doc: PDFDocument,
   dataUrl: string
 ): Promise<Awaited<ReturnType<PDFDocument["embedPng"]>> | null> {
-  const m = /^data:(image\/(?:png|jpeg|jpg));base64,(.+)$/i.exec(dataUrl);
+  const raw = (dataUrl || "").trim();
+  const m = /^data:image\/([\w+.-]+);base64,(.+)$/i.exec(raw);
   if (!m) return null;
-  const bytes = Buffer.from(m[2], "base64");
-  if (/png/i.test(m[1])) return doc.embedPng(bytes);
-  return doc.embedJpg(bytes);
+  const bytes = Buffer.from(m[2].replace(/\s/g, ""), "base64");
+  if (bytes.length < 8) return null;
+
+  // Detecteer echte bytes (MIME van canvas kan liegen → "SOI not found in JPEG")
+  const isPng =
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47;
+  const isJpg = bytes[0] === 0xff && bytes[1] === 0xd8;
+
+  if (isPng) return doc.embedPng(bytes);
+  if (isJpg) return doc.embedJpg(bytes);
+
+  const mime = m[1].toLowerCase();
+  if (mime.includes("png")) {
+    try {
+      return await doc.embedPng(bytes);
+    } catch {
+      return null;
+    }
+  }
+  if (mime.includes("jpeg") || mime.includes("jpg")) {
+    try {
+      return await doc.embedJpg(bytes);
+    } catch {
+      try {
+        return await doc.embedPng(bytes);
+      } catch {
+        return null;
+      }
+    }
+  }
+  try {
+    return await doc.embedPng(bytes);
+  } catch {
+    try {
+      return await doc.embedJpg(bytes);
+    } catch {
+      return null;
+    }
+  }
 }
 
 function drawFieldText(
@@ -170,20 +210,23 @@ export async function buildZzpOvereenkomstPdf(opts: {
   const advSig = opts.signatures?.adv_handtekening;
   if (advSig) {
     const img = await embedDataUrl(doc, advSig);
-    if (img) {
-      const line = LINES.adv_handtekening;
-      const maxW = 280;
-      const maxH = 72;
-      const scale = Math.min(maxW / img.width, maxH / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      page.drawImage(img, {
-        x: FIELD_X,
-        y: signatureY(line, h),
-        width: w,
-        height: h,
-      });
+    if (!img) {
+      throw new Error(
+        "Handtekening kon niet worden verwerkt. Wis en teken opnieuw."
+      );
     }
+    const line = LINES.adv_handtekening;
+    const maxW = 280;
+    const maxH = 72;
+    const scale = Math.min(maxW / img.width, maxH / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    page.drawImage(img, {
+      x: FIELD_X,
+      y: signatureY(line, h),
+      width: w,
+      height: h,
+    });
   }
 
   return doc.save({ useObjectStreams: false });

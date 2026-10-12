@@ -78,6 +78,7 @@ export type SollicitatieStatus =
   | "aangenomen_actief";
 
 export type CrmTab =
+  | "today"
   | "taken"
   | "leads"
   | "bellen"
