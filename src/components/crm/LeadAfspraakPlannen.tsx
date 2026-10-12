@@ -24,6 +24,8 @@ type BestSlotOption = {
   reistijd_min: number | null;
   /** true = vanaf startadres; false = vanaf vorige afspraak die dag */
   reistijd_vanaf_startadres: boolean | null;
+  /** Terugreis naar startadres (laatste/enige afspraak die dag) */
+  reistijd_terug_min?: number | null;
 };
 
 function JaNeeField({
@@ -378,7 +380,7 @@ export function LeadAfspraakPlannen({
       <p className="text-xs text-muted">
         {lockAdviseur
           ? "Opties in jouw agenda · bevestigingsmail gaat mee."
-          : "Top-opties: korte reistijd + dichtbij in de komende 2–3 weken. Bevestigingsmail gaat mee."}
+          : "Top-opties: kortste reistijd eerst, daarna conversie. Bevestigingsmail gaat mee."}
       </p>
 
       <div className="space-y-2">
@@ -442,6 +444,14 @@ export function LeadAfspraakPlannen({
                                 : slot.reistijd_vanaf_startadres === true
                                   ? " vanaf startadres"
                                   : " route"}
+                              {slot.reistijd_terug_min != null
+                                ? ` · ~${slot.reistijd_terug_min} min terug`
+                                : ""}
+                            </span>
+                          ) : slot.reistijd_terug_min != null ? (
+                            <span>
+                              ~{slot.reistijd_terug_min} min terug naar
+                              startadres
                             </span>
                           ) : null}
                           {!slot.feasible ? (

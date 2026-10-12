@@ -24,6 +24,7 @@ import {
   blockAgendaUntilStartdatum,
   dayKeyAmsterdam,
   filterSlotsByAfblokkingen,
+  filterSlotsByStartdatum,
   filterSlotsByBeschikbaarheid,
   isDateUnavailable,
   isSlotGeblokkeerd,
@@ -232,17 +233,25 @@ export async function GET(req: NextRequest) {
         tot,
       }),
     ]);
-    const slots = filterSlotsByAfblokkingen(
-      filterSlotsByBeschikbaarheid(rawSlots, unavailable),
-      adviseurId,
-      afgeblokt,
-      vrijgaven
+    const startdatum =
+      (adviseur as { startdatum?: string | null }).startdatum ?? null;
+    const slots = filterSlotsByStartdatum(
+      filterSlotsByAfblokkingen(
+        filterSlotsByBeschikbaarheid(rawSlots, unavailable),
+        adviseurId,
+        afgeblokt,
+        vrijgaven
+      ),
+      startdatum
     );
-    const blocks = filterSlotsByAfblokkingen(
-      filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
-      adviseurId,
-      afgeblokt,
-      vrijgaven
+    const blocks = filterSlotsByStartdatum(
+      filterSlotsByAfblokkingen(
+        filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
+        adviseurId,
+        afgeblokt,
+        vrijgaven
+      ),
+      startdatum
     ).map((b) => {
       const blocked = isSlotGeblokkeerd(
         adviseurId,

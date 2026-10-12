@@ -27,6 +27,7 @@ import {
   loadUnavailableWeekKeys,
   weekKeyFromDate,
   weekKeyString,
+  isBeforeStartdatum,
   isSlotAfgeblokt,
   standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
@@ -162,6 +163,22 @@ export async function planAfspraak(
 
   // Terugbel staat niet in de agenda — geen week/slot-checks.
   if (!isTerugbelSoort(soort)) {
+    const { data: adviseurMeta } = await sb
+      .from("adviseurs")
+      .select("startdatum")
+      .eq("id", input.adviseur_id)
+      .maybeSingle();
+    const startdatum =
+      (adviseurMeta as { startdatum?: string | null } | null)?.startdatum ??
+      null;
+    if (isBeforeStartdatum(start, startdatum)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Deze adviseur start pas op ${String(startdatum).slice(0, 10)}`,
+      };
+    }
+
     const wk = weekKeyFromDate(start);
     const unavailable = await loadUnavailableWeekKeys(sb, input.adviseur_id, [
       wk.jaar,

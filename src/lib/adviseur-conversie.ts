@@ -5,13 +5,18 @@ import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 export type AdviseurConversie = {
   rate: number; // 0–1
   pct: number; // 0–100
+  /** Unieke leads met gelopen huisbezoek in het venster */
   uitgevoerd: number;
+  /** Daarvan met getekende deal */
   deals: number;
 };
 
 /**
- * Sales-conversie per adviseur: voltooide huisbezoeken → getekende deal
+ * Sales-conversie per adviseur: gelopen huisbezoeken → getekende deal
  * (rolling window, default 90 dagen).
+ *
+ * Deal telt via lead (offerte heeft geen adviseur_id) — toegeschreven
+ * aan de adviseur van het gelopen huisbezoek.
  */
 export async function loadAdviseurConversieMap(
   sb: SupabaseClient,
@@ -42,39 +47,41 @@ export async function loadAdviseurConversieMap(
   );
   if (!uitgevoerd.length) return map;
 
-  const byAdvUit = new Map<string, Set<string>>();
+  /** Per adviseur: unieke leads met gelopen huisbezoek */
+  const leadsByAdv = new Map<string, Set<string>>();
   const leadIds = new Set<string>();
   for (const a of uitgevoerd) {
     if (!a.adviseur_id || !a.lead_id) continue;
     leadIds.add(a.lead_id);
-    let set = byAdvUit.get(a.adviseur_id);
+    let set = leadsByAdv.get(a.adviseur_id);
     if (!set) {
       set = new Set();
-      byAdvUit.set(a.adviseur_id, set);
+      leadsByAdv.set(a.adviseur_id, set);
     }
-    set.add(a.id);
+    set.add(a.lead_id);
   }
 
+  // Offertes hebben geen adviseur_id — deal via lead
   const { data: offertes } = await sb
     .from("offertes")
-    .select("lead_id, adviseur_id, status")
+    .select("lead_id, status")
     .in("lead_id", [...leadIds])
     .eq("status", "ondertekend");
 
-  const dealLeadsByAdv = new Map<string, Set<string>>();
+  const dealLeads = new Set<string>();
   for (const o of offertes || []) {
-    if (!o.adviseur_id || !o.lead_id) continue;
-    let set = dealLeadsByAdv.get(o.adviseur_id);
-    if (!set) {
-      set = new Set();
-      dealLeadsByAdv.set(o.adviseur_id, set);
-    }
-    set.add(o.lead_id);
+    if (o.lead_id) dealLeads.add(o.lead_id as string);
   }
 
   for (const id of adviseurIds) {
-    const uitgevoerdN = byAdvUit.get(id)?.size || 0;
-    const dealsN = dealLeadsByAdv.get(id)?.size || 0;
+    const visited = leadsByAdv.get(id);
+    const uitgevoerdN = visited?.size || 0;
+    let dealsN = 0;
+    if (visited) {
+      for (const leadId of visited) {
+        if (dealLeads.has(leadId)) dealsN += 1;
+      }
+    }
     const rate = uitgevoerdN > 0 ? dealsN / uitgevoerdN : 0;
     map.set(id, {
       rate,

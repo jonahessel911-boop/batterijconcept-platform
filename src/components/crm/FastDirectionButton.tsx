@@ -220,7 +220,10 @@ export function FastDirectionButton({
                   )}
                   {opt.toDurationText && (
                     <p>
-                      hier → {opt.toLabel || "volgende"}: {opt.toDurationText}
+                      {opt.toDepot
+                        ? "hier → startlocatie"
+                        : `hier → ${opt.toLabel || "volgende"}`}
+                      : {opt.toDurationText}
                       {opt.toDistanceText ? ` · ${opt.toDistanceText}` : ""}
                     </p>
                   )}

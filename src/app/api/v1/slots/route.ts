@@ -20,6 +20,7 @@ import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   dayKeyAmsterdam,
   filterSlotsByAfblokkingen,
+  filterSlotsByStartdatum,
   filterSlotsByBeschikbaarheid,
   loadAfblokkingen,
   loadSlotVrijgaven,
@@ -101,7 +102,7 @@ export async function GET(req: NextRequest) {
     // —— Legacy: slots van één adviseur ——
     const { data: adviseur, error: aErr } = await sb
       .from("adviseurs")
-      .select("id, naam, email, actief")
+      .select("id, naam, email, actief, startdatum")
       .eq("id", adviseurId)
       .maybeSingle();
 
@@ -143,11 +144,14 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    const slots = filterSlotsByAfblokkingen(
-      filterSlotsByBeschikbaarheid(rawSlots, unavailable),
-      adviseurId,
-      afgeblokt,
-      vrijgaven
+    const slots = filterSlotsByStartdatum(
+      filterSlotsByAfblokkingen(
+        filterSlotsByBeschikbaarheid(rawSlots, unavailable),
+        adviseurId,
+        afgeblokt,
+        vrijgaven
+      ),
+      (adviseur as { startdatum?: string | null }).startdatum
     )
       .slice(0, limit)
       .map((s) => ({

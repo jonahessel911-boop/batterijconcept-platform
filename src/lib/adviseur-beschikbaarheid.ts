@@ -403,9 +403,48 @@ export function weekdaysInclusive(fromYmd: string, toYmd: string): string[] {
   return out;
 }
 
+/** Alle kalenderdagen (incl. za/zo) van `fromYmd` t/m `toYmd`. */
+export function calendarDaysInclusive(fromYmd: string, toYmd: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromYmd) || !/^\d{4}-\d{2}-\d{2}$/.test(toYmd)) {
+    return [];
+  }
+  if (fromYmd > toYmd) return [];
+  const out: string[] = [];
+  let cur = fromYmd;
+  while (cur <= toYmd) {
+    out.push(cur);
+    cur = addCalendarDaysYmd(cur, 1);
+    if (out.length > 400) break;
+  }
+  return out;
+}
+
 /**
- * Blokkeer alle vaste slots (10/13/16/19) op weekdagen vóór startdatum.
- * Van vandaag (Amsterdam) t/m dag vóór startdatum. Idempotent upsert.
+ * Geen slots vóór startdatum (Amsterdam-dag).
+ * Hard filter — ook zaterdag/zondag, ongeacht afblokkingen.
+ */
+export function filterSlotsByStartdatum<T extends { start_at: string }>(
+  slots: T[],
+  startdatumYmd: string | null | undefined
+): T[] {
+  const sd = (startdatumYmd || "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd)) return slots;
+  return slots.filter((s) => dayKeyAmsterdam(s.start_at) >= sd);
+}
+
+/** True als startAt op een Amsterdam-dag vóór startdatum valt. */
+export function isBeforeStartdatum(
+  startAt: Date | string,
+  startdatumYmd: string | null | undefined
+): boolean {
+  const sd = (startdatumYmd || "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sd)) return false;
+  return dayKeyAmsterdam(startAt) < sd;
+}
+
+/**
+ * Blokkeer alle vaste slots (10/13/16/19) op élke dag vóór startdatum
+ * (incl. za/zo). Van vandaag (Amsterdam) t/m dag vóór startdatum.
  */
 export async function blockAgendaUntilStartdatum(
   sb: SupabaseClient,
@@ -420,7 +459,7 @@ export async function blockAgendaUntilStartdatum(
   if (lastDay < today) {
     return { blockedDays: 0, blockedSlots: 0 };
   }
-  const days = weekdaysInclusive(today, lastDay);
+  const days = calendarDaysInclusive(today, lastDay);
   const rows: { adviseur_id: string; dag: string; slot_hour: number }[] = [];
   for (const dag of days) {
     for (const hour of ADVISEUR_SLOT_HOURS) {

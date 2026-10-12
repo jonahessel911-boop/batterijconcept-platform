@@ -22,6 +22,8 @@ export type FastDirectionSuggestion = {
   dayKey: string;
   /** Eerste afspraak die dag (vanaf startadres adviseur). */
   fromDepot: boolean;
+  /** Laatste/enige afspraak die dag — terugreis naar startadres. */
+  toDepot: boolean;
   fromLabel: string | null;
   toLabel: string | null;
   fromDurationSec: number | null;
@@ -94,6 +96,7 @@ export type PickFastDirectionOptions = {
 /**
  * Score alle vrije slots op reistijd.
  * Vertrekpunt: vorige fysieke afspraak diezelfde dag, anders startadres.
+ * Laatste/enige afspraak die dag: ook terugreis naar startadres.
  * Standaard: per dag het beste slot, vroegste dagen eerst.
  * Met `collapsePerDay: false` blijven alle gescoorde slots behouden.
  */
@@ -149,16 +152,28 @@ export function pickTopFastDirectionSlots(
           (a, b) =>
             new Date(b.start_at).getTime() - new Date(a.start_at).getTime()
         )[0] || null;
-    const next =
+    const nextStop =
       dayStops.find((s) => new Date(s.start_at).getTime() >= slotEnd) || null;
 
     const fromDepot = !prevStop && hasDepot;
+    /** Geen latere afspraak → terug naar huis meenemen in de score. */
+    const toDepot = !nextStop && hasDepot;
     const prev = prevStop
       ? prevStop
       : fromDepot
         ? {
             start_at: slot.start_at,
             end_at: slot.start_at,
+            address: depot,
+            label: depotLabel,
+          }
+        : null;
+    const next = nextStop
+      ? nextStop
+      : toDepot
+        ? {
+            start_at: slot.end_at,
+            end_at: slot.end_at,
             address: depot,
             label: depotLabel,
           }
@@ -195,14 +210,17 @@ export function pickTopFastDirectionSlots(
         feasible = false;
       } else {
         scoreSec += toDurationSec;
-        const gap = gapSec(slot.end_at, next.start_at);
-        if (toDurationSec > gap + 60) feasible = false;
+        // Terug naar huis: geen tijdslot-gap. Wel gap-check naar echte next.
+        if (!toDepot) {
+          const gap = gapSec(slot.end_at, next.start_at);
+          if (toDurationSec > gap + 60) feasible = false;
+        }
       }
     }
 
-    if (prevStop && next) {
+    if (prevStop && nextStop) {
       insertBonus = -15 * 60;
-    } else if (prevStop || next) {
+    } else if (prevStop || nextStop) {
       insertBonus = -5 * 60;
     }
 
@@ -225,32 +243,42 @@ export function pickTopFastDirectionSlots(
       toDistanceM != null ? ` · ${formatDistanceNl(toDistanceM)}` : "";
 
     let reason: string;
-    if (fromDepot && !next) {
+    if (fromDepot && toDepot) {
+      reason =
+        fromDurationSec != null && toDurationSec != null
+          ? `Enige afspraak die dag · ${formatDurationNl(fromDurationSec)}${fromDistPart} heen, ${formatDurationNl(toDurationSec)}${toDistPart} terug naar startlocatie.`
+          : fromDurationSec != null
+            ? `Enige afspraak die dag · ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie (incl. terug).`
+            : `Enige afspraak die dag vanaf startlocatie (incl. terug).`;
+    } else if (fromDepot && nextStop) {
       reason =
         fromDurationSec != null
-          ? `Eerste afspraak die dag · ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie.`
-          : `Eerste afspraak die dag vanaf startlocatie.`;
-    } else if (fromDepot && next) {
-      reason =
-        fromDurationSec != null
-          ? `Eerste die dag: ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie, daarna ${formatDurationNl(toDurationSec || 0)} naar ${next.label || "volgende"}.`
-          : `Eerste die dag vanaf startlocatie, vóór ${next.label || "volgende"}.`;
+          ? `Eerste die dag: ${formatDurationNl(fromDurationSec)}${fromDistPart} vanaf startlocatie, daarna ${formatDurationNl(toDurationSec || 0)} naar ${nextStop.label || "volgende"}.`
+          : `Eerste die dag vanaf startlocatie, vóór ${nextStop.label || "volgende"}.`;
     } else if (!prev && !next) {
       reason =
         "Geen andere fysieke afspraken die dag — vroegste vrije slot. (Geen startadres ingesteld.)";
-    } else if (prev && next) {
+    } else if (prevStop && nextStop) {
       reason = feasible
-        ? `Past tussen ${prev.label || "vorige"} en ${next.label || "volgende"} (samen ${formatDurationNl(scoreSec)} rijden).`
-        : `Tussen ${prev.label || "vorige"} en ${next.label || "volgende"}, maar krap op reistijd.`;
-    } else if (prev) {
+        ? `Past tussen ${prev!.label || "vorige"} en ${nextStop.label || "volgende"} (samen ${formatDurationNl(scoreSec)} rijden).`
+        : `Tussen ${prev!.label || "vorige"} en ${nextStop.label || "volgende"}, maar krap op reistijd.`;
+    } else if (prevStop && toDepot) {
       reason = feasible
-        ? `Na ${prev.label || "vorige afspraak"} · ${formatDurationNl(fromDurationSec || 0)}${fromDistPart} rijden.`
-        : `Na ${prev.label || "vorige afspraak"}, maar reistijd past niet in de pauze.`;
-    } else {
+        ? toDurationSec != null
+          ? `Laatste die dag na ${prev!.label || "vorige"} · ${formatDurationNl(fromDurationSec || 0)}${fromDistPart} heen, ${formatDurationNl(toDurationSec)}${toDistPart} terug naar startlocatie.`
+          : `Laatste die dag na ${prev!.label || "vorige"} · ${formatDurationNl(fromDurationSec || 0)}${fromDistPart} rijden (incl. terug).`
+        : `Na ${prev!.label || "vorige afspraak"}, maar reistijd past niet in de pauze.`;
+    } else if (prevStop) {
+      reason = feasible
+        ? `Na ${prev!.label || "vorige afspraak"} · ${formatDurationNl(fromDurationSec || 0)}${fromDistPart} rijden.`
+        : `Na ${prev!.label || "vorige afspraak"}, maar reistijd past niet in de pauze.`;
+    } else if (nextStop) {
       // Geen startadres, wel latere afspraak die dag
       reason = feasible
-        ? `Voor ${next!.label || "volgende afspraak"} · ${formatDurationNl(toDurationSec || 0)}${toDistPart} rijden. (Geen startadres — stel in onder Instellingen.)`
-        : `Voor ${next!.label || "volgende afspraak"}, maar krap op reistijd.`;
+        ? `Voor ${nextStop.label || "volgende afspraak"} · ${formatDurationNl(toDurationSec || 0)}${toDistPart} rijden. (Geen startadres — stel in onder Instellingen.)`
+        : `Voor ${nextStop.label || "volgende afspraak"}, maar krap op reistijd.`;
+    } else {
+      reason = "Vrije slot.";
     }
 
     const fitScore = scoreSec + insertBonus;
@@ -263,6 +291,7 @@ export function pickTopFastDirectionSlots(
       reason,
       dayKey: day,
       fromDepot,
+      toDepot,
       fromLabel: prev?.label || null,
       toLabel: next?.label || null,
       fromDurationSec,

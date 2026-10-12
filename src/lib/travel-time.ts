@@ -1,4 +1,5 @@
 import { errMessage } from "@/lib/errors";
+import { detectStartAdresLand } from "@/lib/start-adres";
 
 export type TravelLeg = {
   durationSec: number;
@@ -59,8 +60,19 @@ function estimateDriveSec(a: LatLng, b: LatLng): {
   return { durationSec, distanceM: Math.round(roadM) };
 }
 
-export async function geocodeAddress(
+function detectGeocodeCountry(
   address: string
+): "nl" | "be" | null {
+  // Sluis e.d. = NL, ook als er per ongeluk “België” achter staat
+  const land = detectStartAdresLand(address);
+  if (land === "NL") return "nl";
+  if (land === "BE") return "be";
+  return null;
+}
+
+async function geocodeOnce(
+  address: string,
+  opts: { region?: string; country?: string | null }
 ): Promise<LatLng | null> {
   const key = mapsKey();
   if (!key) return null;
@@ -69,8 +81,10 @@ export async function geocodeAddress(
     url.searchParams.set("address", address);
     url.searchParams.set("key", key);
     url.searchParams.set("language", "nl");
-    url.searchParams.set("region", "nl");
-    url.searchParams.set("components", "country:NL");
+    if (opts.region) url.searchParams.set("region", opts.region);
+    if (opts.country) {
+      url.searchParams.set("components", `country:${opts.country.toUpperCase()}`);
+    }
     const res = await fetch(url.toString(), {
       next: { revalidate: 86400 },
     });
@@ -84,6 +98,32 @@ export async function geocodeAddress(
   } catch {
     return null;
   }
+}
+
+/**
+ * Geocode NL én BE. Was eerder hard gelockt op country:NL → Belgische
+ * startadressen (adviseurs die vanuit BE rijden) faalden stil.
+ */
+export async function geocodeAddress(
+  address: string
+): Promise<LatLng | null> {
+  const trimmed = address.trim();
+  if (!trimmed) return null;
+  const country = detectGeocodeCountry(trimmed);
+  const primary = await geocodeOnce(trimmed, {
+    region: country || "nl",
+    country,
+  });
+  if (primary) return primary;
+  // Zonder land-lock
+  const open = await geocodeOnce(trimmed, {
+    region: country || "nl",
+    country: null,
+  });
+  if (open) return open;
+  // Andere buur als fallback (Sluis/grens)
+  const other = country === "be" ? "nl" : "be";
+  return geocodeOnce(trimmed, { region: other, country: other });
 }
 
 async function googleDistanceMatrix(
@@ -112,6 +152,7 @@ async function googleDistanceMatrix(
         url.searchParams.set("destinations", dChunk.join("|"));
         url.searchParams.set("mode", "driving");
         url.searchParams.set("language", "nl");
+        // Bias NL, maar BE-adressen blijven geldig (geen country-lock)
         url.searchParams.set("region", "nl");
         url.searchParams.set("key", key);
 

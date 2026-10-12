@@ -17,7 +17,9 @@ import {
 } from "@/lib/afspraak-soort";
 import {
   filterSlotsByAfblokkingen,
+  filterSlotsByStartdatum,
   filterSlotsByBeschikbaarheid,
+  isBeforeStartdatum,
   isSlotAfgeblokt,
   loadAfblokkingen,
   loadSlotVrijgaven,
@@ -43,7 +45,7 @@ export async function GET(
     const { data: afspraak, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email, startdatum)"
       )
       .eq("manage_token", token)
       .single();
@@ -80,19 +82,25 @@ export async function GET(
       }),
     ]);
 
-    const slots = filterSlotsByAfblokkingen(
-      filterSlotsByBeschikbaarheid(
-        generateAvailableSlots({
-          busy,
-        }).map((s) => ({
-          start_at: s.start.toISOString(),
-          end_at: s.end.toISOString(),
-        })),
-        unavailable
+    const startdatum =
+      (afspraak.adviseurs as { startdatum?: string | null } | null)
+        ?.startdatum ?? null;
+    const slots = filterSlotsByStartdatum(
+      filterSlotsByAfblokkingen(
+        filterSlotsByBeschikbaarheid(
+          generateAvailableSlots({
+            busy,
+          }).map((s) => ({
+            start_at: s.start.toISOString(),
+            end_at: s.end.toISOString(),
+          })),
+          unavailable
+        ),
+        afspraak.adviseur_id,
+        afgeblokt,
+        vrijgaven
       ),
-      afspraak.adviseur_id,
-      afgeblokt,
-      vrijgaven
+      startdatum
     );
 
     return NextResponse.json({ afspraak, slots });
@@ -272,6 +280,23 @@ export async function POST(
         return NextResponse.json(
           {
             error: `De adviseur is niet beschikbaar in week ${wk.week}`,
+          },
+          { status: 409 }
+        );
+      }
+
+      const { data: adviseurMeta } = await sb
+        .from("adviseurs")
+        .select("startdatum")
+        .eq("id", afspraak.adviseur_id)
+        .maybeSingle();
+      const startdatumVerzet =
+        (adviseurMeta as { startdatum?: string | null } | null)?.startdatum ??
+        null;
+      if (isBeforeStartdatum(start, startdatumVerzet)) {
+        return NextResponse.json(
+          {
+            error: `Deze adviseur start pas op ${String(startdatumVerzet).slice(0, 10)}`,
           },
           { status: 409 }
         );

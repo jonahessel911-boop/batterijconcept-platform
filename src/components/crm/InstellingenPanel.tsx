@@ -12,6 +12,7 @@ import {
   type TeamRol,
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
+import { isUsableStartAdres } from "@/lib/start-adres";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import Link from "next/link";
@@ -1705,7 +1706,8 @@ export function InstellingenPanel({
                 const canLoginAls = Boolean(a.email?.trim());
                 const actief = a.actief !== false;
                 const startAdres = (a.start_adres || "").trim();
-                const heeftStartAdres =
+                const heeftStartAdres = isUsableStartAdres(startAdres);
+                const startAdresIngevuld =
                   Boolean(startAdres) && startAdres !== "—";
                 const heeftContract = Boolean(
                   a.contract_bestandsnaam ||
@@ -1770,6 +1772,13 @@ export function InstellingenPanel({
                         >
                           <span aria-hidden>✓</span>
                           Ja
+                        </span>
+                      ) : sales && startAdresIngevuld ? (
+                        <span
+                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
+                          title={`${startAdres} — huisnummer + postcode nodig`}
+                        >
+                          Onvolledig
                         </span>
                       ) : sales ? (
                         <span

@@ -44,9 +44,12 @@ type BestSlotOption = {
   feasible: boolean;
   reason: string | null;
   conversie_pct: number | null;
+  conversie_gelopen?: number | null;
   reistijd_min: number | null;
   /** true = vanaf startadres; false = vanaf vorige afspraak die dag */
   reistijd_vanaf_startadres: boolean | null;
+  /** Terugreis naar startadres (laatste/enige afspraak die dag) */
+  reistijd_terug_min?: number | null;
 };
 async function clientLogLeadEvent(
   leadId: string,
@@ -1362,8 +1365,8 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top {bestSlotsLimit}: korte reistijd + dichtbij in de komende
-              2–3 weken (lange rit en verre datum zwaarder).
+              Top {bestSlotsLimit}: kortste reistijd eerst, daarna conversie ·
+              min. 2 adviseurs. Datum alleen bij gelijke afstand.
             </p>
 
             <div className="space-y-2">
@@ -1427,9 +1430,12 @@ export function BelPanel({
                                   <span>
                                     {slot.conversie_pct.toLocaleString("nl-NL")}%
                                     conversie
+                                    {slot.conversie_gelopen != null
+                                      ? ` · ${slot.conversie_gelopen} gelopen`
+                                      : ""}
                                   </span>
                                 ) : (
-                                  <span>Nog geen conversie</span>
+                                  <span>Nog geen gelopen afspraken</span>
                                 )}
                                 {slot.reistijd_min != null ? (
                                   <span>
@@ -1439,6 +1445,14 @@ export function BelPanel({
                                       : slot.reistijd_vanaf_startadres === true
                                         ? " vanaf startadres"
                                         : " route"}
+                                    {slot.reistijd_terug_min != null
+                                      ? ` · ~${slot.reistijd_terug_min} min terug`
+                                      : ""}
+                                  </span>
+                                ) : slot.reistijd_terug_min != null ? (
+                                  <span>
+                                    ~{slot.reistijd_terug_min} min terug naar
+                                    startadres
                                   </span>
                                 ) : null}
                                 {!slot.feasible ? (
