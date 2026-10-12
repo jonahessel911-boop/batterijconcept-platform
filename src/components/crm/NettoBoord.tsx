@@ -1239,10 +1239,10 @@ export function NettoBoord({
   );
 
   const agendaProjects = useMemo(() => {
-    // Adviseur: projecten komen al gescoopt uit CrmShell.
-    if (lockAdviseur || !adviseurId) return projecten;
+    if (!adviseurId) return projecten;
+    // Altijd filteren op gekoppelde adviseur (ook bij lockAdviseur)
     return projecten.filter((p) => projectAdviseurId(p) === adviseurId);
-  }, [projecten, adviseurId, lockAdviseur]);
+  }, [projecten, adviseurId]);
 
   return (
     <div className="flex flex-col">

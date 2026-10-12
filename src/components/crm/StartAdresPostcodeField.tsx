@@ -91,7 +91,7 @@ export function StartAdresPostcodeField({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(4.5rem,0.55fr)_minmax(4rem,0.45fr)_auto] items-end gap-2">
+      <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(4.5rem,0.55fr)_minmax(4rem,0.45fr)_auto]">
         <label className={fieldLabel}>
           Postcode
           <input
@@ -137,7 +137,7 @@ export function StartAdresPostcodeField({
           type="button"
           disabled={busy || !postcode.trim() || !huisnummer.trim()}
           onClick={() => void lookup()}
-          className="mb-0 h-[42px] shrink-0 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          className="h-[42px] w-full shrink-0 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50 sm:mb-0 sm:w-auto"
         >
           {busy ? "…" : "Ophalen"}
         </button>

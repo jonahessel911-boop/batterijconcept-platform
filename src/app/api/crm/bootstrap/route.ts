@@ -86,6 +86,15 @@ export async function GET() {
       ]);
 
     let offertes = offertesRaw as OfferteBootstrapRow[];
+    let projectenScoped = projecten as {
+      lead_id: string;
+      leads?:
+        | { adviseur_id?: string | null }
+        | { adviseur_id?: string | null }[]
+        | null;
+    }[];
+    let facturenScoped = facturen as { lead_id: string }[];
+
     if (eigenScope) {
       const myLeadIds = new Set(
         (leads as { id: string }[]).map((l) => l.id)
@@ -97,14 +106,20 @@ export async function GET() {
           o.leads?.adviseur_id === me || myLeadIds.has(o.lead_id)
         );
       });
+      // Schouw/installatie/service: alleen orders van eigen leads
+      projectenScoped = projectenScoped.filter((p) => {
+        const lead = Array.isArray(p.leads) ? p.leads[0] : p.leads;
+        return lead?.adviseur_id === me || myLeadIds.has(p.lead_id);
+      });
+      facturenScoped = facturenScoped.filter((f) => myLeadIds.has(f.lead_id));
     }
 
     return NextResponse.json({
       leads,
       afspraken,
       offertes,
-      projecten,
-      facturen,
+      projecten: projectenScoped,
+      facturen: facturenScoped,
       instroomCount: sCount.count || 0,
     });
   } catch (e) {

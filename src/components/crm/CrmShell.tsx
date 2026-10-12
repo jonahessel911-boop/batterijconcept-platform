@@ -677,7 +677,10 @@ export function CrmShell() {
       if (!p.offerte_id) return true;
       return offerteActieOpen.get(p.offerte_id) !== true;
     });
-    if (adviseurFilter && userRol && magBekijkAls(userRol)) {
+    // Adviseur: alleen eigen orders (schouw/installatie/service)
+    if (userRol && alleenEigenLeads(userRol) && sessionUser?.id) {
+      list = list.filter((p) => scopedLeadIds.has(p.lead_id));
+    } else if (adviseurFilter && userRol && magBekijkAls(userRol)) {
       list = list.filter((p) => scopedLeadIds.has(p.lead_id));
     }
     // Offerte-meta voor actietekst (Warmtefonds vs eigen middelen)
@@ -701,13 +704,23 @@ export function CrmShell() {
           p.aanbetaling_te_innen_inc ?? o.aanbetaling_te_innen_inc ?? null,
       };
     });
-  }, [projecten, adviseurFilter, scopedLeadIds, offerteActieOpen, offertes, userRol]);
+  }, [
+    projecten,
+    adviseurFilter,
+    scopedLeadIds,
+    offerteActieOpen,
+    offertes,
+    userRol,
+    sessionUser,
+  ]);
 
   const scopedFacturen = useMemo(() => {
-    let list =
-      adviseurFilter && userRol && magBekijkAls(userRol)
-        ? facturen.filter((f) => scopedLeadIds.has(f.lead_id))
-        : facturen;
+    let list = facturen;
+    if (userRol && alleenEigenLeads(userRol) && sessionUser?.id) {
+      list = facturen.filter((f) => scopedLeadIds.has(f.lead_id));
+    } else if (adviseurFilter && userRol && magBekijkAls(userRol)) {
+      list = facturen.filter((f) => scopedLeadIds.has(f.lead_id));
+    }
     return list.map((f) => {
       if (f.offertes?.offerte_nummer || !f.offerte_id) return f;
       const o = offertes.find((x) => x.id === f.offerte_id);
@@ -717,7 +730,7 @@ export function CrmShell() {
         offertes: { id: o.id, offerte_nummer: o.offerte_nummer },
       };
     });
-  }, [facturen, adviseurFilter, scopedLeadIds, offertes, userRol]);
+  }, [facturen, adviseurFilter, scopedLeadIds, offertes, userRol, sessionUser]);
 
   // Admin/backoffice: sticky "Bekijk als" die alles leegmaakt → reset naar iedereen
   useEffect(() => {

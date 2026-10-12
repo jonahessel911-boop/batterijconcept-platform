@@ -686,9 +686,9 @@ export function InstellingenPanel({
     const actief = draft.actief !== false;
 
     return (
-      <div className="relative mx-auto max-w-3xl pb-24">
+      <div className="relative w-full pb-24">
         <div className="border border-line bg-white">
-          <div className="border-b border-line px-4 py-3 sm:px-5">
+          <div className="border-b border-line px-4 py-3 sm:px-5 lg:px-6">
             <button
               type="button"
               onClick={closeDetail}
@@ -696,7 +696,7 @@ export function InstellingenPanel({
             >
               ← Terug naar overzicht
             </button>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <span
                 className="flex h-11 w-11 shrink-0 items-center justify-center bg-green-soft text-sm font-bold tracking-wide text-green-dark"
                 aria-hidden
@@ -704,7 +704,7 @@ export function InstellingenPanel({
                 {naamInitialen(draft.naam || selectedAdviseur.naam) || "?"}
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="font-display text-xl font-semibold text-ink">
+                <h2 className="font-display text-xl font-semibold text-ink sm:text-2xl">
                   {draft.naam || selectedAdviseur.naam}
                 </h2>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -723,12 +723,12 @@ export function InstellingenPanel({
                   ) : null}
                 </div>
               </div>
-              <div className="flex border border-line p-0.5">
+              <div className="flex w-full border border-line p-0.5 sm:w-auto">
                 <button
                   type="button"
                   onClick={() => setDraft((d) => ({ ...d, actief: true }))}
                   className={[
-                    "px-3 py-1.5 text-xs font-semibold",
+                    "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
                     actief
                       ? "bg-green text-white"
                       : "bg-white text-muted hover:bg-wash",
@@ -740,7 +740,7 @@ export function InstellingenPanel({
                   type="button"
                   onClick={() => setDraft((d) => ({ ...d, actief: false }))}
                   className={[
-                    "px-3 py-1.5 text-xs font-semibold",
+                    "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
                     !actief
                       ? "bg-[#C45A12] text-white"
                       : "bg-white text-muted hover:bg-wash",
@@ -770,7 +770,7 @@ export function InstellingenPanel({
             </div>
           )}
 
-          <div className="space-y-4 p-4 sm:p-5">
+          <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2 lg:p-6 xl:grid-cols-2">
             <FormSection title="Account">
               <Field label="Naam">
                 <input
@@ -876,8 +876,12 @@ export function InstellingenPanel({
                   </Field>
                 </FormSection>
 
-                <FormSection title="Factuurgegevens">
-                  <Field label="Bedrijfsnaam" className="sm:col-span-2">
+                <FormSection
+                  title="Factuurgegevens"
+                  className="lg:col-span-2"
+                  wide
+                >
+                  <Field label="Bedrijfsnaam" className="sm:col-span-2 xl:col-span-2">
                     <input
                       value={draft.bedrijfsnaam || ""}
                       onChange={(e) =>
@@ -979,11 +983,13 @@ export function InstellingenPanel({
                   </Field>
                 </FormSection>
 
-                <AdviseurCreditFacturenBlock />
+                <div className="lg:col-span-2">
+                  <AdviseurCreditFacturenBlock />
+                </div>
               </>
             ) : null}
 
-            <FormSection title="Contract">
+            <FormSection title="Contract" className="lg:col-span-2">
               <div className="sm:col-span-2">
                 <RelatieContractUpload
                   kind="adviseur"
@@ -1011,7 +1017,7 @@ export function InstellingenPanel({
               </div>
             </FormSection>
 
-            <FormSection title="Toegang">
+            <FormSection title="Toegang" className="lg:col-span-2">
               <div className="flex flex-wrap gap-2 sm:col-span-2">
                 {selectedAdviseur.email ? (
                   <button
@@ -1680,12 +1686,13 @@ export function InstellingenPanel({
         </div>
       ) : activeFilter === "medewerkers" ? (
         <div className="overflow-x-auto">
-          <table className="crm-table crm-table--compact w-full min-w-[640px]">
+          <table className="crm-table crm-table--compact w-full min-w-[720px]">
             <thead>
               <tr>
                 <th>Medewerker</th>
                 <th>Rol</th>
                 <th>Commissie</th>
+                <th>Start adres</th>
                 <th>Contract</th>
                 <th>Status</th>
                 <th className="w-36 text-right">Actie</th>
@@ -1697,6 +1704,9 @@ export function InstellingenPanel({
                 const rol = normalizeRol(a.rol) as TeamRol;
                 const canLoginAls = Boolean(a.email?.trim());
                 const actief = a.actief !== false;
+                const startAdres = (a.start_adres || "").trim();
+                const heeftStartAdres =
+                  Boolean(startAdres) && startAdres !== "—";
                 const heeftContract = Boolean(
                   a.contract_bestandsnaam ||
                     a.contract_sign_status === "ondertekend"
@@ -1750,6 +1760,26 @@ export function InstellingenPanel({
                         </span>
                       ) : (
                         "—"
+                      )}
+                    </td>
+                    <td>
+                      {heeftStartAdres ? (
+                        <span
+                          className="inline-flex items-center gap-1 bg-green-soft px-2 py-0.5 text-[10px] font-semibold text-green-dark"
+                          title={startAdres}
+                        >
+                          <span aria-hidden>✓</span>
+                          Ja
+                        </span>
+                      ) : sales ? (
+                        <span
+                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
+                          title="Nodig voor reistijd bij inplannen"
+                        >
+                          Ontbreekt
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-muted">—</span>
                       )}
                     </td>
                     <td>
@@ -2069,14 +2099,21 @@ function FormSection({
   title,
   hint,
   children,
+  className,
+  wide = false,
 }: {
   title: string;
   hint?: string;
   children: React.ReactNode;
+  className?: string;
+  /** Meer kolommen op brede schermen (factuur e.d.) */
+  wide?: boolean;
 }) {
   return (
-    <section className="border border-line">
-      <div className="border-b border-line bg-[#fafbfa] px-3.5 py-2.5">
+    <section
+      className={["border border-line", className].filter(Boolean).join(" ")}
+    >
+      <div className="border-b border-line bg-[#fafbfa] px-3.5 py-2.5 sm:px-4">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
           {title}
         </h3>
@@ -2086,7 +2123,16 @@ function FormSection({
           </p>
         ) : null}
       </div>
-      <div className="grid gap-3 p-3.5 sm:grid-cols-2">{children}</div>
+      <div
+        className={[
+          "grid gap-3 p-3.5 sm:p-4",
+          wide
+            ? "sm:grid-cols-2 xl:grid-cols-4"
+            : "sm:grid-cols-2",
+        ].join(" ")}
+      >
+        {children}
+      </div>
     </section>
   );
 }
