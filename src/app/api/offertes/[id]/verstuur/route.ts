@@ -22,15 +22,44 @@ export async function POST(
 
     const { data: row, error } = await sb
       .from("offertes")
-      .select("id, status, offerte_nummer, sign_token")
+      .select("id, status, offerte_nummer, sign_token, verzonden_op")
       .eq("id", id)
       .single();
 
-    if (error || !row) {
+    type OfferteRow = {
+      id: string;
+      status: string;
+      offerte_nummer: string;
+      sign_token: string;
+      verzonden_op?: string | null;
+    };
+    let offerte: OfferteRow | null = (row as OfferteRow | null) ?? null;
+    if (error || !offerte) {
+      if (error?.message?.includes("verzonden_op")) {
+        const retry = await sb
+          .from("offertes")
+          .select("id, status, offerte_nummer, sign_token")
+          .eq("id", id)
+          .single();
+        if (retry.error || !retry.data) {
+          return NextResponse.json(
+            { error: "Offerte niet gevonden" },
+            { status: 404 }
+          );
+        }
+        offerte = retry.data as OfferteRow;
+      } else {
+        return NextResponse.json(
+          { error: "Offerte niet gevonden" },
+          { status: 404 }
+        );
+      }
+    }
+    if (!offerte) {
       return NextResponse.json({ error: "Offerte niet gevonden" }, { status: 404 });
     }
 
-    if (row.status === "ondertekend") {
+    if (offerte.status === "ondertekend") {
       return NextResponse.json(
         { error: "Deze offerte is al ondertekend" },
         { status: 409 }
@@ -46,15 +75,15 @@ export async function POST(
       );
     }
 
-    const signUrl = `${appBaseUrl()}/offerte/${row.sign_token}`;
+    const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;
     const pdfBytes = Buffer.from(await built.blob.arrayBuffer());
 
     const sent = await sendEmail({
       to: email,
-      subject: `Offerte ${row.offerte_nummer} voor ${built.leadNaam}`,
+      subject: `Offerte ${offerte.offerte_nummer} voor ${built.leadNaam}`,
       html: offerteVerstuurdEmail({
         naam: built.leadNaam,
-        offerteNummer: row.offerte_nummer,
+        offerteNummer: offerte.offerte_nummer,
         signUrl,
       }),
       tag: "offerte-verstuurd",
@@ -74,14 +103,45 @@ export async function POST(
       );
     }
 
-    const { data: updated, error: upErr } = await sb
-      .from("offertes")
-      .update({ status: "verzonden" })
-      .eq("id", id)
-      .select(
-        "id, status, offerte_nummer, sign_token, leads(naam, email)"
-      )
-      .single();
+    const patch: { status: string; verzonden_op?: string } = {
+      status: "verzonden",
+    };
+    // Alleen eerste verzending vastleggen
+    if (!offerte.verzonden_op) {
+      patch.verzonden_op = new Date().toISOString();
+    }
+
+    let updated: Record<string, unknown> | null = null;
+    let upErr: { message?: string } | null = null;
+    {
+      const res = await sb
+        .from("offertes")
+        .update(patch)
+        .eq("id", id)
+        .select(
+          "id, status, offerte_nummer, sign_token, verzonden_op, leads(naam, email)"
+        )
+        .single();
+      updated = res.data as Record<string, unknown> | null;
+      upErr = res.error;
+      // Graceful als migratie nog niet gedraaid is
+      if (
+        upErr &&
+        (upErr.message?.includes("verzonden_op") ||
+          upErr.message?.includes("schema cache"))
+      ) {
+        const retry = await sb
+          .from("offertes")
+          .update({ status: "verzonden" })
+          .eq("id", id)
+          .select(
+            "id, status, offerte_nummer, sign_token, leads(naam, email)"
+          )
+          .single();
+        updated = retry.data as Record<string, unknown> | null;
+        upErr = retry.error;
+      }
+    }
 
     if (upErr) {
       return NextResponse.json(

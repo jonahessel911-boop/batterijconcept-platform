@@ -26,7 +26,9 @@ import {
   filterSlotsByAfblokkingen,
   filterSlotsByBeschikbaarheid,
   isDateUnavailable,
+  isSlotGeblokkeerd,
   loadAfblokkingen,
+  loadSlotVrijgaven,
   loadUnavailableWeekKeys,
   nearestSlotHour,
 } from "@/lib/adviseur-beschikbaarheid";
@@ -218,27 +220,36 @@ export async function GET(req: NextRequest) {
     ]);
     const van = dayKeyAmsterdam(new Date());
     const tot = dayKeyAmsterdam(addDays(new Date(), 40));
-    const afgeblokt = await loadAfblokkingen(sb, {
-      adviseurIds: [adviseurId],
-      van,
-      tot,
-    });
+    const [afgeblokt, vrijgaven] = await Promise.all([
+      loadAfblokkingen(sb, {
+        adviseurIds: [adviseurId],
+        van,
+        tot,
+      }),
+      loadSlotVrijgaven(sb, {
+        adviseurIds: [adviseurId],
+        van,
+        tot,
+      }),
+    ]);
     const slots = filterSlotsByAfblokkingen(
       filterSlotsByBeschikbaarheid(rawSlots, unavailable),
       adviseurId,
-      afgeblokt
+      afgeblokt,
+      vrijgaven
     );
     const blocks = filterSlotsByAfblokkingen(
       filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
       adviseurId,
-      afgeblokt
+      afgeblokt,
+      vrijgaven
     ).map((b) => {
-      const blocked = afgeblokt.has(
-        afblokKey(
-          adviseurId,
-          dayKeyAmsterdam(b.start_at),
-          nearestSlotHour(b.start_at)
-        )
+      const blocked = isSlotGeblokkeerd(
+        adviseurId,
+        dayKeyAmsterdam(b.start_at),
+        nearestSlotHour(b.start_at),
+        afgeblokt,
+        vrijgaven
       );
       return {
         ...b,

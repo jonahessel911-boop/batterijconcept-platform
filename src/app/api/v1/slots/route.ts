@@ -22,6 +22,7 @@ import {
   filterSlotsByAfblokkingen,
   filterSlotsByBeschikbaarheid,
   loadAfblokkingen,
+  loadSlotVrijgaven,
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
 import { requireSalesOrAdminApiKey } from "@/lib/api-v1/auth";
@@ -129,16 +130,24 @@ export async function GET(req: NextRequest) {
     ]);
     const van = dayKeyAmsterdam(new Date());
     const tot = dayKeyAmsterdam(addDays(new Date(), daysAhead + 5));
-    const afgeblokt = await loadAfblokkingen(sb, {
-      adviseurIds: [adviseurId],
-      van,
-      tot,
-    });
+    const [afgeblokt, vrijgaven] = await Promise.all([
+      loadAfblokkingen(sb, {
+        adviseurIds: [adviseurId],
+        van,
+        tot,
+      }),
+      loadSlotVrijgaven(sb, {
+        adviseurIds: [adviseurId],
+        van,
+        tot,
+      }),
+    ]);
 
     const slots = filterSlotsByAfblokkingen(
       filterSlotsByBeschikbaarheid(rawSlots, unavailable),
       adviseurId,
-      afgeblokt
+      afgeblokt,
+      vrijgaven
     )
       .slice(0, limit)
       .map((s) => ({

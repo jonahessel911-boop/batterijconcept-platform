@@ -26,10 +26,12 @@ import {
 import {
   dayKeyAmsterdam,
   loadAfblokkingen,
+  loadSlotVrijgaven,
   weekKeyString,
 } from "@/lib/adviseur-beschikbaarheid";
 import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import { addDays, getISOWeekYear } from "date-fns";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
 
 export const runtime = "nodejs";
 
@@ -362,10 +364,12 @@ export async function GET(req: NextRequest) {
       const tot = dayKeyAmsterdam(addDays(now, daysAhead + 2));
       const y = getISOWeekYear(now);
       const adviseurIds = raw.adviseurs.map((a) => a.id);
-      const [unavailableByAdviseur, afblokkingen] = await Promise.all([
-        loadUnavailableByAdviseur(sb, adviseurIds, [y - 1, y, y + 1]),
-        loadAfblokkingen(sb, { adviseurIds, van, tot }),
-      ]);
+      const [unavailableByAdviseur, afblokkingen, vrijgaven] =
+        await Promise.all([
+          loadUnavailableByAdviseur(sb, adviseurIds, [y - 1, y, y + 1]),
+          loadAfblokkingen(sb, { adviseurIds, van, tot }),
+          loadSlotVrijgaven(sb, { adviseurIds, van, tot }),
+        ]);
 
       // Rollende 7 kalenderdagen t/m vandaag (live, niet “tot gisteren”)
       const l2aTo = dayKeyAmsterdam(now);
@@ -393,6 +397,7 @@ export async function GET(req: NextRequest) {
         })),
         unavailableByAdviseur,
         afblokkingen,
+        vrijgaven,
         weeksAhead,
         now,
         targetLeadToAppt: l2aFractie,
@@ -568,35 +573,75 @@ export async function GET(req: NextRequest) {
       finance = emptyDashboardV2Finance();
     }
 
-    // Verzonden offertes (voor “offertes verstuurd vandaag”)
+    // Offertes verstuurd vandaag: verzonden_op (niet updated_at / ondertekend_op)
+    const zNow = toZonedTime(now, "Europe/Amsterdam");
+    const vandaagStart = fromZonedTime(
+      new Date(zNow.getFullYear(), zNow.getMonth(), zNow.getDate(), 0, 0, 0, 0),
+      "Europe/Amsterdam"
+    ).toISOString();
     let offertesVerzonden: {
       id: string;
       adviseur_id: string | null;
-      updated_at: string;
+      verzonden_op: string | null;
       created_at: string;
     }[] = [];
+    const mapVerzondenRow = (o: Record<string, unknown>) => {
+      const lead = o.leads as { adviseur_id?: string | null } | null;
+      return {
+        id: o.id as string,
+        adviseur_id: lead?.adviseur_id ?? null,
+        verzonden_op: (o.verzonden_op as string) || null,
+        created_at: o.created_at as string,
+      };
+    };
     try {
-      const verzondenRows = await fetchAllRows((from, to) =>
+      // Primair: op verzonden_op vandaag
+      const byOp = await fetchAllRows((from, to) =>
         sb
           .from("offertes")
           .select(
-            "id, lead_id, status, updated_at, created_at, leads(adviseur_id)"
+            "id, lead_id, status, verzonden_op, created_at, leads(adviseur_id)"
           )
-          .eq("status", "verzonden")
-          .order("updated_at", { ascending: false })
+          .in("status", ["verzonden", "ondertekend"])
+          .gte("verzonden_op", vandaagStart)
+          .order("verzonden_op", { ascending: false })
           .range(from, to)
       );
-      offertesVerzonden = verzondenRows.map((o) => {
-        const lead = o.leads as { adviseur_id?: string | null } | null;
-        return {
-          id: o.id as string,
-          adviseur_id: lead?.adviseur_id ?? null,
-          updated_at: (o.updated_at as string) || (o.created_at as string),
-          created_at: o.created_at as string,
-        };
-      });
+      const byCreated = await fetchAllRows((from, to) =>
+        sb
+          .from("offertes")
+          .select(
+            "id, lead_id, status, verzonden_op, created_at, leads(adviseur_id)"
+          )
+          .in("status", ["verzonden", "ondertekend"])
+          .is("verzonden_op", null)
+          .gte("created_at", vandaagStart)
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      );
+      const byId = new Map<string, ReturnType<typeof mapVerzondenRow>>();
+      for (const o of [...byOp, ...byCreated]) {
+        byId.set(o.id as string, mapVerzondenRow(o as Record<string, unknown>));
+      }
+      offertesVerzonden = [...byId.values()];
     } catch {
-      offertesVerzonden = [];
+      // Migratie nog niet gedraaid → alleen created_at vandaag
+      try {
+        const rows = await fetchAllRows((from, to) =>
+          sb
+            .from("offertes")
+            .select("id, lead_id, status, created_at, leads(adviseur_id)")
+            .in("status", ["verzonden", "ondertekend"])
+            .gte("created_at", vandaagStart)
+            .order("created_at", { ascending: false })
+            .range(from, to)
+        );
+        offertesVerzonden = rows.map((o) =>
+          mapVerzondenRow({ ...o, verzonden_op: null })
+        );
+      } catch {
+        offertesVerzonden = [];
+      }
     }
 
     const vandaag = buildDashboardV2Vandaag(

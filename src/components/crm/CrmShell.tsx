@@ -928,7 +928,7 @@ export function CrmShell() {
   const titles: Record<CrmTab, { title: string; sub: string }> = {
     today: {
       title: "Today",
-      sub: "Dagelijkse stand · offertes, orders, leads, afspraken",
+      sub: "Hoe staat de dag ervoor",
     },
     taken: {
       title: "Agenda & taken",

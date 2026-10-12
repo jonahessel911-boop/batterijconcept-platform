@@ -129,6 +129,10 @@ export function isNaAfspraakStatus(status: string | null | undefined): boolean {
   return status === "na_afspraak";
 }
 
+/**
+ * Klaar voor uitkomst / afboeken vanaf starttijd (niet pas na de 2u-slot).
+ * Voorbeeld: 19:00-afspraak → actie vanaf 19:00, niet vanaf 21:00.
+ */
 export function afspraakIsAfgelopen(
   afspraak: Pick<Afspraak, "status" | "end_at" | "start_at">,
   now = new Date()
@@ -136,8 +140,8 @@ export function afspraakIsAfgelopen(
   if (afspraak.status === "voltooid") return true;
   if (afspraak.status === "geannuleerd") return false;
   if (!ACTIEF.has(afspraak.status)) return false;
-  const end = new Date(afspraak.end_at || afspraak.start_at).getTime();
-  return end < now.getTime();
+  const start = new Date(afspraak.start_at).getTime();
+  return start <= now.getTime();
 }
 
 /** Lead heeft (ooit) een fysieke afspraak gehad (niet-geannuleerd). */

@@ -95,7 +95,21 @@ export function isMaandagTienAmsterdam(
   return nearestSlotHour(dateOrDayKey) === 10;
 }
 
-/** Standaard geblokkeerd: hele zondag, of maandag 10:00 (weekmeeting). */
+/**
+ * Hard geblokkeerd (niet te openen): maandag 10:00 weekmeeting.
+ * Zondag is standaard dicht maar mag via vrijgave open.
+ */
+export function isHardGeblokkeerdSlot(
+  dateOrDayKey: Date | string,
+  hour?: number
+): boolean {
+  return isMaandagTienAmsterdam(dateOrDayKey, hour);
+}
+
+/**
+ * Standaard-geblokkeerd vóór vrijgave-check.
+ * Zondag + maandag 10:00. Gebruik `isSlotGeblokkeerd` met vrijgaven voor effectieve status.
+ */
 export function isStandaardGeblokkeerdSlot(
   dateOrDayKey: Date | string,
   hour?: number
@@ -104,17 +118,46 @@ export function isStandaardGeblokkeerdSlot(
   return isMaandagTienAmsterdam(dateOrDayKey, hour);
 }
 
+/** Mag dit standaard-slot via afblok-modus worden geopend? (alleen zondag). */
+export function magStandaardSlotOntblokken(
+  dateOrDayKey: Date | string,
+  hour?: number
+): boolean {
+  if (isHardGeblokkeerdSlot(dateOrDayKey, hour)) return false;
+  return isZondagAmsterdam(dateOrDayKey);
+}
+
 export function standaardBlokkadeLabel(
   dateOrDayKey: Date | string,
   hour?: number
 ): string | null {
-  if (isZondagAmsterdam(dateOrDayKey)) {
-    return "Zondag is standaard geblokkeerd";
-  }
   if (isMaandagTienAmsterdam(dateOrDayKey, hour)) {
     return "Maandag 10:00 is standaard geblokkeerd (weekmeeting)";
   }
+  if (isZondagAmsterdam(dateOrDayKey)) {
+    return "Zondag is standaard geblokkeerd";
+  }
   return null;
+}
+
+/**
+ * Effectieve blokkade: hard (ma 10) → altijd dicht;
+ * zondag → dicht tenzij vrijgegeven;
+ * overige → alleen via afblokkingen-set.
+ */
+export function isSlotGeblokkeerd(
+  adviseurId: string,
+  dayKey: string,
+  hour: number,
+  afblokkingen: Set<string>,
+  vrijgaven: Set<string> = new Set()
+): boolean {
+  if (isHardGeblokkeerdSlot(dayKey, hour)) return true;
+  const key = afblokKey(adviseurId, dayKey, hour);
+  if (isZondagAmsterdam(dayKey)) {
+    return !vrijgaven.has(key);
+  }
+  return afblokkingen.has(key);
 }
 
 function isMissingAfblokTable(error: {
@@ -128,6 +171,22 @@ function isMissingAfblokTable(error: {
     error.code === "42P01" ||
     error.code === "PGRST205" ||
     msg.includes("adviseur_afblokkingen") ||
+    msg.includes("schema cache") ||
+    msg.includes("does not exist")
+  );
+}
+
+function isMissingVrijgaveTable(error: {
+  code?: string;
+  message?: string;
+} | null): boolean {
+  if (!error) return false;
+  const msg = error.message || "";
+  return (
+    error.code === "42703" ||
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    msg.includes("adviseur_slot_vrijgaven") ||
     msg.includes("schema cache") ||
     msg.includes("does not exist")
   );
@@ -204,15 +263,64 @@ export async function loadAfblokkingen(
   return blocked;
 }
 
+/**
+ * Zondag-vrijgaven (open slots) voor adviseurs in datumbereik.
+ * Key = zelfde als afblokKey.
+ */
+export async function loadSlotVrijgaven(
+  sb: SupabaseClient,
+  opts: {
+    adviseurIds: string[];
+    van: string;
+    tot: string;
+  }
+): Promise<Set<string>> {
+  const open = new Set<string>();
+  if (!opts.adviseurIds.length) return open;
+
+  const { data, error } = await sb
+    .from("adviseur_slot_vrijgaven")
+    .select("adviseur_id, dag, slot_hour")
+    .in("adviseur_id", opts.adviseurIds)
+    .gte("dag", opts.van)
+    .lte("dag", opts.tot);
+
+  if (error) {
+    if (isMissingVrijgaveTable(error)) return open;
+    throw error;
+  }
+
+  for (const row of data || []) {
+    open.add(afblokKey(row.adviseur_id, row.dag, row.slot_hour));
+  }
+  return open;
+}
+
 export async function isSlotAfgeblokt(
   sb: SupabaseClient,
   adviseurId: string,
   startAt: Date
 ): Promise<boolean> {
-  if (isStandaardGeblokkeerdSlot(startAt)) return true;
+  if (isHardGeblokkeerdSlot(startAt)) return true;
 
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);
+
+  if (isZondagAmsterdam(startAt)) {
+    const { data, error } = await sb
+      .from("adviseur_slot_vrijgaven")
+      .select("id")
+      .eq("adviseur_id", adviseurId)
+      .eq("dag", dag)
+      .eq("slot_hour", hour)
+      .maybeSingle();
+    if (error) {
+      if (isMissingVrijgaveTable(error)) return true; // standaard dicht
+      throw error;
+    }
+    return !data; // vrijgave = open
+  }
+
   const { data, error } = await sb
     .from("adviseur_afblokkingen")
     .select("id")
@@ -228,17 +336,20 @@ export async function isSlotAfgeblokt(
   return Boolean(data);
 }
 
-/** Filter slots die als tijdsblok zijn afgeblokt (incl. standaard zondag + ma 10:00). */
+/**
+ * Filter slots die als tijdsblok zijn afgeblokt
+ * (ma 10 hard, zondag tenzij vrijgegeven, overige via afblokkingen).
+ */
 export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
   slots: T[],
   adviseurId: string,
-  blocked: Set<string>
+  blocked: Set<string>,
+  vrijgaven: Set<string> = new Set()
 ): T[] {
   return slots.filter((s) => {
-    if (isStandaardGeblokkeerdSlot(s.start_at)) return false;
     const dag = dayKeyAmsterdam(s.start_at);
     const hour = nearestSlotHour(s.start_at);
-    return !blocked.has(afblokKey(adviseurId, dag, hour));
+    return !isSlotGeblokkeerd(adviseurId, dag, hour, blocked, vrijgaven);
   });
 }
 

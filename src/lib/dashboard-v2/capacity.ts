@@ -11,9 +11,8 @@ import { addDays, getISOWeek, getISOWeekYear } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
-  afblokKey,
   dayKeyAmsterdam,
-  isStandaardGeblokkeerdSlot,
+  isSlotGeblokkeerd,
   nearestSlotHour,
   weekKeyFromDate,
   weekKeyString,
@@ -149,6 +148,8 @@ export function buildDashboardV2Capacity(opts: {
   unavailableByAdviseur: Map<string, Set<string>>;
   /** Keys `${adviseurId}:${yyyy-MM-dd}:${hour}` */
   afblokkingen: Set<string>;
+  /** Zondag-vrijgaven (open uitzonderingen),zelfde key-vorm */
+  vrijgaven?: Set<string>;
   weeksAhead?: number;
   now?: Date;
   /**
@@ -263,9 +264,13 @@ export function buildDashboardV2Capacity(opts: {
 
       const dag = dayKeyAmsterdam(block.start);
       const hour = nearestSlotHour(block.start);
-      const blocked =
-        isStandaardGeblokkeerdSlot(block.start) ||
-        opts.afblokkingen.has(afblokKey(adv.id, dag, hour));
+      const blocked = isSlotGeblokkeerd(
+        adv.id,
+        dag,
+        hour,
+        opts.afblokkingen,
+        opts.vrijgaven ?? new Set()
+      );
 
       if (blocked) {
         slotsAfgeblokt += 1;

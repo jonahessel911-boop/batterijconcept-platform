@@ -20,6 +20,7 @@ import {
   filterSlotsByBeschikbaarheid,
   isSlotAfgeblokt,
   loadAfblokkingen,
+  loadSlotVrijgaven,
   loadUnavailableWeekKeys,
   weekKeyFromDate,
   weekKeyString,
@@ -66,11 +67,18 @@ export async function GET(
     );
     const van = dayKeyAmsterdam(new Date());
     const tot = dayKeyAmsterdam(addDays(new Date(), 40));
-    const afgeblokt = await loadAfblokkingen(sb, {
-      adviseurIds: [afspraak.adviseur_id],
-      van,
-      tot,
-    });
+    const [afgeblokt, vrijgaven] = await Promise.all([
+      loadAfblokkingen(sb, {
+        adviseurIds: [afspraak.adviseur_id],
+        van,
+        tot,
+      }),
+      loadSlotVrijgaven(sb, {
+        adviseurIds: [afspraak.adviseur_id],
+        van,
+        tot,
+      }),
+    ]);
 
     const slots = filterSlotsByAfblokkingen(
       filterSlotsByBeschikbaarheid(
@@ -83,7 +91,8 @@ export async function GET(
         unavailable
       ),
       afspraak.adviseur_id,
-      afgeblokt
+      afgeblokt,
+      vrijgaven
     );
 
     return NextResponse.json({ afspraak, slots });

@@ -13,6 +13,7 @@ import {
   filterSlotsByAfblokkingen,
   filterSlotsByBeschikbaarheid,
   loadAfblokkingen,
+  loadSlotVrijgaven,
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
@@ -305,16 +306,24 @@ async function freeSlotsForAdviseur(
   ]);
   const van = dayKeyAmsterdam(new Date());
   const tot = dayKeyAmsterdam(addDays(new Date(), daysAhead + 5));
-  const afgeblokt = await loadAfblokkingen(sb, {
-    adviseurIds: [adviseurId],
-    van,
-    tot,
-  });
+  const [afgeblokt, vrijgaven] = await Promise.all([
+    loadAfblokkingen(sb, {
+      adviseurIds: [adviseurId],
+      van,
+      tot,
+    }),
+    loadSlotVrijgaven(sb, {
+      adviseurIds: [adviseurId],
+      van,
+      tot,
+    }),
+  ]);
 
   return filterSlotsByAfblokkingen(
     filterSlotsByBeschikbaarheid(rawSlots, unavailable),
     adviseurId,
-    afgeblokt
+    afgeblokt,
+    vrijgaven
   );
 }
 

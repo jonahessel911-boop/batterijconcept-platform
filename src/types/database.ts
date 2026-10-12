@@ -441,6 +441,8 @@ export interface Offerte {
   track_last_seen_at?: string | null;
   /** Aantal portaalbezoeken. */
   track_view_count?: number | null;
+  /** Eerste verzending naar klant (mail). */
+  verzonden_op?: string | null;
   ondertekend_naam: string | null;
   ondertekend_handtekening: string | null;
   ondertekend_op: string | null;

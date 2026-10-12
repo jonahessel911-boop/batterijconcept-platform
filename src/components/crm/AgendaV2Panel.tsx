@@ -34,7 +34,10 @@ import {
 import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
 import {
   afblokKey,
-  isStandaardGeblokkeerdSlot,
+  isHardGeblokkeerdSlot,
+  isSlotGeblokkeerd,
+  isZondagAmsterdam,
+  magStandaardSlotOntblokken,
   standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
 import { LeadZoekVeld } from "./LeadZoekVeld";
@@ -389,6 +392,8 @@ export function AgendaPanel({
   /** Klik op Afblokken → modus aan; daarna tijdslots aan/uit blokkeren. */
   const [afblokMode, setAfblokMode] = useState(false);
   const [afblokkingen, setAfblokkingen] = useState<Set<string>>(new Set());
+  /** Zondag-vrijgaven: key = afblokKey → slot is open i.p.v. standaard dicht */
+  const [vrijgaven, setVrijgaven] = useState<Set<string>>(new Set());
 
   const todayKey = dayKeyAmsterdam(new Date());
 
@@ -618,11 +623,12 @@ export function AgendaPanel({
     };
   }, [planAdviseurs, weekInfo.jaar]);
 
-  // Slot-afblokkingen voor de zichtbare week
+  // Slot-afblokkingen + zondag-vrijgaven voor de zichtbare week
   useEffect(() => {
     const ids = planAdviseurs.map((a) => a.id);
     if (!ids.length || !days.length) {
       setAfblokkingen(new Set());
+      setVrijgaven(new Set());
       return;
     }
     let cancelled = false;
@@ -649,7 +655,18 @@ export function AgendaPanel({
             )
           );
         }
+        const nextVrij = new Set<string>();
+        for (const item of data.vrijgaven || []) {
+          nextVrij.add(
+            afblokKey(
+              item.adviseur_id as string,
+              item.dag as string,
+              Number(item.slot_hour)
+            )
+          );
+        }
         setAfblokkingen(next);
+        setVrijgaven(nextVrij);
       } catch (e) {
         if (!cancelled) {
           setError(
@@ -674,8 +691,13 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ): boolean {
-    if (isStandaardGeblokkeerdSlot(dayKey, hour)) return true;
-    return afblokkingen.has(afblokKey(adviseurId, dayKey, hour));
+    return isSlotGeblokkeerd(
+      adviseurId,
+      dayKey,
+      hour,
+      afblokkingen,
+      vrijgaven
+    );
   }
 
   async function toggleSlotAfblok(
@@ -683,24 +705,35 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ) {
-    const standaard = standaardBlokkadeLabel(dayKey, hour);
-    if (standaard) {
-      setError(`${standaard} en kan niet worden geopend.`);
+    if (isHardGeblokkeerdSlot(dayKey, hour)) {
+      setError(
+        `${standaardBlokkadeLabel(dayKey, hour) || "Dit slot"} kan niet worden geopend.`
+      );
       return;
     }
     const key = afblokKey(adviseurId, dayKey, hour);
-    const currentlyBlocked = afblokkingen.has(key);
+    const currentlyBlocked = isSlotBlocked(adviseurId, dayKey, hour);
     const nextBlocked = !currentlyBlocked;
+    const isZondag = isZondagAmsterdam(dayKey);
     setBlockBusy(true);
     setError(null);
     setOkMsg(null);
     // Optimistic
-    setAfblokkingen((prev) => {
-      const copy = new Set(prev);
-      if (nextBlocked) copy.add(key);
-      else copy.delete(key);
-      return copy;
-    });
+    if (isZondag) {
+      setVrijgaven((prev) => {
+        const copy = new Set(prev);
+        if (nextBlocked) copy.delete(key); // dicht = geen vrijgave
+        else copy.add(key); // open = vrijgave
+        return copy;
+      });
+    } else {
+      setAfblokkingen((prev) => {
+        const copy = new Set(prev);
+        if (nextBlocked) copy.add(key);
+        else copy.delete(key);
+        return copy;
+      });
+    }
     try {
       const res = await fetch("/api/adviseurs/afblokkingen", {
         method: "POST",
@@ -722,12 +755,21 @@ export function AgendaPanel({
       );
     } catch (e) {
       // Rollback
-      setAfblokkingen((prev) => {
-        const copy = new Set(prev);
-        if (currentlyBlocked) copy.add(key);
-        else copy.delete(key);
-        return copy;
-      });
+      if (isZondag) {
+        setVrijgaven((prev) => {
+          const copy = new Set(prev);
+          if (currentlyBlocked) copy.delete(key);
+          else copy.add(key);
+          return copy;
+        });
+      } else {
+        setAfblokkingen((prev) => {
+          const copy = new Set(prev);
+          if (currentlyBlocked) copy.add(key);
+          else copy.delete(key);
+          return copy;
+        });
+      }
       setError(e instanceof Error ? e.message : "Blokkeren mislukt");
     } finally {
       setBlockBusy(false);
@@ -799,13 +841,19 @@ export function AgendaPanel({
       return;
     }
     const row = SLOT_ROWS[slotIdx];
-    const standaard = standaardBlokkadeLabel(dayKey, row.hour);
-    if (standaard) {
-      setError(standaard);
+    if (isHardGeblokkeerdSlot(dayKey, row.hour)) {
+      setError(
+        standaardBlokkadeLabel(dayKey, row.hour) ||
+          "Dit tijdslot is standaard geblokkeerd"
+      );
       return;
     }
     if (isSlotBlocked(adviseurId, dayKey, row.hour)) {
-      setError("Dit tijdslot is afgeblokt");
+      setError(
+        isZondagAmsterdam(dayKey)
+          ? "Zondag is standaard geblokkeerd — open eerst via Afblokken"
+          : "Dit tijdslot is afgeblokt"
+      );
       return;
     }
     setPlanSlot({
@@ -1155,7 +1203,7 @@ export function AgendaPanel({
                           {blocked && items.length === 0 ? (
                             <GeblokkeerdCell
                               onClick={
-                                isStandaardGeblokkeerdSlot(day.key, row.hour)
+                                isHardGeblokkeerdSlot(day.key, row.hour)
                                   ? () =>
                                       setError(
                                         standaardBlokkadeLabel(
@@ -1175,15 +1223,31 @@ export function AgendaPanel({
                                           setError(
                                             "Hele week is geblokkeerd — slot-afblokken kan dan niet"
                                           )
-                                      : undefined
+                                      : magStandaardSlotOntblokken(
+                                            day.key,
+                                            row.hour
+                                          ) && !afblokMode
+                                        ? () =>
+                                            setError(
+                                              "Zondag is standaard dicht — zet Afblokken aan om te openen"
+                                            )
+                                        : undefined
                               }
                               hint={
-                                standaardBlokkadeLabel(day.key, row.hour) ||
-                                (afblokMode
-                                  ? slotBlocked
-                                    ? "Klik om dit slot weer te openen"
-                                    : "Week geblokkeerd"
-                                  : undefined)
+                                isHardGeblokkeerdSlot(day.key, row.hour)
+                                  ? standaardBlokkadeLabel(
+                                      day.key,
+                                      row.hour
+                                    ) || undefined
+                                  : afblokMode
+                                    ? slotBlocked
+                                      ? isZondagAmsterdam(day.key)
+                                        ? "Klik om zondag te openen"
+                                        : "Klik om dit slot weer te openen"
+                                      : "Week geblokkeerd"
+                                    : isZondagAmsterdam(day.key)
+                                      ? "Zondag · standaard dicht"
+                                      : undefined
                               }
                             />
                           ) : items.length > 0 ? (

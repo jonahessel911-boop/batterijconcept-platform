@@ -24,6 +24,8 @@ export type VandaagAfspraakRow = {
   lead_naam: string | null;
   lead_number: string | null;
   lead_plaats: string | null;
+  /** Lead-status = afboekuitkomst na checkout */
+  lead_status: string | null;
   status: string;
   /** gelopen | te_lopen | niet_afgeboekt */
   bucket: "gelopen" | "te_lopen" | "niet_afgeboekt";
@@ -73,11 +75,12 @@ export type VandaagRaw = {
   }[];
   /** Getekende (en evt. geannuleerde) offertes */
   offertes: DashboardV2Raw["offertes"];
-  /** Verzonden offertes (status=verzonden) met updated_at */
+  /** Verzonden/ondertekende offertes voor “offertes verstuurd” */
   offertesVerzonden: {
     id: string;
     adviseur_id: string | null;
-    updated_at: string;
+    /** Echte verstuurdatum; anders created_at als legacy-proxy */
+    verzonden_op: string | null;
     created_at: string;
   }[];
   adviseurs: DashboardV2Raw["adviseurs"];
@@ -156,16 +159,11 @@ export function buildDashboardV2Vandaag(
     return inIsoRange(at, start, end);
   }).length;
 
+  // Alleen echt verstuurde offertes vandaag — niet updated_at, niet onderteken-datum
   const verstuurdIds = new Set<string>();
   for (const o of offertesVerzonden) {
-    if (inIsoRange(o.updated_at || o.created_at, start, end)) {
-      verstuurdIds.add(o.id);
-    }
-  }
-  for (const o of offertes) {
-    if (o.geannuleerd) continue;
-    const at = o.ondertekend_op;
-    if (at && inIsoRange(at, start, end)) verstuurdIds.add(o.id);
+    const at = o.verzonden_op || o.created_at;
+    if (inIsoRange(at, start, end)) verstuurdIds.add(o.id);
   }
 
   let orders = 0;
@@ -264,6 +262,7 @@ export function buildDashboardV2Vandaag(
       lead_naam: a.lead_naam ?? null,
       lead_number: a.lead_number ?? null,
       lead_plaats: a.lead_plaats ?? null,
+      lead_status: leadStatus,
       status: a.status,
       bucket,
     });
