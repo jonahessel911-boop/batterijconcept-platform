@@ -122,6 +122,11 @@ export interface Adviseur {
   /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
   start_adres?: string | null;
   /**
+   * Eerste werkdag (yyyy-MM-dd). Agenda-slots vóór deze datum worden
+   * automatisch afgeblokt bij aanmaken/wijzigen.
+   */
+  startdatum?: string | null;
+  /**
    * Meedoen in bel-systeem / beste slots om agenda te vullen.
    * false = niet automatisch inplannen (wel eigen agenda/beschikbaarheid).
    */
@@ -144,6 +149,13 @@ export interface Adviseur {
   contract_storage_path?: string | null;
   contract_bestandsnaam?: string | null;
   contract_uploaded_at?: string | null;
+  /** Digitaal ondertekenen ZZP-overeenkomst */
+  contract_sign_token?: string | null;
+  contract_sign_status?: "concept" | "verzonden" | "ondertekend" | null;
+  contract_sign_fields?: Record<string, string | null> | null;
+  contract_bc_handtekening?: string | null;
+  contract_sent_at?: string | null;
+  contract_signed_at?: string | null;
 }
 
 export type AdviseurCreditFactuurStatus =
@@ -444,6 +456,8 @@ export interface Offerte {
   backoffice_notitie_door?: string | null;
   installateur_notitie_door?: string | null;
   installatie_partner_id?: string | null;
+  /** Adviseur die de offerte heeft aangemaakt */
+  aangemaakt_door_id?: string | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
@@ -468,6 +482,7 @@ export interface Offerte {
     InstallatiePartner,
     "id" | "naam" | "email" | "telefoon"
   > | null;
+  aangemaakt_door?: Pick<Adviseur, "id" | "naam"> | null;
 }
 
 export interface Project {

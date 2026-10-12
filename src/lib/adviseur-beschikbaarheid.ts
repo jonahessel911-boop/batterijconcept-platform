@@ -261,3 +261,66 @@ export function isDateUnavailable(
   const k = weekKeyFromDate(date);
   return unavailable.has(weekKeyString(k.jaar, k.week));
 }
+
+/** yyyy-MM-dd + dagen (kalender, lokale wall-clock). */
+export function addCalendarDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+/**
+ * Weekdagen (ma–vr) van `fromYmd` t/m `toYmd` (inclusief), als yyyy-MM-dd.
+ */
+export function weekdaysInclusive(fromYmd: string, toYmd: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromYmd) || !/^\d{4}-\d{2}-\d{2}$/.test(toYmd)) {
+    return [];
+  }
+  if (fromYmd > toYmd) return [];
+  const out: string[] = [];
+  let cur = fromYmd;
+  while (cur <= toYmd) {
+    const [y, m, d] = cur.split("-").map(Number);
+    const wd = new Date(y, m - 1, d).getDay(); // 0=zo … 6=za
+    if (wd >= 1 && wd <= 5) out.push(cur);
+    cur = addCalendarDaysYmd(cur, 1);
+    if (out.length > 400) break;
+  }
+  return out;
+}
+
+/**
+ * Blokkeer alle vaste slots (10/13/16/19) op weekdagen vóór startdatum.
+ * Van vandaag (Amsterdam) t/m dag vóór startdatum. Idempotent upsert.
+ */
+export async function blockAgendaUntilStartdatum(
+  sb: SupabaseClient,
+  adviseurId: string,
+  startdatumYmd: string
+): Promise<{ blockedDays: number; blockedSlots: number }> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startdatumYmd)) {
+    return { blockedDays: 0, blockedSlots: 0 };
+  }
+  const today = dayKeyAmsterdam(new Date());
+  const lastDay = addCalendarDaysYmd(startdatumYmd, -1);
+  if (lastDay < today) {
+    return { blockedDays: 0, blockedSlots: 0 };
+  }
+  const days = weekdaysInclusive(today, lastDay);
+  const rows: { adviseur_id: string; dag: string; slot_hour: number }[] = [];
+  for (const dag of days) {
+    for (const hour of ADVISEUR_SLOT_HOURS) {
+      rows.push({ adviseur_id: adviseurId, dag, slot_hour: hour });
+    }
+  }
+  if (!rows.length) return { blockedDays: 0, blockedSlots: 0 };
+
+  const { error } = await sb
+    .from("adviseur_afblokkingen")
+    .upsert(rows, { onConflict: "adviseur_id,dag,slot_hour" });
+  if (error) throw error;
+  return { blockedDays: days.length, blockedSlots: rows.length };
+}

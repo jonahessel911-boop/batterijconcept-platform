@@ -4,17 +4,20 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CreditfacturenPanel } from "./CreditfacturenPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
+import { OvereenkomstenPanel } from "./OvereenkomstenPanel";
 
 type PartnersView =
   | "medewerkers"
   | "partners"
   | "warmtefonds"
-  | "facturen";
+  | "facturen"
+  | "overeenkomsten";
 
 const TABS: { key: PartnersView; label: string }[] = [
   { key: "medewerkers", label: "Team" },
   { key: "partners", label: "Installatiepartners" },
   { key: "warmtefonds", label: "Warmtefonds" },
+  { key: "overeenkomsten", label: "Overeenkomsten" },
   { key: "facturen", label: "Uitbetalingen" },
 ];
 
@@ -22,6 +25,7 @@ function viewFromParams(p: string | null): PartnersView {
   if (p === "uitbetalingen" || p === "facturen") return "facturen";
   if (p === "partners" || p === "installatie") return "partners";
   if (p === "warmtefonds") return "warmtefonds";
+  if (p === "overeenkomsten" || p === "contracten") return "overeenkomsten";
   return "medewerkers";
 }
 
@@ -62,16 +66,20 @@ export function PartnersPanel({
         <p className="text-xs text-muted">
           {view === "facturen"
             ? "Commissie- en partnerfacturen"
-            : view === "medewerkers"
-              ? "Login-accounts: Admin · Adviseur · Beller · Backoffice"
-              : view === "warmtefonds"
-                ? "Warmtefonds-partners en portaallinks"
-                : "Installatiepartners voor schouw en montage"}
+            : view === "overeenkomsten"
+              ? "ZZP-samenwerkingsovereenkomsten versturen en ondertekende PDF’s"
+              : view === "medewerkers"
+                ? "Login-accounts: Admin · Adviseur · Beller · Backoffice"
+                : view === "warmtefonds"
+                  ? "Warmtefonds-partners en portaallinks"
+                  : "Installatiepartners voor schouw en montage"}
         </p>
       </div>
 
       {view === "facturen" ? (
         <CreditfacturenPanel />
+      ) : view === "overeenkomsten" ? (
+        <OvereenkomstenPanel />
       ) : (
         <InstellingenPanel
           onAdviseursChange={onAdviseursChange}

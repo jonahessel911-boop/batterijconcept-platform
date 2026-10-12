@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Adviseur, CrmTab } from "@/types/database";
+import { gebruikerRolLabel, type GebruikerRol } from "@/lib/rollen";
 
 export function CrmHeader({
   onRefresh,
@@ -15,6 +16,8 @@ export function CrmHeader({
   tabCounts,
   tabs,
   userName,
+  userEmail,
+  userRol,
   onLogout,
   showBekijkAls = true,
   hideTabNav = false,
@@ -30,6 +33,8 @@ export function CrmHeader({
   tabCounts?: Partial<Record<CrmTab, number>>;
   tabs?: { id: CrmTab; label: string }[];
   userName?: string;
+  userEmail?: string;
+  userRol?: GebruikerRol | string | null;
   onLogout?: () => void;
   showBekijkAls?: boolean;
   /** Sidebar-modus: geen top-tabs / hamburger-tabs */
@@ -136,6 +141,28 @@ export function CrmHeader({
               </select>
             </label>
           )}
+          {(userName || userEmail) && (
+            <div
+              className="hidden min-w-0 max-w-[14rem] text-right sm:block lg:max-w-[18rem]"
+              title={[userName, userEmail, userRol]
+                .filter(Boolean)
+                .join(" · ")}
+            >
+              <p className="truncate text-xs font-semibold leading-tight text-white">
+                {userName || userEmail}
+              </p>
+              <p className="truncate text-[10px] leading-tight text-white/55">
+                {[
+                  userName && userEmail ? userEmail : null,
+                  userRol && userRol in gebruikerRolLabel
+                    ? gebruikerRolLabel[userRol as GebruikerRol]
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "\u00a0"}
+              </p>
+            </div>
+          )}
           {onRefresh && (
             <button
               type="button"
@@ -154,7 +181,11 @@ export function CrmHeader({
               type="button"
               onClick={onLogout}
               className="min-h-9 border border-white/25 bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-white/20 sm:px-3"
-              title={userName ? `Uitloggen (${userName})` : "Uitloggen"}
+              title={
+                userEmail || userName
+                  ? `Uitloggen (${userEmail || userName})`
+                  : "Uitloggen"
+              }
             >
               <span className="sm:hidden">⎋</span>
               <span className="hidden sm:inline">Uitloggen</span>

@@ -4,7 +4,6 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { isAdminAdviseur, isAdminEmail } from "@/lib/admin-adviseur";
-import { normalizeRol } from "@/lib/rollen";
 import { remapLegacyProjectStatus } from "@/lib/project-status-config";
 import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import { isSchouwFormulier } from "@/lib/project-documenten";
@@ -90,16 +89,20 @@ function mapProduct(row: Record<string, unknown>): ProductInkoop {
 
 async function requirePurchasingAccess() {
   const jar = await cookies();
-  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-  if (!session) return { error: "Niet ingelogd", status: 401 as const };
-  const rol = normalizeRol(session.rol);
+  const raw = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+  if (!raw) return { error: "Niet ingelogd", status: 401 as const };
+  const { resolveLiveSession } = await import("@/lib/auth-require-admin");
+  const session = await resolveLiveSession(raw);
   const mag =
-    rol === "admin" ||
-    rol === "backoffice" ||
+    session.rol === "admin" ||
+    session.rol === "backoffice" ||
     isAdminEmail(session.email) ||
     isAdminAdviseur({ naam: session.naam, email: session.email });
   if (!mag) {
-    return { error: "Geen toegang", status: 403 as const };
+    return {
+      error: `Geen toegang (rol: ${session.rol})`,
+      status: 403 as const,
+    };
   }
   return { session };
 }

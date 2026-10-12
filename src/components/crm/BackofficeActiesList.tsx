@@ -99,7 +99,7 @@ const SECTION_META: Record<
     accent: "bg-[#FFF0E6] text-[#9A3B1A]",
   },
   handmatig: {
-    label: "Handmatige acties",
+    label: "Taken",
     accent: "bg-[#F3F0FF] text-[#5B21B6]",
   },
 };
@@ -431,7 +431,8 @@ export function BackofficeActiesList({
   );
 
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
-  const [handmatigeTaken, setHandmatigeTaken] = useState<ProjectTaak[]>([]);
+  /** Open project-taken (handmatig + auto) */
+  const [projectTaken, setProjectTaken] = useState<ProjectTaak[]>([]);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     herplan: true,
     aangetekend: true,
@@ -467,18 +468,24 @@ export function BackofficeActiesList({
   });
   const [newAfdeling, setNewAfdeling] = useState<string>("Backoffice");
 
-  async function loadHandmatigeTaken() {
+  async function loadProjectTaken() {
     try {
+      // Eerst verouderde auto-taken automatisch afsluiten bij huidige status
+      await fetch("/api/taken/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => null);
+
       const res = await fetch("/api/taken?open=1");
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setHandmatigeTaken([]);
+        setProjectTaken([]);
         return;
       }
-      const all = (data.taken as ProjectTaak[]) || [];
-      setHandmatigeTaken(all.filter((t) => !t.auto_key));
+      setProjectTaken((data.taken as ProjectTaak[]) || []);
     } catch {
-      setHandmatigeTaken([]);
+      setProjectTaken([]);
     }
   }
 
@@ -499,7 +506,7 @@ export function BackofficeActiesList({
   }, []);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => void loadHandmatigeTaken());
+    const frame = requestAnimationFrame(() => void loadProjectTaken());
     return () => cancelAnimationFrame(frame);
   }, []);
 
@@ -524,7 +531,7 @@ export function BackofficeActiesList({
             ...SECTION_META.handmatig,
             rows: [] as TaskRow[],
             doneCount: 0,
-            taken: handmatigeTaken,
+            taken: projectTaken,
           };
         }
         return {
@@ -539,7 +546,7 @@ export function BackofficeActiesList({
         (s) =>
           s.id === "handmatig" || s.rows.length > 0 || s.taken.length > 0
       );
-  }, [rows, handmatigeTaken]);
+  }, [rows, projectTaken]);
 
   function toggleSection(id: SectionId) {
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -586,7 +593,7 @@ export function BackofficeActiesList({
         );
       }
       const taak = data.taak as ProjectTaak;
-      setHandmatigeTaken((prev) => [taak, ...prev]);
+      setProjectTaken((prev) => [taak, ...prev]);
       setShowCreate(false);
       setNewTitel("");
       setNewOmschrijving("");
@@ -615,21 +622,142 @@ export function BackofficeActiesList({
           (data as { error?: string }).error || "Voltooien mislukt"
         );
       }
-      setHandmatigeTaken((prev) => prev.filter((t) => t.id !== taak.id));
+      setProjectTaken((prev) => prev.filter((t) => t.id !== taak.id));
       const mail = (data as { mail?: { ok?: boolean; skipped?: boolean } })
         .mail;
       if (taak.aangemaakt_door_id && mail?.ok) {
-        setMsg("Actie voltooid · adviseur gemaild.");
+        setMsg("Taak afgerond · adviseur gemaild.");
       } else if (taak.aangemaakt_door_id && mail && !mail.ok && !mail.skipped) {
-        setMsg("Actie voltooid · mail naar adviseur mislukt.");
+        setMsg("Taak afgerond · mail naar adviseur mislukt.");
       } else {
-        setMsg("Actie voltooid.");
+        setMsg(taak.auto_key ? "Auto-taak afgerond." : "Taak afgerond.");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Voltooien mislukt");
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function verwijderProjectTaak(taak: ProjectTaak) {
+    if (
+      !confirm(
+        taak.auto_key
+          ? "Deze auto-taak verwijderen uit de lijst? (wordt afgerond)"
+          : "Deze taak definitief verwijderen?"
+      )
+    ) {
+      return;
+    }
+    setBusyId(`del-${taak.id}`);
+    setError(null);
+    try {
+      if (taak.auto_key) {
+        // Hard delete zou bij sync opnieuw aangemaakt worden
+        const res = await fetch(`/api/taken/${taak.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "done" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Verwijderen mislukt"
+          );
+        }
+      } else {
+        const res = await fetch(`/api/taken/${taak.id}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Verwijderen mislukt"
+          );
+        }
+      }
+      setProjectTaken((prev) => prev.filter((t) => t.id !== taak.id));
+      setMsg("Taak verwijderd.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** Actie uit de Acties-lijst halen (zonder het onderliggende werk te forceren). */
+  async function verwijderActie(actie: BackofficeActie) {
+    if (
+      !confirm(
+        "Deze actie uit de lijst verwijderen? Je kunt hem later opnieuw zien als de status dat weer vraagt."
+      )
+    ) {
+      return;
+    }
+    const completedAt = new Date().toISOString();
+    if (actie.soort === "aangetekende_brief") {
+      const project = await patchProject(actie, {
+        aangetekende_brief_verstuurd_at: completedAt,
+      });
+      if (project) {
+        void logBackofficeActieEvent({
+          soort: "aangetekende_brief",
+          leadId: actie.leadId,
+          projectId: actie.projectId,
+          adviseurId,
+          deadlineAt: actie.deadlineAt,
+          completedAt,
+        });
+        setMsg("Actie verwijderd.");
+      }
+      return;
+    }
+    if (actie.soort === "schakel_financiering") {
+      const project = await patchProject(actie, {
+        financiering_geschakeld_at: completedAt,
+      });
+      if (project) {
+        void logBackofficeActieEvent({
+          soort: "schakel_financiering",
+          leadId: actie.leadId,
+          projectId: actie.projectId,
+          adviseurId,
+          deadlineAt: actie.deadlineAt,
+          completedAt,
+        });
+        setMsg("Actie verwijderd.");
+      }
+      return;
+    }
+    if (actie.soort === "bel_schouw_aanbetaling") {
+      const project = await patchProject(actie, {
+        bel_schouw_aanbetaling_at: completedAt,
+      });
+      if (project) {
+        void logBackofficeActieEvent({
+          soort: "bel_schouw_aanbetaling",
+          leadId: actie.leadId,
+          projectId: actie.projectId,
+          adviseurId,
+          deadlineAt: actie.deadlineAt,
+          completedAt,
+        });
+        setMsg("Actie verwijderd.");
+      }
+      return;
+    }
+    if (actie.soort === "herplan_afspraak") {
+      await voltooiHerplan(actie);
+      setMsg("Actie verwijderd.");
+      return;
+    }
+    if (actie.soort === "nabellen_factuur") {
+      setError(
+        "Factuur-acties verwijder je door de factuur als betaald te markeren, of via het factuur-scherm."
+      );
+      return;
+    }
+    setError(
+      "Deze actie verdwijnt automatisch als de volgende stap op het project is gezet."
+    );
   }
 
   async function voltooiHerplan(actie: BackofficeActie) {
@@ -736,6 +864,7 @@ export function BackofficeActiesList({
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       const project = data.project as Project;
       onProjectUpdated?.(project);
+      void loadProjectTaken();
       return project;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
@@ -849,6 +978,7 @@ export function BackofficeActiesList({
         deadlineAt: actie.deadlineAt,
         completedAt,
       });
+      void loadProjectTaken();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Markeren mislukt");
     } finally {
@@ -879,6 +1009,7 @@ export function BackofficeActiesList({
       if (data.factuur) onFactuurUpdated?.(data.factuur as Factuur);
       setExpandedRow(null);
       await maybeCompleteStap1(actie, { factuurDone: true });
+      void loadProjectTaken();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Versturen mislukt");
     } finally {
@@ -967,6 +1098,7 @@ export function BackofficeActiesList({
         schouwDone: true,
         project: data.project as Project,
       });
+      void loadProjectTaken();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
@@ -985,7 +1117,7 @@ export function BackofficeActiesList({
   }
 
   const hasOpen =
-    rows.some((r) => !r.done) || handmatigeTaken.length > 0 || showCreate;
+    rows.some((r) => !r.done) || projectTaken.length > 0 || showCreate;
 
   return (
     <div className="space-y-5 px-5 pb-6 pt-5">
@@ -1004,8 +1136,8 @@ export function BackofficeActiesList({
         <p className="text-sm text-muted">
           {!hasOpen && !showCreate
             ? "Geen openstaande acties."
-            : `${rows.filter((r) => !r.done).length + handmatigeTaken.length} open actie${
-                rows.filter((r) => !r.done).length + handmatigeTaken.length === 1
+            : `${rows.filter((r) => !r.done).length + projectTaken.length} open actie${
+                rows.filter((r) => !r.done).length + projectTaken.length === 1
                   ? ""
                   : "s"
               }`}
@@ -1192,9 +1324,16 @@ export function BackofficeActiesList({
                             <div className="flex items-start gap-2">
                               <CheckDot done={false} />
                               <div className="min-w-0">
-                                <p className="font-medium text-ink">
-                                  {taak.titel}
-                                </p>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="font-medium text-ink">
+                                    {taak.titel}
+                                  </p>
+                                  {taak.auto_key ? (
+                                    <span className="rounded bg-[#EEF1EF] px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                                      Auto
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <p className="mt-0.5 text-xs text-muted">
                                   {leadNaam}
                                   {taak.projecten?.project_nummer
@@ -1244,11 +1383,25 @@ export function BackofficeActiesList({
                               ) : null}
                               <button
                                 type="button"
-                                disabled={busyId === taak.id}
+                                disabled={
+                                  busyId === taak.id || busyId === `del-${taak.id}`
+                                }
                                 onClick={() => void voltooiHandmatigeTaak(taak)}
-                                className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                className="min-h-8 border border-[#0D5C32]/25 bg-[#E8F6EC] px-2 text-[11px] font-semibold text-green-dark hover:bg-[#d4eedc] disabled:opacity-50"
                               >
-                                {busyId === taak.id ? "Bezig…" : "Voltooien"}
+                                {busyId === taak.id ? "Bezig…" : "Afronden"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={
+                                  busyId === taak.id || busyId === `del-${taak.id}`
+                                }
+                                onClick={() => void verwijderProjectTaak(taak)}
+                                className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                              >
+                                {busyId === `del-${taak.id}`
+                                  ? "…"
+                                  : "Verwijderen"}
                               </button>
                             </div>
                           </td>
@@ -1666,6 +1819,14 @@ export function BackofficeActiesList({
                                       ? "…"
                                       : "Brief verstuurd"}
                                   </button>
+                                  <button
+                                    type="button"
+                                    disabled={busyId === actie.id}
+                                    onClick={() => void verwijderActie(actie)}
+                                    className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                  >
+                                    Verwijderen
+                                  </button>
                                 </>
                               ) : null}
                               {row.kind === "financiering" && isOpen ? (
@@ -1766,6 +1927,19 @@ export function BackofficeActiesList({
                                     Definitief annuleren
                                   </button>
                                 </>
+                              ) : null}
+                              {row.kind !== "aangetekende_brief" &&
+                              (actie.soort === "schakel_financiering" ||
+                                actie.soort === "bel_schouw_aanbetaling" ||
+                                actie.soort === "herplan_afspraak") ? (
+                                <button
+                                  type="button"
+                                  disabled={busyId === actie.id}
+                                  onClick={() => void verwijderActie(actie)}
+                                  className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                >
+                                  Verwijderen
+                                </button>
                               ) : null}
                             </div>
                             {row.kind === "schouw_week" &&

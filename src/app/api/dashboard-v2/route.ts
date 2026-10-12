@@ -7,6 +7,7 @@ import {
   buildDashboardV2Capacity,
   buildDashboardV2Drilldown,
   buildDashboardV2Finance,
+  capacitySteeringGoals,
   emptyDashboardV2Capacity,
   emptyDashboardV2Finance,
   parseDashboardV2Kpi,
@@ -16,6 +17,11 @@ import {
   type DashboardV2Raw,
   type DrilldownRaw,
 } from "@/lib/dashboard-v2";
+import {
+  aggRange,
+  afsprakenVoorL2a,
+  resolveRange,
+} from "@/lib/dashboard-v2/build";
 import {
   dayKeyAmsterdam,
   loadAfblokkingen,
@@ -346,10 +352,10 @@ export async function GET(req: NextRequest) {
       scopeOpts
     );
 
-    // Capaciteit: vrije slots (incl. afblokkingen) → leads @ 25% L2A
-    let capacity = emptyDashboardV2Capacity(4);
+    // Capaciteit: komende 2 weken → leads nodig @ L2A afgelopen 7 dagen
+    let capacity = emptyDashboardV2Capacity(2);
     try {
-      const weeksAhead = 4;
+      const weeksAhead = 2;
       const daysAhead = weeksAhead * 7;
       const van = dayKeyAmsterdam(now);
       const tot = dayKeyAmsterdam(addDays(now, daysAhead + 2));
@@ -359,6 +365,22 @@ export async function GET(req: NextRequest) {
         loadUnavailableByAdviseur(sb, adviseurIds, [y - 1, y, y + 1]),
         loadAfblokkingen(sb, { adviseurIds, van, tot }),
       ]);
+
+      // Rollende 7 kalenderdagen t/m vandaag (live, niet “tot gisteren”)
+      const l2aTo = dayKeyAmsterdam(now);
+      const l2aFrom = dayKeyAmsterdam(addDays(now, -6));
+      const l2aRange = resolveRange("custom", now, {
+        from: l2aFrom,
+        to: l2aTo,
+      });
+      const dashRaw = toDashboardRaw(raw);
+      const l2aTotals = aggRange(dashRaw, l2aRange, now);
+      const l2aAfspraken = afsprakenVoorL2a(dashRaw.afspraken, l2aRange).length;
+      const l2aFractie =
+        l2aTotals.leadToAppt != null && l2aTotals.leads > 0
+          ? l2aTotals.leadToAppt / 100
+          : null;
+
       capacity = buildDashboardV2Capacity({
         adviseurs: raw.adviseurs,
         afspraken: raw.afspraken.map((a) => ({
@@ -372,9 +394,26 @@ export async function GET(req: NextRequest) {
         afblokkingen,
         weeksAhead,
         now,
+        targetLeadToAppt: l2aFractie,
+        l2aSampleLeads: l2aTotals.leads,
+        l2aSampleAfspraken: l2aAfspraken,
+        leadsGegenereerd7d: l2aTotals.leads,
       });
     } catch {
-      capacity = emptyDashboardV2Capacity(4);
+      capacity = emptyDashboardV2Capacity(2);
+    }
+
+    // KPI-doelen leads/afspraken/L2A = live capaciteitssturing
+    if (capacity.slotsVrij > 0 || capacity.l2aFromRecent) {
+      const steered = capacitySteeringGoals(capacity, dashboard.dayCount);
+      dashboard.goals = {
+        ...dashboard.goals,
+        ...steered.period,
+      };
+      dashboard.goalsWeekly = {
+        ...dashboard.goalsWeekly,
+        ...steered.weekly,
+      };
     }
 
     // Finance: omzet / sales / inkoop / leadkosten
@@ -528,9 +567,16 @@ export async function GET(req: NextRequest) {
       finance = emptyDashboardV2Finance();
     }
 
-    return NextResponse.json({
-      dashboard: { ...dashboard, capacity, finance },
-    });
+    return NextResponse.json(
+      {
+        dashboard: { ...dashboard, capacity, finance },
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Dashboard v2 laden mislukt") },

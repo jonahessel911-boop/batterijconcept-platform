@@ -89,6 +89,8 @@ const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v3";
 function parseTab(value: string | null): CrmTab {
   // Oude URL-tab → Partners (facturen / team zitten daar nu)
   if (value === "creditfacturen" || value === "instellingen") return "partners";
+  // Inkomend-mailfacturen-tab uit menu gehaald
+  if (value === "inkomend") return "facturen";
   // Service / AI zitten onder Backoffice
   if (value === "service" || value === "ai") return "projecten";
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
@@ -332,23 +334,26 @@ export function CrmShell() {
     changeAdviseurFilter(sessionUser.id);
   }, [sessionUser, userRol, adviseurFilter]);
 
-  // Admin/backoffice: ongeldige “Bekijk als”-filter (stale localStorage) → iedereen
+  // Geen “Bekijk als” (backoffice/beller/…): sticky localStorage-filter wissen.
+  // Anders blijft alles leeg zonder UI om te resetten (zoals bij Tarik).
   useEffect(() => {
-    if (!userRol || alleenEigenLeads(userRol)) return;
-    if (!adviseurFilter) return;
-    if (adviseurs.length === 0) return;
-    if (adviseurs.some((a) => a.id === adviseurFilter)) return;
-    changeAdviseurFilter("");
-  }, [adviseurs, adviseurFilter, userRol]);
-
-  // Admin: bij rol-wissel niet blijven hangen op oude eigen-filter uit localStorage
-  useEffect(() => {
-    if (!sessionUser || !userRol) return;
+    if (!userRol) return;
     if (alleenEigenLeads(userRol)) return;
-    if (adviseurFilter === sessionUser.id && magBekijkAls(userRol)) {
-      changeAdviseurFilter("");
+    if (magBekijkAls(userRol)) {
+      // Admin: alleen ongeldige of eigen-id filter opruimen
+      if (!adviseurFilter) return;
+      if (sessionUser && adviseurFilter === sessionUser.id) {
+        changeAdviseurFilter("");
+        return;
+      }
+      if (adviseurs.length === 0) return;
+      if (!adviseurs.some((a) => a.id === adviseurFilter)) {
+        changeAdviseurFilter("");
+      }
+      return;
     }
-  }, [sessionUser, userRol]);
+    if (adviseurFilter) changeAdviseurFilter("");
+  }, [sessionUser, userRol, adviseurFilter, adviseurs]);
 
   function changeTab(next: CrmTab) {
     if (userRol && !magTab(userRol, next)) return;
@@ -405,8 +410,8 @@ export function CrmShell() {
     setError(null);
     try {
       // Primair: service-role bootstrap (betrouwbaar voor admin / alle data)
-      const boot = await fetch("/api/crm/bootstrap");
-      const bootData = await boot.json();
+      const boot = await fetch("/api/crm/bootstrap", { cache: "no-store" });
+      const bootData = await boot.json().catch(() => ({}));
       if (boot.ok) {
         const nextLeads = (bootData.leads as Lead[]) || [];
         const nextAfspraken = (bootData.afspraken as Afspraak[]) || [];
@@ -421,21 +426,41 @@ export function CrmShell() {
         setFacturen(nextFacturen);
         setInstroomCount(nextInstroom);
         let nextAdviseurs: Adviseur[] = [];
-        const advRes = await fetch("/api/adviseurs?include_inactive=1");
-        const advData = await advRes.json();
+        const advRes = await fetch("/api/adviseurs?include_inactive=1", {
+          cache: "no-store",
+        });
+        const advData = await advRes.json().catch(() => ({}));
         if (advRes.ok) {
           nextAdviseurs = (advData.adviseurs as Adviseur[]) || [];
           setAdviseurs(nextAdviseurs);
         }
-        writeCrmBootstrapCache({
-          leads: nextLeads,
-          afspraken: nextAfspraken,
-          offertes: nextOffertes,
-          projecten: nextProjecten,
-          facturen: nextFacturen,
-          instroomCount: nextInstroom,
-          adviseurs: nextAdviseurs,
-        });
+        // Nooit een volle cache overschrijven met totaal lege data
+        const hasData =
+          nextLeads.length +
+            nextProjecten.length +
+            nextFacturen.length +
+            nextOffertes.length >
+          0;
+        if (hasData || !hasCrmBootstrapCache()) {
+          writeCrmBootstrapCache({
+            leads: nextLeads,
+            afspraken: nextAfspraken,
+            offertes: nextOffertes,
+            projecten: nextProjecten,
+            facturen: nextFacturen,
+            instroomCount: nextInstroom,
+            adviseurs: nextAdviseurs,
+          });
+        }
+        return;
+      }
+
+      // Bootstrap mislukt (401/500): geen stille lege anon-fallback als we cache hebben
+      if (hasCrmBootstrapCache()) {
+        setError(
+          (bootData as { error?: string }).error ||
+            "Kon data niet vernieuwen — toon cache. Vernieuw of log opnieuw in."
+        );
         return;
       }
 
@@ -516,16 +541,18 @@ export function CrmShell() {
   }, [load]);
 
   const scopedLeads = useMemo(() => {
-    if (!userRol) return [];
+    // Tijdens sessie-load: geen lege lijst forceren (voorkomt leeg planbord/facturen)
+    if (!userRol) return leads;
     // Adviseur: strikt alleen eigen leads
     if (alleenEigenLeads(userRol) && sessionUser?.id) {
       return leads.filter((l) => l.adviseur_id === sessionUser.id);
     }
-    // Beller: team-leads (zelfde pool als Bel-tab; dubbel voorkomen via claim)
-    if (isBellerRol(userRol)) {
+    // Beller / backoffice: altijd teamdata (geen Bekijk-als-scope)
+    if (isBellerRol(userRol) || userRol === "backoffice") {
       return leads;
     }
-    if (!adviseurFilter) return leads;
+    // Alleen admin mag Bekijk-als filteren
+    if (!magBekijkAls(userRol) || !adviseurFilter) return leads;
     const selected = adviseurs.find((a) => a.id === adviseurFilter);
     if (selected && isBellerRol(selected.rol)) {
       return leads.filter((l) => l.beller_id === adviseurFilter);
@@ -597,9 +624,31 @@ export function CrmShell() {
   }, [scopedLeads, search, statusFilter]);
 
   const scopedOffertes = useMemo(() => {
-    if (!adviseurFilter) return offertes;
-    return offertes.filter((o) => scopedLeadIds.has(o.lead_id));
-  }, [offertes, adviseurFilter, scopedLeadIds]);
+    if (!userRol) return offertes;
+    // Adviseur: alleen eigen aangemaakte offertes (fallback: lead van hen)
+    if (alleenEigenLeads(userRol) && sessionUser?.id) {
+      const me = sessionUser.id;
+      return offertes.filter((o) => {
+        if (o.aangemaakt_door_id) return o.aangemaakt_door_id === me;
+        return scopedLeadIds.has(o.lead_id);
+      });
+    }
+    // Admin “Bekijk als”: door hen aangemaakt óf lead van hen
+    if (magBekijkAls(userRol) && adviseurFilter) {
+      return offertes.filter(
+        (o) =>
+          o.aangemaakt_door_id === adviseurFilter ||
+          scopedLeadIds.has(o.lead_id)
+      );
+    }
+    return offertes;
+  }, [
+    offertes,
+    adviseurFilter,
+    scopedLeadIds,
+    userRol,
+    sessionUser,
+  ]);
 
   const offerteActieOpen = useMemo(() => {
     const m = new Map<string, boolean>();
@@ -615,7 +664,7 @@ export function CrmShell() {
       if (!p.offerte_id) return true;
       return offerteActieOpen.get(p.offerte_id) !== true;
     });
-    if (adviseurFilter) {
+    if (adviseurFilter && userRol && magBekijkAls(userRol)) {
       list = list.filter((p) => scopedLeadIds.has(p.lead_id));
     }
     // Offerte-meta voor actietekst (Warmtefonds vs eigen middelen)
@@ -639,12 +688,13 @@ export function CrmShell() {
           p.aanbetaling_te_innen_inc ?? o.aanbetaling_te_innen_inc ?? null,
       };
     });
-  }, [projecten, adviseurFilter, scopedLeadIds, offerteActieOpen, offertes]);
+  }, [projecten, adviseurFilter, scopedLeadIds, offerteActieOpen, offertes, userRol]);
 
   const scopedFacturen = useMemo(() => {
-    let list = adviseurFilter
-      ? facturen.filter((f) => scopedLeadIds.has(f.lead_id))
-      : facturen;
+    let list =
+      adviseurFilter && userRol && magBekijkAls(userRol)
+        ? facturen.filter((f) => scopedLeadIds.has(f.lead_id))
+        : facturen;
     return list.map((f) => {
       if (f.offertes?.offerte_nummer || !f.offerte_id) return f;
       const o = offertes.find((x) => x.id === f.offerte_id);
@@ -654,7 +704,16 @@ export function CrmShell() {
         offertes: { id: o.id, offerte_nummer: o.offerte_nummer },
       };
     });
-  }, [facturen, adviseurFilter, scopedLeadIds, offertes]);
+  }, [facturen, adviseurFilter, scopedLeadIds, offertes, userRol]);
+
+  // Admin/backoffice: sticky "Bekijk als" die alles leegmaakt → reset naar iedereen
+  useEffect(() => {
+    if (!userRol || alleenEigenLeads(userRol)) return;
+    if (!adviseurFilter) return;
+    if (projecten.length === 0) return;
+    if (scopedProjecten.length > 0) return;
+    changeAdviseurFilter("");
+  }, [userRol, adviseurFilter, projecten.length, scopedProjecten.length]);
 
   const appointmentLeadIds = useMemo(() => {
     const ids = new Set<string>();
@@ -989,6 +1048,8 @@ export function CrmShell() {
         hideTabNav
         onOpenSidebar={() => setSidebarMobileOpen(true)}
         userName={sessionUser?.naam}
+        userEmail={sessionUser?.email}
+        userRol={userRol}
         onLogout={() => {
           clearCrmShellCache();
           void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
@@ -1306,7 +1367,10 @@ export function CrmShell() {
                       onPendingChange={setAdviseurFacturenPending}
                     />
                   ) : (
-                    <FacturenTable facturen={scopedFacturen} />
+                    <FacturenTable
+                      facturen={scopedFacturen}
+                      showFinanceKpis={userRol === "admin"}
+                    />
                   ))}
                 {tab === "inkomend" && <InkomendPanel />}
                 {tab === "purchasing" && <PurchasingPanel />}

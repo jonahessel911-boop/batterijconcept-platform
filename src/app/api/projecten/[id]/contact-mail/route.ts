@@ -88,6 +88,8 @@ export async function POST(
       rol === "admin" ? "Backoffice" : gebruikerRolLabel[rol] || "Backoffice";
     const medewerkerNaam =
       adviseur?.naam?.trim() || session.naam || "Batterijconcept";
+    const medewerkerEmail =
+      adviseur?.email?.trim() || session.email?.trim() || null;
 
     const html = klantContactEmail({
       klantNaam,
@@ -101,6 +103,7 @@ export async function POST(
       subject,
       html,
       tag: "project-klant-contact",
+      replyTo: medewerkerEmail,
     });
 
     if (!result.ok) {
@@ -121,6 +124,7 @@ export async function POST(
           project_id: id,
           message_id: result.messageId || null,
           by: medewerkerNaam,
+          reply_to: medewerkerEmail,
         },
       });
     }

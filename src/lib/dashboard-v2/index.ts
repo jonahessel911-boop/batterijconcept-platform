@@ -48,7 +48,9 @@ export type {
 export {
   buildDashboardV2Capacity,
   emptyDashboardV2Capacity,
+  capacitySteeringGoals,
   CAPACITY_TARGET_L2A,
+  CAPACITY_WEEKS_AHEAD,
 } from "./capacity";
 export type {
   DashboardV2Finance,

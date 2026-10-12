@@ -21,6 +21,7 @@ import {
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import {
   afblokKey,
+  blockAgendaUntilStartdatum,
   dayKeyAmsterdam,
   filterSlotsByAfblokkingen,
   filterSlotsByBeschikbaarheid,
@@ -36,13 +37,22 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_MID =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, created_at, updated_at";
 const ADVISEUR_PUBLIC_MIN =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, created_at, updated_at";
+
+function parseStartdatum(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return undefined;
+  return v;
+}
 
 type SbError = { code?: string; message?: string } | null;
 
@@ -86,6 +96,7 @@ function isSchemaCompatError(error: SbError): boolean {
     msg.includes("bedrijfsnaam") ||
     msg.includes("kvk_nummer") ||
     msg.includes("max_factuur_bedrag") ||
+    msg.includes("startdatum") ||
     isMissingColumn(error, "rol")
   );
 }
@@ -116,14 +127,18 @@ export async function GET(req: NextRequest) {
     if (
       error &&
       (error.code === "42703" ||
+        error.code === "PGRST204" ||
         error.message?.includes("start_adres") ||
+        error.message?.includes("startdatum") ||
         error.message?.includes("bel_planning") ||
         error.message?.includes("rol") ||
         error.message?.includes("commissie_pct") ||
         error.message?.includes("bedrijfsnaam") ||
         error.message?.includes("kvk_nummer") ||
         error.message?.includes("max_factuur_bedrag") ||
-        error.message?.includes("contract_storage_path"))
+        error.message?.includes("contract_storage_path") ||
+        error.message?.includes("contract_sign_token") ||
+        error.message?.includes("contract_sign_status"))
     ) {
       let retry = sb
         .from("adviseurs")
@@ -256,6 +271,7 @@ export async function POST(req: NextRequest) {
     telefoon?: string;
     rol?: string;
     commissie_pct?: number | null;
+    startdatum?: string | null;
     bedrijfsnaam?: string | null;
     kvk_nummer?: string | null;
     btw_nummer?: string | null;
@@ -284,6 +300,14 @@ export async function POST(req: NextRequest) {
   }
   if (!GEBRUIKER_ROLLEN.includes(rol)) {
     return NextResponse.json({ error: "Ongeldige rol" }, { status: 400 });
+  }
+
+  const startdatum = parseStartdatum(body.startdatum);
+  if (body.startdatum !== undefined && startdatum === undefined) {
+    return NextResponse.json(
+      { error: "Startdatum moet yyyy-MM-dd zijn" },
+      { status: 400 }
+    );
   }
 
   const kvkFields = {
@@ -318,20 +342,49 @@ export async function POST(req: NextRequest) {
     const password = generatePassword(12);
     const password_hash = hashPassword(password);
 
+    const baseRow: Record<string, unknown> = {
+      naam,
+      email,
+      telefoon: body.telefoon?.trim() || null,
+      password_hash,
+      actief: true,
+      rol,
+      ...(commissiePct != null ? { commissie_pct: commissiePct } : {}),
+      ...kvkFields,
+    };
+    if (startdatum !== undefined) baseRow.startdatum = startdatum;
+
     let insert = await sb
       .from("adviseurs")
-      .insert({
-        naam,
-        email,
-        telefoon: body.telefoon?.trim() || null,
-        password_hash,
-        actief: true,
-        rol,
-        ...(commissiePct != null ? { commissie_pct: commissiePct } : {}),
-        ...kvkFields,
-      })
+      .insert(baseRow)
       .select(ADVISEUR_PUBLIC)
       .single();
+
+    // Select/insert faalt op ontbrekende startdatum-kolom → retry zonder die kolom
+    if (
+      insert.error &&
+      (isMissingColumn(insert.error, "startdatum") ||
+        insert.error.message?.includes("startdatum") ||
+        insert.error.code === "PGRST204")
+    ) {
+      if (startdatum) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-startdatum.sql uit in Supabase.",
+            detail: insert.error.message,
+          },
+          { status: 503 }
+        );
+      }
+      const withoutStart = { ...baseRow };
+      delete withoutStart.startdatum;
+      insert = await sb
+        .from("adviseurs")
+        .insert(withoutStart)
+        .select(ADVISEUR_PUBLIC_FALLBACK)
+        .single();
+    }
 
     // Kolom password_hash / rol nog niet gemigreerd
     if (
@@ -377,6 +430,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    let agendaBlocked: { blockedDays: number; blockedSlots: number } | null =
+      null;
+    if (startdatum) {
+      try {
+        agendaBlocked = await blockAgendaUntilStartdatum(
+          sb,
+          insert.data.id as string,
+          startdatum
+        );
+      } catch (blockErr) {
+        console.error("startdatum afblokken mislukt:", blockErr);
+      }
+    }
+
     const loginUrl = `${appBaseUrl()}/login`;
     const html = teamWelkomEmail({
       naam,
@@ -396,6 +463,7 @@ export async function POST(req: NextRequest) {
         adviseur: stripHash(insert.data as Record<string, unknown>),
         mail_sent: sent.ok,
         mail_error: sent.error,
+        agenda_blocked: agendaBlocked,
       },
       { status: 201 }
     );
@@ -416,6 +484,7 @@ export async function PATCH(req: NextRequest) {
     telefoon?: string | null;
     actief?: boolean;
     start_adres?: string | null;
+    startdatum?: string | null;
     bel_planning?: boolean;
     rol?: string;
     commissie_pct?: number | null;
@@ -543,6 +612,16 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;
+    }
+    if (body.startdatum !== undefined) {
+      const sd = parseStartdatum(body.startdatum);
+      if (sd === undefined) {
+        return NextResponse.json(
+          { error: "Startdatum moet yyyy-MM-dd zijn" },
+          { status: 400 }
+        );
+      }
+      patch.startdatum = sd;
     }
     if (typeof body.bel_planning === "boolean") {
       patch.bel_planning = body.bel_planning;
@@ -695,6 +774,20 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      if (
+        patch.startdatum !== undefined &&
+        isMissingColumn(error, "startdatum")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-startdatum.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
       // Update ok / select faalt op optionele kolommen → retry met smaller select.
       // Strip ook optionele patch-velden die nog niet bestaan.
       const slimPatch = { ...patch };
@@ -707,6 +800,9 @@ export async function PATCH(req: NextRequest) {
       }
       if (isMissingColumn(error, "bel_planning")) {
         delete slimPatch.bel_planning;
+      }
+      if (isMissingColumn(error, "startdatum")) {
+        delete slimPatch.startdatum;
       }
       if (isMissingColumn(error, "rol")) {
         delete slimPatch.rol;
@@ -751,7 +847,24 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ adviseur: data });
+    let agendaBlocked: { blockedDays: number; blockedSlots: number } | null =
+      null;
+    if (typeof patch.startdatum === "string" && patch.startdatum) {
+      try {
+        agendaBlocked = await blockAgendaUntilStartdatum(
+          sb,
+          body.id,
+          patch.startdatum
+        );
+      } catch (blockErr) {
+        console.error("startdatum afblokken mislukt:", blockErr);
+      }
+    }
+
+    return NextResponse.json({
+      adviseur: data,
+      agenda_blocked: agendaBlocked,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

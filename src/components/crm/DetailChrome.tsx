@@ -64,6 +64,8 @@ export function DetailShell({
         onLogout={logout}
         tabs={visibleTabs}
         userName={session?.naam}
+        userEmail={session?.email}
+        userRol={rol}
         showBekijkAls={false}
         hideTabNav
         onOpenSidebar={() => setSidebarMobileOpen(true)}

@@ -119,7 +119,9 @@ export function LeadAfspraakPlannen({
   const [error, setError] = useState<string | null>(null);
   const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
   const [bestSlotsLoading, setBestSlotsLoading] = useState(false);
+  const [bestSlotsLoadingMore, setBestSlotsLoadingMore] = useState(false);
   const [bestSlotsError, setBestSlotsError] = useState<string | null>(null);
+  const [bestSlotsLimit, setBestSlotsLimit] = useState<5 | 10>(5);
   const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
     null
   );
@@ -137,15 +139,18 @@ export function LeadAfspraakPlannen({
     setError(null);
     setSelectedBestSlotId(null);
     setShowHandmatig(false);
+    setBestSlotsLimit(5);
   }, [open, lead.id, preferred, lead.notities]);
 
   useEffect(() => {
     if (!open) {
       setBestSlots([]);
+      setBestSlotsLimit(5);
       return;
     }
     if (adresRegel(lead) === "—") {
       setBestSlots([]);
+      setBestSlotsLimit(5);
       setBestSlotsError(
         "Lead heeft geen volledig adres — top-opties niet beschikbaar."
       );
@@ -154,6 +159,7 @@ export function LeadAfspraakPlannen({
     let cancelled = false;
     setBestSlotsLoading(true);
     setBestSlotsError(null);
+    setBestSlotsLimit(5);
     queueMicrotask(async () => {
       try {
         const qs = new URLSearchParams({
@@ -192,6 +198,40 @@ export function LeadAfspraakPlannen({
       cancelled = true;
     };
   }, [open, lead, lockAdviseur, defaultAdviseurId]);
+
+  async function loadMeerBestSlots() {
+    if (!open || bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
+    setBestSlotsLoadingMore(true);
+    setBestSlotsError(null);
+    try {
+      const qs = new URLSearchParams({
+        lead_id: lead.id,
+        limit: "10",
+      });
+      if (lockAdviseur && defaultAdviseurId) {
+        qs.set("adviseur_id", defaultAdviseurId);
+      }
+      const res = await fetch(`/api/best-slots?${qs}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Extra opties laden mislukt"
+        );
+      }
+      let slots = (data.slots || []) as BestSlotOption[];
+      if (lockAdviseur && defaultAdviseurId) {
+        slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
+      }
+      setBestSlots(slots);
+      setBestSlotsLimit(10);
+    } catch (e) {
+      setBestSlotsError(
+        e instanceof Error ? e.message : "Extra opties laden mislukt"
+      );
+    } finally {
+      setBestSlotsLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     if (!open || !adviseurId) {
@@ -338,7 +378,7 @@ export function LeadAfspraakPlannen({
       <p className="text-xs text-muted">
         {lockAdviseur
           ? "Opties in jouw agenda · bevestigingsmail gaat mee."
-          : "Top-opties: korte reistijd eerst, daarna zo vroeg mogelijk. Bevestigingsmail gaat mee."}
+          : "Top-opties: korte reistijd + dichtbij in de komende 2–3 weken. Bevestigingsmail gaat mee."}
       </p>
 
       <div className="space-y-2">
@@ -360,59 +400,73 @@ export function LeadAfspraakPlannen({
             Geen gezamenlijke opties — kies handmatig hieronder.
           </p>
         ) : (
-          <ul className="space-y-1.5">
-            {bestSlots.map((slot, idx) => {
-              const selected = selectedBestSlotId === slot.slot_id;
-              return (
-                <li key={slot.slot_id}>
-                  <button
-                    type="button"
-                    onClick={() => selectBestSlot(slot)}
-                    className={[
-                      "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
-                      selected
-                        ? "border-green bg-green-soft"
-                        : "border-line bg-white hover:border-green/50",
-                    ].join(" ")}
-                  >
-                    <span
+          <>
+            <ul className="space-y-1.5">
+              {bestSlots.map((slot, idx) => {
+                const selected = selectedBestSlotId === slot.slot_id;
+                return (
+                  <li key={slot.slot_id}>
+                    <button
+                      type="button"
+                      onClick={() => selectBestSlot(slot)}
                       className={[
-                        "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
+                        "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
                         selected
-                          ? "bg-green text-white"
-                          : "bg-wash text-muted",
+                          ? "border-green bg-green-soft"
+                          : "border-line bg-white hover:border-green/50",
                       ].join(" ")}
                     >
-                      {idx + 1}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-semibold text-ink">
-                        {slot.label_kort || slot.label_nl}
+                      <span
+                        className={[
+                          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
+                          selected
+                            ? "bg-green text-white"
+                            : "bg-wash text-muted",
+                        ].join(" ")}
+                      >
+                        {idx + 1}
                       </span>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
-                        <span className="font-medium text-ink">
-                          {slot.adviseur_naam}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-ink">
+                          {slot.label_kort || slot.label_nl}
                         </span>
-                        {slot.reistijd_min != null ? (
-                          <span>
-                            ~{slot.reistijd_min} min
-                            {slot.reistijd_vanaf_startadres === false
-                              ? " vanaf vorige afspraak"
-                              : slot.reistijd_vanaf_startadres === true
-                                ? " vanaf startadres"
-                                : " route"}
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
+                          <span className="font-medium text-ink">
+                            {slot.adviseur_naam}
                           </span>
-                        ) : null}
-                        {!slot.feasible ? (
-                          <span className="text-[#C45A12]">Strak</span>
-                        ) : null}
+                          {slot.reistijd_min != null ? (
+                            <span>
+                              ~{slot.reistijd_min} min
+                              {slot.reistijd_vanaf_startadres === false
+                                ? " vanaf vorige afspraak"
+                                : slot.reistijd_vanaf_startadres === true
+                                  ? " vanaf startadres"
+                                  : " route"}
+                            </span>
+                          ) : null}
+                          {!slot.feasible ? (
+                            <span className="text-[#C45A12]">Strak</span>
+                          ) : null}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {bestSlotsLimit < 10 && bestSlots.length >= 5 ? (
+              <button
+                type="button"
+                disabled={bestSlotsLoadingMore}
+                onClick={() => void loadMeerBestSlots()}
+                className="w-full border border-line bg-wash px-3 py-2 text-xs font-semibold text-ink hover:bg-white disabled:opacity-50"
+              >
+                {bestSlotsLoadingMore
+                  ? "Extra opties laden…"
+                  : "5 meer laden"}
+              </button>
+            ) : null}
+          </>
         )}
         <button
           type="button"

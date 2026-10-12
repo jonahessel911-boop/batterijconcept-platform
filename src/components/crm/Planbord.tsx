@@ -100,7 +100,22 @@ function weekDaysFrom(anchor: Date): DayCol[] {
     const date = addDays(monday, i);
     const dow = date.getDay();
     return {
-      key: format(date, "yyyy-MM-dd"),
+      // Altijd Amsterdam-kalenderdag — niet machine-timezone via format()
+      key: formatInTimeZone(
+        fromZonedTime(
+          new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            12,
+            0,
+            0
+          ),
+          AMSTERDAM_TZ
+        ),
+        AMSTERDAM_TZ,
+        "yyyy-MM-dd"
+      ),
       date,
       weekend: dow === 0 || dow === 6,
     };
@@ -2485,7 +2500,21 @@ function monthGridDays(anchor: Date): DayCol[] {
   return eachDayOfInterval({ start, end }).map((date) => {
     const dow = date.getDay();
     return {
-      key: format(date, "yyyy-MM-dd"),
+      key: formatInTimeZone(
+        fromZonedTime(
+          new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            12,
+            0,
+            0
+          ),
+          AMSTERDAM_TZ
+        ),
+        AMSTERDAM_TZ,
+        "yyyy-MM-dd"
+      ),
       date,
       weekend: dow === 0 || dow === 6,
     };

@@ -60,9 +60,17 @@ function currentKwartaalKey(now = new Date()): string {
   return k ? `${k.jaar}-Q${k.kwartaal}` : "";
 }
 
-export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
+export function FacturenTable({
+  facturen,
+  /** BTW-/betalings-KPI's alleen voor admin */
+  showFinanceKpis = false,
+}: {
+  facturen: Factuur[];
+  showFinanceKpis?: boolean;
+}) {
   const router = useRouter();
   const [filter, setFilter] = useState<StatusFilter>("actief");
+  const [search, setSearch] = useState("");
 
   function openFactuur(id: string) {
     rememberCrmReturnUrl();
@@ -71,22 +79,44 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
 
   const filtered = useMemo(() => {
     // Creditfacturen staan onder de oorspronkelijke factuur — niet als aparte rij
-    const base = facturen.filter((f) => !isCreditFactuur(f));
+    let base = facturen.filter((f) => !isCreditFactuur(f));
     switch (filter) {
       case "actief":
-        return base.filter((f) => f.status !== "concept");
+        base = base.filter((f) => f.status !== "concept");
+        break;
       case "betaald":
-        return base.filter((f) => f.status === "betaald");
+        base = base.filter((f) => f.status === "betaald");
+        break;
       case "open":
-        return base.filter(
+        base = base.filter(
           (f) => f.status === "verzonden" || f.status === "deels_betaald"
         );
+        break;
       case "concept":
-        return base.filter((f) => f.status === "concept");
+        base = base.filter((f) => f.status === "concept");
+        break;
       default:
-        return base;
+        break;
     }
-  }, [facturen, filter]);
+    const q = search.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter((f) => {
+      const lead = f.leads;
+      const hay = [
+        f.factuur_nummer,
+        f.omschrijving,
+        lead?.naam,
+        lead?.email,
+        lead?.telefoon,
+        lead?.lead_number,
+        f.offertes?.offerte_nummer,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [facturen, filter, search]);
 
   const creditsByParent = useMemo(() => {
     const map = new Map<string, Factuur[]>();
@@ -195,120 +225,136 @@ export function FacturenTable({ facturen }: { facturen: Factuur[] }) {
 
   return (
     <div>
-      <div className="border-b border-line bg-white px-4 py-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Af te dragen BTW per kwartaal
-            </p>
-            <p className="mt-0.5 text-[11px] text-muted">
-              Op factuurdatum · betaald (credits verlagen) ·{" "}
-              {overview.betaaldCount} betaald
-            </p>
-          </div>
-          <p className="text-[11px] text-muted">
-            Totaal{" "}
-            <span className="font-semibold tabular-nums text-ink">
-              {formatEuro(overview.ontvangenBtw)}
-            </span>
-          </p>
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {overview.kwartalen.map((k) => {
-            const current = k.key === overview.huidigeKwartaalKey;
-            return (
-              <div
-                key={k.key}
-                className={[
-                  "border px-3 py-2.5",
-                  current
-                    ? "border-green/40 bg-green-soft/40"
-                    : "border-line bg-wash/40",
-                ].join(" ")}
-              >
-                <p
-                  className={[
-                    "text-[10px] font-semibold uppercase tracking-wide",
-                    current ? "text-green-deeper" : "text-muted",
-                  ].join(" ")}
-                >
-                  {k.label}
-                  {current ? " · nu" : ""}
+      {showFinanceKpis ? (
+        <>
+          <div className="border-b border-line bg-white px-4 py-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Af te dragen BTW per kwartaal
                 </p>
-                <p
-                  className={[
-                    "mt-0.5 font-display text-lg font-semibold tabular-nums",
-                    k.btw < 0
-                      ? "text-[#C45A12]"
-                      : current
-                        ? "text-green-deeper"
-                        : "text-ink",
-                  ].join(" ")}
-                >
-                  {formatEuro(k.btw)}
-                </p>
-                <p className="mt-0.5 text-[10px] text-muted">
-                  {k.count
-                    ? `${k.count} factuur${k.count === 1 ? "" : "en"}`
-                    : "geen"}
+                <p className="mt-0.5 text-[11px] text-muted">
+                  Op factuurdatum · betaald (credits verlagen) ·{" "}
+                  {overview.betaaldCount} betaald
                 </p>
               </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-3">
-        {[
-          {
-            label: "Openstaande BTW",
-            value: formatEuro(overview.openstaandeBtw),
-            hint: `${overview.openCount} open`,
-          },
-          {
-            label: "Betaald (inc. btw)",
-            value: formatEuro(overview.betaaldInc),
-            hint: null,
-          },
-          {
-            label: "Openstaand (inc. btw)",
-            value: formatEuro(overview.openstaandInc),
-            hint: null,
-          },
-        ].map((kpi) => (
-          <div key={kpi.label} className="bg-white px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              {kpi.label}
-            </p>
-            <p className="mt-0.5 font-display text-lg font-semibold tabular-nums text-ink">
-              {kpi.value}
-            </p>
-            {kpi.hint ? (
-              <p className="mt-0.5 text-[10px] text-muted">{kpi.hint}</p>
-            ) : null}
+              <p className="text-[11px] text-muted">
+                Totaal{" "}
+                <span className="font-semibold tabular-nums text-ink">
+                  {formatEuro(overview.ontvangenBtw)}
+                </span>
+              </p>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {overview.kwartalen.map((k) => {
+                const current = k.key === overview.huidigeKwartaalKey;
+                return (
+                  <div
+                    key={k.key}
+                    className={[
+                      "border px-3 py-2.5",
+                      current
+                        ? "border-green/40 bg-green-soft/40"
+                        : "border-line bg-wash/40",
+                    ].join(" ")}
+                  >
+                    <p
+                      className={[
+                        "text-[10px] font-semibold uppercase tracking-wide",
+                        current ? "text-green-deeper" : "text-muted",
+                      ].join(" ")}
+                    >
+                      {k.label}
+                      {current ? " · nu" : ""}
+                    </p>
+                    <p
+                      className={[
+                        "mt-0.5 font-display text-lg font-semibold tabular-nums",
+                        k.btw < 0
+                          ? "text-[#C45A12]"
+                          : current
+                            ? "text-green-deeper"
+                            : "text-ink",
+                      ].join(" ")}
+                    >
+                      {formatEuro(k.btw)}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-muted">
+                      {k.count
+                        ? `${k.count} factuur${k.count === 1 ? "" : "en"}`
+                        : "geen"}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-        {filters.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setFilter(f.id)}
-            className={[
-              "px-3 py-1.5 text-xs font-semibold transition-colors",
-              filter === f.id
-                ? "bg-green text-white"
-                : "border border-line bg-white text-muted hover:text-ink",
-            ].join(" ")}
-          >
-            {f.label}
-          </button>
-        ))}
-        <p className="ml-auto text-xs text-muted">
-          {filtered.length} van {facturen.length}
-        </p>
+          <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-3">
+            {[
+              {
+                label: "Openstaande BTW",
+                value: formatEuro(overview.openstaandeBtw),
+                hint: `${overview.openCount} open`,
+              },
+              {
+                label: "Betaald (inc. btw)",
+                value: formatEuro(overview.betaaldInc),
+                hint: null,
+              },
+              {
+                label: "Openstaand (inc. btw)",
+                value: formatEuro(overview.openstaandInc),
+                hint: null,
+              },
+            ].map((kpi) => (
+              <div key={kpi.label} className="bg-white px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  {kpi.label}
+                </p>
+                <p className="mt-0.5 font-display text-lg font-semibold tabular-nums text-ink">
+                  {kpi.value}
+                </p>
+                {kpi.hint ? (
+                  <p className="mt-0.5 text-[10px] text-muted">{kpi.hint}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      <div className="flex flex-col gap-3 border-b border-line px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <label className="relative min-w-0 flex-1 sm:max-w-sm">
+          <span className="sr-only">Zoek facturen</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Zoek op naam, nr, e-mail…"
+            className="w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none placeholder:text-muted focus:border-green"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              className={[
+                "px-3 py-1.5 text-xs font-semibold transition-colors",
+                filter === f.id
+                  ? "bg-green text-white"
+                  : "border border-line bg-white text-muted hover:text-ink",
+              ].join(" ")}
+            >
+              {f.label}
+            </button>
+          ))}
+          <p className="text-xs text-muted sm:ml-1">
+            {filtered.length} van {facturen.length}
+          </p>
+        </div>
       </div>
 
       {filtered.length === 0 ? (

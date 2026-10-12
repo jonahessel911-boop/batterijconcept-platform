@@ -1,24 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
+import { requireAdminSession } from "@/lib/auth-require-admin";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
 export const runtime = "nodejs";
 
 async function requireAdmin() {
-  const jar = await cookies();
-  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-  if (!session) {
-    return { error: NextResponse.json({ error: "Niet ingelogd" }, { status: 401 }) };
+  const auth = await requireAdminSession();
+  if (!auth.ok) {
+    return {
+      error: NextResponse.json(
+        { error: auth.error },
+        { status: auth.status }
+      ),
+    };
   }
-  if (normalizeRol(session.rol) !== "admin") {
-    return { error: NextResponse.json({ error: "Geen toegang" }, { status: 403 }) };
-  }
-  return { session };
+  return { session: auth.session };
 }
 
 function parseDueAt(raw: unknown): string | null {

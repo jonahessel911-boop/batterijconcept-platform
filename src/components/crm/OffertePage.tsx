@@ -80,7 +80,8 @@ export function OffertePage() {
 
     try {
       const sb = getSupabaseBrowser();
-      const [o, p, f] = await Promise.all([
+      const [sessionRes, o, p, f] = await Promise.all([
+        fetch("/api/auth/login").then((r) => (r.ok ? r.json() : null)).catch(() => null),
         sb
           .from("offertes")
           .select(
@@ -102,6 +103,19 @@ export function OffertePage() {
         setNotFound(true);
       } else {
         const data = o.data as Offerte;
+        const me = sessionRes?.adviseur?.id as string | undefined;
+        const rol = sessionRes?.adviseur?.rol as string | undefined;
+        if (rol === "adviseur" && me) {
+          const maker = data.aangemaakt_door_id;
+          const leadAdv = data.leads?.adviseur_id ?? null;
+          const mag =
+            maker != null ? maker === me : leadAdv === me;
+          if (!mag) {
+            setNotFound(true);
+            setLoading(false);
+            return;
+          }
+        }
         setOfferte(data);
         setAanbetalingModus(normalizeAanbetalingModus(data.aanbetaling_modus));
         setAanbetalingHandmatig(

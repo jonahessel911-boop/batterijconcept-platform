@@ -1097,3 +1097,42 @@ export function relatieFactuurAanBcEmail(opts: {
       .join(""),
   });
 }
+
+export function zzpContractTeOndertekenenEmail(opts: {
+  naam: string;
+  signUrl: string;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: "Samenwerkingsovereenkomst ondertekenen",
+    preheader:
+      "Bekijk en onderteken je ZZP-overeenkomst met BatterijConcept.",
+    bodyHtml: [
+      emailH1("Samenwerkingsovereenkomst"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je samenwerkingsovereenkomst met BatterijConcept staat klaar. Je gegevens staan al ingevuld — open de link, bekijk de PDF en zet alleen je handtekening."
+      ),
+      emailButton("Bekijk &amp; onderteken overeenkomst", opts.signUrl),
+      emailMuted(
+        "Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+    ].join(""),
+  });
+}
+
+export function zzpContractOndertekendEmail(opts: { naam: string }) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: "Overeenkomst ondertekend",
+    preheader: "Je samenwerkingsovereenkomst is digitaal ondertekend.",
+    bodyHtml: [
+      emailH1("Overeenkomst ondertekend"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Bedankt. Je samenwerkingsovereenkomst met BatterijConcept is digitaal ondertekend. In de bijlage vind je de ondertekende PDF."
+      ),
+      emailMuted("Met vriendelijke groet, team BatterijConcept"),
+    ].join(""),
+  });
+}

@@ -948,9 +948,12 @@ function FinanceBarsSection({
 }
 
 function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
-  const l2aPct = Math.round(capacity.targetLeadToAppt * 100);
+  const l2aPct = Math.round(capacity.targetLeadToAppt * 1000) / 10;
   const [openWeekKey, setOpenWeekKey] = useState<string | null>(null);
   const [openAdviseurId, setOpenAdviseurId] = useState<string | null>(null);
+  const tekort = capacity.leadsTekort ?? 0;
+  const gegenereerd7d = capacity.leadsGegenereerd7d ?? 0;
+  const projected = capacity.leadsGegenereerdProjected ?? 0;
 
   const sorted = useMemo(
     () =>
@@ -992,9 +995,12 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
         </h3>
         <p className="mt-1 text-sm text-muted">
           Komende {capacity.weeksAhead} weken · {capacity.adviseurCount}{" "}
-          planbare adviseurs · doel {l2aPct}% lead→afspraak. Klik een week of
-          adviseur open voor de uitsplitsing. Afgeblokte tijden en week-uit
-          tellen niet mee.
+          planbare adviseurs · L2A{" "}
+          {capacity.l2aFromRecent
+            ? `${num(l2aPct, 1)}% (laatste 7 dagen t/m vandaag, ${num(capacity.l2aSampleAfspraken)}/${num(capacity.l2aSampleLeads)})`
+            : `${num(l2aPct, 1)}% fallback — nog geen sample`}
+          . Live herberekend — stuurt ook de KPI-doelen leads/afspraken/L2A
+          hierboven. Afgeblokte tijden en week-uit tellen niet mee.
         </p>
       </div>
 
@@ -1008,7 +1014,7 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
           </p>
           <p className="mt-1 text-xs text-muted">
             van {num(capacity.slotsOpen)} open · {num(capacity.slotsGepland)}{" "}
-            gepland
+            gepland · {num(capacity.slotsAfgeblokt)} afgeblokt
           </p>
         </div>
         <div className="rounded-2xl border border-green/30 bg-green-soft/40 p-4">
@@ -1019,29 +1025,43 @@ function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
             {num(capacity.leadsNodig)}
           </p>
           <p className="mt-1 text-xs text-muted">
-            ≈ {num(capacity.leadsNodigPerWeek, 1)}/week bij {l2aPct}% L2A
+            over {capacity.weeksAhead} weken · ≈{" "}
+            {num(capacity.leadsNodigPerWeek, 1)}/week bij {num(l2aPct, 1)}% L2A
           </p>
         </div>
         <div className="rounded-2xl border border-line bg-white p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Afgeblokt
+            Leads gegenereerd
           </p>
           <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
-            {num(capacity.slotsAfgeblokt)}
+            {num(gegenereerd7d)}
           </p>
           <p className="mt-1 text-xs text-muted">
-            slots (incl. ma 10:00 weekmeeting)
+            afgelopen 7 dagen · tempo ≈ {num(projected)} over{" "}
+            {capacity.weeksAhead} weken
           </p>
         </div>
-        <div className="rounded-2xl border border-line bg-white p-4">
+        <div
+          className={`rounded-2xl border p-4 ${
+            tekort > 0
+              ? "border-[#C45A12]/30 bg-[#FFF0E6]"
+              : "border-green/30 bg-green-soft/40"
+          }`}
+        >
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Gepland
+            {tekort > 0 ? "Tekort" : "Ruimte"}
           </p>
-          <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
-            {num(capacity.slotsGepland)}
+          <p
+            className={`mt-1 font-display text-3xl font-semibold tabular-nums ${
+              tekort > 0 ? "text-[#C45A12]" : "text-green-deeper"
+            }`}
+          >
+            {num(Math.abs(tekort))}
           </p>
           <p className="mt-1 text-xs text-muted">
-            huisbezoeken in het venster
+            {tekort > 0
+              ? `nodig − tempo (${num(capacity.leadsNodig)} − ${num(projected)})`
+              : `tempo dekt de capaciteit (+${num(Math.abs(tekort))} marge)`}
           </p>
         </div>
       </div>
@@ -1357,20 +1377,21 @@ export function DashboardV2() {
     return base;
   }, [weekKey]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (period === "custom" && (!fromDate || !toDate)) {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
       return;
     }
     if (period === "calendar_week" && !weekKey) {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `/api/dashboard-v2?${qsPeriod(period, fromDate, toDate, weekKey, scope, personId)}`
+        `/api/dashboard-v2?${qsPeriod(period, fromDate, toDate, weekKey, scope, personId)}`,
+        { cache: "no-store" }
       );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Laden mislukt");
@@ -1385,7 +1406,7 @@ export function DashboardV2() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, [period, fromDate, toDate, weekKey, scope, personId]);
 
@@ -1398,6 +1419,14 @@ export function DashboardV2() {
     if (period === "calendar_week" && !weekKey) return;
     void load();
   }, [period, fromDate, toDate, weekKey, scope, personId, load]);
+
+  // Live sturen: elke 60s stille refresh (L2A, leads nodig, doelen)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void load({ silent: true });
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [load]);
 
   // Bij switch naar custom: seed datums vanuit laatste geladen range
   useEffect(() => {
@@ -1558,6 +1587,10 @@ export function DashboardV2() {
               Stand vs doel · {data.periodLabel.toLowerCase()}
               {data.personNaam ? ` · ${data.personNaam}` : " · team"}
             </h3>
+            <p className="mb-3 text-xs text-muted">
+              Leads-, afspraken- en L2A-doel komen live uit agenda-capaciteit
+              (recente L2A × vrije slots). Vernieuwt automatisch elke minuut.
+            </p>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-3">
               <ProgressDonut
                 title="Leads"

@@ -158,7 +158,6 @@ const GROUPS: SidebarGroup[] = [
       { id: "projecten", label: "Backoffice", icon: ICONS.projecten },
       { id: "purchasing", label: "Purchasing", icon: ICONS.purchasing },
       { id: "facturen", label: "Facturen", icon: ICONS.facturen },
-      { id: "inkomend", label: "Inkomend", icon: ICONS.inkomend },
       { id: "instroom", label: "Recruitment", icon: ICONS.instroom },
     ],
   },

@@ -1,7 +1,10 @@
 /**
- * Agenda-capaciteit → leads nodig bij 25% lead→afspraak.
+ * Agenda-capaciteit → leads nodig bij recente lead→afspraak %.
  * Telt echte vrije slots: week-beschikbaarheid, afblokkingen,
  * standaard blokkades (zo / ma 10:00) en al geplande huisbezoeken.
+ *
+ * Standaardvenster: komende 2 ISO-weken. L2A = afgelopen 7 dagen
+ * (fallback 25% als er geen sample is).
  */
 
 import { addDays, getISOWeek, getISOWeekYear } from "date-fns";
@@ -17,14 +20,18 @@ import {
 } from "@/lib/adviseur-beschikbaarheid";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { formatSchouwWeekLabel } from "@/lib/schouw-week";
 import {
   AFSPRAAK_DUUR_MINUTEN,
   generateDayBlocks,
   type BusySlot,
 } from "@/lib/slots";
 
-/** Doel: 1 op 4 leads wordt een afspraak. */
+/** Fallback als afgelopen 7 dagen geen bruikbare L2A opleveren. */
 export const CAPACITY_TARGET_L2A = 0.25;
+
+/** Standaard planningshorizon. */
+export const CAPACITY_WEEKS_AHEAD = 2;
 
 export type CapacityWeekRow = {
   jaar: number;
@@ -50,7 +57,14 @@ export type CapacityAdviseurRow = {
 };
 
 export type DashboardV2Capacity = {
+  /** Fractie 0–1 (bijv. 0.18 = 18%) — afgelopen 7d of fallback */
   targetLeadToAppt: number;
+  /** true = echte L2A afgelopen 7 dagen; false = fallback 25% */
+  l2aFromRecent: boolean;
+  /** Leads in L2A-sample (afgelopen 7 dagen) */
+  l2aSampleLeads: number;
+  /** Eerste-nieuw-afspraken in L2A-sample */
+  l2aSampleAfspraken: number;
   weeksAhead: number;
   daysAhead: number;
   adviseurCount: number;
@@ -58,10 +72,16 @@ export type DashboardV2Capacity = {
   slotsAfgeblokt: number;
   slotsGepland: number;
   slotsVrij: number;
-  /** ceil(slotsVrij / 0.25) */
+  /** ceil(slotsVrij / L2A) over het venster */
   leadsNodig: number;
   /** Gemiddeld per week over het venster */
   leadsNodigPerWeek: number;
+  /** Leads aangemaakt in afgelopen 7 dagen */
+  leadsGegenereerd7d: number;
+  /** Tempo naar 2 weken: leadsGegenereerd7d × (weeksAhead) */
+  leadsGegenereerdProjected: number;
+  /** leadsNodig − projected (positief = tekort) */
+  leadsTekort: number;
   weeks: CapacityWeekRow[];
   adviseurs: CapacityAdviseurRow[];
 };
@@ -87,7 +107,7 @@ function ceilInt(n: number): number {
   return Math.ceil(n);
 }
 
-function leadsForVrijeSlots(vrij: number, l2a = CAPACITY_TARGET_L2A): number {
+function leadsForVrijeSlots(vrij: number, l2a: number): number {
   return ceilInt(vrij / Math.max(l2a, 0.01));
 }
 
@@ -95,7 +115,7 @@ function emptyWeek(jaar: number, week: number): CapacityWeekRow {
   return {
     jaar,
     week,
-    label: `W${week}`,
+    label: formatSchouwWeekLabel(jaar, week),
     slotsOpen: 0,
     slotsAfgeblokt: 0,
     slotsGepland: 0,
@@ -111,10 +131,10 @@ function weekKeyOf(d: Date): { jaar: number; week: number; key: string } {
   return { jaar, week, key: weekKeyString(jaar, week) };
 }
 
-function finalizeWeek(w: CapacityWeekRow): CapacityWeekRow {
+function finalizeWeek(w: CapacityWeekRow, l2a: number): CapacityWeekRow {
   return {
     ...w,
-    leadsNodig: leadsForVrijeSlots(w.slotsVrij),
+    leadsNodig: leadsForVrijeSlots(w.slotsVrij, l2a),
   };
 }
 
@@ -131,10 +151,42 @@ export function buildDashboardV2Capacity(opts: {
   afblokkingen: Set<string>;
   weeksAhead?: number;
   now?: Date;
+  /**
+   * L2A als fractie (0–1). Null/undefined → fallback 25%.
+   * Typisch: afgelopen 7 dagen.
+   */
+  targetLeadToAppt?: number | null;
+  l2aSampleLeads?: number;
+  l2aSampleAfspraken?: number;
+  /** Leads aangemaakt in afgelopen 7 dagen */
+  leadsGegenereerd7d?: number;
 }): DashboardV2Capacity {
-  const weeksAhead = Math.min(Math.max(opts.weeksAhead ?? 4, 1), 12);
+  const weeksAhead = Math.min(
+    Math.max(opts.weeksAhead ?? CAPACITY_WEEKS_AHEAD, 1),
+    12
+  );
   const daysAhead = weeksAhead * 7;
   const now = opts.now ?? new Date();
+
+  const sampleLeads = Math.max(0, Math.round(opts.l2aSampleLeads ?? 0));
+  const sampleAfspraken = Math.max(0, Math.round(opts.l2aSampleAfspraken ?? 0));
+  const rawL2a = opts.targetLeadToAppt;
+  const l2aFromRecent =
+    rawL2a != null &&
+    Number.isFinite(rawL2a) &&
+    rawL2a > 0 &&
+    sampleLeads > 0;
+  const l2a = l2aFromRecent
+    ? Math.min(1, Math.max(0.01, rawL2a as number))
+    : CAPACITY_TARGET_L2A;
+
+  const leadsGegenereerd7d = Math.max(
+    0,
+    Math.round(opts.leadsGegenereerd7d ?? sampleLeads)
+  );
+  const leadsGegenereerdProjected = Math.round(
+    leadsGegenereerd7d * weeksAhead
+  );
 
   const adviseurs = opts.adviseurs
     .filter((a) => isPlanbaarAdviseur(a))
@@ -238,7 +290,9 @@ export function buildDashboardV2Capacity(opts: {
       }
     }
 
-    const weeks = weekOrder.map((w) => finalizeWeek(advByWeek.get(w.key)!));
+    const weeks = weekOrder.map((w) =>
+      finalizeWeek(advByWeek.get(w.key)!, l2a)
+    );
     adviseurRows.push({
       id: adv.id,
       naam: adv.naam,
@@ -246,20 +300,26 @@ export function buildDashboardV2Capacity(opts: {
       slotsAfgeblokt,
       slotsGepland,
       slotsVrij,
-      leadsNodig: leadsForVrijeSlots(slotsVrij),
+      leadsNodig: leadsForVrijeSlots(slotsVrij, l2a),
       weeks,
     });
   }
 
-  const weeks = weekOrder.map((w) => finalizeWeek(teamByWeek.get(w.key)!));
+  const weeks = weekOrder.map((w) =>
+    finalizeWeek(teamByWeek.get(w.key)!, l2a)
+  );
   const slotsOpen = weeks.reduce((s, w) => s + w.slotsOpen, 0);
   const slotsAfgeblokt = weeks.reduce((s, w) => s + w.slotsAfgeblokt, 0);
   const slotsGepland = weeks.reduce((s, w) => s + w.slotsGepland, 0);
   const slotsVrij = weeks.reduce((s, w) => s + w.slotsVrij, 0);
-  const leadsNodig = leadsForVrijeSlots(slotsVrij);
+  const leadsNodig = leadsForVrijeSlots(slotsVrij, l2a);
+  const leadsTekort = leadsNodig - leadsGegenereerdProjected;
 
   return {
-    targetLeadToAppt: CAPACITY_TARGET_L2A,
+    targetLeadToAppt: l2a,
+    l2aFromRecent,
+    l2aSampleLeads: sampleLeads,
+    l2aSampleAfspraken: sampleAfspraken,
     weeksAhead,
     daysAhead,
     adviseurCount: adviseurs.length,
@@ -272,17 +332,60 @@ export function buildDashboardV2Capacity(opts: {
       weeksAhead > 0
         ? Math.round((leadsNodig / weeksAhead) * 10) / 10
         : 0,
+    leadsGegenereerd7d,
+    leadsGegenereerdProjected,
+    leadsTekort,
     weeks,
     adviseurs: adviseurRows,
   };
 }
 
+/**
+ * Stuurdoelen afleiden uit live capaciteit + recente L2A.
+ * Weekbasis: leads/afspraken per 7 dagen; daarna schalen naar `dayCount`.
+ */
+export function capacitySteeringGoals(
+  capacity: DashboardV2Capacity,
+  dayCount: number
+): {
+  weekly: { leads: number; afsprakenGepland: number; leadToAppt: number };
+  period: { leads: number; afsprakenGepland: number; leadToAppt: number };
+} {
+  const l2aPct = Math.round(capacity.targetLeadToAppt * 1000) / 10;
+  const weeklyLeads = capacity.leadsNodigPerWeek;
+  const weeklyAfspraken =
+    capacity.weeksAhead > 0
+      ? Math.round((capacity.slotsVrij / capacity.weeksAhead) * 10) / 10
+      : 0;
+  const factor = Math.max(1, dayCount) / 7;
+  const roundVol = (n: number) => {
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    if (n >= 100) return Math.round(n);
+    return Math.round(n * 10) / 10;
+  };
+  return {
+    weekly: {
+      leads: roundVol(weeklyLeads),
+      afsprakenGepland: roundVol(weeklyAfspraken),
+      leadToAppt: l2aPct,
+    },
+    period: {
+      leads: roundVol(weeklyLeads * factor),
+      afsprakenGepland: roundVol(weeklyAfspraken * factor),
+      leadToAppt: l2aPct,
+    },
+  };
+}
+
 /** Lege capaciteit (geen adviseurs / fout bij laden). */
 export function emptyDashboardV2Capacity(
-  weeksAhead = 4
+  weeksAhead = CAPACITY_WEEKS_AHEAD
 ): DashboardV2Capacity {
   return {
     targetLeadToAppt: CAPACITY_TARGET_L2A,
+    l2aFromRecent: false,
+    l2aSampleLeads: 0,
+    l2aSampleAfspraken: 0,
     weeksAhead,
     daysAhead: weeksAhead * 7,
     adviseurCount: 0,
@@ -292,6 +395,9 @@ export function emptyDashboardV2Capacity(
     slotsVrij: 0,
     leadsNodig: 0,
     leadsNodigPerWeek: 0,
+    leadsGegenereerd7d: 0,
+    leadsGegenereerdProjected: 0,
+    leadsTekort: 0,
     weeks: [],
     adviseurs: [],
   };

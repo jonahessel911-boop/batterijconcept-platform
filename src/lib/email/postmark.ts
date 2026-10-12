@@ -23,6 +23,8 @@ export async function sendEmail(opts: {
   subject: string;
   html: string;
   tag?: string;
+  /** Reply-To — antwoorden gaan naar dit adres i.p.v. From */
+  replyTo?: string | null;
   attachments?: EmailAttachment[];
 }): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const pm = getClient();
@@ -40,6 +42,8 @@ export async function sendEmail(opts: {
       return new Attachment(a.name, base64, a.contentType);
     });
 
+    const replyTo = opts.replyTo?.trim() || undefined;
+
     const result = await pm.sendEmail({
       From: FROM,
       To: opts.to,
@@ -47,6 +51,7 @@ export async function sendEmail(opts: {
       HtmlBody: opts.html,
       MessageStream: "outbound",
       Tag: opts.tag,
+      ...(replyTo ? { ReplyTo: replyTo } : {}),
       Attachments,
     });
     return { ok: true, messageId: result.MessageID };

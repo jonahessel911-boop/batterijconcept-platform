@@ -126,7 +126,7 @@ export type DashboardV2Data = {
   /** Laatste 3 ISO-weken + forecast-op-forecast vooruit */
   forecast: DashboardV2Forecast;
   /**
-   * Agenda-capaciteit komende weken → leads nodig bij 25% L2A.
+   * Agenda-capaciteit komende 2 weken → leads nodig bij L2A afgelopen 7 dagen.
    * Houdt rekening met afblokkingen, week-uit en geplande huisbezoeken.
    */
   capacity: DashboardV2Capacity;

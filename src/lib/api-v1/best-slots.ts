@@ -568,7 +568,9 @@ export async function loadBestSlotsForLead(
   let usedRoute = false;
 
   for (const adv of adviseurs) {
-    const freeCap = diversifyHours ? 80 : 40;
+    // Volledige 2–3 weken scoren (~4 slots/dag × 21 ≈ 84), niet alleen de
+    // eerste 40 chronologische — anders mis je dichte route-fits later.
+    const freeCap = diversifyHours ? 100 : 90;
     const free = (await freeSlotsForAdviseur(sb, adv.id, daysAhead)).slice(
       0,
       freeCap
@@ -596,7 +598,7 @@ export async function loadBestSlotsForLead(
         targetAddress,
         stops,
         depotAddress,
-        25,
+        40,
         freeDayKeys
       );
       if (addresses.length >= 1) {
@@ -619,7 +621,7 @@ export async function loadBestSlotsForLead(
               return distanceMap.get(`${from}|||${to}`) ?? null;
             },
           },
-          diversifyHours ? 80 : 40,
+          diversifyHours ? 100 : 90,
           { collapsePerDay: false }
         );
         if (scored.some((s) => s.fromDurationSec != null || s.toDurationSec != null)) {
@@ -721,38 +723,44 @@ export async function loadBestSlotsForLead(
   const nowMs = Date.now();
   const DAY_MS = 24 * 60 * 60 * 1000;
   /**
-   * Reistijd weegt zwaar; sneller inplannen telt mee maar lichter.
-   * ~5 min wachten ≈ 1 min reistijd → een week eerder wint alleen als de
-   * rit niet veel langer is (bijv. 58 vs 23 min: korte rit wint).
+   * Reistijd zwaar + sneller inplannen telt mee.
+   * ~12 min wachten ≈ 1 min reistijd → ~1 week eerder ≈ 84 min “reistijd”.
+   * Zo winnen dichte ritten in de komende 2 weken van verre ritten later.
    */
-  const DAY_PENALTY_SEC = 5 * 60;
-  /** Ritten boven ~45 min krijgen extra straf (altijd “goede” reistijd). */
-  const LONG_DRIVE_FROM_MIN = 45;
-  const LONG_DRIVE_EXTRA_PER_MIN = 1.25;
+  const DAY_PENALTY_SEC = 12 * 60;
+  /** Ritten boven ~40 min krijgen stevige extra straf. */
+  const LONG_DRIVE_FROM_MIN = 40;
+  const LONG_DRIVE_EXTRA_PER_MIN = 2;
+  /** Extreem lange ritten (>100) alleen tonen als er te weinig kortere zijn. */
+  const DECENT_TRAVEL_MAX_MIN = 75;
+  const EXTREME_TRAVEL_MIN = 100;
+  /** Max slots per kalenderdag in CRM-top (geen weken-uit-elkaar-spreiding). */
+  const MAX_PER_DAY = 2;
+
+  function travelMinOf(c: Candidate): number {
+    if (c.reistijd_min != null) return c.reistijd_min;
+    if (c.scoreSec > 0 && c.scoreSec < 40_000) return c.scoreSec / 60;
+    return 50;
+  }
 
   /**
    * Lagere score = beter.
    * Primair: reistijd (lange ritten extra zwaar). Secundair: zo vroeg mogelijk.
-   * Klein plusje als slot aansluit op een eerdere afspraak die dag.
+   * Plusje als slot aansluit op een eerdere afspraak die dag.
    */
   function rankCostSec(c: Candidate): number {
-    const travelMin =
-      c.reistijd_min != null
-        ? c.reistijd_min
-        : c.scoreSec > 0 && c.scoreSec < 40_000
-          ? c.scoreSec / 60
-          : 50;
+    const travelMin = travelMinOf(c);
     const overLong = Math.max(0, travelMin - LONG_DRIVE_FROM_MIN);
     const travelWeightedMin =
       travelMin + overLong * LONG_DRIVE_EXTRA_PER_MIN;
-    const daysAhead = Math.max(
+    const daysOut = Math.max(
       0,
       (new Date(c.start_at).getTime() - nowMs) / DAY_MS
     );
     const routeBonusMin =
-      c.reistijd_vanaf_startadres === false ? -3 : 0;
+      c.reistijd_vanaf_startadres === false ? -8 : 0;
     return (
-      (travelWeightedMin + daysAhead * (DAY_PENALTY_SEC / 60) + routeBonusMin) *
+      (travelWeightedMin + daysOut * (DAY_PENALTY_SEC / 60) + routeBonusMin) *
       60
     );
   }
@@ -792,6 +800,13 @@ export async function loadBestSlotsForLead(
     return a.adviseur_naam.localeCompare(b.adviseur_naam, "nl");
   });
 
+  const decentAvailable = ranked.filter(
+    (c) =>
+      c.feasible &&
+      c.reistijd_min != null &&
+      c.reistijd_min <= DECENT_TRAVEL_MAX_MIN
+  ).length;
+
   let chosen: Candidate[];
 
   if (diversifyHours) {
@@ -799,26 +814,43 @@ export async function loadBestSlotsForLead(
     const pool = ranked.slice(0, Math.max(poolSize, 40));
     chosen = pickFonioDaypartSlots(pool);
   } else {
-    // Max 1 slot per dag — volgorde blijft reistijd + zo vroeg mogelijk
-    const onePerDay: Candidate[] = [];
-    const seenDays = new Set<string>();
+    // Dicht bij elkaar: rank eerst, max 2 per dag (niet 1× over 5 weken).
+    // Extreme ritten skippen als er genoeg kortere opties zijn.
+    const picked: Candidate[] = [];
+    const perDay = new Map<string, number>();
 
-    for (const c of ranked) {
-      if (seenDays.has(c.dayKey)) continue;
-      seenDays.add(c.dayKey);
-      onePerDay.push(c);
-      if (onePerDay.length >= limit) break;
-    }
-
-    // Vul aan (2e slot opzelfde dag) als te weinig dagen
-    if (onePerDay.length < limit) {
+    const tryPick = (allowExtreme: boolean) => {
       for (const c of ranked) {
-        if (onePerDay.some((x) => x.slot_id === c.slot_id)) continue;
-        onePerDay.push(c);
-        if (onePerDay.length >= limit) break;
+        if (picked.length >= limit) break;
+        if (picked.some((x) => x.slot_id === c.slot_id)) continue;
+        const n = perDay.get(c.dayKey) || 0;
+        if (n >= MAX_PER_DAY) continue;
+        const t = c.reistijd_min;
+        if (
+          !allowExtreme &&
+          decentAvailable >= limit &&
+          t != null &&
+          t > EXTREME_TRAVEL_MIN
+        ) {
+          continue;
+        }
+        perDay.set(c.dayKey, n + 1);
+        picked.push(c);
+      }
+    };
+
+    tryPick(false);
+    if (picked.length < limit) tryPick(true);
+
+    // Laatste vulronde: negeer dag-limiet als er echt te weinig is
+    if (picked.length < limit) {
+      for (const c of ranked) {
+        if (picked.length >= limit) break;
+        if (picked.some((x) => x.slot_id === c.slot_id)) continue;
+        picked.push(c);
       }
     }
-    chosen = onePerDay;
+    chosen = picked;
   }
 
   const slots: BestSlotOption[] = chosen.map(
@@ -843,6 +875,6 @@ export async function loadBestSlotsForLead(
     slots_tekst: slots_tekst || "Geen vrije momenten gevonden",
     mode: usedRoute ? "route" : "calendar",
     note:
-      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: reistijd zwaar (lange rit extra), daarna zo vroeg mogelijk.",
+      "Bied alleen label_nl aan. Boek met slot_id via POST /api/v1/afspraken (adviseur wordt automatisch gekoppeld). Ranking: korte reistijd + zo vroeg mogelijk in de komende 2–3 weken (lange ritten en verre datums zwaarder gestraft).",
   };
 }

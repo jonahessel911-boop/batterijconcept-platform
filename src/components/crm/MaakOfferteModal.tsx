@@ -428,50 +428,74 @@ export function MaakOfferteModal({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 Product uit catalogus
               </p>
-              <div className="mt-1 grid gap-2 sm:grid-cols-[1fr_80px_auto]">
-                <label className="block text-xs font-medium text-muted sm:col-span-1">
-                  Product
-                  <select
-                    value={productId}
-                    onChange={(e) => setProductId(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                  >
-                    <option value="">Kies product…</option>
-                    {producten.map((p) => {
-                      const fase = p.naam.includes("G3 S5")
-                        ? "1-fase"
-                        : p.naam.includes("G3 T10")
-                          ? "3-fase"
-                          : null;
-                      return (
-                        <option key={p.id} value={p.id}>
-                          {p.naam}
-                          {fase ? ` (${fase})` : ""} —{" "}
-                          {formatEuro(Number(p.prijs_ex_btw))} excl. btw
-                        </option>
-                      );
-                    })}
-                  </select>
-                </label>
-                <label className="block text-xs font-medium text-muted">
-                  Aantal
-                  <input
-                    type="number"
-                    min={1}
-                    value={aantal}
-                    onChange={(e) => setAantal(Number(e.target.value) || 1)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
-                  />
-                </label>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    onClick={addProduct}
-                    disabled={!productId}
-                    className="w-full border border-green bg-green-soft px-3 py-2 text-sm font-semibold text-green-dark disabled:opacity-50"
-                  >
-                    Toevoegen
-                  </button>
+              <div className="mt-1 space-y-2">
+                <div className="max-h-48 overflow-y-auto overscroll-contain border border-line bg-white sm:max-h-56">
+                  {producten.length === 0 ? (
+                    <p className="px-3 py-3 text-sm text-muted">
+                      Geen actieve producten
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-line">
+                      {producten.map((p) => {
+                        const fase = p.naam.includes("G3 S5")
+                          ? "1-fase"
+                          : p.naam.includes("G3 T10")
+                            ? "3-fase"
+                            : null;
+                        const selected = productId === p.id;
+                        return (
+                          <li key={p.id}>
+                            <button
+                              type="button"
+                              onClick={() => setProductId(p.id)}
+                              className={[
+                                "flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left text-sm transition",
+                                selected
+                                  ? "bg-green-soft text-green-dark"
+                                  : "bg-white text-ink hover:bg-wash",
+                              ].join(" ")}
+                            >
+                              <span className="min-w-0">
+                                <span className="block font-medium leading-snug">
+                                  {p.naam}
+                                  {fase ? (
+                                    <span className="ml-1 font-normal text-muted">
+                                      ({fase})
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </span>
+                              <span className="shrink-0 tabular-nums text-xs font-semibold text-muted">
+                                {formatEuro(Number(p.prijs_ex_btw))}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                <div className="grid grid-cols-[80px_1fr] gap-2">
+                  <label className="block text-xs font-medium text-muted">
+                    Aantal
+                    <input
+                      type="number"
+                      min={1}
+                      value={aantal}
+                      onChange={(e) => setAantal(Number(e.target.value) || 1)}
+                      className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      onClick={addProduct}
+                      disabled={!productId}
+                      className="w-full border border-green bg-green-soft px-3 py-2 text-sm font-semibold text-green-dark disabled:opacity-50"
+                    >
+                      Toevoegen
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -1,7 +1,9 @@
 import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 
 export const runtime = "nodejs";
 
@@ -43,6 +45,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    if (!session) {
+      return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
+    }
+
     const sb = getSupabaseAdmin();
 
     const { data: offerteNr, error: numErr } = await sb.rpc(
@@ -93,6 +101,7 @@ export async function POST(req: NextRequest) {
       totaal_inc_btw: Math.round((subtotaal + btw) * 100) / 100,
       geldig_tot: geldigTot.toISOString().slice(0, 10),
       financiering_voorbehoud: Boolean(body.financiering_voorbehoud),
+      aangemaakt_door_id: session.adviseurId,
     };
 
     if (body.installatie_partner_id) {
@@ -103,7 +112,7 @@ export async function POST(req: NextRequest) {
       .from("offertes")
       .insert(row)
       .select(
-        "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, financiering_voorbehoud, installatie_partner_id, status"
+        "id, offerte_nummer, sign_token, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, geldig_tot, financiering_voorbehoud, installatie_partner_id, aangemaakt_door_id, status"
       )
       .single();
 
@@ -112,6 +121,7 @@ export async function POST(req: NextRequest) {
       (insert.error.message?.includes("financiering_voorbehoud") ||
         insert.error.message?.includes("installatie_partner_id") ||
         insert.error.message?.includes("track_token") ||
+        insert.error.message?.includes("aangemaakt_door_id") ||
         insert.error.code === "42703")
     ) {
       const missingPartner = insert.error.message?.includes(
@@ -121,9 +131,11 @@ export async function POST(req: NextRequest) {
         "financiering_voorbehoud"
       );
       const missingTrack = insert.error.message?.includes("track_token");
+      const missingCreator = insert.error.message?.includes("aangemaakt_door_id");
       if (missingPartner) delete row.installatie_partner_id;
       if (missingFin) delete row.financiering_voorbehoud;
       if (missingTrack) delete row.track_token;
+      if (missingCreator) delete row.aangemaakt_door_id;
       insert = await sb
         .from("offertes")
         .insert(row)

@@ -32,7 +32,8 @@ export const teamRolUitleg: Record<TeamRol, string> = {
   admin: "Alles: leads, bellen, agenda, backoffice, rapportage, partners",
   adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen",
   beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
-  backoffice: "Leads, bellen (terugbel), projecten, facturen, inkomend, purchasing",
+  backoffice:
+    "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -56,7 +57,14 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
     case "beller":
       return ["leads", "bellen"];
     case "backoffice":
-      return ["leads", "bellen", "projecten", "facturen", "inkomend", "purchasing"];
+      return [
+        "leads",
+        "bellen",
+        "agenda",
+        "projecten",
+        "facturen",
+        "purchasing",
+      ];
     case "installateur":
       return [];
     case "admin":
@@ -72,7 +80,6 @@ export function tabsVoorRol(rol: GebruikerRol): CrmTab[] {
         "instroom",
         "projecten",
         "facturen",
-        "inkomend",
         "purchasing",
         "rapportage",
         "admin",
@@ -108,11 +115,11 @@ export function magBekijkAls(rol: GebruikerRol): boolean {
 }
 
 /**
- * Backoffice-rol: agenda = installatie-agenda (schouw/installatie),
- * niet de adviseur-afsprakenagenda. (Agenda-tab zelf is voor backoffice uit.)
+ * Installatie-/schouw-agenda i.p.v. adviseur-huisbezoeken.
+ * Backoffice gebruikt Planbord onder Backoffice; Agenda-tab = adviseurs.
  */
-export function agendaIsInstallatie(rol: GebruikerRol): boolean {
-  return rol === "backoffice";
+export function agendaIsInstallatie(_rol: GebruikerRol): boolean {
+  return false;
 }
 
 /** Mag inkomende facturen bekijken/bewerken. */

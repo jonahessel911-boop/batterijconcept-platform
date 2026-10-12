@@ -308,7 +308,7 @@ export async function GET(req: NextRequest) {
   ).trim();
   const liveNaam = (data?.naam || session.naam || "").trim() || session.naam;
 
-  return NextResponse.json({
+  const res = NextResponse.json({
     authenticated: true,
     adviseur: {
       id: session.adviseurId,
@@ -323,6 +323,25 @@ export async function GET(req: NextRequest) {
         }
       : null,
   });
+
+  // Vernieuw JWT als DB-rol/naam/e-mail afwijkt — voorkomt "Geen toegang" op admin-API's
+  const rolChanged = normalizeRol(session.rol) !== rol;
+  const emailChanged =
+    (session.email || "").trim().toLowerCase() !== liveEmail.toLowerCase();
+  const naamChanged = (session.naam || "").trim() !== liveNaam;
+  if (rolChanged || emailChanged || naamChanged) {
+    const token = await createSessionToken({
+      adviseurId: session.adviseurId,
+      naam: liveNaam,
+      email: liveEmail || session.email,
+      rol,
+      impersonatorId: session.impersonatorId,
+      impersonatorNaam: session.impersonatorNaam,
+    });
+    res.cookies.set(sessionCookieOptions(token));
+  }
+
+  return res;
 }
 
 /** DELETE /api/auth/login — uitloggen */

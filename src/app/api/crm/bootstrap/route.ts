@@ -2,47 +2,64 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { resolveLiveSession } from "@/lib/auth-require-admin";
+import { alleenEigenLeads } from "@/lib/rollen";
 import { errMessage } from "@/lib/errors";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 
 export const runtime = "nodejs";
 
+type OfferteBootstrapRow = {
+  id: string;
+  lead_id: string;
+  aangemaakt_door_id?: string | null;
+  leads?: { adviseur_id?: string | null } | null;
+};
+
 /**
  * GET /api/crm/bootstrap — alle CRM-data via service role (ingelogde sessie).
  * Voorkomt lege schermen door RLS/anon-key issues in de browser.
+ * Adviseurs krijgen alleen eigen leads/afspraken/offertes.
  */
 export async function GET() {
   const jar = await cookies();
-  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-  if (!session) {
+  const raw = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+  if (!raw) {
     return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
   }
+  const session = await resolveLiveSession(raw);
+  const eigenScope = alleenEigenLeads(session.rol);
+  const me = session.adviseurId;
 
   try {
     const sb = getSupabaseAdmin();
-    const [leads, afspraken, offertes, projecten, facturen, sCount] =
+    const [leads, afspraken, offertesRaw, projecten, facturen, sCount] =
       await Promise.all([
-        fetchAllRows((from, to) =>
-          sb
+        fetchAllRows((from, to) => {
+          let q = sb
             .from("leads")
             .select("*")
             .order("created_at", { ascending: false })
-            .range(from, to)
-        ),
-        fetchAllRows((from, to) =>
-          sb
+            .range(from, to);
+          if (eigenScope) q = q.eq("adviseur_id", me);
+          return q;
+        }),
+        fetchAllRows((from, to) => {
+          let q = sb
             .from("afspraken")
             .select(
               "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities"
             )
             .order("start_at", { ascending: true })
-            .range(from, to)
-        ),
+            .range(from, to);
+          if (eigenScope) q = q.eq("adviseur_id", me);
+          return q;
+        }),
         fetchAllRows((from, to) =>
           sb
             .from("offertes")
             .select(
-              "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), installatie_partners(id, naam)"
+              "*, leads(naam, email, lead_number, postcode, huisnummer, plaats, adviseur_id), installatie_partners(id, naam)"
             )
             .order("created_at", { ascending: false })
             .range(from, to)
@@ -67,6 +84,20 @@ export async function GET() {
         ),
         sb.from("sollicitaties").select("id", { count: "exact", head: true }),
       ]);
+
+    let offertes = offertesRaw as OfferteBootstrapRow[];
+    if (eigenScope) {
+      const myLeadIds = new Set(
+        (leads as { id: string }[]).map((l) => l.id)
+      );
+      offertes = offertes.filter((o) => {
+        if (o.aangemaakt_door_id) return o.aangemaakt_door_id === me;
+        // Legacy zonder maker: alleen lead van deze adviseur
+        return (
+          o.leads?.adviseur_id === me || myLeadIds.has(o.lead_id)
+        );
+      });
+    }
 
     return NextResponse.json({
       leads,
