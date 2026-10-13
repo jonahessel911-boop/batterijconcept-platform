@@ -1132,9 +1132,12 @@ export function BelPanel({
           )}
         </div>
 
-        <p className="mt-5 font-mono text-lg font-semibold tabular-nums text-ink">
+        <a
+          href={`tel:${phone.replace(/[\s().-]/g, "")}`}
+          className="mt-5 block font-mono text-lg font-semibold tabular-nums text-ink underline-offset-2 hover:text-green-dark hover:underline"
+        >
           {phone}
-        </p>
+        </a>
         <button
           type="button"
           onClick={() => void copyPhone(phone)}
@@ -1365,8 +1368,11 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top {bestSlotsLimit}: kortste reistijd eerst, daarna conversie ·
-              min. 2 adviseurs. Datum alleen bij gelijke afstand.
+              Top {bestSlotsLimit}: kortste reistijd eerst, daarna conversie
+              {bestSlotsLimit <= 5
+                ? " · min. 2 adviseurs"
+                : " · ook zelfde adviseur als die dichterbij is"}
+              . Datum alleen bij gelijke afstand.
             </p>
 
             <div className="space-y-2">

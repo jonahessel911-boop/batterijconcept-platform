@@ -785,13 +785,18 @@ export async function loadBestSlotsForLead(
   /** Extreem lange ritten (>100) alleen tonen als er te weinig kortere zijn. */
   const DECENT_TRAVEL_MAX_MIN = 75;
   const EXTREME_TRAVEL_MIN = 100;
-  /** Max slots per kalenderdag in CRM-top (geen weken-uit-elkaar-spreiding). */
-  const MAX_PER_DAY = 2;
   /**
-   * Top-N altijd ≥2 adviseurs als die beschikbaar zijn.
-   * Top 5 → max 3 per adviseur; top 10 → max 5.
+   * Max slots per kalenderdag.
+   * Top 5: max 2 (spreiding). Bij “5 meer” (10): max 4 zodat
+   * de dichtstbijzijnde adviseur meer goede momenten die dag mag tonen.
    */
-  const MAX_PER_ADVISEUR = Math.max(1, Math.ceil(limit / 2));
+  const MAX_PER_DAY = limit > 5 ? 4 : 2;
+  /**
+   * Top 5: max ~helft per adviseur + soft ≥2 namen.
+   * Top 10+: bijna geen cap — beste reistijd wint, ook dezelfde adviseur.
+   */
+  const MAX_PER_ADVISEUR =
+    limit > 5 ? Math.max(limit - 1, 1) : Math.max(1, Math.ceil(limit / 2));
   const MIN_ADVISEURS = 2;
 
   function travelMinOf(c: Candidate): number {
