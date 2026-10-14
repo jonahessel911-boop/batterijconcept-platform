@@ -231,9 +231,10 @@ function belTeamWeeklyTargets(
 }
 
 /**
- * GET /api/rapportage/bel-conversie?period=today|last_7_days|…
+ * GET /api/rapportage/bel-conversie?period=today|yesterday|last_7_days|…
  * Leads afgeboekt of huisbezoek-ingepland in periode → per beller / L→A %.
- * Dagoel blijft operationeel (vandaag + slots vooruit).
+ * Eendaagse periode: dagoel-teller = periode-ingepland (zelfde als tabel).
+ * Multi-day: dagoel blijft live stand van vandaag + slots vooruit.
  */
 export async function GET(req: NextRequest) {
   const period = parseConversiePeriod(
@@ -497,35 +498,47 @@ export async function GET(req: NextRequest) {
       leadToApptActueel = null;
     }
 
-    // Operationele finishlijnen: vandaag + huidige ISO-week (niet het filtervenster)
-    let geplandVandaag = 0;
+    // Finishlijnen: bij eendaagse periode (Vandaag/Gisteren) = zelfde telling als de tabel.
+    // Bij multi-day filter blijft dagoel de live stand van vandaag.
+    const singleDayPeriod = rangeStartYmd === dateYmd;
+    const focusYmd = singleDayPeriod ? dateYmd : todayYmd;
+    let geplandVandaag = singleDayPeriod ? huisbezoekIds.size : 0;
     let geplandDezeWeek = 0;
     try {
-      const { start: dayStart } = amsDayBounds(todayYmd);
-      const { end: dayEnd } = amsDayBounds(todayYmd);
-      const weekRange = isoWeekRangeYmd(todayYmd);
+      const { start: dayStart } = amsDayBounds(focusYmd);
+      const { end: dayEnd } = amsDayBounds(focusYmd);
+      const weekRange = isoWeekRangeYmd(focusYmd);
       const { start: weekStart } = amsDayBounds(weekRange.start);
-      const { end: weekEnd } = amsDayBounds(weekRange.end);
+      // Weekstand t/m focusdag (niet toekomstige weekdagen meenemen bij Gisteren)
+      const weekEndYmd =
+        focusYmd < weekRange.end ? focusYmd : weekRange.end;
+      const { end: weekEnd } = amsDayBounds(weekEndYmd);
       const { data: afsOps, error: afsOpsErr } = await sb
         .from("afspraken")
         .select("id, lead_id, created_at, start_at, status, soort")
         .gte("created_at", weekStart.toISOString())
         .lte("created_at", dayEnd.toISOString());
       if (!afsOpsErr) {
-        for (const a of (afsOps || []) as BelConversieAfspraak[]) {
-          if (!isHuisbezoekAfspraak(a)) continue;
-          if (!a.created_at) continue;
-          if (inAmsterdamDayRange(a.created_at, dayStart, dayEnd)) {
-            geplandVandaag += 1;
-          }
-          if (inAmsterdamDayRange(a.created_at, weekStart, weekEnd)) {
-            geplandDezeWeek += 1;
-          }
+        const afsOpsRows = (afsOps || []) as BelConversieAfspraak[];
+        if (!singleDayPeriod) {
+          geplandVandaag = huisbezoekLeadIdsOpDag(
+            afsOpsRows,
+            dayStart,
+            dayEnd
+          ).size;
         }
+        geplandDezeWeek = huisbezoekLeadIdsOpDag(
+          afsOpsRows,
+          weekStart,
+          weekEnd
+        ).size;
+      } else if (singleDayPeriod) {
+        // Fallback: week ≈ dag als weekquery faalt
+        geplandDezeWeek = geplandVandaag;
       }
     } catch {
-      geplandVandaag = 0;
-      geplandDezeWeek = 0;
+      if (!singleDayPeriod) geplandVandaag = 0;
+      geplandDezeWeek = singleDayPeriod ? geplandVandaag : 0;
     }
 
     // Capaciteit: deze week + 2 weken vooruit → dagoel met 20% marge

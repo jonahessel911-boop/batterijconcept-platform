@@ -198,16 +198,31 @@ export function BelConversiePanel() {
 
   const t = data?.targets;
   const rows = (data?.byBeller || []).filter((r) => r.gebeld > 0);
-  const gepland = t?.geplandVandaag ?? data?.totals.ingepland ?? 0;
+  const periodIngepland = data?.totals.ingepland ?? 0;
+  // Eendaagse periode (Vandaag/Gisteren): dag target = zelfde telling als de tabel
+  const gepland =
+    data?.periodDays === 1
+      ? periodIngepland
+      : (t?.geplandVandaag ?? periodIngepland);
   const doel = t?.doelVandaag ?? 0;
-  const nog = t?.nogVandaag ?? 0;
-  const pct = t?.pctVandaag ?? 0;
-  const finish = Boolean(t?.finishVandaag);
+  const nog = Math.max(0, doel - gepland);
+  const pct =
+    doel > 0
+      ? Math.min(100, Math.round((gepland / doel) * 100))
+      : gepland > 0
+        ? 100
+        : 0;
+  const finish = doel > 0 ? gepland >= doel : false;
   const geplandWeek = t?.geplandDezeWeek ?? 0;
   const doelWeek = t?.doelDezeWeek ?? 0;
-  const nogWeek = t?.nogDezeWeek ?? 0;
-  const pctWeek = t?.pctDezeWeek ?? 0;
-  const finishWeek = Boolean(t?.finishDezeWeek);
+  const nogWeek = Math.max(0, doelWeek - geplandWeek);
+  const pctWeek =
+    doelWeek > 0
+      ? Math.min(100, Math.round((geplandWeek / doelWeek) * 100))
+      : geplandWeek > 0
+        ? 100
+        : 0;
+  const finishWeek = doelWeek > 0 ? geplandWeek >= doelWeek : false;
   const horizonNog = t?.horizonNog ?? 0;
   const weekLabels = ["Deze week", "Volgende week", "Week daarna"];
 
