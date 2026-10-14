@@ -98,9 +98,8 @@ export type BelConversieTargets = {
   /** Huisbezoeken gepland op de geselecteerde dag */
   geplandVandaag: number;
   /**
-   * Dagoel = tempo om deze week + 2 weken vooruit vol te krijgen,
-   * met 20% uitvalmarge. Gebaseerd op resterende bel-werkdagen t/m eind
-   * van die weken.
+   * Dagoel = restant weekdoel ÷ resterende bel-werkdagen (ma–vr).
+   * Mist gisteren → hogere dagoel vandaag (inhaal).
    */
   doelVandaag: number;
   /** max(0, doel − gepland) */
@@ -109,13 +108,18 @@ export type BelConversieTargets = {
   pctVandaag: number;
   /** gepland ≥ doel */
   finishVandaag: boolean;
-  /** Weekdoel = dagoel × 5 werkdagen (finishlijn, niet slot-breakdown) */
+  /**
+   * Weekdoel obv open slots (tempo om horizon vol te plannen × 5 werkdagen).
+   * Tellers: huisbezoeken gezet deze ISO-week.
+   */
   doelDezeWeek: number;
   /** Huisbezoeken ingepland in de huidige ISO-week */
   geplandDezeWeek: number;
   nogDezeWeek: number;
   pctDezeWeek: number;
   finishDezeWeek: boolean;
+  /** Resterende bel-werkdagen vanaf focusdag t/m vrijdag (1–5) */
+  resterendeWerkdagenWeek: number;
   /** Vrije slots over het venster (deze week + 2 weken vooruit) */
   horizonNog: number;
   horizonGepland: number;
@@ -216,6 +220,14 @@ export function countWeekdaysInclusive(
   return n;
 }
 
+function ymdFromAmsterdamDate(d: Date): string {
+  const z = toZonedTime(d, AMSTERDAM_TZ);
+  const y = z.getFullYear();
+  const m = String(z.getMonth() + 1).padStart(2, "0");
+  const day = String(z.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function sundayYmdOfIsoWeek(jaar: number, week: number): string {
   const mondayRaw = schouwWeekToMondayIso(jaar, week);
   const mondayYmd = String(mondayRaw).slice(0, 10);
@@ -224,11 +236,17 @@ function sundayYmdOfIsoWeek(jaar: number, week: number): string {
     fromZonedTime(new Date(y, m - 1, d, 12, 0, 0, 0), AMSTERDAM_TZ),
     6
   );
-  const z = toZonedTime(sun, AMSTERDAM_TZ);
-  const yy = z.getFullYear();
-  const mm = String(z.getMonth() + 1).padStart(2, "0");
-  const dd = String(z.getDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
+  return ymdFromAmsterdamDate(sun);
+}
+
+/** Vrijdag (bel-werkweek) van de ISO-week die `ymd` bevat. */
+export function fridayYmdOfIsoWeekContaining(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const noon = fromZonedTime(new Date(y, m - 1, d, 12, 0, 0, 0), AMSTERDAM_TZ);
+  const z = toZonedTime(noon, AMSTERDAM_TZ);
+  const dow = z.getDay(); // 0=zo … 6=za
+  const toFriday = dow === 0 ? -2 : 5 - dow;
+  return ymdFromAmsterdamDate(addDays(noon, toFriday));
 }
 
 /**
@@ -411,36 +429,30 @@ export function buildBelConversieTargets(opts: {
   const horizonWeeks = h?.weeks ?? [];
   const fromYmd = opts.fromYmd || todayAmsterdamYmd();
 
-  let doelVandaag: number;
+  // Slot-tempo (open slots horizon ÷ werkdagen + 20% uitval)
+  let tempoDoel: number;
   let werkdagen: number;
   if (horizonWeeks.length > 0 && slotsVrij > 0) {
     const d = dailyDoelToFillAheadWeeks({
       weeks: horizonWeeks,
       fromYmd,
     });
-    doelVandaag = d.doel;
+    tempoDoel = d.doel;
     werkdagen = d.werkdagen;
   } else if (slotsVrij > 0) {
     const d = dailyDoelFromVrijeSlots(slotsVrij, weeksAhead);
-    doelVandaag = d.doel;
+    tempoDoel = d.doel;
     werkdagen = d.werkdagen;
   } else {
-    doelVandaag = dailyAfsprakenDoelFromWeekly(
+    tempoDoel = dailyAfsprakenDoelFromWeekly(
       opts.weeklyAfsprakenDoelFallback ?? 0
     );
     werkdagen = weeksAhead * BEL_WORKDAYS_PER_WEEK;
   }
 
-  const nogVandaag = Math.max(0, doelVandaag - gepland);
-  const pctVandaag =
-    doelVandaag > 0
-      ? Math.min(100, Math.round((gepland / doelVandaag) * 100))
-      : gepland > 0
-        ? 100
-        : 0;
-
+  // Weekdoel: slot-tempo × 5 bel-werkdagen (volume om weekfinish te halen)
   const doelDezeWeek =
-    doelVandaag > 0 ? doelVandaag * BEL_WORKDAYS_PER_WEEK : 0;
+    tempoDoel > 0 ? tempoDoel * BEL_WORKDAYS_PER_WEEK : 0;
   const geplandDezeWeek = Math.max(
     0,
     Math.round(opts.geplandDezeWeek ?? gepland)
@@ -450,6 +462,24 @@ export function buildBelConversieTargets(opts: {
     doelDezeWeek > 0
       ? Math.min(100, Math.round((geplandDezeWeek / doelDezeWeek) * 100))
       : geplandDezeWeek > 0
+        ? 100
+        : 0;
+
+  // Dagoel = restant week ÷ resterende werkdagen (wo→vr = 3, etc.)
+  const fridayYmd = fridayYmdOfIsoWeekContaining(fromYmd);
+  const resterendeWerkdagenWeek = Math.max(
+    0,
+    countWeekdaysInclusive(fromYmd, fridayYmd)
+  );
+  const doelVandaag =
+    resterendeWerkdagenWeek > 0
+      ? Math.ceil(nogDezeWeek / resterendeWerkdagenWeek)
+      : tempoDoel;
+  const nogVandaag = Math.max(0, doelVandaag - gepland);
+  const pctVandaag =
+    doelVandaag > 0
+      ? Math.min(100, Math.round((gepland / doelVandaag) * 100))
+      : gepland > 0
         ? 100
         : 0;
 
@@ -479,6 +509,7 @@ export function buildBelConversieTargets(opts: {
     nogDezeWeek,
     pctDezeWeek,
     finishDezeWeek: doelDezeWeek > 0 ? geplandDezeWeek >= doelDezeWeek : false,
+    resterendeWerkdagenWeek,
     horizonNog: slotsVrij,
     horizonGepland: h?.slotsGepland ?? 0,
     horizonOpen: h?.slotsOpen ?? 0,
@@ -666,8 +697,7 @@ export function buildBelConversie(opts: {
       label: baseTargets.horizonLabel,
       weeks: baseTargets.horizonWeeks,
     },
-    weeklyAfsprakenDoelFallback:
-      baseTargets.doelVandaag * BEL_WORKDAYS_PER_WEEK,
+    weeklyAfsprakenDoelFallback: baseTargets.doelDezeWeek,
     leadToApptActueel: baseTargets.leadToApptActueel,
     leadsBelbaarTotaal: baseTargets.leadsBelbaarTotaal,
     leadsBelbaarVandaag: baseTargets.leadsBelbaarVandaag,
