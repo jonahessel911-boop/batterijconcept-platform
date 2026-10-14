@@ -239,6 +239,8 @@ export type RapportageRaw = {
     created_at: string;
     status: string;
     soort?: string | null;
+    /** Wie de afspraak inplantte (bel-credit / loon Tarik). */
+    ingepland_door_id?: string | null;
   }[];
   offertes: {
     id: string;
@@ -253,7 +255,12 @@ export type RapportageRaw = {
     adviseur_id: string | null;
     offerte_nummer?: string | null;
     lead_naam?: string | null;
-    regels?: { omschrijving?: string | null; aantal?: number | null }[];
+    regels?: {
+      id?: string | null;
+      omschrijving?: string | null;
+      aantal?: number | null;
+      product_id?: string | null;
+    }[];
   }[];
   projecten: {
     id: string;
@@ -263,8 +270,15 @@ export type RapportageRaw = {
     projectkosten: number;
     adviseur_id: string | null;
     installatie_at?: string | null;
+    installatie_voltooid_at?: string | null;
+    schouw_at?: string | null;
     status?: string | null;
     project_nummer?: string | null;
+    materiaal_checks?: Record<string, boolean | string> | null;
+    /** Zelfde poort als Purchasing-tab “Te bestellen”: PDF-schouwrapport binnen. */
+    heeft_schouw_pdf?: boolean;
+    /** Som te_kopen-regels ex btw (Purchasing te_bestellen_ex_btw). */
+    te_bestellen_ex_btw?: number;
   }[];
   facturen: {
     id: string;
@@ -279,6 +293,7 @@ export type RapportageRaw = {
     adviseur_id: string | null;
     factuur_nummer?: string | null;
     omschrijving?: string | null;
+    credit_van_factuur_id?: string | null;
   }[];
 };
 
