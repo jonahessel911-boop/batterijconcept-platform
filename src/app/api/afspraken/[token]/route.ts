@@ -45,7 +45,7 @@ export async function GET(
     const { data: afspraak, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email, startdatum)"
+        "*, leads(naam, email, telefoon, lead_number), adviseurs!adviseur_id(naam, email, startdatum)"
       )
       .eq("manage_token", token)
       .single();
@@ -132,7 +132,7 @@ export async function POST(
     const { data: afspraak, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, lead_number), adviseurs(naam, email)"
+        "*, leads(naam, email, lead_number), adviseurs!adviseur_id(naam, email)"
       )
       .eq("manage_token", token)
       .single();
@@ -227,6 +227,9 @@ export async function POST(
             "sale_financiering",
             "sale_eigen_middelen",
             "geen_interesse",
+            "geen_interesse_al_batterij",
+            "geen_interesse_plugin",
+            "geen_interesse_alleen_info",
             "offerte_afgewezen",
             "niet_gekwalificeerd",
           ]);
@@ -346,7 +349,7 @@ export async function POST(
         })
         .eq("id", afspraak.id)
         .select(
-          "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+          "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
         )
         .single();
 
@@ -364,7 +367,7 @@ export async function POST(
             })
             .eq("id", afspraak.id)
             .select(
-              "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+              "*, leads(naam, email, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
             )
             .single();
           if (retry.error || !retry.data) {

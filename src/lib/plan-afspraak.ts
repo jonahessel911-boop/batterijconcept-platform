@@ -35,7 +35,7 @@ import type { AfspraakSoort } from "@/types/database";
 import { normalizeRol } from "@/lib/rollen";
 
 export const AFSPRAAK_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)";
+  "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)";
 
 export type PlanAfspraakInput = {
   lead_id: string;
@@ -45,6 +45,8 @@ export type PlanAfspraakInput = {
   partner_aanwezig?: boolean;
   andere_offertes_gehad?: boolean;
   soort?: string | null;
+  /** Wie plant in (bel-credit). Niet de agenda-adviseur. */
+  ingepland_door_id?: string | null;
 };
 
 export type PlanAfspraakSuccess = {
@@ -146,7 +148,8 @@ export async function planAfspraak(
   const end = addMinutes(start, afspraakDuurMinuten(soort));
 
   const magMailen = afspraakStuurtMail(soort);
-  const insertRow = {
+  const ingeplandDoor = (input.ingepland_door_id || "").trim() || null;
+  const insertRow: Record<string, unknown> = {
     lead_id: input.lead_id,
     adviseur_id: input.adviseur_id,
     start_at: start.toISOString(),
@@ -160,6 +163,9 @@ export async function planAfspraak(
     herinnering_verstuurd: !magMailen,
     opwarm_verstuurd: !magMailen,
   };
+  if (ingeplandDoor) {
+    insertRow.ingepland_door_id = ingeplandDoor;
+  }
 
   // Terugbel staat niet in de agenda — geen week/slot-checks.
   if (!isTerugbelSoort(soort)) {
@@ -217,14 +223,47 @@ export async function planAfspraak(
     }
   }
 
+  // Insert zonder embed (twee FKs naar adviseurs → join kan falen).
+  // Ontbrekende kolommen (migrate nog niet gedraaid) strippen we progressief.
+  const optionalCols = [
+    "ingepland_door_id",
+    "opwarm_verstuurd",
+    "soort",
+  ] as const;
+
+  function isMissingColumnError(err: {
+    message?: string;
+    code?: string;
+  } | null) {
+    if (!err) return false;
+    const msg = (err.message || "").toLowerCase();
+    return (
+      err.code === "42703" ||
+      err.code === "PGRST204" ||
+      msg.includes("schema cache") ||
+      msg.includes("does not exist") ||
+      optionalCols.some((c) => (err.message || "").includes(c))
+    );
+  }
+
+  function columnToStrip(err: { message?: string } | null, row: Record<string, unknown>) {
+    const msg = err?.message || "";
+    const mentioned = optionalCols.find((c) => msg.includes(c) && c in row);
+    if (mentioned) return mentioned;
+    return optionalCols.find((c) => c in row) || null;
+  }
+
+  let row: Record<string, unknown> = { ...insertRow };
   let { data: afspraak, error } = await sb
     .from("afspraken")
-    .insert(insertRow)
-    .select(AFSPRAAK_SELECT)
+    .insert(row)
+    .select("*")
     .single();
 
-  if (error && (error.message?.includes("soort") || error.code === "42703")) {
-    if (soort !== "nieuw") {
+  while (error && isMissingColumnError(error)) {
+    const col = columnToStrip(error, row);
+    if (!col) break;
+    if (col === "soort" && soort !== "nieuw") {
       return {
         ok: false,
         status: 500,
@@ -233,23 +272,9 @@ export async function planAfspraak(
         detail: error.message,
       };
     }
-    const { soort: _soort, ...withoutSoort } = insertRow;
-    const retry = await sb
-      .from("afspraken")
-      .insert(withoutSoort)
-      .select(AFSPRAAK_SELECT)
-      .single();
-    afspraak = retry.data;
-    error = retry.error;
-  }
-
-  if (error?.message?.includes("opwarm_verstuurd")) {
-    const { opwarm_verstuurd: _opwarm, ...rest } = insertRow;
-    const retry = await sb
-      .from("afspraken")
-      .insert(rest)
-      .select(AFSPRAAK_SELECT)
-      .single();
+    const { [col]: _drop, ...rest } = row;
+    row = rest;
+    const retry = await sb.from("afspraken").insert(row).select("*").single();
     afspraak = retry.data;
     error = retry.error;
   }
@@ -262,6 +287,14 @@ export async function planAfspraak(
       detail: error?.message,
     };
   }
+
+  // Soft enrich met lead/adviseur (fail → kale rij is genoeg)
+  const { data: enriched } = await sb
+    .from("afspraken")
+    .select(AFSPRAAK_SELECT)
+    .eq("id", (afspraak as { id: string }).id)
+    .maybeSingle();
+  if (enriched) afspraak = enriched;
 
   return afterCreate(sb, afspraak, input, soort);
 }

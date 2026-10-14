@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     let q = sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number), adviseurs!adviseur_id(naam, email)"
       )
       .order("start_at", { ascending: true })
       .limit(limit);

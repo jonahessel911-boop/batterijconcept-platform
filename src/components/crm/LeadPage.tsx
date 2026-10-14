@@ -22,6 +22,7 @@ import { MaakOfferteModal } from "./MaakOfferteModal";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
 import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
+import { LeadTerugbelPlannen } from "./LeadTerugbelPlannen";
 import { LeadActivityPanel } from "./LeadActivityPanel";
 import {
   Breadcrumb,
@@ -182,6 +183,10 @@ export function LeadPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  /** null | huisbezoek | bel | warme_bel */
+  const [planMode, setPlanMode] = useState<
+    null | "huisbezoek" | "bel" | "warme_bel"
+  >(null);
   const [kwalReden, setKwalReden] = useState("");
   const [showKwalForm, setShowKwalForm] = useState(false);
   const [activityKey, setActivityKey] = useState(0);
@@ -950,24 +955,58 @@ export function LeadPage() {
                 </span>
               ) : null}
             </SectionTitle>
-            <button
-              type="button"
-              onClick={() => setPlanOpen((v) => !v)}
-              className="inline-flex items-center gap-1 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
-            >
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               {planOpen ? (
-                "Sluiten"
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlanOpen(false);
+                    setPlanMode(null);
+                  }}
+                  className="border border-line px-2.5 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+                >
+                  Sluiten
+                </button>
               ) : (
                 <>
-                  <PlusIcon />
-                  Plannen
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlanMode("huisbezoek");
+                      setPlanOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                  >
+                    <PlusIcon />
+                    Huisbezoek
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlanMode("bel");
+                      setPlanOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D4]"
+                  >
+                    Terugbel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlanMode("warme_bel");
+                      setPlanOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 border border-[#C9A227]/50 bg-[#FFF8D6] px-2.5 py-1.5 text-xs font-semibold text-[#8A6D00] hover:bg-[#fff0b8]"
+                  >
+                    Warme terugbel
+                  </button>
                 </>
               )}
-            </button>
+            </div>
           </div>
 
           <div>
-            {planOpen && (
+            {planOpen && planMode === "huisbezoek" && (
               <div className="border-b border-line bg-wash/40 px-4 py-3 sm:px-5">
                 <LeadAfspraakPlannen
                   lead={lead}
@@ -978,15 +1017,55 @@ export function LeadPage() {
                       ? session?.id
                       : lead.adviseur_id || undefined
                   }
+                  onCancel={() => {
+                    setPlanOpen(false);
+                    setPlanMode(null);
+                  }}
                   onPlanned={() => {
                     setOkMsg("Afspraak gepland.");
                     setPlanOpen(false);
+                    setPlanMode(null);
                     setActivityKey((k) => k + 1);
                     void load();
                   }}
                 />
               </div>
             )}
+            {planOpen &&
+              (planMode === "bel" || planMode === "warme_bel") && (
+                <div className="border-b border-line bg-wash/40 px-4 py-3 sm:px-5">
+                  <LeadTerugbelPlannen
+                    key={planMode}
+                    lead={lead}
+                    adviseurs={adviseurs}
+                    warm={planMode === "warme_bel"}
+                    lockAdviseur={rol === "adviseur"}
+                    defaultAdviseurId={
+                      rol === "adviseur"
+                        ? session?.id
+                        : lead.beller_id ||
+                          lead.adviseur_id ||
+                          session?.id ||
+                          undefined
+                    }
+                    onCancel={() => {
+                      setPlanOpen(false);
+                      setPlanMode(null);
+                    }}
+                    onPlanned={() => {
+                      setOkMsg(
+                        planMode === "warme_bel"
+                          ? "Warme terugbelafspraak gepland."
+                          : "Terugbelafspraak gepland."
+                      );
+                      setPlanOpen(false);
+                      setPlanMode(null);
+                      setActivityKey((k) => k + 1);
+                      void load();
+                    }}
+                  />
+                </div>
+              )}
 
             {upcoming.length === 0 && past.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted sm:px-5">

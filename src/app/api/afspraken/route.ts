@@ -21,6 +21,16 @@ import { normalizeRol } from "@/lib/rollen";
 
 export const runtime = "nodejs";
 
+/**
+ * Wie plant de afspraak in (bel-credit).
+ * Altijd de ingelogde medewerker die POST /api/afspraken doet — niet claim/Tarik.
+ */
+function resolveIngeplandDoorId(
+  session: { adviseurId: string } | null
+): string | null {
+  return session?.adviseurId?.trim() || null;
+}
+
 /** GET — lijst afspraken */
 export async function GET() {
   try {
@@ -28,7 +38,7 @@ export async function GET() {
     const { data, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
       )
       .order("start_at", { ascending: true });
     if (error) throw error;
@@ -76,7 +86,7 @@ export async function PATCH(req: NextRequest) {
     const { data: afspraak, error } = await sb
       .from("afspraken")
       .select(
-        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
       )
       .eq("id", body.id)
       .single();
@@ -149,7 +159,7 @@ export async function PATCH(req: NextRequest) {
         })
         .eq("id", afspraak.id)
         .select(
-          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
         )
         .single();
 
@@ -255,7 +265,7 @@ export async function PATCH(req: NextRequest) {
         .update(updateRow)
         .eq("id", afspraak.id)
         .select(
-          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
         )
         .single();
 
@@ -266,7 +276,7 @@ export async function PATCH(req: NextRequest) {
           .update(withoutOpwarm)
           .eq("id", afspraak.id)
           .select(
-            "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam, email)"
+            "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
           )
           .single();
         updated = retry.data;
@@ -415,13 +425,31 @@ export async function POST(req: NextRequest) {
     }
 
     const sb = getSupabaseAdmin();
-    const result = await planAfspraak(sb, body);
+    const ingeplandDoorId = resolveIngeplandDoorId(
+      session ? { adviseurId: session.adviseurId } : null
+    );
+    const result = await planAfspraak(sb, {
+      ...body,
+      ingepland_door_id: ingeplandDoorId,
+    });
     if (!result.ok) {
       return NextResponse.json(
         { error: result.error, detail: result.detail },
         { status: result.status }
       );
     }
+
+    // Lead-credit = wie net heeft ingepland (sessie)
+    if (ingeplandDoorId && body.lead_id) {
+      await sb
+        .from("leads")
+        .update({
+          laatst_gebeld_door: ingeplandDoorId,
+          laatst_gebeld_at: new Date().toISOString(),
+        })
+        .eq("id", body.lead_id);
+    }
+
     return NextResponse.json(
       {
         ok: true,
@@ -429,6 +457,7 @@ export async function POST(req: NextRequest) {
         manage_url: result.manage_url,
         bevestiging_direct: result.bevestiging_direct,
         bevestiging_error: result.bevestiging_error,
+        ingepland_door_id: ingeplandDoorId,
       },
       { status: 201 }
     );

@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
     let q = sb
       .from("afspraken")
       .select(
-        "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, created_at, leads(id, naam, telefoon, email, lead_number, terugbellen, terugbel_notitie, status), adviseurs(naam)"
+        "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, created_at, leads(id, naam, telefoon, email, lead_number, terugbellen, terugbel_notitie, status), adviseurs!adviseur_id(naam)"
       )
       .in("status", [...ACTIEF])
       .in("soort", ["bel", "warme_bel"])

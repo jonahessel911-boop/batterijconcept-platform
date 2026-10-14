@@ -70,12 +70,15 @@ export function LeadAfspraakPlannen({
   lead,
   adviseurs,
   onPlanned,
+  onCancel,
   lockAdviseur = false,
   defaultAdviseurId,
 }: {
   lead: Lead;
   adviseurs: Adviseur[];
   onPlanned: () => void;
+  /** Sluit het paneel (ouder toont dit component al na klik op Huisbezoek). */
+  onCancel?: () => void;
   /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
   lockAdviseur?: boolean;
   defaultAdviseurId?: string | null;
@@ -105,7 +108,6 @@ export function LeadAfspraakPlannen({
     planAdviseurs[0]?.id ||
     "";
 
-  const [open, setOpen] = useState(false);
   const [adviseurId, setAdviseurId] = useState(preferred);
   const [slots, setSlots] = useState<
     { start_at: string; end_at: string; busy?: boolean }[]
@@ -130,7 +132,6 @@ export function LeadAfspraakPlannen({
   const [showHandmatig, setShowHandmatig] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
     setAdviseurId(preferred);
     setNotities(lead.notities || "");
     setPartnerAanwezig(null);
@@ -142,14 +143,9 @@ export function LeadAfspraakPlannen({
     setSelectedBestSlotId(null);
     setShowHandmatig(false);
     setBestSlotsLimit(5);
-  }, [open, lead.id, preferred, lead.notities]);
+  }, [lead.id, preferred, lead.notities]);
 
   useEffect(() => {
-    if (!open) {
-      setBestSlots([]);
-      setBestSlotsLimit(5);
-      return;
-    }
     if (adresRegel(lead) === "—") {
       setBestSlots([]);
       setBestSlotsLimit(5);
@@ -199,10 +195,10 @@ export function LeadAfspraakPlannen({
     return () => {
       cancelled = true;
     };
-  }, [open, lead, lockAdviseur, defaultAdviseurId]);
+  }, [lead, lockAdviseur, defaultAdviseurId]);
 
   async function loadMeerBestSlots() {
-    if (!open || bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
+    if (bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
     setBestSlotsLoadingMore(true);
     setBestSlotsError(null);
     try {
@@ -236,7 +232,7 @@ export function LeadAfspraakPlannen({
   }
 
   useEffect(() => {
-    if (!open || !adviseurId) {
+    if (!adviseurId) {
       setSlots([]);
       return;
     }
@@ -249,10 +245,9 @@ export function LeadAfspraakPlannen({
     return () => {
       cancelled = true;
     };
-  }, [open, adviseurId]);
+  }, [adviseurId]);
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
     queueMicrotask(async () => {
       const res = await fetch("/api/afspraken");
@@ -262,7 +257,7 @@ export function LeadAfspraakPlannen({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, []);
 
   function selectBestSlot(slot: BestSlotOption) {
     if (
@@ -337,25 +332,12 @@ export function LeadAfspraakPlannen({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      setOpen(false);
       onPlanned();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
     } finally {
       setBusy(false);
     }
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="w-full bg-green px-3 py-2.5 text-sm font-semibold text-white hover:bg-green-dark"
-      >
-        Afspraak inplannen
-      </button>
-    );
   }
 
   const selectedAdviseur = planAdviseurs.find((a) => a.id === adviseurId);
@@ -367,11 +349,11 @@ export function LeadAfspraakPlannen({
     >
       <div className="flex items-center justify-between gap-2">
         <p className="font-display text-base font-semibold text-ink">
-          Afspraak inplannen
+          Huisbezoek inplannen
         </p>
         <button
           type="button"
-          onClick={() => setOpen(false)}
+          onClick={() => onCancel?.()}
           className="text-xs font-medium text-muted hover:text-ink"
         >
           Annuleren
