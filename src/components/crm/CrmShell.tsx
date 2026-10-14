@@ -136,6 +136,35 @@ export function CrmShell() {
     rememberCrmReturnUrl();
   }, [tab, searchParams]);
 
+  useEffect(() => {
+    const pageNames: Partial<Record<CrmTab, string>> = {
+      today: "Today",
+      taken: "Agenda",
+      leads: "Leads",
+      bellen: "Bellen",
+      agenda: "Agenda",
+      offertes: "Offertes",
+      netto: "Netto-boord",
+      leaderboard: "Leaderboard",
+      instroom: "Recruitment",
+      projecten: "Backoffice",
+      facturen: "Facturen",
+      creditfacturen: "Creditfacturen",
+      inkomend: "Inkomend",
+      purchasing: "Purchasing",
+      rapportage: "Rapportage",
+      admin: "Admin",
+      ai: "AI",
+      partners: "Partners",
+      instellingen: "Partners",
+    };
+    const name = pageNames[tab] || "CRM";
+    document.title = `${name} · Batterijconcept CRM`;
+    return () => {
+      document.title = "Batterijconcept CRM";
+    };
+  }, [tab]);
+
   const statusFilter = parseLeadStatus(searchParams.get("status"));
   const [leads, setLeads] = useState<Lead[]>(
     () => readCrmBootstrapCache()?.leads ?? []
@@ -1038,7 +1067,7 @@ export function CrmShell() {
     },
     rapportage: {
       title: "Rapportage",
-      sub: "Dashboard en kaart",
+      sub: "Dashboard · Bellen · Leads · Financieel · Kaart",
     },
     admin: {
       title: "Admin",
@@ -1303,7 +1332,21 @@ export function CrmShell() {
                         );
                       });
                     }}
-                    onNeedReload={() => void load()}
+                    onAfspraakCreated={(afspraak) => {
+                      setAfspraken((prev) => {
+                        if (prev.some((a) => a.id === afspraak.id)) {
+                          return prev.map((a) =>
+                            a.id === afspraak.id ? { ...a, ...afspraak } : a
+                          );
+                        }
+                        return [...prev, afspraak].sort(
+                          (a, b) =>
+                            new Date(a.start_at).getTime() -
+                            new Date(b.start_at).getTime()
+                        );
+                      });
+                    }}
+                    onNeedReload={() => load()}
                   />
                 )}
                 {tab === "agenda" &&
@@ -1337,6 +1380,7 @@ export function CrmShell() {
                       onBellerChange={
                         userRol === "admin" ? updateLeadBeller : undefined
                       }
+                      showAdminSlots={userRol === "admin"}
                     />
                   ))}
                 {tab === "offertes" && (

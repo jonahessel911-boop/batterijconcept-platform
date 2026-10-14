@@ -21,6 +21,9 @@ export type MetaCapiEventName =
 /** Statussen → NotQualifiedLead (één keer). */
 export const META_CAPI_NOT_QUALIFIED: ReadonlySet<LeadStatus> = new Set([
   "geen_interesse",
+  "geen_interesse_al_batterij",
+  "geen_interesse_plugin",
+  "geen_interesse_alleen_info",
   "geen_contact",
   "huurwoning",
   "foutief_nummer",
@@ -45,6 +48,9 @@ export const META_CAPI_STATUS_LEVEL: Partial<Record<LeadStatus, 0 | 1 | 2 | 3>> 
     gegevens_niet_overeen: 0,
     geen_contact: 0,
     geen_interesse: 0,
+    geen_interesse_al_batterij: 0,
+    geen_interesse_plugin: 0,
+    geen_interesse_alleen_info: 0,
     niet_gekwalificeerd: 0,
 
     // Fysieke afspraak geboekt → QualifiedLead + Schedule

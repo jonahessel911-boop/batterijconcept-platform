@@ -34,6 +34,7 @@ import {
 import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
 import {
   afblokKey,
+  isBeforeStartdatum,
   isHardGeblokkeerdSlot,
   isSlotGeblokkeerd,
   isZondagAmsterdam,
@@ -189,6 +190,9 @@ function stickerMeta(
       border = "#FECACA";
     } else if (
       ls === "geen_interesse" ||
+      ls === "geen_interesse_al_batterij" ||
+      ls === "geen_interesse_plugin" ||
+      ls === "geen_interesse_alleen_info" ||
       ls === "offerte_afgewezen" ||
       ls === "vervolg_geen_contact"
     ) {
@@ -353,6 +357,8 @@ export function AgendaPanel({
   adviseurs: adviseursProp = [],
   onStatusChange,
   onBellerChange,
+  /** Admin: toon beschikbare slots voor de geselecteerde week. */
+  showAdminSlots = false,
 }: {
   leads: Lead[];
   afspraken?: Afspraak[];
@@ -360,6 +366,7 @@ export function AgendaPanel({
   adviseurs?: Adviseur[];
   onStatusChange?: (leadId: string, status: LeadStatus) => void;
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
+  showAdminSlots?: boolean;
 }) {
   const [afspraken, setAfspraken] = useState<Afspraak[]>(afsprakenProp || []);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>(adviseursProp);
@@ -441,6 +448,56 @@ export function AgendaPanel({
     }
     return counts;
   }, [afspraken, days]);
+
+  /**
+   * Vrije planbare slots in de geselecteerde week (admin).
+   * Zelfde regels als de agenda-cellen: week/slot-blokkade, startdatum, bezet.
+   */
+  const beschikbareSlotsWeek = useMemo(() => {
+    if (!showAdminSlots) return 0;
+    let vrij = 0;
+    for (const adv of planAdviseurs) {
+      const weekKey = `${adv.id}:${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
+      if (beschikbaarMap.get(weekKey) === false) continue;
+      for (const day of days) {
+        if (isBeforeStartdatum(`${day.key}T12:00:00`, adv.startdatum)) {
+          continue;
+        }
+        for (let slotIdx = 0; slotIdx < SLOT_ROWS.length; slotIdx++) {
+          const row = SLOT_ROWS[slotIdx]!;
+          if (
+            isSlotGeblokkeerd(
+              adv.id,
+              day.key,
+              row.hour,
+              afblokkingen,
+              vrijgaven
+            )
+          ) {
+            continue;
+          }
+          const bezet = afspraken.some((a) => {
+            if (a.adviseur_id !== adv.id) return false;
+            if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
+            if (dayKeyAmsterdam(a.start_at) !== day.key) return false;
+            return nearestSlotIndex(a.start_at) === slotIdx;
+          });
+          if (!bezet) vrij += 1;
+        }
+      }
+    }
+    return vrij;
+  }, [
+    showAdminSlots,
+    planAdviseurs,
+    weekInfo.jaar,
+    weekInfo.week,
+    days,
+    beschikbaarMap,
+    afblokkingen,
+    vrijgaven,
+    afspraken,
+  ]);
 
   /** Leads met een zichtbare agenda-afspraak vandaag (op starttijd). */
   const leadsVandaag = useMemo(() => {
@@ -560,8 +617,8 @@ export function AgendaPanel({
     setError(null);
     try {
       const [a, adv] = await Promise.all([
-        fetch("/api/afspraken").then((r) => r.json()),
-        fetch("/api/adviseurs").then((r) => r.json()),
+        fetch("/api/afspraken", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/adviseurs", { cache: "no-store" }).then((r) => r.json()),
       ]);
       if (!a.error) {
         const list = (a.afspraken || []) as Afspraak[];
@@ -579,13 +636,24 @@ export function AgendaPanel({
     }
   }, [afsprakenProp, defaultAdviseurId]);
 
+  // Props vanuit CRM (o.a. net gepland via Bel) meteen tonen — merge, niet wissen.
   useEffect(() => {
-    if (!afsprakenProp) return;
-    setAfspraken(
-      defaultAdviseurId
+    if (!afsprakenProp?.length) return;
+    setAfspraken((prev) => {
+      const fromProp = defaultAdviseurId
         ? afsprakenProp.filter((x) => x.adviseur_id === defaultAdviseurId)
-        : afsprakenProp
-    );
+        : afsprakenProp;
+      if (!prev.length) return fromProp;
+      const byId = new Map(prev.map((a) => [a.id, a]));
+      for (const a of fromProp) {
+        const cur = byId.get(a.id);
+        byId.set(a.id, cur ? { ...cur, ...a } : a);
+      }
+      return [...byId.values()].sort(
+        (a, b) =>
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+      );
+    });
   }, [afsprakenProp, defaultAdviseurId]);
 
   useEffect(() => {
@@ -907,6 +975,16 @@ export function AgendaPanel({
 
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
+            {showAdminSlots && mainView === "agenda" ? (
+              <p className="mb-1.5 text-sm font-semibold tabular-nums text-ink">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Beschikbare slots deze week
+                </span>
+                <span className="mt-0.5 block font-display text-2xl font-semibold sm:text-3xl">
+                  {beschikbareSlotsWeek}
+                </span>
+              </p>
+            ) : null}
             <h1 className="font-display text-xl font-semibold text-ink sm:text-2xl">
               {mainView === "leads" ? leadsTitle : weekTitle}
             </h1>

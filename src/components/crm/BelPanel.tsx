@@ -151,6 +151,7 @@ export function BelPanel({
   defaultAdviseurId,
   lockAdviseur = false,
   onLeadUpdated,
+  onAfspraakCreated,
   onNeedReload,
 }: {
   leads: Lead[];
@@ -161,15 +162,19 @@ export function BelPanel({
   /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
   lockAdviseur?: boolean;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
-  onNeedReload?: () => void;
+  /** Direct agenda bijwerken na inplannen (zonder te wachten op full reload). */
+  onAfspraakCreated?: (afspraak: Afspraak) => void;
+  onNeedReload?: () => void | Promise<void>;
 }) {
   const [currentId, setCurrentId] = useState<string | null>(null);
   /** Snapshot van geclaimde lead (server is bron van waarheid). */
   const [claimedLead, setClaimedLead] = useState<Lead | null>(null);
   const [claiming, setClaiming] = useState(true);
   const [claimError, setClaimError] = useState<string | null>(null);
-  /** null = Volgende-knop · status = uitkomsten · terugbel = interne terugbel-afspraak */
-  const [nextMode, setNextMode] = useState<"status" | "terugbel" | null>(null);
+  /** null = Volgende-knop · status = uitkomsten · geen_interesse = subredenen · terugbel */
+  const [nextMode, setNextMode] = useState<
+    "status" | "geen_interesse" | "terugbel" | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -693,12 +698,35 @@ export function BelPanel({
     window.setTimeout(() => setCopied(false), 1500);
   }
 
+  async function stampGebeldDoor(opts: {
+    leadId: string;
+    status?: string | null;
+    eersteGebeld?: boolean;
+  }): Promise<Partial<Lead>> {
+    try {
+      const res = await fetch("/api/bel/mark-called", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lead_id: opts.leadId,
+          status: opts.status ?? undefined,
+          eerste_gebeld: Boolean(opts.eersteGebeld),
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        patch?: Partial<Lead>;
+      };
+      return data.patch || {};
+    } catch {
+      return {};
+    }
+  }
+
   async function saveOutcome(status: LeadStatus) {
     if (!current) return;
     setBusy(true);
     setError(null);
     try {
-      const now = new Date().toISOString();
       const pogingen =
         status === "geen_contact"
           ? Math.min(belpogingenOf(current) + 1, MAX_BELPOGINGEN)
@@ -711,29 +739,14 @@ export function BelPanel({
         status,
         belpogingen: pogingen,
         belpogingen_vandaag: Math.min(vandaag, MAX_BELPOGINGEN_PER_DAG),
-        laatst_gebeld_at: now,
         terugbellen: false,
         terugbel_notitie: null,
       };
-      if (!current.eerste_gebeld_at) {
-        patch.eerste_gebeld_at = now;
-      }
       const sb = getSupabaseBrowser();
       let { error: err } = await sb
         .from("leads")
         .update(patch)
         .eq("id", current.id);
-      if (
-        err &&
-        (err.message?.includes("eerste_gebeld_at") || err.code === "42703")
-      ) {
-        const { eerste_gebeld_at: _, ...withoutFirst } = patch;
-        const retryFirst = await sb
-          .from("leads")
-          .update(withoutFirst)
-          .eq("id", current.id);
-        err = retryFirst.error;
-      }
       if (
         err &&
         (err.message?.includes("belpogingen_vandaag") || err.code === "42703")
@@ -757,6 +770,13 @@ export function BelPanel({
         }
         throw err;
       }
+      // Ingelogde medewerker = beller (server-side, geen RLS/claim-issues)
+      const stamped = await stampGebeldDoor({
+        leadId: current.id,
+        status,
+        eersteGebeld: !current.eerste_gebeld_at,
+      });
+      Object.assign(patch, stamped);
       await completeTerugbelAfspraak(current.id);
       onLeadUpdated(current.id, patch);
       void clientLogLeadEvent(current.id, {
@@ -835,12 +855,28 @@ export function BelPanel({
           andere_offertes_gehad: andereOffertes,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        error?: string;
+        afspraak?: Afspraak;
+      };
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      onLeadUpdated(current.id, { status: "afspraak" });
+      const leadPatch: Partial<Lead> = {
+        status: "afspraak",
+        ...(await stampGebeldDoor({
+          leadId: current.id,
+          status: "afspraak",
+          eersteGebeld: !current.eerste_gebeld_at,
+        })),
+      };
+
+      if (data.afspraak) {
+        onAfspraakCreated?.(data.afspraak);
+      }
+      onLeadUpdated(current.id, leadPatch);
       await completeTerugbelAfspraak(current.id);
-      onNeedReload?.();
+      // Full reload op de achtergrond (joins); agenda heeft de afspraak al
+      void onNeedReload?.();
       goNextLead(current.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -882,19 +918,33 @@ export function BelPanel({
         );
       }
 
-      const now = new Date().toISOString();
       const assignee = terugbelMedewerkers.find((a) => a.id === planAdviseurId);
       const assigneeRol = normalizeRol(assignee?.rol);
       const leadPatch: Partial<Lead> = {
         terugbellen: true,
         terugbel_notitie: note,
-        laatst_gebeld_at: now,
+        ...(await stampGebeldDoor({
+          leadId: current.id,
+          eersteGebeld: !current.eerste_gebeld_at,
+        })),
       };
       if (assigneeRol === "beller") {
         leadPatch.beller_id = planAdviseurId;
-      }
-      if (!current.eerste_gebeld_at) {
-        leadPatch.eerste_gebeld_at = now;
+        const sb = getSupabaseBrowser();
+        await sb
+          .from("leads")
+          .update({
+            terugbellen: true,
+            terugbel_notitie: note,
+            beller_id: planAdviseurId,
+          })
+          .eq("id", current.id);
+      } else {
+        const sb = getSupabaseBrowser();
+        await sb
+          .from("leads")
+          .update({ terugbellen: true, terugbel_notitie: note })
+          .eq("id", current.id);
       }
 
       onLeadUpdated(current.id, leadPatch);
@@ -1199,14 +1249,6 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void saveOutcome("huurwoning")}
-                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
-              >
-                Huurwoning
-              </button>
-              <button
-                type="button"
-                disabled={busy}
                 onClick={() => void saveOutcome("foutief_nummer")}
                 className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
               >
@@ -1223,7 +1265,10 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void saveOutcome("geen_interesse")}
+                onClick={() => {
+                  setNextMode("geen_interesse");
+                  setError(null);
+                }}
                 className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
               >
                 Geen interesse
@@ -1260,6 +1305,43 @@ export function BelPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => setNextMode(null)}
+                className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
+              >
+                Terug
+              </button>
+            </div>
+          ) : nextMode === "geen_interesse" ? (
+            <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
+              <p className="text-sm font-semibold text-ink">Geen interesse</p>
+              <p className="text-xs text-muted">Kies de reden · lead verdwijnt uit de bellijst.</p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveOutcome("geen_interesse_al_batterij")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Heeft al een batterij
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveOutcome("geen_interesse_plugin")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Interesse in een plugin batterij
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveOutcome("geen_interesse_alleen_info")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Wilde alleen informatie
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setNextMode("status")}
                 className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
               >
                 Terug
@@ -1449,7 +1531,7 @@ export function BelPanel({
                                     {slot.reistijd_vanaf_startadres === false
                                       ? " vanaf vorige afspraak"
                                       : slot.reistijd_vanaf_startadres === true
-                                        ? " vanaf startadres"
+                                        ? " vanaf start"
                                         : " route"}
                                     {slot.reistijd_terug_min != null
                                       ? ` · ~${slot.reistijd_terug_min} min terug`

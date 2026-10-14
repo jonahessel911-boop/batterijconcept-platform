@@ -4,6 +4,9 @@ import { leadStatusVoorAfspraakSoort } from "@/lib/afspraak-soort";
 const BESCHERMDE_STATUS = new Set([
   "deal",
   "geen_interesse",
+  "geen_interesse_al_batterij",
+  "geen_interesse_plugin",
+  "geen_interesse_alleen_info",
   "offerte_afgewezen",
   "niet_gekwalificeerd",
 ]);
