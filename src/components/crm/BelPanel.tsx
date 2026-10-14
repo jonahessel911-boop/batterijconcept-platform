@@ -37,6 +37,8 @@ import {
 } from "@/lib/postcode-provincie";
 import { leadStatusLabel } from "@/lib/labels";
 import { FastDirectionButton } from "./FastDirectionButton";
+import { LeadAdresEditor } from "./LeadAdresEditor";
+import { LeadContactEditor } from "./LeadContactEditor";
 import { LeadTimeline } from "./LeadTimeline";
 import { ReistijdHint } from "./ReistijdHint";
 import {
@@ -45,6 +47,24 @@ import {
   useBestSlots,
   type BestSlotOption,
 } from "./BestSlotsOptions";
+
+function PencilIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
 async function clientLogLeadEvent(
   leadId: string,
   opts: {
@@ -202,6 +222,8 @@ export function BelPanel({
   const [terugbelWarm, setTerugbelWarm] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  /** Contact/adres bewerken (postcode, huisnr, e-mail, …). */
+  const [editingGegevens, setEditingGegevens] = useState(false);
   /** Leads die deze sessie al via Volgende zijn doorgeschoven. */
   const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
   const [timelineTick, setTimelineTick] = useState(0);
@@ -539,6 +561,7 @@ export function BelPanel({
     setTerugbelNotitie(current.terugbel_notitie || "");
     setNoteDraft("");
     setSavingNote(false);
+    setEditingGegevens(false);
     setSelectedBestSlotId(null);
     setShowHandmatig(false);
     setTimelineTick((t) => t + 1);
@@ -1297,22 +1320,69 @@ export function BelPanel({
         <p className="mt-1 text-sm text-muted">
           Aangemeld {formatDateTimeNl(current.created_at)}
         </p>
-        <p className="mt-2 text-sm text-muted">{adresRegel(current)}</p>
-        {bakMode === "provincie" && selectedProvincie ? (
-          <p className="mt-1 text-xs text-muted">
-            Provincie lead:{" "}
-            <span className="font-semibold text-ink">
-              {provincieVanPostcode(current.postcode)}
-            </span>
-            {leadInProvincie(current, selectedProvincie) ? null : (
-              <span className="ml-1 font-semibold text-[#C45A12]">
-                · hoort niet bij {selectedProvincie}
-              </span>
-            )}
-          </p>
-        ) : null}
-        {current.email && (
-          <p className="mt-1 text-sm text-muted">{current.email}</p>
+
+        {editingGegevens ? (
+          <div className="mt-3 space-y-4 border border-line bg-wash/40 p-3.5 sm:p-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Contactgegevens bewerken
+              </p>
+              <button
+                type="button"
+                onClick={() => setEditingGegevens(false)}
+                className="border border-line bg-white px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+              >
+                Klaar
+              </button>
+            </div>
+            <LeadContactEditor
+              lead={current}
+              onSaved={(patch) => {
+                onLeadUpdated(current.id, patch);
+                setClaimedLead((prev) =>
+                  prev?.id === current.id ? { ...prev, ...patch } : prev
+                );
+              }}
+            />
+            <LeadAdresEditor
+              lead={current}
+              onSaved={(patch) => {
+                onLeadUpdated(current.id, patch);
+                setClaimedLead((prev) =>
+                  prev?.id === current.id ? { ...prev, ...patch } : prev
+                );
+              }}
+            />
+          </div>
+        ) : (
+          <div className="relative mt-3 border border-line bg-white px-3.5 py-3 pr-12">
+            <p className="text-sm text-ink">{adresRegel(current) || "Geen adres"}</p>
+            {bakMode === "provincie" && selectedProvincie ? (
+              <p className="mt-1 text-xs text-muted">
+                Provincie lead:{" "}
+                <span className="font-semibold text-ink">
+                  {provincieVanPostcode(current.postcode)}
+                </span>
+                {leadInProvincie(current, selectedProvincie) ? null : (
+                  <span className="ml-1 font-semibold text-[#C45A12]">
+                    · hoort niet bij {selectedProvincie}
+                  </span>
+                )}
+              </p>
+            ) : null}
+            <p className="mt-1 text-sm text-muted">
+              {current.email?.trim() || "Geen e-mail"}
+            </p>
+            <button
+              type="button"
+              onClick={() => setEditingGegevens(true)}
+              className="absolute right-2.5 top-2.5 inline-flex items-center justify-center border border-line bg-white p-1.5 text-ink hover:bg-wash"
+              title="Contactgegevens bewerken"
+              aria-label="Contactgegevens bewerken"
+            >
+              <PencilIcon />
+            </button>
+          </div>
         )}
 
         {currentIsTerugbelDue && currentTerugbel && (

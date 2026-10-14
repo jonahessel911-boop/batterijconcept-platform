@@ -100,8 +100,8 @@ export type BelConversieTargets = {
   /** Huisbezoeken gepland op de geselecteerde dag */
   geplandVandaag: number;
   /**
-   * Dagoel = restant weekdoel ÷ resterende bel-werkdagen (ma–vr).
-   * Mist gisteren → hogere dagoel vandaag (inhaal).
+   * Dagoel = tempo om open slots over ~2 weken vooruit vol te plannen
+   * (+ 20% uitval). Daalt alleen als er minder open slots overblijven.
    */
   doelVandaag: number;
   /** max(0, doel − gepland) */
@@ -230,7 +230,7 @@ function ymdFromAmsterdamDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function sundayYmdOfIsoWeek(jaar: number, week: number): string {
+export function sundayYmdOfIsoWeek(jaar: number, week: number): string {
   const mondayRaw = schouwWeekToMondayIso(jaar, week);
   const mondayYmd = String(mondayRaw).slice(0, 10);
   const [y, m, d] = mondayYmd.split("-").map(Number);
@@ -472,16 +472,14 @@ export function buildBelConversieTargets(opts: {
         ? 100
         : 0;
 
-  // Dagoel = restant week ÷ resterende werkdagen (wo→vr = 3, etc.)
+  // Dagoel = slot-tempo (2 weken vooruit), niet restant-week ÷ resterende dagen.
+  // Plannen vandaag: teller omhoog; noemer blijft tot open slots echt dalen.
   const fridayYmd = fridayYmdOfIsoWeekContaining(fromYmd);
   const resterendeWerkdagenWeek = Math.max(
     0,
     countWeekdaysInclusive(fromYmd, fridayYmd)
   );
-  const doelVandaag =
-    resterendeWerkdagenWeek > 0
-      ? Math.ceil(nogDezeWeek / resterendeWerkdagenWeek)
-      : tempoDoel;
+  const doelVandaag = tempoDoel;
   const nogVandaag = Math.max(0, doelVandaag - gepland);
   const pctVandaag =
     doelVandaag > 0

@@ -359,13 +359,7 @@ export function BelConversiePanel() {
               )}
             </p>
             <p className="mt-2 text-sm text-muted">
-              Restant weekdoel ÷{" "}
-              {t?.resterendeWerkdagenWeek != null &&
-              t.resterendeWerkdagenWeek > 0
-                ? `${num(t.resterendeWerkdagenWeek)} resterende werkdag${
-                    t.resterendeWerkdagenWeek === 1 ? "" : "en"
-                  }`
-                : "resterende werkdagen"}
+              Tempo om ~2 weken vooruit vol te plannen (+ 20% uitval)
               {" · L→A "}
               {data.totals.leadToAppt != null
                 ? `${num(data.totals.leadToAppt, 1)}%`
@@ -512,8 +506,7 @@ export function BelConversiePanel() {
                   )}
                 </p>
                 <p className="mt-1 text-xs text-muted">
-                  Weekdoel obv open slots (tempo × 5) · huisbezoeken gezet deze
-                  week · achterstand wordt over resterende dagen verdeeld
+                  Weekdoel = dagoel × 5 · huisbezoeken gezet deze week
                 </p>
                 <div className="mt-4">
                   <div className="relative h-3 overflow-hidden rounded-full bg-wash">

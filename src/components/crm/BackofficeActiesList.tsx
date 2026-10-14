@@ -16,10 +16,12 @@ import {
   FINANCIERINGSMAN_TEL_HREF,
   financieringSchakelBericht,
   isWarmtefondsProject,
+  actieTabVoorSoort,
   actiesVoorActiesTab,
   openBackofficeActies,
   recommendedSchouwWeekForProject,
   saleMomentVanProject,
+  type ActiesTabId,
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
@@ -467,17 +469,6 @@ export function BackofficeActiesList({
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   /** Open project-taken (handmatig + auto) */
   const [projectTaken, setProjectTaken] = useState<ProjectTaak[]>([]);
-  const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
-    herplan: true,
-    schouw: true,
-    aangetekend: true,
-    volgende: true,
-    inkoop: true,
-    warmtefonds: true,
-    stap1: true,
-    factuur: true,
-    handmatig: true,
-  });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -547,23 +538,62 @@ export function BackofficeActiesList({
 
   const defaultPartnerId = partners.length === 1 ? partners[0].id : "";
 
-  /** Secties uit gefilterde acties (badge = zelfde set via actiesVoorActiesTab). */
-  const sections = useMemo(() => {
-    const order: SectionId[] = ["herplan", "schouw", "inkoop"];
-    return order
-      .map((id) => ({
-        id,
-        ...SECTION_META[id],
-        rows: rows.filter((r) => r.section === id && !r.done),
-        doneCount: rows.filter((r) => r.section === id && r.done).length,
-        taken: [] as ProjectTaak[],
-      }))
-      .filter((s) => s.rows.length > 0);
-  }, [rows]);
+  const [actiesTab, setActiesTab] = useState<ActiesTabId>("afspraken");
 
-  function toggleSection(id: SectionId) {
-    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
-  }
+  const openRows = useMemo(() => rows.filter((r) => !r.done), [rows]);
+
+  const nazorgTaken = useMemo(
+    () =>
+      projectTaken.filter((t) => {
+        if (t.status === "done") return false;
+        const key = (t.auto_key || "").toLowerCase();
+        const titel = (t.titel || "").toLowerCase();
+        return (
+          key.includes("overstap") ||
+          key.includes("btw_terug") ||
+          titel.includes("overstap") ||
+          titel.includes("btw terug") ||
+          titel.includes("dynamische")
+        );
+      }),
+    [projectTaken]
+  );
+
+  const tabCounts = useMemo(() => {
+    const counts: Record<ActiesTabId, number> = {
+      afspraken: 0,
+      purchasing: 0,
+      projecten: 0,
+      nazorg: nazorgTaken.length,
+    };
+    for (const r of openRows) {
+      const tab = actieTabVoorSoort(r.actie.soort, r.titel);
+      counts[tab] += 1;
+    }
+    return counts;
+  }, [openRows, nazorgTaken.length]);
+
+  const visibleRows = useMemo(
+    () =>
+      openRows.filter(
+        (r) => actieTabVoorSoort(r.actie.soort, r.titel) === actiesTab
+      ),
+    [openRows, actiesTab]
+  );
+
+  const ACTIES_TABS: { id: ActiesTabId; label: string }[] = [
+    { id: "afspraken", label: "Afspraken" },
+    { id: "purchasing", label: "Purchasing" },
+    { id: "projecten", label: "Projecten" },
+    { id: "nazorg", label: "After sales" },
+  ];
+
+  // Open eerste tab met inhoud als huidige leeg is
+  useEffect(() => {
+    if (tabCounts[actiesTab] > 0) return;
+    const first = ACTIES_TABS.find((t) => tabCounts[t.id] > 0);
+    if (first) setActiesTab(first.id);
+  }, [tabCounts, actiesTab]);
 
   async function createHandmatigeActie() {
     if (!newTitel.trim()) {
@@ -1129,12 +1159,15 @@ export function BackofficeActiesList({
     }
   }
 
-  const hasOpen =
-    sections.some((s) => s.rows.length > 0) || showCreate;
-  const openActieCount = rows.filter((r) => !r.done).length;
+  const openActieCount =
+    openRows.length + nazorgTaken.length;
+  const tabEmpty =
+    actiesTab === "nazorg"
+      ? visibleRows.length === 0 && nazorgTaken.length === 0
+      : visibleRows.length === 0;
 
   return (
-    <div className="space-y-5 px-5 pb-6 pt-5">
+    <div className="space-y-4 px-5 pb-6 pt-5">
       {error && (
         <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
           {error}
@@ -1146,12 +1179,49 @@ export function BackofficeActiesList({
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">
-          {!hasOpen && !showCreate
-            ? "Geen openstaande acties."
-            : `${openActieCount} open actie${openActieCount === 1 ? "" : "s"}`}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="font-display text-lg font-semibold text-ink">Acties</p>
+          <p className="mt-0.5 text-sm text-muted">
+            {openActieCount === 0
+              ? "Geen openstaande acties."
+              : `${openActieCount} open`}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1 border-b border-line">
+        {ACTIES_TABS.map((tab) => {
+          const active = actiesTab === tab.id;
+          const n = tabCounts[tab.id];
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiesTab(tab.id)}
+              className={[
+                "relative -mb-px px-3 py-2 text-sm font-semibold transition",
+                active
+                  ? "border-b-2 border-green text-green-dark"
+                  : "text-muted hover:text-ink",
+              ].join(" ")}
+            >
+              {tab.label}
+              {n > 0 ? (
+                <span
+                  className={[
+                    "ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                    active
+                      ? "bg-green-soft text-green-dark"
+                      : "bg-[#EEF1EF] text-muted",
+                  ].join(" ")}
+                >
+                  {n}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       {showCreate ? (
@@ -1250,253 +1320,156 @@ export function BackofficeActiesList({
         </div>
       ) : null}
 
-      {sections.map((section) => {
-        const open = openSections[section.id];
-        const openCount =
-          section.id === "handmatig"
-            ? section.taken.length
-            : section.rows.length;
-
-        if (section.id === "handmatig" && section.taken.length === 0) {
-          return null;
-        }
-
-        return (
-          <section key={section.id} className="border-b border-line pb-4">
-            <button
-              type="button"
-              onClick={() => toggleSection(section.id)}
-              className="flex w-full items-center gap-2 py-1.5 text-left"
-            >
-              <span
-                className={[
-                  "text-muted transition",
-                  open ? "" : "-rotate-90",
-                ].join(" ")}
-              >
-                ▾
-              </span>
-              <span className="text-sm font-semibold text-ink">
-                {section.label}
-              </span>
-              <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-[#eef1ef] px-1.5 text-[10px] font-semibold tabular-nums text-muted">
-                {openCount}
-              </span>
-              <span
-                className={[
-                  "ml-1 rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                  section.accent,
-                ].join(" ")}
-              >
-                {section.label}
-              </span>
-            </button>
-
-            {open && section.id === "handmatig" ? (
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      <th className="pb-2 pr-3 font-semibold">Taak</th>
-                      <th className="pb-2 pr-3 font-semibold">Medewerker</th>
-                      <th className="pb-2 pr-3 font-semibold">Due date</th>
-                      <th className="pb-2 font-semibold">Actie</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.taken.map((taak) => {
-                      const overdue =
-                        Boolean(taak.due_at) &&
-                        new Date(taak.due_at!).getTime() < Date.now() &&
-                        taak.status !== "done";
-                      const leadNaam =
-                        taak.projecten?.leads?.naam ||
-                        leads.find((l) => l.id === taak.projecten?.lead_id)
-                          ?.naam ||
-                        "—";
-                      return (
-                        <tr
-                          key={taak.id}
-                          className="border-b border-line/80 align-top last:border-b-0"
-                        >
-                          <td className="py-2.5 pr-3">
-                            <div className="flex items-start gap-2">
-                              <CheckDot done={false} />
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <p className="font-medium text-ink">
-                                    {taak.titel}
-                                  </p>
-                                  {taak.auto_key ? (
-                                    <span className="rounded bg-[#EEF1EF] px-1.5 py-0.5 text-[10px] font-semibold text-muted">
-                                      Auto
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <p className="mt-0.5 text-xs text-muted">
-                                  {leadNaam}
-                                  {taak.projecten?.project_nummer
-                                    ? ` · ${taak.projecten.project_nummer}`
-                                    : ""}
-                                  {taak.afdeling ? ` · ${taak.afdeling}` : ""}
-                                </p>
-                                {taak.notities ? (
-                                  <p className="mt-1 text-xs text-muted">
-                                    {taak.notities}
-                                  </p>
-                                ) : null}
-                                {taak.aangemaakt_door?.naam ? (
-                                  <p className="mt-1 text-xs font-medium text-[#0F766E]">
-                                    Van adviseur: {taak.aangemaakt_door.naam}
-                                  </p>
-                                ) : null}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="py-2.5 pr-3 whitespace-nowrap">
-                            <span className="rounded bg-[#F3F0FF] px-1.5 py-0.5 text-[10px] font-semibold text-[#5B21B6]">
-                              {taak.verantwoordelijke?.naam ||
-                                (taak.aangemaakt_door_id
-                                  ? "Backoffice"
-                                  : "—")}
+      {tabEmpty ? (
+        <p className="py-10 text-center text-sm text-muted">
+          Geen openstaande acties in deze tab.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-line">
+          <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-line bg-[#F7F9F8] text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <th className="px-3 py-2.5 font-semibold">Taak</th>
+                <th className="px-3 py-2.5 font-semibold">Klant</th>
+                <th className="px-3 py-2.5 font-semibold">Due</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Actie</th>
+              </tr>
+            </thead>
+            <tbody>
+              {actiesTab === "nazorg"
+                ? nazorgTaken.map((taak) => {
+                    const overdue =
+                      Boolean(taak.due_at) &&
+                      new Date(taak.due_at!).getTime() < Date.now();
+                    const leadNaam =
+                      taak.projecten?.leads?.naam ||
+                      leads.find((l) => l.id === taak.projecten?.lead_id)
+                        ?.naam ||
+                      "—";
+                    return (
+                      <tr
+                        key={taak.id}
+                        className="border-b border-line/70 last:border-b-0"
+                      >
+                        <td className="px-3 py-3 align-top">
+                          <p className="font-medium text-ink">{taak.titel}</p>
+                          {taak.projecten?.project_nummer ? (
+                            <p className="mt-0.5 font-mono text-[10px] text-green-dark">
+                              {taak.projecten.project_nummer}
+                            </p>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-muted">
+                          {leadNaam}
+                        </td>
+                        <td className="px-3 py-3 align-top whitespace-nowrap text-xs">
+                          {taak.due_at ? (
+                            <span
+                              className={
+                                overdue
+                                  ? "font-semibold text-[#C45A12]"
+                                  : "text-muted"
+                              }
+                            >
+                              {formatDateTimeNl(taak.due_at)}
+                              {overdue ? " · te laat" : ""}
                             </span>
-                          </td>
-                          <td className="py-2.5 pr-3 whitespace-nowrap text-xs text-muted">
-                            {taak.due_at ? formatDateTimeNl(taak.due_at) : "—"}
-                            {overdue ? (
-                              <span className="font-semibold text-[#C45A12]">
-                                {" "}
-                                · te laat
-                              </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            {taak.project_id ? (
+                              <Link
+                                href={`/projecten/${taak.project_id}`}
+                                className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
+                              >
+                                Project
+                              </Link>
                             ) : null}
-                          </td>
-                          <td className="py-2.5">
-                            <div className="flex flex-wrap gap-1.5">
-                              {taak.project_id ? (
-                                <Link
-                                  href={`/projecten/${taak.project_id}`}
-                                  className="min-h-8 border border-line px-2 text-[11px] font-semibold leading-8 text-ink hover:bg-wash"
-                                >
-                                  Project
-                                </Link>
-                              ) : null}
-                              <button
-                                type="button"
-                                disabled={
-                                  busyId === taak.id || busyId === `del-${taak.id}`
-                                }
-                                onClick={() => void voltooiHandmatigeTaak(taak)}
-                                className="min-h-8 border border-[#0D5C32]/25 bg-[#E8F6EC] px-2 text-[11px] font-semibold text-green-dark hover:bg-[#d4eedc] disabled:opacity-50"
-                              >
-                                {busyId === taak.id ? "Bezig…" : "Afronden"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={
-                                  busyId === taak.id || busyId === `del-${taak.id}`
-                                }
-                                onClick={() => void verwijderProjectTaak(taak)}
-                                className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
-                              >
-                                {busyId === `del-${taak.id}`
-                                  ? "…"
-                                  : "Verwijderen"}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
+                            <button
+                              type="button"
+                              disabled={busyId === taak.id}
+                              onClick={() => void voltooiHandmatigeTaak(taak)}
+                              className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                            >
+                              {busyId === taak.id ? "…" : "Afronden"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                : null}
+              {visibleRows.map((row) => {
+                const actie = row.actie;
+                const pill =
+                  row.kind === "herplan"
+                    ? actie.herplanBron === "adviseur"
+                      ? {
+                          label: "Adviseur",
+                          className: "bg-[#E8F0F6] text-[#1A4A6E]",
+                        }
+                      : {
+                          label: "Klant",
+                          className: "bg-[#FFF0E6] text-[#C45A12]",
+                        }
+                    : TYPE_PILL[row.kind];
+                const isOpen = expandedRow === row.key;
+                const drafts = draftFacturenVoorActie(actie, facturen);
+                const saleAt = actie.saleAt
+                  ? new Date(actie.saleAt)
+                  : actie.project
+                    ? saleMomentVanProject(actie.project)
+                    : new Date();
+                const warmtefonds = actie.project
+                  ? isWarmtefondsProject(actie.project)
+                  : false;
+                const recommended = actie.project
+                  ? recommendedSchouwWeekForProject(actie.project, saleAt)
+                  : {
+                      jaar: saleAt.getFullYear(),
+                      week: 1,
+                    };
+                const recommendedValue = schouwWeekValue(
+                  recommended.jaar,
+                  recommended.week
+                );
+                const selectedWeek = weekKeuze[actie.id] || recommendedValue;
+                const selectedFactuur =
+                  factuurKeuze[actie.id] ||
+                  (drafts.length === 1 ? drafts[0].id : "");
+                const selectedSchouwAt = schouwAtKeuze[actie.id] || "";
 
-            {open && section.id !== "handmatig" ? (
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      <th className="pb-2 pr-3 font-semibold">Taak</th>
-                      <th className="pb-2 pr-3 font-semibold">Type</th>
-                      <th className="pb-2 pr-3 font-semibold">Due date</th>
-                      <th className="pb-2 font-semibold">Actie</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.rows.map((row) => {
-                      const actie = row.actie;
-                      const pill =
-                        row.kind === "herplan"
-                          ? actie.herplanBron === "adviseur"
-                            ? {
-                                label: "Adviseur",
-                                className: "bg-[#E8F0F6] text-[#1A4A6E]",
-                              }
-                            : {
-                                label: "Klant",
-                                className: "bg-[#FFF0E6] text-[#C45A12]",
-                              }
-                          : TYPE_PILL[row.kind];
-                      const isOpen = expandedRow === row.key;
-                      const drafts = draftFacturenVoorActie(actie, facturen);
-                      const saleAt = actie.saleAt
-                        ? new Date(actie.saleAt)
-                        : actie.project
-                          ? saleMomentVanProject(actie.project)
-                          : new Date();
-                      const warmtefonds = actie.project
-                        ? isWarmtefondsProject(actie.project)
-                        : false;
-                      const recommended = actie.project
-                        ? recommendedSchouwWeekForProject(actie.project, saleAt)
-                        : {
-                            jaar: saleAt.getFullYear(),
-                            week: 1,
-                          };
-                      const recommendedValue = schouwWeekValue(
-                        recommended.jaar,
-                        recommended.week
-                      );
-                      const selectedWeek =
-                        weekKeuze[actie.id] || recommendedValue;
-                      const selectedFactuur =
-                        factuurKeuze[actie.id] ||
-                        (drafts.length === 1 ? drafts[0].id : "");
-                      const selectedSchouwAt = schouwAtKeuze[actie.id] || "";
-
-                      return (
-                        <tr
-                          key={row.key}
-                          className="border-b border-line/80 align-top last:border-b-0"
-                        >
-                          <td className="py-2.5 pr-3">
-                            <div className="flex items-start gap-2">
-                              <CheckDot done={row.done} />
-                              <div className="min-w-0">
-                                <p className="font-medium text-ink">
-                                  {row.titel}
-                                </p>
-                                <p className="mt-0.5 text-xs text-muted">
-                                  {row.klant}
-                                  {actie.telefoon?.trim() ? (
-                                    <>
-                                      {" · "}
-                                      <a
-                                        href={`tel:${actie.telefoon.trim()}`}
-                                        className="font-medium text-green-dark hover:underline"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        {actie.telefoon.trim()}
-                                      </a>
-                                    </>
-                                  ) : null}
-                                  {row.meta ? (
-                                    <span className="ml-1.5 font-mono text-[10px] text-green-dark">
-                                      {row.meta}
-                                    </span>
-                                  ) : null}
-                                </p>
+                return (
+                  <tr
+                    key={row.key}
+                    className="border-b border-line/70 align-top last:border-b-0"
+                  >
+                    <td className="px-3 py-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="font-medium text-ink">{row.titel}</p>
+                          <span
+                            className={[
+                              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                              pill.className,
+                            ].join(" ")}
+                          >
+                            {pill.label}
+                          </span>
+                          {row.prio ? (
+                            <span className="rounded bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                              PRIO
+                            </span>
+                          ) : null}
+                        </div>
+                        {row.meta ? (
+                          <p className="mt-0.5 font-mono text-[10px] text-green-dark">
+                            {row.meta}
+                          </p>
+                        ) : null}
                                 {row.kind === "herplan" ? (
                                   <div className="mt-1 max-w-md space-y-0.5 text-xs leading-snug text-ink">
                                     {actie.herplanBron === "adviseur" ? (
@@ -1788,50 +1761,46 @@ export function BackofficeActiesList({
                                     )}
                                   </div>
                                 ) : null}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="py-2.5 pr-3">
-                            <span
-                              className={[
-                                "inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                                pill.className,
-                              ].join(" ")}
-                            >
-                              {pill.label}
-                            </span>
-                          </td>
-                          <td className="py-2.5 pr-3 whitespace-nowrap">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {row.prio ? (
-                                <span className="rounded bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
-                                  PRIO
-                                </span>
-                              ) : null}
-                              <span
-                                className={[
-                                  "text-xs tabular-nums",
-                                  row.overdue
-                                    ? "font-semibold text-[#C45A12]"
-                                    : "text-muted",
-                                ].join(" ")}
-                              >
-                                {formatDateTimeNl(row.dueAt)}
-                                {row.overdue ? " · te laat" : ""}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-2.5">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedRow(isOpen ? null : row.key)
-                                }
-                                className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash"
-                              >
-                                {isOpen ? "Sluiten" : "Open"}
-                              </button>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      <p className="text-sm font-medium text-ink">{row.klant}</p>
+                      {actie.telefoon?.trim() ? (
+                        <a
+                          href={`tel:${actie.telefoon.trim()}`}
+                          className="mt-0.5 block text-xs text-green-dark hover:underline"
+                        >
+                          {actie.telefoon.trim()}
+                        </a>
+                      ) : null}
+                      {actie.plaats ? (
+                        <p className="mt-0.5 text-xs text-muted">{actie.plaats}</p>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-3 align-top whitespace-nowrap">
+                      <span
+                        className={[
+                          "text-xs tabular-nums",
+                          row.overdue
+                            ? "font-semibold text-[#C45A12]"
+                            : "text-muted",
+                        ].join(" ")}
+                      >
+                        {formatDateTimeNl(row.dueAt)}
+                        {row.overdue ? " · te laat" : ""}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedRow(isOpen ? null : row.key)
+                          }
+                          className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
+                        >
+                          {isOpen ? "Sluiten" : "Open"}
+                        </button>
                               {row.kind === "aangetekende_brief" ? (
                                 <>
                                   {actie.projectId ? (
@@ -1916,56 +1885,58 @@ export function BackofficeActiesList({
                               {row.kind === "bestel_materiaal" ? (
                                 <Link
                                   href="/?tab=purchasing"
-                                  className="min-h-8 bg-orange px-2 text-[11px] font-semibold leading-8 text-white hover:opacity-90"
+                                  className="inline-flex h-8 items-center bg-orange px-2.5 text-[11px] font-semibold text-white hover:opacity-90"
                                 >
-                                  Open Purchasing
+                                  Purchasing
+                                </Link>
+                              ) : null}
+                              {row.kind === "herplan" ? (
+                                <Link
+                                  href={`/?tab=leads&lead=${actie.leadId}`}
+                                  className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
+                                >
+                                  Herplannen
                                 </Link>
                               ) : null}
                               {actie.projectId ? (
                                 <Link
                                   href={`/projecten/${actie.projectId}?from=acties`}
-                                  className="text-[11px] font-semibold text-green-dark hover:underline"
+                                  className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
                                 >
                                   Project
                                 </Link>
                               ) : actie.factuurId ? (
                                 <Link
                                   href={`/facturen/${actie.factuurId}`}
-                                  className="text-[11px] font-semibold text-green-dark hover:underline"
+                                  className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
                                 >
                                   Factuur
                                 </Link>
-                              ) : row.kind === "herplan" ? (
+                              ) : null}
+                              {isOpen && row.kind === "herplan" ? (
                                 <>
                                   <button
                                     type="button"
                                     disabled={busyId === actie.id}
                                     onClick={() => void voltooiHerplan(actie)}
-                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                    className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
                                   >
-                                    {busyId === actie.id
-                                      ? "Bezig…"
-                                      : "Voltooien"}
+                                    {busyId === actie.id ? "…" : "Voltooien"}
                                   </button>
-                                  <Link
-                                    href={`/?tab=leads&lead=${actie.leadId}`}
-                                    className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"
-                                  >
-                                    Lead herplannen
-                                  </Link>
                                   <button
                                     type="button"
                                     disabled={busyId === actie.id}
                                     onClick={() =>
                                       void definitiefAnnuleren(actie)
                                     }
-                                    className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                    className="inline-flex h-8 items-center border border-[#C62828]/40 px-2.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
                                   >
-                                    Definitief annuleren
+                                    Annuleren
                                   </button>
                                 </>
                               ) : null}
-                              {row.kind !== "aangetekende_brief" &&
+                              {isOpen &&
+                              row.kind !== "aangetekende_brief" &&
                               (actie.soort === "schakel_financiering" ||
                                 actie.soort === "bel_schouw_aanbetaling" ||
                                 actie.soort === "herplan_afspraak") ? (
@@ -1973,34 +1944,20 @@ export function BackofficeActiesList({
                                   type="button"
                                   disabled={busyId === actie.id}
                                   onClick={() => void verwijderActie(actie)}
-                                  className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                  className="inline-flex h-8 items-center border border-[#C62828]/40 px-2.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
                                 >
                                   Verwijderen
                                 </button>
                               ) : null}
                             </div>
-                            {row.kind === "schouw_week" &&
-                            row.done &&
-                            actie.project?.schouw_jaar &&
-                            actie.project?.schouw_week ? (
-                              <p className="mt-1 text-[10px] text-muted">
-                                {formatSchouwWeekLabel(
-                                  actie.project.schouw_jaar,
-                                  actie.project.schouw_week
-                                )}
-                              </p>
-                            ) : null}
                           </td>
                         </tr>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </section>
-        );
-      })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

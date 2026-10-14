@@ -1022,14 +1022,46 @@ export function openBackofficeActies(
 }
 
 /**
- * Acties-tab / sidebar-badge: herplan + schouw inplannen + purchasing.
+ * Acties-tab / sidebar-badge: afspraken, purchasing, project-planning, nazorg.
  * Badge en lijst moeten dezelfde set gebruiken.
  */
 export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "herplan_afspraak",
   "bestel_materiaal",
   "schouw_inplannen",
+  "volgende_stap",
+  "aangetekende_brief",
+  "schakel_financiering",
 ]);
+
+export type ActiesTabId =
+  | "afspraken"
+  | "purchasing"
+  | "projecten"
+  | "nazorg";
+
+/** Tab-indeling voor de Acties-UI. */
+export function actieTabVoorSoort(
+  soort: BackofficeActieSoort,
+  titel?: string
+): ActiesTabId {
+  if (soort === "herplan_afspraak") return "afspraken";
+  if (soort === "bestel_materiaal") return "purchasing";
+  if (soort === "aangetekende_brief" || soort === "schakel_financiering") {
+    return "nazorg";
+  }
+  if (soort === "volgende_stap") {
+    const t = titel || "";
+    if (/materiaal|inkoop|bestel/i.test(t)) return "purchasing";
+    if (/overstap|btw|review|nazorg/i.test(t)) return "nazorg";
+    return "projecten";
+  }
+  if (soort === "schouw_inplannen" || soort === "bel_schouw_aanbetaling") {
+    return "projecten";
+  }
+  if (soort === "nabellen_factuur") return "afspraken";
+  return "projecten";
+}
 
 export function actiesVoorActiesTab(
   acties: BackofficeActie[]
