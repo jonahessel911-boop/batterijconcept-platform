@@ -12,6 +12,7 @@ import { toZonedTime } from "date-fns-tz";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
   dayKeyAmsterdam,
+  isBeforeStartdatum,
   isSlotGeblokkeerd,
   nearestSlotHour,
   weekKeyFromDate,
@@ -91,6 +92,8 @@ type AdviseurIn = {
   actief: boolean;
   rol: string | null;
   email?: string | null;
+  /** Eerste planbare Amsterdam-dag; slots vóór deze datum tellen niet mee. */
+  startdatum?: string | null;
 };
 
 type AfspraakIn = {
@@ -152,6 +155,18 @@ export function buildDashboardV2Capacity(opts: {
   vrijgaven?: Set<string>;
   weeksAhead?: number;
   now?: Date;
+  /** Alleen ma–vr (bel-dagoel deelt door 5 werkdagen/week). */
+  weekdaysOnly?: boolean;
+  /**
+   * Bel-planning: sla de huidige ISO-week over en start bij de volgende
+   * volle week (2 weken vooruit = week+1 en week+2).
+   */
+  skipCurrentIsoWeek?: boolean;
+  /**
+   * Start scan vanaf vandaag (d=0) i.p.v. morgen (d=1).
+   * Nodig om rest van deze week mee te tellen in bel-dagoel.
+   */
+  includeToday?: boolean;
   /**
    * L2A als fractie (0–1). Null/undefined → fallback 25%.
    * Typisch: afgelopen 7 dagen.
@@ -166,8 +181,19 @@ export function buildDashboardV2Capacity(opts: {
     Math.max(opts.weeksAhead ?? CAPACITY_WEEKS_AHEAD, 1),
     12
   );
-  const daysAhead = weeksAhead * 7;
   const now = opts.now ?? new Date();
+  const currentWeekKey = weekKeyOf(now).key;
+  let scanStart = opts.includeToday ? 0 : 1;
+  if (opts.skipCurrentIsoWeek) {
+    for (let d = 1; d <= 14; d++) {
+      if (weekKeyOf(addDays(now, d)).key !== currentWeekKey) {
+        scanStart = d;
+        break;
+      }
+    }
+  }
+  // Genoeg dagen om weeksAhead volle weken te bestrijken vanaf scanStart
+  const daysAhead = scanStart + weeksAhead * 7 + 2;
 
   const sampleLeads = Math.max(0, Math.round(opts.l2aSampleLeads ?? 0));
   const sampleAfspraken = Math.max(0, Math.round(opts.l2aSampleAfspraken ?? 0));
@@ -196,9 +222,10 @@ export function buildDashboardV2Capacity(opts: {
   // Weekvolgorde voor team-totalen (komende weeksAhead ISO-weken)
   const weekOrder: { jaar: number; week: number; key: string }[] = [];
   const seenWeek = new Set<string>();
-  for (let d = 1; d <= daysAhead; d++) {
+  for (let d = scanStart; d <= daysAhead; d++) {
     const day = addDays(now, d);
     const wk = weekKeyOf(day);
+    if (opts.skipCurrentIsoWeek && wk.key === currentWeekKey) continue;
     if (seenWeek.has(wk.key)) continue;
     seenWeek.add(wk.key);
     weekOrder.push(wk);
@@ -237,6 +264,7 @@ export function buildDashboardV2Capacity(opts: {
       daysAhead,
       busy,
       fromDate: now,
+      weekdaysOnly: opts.weekdaysOnly === true,
     });
 
     const advByWeek = new Map<string, CapacityWeekRow>();
@@ -253,6 +281,9 @@ export function buildDashboardV2Capacity(opts: {
       const wk = weekKeyFromDate(block.start);
       const wkKey = weekKeyString(wk.jaar, wk.week);
       if (!advByWeek.has(wkKey)) continue; // buiten venster
+
+      // Nog niet gestart — geen planbare capaciteit
+      if (isBeforeStartdatum(block.start, adv.startdatum)) continue;
 
       const row = advByWeek.get(wkKey)!;
       const team = teamByWeek.get(wkKey);

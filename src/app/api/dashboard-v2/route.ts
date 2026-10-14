@@ -151,7 +151,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
         sb
           .from("leads")
           .select(
-            "id, created_at, naam, lead_number, status, telefoon, plaats, adviseur_id"
+            "id, created_at, naam, lead_number, status, telefoon, plaats, adviseur_id, bron, utm_source, lander, campaign_name"
           )
           .order("created_at", { ascending: true })
           .range(from, to)
@@ -175,7 +175,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
           .not("offerte_id", "is", null)
           .range(from, to)
       ),
-      sb.from("adviseurs").select("id, naam, email, actief, rol"),
+      sb.from("adviseurs").select("id, naam, email, actief, rol, startdatum"),
     ]);
 
   if (adviseursRes.error) throw adviseursRes.error;
@@ -255,20 +255,35 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
     actief: Boolean(a.actief),
     rol: ((a as { rol?: string | null }).rol as string | null) || "adviseur",
     email: ((a as { email?: string | null }).email as string | null) || null,
+    startdatum:
+      ((a as { startdatum?: string | null }).startdatum as string | null) ||
+      null,
   }));
 
   return {
-    leads: leadsRows.map((l) => ({
-      id: l.id as string,
-      created_at: l.created_at as string,
-      naam: (l.naam as string) || null,
-      lead_number: (l.lead_number as string) || null,
-      status: (l.status as string) || null,
-      telefoon: (l.telefoon as string) || null,
-      plaats: (l.plaats as string) || null,
-      adviseur_id:
-        ((l as { adviseur_id?: string | null }).adviseur_id as string) || null,
-    })),
+    leads: leadsRows.map((l) => {
+      const row = l as {
+        adviseur_id?: string | null;
+        bron?: string | null;
+        utm_source?: string | null;
+        lander?: string | null;
+        campaign_name?: string | null;
+      };
+      return {
+        id: l.id as string,
+        created_at: l.created_at as string,
+        naam: (l.naam as string) || null,
+        lead_number: (l.lead_number as string) || null,
+        status: (l.status as string) || null,
+        telefoon: (l.telefoon as string) || null,
+        plaats: (l.plaats as string) || null,
+        adviseur_id: (row.adviseur_id as string) || null,
+        bron: row.bron ?? null,
+        utm_source: row.utm_source ?? null,
+        lander: row.lander ?? null,
+        campaign_name: row.campaign_name ?? null,
+      };
+    }),
     afspraken,
     offertes,
     adviseurs,
@@ -281,6 +296,11 @@ function toDashboardRaw(raw: DrilldownRaw): DashboardV2Raw {
       created_at: l.created_at,
       adviseur_id: l.adviseur_id ?? null,
       status: l.status ?? null,
+      bron: (l as { bron?: string | null }).bron ?? null,
+      utm_source: (l as { utm_source?: string | null }).utm_source ?? null,
+      lander: (l as { lander?: string | null }).lander ?? null,
+      campaign_name:
+        (l as { campaign_name?: string | null }).campaign_name ?? null,
     })),
     afspraken: raw.afspraken.map((a) => ({
       id: a.id,

@@ -125,6 +125,10 @@ export type DrilldownRaw = {
     telefoon: string | null;
     plaats: string | null;
     adviseur_id?: string | null;
+    bron?: string | null;
+    utm_source?: string | null;
+    lander?: string | null;
+    campaign_name?: string | null;
   }[];
   afspraken: {
     id: string;
@@ -158,6 +162,7 @@ export type DrilldownRaw = {
     actief: boolean;
     rol: string | null;
     email?: string | null;
+    startdatum?: string | null;
   }[];
 };
 
@@ -197,6 +202,10 @@ function toBuildRaw(raw: DrilldownRaw): DashboardV2Raw {
       created_at: l.created_at,
       adviseur_id: l.adviseur_id ?? null,
       status: l.status ?? null,
+      bron: l.bron ?? null,
+      utm_source: l.utm_source ?? null,
+      lander: l.lander ?? null,
+      campaign_name: l.campaign_name ?? null,
     })),
     afspraken: raw.afspraken.map((a) => ({
       id: a.id,

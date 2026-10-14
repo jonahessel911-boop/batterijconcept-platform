@@ -67,6 +67,21 @@ export type DashboardV2Totals = {
   verlorenOmzet: number;
 };
 
+/** Leadbron / traffic source (Native, Meta, lander, …) in de geselecteerde periode. */
+export type DashboardV2SourceRow = {
+  key: string;
+  label: string;
+  leads: number;
+  /** Eerste nieuw-afspraken (L2A-teller) */
+  afsprakenL2a: number;
+  afsprakenGepland: number;
+  afsprakenVoltooid: number;
+  leadToAppt: number | null;
+  orders: number;
+  omzet: number;
+  afspraakToSale: number | null;
+};
+
 export type DashboardV2AdviseurBar = {
   id: string;
   naam: string;
@@ -104,6 +119,8 @@ export type DashboardV2Data = {
   personNaam: string | null;
   buckets: DashboardV2Bucket[];
   totals: DashboardV2Totals;
+  /** Per leadbron / utm_source / lander in de periode */
+  bySource: DashboardV2SourceRow[];
   previous: DashboardV2Totals;
   deltas: {
     leads: number | null;

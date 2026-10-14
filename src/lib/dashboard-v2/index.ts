@@ -33,6 +33,7 @@ export type {
   DashboardV2RangeOpts,
   DashboardV2Scope,
   DashboardV2ScopeOpts,
+  DashboardV2SourceRow,
 } from "./types";
 export type {
   DashboardV2Forecast,

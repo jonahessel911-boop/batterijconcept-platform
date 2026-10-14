@@ -4,8 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
 import { RapportageMap } from "./RapportageMap";
 import { DashboardV2 } from "./DashboardV2";
+import { BelConversiePanel } from "./BelConversiePanel";
+import { LeadConversiePanel } from "./LeadConversiePanel";
+import { FinancialPanel } from "./FinancialPanel";
 
-type ViewMode = "dashboard_v2" | "map";
+type ViewMode =
+  | "dashboard_v2"
+  | "bel_conversie"
+  | "lead_conversie"
+  | "financial"
+  | "map";
 
 export function RapportagePanel() {
   const [view, setView] = useState<ViewMode>("dashboard_v2");
@@ -33,24 +41,44 @@ export function RapportagePanel() {
     void loadMap();
   }, [view, loadMap]);
 
+  const title =
+    view === "dashboard_v2"
+      ? "Dashboard"
+      : view === "bel_conversie"
+        ? "Bellen"
+        : view === "lead_conversie"
+          ? "Leads"
+          : view === "financial"
+            ? "Financieel"
+            : "Kaart";
+  const subtitle =
+    view === "dashboard_v2"
+      ? "Stand vs doel: waar staan we, en wat moet er nog bij."
+      : view === "bel_conversie"
+        ? "Bel-conversie · periodefilter · dagoel uit open slots (+20% uitval)."
+        : view === "lead_conversie"
+          ? "Lead-conversie · periodefilter · bi-weekly leads nodig · CPL per kanaal."
+          : view === "financial"
+            ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
+            : "Klik op een provincie voor leads, afspraken en deals.";
+
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
       <div className="border border-line bg-white">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
           <div>
             <p className="font-display text-base font-semibold text-ink">
-              {view === "dashboard_v2" ? "Dashboard" : "Kaart"}
+              {title}
             </p>
-            <p className="mt-0.5 text-sm text-muted">
-              {view === "dashboard_v2"
-                ? "Stand vs doel: waar staan we, en wat moet er nog bij."
-                : "Klik op een provincie voor leads, afspraken en deals."}
-            </p>
+            <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
           </div>
-          <div className="flex shrink-0 gap-1 border border-line p-0.5">
+          <div className="flex shrink-0 flex-wrap gap-1 border border-line p-0.5">
             {(
               [
                 ["dashboard_v2", "Dashboard"],
+                ["bel_conversie", "Bellen"],
+                ["lead_conversie", "Leads"],
+                ["financial", "Financieel"],
                 ["map", "Kaart"],
               ] as const
             ).map(([id, label]) => (
@@ -80,6 +108,18 @@ export function RapportagePanel() {
         {view === "dashboard_v2" ? (
           <div className="bg-wash/40 px-4 py-5 sm:px-5">
             <DashboardV2 />
+          </div>
+        ) : view === "bel_conversie" ? (
+          <div className="bg-wash/40 px-4 py-5 sm:px-5">
+            <BelConversiePanel />
+          </div>
+        ) : view === "lead_conversie" ? (
+          <div className="bg-wash/40 px-4 py-5 sm:px-5">
+            <LeadConversiePanel />
+          </div>
+        ) : view === "financial" ? (
+          <div className="bg-wash/40">
+            <FinancialPanel />
           </div>
         ) : mapLoading ? (
           <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>

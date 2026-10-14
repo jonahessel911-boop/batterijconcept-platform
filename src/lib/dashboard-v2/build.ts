@@ -32,6 +32,7 @@ import type {
   DashboardV2RangeOpts,
   DashboardV2Scope,
   DashboardV2ScopeOpts,
+  DashboardV2SourceRow,
   DashboardV2Totals,
 } from "./types";
 import {
@@ -62,8 +63,19 @@ export const DASHBOARD_V2_PERIOD_LABELS: Record<DashboardV2Period, string> = {
   custom: "Aangepast",
 };
 
+export type DashboardV2LeadRow = {
+  id: string;
+  created_at: string;
+  adviseur_id?: string | null;
+  status?: string | null;
+  bron?: string | null;
+  utm_source?: string | null;
+  lander?: string | null;
+  campaign_name?: string | null;
+};
+
 export type DashboardV2Raw = {
-  leads: { id: string; created_at: string; adviseur_id?: string | null; status?: string | null }[];
+  leads: DashboardV2LeadRow[];
   afspraken: {
     id: string;
     lead_id: string;
@@ -402,6 +414,21 @@ function leadStatusMap(
   return map;
 }
 
+/**
+ * Traffic source voor rapportage.
+ * Native/Meta/etc.: expliciete bron ≠ website, anders utm_source, anders lander.
+ */
+export function leadSourceLabel(l: DashboardV2LeadRow): string {
+  const bron = (l.bron || "").trim();
+  const utm = (l.utm_source || "").trim();
+  const lander = (l.lander || "").trim();
+  if (bron && bron.toLowerCase() !== "website") return bron;
+  if (utm) return utm;
+  if (lander) return lander;
+  if (bron) return bron;
+  return "Onbekend";
+}
+
 export function aggRange(
   raw: DashboardV2Raw,
   range: Range,
@@ -463,6 +490,97 @@ export function aggRange(
     annuleringsPct,
     verlorenOmzet: round2(verlorenOmzet),
   };
+}
+
+/** Per source: leads, L→A, afspraken, orders — zelfde definities als totals. */
+export function buildBySource(
+  raw: DashboardV2Raw,
+  range: Range,
+  now = new Date()
+): DashboardV2SourceRow[] {
+  const sourceByLeadId = new Map<string, string>();
+  for (const l of raw.leads) {
+    sourceByLeadId.set(l.id, leadSourceLabel(l));
+  }
+
+  type Acc = {
+    leads: number;
+    afsprakenL2a: number;
+    afsprakenGepland: number;
+    afsprakenVoltooid: number;
+    orders: number;
+    omzet: number;
+  };
+  const by = new Map<string, Acc>();
+  const touch = (key: string): Acc => {
+    let a = by.get(key);
+    if (!a) {
+      a = {
+        leads: 0,
+        afsprakenL2a: 0,
+        afsprakenGepland: 0,
+        afsprakenVoltooid: 0,
+        orders: 0,
+        omzet: 0,
+      };
+      by.set(key, a);
+    }
+    return a;
+  };
+
+  for (const l of raw.leads) {
+    if (!inIsoRange(l.created_at, range.start, range.end)) continue;
+    touch(leadSourceLabel(l)).leads += 1;
+  }
+
+  for (const a of afsprakenVoorL2a(raw.afspraken, range)) {
+    const src = sourceByLeadId.get(a.lead_id) || "Onbekend";
+    touch(src).afsprakenL2a += 1;
+  }
+
+  for (const a of raw.afspraken) {
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    const at = a.created_at || a.start_at;
+    if (!inIsoRange(at, range.start, range.end)) continue;
+    const src = sourceByLeadId.get(a.lead_id) || "Onbekend";
+    touch(src).afsprakenGepland += 1;
+  }
+
+  const statusMap = leadStatusMap(raw);
+  for (const a of afsprakenVoltooidInRange(raw.afspraken, range, now, statusMap)) {
+    const src = sourceByLeadId.get(a.lead_id) || "Onbekend";
+    touch(src).afsprakenVoltooid += 1;
+  }
+
+  for (const o of raw.offertes) {
+    const at = dealAt(o);
+    if (!at || !inIsoRange(at, range.start, range.end)) continue;
+    if (o.geannuleerd) continue;
+    const src = sourceByLeadId.get(o.lead_id) || "Onbekend";
+    const acc = touch(src);
+    acc.orders += 1;
+    acc.omzet += Number(o.subtotaal_ex_btw) || 0;
+  }
+
+  const rows: DashboardV2SourceRow[] = [...by.entries()].map(([key, a]) => {
+    const l2a = safeDiv(a.afsprakenL2a, a.leads);
+    const a2s = safeDiv(a.orders, a.afsprakenVoltooid);
+    return {
+      key,
+      label: key,
+      leads: a.leads,
+      afsprakenL2a: a.afsprakenL2a,
+      afsprakenGepland: a.afsprakenGepland,
+      afsprakenVoltooid: a.afsprakenVoltooid,
+      leadToAppt: l2a != null ? round2(l2a * 100) : null,
+      orders: a.orders,
+      omzet: round2(a.omzet),
+      afspraakToSale: a2s != null ? round2(a2s * 100) : null,
+    };
+  });
+
+  rows.sort((a, b) => b.leads - a.leads || a.label.localeCompare(b.label, "nl"));
+  return rows;
 }
 
 function buildBuckets(
@@ -732,6 +850,7 @@ export function buildDashboardV2(
   const { granularity, buckets: defs } = buildBucketDefsForRange(range);
   const buckets = buildBuckets(scopedRaw, defs, now);
   const totals = aggRange(scopedRaw, range, now);
+  const bySource = buildBySource(scopedRaw, range, now);
   const previous = aggRange(scopedRaw, prev, now);
 
   const weeklyGoals =
@@ -778,6 +897,7 @@ export function buildDashboardV2(
     personNaam: person?.naam || null,
     buckets,
     totals,
+    bySource,
     previous,
     deltas: {
       leads: deltaPct(totals.leads, previous.leads),

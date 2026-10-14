@@ -19,6 +19,9 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
   offerte_afgewezen: "Offerte afgewezen",
   niet_gekwalificeerd: "Niet goed gekwalificeerd door beller",
   geen_interesse: "Geen interesse in thuisbatterij",
+  geen_interesse_al_batterij: "Geen interesse — heeft al een batterij",
+  geen_interesse_plugin: "Geen interesse — interesse in een plugin batterij",
+  geen_interesse_alleen_info: "Geen interesse — wilde alleen informatie",
   geen_contact: "Geen contact",
   deal: "Deal",
   sale_financiering: "Sale met financiering",
@@ -46,11 +49,24 @@ export const AFSPRAAK_UITKOMSTEN: LeadStatus[] = [
 
 /** Bel-uitkomsten (excl. terugbel-afspraak / warme terugbel — die zijn aparte acties). */
 export const BEL_UITKOMSTEN: LeadStatus[] = [
-  "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
-  "geen_interesse",
+  "geen_interesse_al_batterij",
+  "geen_interesse_plugin",
+  "geen_interesse_alleen_info",
 ];
+
+/** Geen-interesse (generiek + subredenen uit Bel). */
+export function isGeenInteresseStatus(
+  status: string | null | undefined
+): boolean {
+  return (
+    status === "geen_interesse" ||
+    status === "geen_interesse_al_batterij" ||
+    status === "geen_interesse_plugin" ||
+    status === "geen_interesse_alleen_info"
+  );
+}
 
 /**
  * Alle leadstatussen gegroepeerd voor dropdowns (met scheiding).
@@ -81,11 +97,14 @@ export const LEAD_STATUS_GROUPS: {
   {
     label: "Bellen",
     statuses: [
-      "huurwoning",
       "foutief_nummer",
       "gegevens_niet_overeen",
+      "geen_interesse_al_batterij",
+      "geen_interesse_plugin",
+      "geen_interesse_alleen_info",
       "geen_interesse",
       "geen_contact",
+      "huurwoning",
     ],
   },
   {
@@ -221,6 +240,12 @@ export function statusTone(
       niet_gekwalificeerd:
         "border border-[#8D6E63]/35 bg-[#F5EEEA] text-[#6D4C41]",
       geen_interesse: "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
+      geen_interesse_al_batterij:
+        "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
+      geen_interesse_plugin:
+        "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
+      geen_interesse_alleen_info:
+        "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
       geen_contact: "border border-[#37474F]/30 bg-[#ECEFF1] text-[#37474F]",
       deal: "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
       sale_financiering:
@@ -462,6 +487,9 @@ function afboekAgendaAccent(
         time: "text-[#A16207]",
       };
     case "geen_interesse":
+    case "geen_interesse_al_batterij":
+    case "geen_interesse_plugin":
+    case "geen_interesse_alleen_info":
     case "offerte_afgewezen":
       return {
         bar: "bg-[#C62828]",

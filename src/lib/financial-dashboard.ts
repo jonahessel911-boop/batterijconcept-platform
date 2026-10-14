@@ -13,10 +13,14 @@ import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { STANDAARD_INSTALLATIEKOSTEN, hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import {
-  buildInkoopChecklist,
-} from "@/lib/project-inkoop-checklist";
-import { factuurIsBetaald } from "@/lib/aanbetaling";
+  factuurIsBetaald,
+  isAanbetalingFactuurOmschrijving,
+} from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import {
+  commissieTrancheA,
+  commissieTrancheB,
+} from "@/lib/netto-boord";
 import type { RapportageRaw } from "@/lib/rapportage";
 
 /** Adviseur commissie-% map: adviseur_id → percentage (0-100) */
@@ -26,8 +30,17 @@ const TZ = "Europe/Amsterdam";
 const MS_DAY = 24 * 60 * 60 * 1000;
 /** Restbetaling / 100% betaald: modelmatig 5 weken na ondertekenen. */
 const FULL_PAY_AFTER_MS = 5 * 7 * MS_DAY;
-/** Installatie: modelmatig 6 weken na ondertekenen. */
-const INSTALL_AFTER_MS = 6 * 7 * MS_DAY;
+/** Partner-installatie: betalen binnen 7 dagen na installatie (= relatie-betaaltermijn). */
+const INSTALL_PAY_AFTER_DAYS = 7;
+/** Vooruitblik: huidige week + 7 weken (~2 maanden). */
+const CASHFLOW_WEEK_COUNT = 8;
+
+/** Tarik loon: vast + variabel per ingepland huisbezoek. */
+export const TARIK_FIXED_PER_MONTH = 3000;
+export const TARIK_PER_INGEPLANDE_AFSPRAAK = 15;
+/** Weekfactuur ≈ maandsalaris / (52/12) weken. */
+export const TARIK_FIXED_PER_WEEK =
+  Math.round(((TARIK_FIXED_PER_MONTH * 12) / 52) * 100) / 100;
 
 export type FinancialDateRange =
   | "this_week"
@@ -114,19 +127,86 @@ export type CashflowInkoopRow = {
 export type CashflowInstallatieRow = {
   label: string;
   bedragExBtw: number;
+  /** Geplande installatiedatum (ISO) */
+  installatieAt?: string | null;
+  /** Uiterste betaaldatum = installatie + 7d (ISO) */
+  betaalAt?: string | null;
+};
+
+export type CashflowSalesRow = {
+  label: string;
+  bedragExBtw: number;
+  betaalAt?: string | null;
 };
 
 export type CashflowOverigRow = {
   label: string;
   bedrag: number;
+  betaalAt?: string | null;
 };
 
 export type FreeCashflowWeekDetails = {
   inkomsten: CashflowInkomenRow[];
   inkoop: CashflowInkoopRow[];
   installatie: CashflowInstallatieRow[];
+  sales: CashflowSalesRow[];
   overig: CashflowOverigRow[];
 };
+
+/** Kostenpost in de uitgaven-forecast. */
+export type ExpenseCostPostKey =
+  | "btw"
+  | "inkoop"
+  | "installatie"
+  | "sales"
+  | "loon"
+  | "leads"
+  | "credit"
+  | "overig";
+
+export type ExpenseForecastLine = {
+  costPost: ExpenseCostPostKey;
+  label: string;
+  bedrag: number;
+  /** yyyy-MM-dd */
+  betaalDatum: string;
+  /** Korte uitleg wanneer / waarom */
+  wanneer: string;
+  detail?: string;
+};
+
+export type ExpenseForecastByPost = {
+  key: ExpenseCostPostKey;
+  label: string;
+  bedrag: number;
+  wanneer: string;
+  lines: ExpenseForecastLine[];
+};
+
+/** Uitgaven-forecast: overzicht + per kostenpost + komende maand. */
+export type ExpenseForecast = {
+  horizonLabel: string;
+  monthLabel: string;
+  monthStart: string;
+  monthEnd: string;
+  monthTotaal: number;
+  horizonTotaal: number;
+  byCostPost: ExpenseForecastByPost[];
+  monthByCostPost: ExpenseForecastByPost[];
+  /** Komende 14 dagen — hoofddashboard-stand */
+  twoWeekByCostPost: ExpenseForecastByPost[];
+  twoWeekTotaal: number;
+  twoWeekStart: string;
+  twoWeekEnd: string;
+  lines: ExpenseForecastLine[];
+};
+
+/** BTW op partner-installatie (selfbilling). */
+export const INSTALL_BTW_PCT = 0.21;
+
+export function installatieInclBtw(exBtw: number): number {
+  return Math.round(exBtw * (1 + INSTALL_BTW_PCT) * 100) / 100;
+}
 
 export type FreeCashflowWeekRow = {
   week: number;
@@ -153,8 +233,12 @@ export type FreeCashflowSnapshot = {
   verwachteDeals: number;
   afTeDragenBtw: number;
   teBetalenInkoop5w: number;
-  /** Verwachte installatiekosten (€675/stuk) in de vooruitblik. */
+  /** Verwachte installatiekosten (€675/stuk of projectkosten) in de vooruitblik. */
   teBetalenInstallatie: number;
+  /** Verwachte sales-commissie in de vooruitblik. */
+  teBetalenSales: number;
+  /** Tarik loon (vast + €15/afspraak) in de vooruitblik. */
+  teBetalenLoon: number;
   openstaandeFacturenIncBtw: number;
   openstaandeRestOrdersIncBtw: number;
   adSpendPeriode: number;
@@ -164,7 +248,13 @@ export type FreeCashflowSnapshot = {
   beginsaldoOntbreekt: boolean;
   /** Nog af te dragen / gereserveerde btw (lock op vrije cash). */
   btwTeBetalen: number;
+  /** Kwartaal-label van de eerstvolgende BTW-aangifte (bijv. 2026-Q3). */
+  btwKwartaalLabel: string | null;
+  /** Uiterste betaaldatum BTW (yyyy-MM-dd). */
+  btwBetaalDatum: string | null;
   weeks: FreeCashflowWeekRow[];
+  /** Uitgaven-forecast per kostenpost + komende maand. */
+  expenseForecast: ExpenseForecast;
 };
 
 export type FinancialTotals = {
@@ -292,6 +382,167 @@ export function financialRangeLabel(range: FinancialDateRange): string {
   return labels[range];
 }
 
+function ymdAmsterdam(d: Date): string {
+  return formatInTimeZone(d, TZ, "yyyy-MM-dd");
+}
+
+function nextWednesdayOnOrAfter(d: Date): Date {
+  const z = toZonedTime(d, TZ);
+  const day = z.getDay(); // 0 zo … 3 wo
+  const add = day === 3 ? 0 : (3 - day + 7) % 7;
+  return fromZonedTime(
+    new Date(z.getFullYear(), z.getMonth(), z.getDate() + add, 12, 0, 0, 0),
+    TZ
+  );
+}
+
+/**
+ * NL BTW-aangifte: kwartaal, uiterlijk laatste dag van de maand erna.
+ * Q1→30 apr, Q2→31 jul, Q3→31 okt, Q4→31 jan.
+ * In okt (Q4) is de eerstvolgende dus nog Q3 (uiterlijk 31 okt), niet Q4.
+ */
+export function resolveNextBtwAangifte(now = new Date()): {
+  label: string;
+  dueYmd: string;
+  dueDate: Date;
+  quarterStart: Date;
+  quarterEnd: Date;
+} {
+  const z = toZonedTime(now, TZ);
+  const y = z.getFullYear();
+  const q = Math.floor(z.getMonth() / 3); // 0..3 huidig kwartaal
+  // Vorige kwartaal eerst: aangifte valt in de 1e maand van het huidige kwartaal
+  const prevQi = q === 0 ? 3 : q - 1;
+  const prevQy = q === 0 ? y - 1 : y;
+  const candidates: { qi: number; qy: number }[] = [
+    { qi: prevQi, qy: prevQy },
+    { qi: q, qy: y },
+    { qi: (q + 1) % 4, qy: q === 3 ? y + 1 : y },
+  ];
+
+  for (const c of candidates) {
+    // Due-maand: Q1→apr(3), Q2→jul(6), Q3→okt(9), Q4→jan(0) volgend jaar
+    const dueMonth = [3, 6, 9, 0][c.qi]!;
+    const dueYear = c.qi === 3 ? c.qy + 1 : c.qy;
+    const dueDay = dueMonth === 0 || dueMonth === 6 ? 31 : 30;
+    const dueDate = fromZonedTime(
+      new Date(dueYear, dueMonth, dueDay, 12, 0, 0, 0),
+      TZ
+    );
+    if (dueDate.getTime() < amsStartOfDay(now).getTime()) continue;
+
+    const qStartMonth = c.qi * 3;
+    const quarterStart = fromZonedTime(
+      new Date(c.qy, qStartMonth, 1, 0, 0, 0, 0),
+      TZ
+    );
+    const quarterEnd = fromZonedTime(
+      new Date(c.qy, qStartMonth + 3, 0, 23, 59, 59, 999),
+      TZ
+    );
+    return {
+      label: `${c.qy}-Q${c.qi + 1}`,
+      dueYmd: ymdAmsterdam(dueDate),
+      dueDate,
+      quarterStart,
+      quarterEnd,
+    };
+  }
+
+  // Fallback: Q1 volgend jaar
+  const fy = y + 1;
+  const dueDate = fromZonedTime(new Date(fy, 3, 30, 12, 0, 0, 0), TZ);
+  return {
+    label: `${fy}-Q1`,
+    dueYmd: ymdAmsterdam(dueDate),
+    dueDate,
+    quarterStart: fromZonedTime(new Date(fy, 0, 1, 0, 0, 0, 0), TZ),
+    quarterEnd: fromZonedTime(new Date(fy, 2, 31, 23, 59, 59, 999), TZ),
+  };
+}
+
+function installatieKostenBedrag(projectkosten: number | null | undefined): number {
+  const pk = Number(projectkosten);
+  if (Number.isFinite(pk) && pk > 0) return round2(pk);
+  return STANDAARD_INSTALLATIEKOSTEN;
+}
+
+function costPostLabel(key: ExpenseCostPostKey): string {
+  switch (key) {
+    case "btw":
+      return "BTW-afdracht";
+    case "inkoop":
+      return "Purchasing (te bestellen)";
+    case "installatie":
+      return "Installatiekosten";
+    case "sales":
+      return "Sales / commissie";
+    case "loon":
+      return "Loonkosten (Tarik)";
+    case "leads":
+      return "Leadkosten (ads)";
+    case "credit":
+      return "Credit terugbetaling";
+    default:
+      return "Overig";
+  }
+}
+
+function groupExpenseLines(
+  lines: ExpenseForecastLine[]
+): ExpenseForecastByPost[] {
+  const order: ExpenseCostPostKey[] = [
+    "inkoop",
+    "installatie",
+    "sales",
+    "loon",
+    "leads",
+    "credit",
+    "overig",
+    "btw",
+  ];
+  const by = new Map<ExpenseCostPostKey, ExpenseForecastLine[]>();
+  for (const line of lines) {
+    const arr = by.get(line.costPost) || [];
+    arr.push(line);
+    by.set(line.costPost, arr);
+  }
+  return order
+    .filter((k) => (by.get(k) || []).length > 0)
+    .map((k) => {
+      const ls = by.get(k) || [];
+      const bedrag = round2(ls.reduce((s, l) => s + l.bedrag, 0));
+      const wanneer =
+        k === "btw"
+          ? "Uiterlijk kwartaal-deadline"
+          : k === "installatie"
+            ? `Binnen ${INSTALL_PAY_AFTER_DAYS} dagen na installatie`
+            : k === "sales"
+              ? "€250 bij betaalde aanbetaling · rest woensdag na installatie"
+              : k === "loon"
+                ? "Weekfactuur · betalen maandag na werkweek (ma–vr)"
+                : k === "leads"
+                  ? "Doorlopend (weekgemiddelde ads)"
+                  : k === "inkoop"
+                    ? "Purchasing · Te bestellen (schouw-PDF + te kopen)"
+                    : k === "credit"
+                      ? "Terugbetaling · origineel was betaald"
+                      : "Overig";
+      return {
+        key: k,
+        label: costPostLabel(k),
+        bedrag,
+        wanneer,
+        lines: ls.sort((a, b) => a.betaalDatum.localeCompare(b.betaalDatum)),
+      };
+    });
+}
+
+function isHuisbezoekVoorLoon(soort: string | null | undefined): boolean {
+  const s = (soort || "nieuw").toLowerCase();
+  return s !== "bel" && s !== "warme_bel";
+}
+
 export function resolveFinancialRange(
   range: FinancialDateRange,
   now = new Date()
@@ -358,30 +609,41 @@ function orderIncBtw(o: RapportageRaw["offertes"][0]): number {
 }
 
 function factuurIncBtw(f: RapportageRaw["facturen"][0]): number {
-  if (f.bedrag_inc_btw != null && Number(f.bedrag_inc_btw) > 0) {
-    return round2(Number(f.bedrag_inc_btw));
+  if (f.bedrag_inc_btw != null && Number.isFinite(Number(f.bedrag_inc_btw))) {
+    const n = Number(f.bedrag_inc_btw);
+    if (n !== 0) return round2(Math.abs(n));
   }
-  const ex = Number(f.bedrag_ex_btw) || 0;
-  if (f.btw_bedrag != null && Number(f.btw_bedrag) > 0) {
-    return round2(ex + Number(f.btw_bedrag));
+  const ex = Math.abs(Number(f.bedrag_ex_btw) || 0);
+  if (f.btw_bedrag != null && Number.isFinite(Number(f.btw_bedrag))) {
+    return round2(ex + Math.abs(Number(f.btw_bedrag)));
   }
   return round2(ex * 1.21);
 }
 
 function factuurBtw(f: RapportageRaw["facturen"][0]): number {
   if (f.btw_bedrag != null && Number.isFinite(Number(f.btw_bedrag))) {
-    return round2(Number(f.btw_bedrag));
+    return round2(Math.abs(Number(f.btw_bedrag)));
   }
-  const ex = Number(f.bedrag_ex_btw) || 0;
+  const ex = Math.abs(Number(f.bedrag_ex_btw) || 0);
   const inc = factuurIncBtw(f);
   return round2(Math.max(0, inc - ex));
 }
 
+function isCreditFactuur(f: {
+  credit_van_factuur_id?: string | null;
+}): boolean {
+  return Boolean(f.credit_van_factuur_id);
+}
+
 /**
  * Free cashflow:
- * - periode: getekende omzet, betaald ex/incl, af te dragen btw
- * - vooruitblik: restbedragen (~5w na tekenen), inkoop bij 100% betaling (zelfde week),
- *   installatiekosten €675 (~6w na tekenen of geplande installatiedatum)
+ * - periode: getekende omzet, betaald ex/incl (− credits op betaalde facturen)
+ * - vooruitblik: rest (~5w), purchasing = Purchasing-tab “Te bestellen”
+ *   (schouw-PDF + te_kopen, volledig betaald),
+ *   installatiekosten alleen bij echte installatie_at (≤7d na, incl. btw),
+ *   sales-commissie (€250 bij aanbetaling betaald · rest na installatie),
+ *   leadkosten (ads), credit-terugbetalingen
+ * - BTW-kwartaal: af te dragen obv betaalde facturen (− credits) in cashstand
  */
 export function buildFreeCashflow(
   raw: RapportageRaw,
@@ -393,7 +655,10 @@ export function buildFreeCashflow(
   opts?: {
     beginsaldoCash?: number | null;
     btwReservering?: number | null;
-  }
+    /** Adviseur-id van Tarik (loon €15/afspraak + €3000/mnd). */
+    tarikId?: string | null;
+  },
+  commissieMap?: CommissieMap
 ): FreeCashflowSnapshot {
   const offertes = (
     adviseurId
@@ -420,13 +685,34 @@ export function buildFreeCashflow(
     omzetExBtw += Number(o.subtotaal_ex_btw) || 0;
   }
 
+  const factuurById = new Map(facturen.map((f) => [f.id, f]));
+
   for (const f of facturen) {
+    if (f.status === "concept" || f.status === "vervallen") continue;
+
+    if (isCreditFactuur(f)) {
+      // Credit alleen meetellen als origineel betaald was (anders: herroeping, geen cash)
+      const orig = f.credit_van_factuur_id
+        ? factuurById.get(f.credit_van_factuur_id)
+        : null;
+      if (!orig || !factuurIsBetaald(orig.status, orig.betaald_op)) continue;
+      const creditIso = f.betaald_op || f.factuurdatum;
+      if (!creditIso || !inRange(creditIso, start, end)) continue;
+      betaaldeOmzetExBtw -= Math.abs(Number(f.bedrag_ex_btw) || 0);
+      inkomstenIncBtw -= factuurIncBtw(f);
+      afTeDragenBtw -= factuurBtw(f);
+      continue;
+    }
+
     const iso = factuurBetaalIso(f);
     if (!iso || !inRange(iso, start, end)) continue;
-    betaaldeOmzetExBtw += Number(f.bedrag_ex_btw) || 0;
+    betaaldeOmzetExBtw += Math.abs(Number(f.bedrag_ex_btw) || 0);
     inkomstenIncBtw += factuurIncBtw(f);
     afTeDragenBtw += factuurBtw(f);
   }
+  betaaldeOmzetExBtw = round2(Math.max(0, betaaldeOmzetExBtw));
+  inkomstenIncBtw = round2(Math.max(0, inkomstenIncBtw));
+  afTeDragenBtw = round2(Math.max(0, afTeDragenBtw));
 
   for (const k of kosten) {
     if (adviseurId && k.adviseur_id && k.adviseur_id !== adviseurId) continue;
@@ -441,6 +727,28 @@ export function buildFreeCashflow(
   for (const f of facturen) {
     if (f.status === "concept" || f.status === "vervallen") continue;
     const inc = factuurIncBtw(f);
+
+    if (isCreditFactuur(f)) {
+      const orig = f.credit_van_factuur_id
+        ? factuurById.get(f.credit_van_factuur_id)
+        : null;
+      // Alleen credits op betaalde originelen verlagen ontvangen cash
+      if (!orig || !factuurIsBetaald(orig.status, orig.betaald_op)) continue;
+      if (!factuurIsBetaald(f.status, f.betaald_op)) continue; // nog niet terugbetaald → niet in paid
+      const offerteId = f.offerte_id || orig.offerte_id;
+      if (offerteId) {
+        paidByOfferte.set(
+          offerteId,
+          round2((paidByOfferte.get(offerteId) || 0) - inc)
+        );
+      }
+      paidByLead.set(
+        f.lead_id,
+        round2((paidByLead.get(f.lead_id) || 0) - inc)
+      );
+      continue;
+    }
+
     if (factuurIsBetaald(f.status, f.betaald_op)) {
       if (f.offerte_id) {
         paidByOfferte.set(
@@ -457,23 +765,28 @@ export function buildFreeCashflow(
     }
   }
 
-  // Huidige week + 6 weken vooruit (installatie ~6w na tekenen)
-  const WEEK_COUNT = 7;
+  // Huidige week + 7 weken vooruit (~2 maanden, dekt komende maand)
+  const WEEK_COUNT = CASHFLOW_WEEK_COUNT;
   const horizonMs = WEEK_COUNT * 7 * MS_DAY;
   const nowMs = now.getTime();
   const horizonEnd = nowMs + horizonMs;
   const zNow = toZonedTime(now, TZ);
   const week0Monday = startOfISOWeek(zNow);
+  const expenseLines: ExpenseForecastLine[] = [];
 
   type Bucket = {
     binnen: number;
     daadwerkelijkBinnen: number;
     uitInkoop: number;
     uitInstallatie: number;
+    uitSales: number;
+    uitLoon: number;
     uitAds: number;
+    uitBtw: number;
     inkomsten: CashflowInkomenRow[];
     inkoop: CashflowInkoopRow[];
     installatie: CashflowInstallatieRow[];
+    sales: CashflowSalesRow[];
     overig: CashflowOverigRow[];
   };
   const buckets: Bucket[] = Array.from({ length: WEEK_COUNT }, () => ({
@@ -481,12 +794,18 @@ export function buildFreeCashflow(
     daadwerkelijkBinnen: 0,
     uitInkoop: 0,
     uitInstallatie: 0,
+    uitSales: 0,
+    uitLoon: 0,
     uitAds: 0,
+    uitBtw: 0,
     inkomsten: [],
     inkoop: [],
     installatie: [],
+    sales: [],
     overig: [],
   }));
+  let teBetalenLoon = 0;
+  const tarikId = (opts?.tarikId || "").trim() || null;
 
   function weekIndexForDate(d: Date): number {
     const z = toZonedTime(d, TZ);
@@ -518,7 +837,7 @@ export function buildFreeCashflow(
     ? 0
     : round2(Number(opts!.beginsaldoCash));
 
-  // Ads: spreid recent weekgemiddelde over vooruitblik
+  // Ads: spreid recent weekgemiddelde over vooruitblik (= leadkosten)
   const daysInPeriod = Math.max(
     1,
     differenceInCalendarDays(end, start) + 1
@@ -527,9 +846,89 @@ export function buildFreeCashflow(
   for (let i = 0; i < WEEK_COUNT; i++) {
     buckets[i].uitAds += adsPerWeek;
     if (adsPerWeek > 0) {
+      const monday = addWeeks(week0Monday, i);
+      const betaalDatum = ymdAmsterdam(monday);
       buckets[i].overig.push({
-        label: "Ad spend (gespreid)",
+        label: "Leadkosten / ad spend (weekgemiddelde)",
         bedrag: adsPerWeek,
+        betaalAt: monday.toISOString(),
+      });
+      expenseLines.push({
+        costPost: "leads",
+        label: `Ads week ${getISOWeek(monday)}`,
+        bedrag: adsPerWeek,
+        betaalDatum,
+        wanneer: "Doorlopend weekgemiddelde uit ads-periode",
+      });
+    }
+  }
+
+  // Tarik loon: per werkweek (ma–vr) factuur = vast weekdeel + €15 × ingeplande huisbezoeken.
+  // Betaaldatum = maandag ná die werkweek (weekMaandag + 7 dagen).
+  // Incl. 2 weken terug (nog openstaande weekfacturen).
+  if (tarikId) {
+    for (let workWeekIdx = -2; workWeekIdx < WEEK_COUNT; workWeekIdx++) {
+      const weekMon = addWeeks(week0Monday, workWeekIdx);
+      const weekFriEnd = fromZonedTime(
+        (() => {
+          const z = toZonedTime(weekMon, TZ);
+          return new Date(
+            z.getFullYear(),
+            z.getMonth(),
+            z.getDate() + 4,
+            23,
+            59,
+            59,
+            999
+          );
+        })(),
+        TZ
+      );
+      const weekMonStart = fromZonedTime(
+        (() => {
+          const z = toZonedTime(weekMon, TZ);
+          return new Date(z.getFullYear(), z.getMonth(), z.getDate(), 0, 0, 0, 0);
+        })(),
+        TZ
+      );
+      let apptCount = 0;
+      for (const a of raw.afspraken || []) {
+        if (a.status === "geannuleerd") continue;
+        if (!isHuisbezoekVoorLoon(a.soort)) continue;
+        const door = (a.ingepland_door_id || "").trim();
+        if (door !== tarikId) continue;
+        const plannedAt = a.created_at || a.start_at;
+        if (!plannedAt) continue;
+        const t = new Date(plannedAt).getTime();
+        if (t < weekMonStart.getTime() || t > weekFriEnd.getTime()) continue;
+        apptCount += 1;
+      }
+      const variabel = round2(apptCount * TARIK_PER_INGEPLANDE_AFSPRAAK);
+      const vast = TARIK_FIXED_PER_WEEK;
+      const totaal = round2(vast + variabel);
+      if (!(totaal > 0)) continue;
+      // Betalen maandag na de werkweek
+      const payAt = addWeeks(weekMon, 1);
+      if (payAt.getTime() > horizonEnd + MS_DAY) continue;
+      const payIdx = weekIndexForDate(payAt);
+      teBetalenLoon += totaal;
+      buckets[payIdx].uitLoon += totaal;
+      buckets[payIdx].overig.push({
+        label: `Tarik week ${getISOWeek(weekMon)} · vast €${vast}${
+          apptCount > 0
+            ? ` + ${apptCount}×€${TARIK_PER_INGEPLANDE_AFSPRAAK}`
+            : ""
+        }`,
+        bedrag: totaal,
+        betaalAt: payAt.toISOString(),
+      });
+      expenseLines.push({
+        costPost: "loon",
+        label: `Tarik · week ${getISOWeek(weekMon)}`,
+        bedrag: totaal,
+        betaalDatum: ymdAmsterdam(payAt),
+        wanneer: `Maandag na werkweek ma–vr (week ${getISOWeek(weekMon)})`,
+        detail: `€${vast} vast + €${variabel} (${apptCount}×€${TARIK_PER_INGEPLANDE_AFSPRAAK})`,
       });
     }
   }
@@ -540,6 +939,8 @@ export function buildFreeCashflow(
   let openstaandeRestOrdersIncBtw = 0;
   let teBetalenInkoop5w = 0;
   let teBetalenInstallatie = 0;
+  let teBetalenSales = 0;
+  const scheduledInstallPay = new Set<string>(); // project id / offerte id
 
   /** Open (nog niet betaalde) facturen per offerte — voor aftrek op order-rest. */
   const openByOfferte = new Map<string, number>();
@@ -562,9 +963,10 @@ export function buildFreeCashflow(
     return WEEK_COUNT - 1;
   }
 
-  // 1) Facturen: betaald → daadwerkelijk; open → verwacht
+  // 1) Facturen: betaald → daadwerkelijk; open → verwacht (credits apart als terugbetaling)
   for (const f of facturen) {
     if (f.status === "concept" || f.status === "vervallen") continue;
+    if (isCreditFactuur(f)) continue; // geen inkomsten; refund hieronder
     const inc = factuurIncBtw(f);
     if (!(inc > 0)) continue;
 
@@ -634,67 +1036,298 @@ export function buildFreeCashflow(
     }
 
     const project = projecten.find((p) => p.offerte_id === o.id);
-    const installed =
+    const installedDone =
       project?.status === "installatie_voltooid" ||
       (project?.installatie_at &&
-        new Date(project.installatie_at).getTime() < nowMs);
-    if (installed) continue;
+        addDays(new Date(project.installatie_at), INSTALL_PAY_AFTER_DAYS).getTime() <
+          nowMs);
 
-    // Inkoopregels (producten) in week van 100% betaling
-    const checklist = buildInkoopChecklist(
-      (o.regels || []).map((r, i) => ({
-        id: `${o.id}-${i}`,
-        omschrijving: r.omschrijving || "Product",
-        aantal: Math.max(0, Number(r.aantal) || 0),
-      }))
-    );
-    const inkoopTotaal = round2(
-      checklist.reduce((s, it) => s + (Number(it.inkoopExBtw) || 0), 0)
-    );
-
-    if (inkoopTotaal > 0) {
-      const inkoopAt =
-        remaining > 0.01 ? fullPayAt : new Date(nowMs);
-      if (inkoopAt.getTime() <= horizonEnd) {
-        const idx = weekIndexForDate(inkoopAt);
-        teBetalenInkoop5w += inkoopTotaal;
-        buckets[idx].uitInkoop += inkoopTotaal;
-        for (const it of checklist) {
-          if (!(it.inkoopExBtw > 0)) continue;
-          buckets[idx].inkoop.push({
-            product: it.label,
-            orderLabel: oLabel,
-            bedragExBtw: it.inkoopExBtw,
-          });
-        }
-      }
+    // Purchasing = zelfde als tab “Te bestellen”: 100% betaald + schouw-PDF + te_kopen
+    const volledigBetaald = remaining <= 0.01;
+    const teBestellenEx = round2(Number(project?.te_bestellen_ex_btw) || 0);
+    const inPurchasingTeBestellen =
+      Boolean(project?.heeft_schouw_pdf) && teBestellenEx > 0;
+    if (
+      !installedDone &&
+      volledigBetaald &&
+      inPurchasingTeBestellen
+    ) {
+      const inkoopAt = new Date(nowMs);
+      const idx = weekIndexForDate(inkoopAt);
+      teBetalenInkoop5w += teBestellenEx;
+      buckets[idx].uitInkoop += teBestellenEx;
+      buckets[idx].inkoop.push({
+        product: "Te bestellen",
+        orderLabel: oLabel,
+        bedragExBtw: teBestellenEx,
+      });
+      expenseLines.push({
+        costPost: "inkoop",
+        label: project?.project_nummer || oLabel,
+        bedrag: teBestellenEx,
+        betaalDatum: ymdAmsterdam(inkoopAt),
+        wanneer: project?.installatie_at
+          ? `Te bestellen · installatie ${ymdAmsterdam(new Date(project.installatie_at))}`
+          : "Te bestellen · nu",
+        detail: "Purchasing-tab Te bestellen (schouw-PDF + te kopen)",
+      });
     }
 
+    // Installatie: alleen echte installatie_at — betalen ≤7d na, bedragen incl. 21% btw
     const installAt = project?.installatie_at
       ? new Date(project.installatie_at)
-      : new Date(signedMs + INSTALL_AFTER_MS);
-    if (installAt.getTime() <= horizonEnd) {
-      const kost = STANDAARD_INSTALLATIEKOSTEN;
-      const idx = weekIndexForDate(installAt);
-      teBetalenInstallatie += kost;
-      buckets[idx].uitInstallatie += kost;
+      : null;
+    const installPayAt = installAt
+      ? addDays(installAt, INSTALL_PAY_AFTER_DAYS)
+      : null;
+    const kostEx = installatieKostenBedrag(project?.projectkosten);
+    const kostInc = installatieInclBtw(kostEx);
+    const installKey = project?.id || o.id;
+    if (
+      installAt &&
+      installPayAt &&
+      installPayAt.getTime() >= nowMs - MS_DAY &&
+      installPayAt.getTime() <= horizonEnd &&
+      !scheduledInstallPay.has(installKey)
+    ) {
+      scheduledInstallPay.add(installKey);
+      const idx = weekIndexForDate(installPayAt);
+      teBetalenInstallatie += kostInc;
+      buckets[idx].uitInstallatie += kostInc;
       buckets[idx].installatie.push({
-        label:
-          project?.project_nummer ||
-          oLabel,
-        bedragExBtw: kost,
+        label: project?.project_nummer || oLabel,
+        bedragExBtw: kostEx,
+        installatieAt: installAt.toISOString(),
+        betaalAt: installPayAt.toISOString(),
+      });
+      expenseLines.push({
+        costPost: "installatie",
+        label: project?.project_nummer || oLabel,
+        bedrag: kostInc,
+        betaalDatum: ymdAmsterdam(installPayAt),
+        wanneer: `Installatie ${ymdAmsterdam(installAt)} + ${INSTALL_PAY_AFTER_DAYS}d`,
+        detail: `€${kostEx} ex + 21% btw = €${kostInc} incl.`,
+      });
+    }
+
+    // Sales-commissie: €250 bij betaalde aanbetaling · rest na installatie voltooid
+    const omzetEx = Number(o.subtotaal_ex_btw) || 0;
+    if (omzetEx > 0) {
+      const orderFacs = facturen.filter(
+        (f) =>
+          f.offerte_id === o.id ||
+          (!f.offerte_id && f.lead_id === o.lead_id)
+      );
+      const aanbetaling = orderFacs.find(
+        (f) =>
+          !isCreditFactuur(f) &&
+          factuurIsBetaald(f.status, f.betaald_op) &&
+          isAanbetalingFactuurOmschrijving(f.omschrijving)
+      );
+      const trancheA = commissieTrancheA(omzetEx);
+      const trancheB = commissieTrancheB(omzetEx);
+
+      function pushSales(
+        bedrag: number,
+        triggerAt: Date,
+        label: string,
+        wanneer: string,
+        detail: string
+      ) {
+        if (!(bedrag > 0)) return;
+        const salesPayAt = nextWednesdayOnOrAfter(triggerAt);
+        // Oudere woensdagen (>1 week geleden) → al uitgekeerd / niet opnieuw aftrekken
+        if (salesPayAt.getTime() < nowMs - 7 * MS_DAY) return;
+        if (salesPayAt.getTime() > horizonEnd) return;
+        const idx = weekIndexForDate(salesPayAt);
+        teBetalenSales += bedrag;
+        buckets[idx].uitSales += bedrag;
+        buckets[idx].sales.push({
+          label,
+          bedragExBtw: bedrag,
+          betaalAt: salesPayAt.toISOString(),
+        });
+        expenseLines.push({
+          costPost: "sales",
+          label,
+          bedrag,
+          betaalDatum: ymdAmsterdam(salesPayAt),
+          wanneer,
+          detail,
+        });
+      }
+
+      if (aanbetaling) {
+        const paidAt = new Date(
+          factuurBetaalIso(aanbetaling) || aanbetaling.betaald_op || now
+        );
+        pushSales(
+          trancheA,
+          paidAt,
+          `Commissie aanbetaling · ${oLabel}`,
+          "Woensdag na betaalde aanbetaling",
+          `Tranche A · €${trancheA}`
+        );
+      }
+
+      const installVoltooid =
+        project?.status === "installatie_voltooid" ||
+        project?.status === "review_gevraagd" ||
+        project?.status === "service" ||
+        Boolean(project?.installatie_voltooid_at);
+      if (installVoltooid && trancheB > 0) {
+        const doneAt = project?.installatie_voltooid_at
+          ? new Date(project.installatie_voltooid_at)
+          : project?.installatie_at
+            ? new Date(project.installatie_at)
+            : new Date(nowMs);
+        pushSales(
+          trancheB,
+          doneAt,
+          `Commissie rest · ${oLabel}`,
+          "Woensdag na installatie voltooid",
+          `Tranche B · 10% − €${trancheA}`
+        );
+      }
+    }
+  }
+
+  // Geplande installaties in agenda zonder dat we ze al via offerte pakten
+  for (const project of projecten) {
+    if (!project.installatie_at) continue;
+    if (scheduledInstallPay.has(project.id)) continue;
+    if (project.status === "installatie_voltooid") {
+      // Al voltooid: alleen nog tonen als betaaldeadline (≥ install+7d) nog in horizon ligt
+    }
+    const installAt = new Date(project.installatie_at);
+    const installPayAt = addDays(installAt, INSTALL_PAY_AFTER_DAYS);
+    if (installPayAt.getTime() < nowMs - MS_DAY) continue;
+    if (installPayAt.getTime() > horizonEnd) continue;
+    scheduledInstallPay.add(project.id);
+    const kostEx = installatieKostenBedrag(project.projectkosten);
+    const kostInc = installatieInclBtw(kostEx);
+    const idx = weekIndexForDate(installPayAt);
+    teBetalenInstallatie += kostInc;
+    buckets[idx].uitInstallatie += kostInc;
+    const label = project.project_nummer || `Project ${project.id.slice(0, 8)}`;
+    buckets[idx].installatie.push({
+      label,
+      bedragExBtw: kostEx,
+      installatieAt: installAt.toISOString(),
+      betaalAt: installPayAt.toISOString(),
+    });
+    expenseLines.push({
+      costPost: "installatie",
+      label,
+      bedrag: kostInc,
+      betaalDatum: ymdAmsterdam(installPayAt),
+      wanneer: `Gepland ${ymdAmsterdam(installAt)} + ${INSTALL_PAY_AFTER_DAYS}d`,
+      detail: `€${kostEx} ex + 21% btw = €${kostInc} incl.`,
+    });
+  }
+
+  // Credit-terugbetalingen: alleen als origineel betaald was én credit nog niet terugbetaald
+  for (const f of facturen) {
+    if (!isCreditFactuur(f)) continue;
+    if (f.status === "concept" || f.status === "vervallen") continue;
+    const orig = f.credit_van_factuur_id
+      ? factuurById.get(f.credit_van_factuur_id)
+      : null;
+    if (!orig || !factuurIsBetaald(orig.status, orig.betaald_op)) continue;
+    // Al terugbetaald → zit al in beginsaldo / bank, niet opnieuw aftrekken
+    if (factuurIsBetaald(f.status, f.betaald_op)) continue;
+    const bedrag = factuurIncBtw(f);
+    if (!(bedrag > 0)) continue;
+    const payAt = new Date(nowMs); // openstaande terugbetaling → nu
+    const idx = weekIndexForDate(payAt);
+    buckets[idx].uitBtw += bedrag; // reuse bucket slot for cash-out (geen aparte uitCredit)
+    buckets[idx].overig.push({
+      label: `Credit ${factuurLabel(f)}`,
+      bedrag,
+      betaalAt: payAt.toISOString(),
+    });
+    expenseLines.push({
+      costPost: "credit",
+      label: factuurLabel(f),
+      bedrag,
+      betaalDatum: ymdAmsterdam(payAt),
+      wanneer: "Terugbetaling · origineel was betaald",
+      detail: orig.factuur_nummer
+        ? `Credit op ${orig.factuur_nummer}`
+        : "Credit op betaalde factuur",
+    });
+  }
+
+  // BTW-afdracht eerstvolgend kwartaal (bijv. Q3 → 31 okt) obv betaalde facturen
+  const btwAangifte = resolveNextBtwAangifte(now);
+  let btwKwartaalBedrag = 0;
+  for (const f of facturen) {
+    if (isCreditFactuur(f)) {
+      // Credits verlagen af te dragen BTW alleen als origineel betaald was
+      const orig = f.credit_van_factuur_id
+        ? factuurById.get(f.credit_van_factuur_id)
+        : null;
+      if (!orig || !factuurIsBetaald(orig.status, orig.betaald_op)) continue;
+      if (f.status === "concept" || f.status === "vervallen") continue;
+      const iso = f.betaald_op || f.factuurdatum;
+      if (!iso) continue;
+      const t = new Date(iso).getTime();
+      if (
+        t >= btwAangifte.quarterStart.getTime() &&
+        t <= btwAangifte.quarterEnd.getTime()
+      ) {
+        btwKwartaalBedrag -= factuurBtw(f);
+      }
+      continue;
+    }
+    const iso = factuurBetaalIso(f);
+    if (!iso) continue;
+    const t = new Date(iso).getTime();
+    if (
+      t >= btwAangifte.quarterStart.getTime() &&
+      t <= btwAangifte.quarterEnd.getTime()
+    ) {
+      btwKwartaalBedrag += factuurBtw(f);
+    }
+  }
+  btwKwartaalBedrag = round2(Math.max(0, btwKwartaalBedrag));
+  // Stand: puur kwartaal-facturen (+ optionele reservering), niet ads-periode
+  const btwLock = round2(
+    Math.max(btwKwartaalBedrag, Number(opts?.btwReservering) || 0)
+  );
+  if (btwLock > 0) {
+    expenseLines.push({
+      costPost: "btw",
+      label: `BTW ${btwAangifte.label}`,
+      bedrag: btwLock,
+      betaalDatum: btwAangifte.dueYmd,
+      wanneer: `Uiterlijk ${btwAangifte.dueYmd}`,
+      detail: `Af te dragen obv betaalde facturen ${btwAangifte.label} (− credits)`,
+    });
+    if (btwAangifte.dueDate.getTime() <= horizonEnd + MS_DAY) {
+      const idx = weekIndexForDate(btwAangifte.dueDate);
+      buckets[idx].uitBtw += btwLock;
+      buckets[idx].overig.push({
+        label: `BTW-afdracht ${btwAangifte.label}`,
+        bedrag: btwLock,
+        betaalAt: btwAangifte.dueDate.toISOString(),
       });
     }
   }
 
-  const btwLock = round2(
-    Math.max(afTeDragenBtw, Number(opts?.btwReservering) || 0)
-  );
-
   const weeks: FreeCashflowWeekRow[] = [];
   let cursor = beginsaldo;
   let uitRemaining = round2(
-    buckets.reduce((s, b) => s + b.uitInkoop + b.uitInstallatie, 0)
+    buckets.reduce(
+      (s, b) =>
+        s +
+        b.uitInkoop +
+        b.uitInstallatie +
+        b.uitSales +
+        b.uitLoon +
+        b.uitBtw,
+      0
+    )
   );
 
   for (let i = 0; i < WEEK_COUNT; i++) {
@@ -704,17 +1337,31 @@ export function buildFreeCashflow(
     const b = buckets[i];
     const verwachtBinnen = round2(b.binnen);
     const daadwerkelijkBinnen = round2(b.daadwerkelijkBinnen);
-    const verwachtUit = round2(b.uitInkoop + b.uitInstallatie + b.uitAds);
+    const verwachtUit = round2(
+      b.uitInkoop +
+        b.uitInstallatie +
+        b.uitSales +
+        b.uitLoon +
+        b.uitAds +
+        b.uitBtw
+    );
     const beginstand = round2(cursor);
     const eindstand = round2(
       beginstand + verwachtBinnen + daadwerkelijkBinnen - verwachtUit
     );
     uitRemaining = round2(
-      Math.max(0, uitRemaining - b.uitInkoop - b.uitInstallatie)
+      Math.max(
+        0,
+        uitRemaining -
+          b.uitInkoop -
+          b.uitInstallatie -
+          b.uitSales -
+          b.uitLoon -
+          b.uitBtw
+      )
     );
-    const vrijeCash = round2(
-      Math.max(0, eindstand - btwLock - uitRemaining)
-    );
+    // Geen BTW-lock meer in stand — alleen echte uitgaven (incl. credit-terugbetalingen)
+    const vrijeCash = round2(Math.max(0, eindstand - uitRemaining));
     weeks.push({
       week,
       year,
@@ -729,6 +1376,7 @@ export function buildFreeCashflow(
         inkomsten: b.inkomsten,
         inkoop: b.inkoop,
         installatie: b.installatie,
+        sales: b.sales,
         overig: b.overig,
       },
     });
@@ -743,8 +1391,55 @@ export function buildFreeCashflow(
     inkomstenIncBtw -
       adSpendPeriode -
       teBetalenInkoop5w -
-      teBetalenInstallatie
+      teBetalenInstallatie -
+      teBetalenSales -
+      teBetalenLoon
   );
+
+  // Komende kalendermaand (vanaf morgen t/m eind volgende maand-blok: rest van deze maand + volgende)
+  const zMonth = toZonedTime(now, TZ);
+  const monthStart = fromZonedTime(
+    new Date(zMonth.getFullYear(), zMonth.getMonth(), zMonth.getDate() + 1, 0, 0, 0, 0),
+    TZ
+  );
+  const monthEnd = fromZonedTime(
+    new Date(zMonth.getFullYear(), zMonth.getMonth() + 2, 0, 23, 59, 59, 999),
+    TZ
+  );
+  const monthStartYmd = ymdAmsterdam(monthStart);
+  const monthEndYmd = ymdAmsterdam(monthEnd);
+  const monthLines = expenseLines.filter(
+    (l) => l.betaalDatum >= monthStartYmd && l.betaalDatum <= monthEndYmd
+  );
+  const twoWeekEnd = addDays(now, 13);
+  const twoWeekStartYmd = ymdAmsterdam(now);
+  const twoWeekEndYmd = ymdAmsterdam(twoWeekEnd);
+  // 14d-kosten + eerstvolgende BTW-aangifte (ook als due net na 14d, bijv. 31 okt)
+  const twoWeekCore = expenseLines.filter(
+    (l) =>
+      l.costPost !== "btw" &&
+      l.betaalDatum >= twoWeekStartYmd &&
+      l.betaalDatum <= twoWeekEndYmd
+  );
+  const btwStandLines = expenseLines.filter((l) => l.costPost === "btw");
+  const twoWeekLines = [...twoWeekCore, ...btwStandLines];
+  const expenseForecast: ExpenseForecast = {
+    horizonLabel: `${WEEK_COUNT} weken vooruit`,
+    monthLabel: `${formatInTimeZone(monthStart, TZ, "MMM")}–${formatInTimeZone(monthEnd, TZ, "MMM yyyy")}`,
+    monthStart: monthStartYmd,
+    monthEnd: monthEndYmd,
+    monthTotaal: round2(monthLines.reduce((s, l) => s + l.bedrag, 0)),
+    horizonTotaal: round2(expenseLines.reduce((s, l) => s + l.bedrag, 0)),
+    byCostPost: groupExpenseLines(expenseLines),
+    monthByCostPost: groupExpenseLines(monthLines),
+    twoWeekByCostPost: groupExpenseLines(twoWeekLines),
+    twoWeekTotaal: round2(twoWeekLines.reduce((s, l) => s + l.bedrag, 0)),
+    twoWeekStart: twoWeekStartYmd,
+    twoWeekEnd: twoWeekEndYmd,
+    lines: expenseLines.sort((a, b) =>
+      a.betaalDatum.localeCompare(b.betaalDatum)
+    ),
+  };
 
   return {
     omzetExBtw: round2(omzetExBtw),
@@ -754,9 +1449,11 @@ export function buildFreeCashflow(
     verwachteWarmtefondsIncBtw: round2(verwachteWarmtefondsIncBtw),
     verwachteEigenMiddelenIncBtw: round2(verwachteEigenMiddelenIncBtw),
     verwachteDeals,
-    afTeDragenBtw: round2(afTeDragenBtw),
+    afTeDragenBtw: round2(Math.max(afTeDragenBtw, btwKwartaalBedrag)),
     teBetalenInkoop5w: round2(teBetalenInkoop5w),
     teBetalenInstallatie: round2(teBetalenInstallatie),
+    teBetalenSales: round2(teBetalenSales),
+    teBetalenLoon: round2(teBetalenLoon),
     openstaandeFacturenIncBtw: round2(openstaandeFacturenIncBtw),
     openstaandeRestOrdersIncBtw: round2(openstaandeRestOrdersIncBtw),
     adSpendPeriode: round2(adSpendPeriode),
@@ -764,7 +1461,10 @@ export function buildFreeCashflow(
     beginsaldo,
     beginsaldoOntbreekt,
     btwTeBetalen: btwLock,
+    btwKwartaalLabel: btwAangifte.label,
+    btwBetaalDatum: btwAangifte.dueYmd,
     weeks,
+    expenseForecast,
   };
 }
 
@@ -1236,6 +1936,7 @@ export function buildFinancialDashboard(
   cashOpts?: {
     beginsaldoCash?: number | null;
     btwReservering?: number | null;
+    tarikId?: string | null;
   }
 ): FinancialDashboardData {
   const { start, end, previousStart, previousEnd } = resolveFinancialRange(
@@ -1280,7 +1981,8 @@ export function buildFinancialDashboard(
     start,
     end,
     now,
-    cashOpts
+    cashOpts,
+    commissieMap
   );
 
   return {

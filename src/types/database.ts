@@ -8,6 +8,9 @@ export type LeadStatus =
   | "offerte_afgewezen"
   | "niet_gekwalificeerd"
   | "geen_interesse"
+  | "geen_interesse_al_batterij"
+  | "geen_interesse_plugin"
+  | "geen_interesse_alleen_info"
   | "geen_contact"
   | "deal"
   | "sale_financiering"
@@ -245,6 +248,11 @@ export interface Afspraak {
   id: string;
   lead_id: string;
   adviseur_id: string;
+  /**
+   * Wie de afspraak heeft ingepland (bel-credit).
+   * Los van adviseur_id (= wie het huisbezoek doet / planner in agenda).
+   */
+  ingepland_door_id?: string | null;
   start_at: string;
   end_at: string;
   status: AfspraakStatus;
@@ -306,6 +314,8 @@ export interface Lead {
   terugbel_notitie?: string | null;
   belpogingen?: number;
   laatst_gebeld_at?: string | null;
+  /** Medewerker die het laatst afboekte in Bel (Bel-conversie). */
+  laatst_gebeld_door?: string | null;
   /** Eerste belpoging (TTFC); blijft staan na latere pogingen. */
   eerste_gebeld_at?: string | null;
   belpogingen_vandaag?: number;
