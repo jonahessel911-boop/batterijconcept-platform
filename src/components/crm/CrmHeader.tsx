@@ -109,12 +109,18 @@ export function CrmHeader({
           )}
 
           <Link href="/" className="min-w-0 shrink" onClick={() => setMenuOpen(false)}>
-            <div className="flex items-baseline gap-1.5 leading-none sm:gap-2">
+            <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-none sm:gap-x-2">
               <span className="font-display text-base font-semibold tracking-tight text-white sm:text-lg">
                 Batterij<span className="text-orange">concept</span>
               </span>
               <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/50 sm:text-[10px] sm:tracking-[0.16em]">
                 CRM
+              </span>
+              <span
+                className="rounded-sm bg-white/15 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums tracking-normal text-white sm:text-[11px]"
+                title="App-versie van deze deploy"
+              >
+                {appVersionLabel()}
               </span>
             </div>
           </Link>
@@ -164,12 +170,6 @@ export function CrmHeader({
               </p>
             </div>
           )}
-          <span
-            className="shrink-0 border border-white/20 bg-white/10 px-2 py-1 text-[10px] font-semibold tabular-nums tracking-wide text-white/80"
-            title="App-versie"
-          >
-            {appVersionLabel()}
-          </span>
           {onRefresh && (
             <button
               type="button"
