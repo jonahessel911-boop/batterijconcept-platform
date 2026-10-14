@@ -726,6 +726,20 @@ export function openBackofficeActies(
   );
 }
 
+/**
+ * Acties-tab / sidebar-badge: nu alleen herplan (overige soorten tijdelijk
+ * niet in de lijst). Badge en lijst moeten dezelfde set gebruiken.
+ */
+export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
+  "herplan_afspraak",
+]);
+
+export function actiesVoorActiesTab(
+  acties: BackofficeActie[]
+): BackofficeActie[] {
+  return acties.filter((a) => ACTIES_TAB_SOORTEN.has(a.soort));
+}
+
 /** Openstaande acties voor één project (incl. factuur-nabellen op dezelfde lead). */
 export function openActiesVoorProject(
   project: Project,

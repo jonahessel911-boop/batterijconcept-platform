@@ -16,6 +16,7 @@ import {
   FINANCIERINGSMAN_TEL_HREF,
   financieringSchakelBericht,
   isWarmtefondsProject,
+  actiesVoorActiesTab,
   openBackofficeActies,
   recommendedSchouwWeekForProject,
   saleMomentVanProject,
@@ -404,10 +405,12 @@ export function BackofficeActiesList({
 }) {
   const acties = useMemo(
     () =>
-      openBackofficeActies(projecten, facturen, new Date(), {
-        leads,
-        afspraken,
-      }),
+      actiesVoorActiesTab(
+        openBackofficeActies(projecten, facturen, new Date(), {
+          leads,
+          afspraken,
+        })
+      ),
     [projecten, facturen, leads, afspraken]
   );
   const rows = useMemo(
@@ -512,41 +515,19 @@ export function BackofficeActiesList({
 
   const defaultPartnerId = partners.length === 1 ? partners[0].id : "";
 
+  /** Secties uit gefilterde acties (badge = zelfde set via actiesVoorActiesTab). */
   const sections = useMemo(() => {
-    const order: SectionId[] = [
-      "herplan",
-      "aangetekend",
-      "inkoop",
-      "volgende",
-      "warmtefonds",
-      "stap1",
-      "factuur",
-      "handmatig",
-    ];
+    const order: SectionId[] = ["herplan"];
     return order
-      .map((id) => {
-        if (id === "handmatig") {
-          return {
-            id,
-            ...SECTION_META.handmatig,
-            rows: [] as TaskRow[],
-            doneCount: 0,
-            taken: projectTaken,
-          };
-        }
-        return {
-          id,
-          ...SECTION_META[id],
-          rows: rows.filter((r) => r.section === id && !r.done),
-          doneCount: rows.filter((r) => r.section === id && r.done).length,
-          taken: [] as ProjectTaak[],
-        };
-      })
-      .filter(
-        (s) =>
-          s.id === "handmatig" || s.rows.length > 0 || s.taken.length > 0
-      );
-  }, [rows, projectTaken]);
+      .map((id) => ({
+        id,
+        ...SECTION_META[id],
+        rows: rows.filter((r) => r.section === id && !r.done),
+        doneCount: rows.filter((r) => r.section === id && r.done).length,
+        taken: [] as ProjectTaak[],
+      }))
+      .filter((s) => s.rows.length > 0);
+  }, [rows]);
 
   function toggleSection(id: SectionId) {
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1117,7 +1098,10 @@ export function BackofficeActiesList({
   }
 
   const hasOpen =
-    rows.some((r) => !r.done) || projectTaken.length > 0 || showCreate;
+    sections.some((s) => s.rows.length > 0) || showCreate;
+  const herplanOpenCount = rows.filter(
+    (r) => r.section === "herplan" && !r.done
+  ).length;
 
   return (
     <div className="space-y-5 px-5 pb-6 pt-5">
@@ -1135,24 +1119,11 @@ export function BackofficeActiesList({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">
           {!hasOpen && !showCreate
-            ? "Geen openstaande acties."
-            : `${rows.filter((r) => !r.done).length + projectTaken.length} open actie${
-                rows.filter((r) => !r.done).length + projectTaken.length === 1
-                  ? ""
-                  : "s"
+            ? "Geen openstaande herplan-acties."
+            : `${herplanOpenCount} open herplan-actie${
+                herplanOpenCount === 1 ? "" : "s"
               }`}
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            setShowCreate((v) => !v);
-            setError(null);
-            setMsg(null);
-          }}
-          className="bg-orange px-3 py-2 text-xs font-semibold text-white hover:bg-[#e0651c]"
-        >
-          {showCreate ? "Annuleren" : "+ Actie"}
-        </button>
       </div>
 
       {showCreate ? (

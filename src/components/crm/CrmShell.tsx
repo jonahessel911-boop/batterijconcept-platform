@@ -46,7 +46,10 @@ import { LEAD_STATUSES } from "@/lib/labels";
 import { inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
-import { openBackofficeActies } from "@/lib/backoffice-acties";
+import {
+  actiesVoorActiesTab,
+  openBackofficeActies,
+} from "@/lib/backoffice-acties";
 import {
   agendaIsInstallatie,
   alleenEigenLeads,
@@ -808,10 +811,12 @@ export function CrmShell() {
 
   const backofficeActieCount = useMemo(
     () =>
-      openBackofficeActies(scopedProjecten, scopedFacturen, new Date(), {
-        leads: scopedLeads,
-        afspraken,
-      }).length,
+      actiesVoorActiesTab(
+        openBackofficeActies(scopedProjecten, scopedFacturen, new Date(), {
+          leads: scopedLeads,
+          afspraken,
+        })
+      ).length,
     [scopedProjecten, scopedFacturen, scopedLeads, afspraken]
   );
 
