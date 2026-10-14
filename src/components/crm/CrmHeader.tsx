@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Adviseur, CrmTab } from "@/types/database";
+import { appVersionLabel } from "@/lib/app-version";
 import { gebruikerRolLabel, type GebruikerRol } from "@/lib/rollen";
 
 export function CrmHeader({
@@ -114,6 +115,12 @@ export function CrmHeader({
               </span>
               <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/50 sm:text-[10px] sm:tracking-[0.16em]">
                 CRM
+              </span>
+              <span
+                className="text-[9px] font-medium tabular-nums tracking-normal text-white/45 sm:text-[10px]"
+                title="App-versie"
+              >
+                {appVersionLabel()}
               </span>
             </div>
           </Link>
