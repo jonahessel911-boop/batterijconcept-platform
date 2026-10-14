@@ -116,12 +116,6 @@ export function CrmHeader({
               <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/50 sm:text-[10px] sm:tracking-[0.16em]">
                 CRM
               </span>
-              <span
-                className="text-[9px] font-medium tabular-nums tracking-normal text-white/45 sm:text-[10px]"
-                title="App-versie"
-              >
-                {appVersionLabel()}
-              </span>
             </div>
           </Link>
         </div>
@@ -170,6 +164,12 @@ export function CrmHeader({
               </p>
             </div>
           )}
+          <span
+            className="shrink-0 border border-white/20 bg-white/10 px-2 py-1 text-[10px] font-semibold tabular-nums tracking-wide text-white/80"
+            title="App-versie"
+          >
+            {appVersionLabel()}
+          </span>
           {onRefresh && (
             <button
               type="button"
