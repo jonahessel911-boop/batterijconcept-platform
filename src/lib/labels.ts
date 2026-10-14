@@ -18,7 +18,7 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
   vervolg_geen_contact: "Na Vervolg telefonisch 3x geen gehoor",
   offerte_afgewezen: "Offerte afgewezen",
   niet_gekwalificeerd: "Niet goed gekwalificeerd door beller",
-  geen_interesse: "Geen interesse in thuisbatterij",
+  geen_interesse: "Geen interesse — overig",
   geen_interesse_al_batterij: "Geen interesse — heeft al een batterij",
   geen_interesse_plugin: "Geen interesse — interesse in een plugin batterij",
   geen_interesse_alleen_info: "Geen interesse — wilde alleen informatie",
@@ -54,6 +54,7 @@ export const BEL_UITKOMSTEN: LeadStatus[] = [
   "geen_interesse_al_batterij",
   "geen_interesse_plugin",
   "geen_interesse_alleen_info",
+  "geen_interesse",
 ];
 
 /** Geen-interesse (generiek + subredenen uit Bel). */
@@ -152,7 +153,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   review_gevraagd: "Review gevraagd",
   service: "Service",
   annulering: "Annulering",
-  hold_sales_actie: "HOLD - Sales actie",
+  hold_sales_actie: "HOLD SALES ACTIE",
 };
 
 /** @deprecated Gebruik projectPipelineFor(betaalwijze) — warmtefonds-default. */

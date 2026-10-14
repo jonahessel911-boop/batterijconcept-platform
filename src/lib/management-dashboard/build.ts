@@ -2163,7 +2163,7 @@ export function buildManagementDashboard(
         { id: "review_gevraagd", label: "Review gevraagd" },
         { id: "service", label: "Service" },
         { id: "annulering", label: "Annulering" },
-        { id: "hold_sales_actie", label: "HOLD - Sales actie" },
+        { id: "hold_sales_actie", label: "HOLD SALES ACTIE" },
       ],
       installateurs: raw.installateurs,
       producten,

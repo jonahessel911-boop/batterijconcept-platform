@@ -362,6 +362,7 @@ async function afterCreate(
         leadPatch.adviseur_id = body.adviseur_id;
       } else if (rol === "beller") {
         leadPatch.beller_id = body.adviseur_id;
+        leadPatch.laatst_gebeld_door = body.adviseur_id;
       }
     }
     await sb.from("leads").update(leadPatch).eq("id", body.lead_id);

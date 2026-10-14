@@ -5,6 +5,38 @@ import { syncProjectServiceStatus } from "@/lib/service-verzoek";
 
 export const runtime = "nodejs";
 
+const SERVICE_SELECT =
+  "*, leads(naam, lead_number, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))";
+
+/**
+ * GET /api/service-verzoeken/[id]
+ */
+export async function GET(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+  try {
+    const sb = getSupabaseAdmin();
+    const { data, error } = await sb
+      .from("service_verzoeken")
+      .select(SERVICE_SELECT)
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      return NextResponse.json({ error: "Verzoek niet gevonden" }, { status: 404 });
+    }
+    return NextResponse.json({ verzoek: data });
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e, "Fout") },
+      { status: 500 }
+    );
+  }
+}
+
 /**
  * PATCH /api/service-verzoeken/[id]
  * Update interne notitie en/of markeer als afgehandeld.
@@ -71,9 +103,7 @@ export async function PATCH(
       .from("service_verzoeken")
       .update(patch)
       .eq("id", id)
-      .select(
-        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
-      )
+      .select(SERVICE_SELECT)
       .single();
 
     if (error || !data) {
@@ -87,9 +117,7 @@ export async function PATCH(
 
     const { data: refreshed } = await sb
       .from("service_verzoeken")
-      .select(
-        "*, leads(naam, lead_number), projecten(id, project_nummer, titel, status, service_at, service_notities, installateur_notitie, installateur_notitie_door, installatie_partner_id, installatie_partners(id, naam))"
-      )
+      .select(SERVICE_SELECT)
       .eq("id", id)
       .single();
 

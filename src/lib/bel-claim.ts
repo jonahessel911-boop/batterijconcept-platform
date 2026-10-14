@@ -4,7 +4,12 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Afspraak, Lead } from "@/types/database";
-import { inBelQueue, sortBelQueue } from "@/lib/bel-queue";
+import {
+  inBelQueue,
+  isNlProvincie,
+  leadInProvincie,
+  sortBelQueue,
+} from "@/lib/bel-queue";
 import { isTerugbelSoort } from "@/lib/afspraak-soort";
 
 /** Claim verloopt zonder heartbeat. */
@@ -195,6 +200,10 @@ export async function claimNextBelLead(
   callerId: string,
   opts?: {
     excludeLeadIds?: string[];
+    /** Alleen leads in deze provincie (postcode → provincie). */
+    provincie?: string | null;
+    /** Bij wisselen van bak: nooit oude claim hergebruiken. */
+    forceNew?: boolean;
   }
 ): Promise<{
   lead: Lead | null;
@@ -202,8 +211,11 @@ export async function claimNextBelLead(
 }> {
   const now = new Date();
   const exclude = new Set(opts?.excludeLeadIds || []);
+  const provincie =
+    opts?.provincie && isNlProvincie(opts.provincie) ? opts.provincie : null;
+  const forceNew = Boolean(opts?.forceNew);
 
-  // 1) Bestaande actieve claim van mij behouden
+  // 1) Bestaande actieve claim van mij behouden (mits binnen provincie-filter)
   const { data: mine, error: mineErr } = await sb
     .from("leads")
     .select("*")
@@ -218,11 +230,16 @@ export async function claimNextBelLead(
 
   const staleMineIds: string[] = [];
   for (const row of (mine || []) as Lead[]) {
-    if (exclude.has(row.id)) {
+    if (forceNew || exclude.has(row.id)) {
       staleMineIds.push(row.id);
       continue;
     }
     if (!isBelClaimActive(row.bel_claimed_at, now)) {
+      staleMineIds.push(row.id);
+      continue;
+    }
+    if (provincie && !leadInProvincie(row, provincie)) {
+      // Andere bak: claim loslaten en verder zoeken
       staleMineIds.push(row.id);
       continue;
     }
@@ -273,6 +290,7 @@ export async function claimNextBelLead(
       if (exclude.has(l.id)) return false;
       if (fonioBusy.has(l.id)) return false;
       if (!inBelQueue(l, appointmentLeadIds)) return false;
+      if (provincie && !leadInProvincie(l, provincie)) return false;
       if (isBelClaimedByOther(l, callerId, now)) return false;
       return true;
     })

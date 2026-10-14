@@ -5,6 +5,12 @@ import {
   isTerugbelSoort,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
+import {
+  NL_PROVINCIES,
+  normalizeProvincieLabel,
+  provincieVanPostcode,
+  type NlProvincie,
+} from "@/lib/postcode-provincie";
 
 export const MAX_BELPOGINGEN = 5;
 export const MAX_BELPOGINGEN_PER_DAG = 1;
@@ -189,16 +195,33 @@ export function latestCancelledVisitAfspraak(
   return list[0] || null;
 }
 
+const ANNULERING_NOTE_RE =
+  /Annulering\s*\(([^)]*)\)(?:\s*door\s+([^:]+))?:\s*([\s\S]+)$/i;
+
 /** Haalt de annuleringsreden uit afspraak-notities, indien aanwezig. */
 export function annuleringsNotitieFromAfspraak(
   afspraak: Pick<Afspraak, "notities"> | null | undefined
 ): string | null {
   const raw = afspraak?.notities?.trim();
   if (!raw) return null;
-  const match = raw.match(/Annulering\s*\([^)]*\):\s*([\s\S]+)$/i);
-  if (match?.[1]?.trim()) return match[1].trim();
+  const match = raw.match(ANNULERING_NOTE_RE);
+  if (match?.[3]?.trim()) return match[3].trim();
+  // Legacy zonder "door …"
+  const legacy = raw.match(/Annulering\s*\([^)]*\):\s*([\s\S]+)$/i);
+  if (legacy?.[1]?.trim()) return legacy[1].trim();
   if (/annulering/i.test(raw)) return raw;
   return null;
+}
+
+/** Wie de CRM-annulering deed, uit notitie `Annulering (CRM) door Naam: …`. */
+export function annuleringsDoorFromAfspraak(
+  afspraak: Pick<Afspraak, "notities"> | null | undefined
+): string | null {
+  const raw = afspraak?.notities?.trim();
+  if (!raw) return null;
+  const match = raw.match(ANNULERING_NOTE_RE);
+  const door = match?.[2]?.trim();
+  return door || null;
 }
 
 export function inBelQueue(
@@ -250,6 +273,45 @@ export function sortBelQueue(leads: Lead[]): Lead[] {
 
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
+}
+
+export function isNlProvincie(v: unknown): v is NlProvincie {
+  return (
+    typeof v === "string" &&
+    (NL_PROVINCIES as readonly string[]).includes(v)
+  );
+}
+
+/** Postcode uit leadvelden (postcode, anders uit plaats/straat). */
+export function leadPostcodeDigits(
+  lead: Pick<Lead, "postcode" | "plaats" | "straat">
+): string | null {
+  const direct = (lead.postcode || "").trim();
+  if (direct) {
+    const m = direct.replace(/\s+/g, "").match(/^(\d{4})/);
+    if (m) return m[1];
+  }
+  for (const raw of [lead.plaats, lead.straat]) {
+    const t = (raw || "").trim();
+    if (!t) continue;
+    const m = t.match(/\b(\d{4})\s*[A-Za-z]{0,2}\b/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Lead hoort bij de gekozen provincie-belbak (via postcode). */
+export function leadInProvincie(
+  lead: Pick<Lead, "postcode" | "plaats" | "straat">,
+  provincie: string | null | undefined
+): boolean {
+  // Geen filter → alles mag
+  if (!provincie) return true;
+  // Ongeldige provincie → niets matchen (nooit per ongeluk heel NL)
+  if (!isNlProvincie(provincie)) return false;
+  const pc = leadPostcodeDigits(lead);
+  if (!pc) return false;
+  return normalizeProvincieLabel(provincieVanPostcode(pc)) === provincie;
 }
 
 export function telHref(telefoon: string): string {

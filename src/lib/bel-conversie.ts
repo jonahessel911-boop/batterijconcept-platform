@@ -50,6 +50,8 @@ export type BelConversieRecenteAfspraak = {
   ingeplandAt: string;
   /** Startdatum/-tijd van het huisbezoek */
   afspraakAt: string;
+  /** Geannuleerd na inplannen — zichtbaar doorstreept, telt niet mee */
+  geannuleerd?: boolean;
 };
 
 /** Cost per appointment over een rollend venster (ad spend ÷ huisbezoeken). */
@@ -361,13 +363,18 @@ export function resolveBellerId(
   return null;
 }
 
-/** Positieve huisbezoek-afspraak (geen terugbel). */
-export function isHuisbezoekAfspraak(a: BelConversieAfspraak): boolean {
-  if (a.status === "geannuleerd") return false;
+/** Huisbezoek-soort (geen terugbel), ongeacht status. */
+export function isHuisbezoekSoort(a: BelConversieAfspraak): boolean {
   if (!afspraakBlokkeertAgenda(a.soort)) return false;
   const soort = normalizeAfspraakSoort(a.soort);
   if (soort === "bel" || soort === "warme_bel") return false;
   return true;
+}
+
+/** Actief huisbezoek (geen terugbel, niet geannuleerd) — telt mee voor L→A. */
+export function isHuisbezoekAfspraak(a: BelConversieAfspraak): boolean {
+  if (a.status === "geannuleerd") return false;
+  return isHuisbezoekSoort(a);
 }
 
 /**
@@ -561,12 +568,22 @@ export function buildBelConversie(opts: {
 
   // Admin krijgt geen bel-credit (sessie-stamp tijdens meekijken/inplannen).
   const skipAdminIds = new Set<string>();
+  const activeBellerIds: string[] = [];
   for (const a of opts.adviseurs) {
     const rol = normalizeRol(a.rol);
     if (rol === "admin" || isAdminEmail(a.email)) {
       skipAdminIds.add(a.id);
+      continue;
+    }
+    if (a.actief !== false && rol === "beller") {
+      activeBellerIds.push(a.id);
     }
   }
+  // Alleen als er precies één actieve beller is: orphans → die persoon.
+  const soloBellerId =
+    activeBellerIds.length === 1 ? activeBellerIds[0] : null;
+  const orphanFallback =
+    opts.fallbackBellerId?.trim() || soloBellerId || null;
 
   // Gebeld = afgeboekt die dag, of huisbezoek gezet die dag (bel-inplanning)
   const byId = new Map<string, BelConversieLead>();
@@ -608,11 +625,14 @@ export function buildBelConversie(opts: {
   const redenenTotal = emptyRedenen();
   for (const l of byId.values()) {
     const isIngepland = ingeplandIds.has(l.id);
-    // Ingepland → alleen wie de afspraak zette (ingepland_door_id).
-    // Gebeld zonder afspraak → laatst_gebeld_door / claim (geen silent Tarik-fallback).
-    const id = isIngepland
-      ? ingeplandDoorByLead.get(l.id)?.trim() || "__onbekend__"
-      : resolveBellerId(l, null, skipAdminIds, null) || "__onbekend__";
+    // Ingepland → planner; anders lead-stamps / claim / solo-beller.
+    // Nooit stilzwijgend "Onbekend" als we wél één actieve beller hebben.
+    const id =
+      (isIngepland
+        ? ingeplandDoorByLead.get(l.id)?.trim() ||
+          resolveBellerId(l, orphanFallback, skipAdminIds, null)
+        : resolveBellerId(l, orphanFallback, skipAdminIds, null)) ||
+      "__onbekend__";
     const acc = touch(id);
     acc.gebeld += 1;
     if (isIngepland) {
@@ -703,14 +723,16 @@ export function buildBelConversie(opts: {
     leadsBelbaarVandaag: baseTargets.leadsBelbaarVandaag,
   });
 
-  // Alleen echt ingeplande huisbezoeken (created_at in periode), nog niet gelopen.
+  // Ingeplande huisbezoeken (created_at in periode): actief + nog niet gelopen,
+  // én geannuleerde (doorstreept in UI, tellen niet mee in totals).
   const now = new Date();
   const recenteAfspraken: BelConversieRecenteAfspraak[] = [];
   for (const a of opts.afspraken) {
-    if (!isHuisbezoekAfspraak(a)) continue;
+    if (!isHuisbezoekSoort(a)) continue;
     if (!a.created_at) continue;
     if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
-    if (!isAfspraakNogNietGelopen(a, now)) continue;
+    const geannuleerd = a.status === "geannuleerd";
+    if (!geannuleerd && !isAfspraakNogNietGelopen(a, now)) continue;
     const lead =
       byId.get(a.lead_id) || opts.leads.find((l) => l.id === a.lead_id);
     // Alleen echte planner (ingepland_door). Geen Tarik/claim-fallback op oude rijen.
@@ -729,10 +751,12 @@ export function buildBelConversie(opts: {
       adviseurNaam: adviseurId ? naamById.get(adviseurId) || null : null,
       ingeplandAt: a.created_at,
       afspraakAt: a.start_at,
+      geannuleerd,
     });
   }
   recenteAfspraken.sort(
     (a, b) =>
+      Number(a.geannuleerd) - Number(b.geannuleerd) ||
       new Date(b.ingeplandAt).getTime() - new Date(a.ingeplandAt).getTime()
   );
 

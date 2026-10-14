@@ -757,75 +757,8 @@ export async function PATCH(
       );
     }
 
-    let annuleringMail: {
-      sent: boolean;
-      skipped?: boolean;
-      error?: string;
-    } | null = null;
-
-    if (
-      body.status === "annulering" &&
-      before?.status &&
-      before.status !== "annulering"
-    ) {
-      const leadRaw = data.leads;
-      const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
-      const to =
-        lead && typeof lead === "object" && typeof lead.email === "string"
-          ? lead.email.trim()
-          : "";
-      const naam =
-        lead && typeof lead === "object" && typeof lead.naam === "string"
-          ? lead.naam
-          : "klant";
-
-      if (!to) {
-        annuleringMail = {
-          sent: false,
-          skipped: true,
-          error: "Geen e-mailadres op de lead",
-        };
-      } else {
-        const { sendEmail } = await import("@/lib/email/postmark");
-        const { projectGeannuleerdKlantEmail } = await import(
-          "@/lib/email/templates"
-        );
-        const html = projectGeannuleerdKlantEmail({
-          naam,
-          projectNummer: (data.project_nummer as string) || null,
-        });
-        const mail = await sendEmail({
-          to,
-          subject: "Bestelling geannuleerd — Batterijconcept",
-          html,
-          tag: "project-annulering",
-        });
-        annuleringMail = {
-          sent: mail.ok,
-          error: mail.error,
-        };
-        if (leadId) {
-          await logLeadEvent({
-            leadId,
-            soort: "email",
-            titel: mail.ok
-              ? "Annuleringsmail verstuurd naar klant"
-              : "Annuleringsmail mislukt",
-            detail: mail.ok
-              ? `Naar ${to}`
-              : mail.error || "Onbekende fout",
-            meta: {
-              project_id: id,
-              project_nummer: data.project_nummer,
-              to,
-              ok: mail.ok,
-            },
-          });
-        }
-      }
-    }
-
-    return NextResponse.json({ project: data, annulering_mail: annuleringMail });
+    // Geen automatische annuleringsmail meer — knop op projectpagina.
+    return NextResponse.json({ project: data });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

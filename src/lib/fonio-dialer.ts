@@ -387,7 +387,7 @@ export async function completeFonioCallForLead(
   const { data: lead } = await sb
     .from("leads")
     .select(
-      "id, status, belpogingen, belpogingen_vandaag, laatst_gebeld_at, eerste_gebeld_at"
+      "id, status, belpogingen, belpogingen_vandaag, laatst_gebeld_at, eerste_gebeld_at, bel_claimed_by, beller_id, laatst_gebeld_door"
     )
     .eq("id", leadId)
     .maybeSingle();
@@ -406,6 +406,11 @@ export async function completeFonioCallForLead(
   const prev = Math.max(0, Number(lead.belpogingen) || 0);
   const { belpogingenVandaagOf } = await import("@/lib/bel-queue");
   const todayCount = belpogingenVandaagOf(lead) + 1;
+  const door =
+    (lead.laatst_gebeld_door || "").trim() ||
+    (lead.bel_claimed_by || "").trim() ||
+    (lead.beller_id || "").trim() ||
+    null;
   const patch: Record<string, unknown> = {
     status: "geen_contact",
     belpogingen: prev + 1,
@@ -413,6 +418,7 @@ export async function completeFonioCallForLead(
     laatst_gebeld_at: now,
     terugbellen: false,
   };
+  if (door) patch.laatst_gebeld_door = door;
   if (!lead.eerste_gebeld_at) patch.eerste_gebeld_at = now;
 
   await sb.from("leads").update(patch).eq("id", leadId);

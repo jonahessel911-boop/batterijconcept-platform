@@ -48,7 +48,7 @@ export async function GET() {
           let q = sb
             .from("afspraken")
             .select(
-              "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities"
+              "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
             )
             .order("start_at", { ascending: true })
             .range(from, to);

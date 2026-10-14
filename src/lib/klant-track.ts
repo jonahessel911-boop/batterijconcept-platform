@@ -11,7 +11,9 @@ import {
   toOperationalStatus,
   type ProjectStatusKey,
 } from "@/lib/project-status-config";
+import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import { planningVensterNl } from "@/lib/planning-window";
+import type { KlantDatumOptie } from "@/lib/project-datum-opties";
 
 export type KlantStapId =
   | "order_bevestigd"
@@ -57,6 +59,7 @@ export type KlantAgendaItem = {
     | "schouwdag"
     | "installatie"
     | "service"
+    | "overstap"
     | "warmtefonds_afspraak";
   titel: string;
   status: "gepland" | "wacht" | "voltooid";
@@ -75,9 +78,17 @@ export type KlantAgendaItem = {
   detail: string;
 };
 
+/** Bevestigde / geplande service-afspraak voor klantportaal */
+export type KlantServiceAfspraak = {
+  at: string;
+};
+
 export type KlantTrackPayload = {
   track_token: string;
   klant_naam: string;
+  /** Prefill bevestiging datum-opties */
+  klant_email: string | null;
+  klant_telefoon: string | null;
   project_nummer: string | null;
   offerte_nummer: string;
   adres: string | null;
@@ -86,6 +97,10 @@ export type KlantTrackPayload = {
   stappen: KlantStap[];
   agenda: KlantAgendaItem[];
   nazorg: KlantNazorgItem[];
+  /** Open of recent gekozen datum-opties (Service / Overstap) */
+  datum_opties: KlantDatumOptie[];
+  /** Alle geplande service-afspraken (niet clickable overzicht) */
+  service_afspraken: KlantServiceAfspraak[];
   documenten: {
     offerte: {
       beschikbaar: boolean;
@@ -105,6 +120,8 @@ type ProjectLite = {
   installatie_at?: string | null;
   installatie_voltooid_at?: string | null;
   service_at?: string | null;
+  /** Geplande overstap-afspraak */
+  overstap_afspraak_at?: string | null;
   /** Interne Warmtefonds-aanvraagafspraak */
   warmtefonds_afspraak_at?: string | null;
   financiering_status?: string | null;
@@ -135,9 +152,43 @@ function warmtefondsAfspraakState(
   return "current";
 }
 
+/** Zelfde voorwaarden als Purchasing “Te bestellen”: schouw-PDF + order volledig betaald. */
+function isKlaarzettenPurchasing(
+  project: ProjectLite,
+  facturen: Array<{
+    status: string;
+    bedrag_inc_btw: number;
+    omschrijving?: string | null;
+  }>,
+  orderIncBtw: number | null | undefined
+): boolean {
+  if (!project.schouw_formulier_geupload) return false;
+  const status = toOperationalStatus(project.status);
+  if (
+    status === "restfactuur_betaald" ||
+    status === "materiaal_besteld" ||
+    status === "installatie_ingepland" ||
+    status === "installatie_voltooid" ||
+    status === "review_gevraagd" ||
+    status === "service"
+  ) {
+    return true;
+  }
+  return isOrderVolledigBetaald({
+    facturen,
+    orderIncBtw,
+  });
+}
+
 function resolveCurrentIndex(
   project: ProjectLite | null,
-  btwStand: BtwFactuurStand
+  btwStand: BtwFactuurStand,
+  facturen: Array<{
+    status: string;
+    bedrag_inc_btw: number;
+    omschrijving?: string | null;
+  }> = [],
+  orderIncBtw?: number | null
 ): number {
   const btwKlaar =
     btwStand === "betaald" || btwStand === "niet_van_toepassing";
@@ -152,11 +203,15 @@ function resolveCurrentIndex(
   if (project.overstap_dynamische_leverancier_at) return 8;
   if (geinstalleerd) return 7;
 
+  // Installatie = current zodra er een installatiedatum staat
   if (project.installatie_at || status === "installatie_ingepland") return 5;
 
-  if (project.schouw_formulier_geupload) return 4;
+  // Klaarzetten = purchasing (schouwformulier + volledig betaald)
+  if (isKlaarzettenPurchasing(project, facturen, orderIncBtw)) return 4;
 
-  if (isSchouwdagDefinitief(project)) return 3;
+  if (isSchouwdagDefinitief(project) || project.schouw_formulier_geupload) {
+    return 3;
+  }
 
   // BTW-factuur eerst afronden (betaling) vóór schouwweek als current
   if (!btwKlaar) return 1;
@@ -477,19 +532,45 @@ function buildAgenda(project: ProjectLite | null): KlantAgendaItem[] {
     });
   }
 
+  // --- Overstap-afspraak ---
+  if (project.overstap_afspraak_at) {
+    const at = project.overstap_afspraak_at;
+    const parts = dateParts(at);
+    const venster = planningVensterNl(at);
+    const past = new Date(at).getTime() < Date.now();
+    items.push({
+      id: "overstap",
+      titel: "Overstap",
+      status: past ? "voltooid" : "gepland",
+      sortAt: at,
+      when: formatNlDateTime(at),
+      day: parts.day,
+      month: parts.month,
+      weekday: parts.weekday,
+      timeLabel: venster.label,
+      detail: "Afspraak voor overstap naar dynamische energieleverancier.",
+    });
+  }
+
   return items;
 }
 
 export function buildKlantTrack(opts: {
   trackToken: string;
   klantNaam: string;
+  klantEmail?: string | null;
+  klantTelefoon?: string | null;
   adres: string | null;
   offerte: {
     offerte_nummer: string;
     ondertekend_op: string | null;
     signed_pdf_path: string | null;
+    totaal_inc_btw?: number | null;
   };
   project: ProjectLite | null;
+  datumOpties?: KlantDatumOptie[];
+  /** Alle bevestigde service-afspraken (gekozen slots + service_at) */
+  serviceAfspraken?: KlantServiceAfspraak[];
   facturen: Array<{
     id: string;
     factuur_nummer: string;
@@ -498,6 +579,7 @@ export function buildKlantTrack(opts: {
     bedrag_inc_btw: number;
     factuurdatum: string;
     betaald_op: string | null;
+    credit_van_factuur_id?: string | null;
   }>;
 }): KlantTrackPayload {
   const geannuleerd = opts.project?.status === "annulering";
@@ -519,6 +601,13 @@ export function buildKlantTrack(opts: {
   const btwStand = resolveBtwFactuurStand(opts.project, opts.facturen);
   const btwFactuur = opts.facturen.find((f) =>
     isAanbetalingOmschrijving(f.omschrijving)
+  );
+  const orderIncBtw = Number(opts.offerte.totaal_inc_btw) || 0;
+  const klaarzetten =
+    opts.project != null &&
+    isKlaarzettenPurchasing(opts.project, opts.facturen, orderIncBtw);
+  const installatieGepland = Boolean(
+    opts.project?.installatie_at || status === "installatie_ingepland"
   );
 
   const defs: Array<{ id: KlantStapId; title: string; detail: string | null }> =
@@ -570,8 +659,13 @@ export function buildKlantTrack(opts: {
       {
         id: "klaar_voor_installatie",
         title: "Klaarzetten voor installatie",
-        detail:
-          "Na een geslaagde schouw en de Warmtefonds-declaratie kopen we je batterij in. Updates volgen per e-mail.",
+        detail: klaarzetten
+          ? installatieGepland || geinstalleerd
+            ? "Schouwformulier ontvangen en order volledig betaald — batterij ingekocht."
+            : "Schouwformulier ontvangen en order volledig betaald. We kopen je batterij in. Updates volgen per e-mail."
+          : opts.project?.schouw_formulier_geupload
+            ? "Schouwformulier ontvangen. Zodra je order volledig is betaald, kopen we je batterij in."
+            : "Na een geslaagde schouw en volledige betaling kopen we je batterij in. Updates volgen per e-mail.",
       },
       {
         id: "installatie",
@@ -600,12 +694,17 @@ export function buildKlantTrack(opts: {
         id: "btw_terugvragen",
         title: "BTW terugvragen",
         detail: opts.project?.btw_terugvragen_aangevraagd_at
-          ? `Aangevraagd op ${formatNlDate(opts.project.btw_terugvragen_aangevraagd_at)}. Het bedrag wordt meestal na 3 tot 4 maanden op je rekening gestort.`
+          ? "BTW teruggave gestart"
           : "Na de installatie starten we de BTW-teruggave. Het bedrag wordt meestal na 3 tot 4 maanden op je rekening gestort.",
       },
     ];
 
-  const currentIdx = resolveCurrentIndex(opts.project, btwStand);
+  const currentIdx = resolveCurrentIndex(
+    opts.project,
+    btwStand,
+    opts.facturen,
+    orderIncBtw
+  );
   const stappen: KlantStap[] = defs.map((d, i) => {
     let state: KlantStapState;
     if (geannuleerd) {
@@ -615,6 +714,34 @@ export function buildKlantTrack(opts: {
     } else if (d.id === "btw_factuur" && btwStand === "niet_van_toepassing") {
       state = "done";
     } else if (d.id === "btw_factuur" && btwStand === "betaald") {
+      state = "done";
+    } else if (d.id === "klaar_voor_installatie") {
+      // NU alleen bij purchasing: schouwformulier + order volledig betaald
+      if (installatieGepland || geinstalleerd || currentIdx > 4) {
+        state = "done";
+      } else if (klaarzetten) {
+        state = "current";
+      } else {
+        state = "upcoming";
+      }
+    } else if (d.id === "installatie") {
+      // NU zodra installatiedatum gepland is
+      if (geinstalleerd || currentIdx > 5) {
+        state = "done";
+      } else if (installatieGepland) {
+        state = "current";
+      } else {
+        state = "upcoming";
+      }
+    } else if (
+      d.id === "dynamische_energie" &&
+      opts.project?.overstap_dynamische_leverancier_at
+    ) {
+      state = "done";
+    } else if (
+      d.id === "btw_terugvragen" &&
+      opts.project?.btw_terugvragen_aangevraagd_at
+    ) {
       state = "done";
     } else if (i < currentIdx) {
       state = "done";
@@ -671,6 +798,8 @@ export function buildKlantTrack(opts: {
   return {
     track_token: opts.trackToken,
     klant_naam: opts.klantNaam,
+    klant_email: opts.klantEmail?.trim() || null,
+    klant_telefoon: opts.klantTelefoon?.trim() || null,
     project_nummer: opts.project?.project_nummer || null,
     offerte_nummer: opts.offerte.offerte_nummer,
     adres: opts.adres,
@@ -679,16 +808,21 @@ export function buildKlantTrack(opts: {
     stappen,
     agenda,
     nazorg,
+    datum_opties: opts.datumOpties || [],
+    service_afspraken: opts.serviceAfspraken || [],
     documenten: {
       offerte: {
-        beschikbaar: Boolean(opts.offerte.signed_pdf_path),
+        // Track is alleen voor ondertekende offertes → getekende PDF altijd klaar
+        beschikbaar: true,
         nummer: opts.offerte.offerte_nummer,
         ondertekend_op: opts.offerte.ondertekend_op,
       },
       facturen: opts.facturen.map((f) => ({
         id: f.id,
         factuur_nummer: f.factuur_nummer,
-        label: friendlyFactuurLabel(f.omschrijving),
+        label: f.credit_van_factuur_id
+          ? "Creditfactuur"
+          : friendlyFactuurLabel(f.omschrijving),
         status: f.status,
         bedrag_inc_btw: Number(f.bedrag_inc_btw) || 0,
         factuurdatum: f.factuurdatum,

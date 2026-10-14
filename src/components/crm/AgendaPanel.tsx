@@ -826,10 +826,6 @@ export function AfspraakDetail({
   }
 
   async function annuleer() {
-    if (magKlantMail && mailKlant === null) {
-      setError("Kies of de klant een mail moet krijgen (ja/nee)");
-      return;
-    }
     if (annuleerNotitie.trim().length < 3) {
       setError("Vul een notitie in bij annuleren");
       return;
@@ -843,15 +839,52 @@ export function AfspraakDetail({
         body: JSON.stringify({
           id: current.id,
           action: "annuleer",
-          mail_klant: magKlantMail ? mailKlant : false,
           notitie: annuleerNotitie.trim(),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Annuleren mislukt");
-      if (data.afspraak) onUpdated(data.afspraak as Afspraak);
-      else onRemoved(current.id);
-      onClose();
+      const next = (data.afspraak as Afspraak) || {
+        ...current,
+        status: "geannuleerd" as const,
+      };
+      setCurrent(next);
+      onUpdated(next);
+      setMode("view");
+      setMailKlant(null);
+      setOkMsg(
+        magKlantMail
+          ? "Afspraak geannuleerd. Verstuur desgewenst de annuleringsmail via de knop."
+          : "Afspraak geannuleerd."
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verstuurAnnuleringsmail() {
+    if (current.status !== "geannuleerd" || !magKlantMail) return;
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "send_annuleringsmail",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Mailen mislukt");
+      setOkMsg(
+        data.to
+          ? `Annuleringsmail verstuurd naar ${data.to}.`
+          : "Annuleringsmail verstuurd."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -1564,10 +1597,8 @@ export function AfspraakDetail({
               </p>
               <p className="mt-1 text-sm text-muted">
                 De afspraak blijft zichtbaar in de agenda (met streep). Een
-                notitie is verplicht.
-                {magKlantMail
-                  ? ""
-                  : " De klant krijgt hier geen mail van."}
+                notitie is verplicht. De klant krijgt niet automatisch een
+                mail — die kun je daarna apart versturen.
               </p>
               <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-muted">
                 Notitie / reden
@@ -1580,15 +1611,6 @@ export function AfspraakDetail({
                   className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
                 />
               </label>
-              {magKlantMail && (
-                <div className="mt-4">
-                  <JaNeeField
-                    label="Klant mailen over deze wijziging?"
-                    value={mailKlant}
-                    onChange={setMailKlant}
-                  />
-                </div>
-              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -1614,6 +1636,26 @@ export function AfspraakDetail({
               </div>
             </section>
           )}
+
+          {cancelled && magKlantMail ? (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Annuleringsmail
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Status is geannuleerd — verstuur desgewenst de bevestiging naar
+                de klant.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void verstuurAnnuleringsmail()}
+                className="mt-3 min-h-11 bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-60"
+              >
+                {busy ? "Bezig…" : "Verstuur annuleringsmail"}
+              </button>
+            </section>
+          ) : null}
         </div>
       </div>
 

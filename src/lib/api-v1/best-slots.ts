@@ -62,6 +62,10 @@ export type BestSlotOption = {
   reistijd_vanaf_startadres: boolean | null;
   /** Terugreis naar startadres (min), alleen bij laatste/enige afspraak die dag */
   reistijd_terug_min: number | null;
+  /** Geen open huisbezoeken in het planvenster → voorrang bij vullen */
+  lege_agenda: boolean;
+  /** Aantal open huisbezoeken in het planvenster (lager = eerder vullen) */
+  agenda_afspraken: number;
 };
 
 function b64urlEncode(json: string): string {
@@ -703,6 +707,8 @@ export async function loadBestSlotsForLead(
             fromSec != null ? s.fromDepot : null,
           reistijd_terug_min:
             s.toDepot && toSec != null ? Math.round(toSec / 60) : null,
+          lege_agenda: workload === 0,
+          agenda_afspraken: workload,
           scoreSec: s.scoreSec,
           travelSec,
           dayKey: s.dayKey,
@@ -747,6 +753,8 @@ export async function loadBestSlotsForLead(
           reistijd_min: null,
           reistijd_vanaf_startadres: null,
           reistijd_terug_min: null,
+          lege_agenda: workload === 0,
+          agenda_afspraken: workload,
           // Iets slechter dan route-score zodat FD blijft winnen als die er is
           scoreSec: scored && scored.length > 0 ? 50_000 : 0,
           travelSec: null,
@@ -771,13 +779,20 @@ export async function loadBestSlotsForLead(
   const DAY_MS = 24 * 60 * 60 * 1000;
   /**
    * Reistijd is leidend. Conversie telt mee (± max ~12 min equivalent).
+   * Lege/dunne agenda’s krijgen scorepunten (± max ~16 min) zodat die
+   * bij het bellen naar voren worden geschoven en gevuld worden.
    * Datum is lichte tie-breaker (~0.4 min/dag).
-   * Zo wint 25 min + 0% van 52 min + 40%, maar bij ~gelijke rit wint hogere conversie.
    */
   const DAY_PENALTY_MIN = 0.4;
   /** 100% conversie ≈ 12 min “korting” op reistijd — niet genoeg om 20+ min rit te winnen. */
   const CONVERSIE_BONUS_MAX_MIN = 12;
-  /** Boven dit reistijdverschil beslist afstand altijd (conversie mag dat niet omdraaien). */
+  /**
+   * Lege agenda (0 open huisbezoeken in venster) ≈ 16 min “korting”.
+   * Schaal af tot 6+ afspraken → geen bonus. Vult dunne agenda’s bij bellen.
+   */
+  const EMPTY_AGENDA_BONUS_MAX_MIN = 16;
+  const EMPTY_AGENDA_FULL_AT = 6;
+  /** Boven dit reistijdverschil beslist afstand altijd (conversie/lege agenda mag dat niet omdraaien). */
   const TRAVEL_ALWAYS_WINS_MIN = 8;
   /** Ritten boven ~40 min krijgen stevige extra straf. */
   const LONG_DRIVE_FROM_MIN = 40;
@@ -819,21 +834,37 @@ export async function loadBestSlotsForLead(
     return travelMin + overLong * LONG_DRIVE_EXTRA_PER_MIN + routeBonusMin;
   }
 
-  /** Lagere score = beter: reistijd − conversiebonus + lichte dagtstraf. */
+  /** Scorepunten voor lege/dunne agenda (reistijd-equivalent, minuten). */
+  function emptyAgendaBonusMin(workload: number): number {
+    if (workload <= 0) return EMPTY_AGENDA_BONUS_MAX_MIN;
+    if (workload >= EMPTY_AGENDA_FULL_AT) return 0;
+    return (
+      EMPTY_AGENDA_BONUS_MAX_MIN *
+      (1 - workload / EMPTY_AGENDA_FULL_AT)
+    );
+  }
+
+  /** Lagere score = beter: reistijd − conversie − lege-agenda + dagtstraf. */
   function rankCostMin(c: Candidate): number {
     const daysOut = Math.max(
       0,
       (new Date(c.start_at).getTime() - nowMs) / DAY_MS
     );
     const convBonus = c.conversie * CONVERSIE_BONUS_MAX_MIN;
-    return travelWeightedMin(c) - convBonus + daysOut * DAY_PENALTY_MIN;
+    const emptyBonus = emptyAgendaBonusMin(c.workload);
+    return (
+      travelWeightedMin(c) -
+      convBonus -
+      emptyBonus +
+      daysOut * DAY_PENALTY_MIN
+    );
   }
 
   function rankCostSec(c: Candidate): number {
     return rankCostMin(c) * 60;
   }
 
-  /** Vergelijk: haalbaar → reistijd (hard) → reistijd+conversie → datum. */
+  /** Vergelijk: haalbaar → reistijd (hard) → score (reistijd+conversie+lege agenda) → datum. */
   function betterCandidate(a: Candidate, b: Candidate): number {
     if (a.feasible !== b.feasible) return Number(a.feasible) - Number(b.feasible);
     const tA = travelWeightedMin(a);
@@ -843,9 +874,9 @@ export async function loadBestSlotsForLead(
     const costB = rankCostSec(b);
     return (
       costB - costA ||
+      b.workload - a.workload ||
       b.conversie - a.conversie ||
       b.start_at.localeCompare(a.start_at) ||
-      b.workload - a.workload ||
       Number(a.preferred) - Number(b.preferred)
     );
   }
@@ -866,9 +897,10 @@ export async function loadBestSlotsForLead(
     if (Math.abs(tA - tB) >= TRAVEL_ALWAYS_WINS_MIN) return tA - tB;
     const dCost = rankCostSec(a) - rankCostSec(b);
     if (dCost !== 0) return dCost;
+    // Lege agenda eerst (scorepunten + expliciete tie-break)
+    if (a.workload !== b.workload) return a.workload - b.workload;
     if (a.conversie !== b.conversie) return b.conversie - a.conversie;
     if (a.start_at !== b.start_at) return a.start_at.localeCompare(b.start_at);
-    if (a.workload !== b.workload) return a.workload - b.workload;
     if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
     return a.adviseur_naam.localeCompare(b.adviseur_naam, "nl");
   });
@@ -979,7 +1011,11 @@ export async function loadBestSlotsForLead(
       conversie: _c,
       workload: _w,
       ...rest
-    }) => rest
+    }) => ({
+      ...rest,
+      lege_agenda: rest.lege_agenda ?? _w === 0,
+      agenda_afspraken: rest.agenda_afspraken ?? _w,
+    })
   );
 
   const slots_tekst = slots

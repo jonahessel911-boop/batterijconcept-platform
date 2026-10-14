@@ -583,9 +583,9 @@ export function BelConversiePanel() {
                 Ingeplande afspraken
               </p>
               <p className="mt-0.5 text-xs text-muted">
-                Alleen huisbezoeken die in de periode zijn ingepland en nog
-                niet gelopen · Ingepland door = wie de afspraak zette · Adviseur
-                = wie het huisbezoek doet
+                Huisbezoeken ingepland in de periode · geannuleerd =
+                doorstreept (tellen niet mee) · Ingepland door = wie zette ·
+                Adviseur = wie het huisbezoek doet
               </p>
             </div>
             <table className="w-full min-w-[720px] text-left text-sm">
@@ -616,26 +616,69 @@ export function BelConversiePanel() {
                   (data.recenteAfspraken || []).map((a) => (
                     <tr
                       key={a.id}
-                      className="border-b border-line/70 last:border-0 hover:bg-wash/50"
+                      className={[
+                        "border-b border-line/70 last:border-0",
+                        a.geannuleerd
+                          ? "bg-[#FAFAFA] text-muted"
+                          : "hover:bg-wash/50",
+                      ].join(" ")}
                     >
-                      <td className="px-4 py-2.5 text-ink">
+                      <td
+                        className={[
+                          "px-4 py-2.5",
+                          a.geannuleerd ? "line-through" : "text-ink",
+                        ].join(" ")}
+                      >
                         <span className="font-medium">{a.leadNaam}</span>
+                        {a.geannuleerd ? (
+                          <span className="ml-2 inline-block no-underline text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                            Geannuleerd
+                          </span>
+                        ) : null}
                         {a.leadNumber ? (
-                          <span className="mt-0.5 block text-xs text-muted">
+                          <span className="mt-0.5 block text-xs text-muted no-underline">
                             {a.leadNumber}
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2.5 text-ink">
+                      <td
+                        className={[
+                          "px-3 py-2.5",
+                          a.geannuleerd
+                            ? "line-through text-muted"
+                            : "text-ink",
+                        ].join(" ")}
+                      >
                         {a.bellerNaam || "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-ink">
+                      <td
+                        className={[
+                          "px-3 py-2.5",
+                          a.geannuleerd
+                            ? "line-through text-muted"
+                            : "text-ink",
+                        ].join(" ")}
+                      >
                         {a.adviseurNaam || "—"}
                       </td>
-                      <td className="px-3 py-2.5 tabular-nums text-ink">
+                      <td
+                        className={[
+                          "px-3 py-2.5 tabular-nums",
+                          a.geannuleerd
+                            ? "line-through text-muted"
+                            : "text-ink",
+                        ].join(" ")}
+                      >
                         {formatDateTimeNl(a.ingeplandAt)}
                       </td>
-                      <td className="px-4 py-2.5 tabular-nums text-ink">
+                      <td
+                        className={[
+                          "px-4 py-2.5 tabular-nums",
+                          a.geannuleerd
+                            ? "line-through text-muted"
+                            : "text-ink",
+                        ].join(" ")}
+                      >
                         {formatDateTimeNl(a.afspraakAt)}
                       </td>
                     </tr>

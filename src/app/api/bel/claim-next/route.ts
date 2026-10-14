@@ -9,8 +9,9 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/bel/claim-next
- * Body: { exclude_lead_id?: string }
+ * Body: { exclude_lead_id?: string, provincie?: string }
  * Eerste vrije lead in bel-volgorde → soft claim voor de ingelogde beller.
+ * Optioneel gefilterd op provincie (provincie-belbak).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -22,12 +23,18 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json().catch(() => ({}))) as {
       exclude_lead_id?: string | null;
+      provincie?: string | null;
+      force_new?: boolean;
     };
     const exclude = body.exclude_lead_id?.trim() || null;
+    const provincie = body.provincie?.trim() || null;
+    const forceNew = Boolean(body.force_new);
 
     const sb = getSupabaseAdmin();
     const result = await claimNextBelLead(sb, session.adviseurId, {
       excludeLeadIds: exclude ? [exclude] : [],
+      provincie,
+      forceNew,
     });
 
     if (result.mode === "nocolumn") {

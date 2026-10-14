@@ -86,7 +86,7 @@ const PROJECT_STATUS_LABEL: Record<string, string> = {
   review_gevraagd: "Review gevraagd",
   service: "Service / nazorg",
   annulering: "Annulering",
-  hold_sales_actie: "HOLD - Sales actie",
+  hold_sales_actie: "HOLD SALES ACTIE",
 };
 
 function kindTone(kind: ActivityKind): string {
@@ -494,7 +494,7 @@ export function LeadActivityPanel({
             sb
               .from("afspraken")
               .select(
-                "id, start_at, created_at, status, soort, adviseurs(naam)"
+                "id, start_at, created_at, status, soort, adviseurs!adviseur_id(naam)"
               )
               .eq("lead_id", leadId)
               .order("start_at", { ascending: false })

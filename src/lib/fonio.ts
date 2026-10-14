@@ -160,8 +160,9 @@ export function pickStr(...values: unknown[]): string | null {
 }
 
 /**
- * Onthoud outbound-call → lead, zodat during-webhook werkt
- * ook als Fonio lead_id/telefoon leeg stuurt.
+ * Onthoud outbound-call → lead (telefoon sync).
+ * Zet géén laatst_gebeld_at — dat telt als bel-conversie zonder beller.
+ * Recent-match loopt via fonio_calls (zie findRecentFonioOutboundLead).
  */
 export async function rememberFonioOutboundLead(opts: {
   leadId: string;
@@ -171,20 +172,14 @@ export async function rememberFonioOutboundLead(opts: {
     const { getSupabaseAdmin } = await import("@/lib/supabase");
     const sb = getSupabaseAdmin();
     const to = toE164Nl(opts.toNumber);
-    const now = new Date().toISOString();
-    await sb
-      .from("leads")
-      .update({
-        ...(to ? { telefoon: to } : {}),
-        laatst_gebeld_at: now,
-      })
-      .eq("id", opts.leadId);
+    if (!to) return;
+    await sb.from("leads").update({ telefoon: to }).eq("id", opts.leadId);
   } catch (e) {
     console.warn("rememberFonioOutboundLead:", e);
   }
 }
 
-/** Meest recent gebelde lead (Fonio outbound) in de laatste N minuten. */
+/** Meest recente Fonio-outbound lead (via fonio_calls, fallback leads). */
 export async function findRecentFonioOutboundLead(
   withinMinutes = 30
 ): Promise<string | null> {
@@ -192,6 +187,17 @@ export async function findRecentFonioOutboundLead(
     const { getSupabaseAdmin } = await import("@/lib/supabase");
     const sb = getSupabaseAdmin();
     const since = new Date(Date.now() - withinMinutes * 60_000).toISOString();
+
+    const { data: call } = await sb
+      .from("fonio_calls")
+      .select("lead_id")
+      .not("lead_id", "is", null)
+      .gte("started_at", since)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (call?.lead_id) return call.lead_id as string;
+
     const { data } = await sb
       .from("leads")
       .select("id")

@@ -17,22 +17,39 @@ const OFFERTE_STATUSES: OfferteStatus[] = [
   "afgewezen",
 ];
 
+export type HoldSalesOfferteInfo = {
+  projectId: string;
+  notitie: string | null;
+};
+
+type StatusFilter = OfferteStatus | "hold_sales" | "";
+
 export function OffertesTable({
   offertes,
+  holdSalesByOfferteId,
   onOpenSign,
 }: {
   offertes: Offerte[];
+  /** Offerte-id → project op HOLD SALES ACTIE (zichtbaar hier i.p.v. Projecten). */
+  holdSalesByOfferteId?: Map<string, HoldSalesOfferteInfo>;
   onOpenSign?: (o: Offerte) => void;
 }) {
   const router = useRouter();
   const [actieOfferte, setActieOfferte] = useState<Offerte | null>(null);
-  const [statusFilter, setStatusFilter] = useState<OfferteStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
   const [search, setSearch] = useState("");
+
+  const holdMap = holdSalesByOfferteId;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return offertes.filter((o) => {
-      if (statusFilter && o.status !== statusFilter) return false;
+    const list = offertes.filter((o) => {
+      const hold = holdMap?.get(o.id);
+      if (statusFilter === "hold_sales") {
+        if (!hold) return false;
+      } else if (statusFilter) {
+        if (o.status !== statusFilter) return false;
+      }
       if (!q) return true;
       const hay = [
         o.offerte_nummer,
@@ -43,13 +60,23 @@ export function OffertesTable({
         o.leads?.plaats,
         o.installatie_partners?.naam,
         o.titel,
+        hold?.notitie,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [offertes, statusFilter, search]);
+    // HOLD bovenaan
+    return list.sort((a, b) => {
+      const aHold = holdMap?.has(a.id) ? 1 : 0;
+      const bHold = holdMap?.has(b.id) ? 1 : 0;
+      if (aHold !== bHold) return bHold - aHold;
+      return 0;
+    });
+  }, [offertes, statusFilter, search, holdMap]);
+
+  const holdCount = holdMap?.size ?? 0;
 
   if (offertes.length === 0) {
     return (
@@ -78,6 +105,11 @@ export function OffertesTable({
         <p className="text-xs text-muted">
           {filtered.length} van {offertes.length} offerte
           {offertes.length === 1 ? "" : "s"}
+          {holdCount > 0 ? (
+            <span className="ml-2 font-semibold text-[#4A3A5C]">
+              · {holdCount} HOLD sales
+            </span>
+          ) : null}
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -94,14 +126,15 @@ export function OffertesTable({
                 <select
                   value={statusFilter}
                   onChange={(e) =>
-                    setStatusFilter(e.target.value as OfferteStatus | "")
+                    setStatusFilter(e.target.value as StatusFilter)
                   }
                   onClick={(e) => e.stopPropagation()}
-                  className="max-w-[8.5rem] cursor-pointer border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
+                  className="max-w-[9.5rem] cursor-pointer border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
                   aria-label="Filter op status"
                   title="Filter op status"
                 >
                   <option value="">Alles</option>
+                  <option value="hold_sales">HOLD SALES ACTIE</option>
                   {OFFERTE_STATUSES.map((s) => (
                     <option key={s} value={s}>
                       {offerteStatusLabel[s]}
@@ -126,21 +159,32 @@ export function OffertesTable({
                   <p className="mt-1 text-sm text-muted">
                     {search.trim()
                       ? `Geen resultaat voor “${search.trim()}”.`
-                      : statusFilter
-                        ? `Geen offertes met status “${offerteStatusLabel[statusFilter]}”.`
-                        : "Pas je zoekopdracht of filter aan."}
+                      : statusFilter === "hold_sales"
+                        ? "Geen offertes op HOLD SALES ACTIE."
+                        : statusFilter
+                          ? `Geen offertes met status “${offerteStatusLabel[statusFilter as OfferteStatus]}”.`
+                          : "Pas je zoekopdracht of filter aan."}
                   </p>
                 </div>
               </td>
             </tr>
           ) : (
-            filtered.map((o) => (
+            filtered.map((o) => {
+              const hold = holdMap?.get(o.id);
+              return (
               <tr
                 key={o.id}
-                className="cursor-pointer"
+                className={[
+                  "cursor-pointer",
+                  hold ? "bg-[#F0ECF5]/60" : "",
+                ].join(" ")}
                 onClick={() => {
                   rememberCrmReturnUrl();
-                  router.push(`/offertes/${o.id}`);
+                  if (hold) {
+                    router.push(`/projecten/${hold.projectId}?from=offertes`);
+                  } else {
+                    router.push(`/offertes/${o.id}`);
+                  }
                 }}
               >
                 <td className="font-mono text-[11px] font-semibold text-green-dark whitespace-nowrap">
@@ -162,7 +206,16 @@ export function OffertesTable({
                   {o.installatie_partners?.naam || "—"}
                 </td>
                 <td>
-                  <StatusBadge kind="offerte" value={o.status} />
+                  {hold ? (
+                    <span
+                      className="inline-flex items-center px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide border border-[#5A4A6E]/30 bg-[#F0ECF5] text-[#4A3A5C]"
+                      title={hold.notitie || "HOLD SALES ACTIE"}
+                    >
+                      HOLD SALES ACTIE
+                    </span>
+                  ) : (
+                    <StatusBadge kind="offerte" value={o.status} />
+                  )}
                 </td>
                 <td className="whitespace-nowrap font-medium tabular-nums">
                   {formatEuro(o.totaal_inc_btw)}
@@ -171,7 +224,28 @@ export function OffertesTable({
                   {formatDateShort(o.geldig_tot)}
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  {o.status === "ondertekend" ? (
+                  {hold ? (
+                    <div className="max-w-[14rem]">
+                      {hold.notitie ? (
+                        <p
+                          className="text-[11px] leading-snug text-[#4A3A5C]"
+                          title={hold.notitie}
+                        >
+                          {hold.notitie}
+                        </p>
+                      ) : (
+                        <span className="text-[11px] text-muted">
+                          Geen notitie
+                        </span>
+                      )}
+                      <Link
+                        href={`/projecten/${hold.projectId}?from=offertes`}
+                        className="mt-0.5 inline-block text-[10px] font-semibold text-green-dark hover:underline"
+                      >
+                        Open project
+                      </Link>
+                    </div>
+                  ) : o.status === "ondertekend" ? (
                     o.actie_required ? (
                       <button
                         type="button"
@@ -198,7 +272,8 @@ export function OffertesTable({
                   )}
                 </td>
               </tr>
-            ))
+              );
+            })
           )}
         </tbody>
       </table>

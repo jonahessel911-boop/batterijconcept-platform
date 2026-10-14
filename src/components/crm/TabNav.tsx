@@ -4,6 +4,7 @@ import type { CrmTab } from "@/types/database";
 
 export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "today", label: "Today" },
+  { id: "weekmeeting", label: "Weekmeeting" },
   { id: "taken", label: "Agenda" },
   { id: "leads", label: "Leads" },
   { id: "bellen", label: "Bellen" },
@@ -18,6 +19,7 @@ export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "rapportage", label: "Rapportage" },
   { id: "admin", label: "Admin" },
   { id: "partners", label: "Partners" },
+  { id: "instellingen", label: "Instellingen" },
 ];
 
 /** Desktop tab-balk (verborgen op telefoon — daar hamburger) */

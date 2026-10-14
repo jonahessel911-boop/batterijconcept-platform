@@ -15,6 +15,7 @@ import {
 import { formatEuro } from "@/lib/format";
 import {
   FACTUUR_BETAALTERMIJN_DAGEN,
+  FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
   amsterdamDatePlusDays,
 } from "@/lib/factuur-betaling";
 
@@ -237,7 +238,10 @@ export async function ensureRestantDraftFactuur(
   );
   const today = new Date();
   const factuurdatum = amsterdamDatePlusDays(today, 0);
-  const vervaldatum = amsterdamDatePlusDays(today, FACTUUR_BETAALTERMIJN_DAGEN);
+  const betaaltermijnDagen = opts.warmtefonds
+    ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
+    : FACTUUR_BETAALTERMIJN_DAGEN;
+  const vervaldatum = amsterdamDatePlusDays(today, betaaltermijnDagen);
   const notities = `Betreft offerte ${opts.offerteNummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${opts.offerteNummer}.`;
 
   const amounts = {

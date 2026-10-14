@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Adviseur, Afspraak, Lead, LeadStatus } from "@/types/database";
 import { formatInTimeZone } from "date-fns-tz";
@@ -26,31 +26,25 @@ import {
   geenContactPogingLabel,
   inBelQueue,
   isTerugbelDue,
+  leadInProvincie,
   sortBelQueue,
 } from "@/lib/bel-queue";
+import {
+  NL_PROVINCIES,
+  adviseurVoorProvincie,
+  provincieVanPostcode,
+  type NlProvincie,
+} from "@/lib/postcode-provincie";
 import { leadStatusLabel } from "@/lib/labels";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { LeadTimeline } from "./LeadTimeline";
 import { ReistijdHint } from "./ReistijdHint";
-
-type BestSlotOption = {
-  slot_id: string;
-  start_at: string;
-  end_at: string;
-  label_nl: string;
-  label_kort: string;
-  adviseur_id: string;
-  adviseur_naam: string;
-  feasible: boolean;
-  reason: string | null;
-  conversie_pct: number | null;
-  conversie_gelopen?: number | null;
-  reistijd_min: number | null;
-  /** true = vanaf startadres; false = vanaf vorige afspraak die dag */
-  reistijd_vanaf_startadres: boolean | null;
-  /** Terugreis naar startadres (laatste/enige afspraak die dag) */
-  reistijd_terug_min?: number | null;
-};
+import {
+  BestSlotsOptionsList,
+  bestSlotsHelpText,
+  useBestSlots,
+  type BestSlotOption,
+} from "./BestSlotsOptions";
 async function clientLogLeadEvent(
   leadId: string,
   opts: {
@@ -166,10 +160,20 @@ export function BelPanel({
   onAfspraakCreated?: (afspraak: Afspraak) => void;
   onNeedReload?: () => void | Promise<void>;
 }) {
+  /** null = bak kiezen; daarna normaal of provincie. */
+  const [bakMode, setBakMode] = useState<"normaal" | "provincie" | null>(null);
+  const [selectedProvincie, setSelectedProvincie] =
+    useState<NlProvincie | null>(null);
+  /** Sync bron voor claim-requests (voorkomt stale state / race). */
+  const bakFilterRef = useRef<{
+    mode: "normaal" | "provincie" | null;
+    provincie: NlProvincie | null;
+  }>({ mode: null, provincie: null });
+  const claimGenRef = useRef(0);
   const [currentId, setCurrentId] = useState<string | null>(null);
   /** Snapshot van geclaimde lead (server is bron van waarheid). */
   const [claimedLead, setClaimedLead] = useState<Lead | null>(null);
-  const [claiming, setClaiming] = useState(true);
+  const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   /** null = Volgende-knop · status = uitkomsten · geen_interesse = subredenen · terugbel */
   const [nextMode, setNextMode] = useState<
@@ -189,14 +193,6 @@ export function BelPanel({
   const [notities, setNotities] = useState("");
   const [partnerAanwezig, setPartnerAanwezig] = useState<boolean | null>(null);
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
-  const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
-  const [bestSlotsLoading, setBestSlotsLoading] = useState(false);
-  const [bestSlotsLoadingMore, setBestSlotsLoadingMore] = useState(false);
-  const [bestSlotsError, setBestSlotsError] = useState<string | null>(null);
-  const [bestSlotsMode, setBestSlotsMode] = useState<"route" | "calendar" | null>(
-    null
-  );
-  const [bestSlotsLimit, setBestSlotsLimit] = useState<5 | 10>(5);
   const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
     null
   );
@@ -273,10 +269,43 @@ export function BelPanel({
     return terugbelMedewerkers[0]?.id || "";
   }
 
-  const normalQueue = useMemo(
+  const allBelQueue = useMemo(
     () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
     [leads, appointmentLeadIds]
   );
+
+  const provincieCounts = useMemo(() => {
+    const map = new Map<NlProvincie, number>();
+    for (const p of NL_PROVINCIES) map.set(p, 0);
+    for (const l of allBelQueue) {
+      for (const p of NL_PROVINCIES) {
+        if (leadInProvincie(l, p)) {
+          map.set(p, (map.get(p) || 0) + 1);
+          break;
+        }
+      }
+    }
+    return map;
+  }, [allBelQueue]);
+
+  /** Per provincie: adviseur in regio of dichtstbij (via startadres). */
+  const provincieAdviseurs = useMemo(() => {
+    const map = new Map<
+      NlProvincie,
+      ReturnType<typeof adviseurVoorProvincie>
+    >();
+    for (const p of NL_PROVINCIES) {
+      map.set(p, adviseurVoorProvincie(p, planAdviseurs));
+    }
+    return map;
+  }, [planAdviseurs]);
+
+  const normalQueue = useMemo(() => {
+    if (bakMode === "provincie" && selectedProvincie) {
+      return allBelQueue.filter((l) => leadInProvincie(l, selectedProvincie));
+    }
+    return allBelQueue;
+  }, [allBelQueue, bakMode, selectedProvincie]);
 
   /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld). */
   const terugbelDue = useMemo(() => {
@@ -355,21 +384,40 @@ export function BelPanel({
     }
   }
 
-  async function claimNext(excludeLeadId?: string | null) {
+  async function claimNext(
+    excludeLeadId?: string | null,
+    opts?: {
+      provincie?: NlProvincie | null;
+      forceNew?: boolean;
+      /** Al overgeslagen ids bij provincie-mismatch retry */
+      skipIds?: string[];
+    }
+  ) {
+    const gen = ++claimGenRef.current;
     setClaiming(true);
     setClaimError(null);
     try {
+      const filter = bakFilterRef.current;
+      const provincie =
+        opts && "provincie" in opts
+          ? opts.provincie || null
+          : filter.mode === "provincie"
+            ? filter.provincie
+            : null;
       const res = await fetch("/api/bel/claim-next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           exclude_lead_id: excludeLeadId || null,
+          provincie: provincie || null,
+          force_new: Boolean(opts?.forceNew),
         }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         lead?: Lead | null;
         error?: string;
       };
+      if (gen !== claimGenRef.current) return; // verouderde response
       if (!res.ok) {
         setCurrentId(null);
         setClaimedLead(null);
@@ -377,6 +425,26 @@ export function BelPanel({
         return;
       }
       const lead = data.lead || null;
+      if (lead && provincie && !leadInProvincie(lead, provincie)) {
+        // Server gaf lead buiten provincie → overslaan en opnieuw
+        const skips = [...(opts?.skipIds || []), lead.id];
+        if (skips.length <= 8) {
+          await releaseClaim(lead.id);
+          if (gen !== claimGenRef.current) return;
+          await claimNext(lead.id, {
+            provincie,
+            forceNew: true,
+            skipIds: skips,
+          });
+          return;
+        }
+        setClaimedLead(null);
+        setCurrentId(null);
+        setClaimError(
+          `Geen passende lead in ${provincie} gevonden (verkeerde provincie gefilterd).`
+        );
+        return;
+      }
       if (lead) {
         setClaimedLead(lead);
         setCurrentId(lead.id);
@@ -386,20 +454,50 @@ export function BelPanel({
         setCurrentId(null);
       }
     } catch {
+      if (gen !== claimGenRef.current) return;
       setClaimError("Claimen mislukt");
       setCurrentId(null);
       setClaimedLead(null);
     } finally {
-      setClaiming(false);
+      if (gen === claimGenRef.current) setClaiming(false);
     }
   }
 
-  // Soft claim bij openen Bel-tab.
-  // Geen release bij React-unmount (tab wissel/remount) — dat liet claims
-  // los waardoor twee bellers tegelijk dezelfde lead kregen.
-  // Release alleen bij tabblad sluiten / pagina verlaten, of via Volgende.
+  async function startNormaleBak() {
+    bakFilterRef.current = { mode: "normaal", provincie: null };
+    setBakMode("normaal");
+    setSelectedProvincie(null);
+    setClaimError(null);
+    await releaseClaim();
+    await claimNext(null, { provincie: null, forceNew: true });
+  }
+
+  async function startProvincieBak(provincie: NlProvincie) {
+    bakFilterRef.current = { mode: "provincie", provincie };
+    setBakMode("provincie");
+    setSelectedProvincie(provincie);
+    setClaimError(null);
+    setCurrentId(null);
+    setClaimedLead(null);
+    await releaseClaim();
+    await claimNext(null, { provincie, forceNew: true });
+  }
+
+  function resetBakKeuze() {
+    claimGenRef.current += 1;
+    bakFilterRef.current = { mode: null, provincie: null };
+    void releaseClaim();
+    setBakMode(null);
+    setSelectedProvincie(null);
+    setCurrentId(null);
+    setClaimedLead(null);
+    setClaimError(null);
+    setClaiming(false);
+  }
+
+  // Release claim bij tabblad sluiten / pagina verlaten.
+  // Geen auto-claim bij mount — eerst bak kiezen.
   useEffect(() => {
-    void claimNext();
     const onUnload = () => {
       void releaseClaim();
     };
@@ -409,8 +507,6 @@ export function BelPanel({
       window.removeEventListener("pagehide", onUnload);
       window.removeEventListener("beforeunload", onUnload);
     };
-    // alleen mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Heartbeat: claim verlengen zolang lead open staat
@@ -444,9 +540,6 @@ export function BelPanel({
     setNoteDraft("");
     setSavingNote(false);
     setSelectedBestSlotId(null);
-    setBestSlots([]);
-    setBestSlotsError(null);
-    setBestSlotsMode(null);
     setShowHandmatig(false);
     setTimelineTick((t) => t + 1);
     const preferred =
@@ -460,112 +553,20 @@ export function BelPanel({
     setAdviseurId(allowed);
   }, [current?.id, defaultAdviseurId, lockAdviseur, planAdviseurs]);
 
-  useEffect(() => {
-    if (!current?.id) {
-      setBestSlots([]);
-      setBestSlotsLimit(5);
-      return;
-    }
-    const adres = adresRegel(current);
-    if (adres === "—") {
-      setBestSlots([]);
-      setBestSlotsLimit(5);
-      setBestSlotsError("Lead heeft geen volledig adres — top-opties niet beschikbaar.");
-      setBestSlotsLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setBestSlotsLoading(true);
-    setBestSlotsError(null);
-    setBestSlotsLimit(5);
-    queueMicrotask(async () => {
-      try {
-        const qs = new URLSearchParams({
-          lead_id: current.id,
-          limit: "5",
-        });
-        if (lockAdviseur && defaultAdviseurId) {
-          qs.set("adviseur_id", defaultAdviseurId);
-        }
-        const res = await fetch(`/api/best-slots?${qs}`);
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok) {
-          setBestSlots([]);
-          setBestSlotsError(
-            (data as { error?: string }).error || "Beste opties laden mislukt"
-          );
-          setBestSlotsMode(null);
-          return;
-        }
-        let slots = (data.slots || []) as BestSlotOption[];
-        if (lockAdviseur && defaultAdviseurId) {
-          slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
-        }
-        setBestSlots(slots);
-        setBestSlotsMode(
-          data.mode === "route" || data.mode === "calendar" ? data.mode : null
-        );
-        setBestSlotsError(null);
-      } catch {
-        if (!cancelled) {
-          setBestSlots([]);
-          setBestSlotsError("Beste opties laden mislukt");
-        }
-      } finally {
-        if (!cancelled) setBestSlotsLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    current?.id,
-    current?.straat,
-    current?.huisnummer,
-    current?.postcode,
-    current?.plaats,
+  const {
+    bestSlots,
+    bestSlotsLoading,
+    bestSlotsLoadingMore,
+    bestSlotsError,
+    bestSlotsMode,
+    bestSlotsLimit,
+    loadMeerBestSlots,
+  } = useBestSlots({
+    lead: current,
     lockAdviseur,
     defaultAdviseurId,
-  ]);
-
-  async function loadMeerBestSlots() {
-    if (!current?.id || bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
-    setBestSlotsLoadingMore(true);
-    setBestSlotsError(null);
-    try {
-      const qs = new URLSearchParams({
-        lead_id: current.id,
-        limit: "10",
-      });
-      if (lockAdviseur && defaultAdviseurId) {
-        qs.set("adviseur_id", defaultAdviseurId);
-      }
-      const res = await fetch(`/api/best-slots?${qs}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Extra opties laden mislukt"
-        );
-      }
-      let slots = (data.slots || []) as BestSlotOption[];
-      if (lockAdviseur && defaultAdviseurId) {
-        slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
-      }
-      setBestSlots(slots);
-      setBestSlotsLimit(10);
-      setBestSlotsMode(
-        data.mode === "route" || data.mode === "calendar" ? data.mode : null
-      );
-    } catch (e) {
-      setBestSlotsError(
-        e instanceof Error ? e.message : "Extra opties laden mislukt"
-      );
-    } finally {
-      setBestSlotsLoadingMore(false);
-    }
-  }
+    enabled: Boolean(current?.id),
+  });
 
   useEffect(() => {
     if (!adviseurId) {
@@ -964,6 +965,135 @@ export function BelPanel({
     }
   }
 
+  // Stap 1: kies belbak
+  if (bakMode === null) {
+    return (
+      <div className="px-6 py-10 sm:px-8">
+        <div className="mx-auto max-w-xl text-center">
+          <p className="font-display text-xl font-semibold text-ink">
+            Welke belbak?
+          </p>
+          <p className="mt-2 text-sm text-muted">
+            Kies de normale wachtrij of bel alleen leads uit één provincie.
+          </p>
+        </div>
+        <div className="mx-auto mt-6 grid max-w-2xl gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => void startNormaleBak()}
+            className="rounded-xl border border-line bg-white px-5 py-5 text-left transition hover:border-green/50 hover:bg-green-soft/40"
+          >
+            <p className="font-display text-base font-semibold text-ink">
+              Normale belbak
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Alle belbare leads in de standaard volgorde.
+            </p>
+            <p className="mt-3 text-xs font-semibold text-green-dark">
+              {allBelQueue.length} in de wachtrij
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setBakMode("provincie");
+              setSelectedProvincie(null);
+              setClaimError(null);
+            }}
+            className="rounded-xl border border-line bg-white px-5 py-5 text-left transition hover:border-green/50 hover:bg-green-soft/40"
+          >
+            <p className="font-display text-base font-semibold text-ink">
+              Provincie belbak
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Alleen leads uit een gekozen provincie, zelfde belvolgorde.
+            </p>
+            <p className="mt-3 text-xs font-semibold text-green-dark">
+              Kies daarna een provincie →
+            </p>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Stap 2 (provincie): kies provincie
+  if (bakMode === "provincie" && !selectedProvincie) {
+    return (
+      <div className="px-6 py-10 sm:px-8">
+        <div className="mx-auto max-w-2xl">
+          <button
+            type="button"
+            onClick={resetBakKeuze}
+            className="text-sm font-medium text-green-dark hover:underline"
+          >
+            ← Andere belbak
+          </button>
+          <p className="mt-3 font-display text-xl font-semibold text-ink">
+            Kies een provincie
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Je krijgt alleen leads met een postcode in die provincie.
+          </p>
+          <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {NL_PROVINCIES.map((p) => {
+              const n = provincieCounts.get(p) || 0;
+              const adv = provincieAdviseurs.get(p);
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={n === 0}
+                  onClick={() => void startProvincieBak(p)}
+                  title={
+                    adv
+                      ? adv.inRegio
+                        ? `Adviseur in regio: ${adv.naam}`
+                        : `Dichtstbij (startadres): ${adv.naam}${
+                            adv.startProvincie
+                              ? ` · ${adv.startProvincie}`
+                              : ""
+                          }`
+                      : undefined
+                  }
+                  className={[
+                    "group rounded-xl border px-4 py-3 text-left transition",
+                    n === 0
+                      ? "cursor-not-allowed border-line/60 bg-[#F7F8F7] text-muted opacity-60"
+                      : "border-line bg-white hover:border-green/50 hover:bg-green-soft/40",
+                  ].join(" ")}
+                >
+                  <p className="text-sm font-semibold text-ink">{p}</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {n === 0 ? "Geen leads" : `${n} in de wachtrij`}
+                  </p>
+                  {adv && n > 0 ? (
+                    <p className="mt-1.5 max-h-0 overflow-hidden text-[11px] leading-snug text-green-dark opacity-0 transition-all duration-150 group-hover:max-h-10 group-hover:opacity-100 group-focus-visible:max-h-10 group-focus-visible:opacity-100">
+                      {adv.inRegio ? (
+                        <>
+                          Adviseur ·{" "}
+                          <span className="font-semibold">{adv.naam}</span>
+                        </>
+                      ) : (
+                        <>
+                          Dichtstbij ·{" "}
+                          <span className="font-semibold">{adv.naam}</span>
+                          {adv.startProvincie
+                            ? ` (${adv.startProvincie})`
+                            : ""}
+                        </>
+                      )}
+                    </p>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (claiming && !current) {
     return (
       <div className="px-6 py-14 text-center">
@@ -981,13 +1111,22 @@ export function BelPanel({
         <p className="mx-auto mt-2 max-w-md text-sm text-[#C45A12]">
           {claimError}
         </p>
-        <button
-          type="button"
-          onClick={() => void claimNext()}
-          className="mt-4 border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
-        >
-          Opnieuw proberen
-        </button>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => void claimNext()}
+            className="border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+          >
+            Opnieuw proberen
+          </button>
+          <button
+            type="button"
+            onClick={resetBakKeuze}
+            className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink"
+          >
+            Andere belbak
+          </button>
+        </div>
       </div>
     );
   }
@@ -996,17 +1135,22 @@ export function BelPanel({
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
-          Bellijst is leeg
+          {bakMode === "provincie" && selectedProvincie
+            ? `Geen leads in ${selectedProvincie}`
+            : "Bellijst is leeg"}
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          Alleen leads zonder afspraak, deal of “geen interesse” staan hier.
-          Max {MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min.
-          {MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later
-          terug. Na {MAX_BELPOGINGEN} keer geen contact vallen ze eruit.
-          Terugbel-afspraken verschijnen bovenaan als chip (klik → lead), niet
-          in deze belwachtrij. Meerdere bellers delen deze lijst — elke lead
-          gaat naar één persoon.
+          {bakMode === "provincie" && selectedProvincie
+            ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
+            : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min. ${MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later terug. Na ${MAX_BELPOGINGEN} keer geen contact vallen ze eruit.`}
         </p>
+        <button
+          type="button"
+          onClick={resetBakKeuze}
+          className="mt-4 border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+        >
+          Andere belbak
+        </button>
       </div>
     );
   }
@@ -1060,17 +1204,28 @@ export function BelPanel({
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
             {queue.length > 0
               ? "Andere bellers hebben de openstaande leads nu vast. Klik op opnieuw om de volgende vrije te pakken."
-              : "Openstaande terugbel-afspraken staan hierboven — klik om naar de lead te gaan."}
+              : bakMode === "provincie" && selectedProvincie
+                ? `Geen belbare leads meer in ${selectedProvincie}. Wissel van belbak of kies een andere provincie.`
+                : "Openstaande terugbel-afspraken staan hierboven — klik om naar de lead te gaan."}
           </p>
-          {queue.length > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {queue.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void claimNext()}
+                className="border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+              >
+                Opnieuw proberen
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => void claimNext()}
-              className="mt-4 border border-green bg-green px-4 py-2 text-sm font-semibold text-white"
+              onClick={resetBakKeuze}
+              className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink"
             >
-              Opnieuw proberen
+              Andere belbak
             </button>
-          ) : null}
+          </div>
         </div>
       </div>
     );
@@ -1085,6 +1240,26 @@ export function BelPanel({
   return (
     <div>
       {terugbelBanner}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-[#F7FBF8] px-4 py-2 sm:px-5">
+        <p className="text-xs text-muted">
+          <span className="font-semibold text-ink">
+            {bakMode === "provincie" && selectedProvincie
+              ? `Provincie belbak · ${selectedProvincie}`
+              : "Normale belbak"}
+          </span>
+          <span className="ml-1.5">
+            · {queue.length} in deze wachtrij
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={resetBakKeuze}
+          className="text-xs font-semibold text-green-dark hover:underline"
+        >
+          Wissel belbak
+        </button>
+      </div>
 
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
@@ -1123,6 +1298,19 @@ export function BelPanel({
           Aangemeld {formatDateTimeNl(current.created_at)}
         </p>
         <p className="mt-2 text-sm text-muted">{adresRegel(current)}</p>
+        {bakMode === "provincie" && selectedProvincie ? (
+          <p className="mt-1 text-xs text-muted">
+            Provincie lead:{" "}
+            <span className="font-semibold text-ink">
+              {provincieVanPostcode(current.postcode)}
+            </span>
+            {leadInProvincie(current, selectedProvincie) ? null : (
+              <span className="ml-1 font-semibold text-[#C45A12]">
+                · hoort niet bij {selectedProvincie}
+              </span>
+            )}
+          </p>
+        ) : null}
         {current.email && (
           <p className="mt-1 text-sm text-muted">{current.email}</p>
         )}
@@ -1341,6 +1529,14 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
+                onClick={() => void saveOutcome("geen_interesse")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Overig
+              </button>
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => setNextMode("status")}
                 className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
               >
@@ -1450,124 +1646,21 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              Top {bestSlotsLimit}: kortste reistijd eerst, daarna conversie
-              {bestSlotsLimit <= 5
-                ? " · min. 2 adviseurs"
-                : " · ook zelfde adviseur als die dichterbij is"}
-              . Datum alleen bij gelijke afstand.
+              {bestSlotsHelpText({ lockAdviseur, limit: bestSlotsLimit })}
             </p>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  Beste opties
-                </span>
-                {bestSlotsMode === "route" ? (
-                  <span className="text-[10px] font-medium text-green-deeper">
-                    Incl. reistijd
-                  </span>
-                ) : null}
-              </div>
-
-              {bestSlotsLoading ? (
-                <p className="text-sm text-muted">Beste opties berekenen…</p>
-              ) : bestSlotsError ? (
-                <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-                  {bestSlotsError}
-                </p>
-              ) : bestSlots.length === 0 ? (
-                <p className="text-sm text-muted">
-                  Geen gezamenlijke opties gevonden — gebruik handmatig.
-                </p>
-              ) : (
-                <>
-                  <ul className="space-y-1.5">
-                    {bestSlots.map((slot, idx) => {
-                      const selected = selectedBestSlotId === slot.slot_id;
-                      return (
-                        <li key={slot.slot_id}>
-                          <button
-                            type="button"
-                            onClick={() => selectBestSlot(slot)}
-                            className={[
-                              "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
-                              selected
-                                ? "border-green bg-green-soft"
-                                : "border-line bg-white hover:border-green/50",
-                            ].join(" ")}
-                          >
-                            <span
-                              className={[
-                                "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
-                                selected
-                                  ? "bg-green text-white"
-                                  : "bg-wash text-muted",
-                              ].join(" ")}
-                            >
-                              {idx + 1}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-sm font-semibold text-ink">
-                                {slot.label_kort || slot.label_nl}
-                              </span>
-                              <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
-                                <span className="font-medium text-ink">
-                                  {slot.adviseur_naam}
-                                </span>
-                                {slot.conversie_pct != null ? (
-                                  <span>
-                                    {slot.conversie_pct.toLocaleString("nl-NL")}%
-                                    conversie
-                                    {slot.conversie_gelopen != null
-                                      ? ` · ${slot.conversie_gelopen} gelopen`
-                                      : ""}
-                                  </span>
-                                ) : (
-                                  <span>Nog geen gelopen afspraken</span>
-                                )}
-                                {slot.reistijd_min != null ? (
-                                  <span>
-                                    ~{slot.reistijd_min} min
-                                    {slot.reistijd_vanaf_startadres === false
-                                      ? " vanaf vorige afspraak"
-                                      : slot.reistijd_vanaf_startadres === true
-                                        ? " vanaf start"
-                                        : " route"}
-                                    {slot.reistijd_terug_min != null
-                                      ? ` · ~${slot.reistijd_terug_min} min terug`
-                                      : ""}
-                                  </span>
-                                ) : slot.reistijd_terug_min != null ? (
-                                  <span>
-                                    ~{slot.reistijd_terug_min} min terug naar
-                                    startadres
-                                  </span>
-                                ) : null}
-                                {!slot.feasible ? (
-                                  <span className="text-[#C45A12]">Strak</span>
-                                ) : null}
-                              </span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {bestSlotsLimit < 10 && bestSlots.length >= 5 ? (
-                    <button
-                      type="button"
-                      disabled={bestSlotsLoadingMore}
-                      onClick={() => void loadMeerBestSlots()}
-                      className="w-full border border-line bg-wash px-3 py-2 text-xs font-semibold text-ink hover:bg-white disabled:opacity-50"
-                    >
-                      {bestSlotsLoadingMore
-                        ? "Extra opties laden…"
-                        : "5 meer laden"}
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </div>
+            <BestSlotsOptionsList
+              slots={bestSlots}
+              selectedSlotId={selectedBestSlotId}
+              onSelect={selectBestSlot}
+              loading={bestSlotsLoading}
+              error={bestSlotsError}
+              mode={bestSlotsMode}
+              limit={bestSlotsLimit}
+              loadingMore={bestSlotsLoadingMore}
+              onLoadMore={() => void loadMeerBestSlots()}
+              lockAdviseur={lockAdviseur}
+            />
 
             <button
               type="button"

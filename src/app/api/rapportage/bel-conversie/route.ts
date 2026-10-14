@@ -355,11 +355,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Geen solo-beller / Tarik-fallback. Credit komt van sessie bij inplannen.
-    const fallbackBellerId: string | null = null;
+    // Solo actieve beller → orphans (geen door/claim) krijgen die credit.
+    const activeBellers = adviseurRows.filter((a) => {
+      if (!a.actief) return false;
+      const rol = normalizeRol(a.rol);
+      if (rol === "admin") return false;
+      return rol === "beller";
+    });
+    const fallbackBellerId =
+      activeBellers.length === 1 ? activeBellers[0].id : null;
 
     for (const l of leadsRows) {
       const door = (l.laatst_gebeld_door || "").trim();
+      const claim = (l.bel_claimed_by || "").trim();
+      const bellerId = (l.beller_id || "").trim();
       const appt = afsprakenDag.find(
         (a) => a.lead_id === l.id && isHuisbezoekAfspraak(a)
       );
@@ -368,15 +377,17 @@ export async function GET(req: NextRequest) {
           ?.ingepland_door_id || ""
       ).trim();
 
-      // Alleen heal: ontbrekende door ← wie de afspraak echt inplantte
-      const needsDoor = !door && Boolean(ingeplandDoor);
+      // Heal ontbrekende door: planner → claim → beller_id → solo-beller
+      const healDoor =
+        ingeplandDoor || claim || bellerId || fallbackBellerId || "";
+      const needsDoor = !door && Boolean(healDoor);
       const needsAt =
         huisbezoekIds.has(l.id) &&
         !inAmsterdamDayRange(l.laatst_gebeld_at, start, end);
       if (!needsDoor && !needsAt) continue;
 
       const patch: Record<string, unknown> = {};
-      if (needsDoor) patch.laatst_gebeld_door = ingeplandDoor;
+      if (needsDoor) patch.laatst_gebeld_door = healDoor;
       if (needsAt) {
         patch.laatst_gebeld_at = appt?.created_at || end.toISOString();
       }

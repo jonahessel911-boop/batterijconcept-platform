@@ -21,7 +21,12 @@ import {
   type ProjectStatusKey,
 } from "@/lib/project-status-config";
 
-type MenuPos = { top: number; left: number; minWidth: number };
+type MenuPos = {
+  top: number;
+  left: number;
+  minWidth: number;
+  maxHeight: number;
+};
 
 function betaalwijzeOf(project: Project): Betaalwijze {
   const off = Array.isArray(project.offertes)
@@ -70,31 +75,47 @@ export function ProjectStatusSelect({
       const btn = btnRef.current;
       if (!btn) return;
       const r = btn.getBoundingClientRect();
-      const menuH = menuRef.current?.offsetHeight ?? 320;
       const gap = 4;
-      const spaceBelow = window.innerHeight - r.bottom - gap;
-      const openUp = spaceBelow < menuH && r.top > spaceBelow;
+      const edge = 8;
+      const spaceBelow = window.innerHeight - r.bottom - gap - edge;
+      const spaceAbove = r.top - gap - edge;
+      const preferred = Math.min(window.innerHeight * 0.7, 420);
+      const openUp = spaceBelow < 220 && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(
+        160,
+        Math.min(preferred, openUp ? spaceAbove : spaceBelow)
+      );
       const next: MenuPos = {
-        top: openUp ? Math.max(8, r.top - gap - menuH) : r.bottom + gap,
-        left: Math.max(8, Math.min(r.left, window.innerWidth - 280)),
+        top: openUp
+          ? Math.max(edge, r.top - gap - maxHeight)
+          : r.bottom + gap,
+        left: Math.max(edge, Math.min(r.left, window.innerWidth - 280)),
         minWidth: Math.max(r.width, 260),
+        maxHeight,
       };
       setPos((prev) =>
         prev &&
         prev.top === next.top &&
         prev.left === next.left &&
-        prev.minWidth === next.minWidth
+        prev.minWidth === next.minWidth &&
+        prev.maxHeight === next.maxHeight
           ? prev
           : next
       );
     }
+    function onScroll(e: Event) {
+      // Scroll in het menu zelf → niet herpositioneren (dat blokkeert scrollen)
+      const t = e.target;
+      if (t instanceof Node && menuRef.current?.contains(t)) return;
+      place();
+    }
     place();
     const raf = requestAnimationFrame(place);
-    window.addEventListener("scroll", place, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", place);
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", place);
     };
   }, [open]);
@@ -133,22 +154,43 @@ export function ProjectStatusSelect({
     if (
       next === "annulering" &&
       !window.confirm(
-        "Weet je zeker dat je deze order definitief wilt annuleren?"
+        "Weet je zeker dat je deze order definitief wilt annuleren?\n\nDe klant krijgt niet automatisch een mail — open het project om desgewenst de annuleringsmail te versturen."
       )
     ) {
       setOpen(false);
       return;
     }
+
+    let holdNotitie: string | null = null;
+    if (next === "hold_sales_actie") {
+      const raw = window.prompt(
+        "HOLD SALES ACTIE — wat moet sales doen? (notitie, zichtbaar bij Offertes)",
+        project.backoffice_notitie?.trim() || ""
+      );
+      if (raw === null) {
+        setOpen(false);
+        return;
+      }
+      holdNotitie = raw.trim();
+    }
+
     setSaving(true);
     setError(null);
     const prev = localStatus;
     setLocalStatus(next);
     setOpen(false);
     try {
+      const body: {
+        status: ProjectStatus;
+        backoffice_notitie?: string | null;
+      } = { status: next };
+      if (next === "hold_sales_actie") {
+        body.backoffice_notitie = holdNotitie || null;
+      }
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -158,7 +200,14 @@ export function ProjectStatusSelect({
       }
       const updated = (data as { project?: Project }).project;
       if (updated) onUpdated?.(updated);
-      else onUpdated?.({ ...project, status: next });
+      else
+        onUpdated?.({
+          ...project,
+          status: next,
+          ...(next === "hold_sales_actie"
+            ? { backoffice_notitie: holdNotitie }
+            : {}),
+        });
     } catch (e) {
       setLocalStatus(prev);
       setError(e instanceof Error ? e.message : "Fout");
@@ -196,14 +245,18 @@ export function ProjectStatusSelect({
           <div
             ref={menuRef}
             role="listbox"
-            className="fixed z-[80] max-h-[70vh] overflow-y-auto border border-line bg-white py-1.5 shadow-lg"
+            className="fixed z-[80] overflow-y-auto overscroll-contain border border-line bg-white py-1.5 shadow-lg"
             style={{
               top: pos?.top ?? -9999,
               left: pos?.left ?? 0,
               minWidth: pos?.minWidth ?? 260,
+              maxHeight: pos?.maxHeight ?? 320,
               visibility: pos ? "visible" : "hidden",
+              WebkitOverflowScrolling: "touch",
             }}
             onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
           >
             <p className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
               {BETAALWIJZE_LABEL[betaalwijze]}

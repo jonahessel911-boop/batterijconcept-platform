@@ -1,21 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
 import { RapportageMap } from "./RapportageMap";
 import { DashboardV2 } from "./DashboardV2";
 import { BelConversiePanel } from "./BelConversiePanel";
 import { LeadConversiePanel } from "./LeadConversiePanel";
+import { SalesManagerPanel } from "./SalesManagerPanel";
 import { FinancialPanel } from "./FinancialPanel";
 
 type ViewMode =
   | "dashboard_v2"
   | "bel_conversie"
   | "lead_conversie"
+  | "sales"
   | "financial"
   | "map";
 
 export function RapportagePanel() {
+  const router = useRouter();
   const [view, setView] = useState<ViewMode>("dashboard_v2");
   const [geo, setGeo] = useState<GeoRegionMetrics[]>([]);
   const [mapLoading, setMapLoading] = useState(false);
@@ -48,9 +52,11 @@ export function RapportagePanel() {
         ? "Bellen"
         : view === "lead_conversie"
           ? "Leads"
-          : view === "financial"
-            ? "Financieel"
-            : "Kaart";
+          : view === "sales"
+            ? "Sales"
+            : view === "financial"
+              ? "Financieel"
+              : "Kaart";
   const subtitle =
     view === "dashboard_v2"
       ? "Stand vs doel: waar staan we, en wat moet er nog bij."
@@ -58,9 +64,11 @@ export function RapportagePanel() {
         ? "Bel-conversie · periodefilter · dagoel uit open slots (+20% uitval)."
         : view === "lead_conversie"
           ? "Lead-conversie · periodefilter · bi-weekly leads nodig · CPL per kanaal."
-          : view === "financial"
-            ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
-            : "Klik op een provincie voor leads, afspraken en deals.";
+          : view === "sales"
+            ? "Sales Manager · conversie vs doel · tijdlijn · kaart per adviseur."
+            : view === "financial"
+              ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
+              : "Klik op een provincie voor leads, afspraken en deals.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -78,6 +86,7 @@ export function RapportagePanel() {
                 ["dashboard_v2", "Dashboard"],
                 ["bel_conversie", "Bellen"],
                 ["lead_conversie", "Leads"],
+                ["sales", "Sales"],
                 ["financial", "Financieel"],
                 ["map", "Kaart"],
               ] as const
@@ -96,6 +105,14 @@ export function RapportagePanel() {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => router.push("/?tab=weekmeeting")}
+              className="px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-wash"
+              title="Naar Weekmeeting"
+            >
+              Weekmeeting
+            </button>
           </div>
         </div>
 
@@ -116,6 +133,10 @@ export function RapportagePanel() {
         ) : view === "lead_conversie" ? (
           <div className="bg-wash/40 px-4 py-5 sm:px-5">
             <LeadConversiePanel />
+          </div>
+        ) : view === "sales" ? (
+          <div className="bg-wash/30">
+            <SalesManagerPanel />
           </div>
         ) : view === "financial" ? (
           <div className="bg-wash/40">

@@ -70,12 +70,13 @@ export async function PATCH(req: NextRequest) {
     "verwijder",
     "annuleer",
     "verwijder_definitief",
+    "send_annuleringsmail",
   ];
   if (!body.id || !body.action || !actions.includes(body.action)) {
     return NextResponse.json(
       {
         error:
-          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief) zijn verplicht",
+          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief | send_annuleringsmail) zijn verplicht",
       },
       { status: 400 }
     );
@@ -121,14 +122,46 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true, deleted: true, id: afspraak.id });
     }
 
-    if (body.action === "verwijder" || body.action === "annuleer") {
-      const magMailen = afspraakStuurtMail(afspraak.soort);
-      if (magMailen && typeof body.mail_klant !== "boolean") {
+    if (body.action === "send_annuleringsmail") {
+      if (afspraak.status !== "geannuleerd") {
         return NextResponse.json(
-          { error: "Kies of de klant een mail moet krijgen (ja/nee)" },
+          { error: "Annuleringsmail alleen bij geannuleerde afspraak" },
           { status: 400 }
         );
       }
+      if (!afspraakStuurtMail(afspraak.soort)) {
+        return NextResponse.json(
+          { error: "Dit type afspraak krijgt geen klantmail" },
+          { status: 400 }
+        );
+      }
+      const email = lead?.email?.trim();
+      if (!email) {
+        return NextResponse.json(
+          { error: "Geen e-mailadres op de lead" },
+          { status: 400 }
+        );
+      }
+      const sent = await sendEmail({
+        to: email,
+        subject: "Afspraak geannuleerd — Batterijconcept",
+        html: afspraakGeannuleerdKlantEmail({
+          naam: lead?.naam || "klant",
+          startAt: afspraak.start_at,
+        }),
+        tag: "afspraak-verwijderd-klant",
+      });
+      if (!sent.ok) {
+        return NextResponse.json(
+          { error: sent.error || "Mailen mislukt", sent: false },
+          { status: 502 }
+        );
+      }
+      return NextResponse.json({ ok: true, sent: true, to: email });
+    }
+
+    if (body.action === "verwijder" || body.action === "annuleer") {
+      // Geen automatische klantmail — knop na annuleren.
       const annuleerNotitie = body.notitie?.trim() || "";
       if (annuleerNotitie.length < 3) {
         return NextResponse.json(
@@ -143,10 +176,25 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      const jar = await cookies();
+      const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+      let geannuleerdDoorNaam =
+        (adviseur as { naam?: string | null } | null)?.naam?.trim() || "";
+      if (session?.adviseurId) {
+        const { data: actor } = await sb
+          .from("adviseurs")
+          .select("naam")
+          .eq("id", session.adviseurId)
+          .maybeSingle();
+        if (actor?.naam?.trim()) geannuleerdDoorNaam = actor.naam.trim();
+      }
+      const annuleerPrefix = geannuleerdDoorNaam
+        ? `Annulering (CRM) door ${geannuleerdDoorNaam}:`
+        : "Annulering (CRM):";
       const bestaande = (afspraak.notities as string | null)?.trim() || "";
       const samengevoegd = bestaande
-        ? `${bestaande}\n\nAnnulering (CRM): ${annuleerNotitie}`
-        : `Annulering (CRM): ${annuleerNotitie}`;
+        ? `${bestaande}\n\n${annuleerPrefix} ${annuleerNotitie}`
+        : `${annuleerPrefix} ${annuleerNotitie}`;
 
       const { data: cancelledRow, error: cancelErr } = await sb
         .from("afspraken")
@@ -170,27 +218,12 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
-      let mailSent = false;
-      const email = lead?.email?.trim();
-      if (magMailen && body.mail_klant && email) {
-        const sent = await sendEmail({
-          to: email,
-          subject: "Afspraak geannuleerd — Batterijconcept",
-          html: afspraakGeannuleerdKlantEmail({
-            naam: lead?.naam || "klant",
-            startAt: afspraak.start_at,
-          }),
-          tag: "afspraak-verwijderd-klant",
-        });
-        mailSent = sent.ok;
-      }
-
       await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
       return NextResponse.json({
         ok: true,
         cancelled: true,
-        mail_sent: mailSent,
+        mail_sent: false,
         afspraak: cancelledRow,
       });
     }

@@ -4,6 +4,7 @@ export const GEBRUIKER_ROLLEN = [
   "adviseur",
   "beller",
   "backoffice",
+  "sales_manager",
   "admin",
   "installateur",
 ] as const;
@@ -13,6 +14,7 @@ export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
 /** Login-accounts in Partners → Team (geen installateur-portaalrol). */
 export const TEAM_ROLLEN = [
   "admin",
+  "sales_manager",
   "adviseur",
   "beller",
   "backoffice",
@@ -24,13 +26,16 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   adviseur: "Adviseur",
   beller: "Beller",
   backoffice: "Backoffice",
+  sales_manager: "Sales manager",
   admin: "Admin",
   installateur: "Installateur",
 };
 
 export const teamRolUitleg: Record<TeamRol, string> = {
   admin: "Alles: leads, bellen, agenda, backoffice, rapportage, partners",
-  adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen",
+  sales_manager:
+    "Sales sturen: Today, weekmeeting, leads, offertes, netto, rapportage",
+  adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen, instellingen",
   beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
   backoffice:
     "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing",
@@ -41,6 +46,7 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
     value === "adviseur" ||
     value === "beller" ||
     value === "backoffice" ||
+    value === "sales_manager" ||
     value === "admin" ||
     value === "installateur"
   ) {
@@ -57,7 +63,7 @@ export function tabsVoorRol(
   let tabs: CrmTab[];
   switch (rol) {
     case "adviseur":
-      tabs = ["leads", "agenda", "offertes", "netto", "facturen"];
+      tabs = ["leads", "agenda", "offertes", "netto", "facturen", "instellingen"];
       break;
     case "beller":
       tabs = ["leads", "bellen"];
@@ -72,6 +78,16 @@ export function tabsVoorRol(
         "purchasing",
       ];
       break;
+    case "sales_manager":
+      tabs = [
+        "today",
+        "weekmeeting",
+        "leads",
+        "offertes",
+        "netto",
+        "rapportage",
+      ];
+      break;
     case "installateur":
       tabs = [];
       break;
@@ -79,6 +95,7 @@ export function tabsVoorRol(
     default:
       tabs = [
         "taken",
+        "weekmeeting",
         "leads",
         "bellen",
         "agenda",
@@ -95,9 +112,10 @@ export function tabsVoorRol(
       ];
       break;
   }
-  // Today alleen voor jona@ — als eerste tab
+  // Today: jona@ of sales_manager-rol
   if (
-    opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl"
+    opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
+    rol === "sales_manager"
   ) {
     tabs = ["today", ...tabs.filter((t) => t !== "today")];
   }
@@ -131,7 +149,12 @@ export function magInstellingen(rol: GebruikerRol): boolean {
 
 /** Mag “Bekijk als”-filter gebruiken. */
 export function magBekijkAls(rol: GebruikerRol): boolean {
-  return rol === "admin";
+  return rol === "admin" || rol === "sales_manager";
+}
+
+/** Mag Sales Manager / weekmeeting sturen. */
+export function magSalesSturing(rol: GebruikerRol): boolean {
+  return rol === "admin" || rol === "sales_manager";
 }
 
 /**

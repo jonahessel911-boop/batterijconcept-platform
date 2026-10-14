@@ -38,6 +38,7 @@ import {
 
 type SectionId =
   | "herplan"
+  | "schouw"
   | "volgende"
   | "inkoop"
   | "warmtefonds"
@@ -52,6 +53,7 @@ type TaskRow = {
   actie: BackofficeActie;
   kind:
     | "herplan"
+    | "schouw_inplannen"
     | "volgende_stap"
     | "bestel_materiaal"
     | "financiering"
@@ -64,6 +66,7 @@ type TaskRow = {
   meta?: string;
   dueAt: string;
   overdue: boolean;
+  prio?: boolean;
   done: boolean;
 };
 
@@ -74,6 +77,10 @@ const SECTION_META: Record<
   herplan: {
     label: "Afspraak herplannen",
     accent: "bg-[#FFF0E6] text-[#C45A12]",
+  },
+  schouw: {
+    label: "Schouw inplannen",
+    accent: "bg-green-soft text-green-dark",
   },
   volgende: {
     label: "Volgende stappen",
@@ -110,6 +117,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     herplan: {
       label: "Herplan",
       className: "bg-[#FFF0E6] text-[#C45A12]",
+    },
+    schouw_inplannen: {
+      label: "Schouw",
+      className: "bg-green-soft text-green-dark",
     },
     volgende_stap: {
       label: "Volgende",
@@ -259,6 +270,23 @@ function buildTaskRows(
         meta: actie.plaats || undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
+        done: false,
+      });
+      continue;
+    }
+    if (actie.soort === "schouw_inplannen") {
+      rows.push({
+        key: `${actie.id}-schouw`,
+        section: "schouw",
+        actie,
+        kind: "schouw_inplannen",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || actie.schouwWeekLabel || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
         done: false,
       });
       continue;
@@ -274,6 +302,7 @@ function buildTaskRows(
         meta: actie.projectNummer || undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
         done: false,
       });
       continue;
@@ -289,6 +318,7 @@ function buildTaskRows(
         meta: actie.projectNummer || undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
         done: false,
       });
       continue;
@@ -409,9 +439,10 @@ export function BackofficeActiesList({
         openBackofficeActies(projecten, facturen, new Date(), {
           leads,
           afspraken,
+          adviseurs,
         })
       ),
-    [projecten, facturen, leads, afspraken]
+    [projecten, facturen, leads, afspraken, adviseurs]
   );
   const rows = useMemo(
     () => buildTaskRows(acties, facturen),
@@ -438,6 +469,7 @@ export function BackofficeActiesList({
   const [projectTaken, setProjectTaken] = useState<ProjectTaak[]>([]);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     herplan: true,
+    schouw: true,
     aangetekend: true,
     volgende: true,
     inkoop: true,
@@ -517,7 +549,7 @@ export function BackofficeActiesList({
 
   /** Secties uit gefilterde acties (badge = zelfde set via actiesVoorActiesTab). */
   const sections = useMemo(() => {
-    const order: SectionId[] = ["herplan"];
+    const order: SectionId[] = ["herplan", "schouw", "inkoop"];
     return order
       .map((id) => ({
         id,
@@ -1099,9 +1131,7 @@ export function BackofficeActiesList({
 
   const hasOpen =
     sections.some((s) => s.rows.length > 0) || showCreate;
-  const herplanOpenCount = rows.filter(
-    (r) => r.section === "herplan" && !r.done
-  ).length;
+  const openActieCount = rows.filter((r) => !r.done).length;
 
   return (
     <div className="space-y-5 px-5 pb-6 pt-5">
@@ -1119,10 +1149,8 @@ export function BackofficeActiesList({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">
           {!hasOpen && !showCreate
-            ? "Geen openstaande herplan-acties."
-            : `${herplanOpenCount} open herplan-actie${
-                herplanOpenCount === 1 ? "" : "s"
-              }`}
+            ? "Geen openstaande acties."
+            : `${openActieCount} open actie${openActieCount === 1 ? "" : "s"}`}
         </p>
       </div>
 
@@ -1397,9 +1425,20 @@ export function BackofficeActiesList({
                   </thead>
                   <tbody>
                     {section.rows.map((row) => {
-                      const pill = TYPE_PILL[row.kind];
-                      const isOpen = expandedRow === row.key;
                       const actie = row.actie;
+                      const pill =
+                        row.kind === "herplan"
+                          ? actie.herplanBron === "adviseur"
+                            ? {
+                                label: "Adviseur",
+                                className: "bg-[#E8F0F6] text-[#1A4A6E]",
+                              }
+                            : {
+                                label: "Klant",
+                                className: "bg-[#FFF0E6] text-[#C45A12]",
+                              }
+                          : TYPE_PILL[row.kind];
+                      const isOpen = expandedRow === row.key;
                       const drafts = draftFacturenVoorActie(actie, facturen);
                       const saleAt = actie.saleAt
                         ? new Date(actie.saleAt)
@@ -1458,24 +1497,43 @@ export function BackofficeActiesList({
                                     </span>
                                   ) : null}
                                 </p>
-                                {row.kind === "herplan" &&
-                                actie.annuleringsReden?.trim() ? (
-                                  <p className="mt-1 max-w-md text-xs leading-snug text-ink">
-                                    <span className="font-semibold text-muted">
-                                      Reden:{" "}
-                                    </span>
-                                    {actie.annuleringsReden.trim()}
-                                  </p>
+                                {row.kind === "herplan" ? (
+                                  <div className="mt-1 max-w-md space-y-0.5 text-xs leading-snug text-ink">
+                                    {actie.herplanBron === "adviseur" ? (
+                                      <p className="text-[11px] text-muted">
+                                        {actie.geannuleerdDoorNaam?.trim()
+                                          ? `Geannuleerd door ${actie.geannuleerdDoorNaam.trim()}`
+                                          : "Adviseur vraagt om herplannen"}
+                                      </p>
+                                    ) : actie.geannuleerdDoorNaam?.trim() ? (
+                                      <p className="text-[11px] text-muted">
+                                        Adviseur: {actie.geannuleerdDoorNaam.trim()}
+                                      </p>
+                                    ) : null}
+                                    {actie.annuleringsReden?.trim() ? (
+                                      <p>
+                                        <span className="font-semibold text-muted">
+                                          Reden:{" "}
+                                        </span>
+                                        {actie.annuleringsReden.trim()}
+                                      </p>
+                                    ) : null}
+                                  </div>
                                 ) : null}
                                 {(row.kind === "volgende_stap" ||
-                                  row.kind === "bestel_materiaal") &&
+                                  row.kind === "bestel_materiaal" ||
+                                  row.kind === "schouw_inplannen") &&
                                 (actie.reden || actie.detail) ? (
                                   <div className="mt-1.5 max-w-md space-y-0.5 text-xs leading-snug">
                                     <p className="text-ink">
                                       <span className="font-semibold text-muted">
-                                        Waarom:{" "}
+                                        {row.kind === "bestel_materiaal"
+                                          ? "Besteldatum: "
+                                          : "Waarom: "}
                                       </span>
-                                      {actie.reden || actie.detail}
+                                      {row.kind === "bestel_materiaal"
+                                        ? actie.detail
+                                        : actie.reden || actie.detail}
                                     </p>
                                     {actie.later ? (
                                       <p className="text-[11px] text-muted">
@@ -1544,7 +1602,8 @@ export function BackofficeActiesList({
                                   </div>
                                 ) : null}
                                 {isOpen &&
-                                row.kind === "volgende_stap" &&
+                                (row.kind === "volgende_stap" ||
+                                  row.kind === "schouw_inplannen") &&
                                 (actie.planSchouwdag ||
                                   actie.planSchouwweek) ? (
                                   <div className="mt-2 space-y-1.5">
@@ -1743,17 +1802,24 @@ export function BackofficeActiesList({
                             </span>
                           </td>
                           <td className="py-2.5 pr-3 whitespace-nowrap">
-                            <span
-                              className={[
-                                "text-xs tabular-nums",
-                                row.overdue
-                                  ? "font-semibold text-[#C45A12]"
-                                  : "text-muted",
-                              ].join(" ")}
-                            >
-                              {formatDateTimeNl(row.dueAt)}
-                              {row.overdue ? " · te laat" : ""}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {row.prio ? (
+                                <span className="rounded bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                                  PRIO
+                                </span>
+                              ) : null}
+                              <span
+                                className={[
+                                  "text-xs tabular-nums",
+                                  row.overdue
+                                    ? "font-semibold text-[#C45A12]"
+                                    : "text-muted",
+                                ].join(" ")}
+                              >
+                                {formatDateTimeNl(row.dueAt)}
+                                {row.overdue ? " · te laat" : ""}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-2.5">
                             <div className="flex flex-wrap items-center gap-1.5">

@@ -6,8 +6,8 @@ import { useBoViewStore } from "@/lib/bo-view-store";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
 import { Planbord } from "./Planbord";
-import { SchouwweekList } from "./SchouwweekList";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
+import { TakenAgendaPanel } from "./TakenAgendaPanel";
 
 export type { BoView };
 export { parseBoView, backofficeHref };
@@ -19,6 +19,8 @@ export function BackofficePanel({
   leads = [],
   afspraken = [],
   adviseurId = null,
+  sessionAdviseurId = null,
+  sessionRol = null,
   onProjectUpdated,
   onFactuurUpdated,
   onLeadUpdated,
@@ -29,6 +31,8 @@ export function BackofficePanel({
   leads?: Lead[];
   afspraken?: Afspraak[];
   adviseurId?: string | null;
+  sessionAdviseurId?: string | null;
+  sessionRol?: string | null;
   onProjectUpdated?: (project: Project) => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
   onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
@@ -59,8 +63,16 @@ export function BackofficePanel({
     );
   }
 
-  if (view === "schouwweek") {
-    return <SchouwweekList projecten={projecten} />;
+  if (view === "taken_agenda") {
+    return (
+      <div className="px-5 pb-5 pt-5">
+        <TakenAgendaPanel
+          adviseurs={adviseurs}
+          sessionAdviseurId={sessionAdviseurId}
+          sessionRol={sessionRol}
+        />
+      </div>
+    );
   }
 
   if (view === "service") {

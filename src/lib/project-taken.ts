@@ -71,17 +71,18 @@ export function autoTakenVoorStatus(
     return kickoffAutoTaken(betaalwijze === "warmtefonds");
   }
 
+  // Na opleveringformulier: 2 backoffice-acties, deadline binnen 2 dagen
   if (key === "installatie_voltooid") {
     return [
       {
-        autoKey: "installatie_voltooid:btw_terugvragen",
-        titel: "BTW terugvragen aanvragen",
+        autoKey: "installatie_voltooid:overstap_leverancier",
+        titel: "Overstappen dynamische leverancier",
         afdeling: "Backoffice",
         dueInDays: 2,
       },
       {
-        autoKey: "installatie_voltooid:overstap_leverancier",
-        titel: "Overstap dynamische leverancier",
+        autoKey: "installatie_voltooid:btw_terugvragen",
+        titel: "BTW terugvrage starten",
         afdeling: "Backoffice",
         dueInDays: 2,
       },

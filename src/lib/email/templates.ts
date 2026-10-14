@@ -8,6 +8,7 @@ import {
 } from "./layout";
 import { formatDateNl, formatDateTimeLongNl, formatTimeNl } from "@/lib/format";
 import { planningVensterNl } from "@/lib/planning-window";
+import { FRANK_ENERGIE_OVERSTAP_URL } from "@/lib/frank-energie";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
 import {
   RECRUITMENT_GESPREK_CONTACT,
@@ -587,6 +588,8 @@ export function factuurVerzondenEmail(opts: {
   factuurNummer: string;
   bedrag: string;
   vervaldatum?: string | null;
+  /** Dagen betaaltermijn in de mail (default 3). */
+  betaaltermijnDagen?: number | null;
   iban?: string | null;
   accountName?: string | null;
   betalingskenmerk?: string | null;
@@ -629,13 +632,21 @@ export function factuurVerzondenEmail(opts: {
     });
   }
 
+  const termijnDagen =
+    typeof opts.betaaltermijnDagen === "number" &&
+    Number.isFinite(opts.betaaltermijnDagen) &&
+    opts.betaaltermijnDagen >= 0
+      ? Math.round(opts.betaaltermijnDagen)
+      : 3;
+  const termijnLabel =
+    termijnDagen === 1 ? "1 dag" : `${termijnDagen} dagen`;
   const betalingHtml = opts.iban
     ? emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Betalen</strong></p>
          <p style="margin:0 0 6px;font-size:14px;">IBAN: <strong>${opts.iban}</strong></p>
          <p style="margin:0 0 6px;font-size:14px;">T.n.v. <strong>${opts.accountName || "BatterijConcept"}</strong></p>
          <p style="margin:0 0 6px;font-size:14px;">Omschrijving: <strong>${kenmerk}</strong></p>
-         <p style="margin:0;font-size:14px;">Betaaltermijn: <strong>3 dagen</strong>${
+         <p style="margin:0;font-size:14px;">Betaaltermijn: <strong>${termijnLabel}</strong>${
            opts.vervaldatum ? ` (uiterlijk ${opts.vervaldatum})` : ""
          }</p>`
       )
@@ -1134,5 +1145,115 @@ export function zzpContractOndertekendEmail(opts: { naam: string }) {
       ),
       emailMuted("Met vriendelijke groet, team BatterijConcept"),
     ].join(""),
+  });
+}
+
+/**
+ * Na bevestigde overstap-datum: BatterijConcept × Frank Energie,
+ * link naar frankenergie.nl + batterijmerk uit offerte.
+ */
+export function overstapFrankEnergieEmail(opts: {
+  naam: string;
+  afspraakAt: string;
+  batterijMerk: string;
+  frankUrl?: string;
+  logoBcUrl: string;
+  logoFrankUrl: string;
+  projectNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const when = formatDateTimeLongNl(opts.afspraakAt);
+  const frankUrl = opts.frankUrl || FRANK_ENERGIE_OVERSTAP_URL;
+  const merk = opts.batterijMerk || "thuisbatterij";
+  const logos = `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 18px;">
+  <tr>
+    <td style="padding:0 14px 0 0;vertical-align:middle;">
+      <img src="${opts.logoBcUrl}" alt="BatterijConcept" width="72" height="72" style="display:block;border:0;border-radius:12px;background:#0a0a0a;" />
+    </td>
+    <td style="padding:0 10px;vertical-align:middle;font-size:12px;font-weight:600;color:#5A635C;letter-spacing:0.04em;text-transform:uppercase;">
+      in samenwerking met
+    </td>
+    <td style="padding:0 0 0 10px;vertical-align:middle;">
+      <img src="${opts.logoFrankUrl}" alt="Frank Energie" width="72" height="72" style="display:block;border:0;border-radius:12px;" />
+    </td>
+  </tr>
+</table>`;
+
+  return emailLayout({
+    title: "Overstap dynamische energie — BatterijConcept × Frank",
+    preheader: `Je overstap staat gepland op ${when}. We bellen je om dit voor je te regelen.`,
+    bodyHtml: [
+      logos,
+      emailH1("Je overstap-afspraak staat"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        `Bedankt voor je bevestiging. We helpen je graag met de <strong>overstap naar een dynamische energieleverancier</strong> — in samenwerking met <strong>Frank Energie</strong>.`
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Afspraak</strong><br />${when}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Duur</strong><br />Ca. 30 minuten</p>
+         <p style="margin:0;font-size:15px;"><strong>Jouw thuisbatterij</strong><br />${merk}</p>`
+      ),
+      emailP(
+        "<strong>We nemen telefonisch contact met je op</strong> om de overstap voor je te regelen. We bellen naar het telefoonnummer dat je hebt doorgegeven."
+      ),
+      emailP(
+        `Voor jouw <strong>${merk}</strong> is een dynamisch energiecontract extra interessant: zo haal je meer uit je batterij en speel je in op goedkope momenten.`
+      ),
+      emailP(
+        "Je kunt alvast meer lezen over Frank Energie en een dynamisch contract:"
+      ),
+      emailButton("Naar Frank Energie", frankUrl),
+      opts.projectNummer
+        ? emailP(`<strong>Order</strong><br />${opts.projectNummer}`)
+        : "",
+      emailP(
+        "Tot dan! Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Team BatterijConcept · i.s.m. Frank Energie"),
+    ]
+      .filter(Boolean)
+      .join(""),
+  });
+}
+
+/** Klant: kies 1 van 3 datumopties (Service of Overstap) in Mijn portaal */
+export function datumOptieKlantEmail(opts: {
+  naam: string;
+  soortLabel: string;
+  slots: [string, string, string];
+  portalUrl: string;
+  projectNummer?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const slotLines = opts.slots
+    .map((iso, i) => {
+      const label = formatDateTimeLongNl(iso);
+      return `<p style="margin:0 0 ${i < 2 ? "8" : "0"}px;font-size:14px;line-height:1.55;">${i + 1}. ${label}</p>`;
+    })
+    .join("");
+  return emailLayout({
+    title: `Kies een datum — ${opts.soortLabel}`,
+    preheader: `Kies één van drie tijden voor je ${opts.soortLabel.toLowerCase()}-afspraak.`,
+    bodyHtml: [
+      emailH1(`Kies een datum voor ${opts.soortLabel.toLowerCase()}`),
+      emailP(`Hoi ${first},`),
+      emailP(
+        `We hebben drie mogelijke tijden voor je <strong>${opts.soortLabel.toLowerCase()}</strong>-afspraak. Open je portaal, kies de tijd die jou het best uitkomt en bevestig je gegevens.`
+      ),
+      emailBox(
+        `<p style="margin:0 0 10px;font-size:15px;font-weight:600;color:#0D5C32;">Voorgestelde tijden</p>${slotLines}`
+      ),
+      opts.projectNummer
+        ? emailP(`<strong>Order</strong><br />${opts.projectNummer}`)
+        : "",
+      emailButton("Kies je datum in Mijn portaal", opts.portalUrl),
+      emailP(
+        "Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Tot snel, team BatterijConcept"),
+    ]
+      .filter(Boolean)
+      .join(""),
   });
 }

@@ -83,12 +83,14 @@ export type SollicitatieStatus =
 export type CrmTab =
   | "today"
   | "taken"
+  | "weekmeeting"
   | "leads"
   | "bellen"
   | "agenda"
   | "offertes"
   | "netto"
   | "leaderboard"
+  | "sales_manager"
   | "instroom"
   | "projecten"
   | "facturen"
@@ -111,6 +113,7 @@ export type AfspraakStatus =
 export type GebruikerRol =
   | "adviseur"
   | "backoffice"
+  | "sales_manager"
   | "admin"
   | "installateur"
   | "beller";
@@ -137,6 +140,8 @@ export interface Adviseur {
   bel_planning?: boolean | null;
   /** CRM-rol */
   rol?: GebruikerRol | null;
+  /** Pad in storage-bucket adviseur-fotos */
+  profielfoto_path?: string | null;
   /** Commissie over omzet excl. btw (%) — saleskosten in Financial Dashboard */
   commissie_pct?: number | null;
   /** ZZP factuurgegevens */
@@ -534,6 +539,8 @@ export interface Project {
   /** Geplande service-afspraak (na oplevering / serviceverzoek). */
   service_at?: string | null;
   service_notities?: string | null;
+  /** Geplande overstap-afspraak (klantportaal of BO). */
+  overstap_afspraak_at?: string | null;
   schouw_herinnering_verstuurd?: boolean;
   installatie_herinnering_verstuurd?: boolean;
   aanbetaling_te_innen_inc?: number | null;

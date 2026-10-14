@@ -6,27 +6,15 @@ import { nl } from "date-fns/locale";
 import type { Adviseur, Afspraak, Lead } from "@/types/database";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { isBelPlanAdviseur } from "@/lib/rollen";
-import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
+import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { ReistijdHint } from "./ReistijdHint";
-
-type BestSlotOption = {
-  slot_id: string;
-  start_at: string;
-  end_at: string;
-  label_nl: string;
-  label_kort: string;
-  adviseur_id: string;
-  adviseur_naam: string;
-  feasible: boolean;
-  reason: string | null;
-  conversie_pct: number | null;
-  reistijd_min: number | null;
-  /** true = vanaf startadres; false = vanaf vorige afspraak die dag */
-  reistijd_vanaf_startadres: boolean | null;
-  /** Terugreis naar startadres (laatste/enige afspraak die dag) */
-  reistijd_terug_min?: number | null;
-};
+import {
+  BestSlotsOptionsList,
+  bestSlotsHelpText,
+  useBestSlots,
+  type BestSlotOption,
+} from "./BestSlotsOptions";
 
 function JaNeeField({
   label,
@@ -121,15 +109,24 @@ export function LeadAfspraakPlannen({
   const [andereOffertes, setAndereOffertes] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
-  const [bestSlotsLoading, setBestSlotsLoading] = useState(false);
-  const [bestSlotsLoadingMore, setBestSlotsLoadingMore] = useState(false);
-  const [bestSlotsError, setBestSlotsError] = useState<string | null>(null);
-  const [bestSlotsLimit, setBestSlotsLimit] = useState<5 | 10>(5);
   const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
     null
   );
   const [showHandmatig, setShowHandmatig] = useState(false);
+
+  const {
+    bestSlots,
+    bestSlotsLoading,
+    bestSlotsLoadingMore,
+    bestSlotsError,
+    bestSlotsMode,
+    bestSlotsLimit,
+    loadMeerBestSlots,
+  } = useBestSlots({
+    lead,
+    lockAdviseur,
+    defaultAdviseurId,
+  });
 
   useEffect(() => {
     setAdviseurId(preferred);
@@ -142,94 +139,7 @@ export function LeadAfspraakPlannen({
     setError(null);
     setSelectedBestSlotId(null);
     setShowHandmatig(false);
-    setBestSlotsLimit(5);
   }, [lead.id, preferred, lead.notities]);
-
-  useEffect(() => {
-    if (adresRegel(lead) === "—") {
-      setBestSlots([]);
-      setBestSlotsLimit(5);
-      setBestSlotsError(
-        "Lead heeft geen volledig adres — top-opties niet beschikbaar."
-      );
-      return;
-    }
-    let cancelled = false;
-    setBestSlotsLoading(true);
-    setBestSlotsError(null);
-    setBestSlotsLimit(5);
-    queueMicrotask(async () => {
-      try {
-        const qs = new URLSearchParams({
-          lead_id: lead.id,
-          limit: "5",
-        });
-        if (lockAdviseur && defaultAdviseurId) {
-          qs.set("adviseur_id", defaultAdviseurId);
-        }
-        const res = await fetch(`/api/best-slots?${qs}`);
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok) {
-          setBestSlots([]);
-          setBestSlotsError(
-            (data as { error?: string }).error || "Beste opties laden mislukt"
-          );
-          return;
-        }
-        let slots = (data.slots || []) as BestSlotOption[];
-        if (lockAdviseur && defaultAdviseurId) {
-          slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
-        }
-        setBestSlots(slots);
-        setBestSlotsError(null);
-      } catch {
-        if (!cancelled) {
-          setBestSlots([]);
-          setBestSlotsError("Beste opties laden mislukt");
-        }
-      } finally {
-        if (!cancelled) setBestSlotsLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [lead, lockAdviseur, defaultAdviseurId]);
-
-  async function loadMeerBestSlots() {
-    if (bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
-    setBestSlotsLoadingMore(true);
-    setBestSlotsError(null);
-    try {
-      const qs = new URLSearchParams({
-        lead_id: lead.id,
-        limit: "10",
-      });
-      if (lockAdviseur && defaultAdviseurId) {
-        qs.set("adviseur_id", defaultAdviseurId);
-      }
-      const res = await fetch(`/api/best-slots?${qs}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Extra opties laden mislukt"
-        );
-      }
-      let slots = (data.slots || []) as BestSlotOption[];
-      if (lockAdviseur && defaultAdviseurId) {
-        slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
-      }
-      setBestSlots(slots);
-      setBestSlotsLimit(10);
-    } catch (e) {
-      setBestSlotsError(
-        e instanceof Error ? e.message : "Extra opties laden mislukt"
-      );
-    } finally {
-      setBestSlotsLoadingMore(false);
-    }
-  }
 
   useEffect(() => {
     if (!adviseurId) {
@@ -360,106 +270,23 @@ export function LeadAfspraakPlannen({
         </button>
       </div>
       <p className="text-xs text-muted">
-        {lockAdviseur
-          ? "Opties in jouw agenda · bevestigingsmail gaat mee."
-          : "Top-opties: kortste reistijd eerst, daarna conversie. Bevestigingsmail gaat mee."}
+        {bestSlotsHelpText({ lockAdviseur, limit: bestSlotsLimit })}
+        {" Bevestigingsmail gaat mee."}
       </p>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-            {lockAdviseur
-              ? "Beste opties (jouw agenda)"
-              : "Beste opties (alle adviseurs)"}
-          </span>
-        </div>
-        {bestSlotsLoading ? (
-          <p className="text-sm text-muted">Beste opties berekenen…</p>
-        ) : bestSlotsError ? (
-          <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-            {bestSlotsError}
-          </p>
-        ) : bestSlots.length === 0 ? (
-          <p className="text-sm text-muted">
-            Geen gezamenlijke opties — kies handmatig hieronder.
-          </p>
-        ) : (
-          <>
-            <ul className="space-y-1.5">
-              {bestSlots.map((slot, idx) => {
-                const selected = selectedBestSlotId === slot.slot_id;
-                return (
-                  <li key={slot.slot_id}>
-                    <button
-                      type="button"
-                      onClick={() => selectBestSlot(slot)}
-                      className={[
-                        "flex w-full items-start gap-2.5 border px-3 py-2.5 text-left transition",
-                        selected
-                          ? "border-green bg-green-soft"
-                          : "border-line bg-white hover:border-green/50",
-                      ].join(" ")}
-                    >
-                      <span
-                        className={[
-                          "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-xs font-bold",
-                          selected
-                            ? "bg-green text-white"
-                            : "bg-wash text-muted",
-                        ].join(" ")}
-                      >
-                        {idx + 1}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-ink">
-                          {slot.label_kort || slot.label_nl}
-                        </span>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
-                          <span className="font-medium text-ink">
-                            {slot.adviseur_naam}
-                          </span>
-                          {slot.reistijd_min != null ? (
-                            <span>
-                              ~{slot.reistijd_min} min
-                              {slot.reistijd_vanaf_startadres === false
-                                ? " vanaf vorige afspraak"
-                                : slot.reistijd_vanaf_startadres === true
-                                  ? " vanaf startadres"
-                                  : " route"}
-                              {slot.reistijd_terug_min != null
-                                ? ` · ~${slot.reistijd_terug_min} min terug`
-                                : ""}
-                            </span>
-                          ) : slot.reistijd_terug_min != null ? (
-                            <span>
-                              ~{slot.reistijd_terug_min} min terug naar
-                              startadres
-                            </span>
-                          ) : null}
-                          {!slot.feasible ? (
-                            <span className="text-[#C45A12]">Strak</span>
-                          ) : null}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {bestSlotsLimit < 10 && bestSlots.length >= 5 ? (
-              <button
-                type="button"
-                disabled={bestSlotsLoadingMore}
-                onClick={() => void loadMeerBestSlots()}
-                className="w-full border border-line bg-wash px-3 py-2 text-xs font-semibold text-ink hover:bg-white disabled:opacity-50"
-              >
-                {bestSlotsLoadingMore
-                  ? "Extra opties laden…"
-                  : "5 meer laden"}
-              </button>
-            ) : null}
-          </>
-        )}
+        <BestSlotsOptionsList
+          slots={bestSlots}
+          selectedSlotId={selectedBestSlotId}
+          onSelect={selectBestSlot}
+          loading={bestSlotsLoading}
+          error={bestSlotsError}
+          mode={bestSlotsMode}
+          limit={bestSlotsLimit}
+          loadingMore={bestSlotsLoadingMore}
+          onLoadMore={() => void loadMeerBestSlots()}
+          lockAdviseur={lockAdviseur}
+        />
         <button
           type="button"
           onClick={() => setShowHandmatig((v) => !v)}

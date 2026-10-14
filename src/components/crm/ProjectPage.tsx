@@ -40,6 +40,7 @@ import { ProjectInkoopSection } from "./ProjectInkoopSection";
 import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
 import { ProjectAgendaAfspraakSection } from "./ProjectAgendaAfspraakSection";
 import { ProjectServiceSection } from "./ProjectServiceSection";
+import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 import { StatusBadge } from "./StatusBadge";
 import {
@@ -330,6 +331,7 @@ export function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
+  const [annuleringsMailBusy, setAnnuleringsMailBusy] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -360,6 +362,7 @@ export function ProjectPage() {
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [trackLinkCopied, setTrackLinkCopied] = useState(false);
   const [trackLinkBusy, setTrackLinkBusy] = useState(false);
+  const [datumOptieOpen, setDatumOptieOpen] = useState(false);
   const [wfPortalBusy, setWfPortalBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
@@ -493,12 +496,42 @@ export function ProjectPage() {
     el.scrollTop = el.scrollHeight;
   }, [project?.id, project?.notities, facturen.length]);
 
+  async function verstuurAnnuleringsmail() {
+    if (!project || project.status !== "annulering") return;
+    setAnnuleringsMailBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/annuleringsmail`,
+        { method: "POST" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Mailen mislukt"
+        );
+      }
+      setOkMsg(
+        `Annuleringsmail verstuurd${
+          (data as { to?: string }).to
+            ? ` naar ${(data as { to?: string }).to}`
+            : ""
+        }.`
+      );
+      void refreshLeadEvents(project.lead_id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mailen mislukt");
+    } finally {
+      setAnnuleringsMailBusy(false);
+    }
+  }
+
   async function updateStatus(status: ProjectStatus) {
     if (!project) return;
     if (
       status === "annulering" &&
       !window.confirm(
-        "Weet je zeker dat je deze order definitief wilt annuleren?"
+        "Weet je zeker dat je deze order definitief wilt annuleren?\n\nDe klant krijgt niet automatisch een mail — die kun je daarna apart versturen."
       )
     ) {
       return;
@@ -518,26 +551,11 @@ export function ProjectPage() {
       const updated = (data as { project?: Project }).project;
       if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
       void refreshLeadEvents(project.lead_id);
-      const mail = (
-        data as {
-          annulering_mail?: { sent?: boolean; skipped?: boolean; error?: string };
-        }
-      ).annulering_mail;
-      if (status === "annulering") {
-        if (mail?.sent) {
-          setOkMsg("Order geannuleerd — bevestiging gemaild naar de klant.");
-        } else if (mail?.skipped) {
-          setOkMsg(
-            "Order geannuleerd — geen e-mailadres, dus geen mail verstuurd."
-          );
-        } else if (mail?.error) {
-          setOkMsg(`Order geannuleerd, maar mail mislukt: ${mail.error}`);
-        } else {
-          setOkMsg("Order geannuleerd.");
-        }
-      } else {
-        setOkMsg("Status bijgewerkt.");
-      }
+      setOkMsg(
+        status === "annulering"
+          ? "Order geannuleerd. Verstuur desgewenst de annuleringsmail via de knop."
+          : "Status bijgewerkt."
+      );
       // Auto-taken herladen
       const takenRes = await fetch(`/api/taken?project_id=${project.id}&open=0`);
       const takenData = await takenRes.json().catch(() => ({}));
@@ -1918,6 +1936,13 @@ export function ProjectPage() {
                               ? "Gekopieerd!"
                               : "Copy link"}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setDatumOptieOpen(true)}
+                          className="border border-green/30 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:opacity-90"
+                        >
+                          Verstuur datum optie
+                        </button>
                         {isWarmtefondsProject(project) ? (
                           <button
                             type="button"
@@ -1984,7 +2009,7 @@ export function ProjectPage() {
                     >
                       {label}
                       {openService > 0 ? (
-                        <span className="min-w-[1.1rem] bg-[#C45A12] px-1 py-0.5 text-center text-[10px] font-bold leading-none text-white">
+                        <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-[#C45A12] px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
                           {openService}
                         </span>
                       ) : null}
@@ -2292,6 +2317,28 @@ export function ProjectPage() {
                   void refreshLeadEvents(p.lead_id);
                 }}
               />
+
+              {project.status === "annulering" ? (
+                <section className="border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-4 sm:px-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]">
+                    Order geannuleerd
+                  </p>
+                  <p className="mt-1 text-sm text-ink">
+                    De klant krijgt niet automatisch een mail. Verstuur desgewenst
+                    de annuleringsbevestiging.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={annuleringsMailBusy || statusSaving}
+                    onClick={() => void verstuurAnnuleringsmail()}
+                    className="mt-3 min-h-10 bg-[#C45A12] px-4 py-2 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-50"
+                  >
+                    {annuleringsMailBusy
+                      ? "Bezig…"
+                      : "Verstuur annuleringsmail"}
+                  </button>
+                </section>
+              ) : null}
 
               {/* Pas ná kickoff: order + financiering — anders dubbel/verwarrend */}
               {isKickoffComplete(project, facturen) ? (
@@ -3077,6 +3124,15 @@ export function ProjectPage() {
         <KlantContactMailModal
           project={project}
           onClose={() => setContactOpen(false)}
+        />
+      ) : null}
+      {datumOptieOpen ? (
+        <VerstuurDatumOptieModal
+          projectId={project.id}
+          onClose={() => setDatumOptieOpen(false)}
+          onSent={() =>
+            setOkMsg("Datum-opties verstuurd — klant kiest in Mijn portaal")
+          }
         />
       ) : null}
     </DetailShell>

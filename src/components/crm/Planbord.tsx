@@ -49,6 +49,7 @@ import {
   formatDuurLabel,
 } from "@/lib/planning-duur";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
+import { SchouwFormulierModal } from "@/components/crm/SchouwFormulierModal";
 import {
   agendaWeekJumpOptions,
   isSchouwdagDefinitief,
@@ -80,7 +81,9 @@ type DayCol = { key: string; date: Date; weekend: boolean };
 
 /** Geannuleerde orders horen niet op het planbord. */
 function isActiefOpPlanbord(p: Project): boolean {
-  return normalizeProjectStatus(p.status) !== "annulering";
+  const st = normalizeProjectStatus(p.status);
+  // HOLD hoort bij Offertes tot sales het fixt; annulering blijft uit planbord
+  return st !== "annulering" && st !== "hold_sales_actie";
 }
 
 function leadOf(p: Project) {
@@ -1335,6 +1338,7 @@ function RequiredDocUploadBlock({
   uploadOk,
   uploadError,
   onUpload,
+  onMaakFormulier,
   noteDraft,
   onNoteChange,
   noteBusy,
@@ -1354,6 +1358,8 @@ function RequiredDocUploadBlock({
   uploadOk: string | null;
   uploadError: string | null;
   onUpload: (file: File) => void;
+  /** Optioneel: digitaal formulier → PDF (schouw). */
+  onMaakFormulier?: (() => void) | null;
   noteDraft: string;
   onNoteChange: (v: string) => void;
   noteBusy: boolean;
@@ -1393,25 +1399,47 @@ function RequiredDocUploadBlock({
               />
             </label>
           ) : null}
+          {allowUpload && onMaakFormulier ? (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={onMaakFormulier}
+              className="border border-[#0D5C32] px-3 py-1.5 text-sm font-semibold text-[#0D5C32] hover:bg-wash disabled:opacity-50"
+            >
+              Nieuw formulier
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="space-y-2">
           <p className="font-medium text-[#C45A12]">{missingLabel}</p>
           {allowUpload ? (
-            <label className="inline-flex w-full cursor-pointer justify-center bg-[#0D9488] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#0F766E]">
-              {uploading ? "Uploaden…" : uploadLabel}
-              <input
-                type="file"
-                accept="image/*,application/pdf,.pdf"
-                className="hidden"
-                disabled={uploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onUpload(file);
-                  e.target.value = "";
-                }}
-              />
-            </label>
+            <div className="flex flex-col gap-2">
+              {onMaakFormulier ? (
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={onMaakFormulier}
+                  className="w-full bg-[#0D5C32] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#0A4A28] disabled:opacity-50"
+                >
+                  Maak formulier
+                </button>
+              ) : null}
+              <label className="inline-flex w-full cursor-pointer justify-center border border-line bg-white px-3 py-2.5 text-sm font-semibold text-ink hover:bg-wash">
+                {uploading ? "Uploaden…" : uploadLabel}
+                <input
+                  type="file"
+                  accept="image/*,application/pdf,.pdf"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) onUpload(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
           ) : null}
         </div>
       )}
@@ -1576,6 +1604,7 @@ function AgendaItemSidebar({
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
   const [serviceDoneLocal, setServiceDoneLocal] = useState(false);
+  const [schouwFormOpen, setSchouwFormOpen] = useState(false);
   const [serviceVerzoeken, setServiceVerzoeken] = useState<
     Pick<
       ServiceVerzoek,
@@ -2153,9 +2182,9 @@ function AgendaItemSidebar({
             {showSchouwForm && (allowSchouwUpload || localDoc !== undefined) ? (
               <DetailRow label="Schouwformulier *">
                 <RequiredDocUploadBlock
-                  label="Verplicht · PDF of foto van het ingevulde schouwformulier"
+                  label="Verplicht · digitaal formulier of upload PDF/foto"
                   missingLabel="Nog niet geüpload — verplicht voor schouw voltooid"
-                  uploadLabel="Schouwformulier uploaden"
+                  uploadLabel="Of upload PDF / foto"
                   defaultFilename="schouwformulier.pdf"
                   doc={localDoc}
                   allowUpload={allowSchouwUpload}
@@ -2163,6 +2192,11 @@ function AgendaItemSidebar({
                   uploadOk={uploadOk}
                   uploadError={uploadError}
                   onUpload={(file) => void uploadRequiredDoc(file, "schouw")}
+                  onMaakFormulier={
+                    allowSchouwUpload
+                      ? () => setSchouwFormOpen(true)
+                      : null
+                  }
                   noteDraft={noteDraft}
                   onNoteChange={setNoteDraft}
                   noteBusy={noteBusy}
@@ -2369,6 +2403,49 @@ function AgendaItemSidebar({
           </Link>
         </div>
       </aside>
+
+      {allowSchouwUpload && showSchouwForm ? (
+        <SchouwFormulierModal
+          open={schouwFormOpen}
+          project={project}
+          submitUrl={
+            fotosUploadUrl
+              ? fotosUploadUrl.replace(/\/fotos\/?$/, "/schouw-formulier")
+              : `/api/projecten/${project.id}/schouw-formulier`
+          }
+          notitie={noteDraft}
+          opnemerDefault={partner?.naam || project.monteur || null}
+          onClose={() => setSchouwFormOpen(false)}
+          onCreated={(result) => {
+            const foto = result.foto;
+            const nextDoc =
+              foto?.url
+                ? {
+                    url: foto.url,
+                    bestandsnaam: foto.bestandsnaam || null,
+                  }
+                : null;
+            if (nextDoc) {
+              setLocalDoc(nextDoc);
+              onSchouwDocChange?.(project.id, nextDoc);
+            }
+            if (result.project && typeof result.project === "object") {
+              onProjectUpdated?.(result.project as Project);
+            }
+            const adv = result.status_advance;
+            if (adv?.advanced && adv.klaarVoorMateriaal) {
+              setUploadOk(
+                "Formulier gemaakt · alles betaald → klaar voor materiaalinkoop."
+              );
+            } else if (adv?.advanced) {
+              setUploadOk("Formulier gemaakt · schouw voltooid.");
+            } else {
+              setUploadOk("Schouwformulier-PDF aangemaakt.");
+            }
+            setUploadError(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

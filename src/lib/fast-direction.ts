@@ -1,5 +1,9 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import {
+  MAANDAG_MEETING_START_ADRES,
+  resolveDayStartAdres,
+} from "@/lib/start-adres";
 
 export type FastDirectionStop = {
   start_at: string;
@@ -87,8 +91,17 @@ export type PickFastDirectionOptions = {
   targetAddress: string;
   freeSlots: FastDirectionSlot[];
   stops: FastDirectionStop[];
+  /** Persoonlijk startadres (ook terugreis eind van de dag). */
   depotAddress?: string | null;
   depotLabel?: string | null;
+  /**
+   * Vertrekpunt eerste afspraak die dag (maandag = ochtendmeeting).
+   * Default: depotAddress.
+   */
+  dayStartDepot?: (dayKey: string) => {
+    address: string | null;
+    label?: string | null;
+  } | null;
   durationSecBetween: (from: string, to: string) => number | null;
   distanceMBetween?: (from: string, to: string) => number | null;
 };
@@ -109,10 +122,34 @@ export function pickTopFastDirectionSlots(
   if (!target || target === "—" || opts.freeSlots.length === 0) return [];
 
   const collapsePerDay = flags?.collapsePerDay !== false;
-  const depot = (opts.depotAddress || "").trim();
-  const hasDepot = Boolean(depot && depot !== "—");
+  const homeDepot = (opts.depotAddress || "").trim();
+  const hasHomeDepot = Boolean(homeDepot && homeDepot !== "—");
   const depotName = opts.depotLabel?.trim() || "adviseur";
-  const depotLabel = `Startlocatie (${depotName})`;
+  const homeDepotLabel = `Startlocatie (${depotName})`;
+
+  const resolveStartDepot = (dayKey: string) => {
+    if (opts.dayStartDepot) {
+      const custom = opts.dayStartDepot(dayKey);
+      const addr = (custom?.address || "").trim();
+      if (addr && addr !== "—") {
+        return {
+          address: addr,
+          label: (custom?.label || "").trim() || homeDepotLabel,
+        };
+      }
+    }
+    const resolved = resolveDayStartAdres(homeDepot || null, dayKey);
+    if (resolved.address) {
+      return {
+        address: resolved.address,
+        label: resolved.label || homeDepotLabel,
+      };
+    }
+    if (hasHomeDepot) {
+      return { address: homeDepot, label: homeDepotLabel };
+    }
+    return null;
+  };
 
   const stopsByDay = new Map<string, FastDirectionStop[]>();
   for (const s of opts.stops) {
@@ -138,6 +175,7 @@ export function pickTopFastDirectionSlots(
     const dayStops = stopsByDay.get(day) || [];
     const slotStart = new Date(slot.start_at).getTime();
     const slotEnd = new Date(slot.end_at).getTime();
+    const dayStart = resolveStartDepot(day);
 
     // Vorige stop = laatste afspraak die eerder die dag begon en eindigt
     // vóór dit slot (bv. 13:00 → reistijd naar 16:00, niet vanaf huis).
@@ -155,17 +193,17 @@ export function pickTopFastDirectionSlots(
     const nextStop =
       dayStops.find((s) => new Date(s.start_at).getTime() >= slotEnd) || null;
 
-    const fromDepot = !prevStop && hasDepot;
-    /** Geen latere afspraak → terug naar huis meenemen in de score. */
-    const toDepot = !nextStop && hasDepot;
+    const fromDepot = !prevStop && Boolean(dayStart);
+    /** Geen latere afspraak → terug naar huis (niet naar meeting). */
+    const toDepot = !nextStop && hasHomeDepot;
     const prev = prevStop
       ? prevStop
-      : fromDepot
+      : fromDepot && dayStart
         ? {
             start_at: slot.start_at,
             end_at: slot.start_at,
-            address: depot,
-            label: depotLabel,
+            address: dayStart.address,
+            label: dayStart.label,
           }
         : null;
     const next = nextStop
@@ -174,8 +212,8 @@ export function pickTopFastDirectionSlots(
         ? {
             start_at: slot.end_at,
             end_at: slot.end_at,
-            address: depot,
-            label: depotLabel,
+            address: homeDepot,
+            label: homeDepotLabel,
           }
         : null;
 
@@ -363,6 +401,8 @@ export function uniqueAddresses(
   };
   push(target);
   if (depotAddress) push(depotAddress);
+  // Maandag-ochtendmeeting: altijd in matrix (best-slots over meerdere weken)
+  push(MAANDAG_MEETING_START_ADRES);
 
   const prefer =
     preferDayKeys instanceof Set

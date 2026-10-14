@@ -990,16 +990,18 @@ export function LeadPage() {
                   >
                     Terugbel
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPlanMode("warme_bel");
-                      setPlanOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1 border border-[#C9A227]/50 bg-[#FFF8D6] px-2.5 py-1.5 text-xs font-semibold text-[#8A6D00] hover:bg-[#fff0b8]"
-                  >
-                    Warme terugbel
-                  </button>
+                  {rol !== "adviseur" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlanMode("warme_bel");
+                        setPlanOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1 border border-[#C9A227]/50 bg-[#FFF8D6] px-2.5 py-1.5 text-xs font-semibold text-[#8A6D00] hover:bg-[#fff0b8]"
+                    >
+                      Warme terugbel
+                    </button>
+                  ) : null}
                 </>
               )}
             </div>

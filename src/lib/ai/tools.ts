@@ -333,7 +333,7 @@ export async function runAiTool(
       const { data: afspraken, error } = await sb
         .from("afspraken")
         .select(
-          "id, start_at, end_at, status, soort, adviseur_id, lead_id, notities, leads(naam, plaats, telefoon, lead_number), adviseurs(naam)"
+          "id, start_at, end_at, status, soort, adviseur_id, lead_id, notities, leads(naam, plaats, telefoon, lead_number), adviseurs!adviseur_id(naam)"
         )
         .gte("start_at", start)
         .lte("start_at", end)

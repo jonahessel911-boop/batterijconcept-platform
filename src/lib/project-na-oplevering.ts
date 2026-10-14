@@ -4,9 +4,23 @@ import { isOpleveringsrapport } from "@/lib/project-documenten";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
 
+async function ensureOpleveringAfrondTaken(
+  sb: SupabaseClient,
+  projectId: string,
+  status: string
+): Promise<void> {
+  try {
+    const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
+    await syncAutoTakenVoorProject(sb, projectId, status);
+  } catch (e) {
+    console.error("ensureOpleveringAfrondTaken:", e);
+  }
+}
+
 /**
  * Na upload opleveringsrapport (met klant-handtekening):
- * zet status op installatie_voltooid + concept creditfactuur voor partner.
+ * zet status op installatie_voltooid + concept creditfactuur voor partner
+ * + 2 backoffice-acties (overstap dynamische leverancier + BTW terugvrage, deadline 2 dagen).
  */
 export async function maybeAdvanceProjectNaOplevering(
   sb: SupabaseClient,
@@ -29,12 +43,7 @@ export async function maybeAdvanceProjectNaOplevering(
   }
 
   const current = (project.status as string) || "";
-  if (
-    current === "annulering" ||
-    current === "installatie_voltooid" ||
-    current === "review_gevraagd" ||
-    current === "service"
-  ) {
+  if (current === "annulering") {
     return { advanced: false, from: current, to: null };
   }
 
@@ -47,6 +56,15 @@ export async function maybeAdvanceProjectNaOplevering(
     isOpleveringsrapport(f.omschrijving)
   );
   if (!hasRapport) {
+    return { advanced: false, from: current, to: null };
+  }
+
+  // Al op installatie_voltooid: afrond-taken alsnog zekerstellen (idempotent)
+  if (current === "installatie_voltooid") {
+    await ensureOpleveringAfrondTaken(sb, projectId, current);
+    return { advanced: false, from: current, to: null };
+  }
+  if (current === "review_gevraagd" || current === "service") {
     return { advanced: false, from: current, to: null };
   }
 
@@ -109,6 +127,8 @@ export async function maybeAdvanceProjectNaOplevering(
   } catch (e) {
     console.error("ensureAdviseurCommissieTrancheB:", e);
   }
+
+  await ensureOpleveringAfrondTaken(sb, projectId, to);
 
   return {
     advanced: true,

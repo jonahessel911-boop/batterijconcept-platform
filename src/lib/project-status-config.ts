@@ -236,12 +236,8 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "afronding",
     scope: "beide",
     inPipeline: true,
-    taak: {
-      autoKeySuffix: "afronding",
-      titel: "BTW terugvragen + overstap dynamische leverancier",
-      afdeling: "Backoffice",
-      due: { kind: "days", days: 2 },
-    },
+    /** Concrete acties via autoTakenVoorStatus (2× deadline 2 dagen). */
+    taak: null,
   },
   {
     key: "review_gevraagd",
@@ -276,7 +272,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "hold_sales_actie",
-    label: "HOLD - Sales actie",
+    label: "HOLD SALES ACTIE",
     fase: "overig",
     scope: "beide",
     inPipeline: false,

@@ -139,6 +139,7 @@ const GROUPS: SidebarGroup[] = [
     label: "Mijn werk",
     items: [
       { id: "today", label: "Today", icon: ICONS.rapportage },
+      { id: "weekmeeting", label: "Weekmeeting", icon: ICONS.agenda },
       { id: "taken", label: "Agenda", icon: ICONS.admin },
     ],
   },
@@ -171,6 +172,7 @@ const GROUPS: SidebarGroup[] = [
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
       { id: "admin", label: "Admin", icon: ICONS.admin },
       { id: "partners", label: "Partners", icon: ICONS.partners },
+      { id: "instellingen", label: "Instellingen", icon: ICONS.instellingen },
     ],
   },
 ];
@@ -197,7 +199,7 @@ export function CrmSidebar({
   onToggleCollapsed?: () => void;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
-  boCounts?: { acties?: number; schouwweek?: number };
+  boCounts?: { acties?: number };
 }) {
   const [activeBoView, setBoView] = useBoViewStore();
   const allowed = new Set(allowedTabs);
@@ -272,7 +274,6 @@ export function CrmSidebar({
   }
 
   const actieCount = boCounts?.acties ?? 0;
-  const weekCount = boCounts?.schouwweek ?? 0;
   const hasBackoffice = allowed.has("projecten");
   const boParentActive =
     active === "projecten" ||
@@ -442,14 +443,8 @@ export function CrmSidebar({
                                   const badge =
                                     sub.id === "acties" && actieCount > 0
                                       ? actieCount
-                                      : sub.id === "schouwweek" &&
-                                          weekCount > 0
-                                        ? weekCount
-                                        : null;
-                                  const badgeTone =
-                                    sub.id === "acties"
-                                      ? "bg-[#C45A12] text-white"
-                                      : "bg-[#CA8A04] text-white";
+                                      : null;
+                                  const badgeTone = "bg-[#C45A12] text-white";
                                   return (
                                     <li key={sub.id}>
                                       <button

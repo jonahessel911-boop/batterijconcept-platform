@@ -155,7 +155,7 @@ export async function GET(req: NextRequest) {
         .order("created_at", { ascending: false }),
       sb
         .from("afspraken")
-        .select("id, start_at, created_at, status, soort, adviseurs(naam)")
+        .select("id, start_at, created_at, status, soort, adviseurs!adviseur_id(naam)")
         .eq("lead_id", leadId)
         .order("start_at", { ascending: false })
         .limit(50),

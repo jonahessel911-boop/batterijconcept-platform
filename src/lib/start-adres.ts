@@ -3,7 +3,35 @@
  * NL én BE moeten bruikbaar zijn (sommige adviseurs vertrekken vanuit België).
  */
 
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
+
 export type StartAdresLand = "NL" | "BE";
+
+/**
+ * Elke maandag ochtendmeeting — eerste afspraak die dag vertrekt hier vandaan
+ * (niet vanaf het persoonlijke startadres van de adviseur).
+ */
+export const MAANDAG_MEETING_START_ADRES =
+  "Daltonlaan 500, Utrecht, Nederland";
+
+export const MAANDAG_MEETING_START_LABEL = "Ochtendmeeting Daltonlaan";
+
+/** True als de kalenderdag (Amsterdam) een maandag is. */
+export function isAmsterdamMonday(day: Date | string): boolean {
+  let ymd: string;
+  if (typeof day === "string" && /^\d{4}-\d{2}-\d{2}/.test(day.trim())) {
+    ymd = day.trim().slice(0, 10);
+  } else {
+    const d = day instanceof Date ? day : new Date(day);
+    if (Number.isNaN(d.getTime())) return false;
+    ymd = formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
+  }
+  const [y, m, d] = ymd.split("-").map(Number);
+  const noon = fromZonedTime(new Date(y, m - 1, d, 12, 0, 0, 0), AMSTERDAM_TZ);
+  // ISO day: 1 = maandag
+  return formatInTimeZone(noon, AMSTERDAM_TZ, "i") === "1";
+}
 
 /**
  * Land voor geocoding/reistijd.
@@ -77,4 +105,35 @@ export function ensureStartAdresCountry(
   if (detected === "BE") return `${t}, België`;
   if (detected === "NL") return `${t}, Nederland`;
   return t;
+}
+
+/**
+ * Vertrekpunt voor de eerste afspraak die dag.
+ * Maandag → Daltonlaan 500 (ochtendmeeting); anders persoonlijk startadres.
+ * Terugreis eind van de dag blijft het persoonlijke startadres.
+ */
+export function resolveDayStartAdres(
+  homeStartAdres: string | null | undefined,
+  day: Date | string
+): {
+  address: string | null;
+  label: string | null;
+  isMondayMeeting: boolean;
+} {
+  if (isAmsterdamMonday(day)) {
+    return {
+      address: ensureStartAdresCountry(MAANDAG_MEETING_START_ADRES, "NL"),
+      label: MAANDAG_MEETING_START_LABEL,
+      isMondayMeeting: true,
+    };
+  }
+  const t = (homeStartAdres || "").trim();
+  if (!t || t === "—" || !isUsableStartAdres(t)) {
+    return { address: null, label: null, isMondayMeeting: false };
+  }
+  return {
+    address: ensureStartAdresCountry(t),
+    label: null,
+    isMondayMeeting: false,
+  };
 }

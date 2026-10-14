@@ -105,6 +105,29 @@ export function provincieVanPostcode(
   return GEEN_PROVINCIE;
 }
 
+/** Eerste NL-postcode (4 cijfers) uit een adresregel. */
+export function postcodeFromAdres(
+  adres: string | null | undefined
+): string | null {
+  if (!adres) return null;
+  const m = String(adres).match(/\b(\d{4})\s*[A-Za-z]{0,2}\b/);
+  return m ? m[1] : null;
+}
+
+/** Representatieve PC4 voor afstand-schatting (midden van ranges). */
+export function provinciePc4Midpoint(provincie: NlProvincie): number {
+  const ranges = PC4_RANGES.filter((r) => r.provincie === provincie);
+  if (ranges.length === 0) return 3500;
+  let sum = 0;
+  let weight = 0;
+  for (const r of ranges) {
+    const w = r.to - r.from + 1;
+    sum += ((r.from + r.to) / 2) * w;
+    weight += w;
+  }
+  return Math.round(sum / Math.max(weight, 1));
+}
+
 /** Normaliseer geojson-naam ↔ onze labels (Fryslân / Friesland). */
 export function normalizeProvincieLabel(raw: string): string {
   const t = (raw || "").trim();
@@ -125,3 +148,71 @@ export function normalizeProvincieLabel(raw: string): string {
 }
 
 export const PROVINCIE_ONBEKEND = GEEN_PROVINCIE;
+
+export type AdviseurProvincieMatch = {
+  id: string;
+  naam: string;
+  /** startadres in dezelfde provincie */
+  inRegio: boolean;
+  /** provincie van het startadres (indien bekend) */
+  startProvincie: string | null;
+};
+
+/**
+ * Adviseur voor een provincie: eerst wie daar start, anders dichtstbij (PC4).
+ */
+export function adviseurVoorProvincie<
+  T extends { id: string; naam: string; start_adres?: string | null },
+>(
+  provincie: NlProvincie,
+  adviseurs: T[]
+): AdviseurProvincieMatch | null {
+  const withPc = adviseurs
+    .map((a) => {
+      const pc = postcodeFromAdres(a.start_adres);
+      const digits = parsePostcodeDigits(pc);
+      const startProv =
+        digits != null ? provincieVanPostcode(String(digits)) : GEEN_PROVINCIE;
+      return { a, digits, startProv };
+    })
+    .filter((x) => x.digits != null);
+
+  if (withPc.length === 0) return null;
+
+  const inRegio = withPc
+    .filter((x) => x.startProv === provincie)
+    .sort((x, y) => x.a.naam.localeCompare(y.a.naam, "nl"));
+
+  if (inRegio.length > 0) {
+    const hit = inRegio[0];
+    return {
+      id: hit.a.id,
+      naam: hit.a.naam,
+      inRegio: true,
+      startProvincie: hit.startProv,
+    };
+  }
+
+  const mid = provinciePc4Midpoint(provincie);
+  let best = withPc[0];
+  let bestDist = Math.abs((best.digits as number) - mid);
+  for (const row of withPc.slice(1)) {
+    const d = Math.abs((row.digits as number) - mid);
+    if (
+      d < bestDist ||
+      (d === bestDist &&
+        row.a.naam.localeCompare(best.a.naam, "nl") < 0)
+    ) {
+      best = row;
+      bestDist = d;
+    }
+  }
+
+  return {
+    id: best.a.id,
+    naam: best.a.naam,
+    inRegio: false,
+    startProvincie:
+      best.startProv === GEEN_PROVINCIE ? null : best.startProv,
+  };
+}

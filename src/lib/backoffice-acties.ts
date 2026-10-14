@@ -1,14 +1,21 @@
 import { addDays } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { Afspraak, Factuur, Lead, Project } from "@/types/database";
-import { AMSTERDAM_TZ } from "@/lib/format";
+import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
+import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
 import { factuurIsOverdue, vervaldatumEndOfDay } from "@/lib/factuur-betaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
-import { annuleringsNotitieFromAfspraak } from "@/lib/bel-queue";
+import {
+  annuleringsDoorFromAfspraak,
+  annuleringsNotitieFromAfspraak,
+} from "@/lib/bel-queue";
 import {
   defaultSchouwWeekAfterSale,
+  dueAtVoorSchouwdagInplan,
   formatSchouwWeekLabel,
+  isInSchouwdagPlannenWindow,
   isSchouwdagDefinitief,
+  isSchouwweekGepland,
   schouwWeekOffsetVoorSale,
   type SchouwWeek,
 } from "@/lib/schouw-week";
@@ -29,7 +36,10 @@ export type BackofficeActieSoort =
   | "herplan_afspraak"
   | "volgende_stap"
   | "bestel_materiaal"
-  | "aangetekende_brief";
+  | "aangetekende_brief"
+  | "schouw_inplannen";
+
+export type HerplanBron = "klant" | "adviseur";
 
 /** Edwin van Veenendaal — plant Warmtefonds-afspraken / aanvragen. */
 export const FINANCIERINGSMAN_NAAM = "Edwin van Veenendaal";
@@ -46,6 +56,8 @@ export type BackofficeActie = {
   deadlineAt: string;
   saleAt?: string;
   overdue: boolean;
+  /** PRIO: deadline vandaag/morgen of overdue */
+  prio?: boolean;
   leadId: string;
   leadNaam: string;
   telefoon?: string | null;
@@ -65,6 +77,10 @@ export type BackofficeActie = {
   project?: Project;
   /** Annuleringsreden (herplan_afspraak), uit afspraak-notities */
   annuleringsReden?: string | null;
+  /** Wie de (CRM-)annulering deed / gekoppelde adviseur */
+  geannuleerdDoorNaam?: string | null;
+  /** Klant-annulering vs adviseur/CRM-herplan */
+  herplanBron?: HerplanBron;
   /** Volgende-stap: waarom dit nu moet */
   reden?: string | null;
   /** Volgende-stap: toon planner voor exacte schouwdag */
@@ -82,6 +98,7 @@ type ProjectOfferteJoin = {
     financiering_voorbehoud?: boolean | null;
     aanbetaling_te_innen_inc?: number | null;
     ondertekend_op?: string | null;
+    totaal_inc_btw?: number | null;
   } | null;
 };
 
@@ -478,19 +495,98 @@ export function openNabellenFactuurActies(
 }
 
 /**
- * Klant heeft huisbezoek geannuleerd → opnieuw inplannen.
- * Bron: leadstatus `afspraak_afgezegd_klant` (zonder nieuwe actieve afspraak).
- * Voltooien → status `nieuw`; definitief annuleren → `geen_interesse`.
+ * Huisbezoek opnieuw inplannen:
+ * - Klant: status `afspraak_afgezegd_klant` (zonder nieuwe actieve afspraak)
+ * - Adviseur/CRM: `Annulering (CRM)` zonder vervangende afspraak, en lead
+ *   nog niet afgeboekt/sale (anders hoort herplannen niet meer)
  */
+type HerplanAfspraak = Pick<
+  Afspraak,
+  "id" | "lead_id" | "start_at" | "status" | "soort" | "notities"
+> & {
+  adviseur_id?: string | null;
+  created_at?: string | null;
+  adviseurs?: { naam?: string | null } | null;
+};
+
+/** Lead is al afgehandeld — geen herplan-actie meer. */
+const HERPLAN_UITGESLOTEN_STATUS = new Set([
+  "deal",
+  "sale_financiering",
+  "sale_eigen_middelen",
+  "geen_interesse",
+  "geen_interesse_al_batterij",
+  "geen_interesse_plugin",
+  "geen_interesse_alleen_info",
+  "offerte_afgewezen",
+  "niet_gekwalificeerd",
+  "huurwoning",
+  "foutief_nummer",
+  "gegevens_niet_overeen",
+  "deur_niet_open",
+  "afspraak",
+  "na_afspraak",
+  "vervolg_fysiek",
+  "vervolg_tel",
+]);
+
+function leadHeeftVervangendeAfspraak(
+  leadId: string,
+  cancelled: HerplanAfspraak,
+  afspraken: HerplanAfspraak[]
+): boolean {
+  const cancelStart = new Date(cancelled.start_at).getTime();
+  const cancelCreated = cancelled.created_at
+    ? new Date(cancelled.created_at).getTime()
+    : cancelStart;
+  const cancelAnchor = Math.min(cancelStart, cancelCreated);
+
+  for (const a of afspraken) {
+    if (a.lead_id !== leadId) continue;
+    if (a.id === cancelled.id) continue;
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
+    const startMs = new Date(a.start_at).getTime();
+    const createdMs = a.created_at ? new Date(a.created_at).getTime() : startMs;
+    // Nieuwere of latere huisbezoek-afspraak = al heringepland / afgerond
+    if (startMs > cancelAnchor || createdMs > cancelAnchor) return true;
+  }
+  return false;
+}
+
+function resolveGeannuleerdDoorNaam(
+  cancelled: HerplanAfspraak | undefined,
+  adviseurById: Map<string, string>
+): string | null {
+  if (!cancelled) return null;
+  const fromNote = annuleringsDoorFromAfspraak(cancelled);
+  if (fromNote) return fromNote;
+  const rawJoin = cancelled.adviseurs as
+    | { naam?: string | null }
+    | { naam?: string | null }[]
+    | null
+    | undefined;
+  const joined = Array.isArray(rawJoin)
+    ? rawJoin[0]?.naam?.trim()
+    : rawJoin?.naam?.trim();
+  if (joined) return joined;
+  const id = cancelled.adviseur_id?.trim();
+  if (id && adviseurById.has(id)) return adviseurById.get(id) || null;
+  return null;
+}
+
 export function openHerplanAfspraakActies(
   leads: Pick<Lead, "id" | "naam" | "telefoon" | "plaats" | "status">[],
-  afspraken: Pick<
-    Afspraak,
-    "id" | "lead_id" | "start_at" | "status" | "soort" | "notities"
-  >[] = [],
-  now = new Date()
+  afspraken: HerplanAfspraak[] = [],
+  now = new Date(),
+  adviseurs: Pick<{ id: string; naam: string }, "id" | "naam">[] = []
 ): BackofficeActie[] {
   const nowMs = now.getTime();
+  const adviseurById = new Map(
+    adviseurs
+      .filter((a) => a.id && a.naam?.trim())
+      .map((a) => [a.id, a.naam.trim()] as const)
+  );
   const hasFutureActive = new Set<string>();
   for (const a of afspraken) {
     if (!afspraakBlokkeertAgenda(a.soort)) continue;
@@ -499,8 +595,9 @@ export function openHerplanAfspraakActies(
     hasFutureActive.add(a.lead_id);
   }
 
-  const cancelledByKlant = new Map<string, (typeof afspraken)[0]>();
-  const latestCancelled = new Map<string, (typeof afspraken)[0]>();
+  const cancelledByKlant = new Map<string, HerplanAfspraak>();
+  const cancelledByCrm = new Map<string, HerplanAfspraak>();
+  const latestCancelled = new Map<string, HerplanAfspraak>();
   for (const a of afspraken) {
     if (!afspraakBlokkeertAgenda(a.soort)) continue;
     if (a.status !== "geannuleerd") continue;
@@ -512,20 +609,31 @@ export function openHerplanAfspraakActies(
       latestCancelled.set(a.lead_id, a);
     }
     const note = (a.notities || "").toLowerCase();
-    if (!note.includes("annulering (klant)")) continue;
-    const prev = cancelledByKlant.get(a.lead_id);
-    if (
-      !prev ||
-      new Date(a.start_at).getTime() > new Date(prev.start_at).getTime()
-    ) {
-      cancelledByKlant.set(a.lead_id, a);
+    if (note.includes("annulering (klant)")) {
+      const prev = cancelledByKlant.get(a.lead_id);
+      if (
+        !prev ||
+        new Date(a.start_at).getTime() > new Date(prev.start_at).getTime()
+      ) {
+        cancelledByKlant.set(a.lead_id, a);
+      }
+    }
+    if (note.includes("annulering (crm)")) {
+      const prev = cancelledByCrm.get(a.lead_id);
+      if (
+        !prev ||
+        new Date(a.start_at).getTime() > new Date(prev.start_at).getTime()
+      ) {
+        cancelledByCrm.set(a.lead_id, a);
+      }
     }
   }
 
+  const leadById = new Map(leads.map((l) => [l.id, l]));
   const items: BackofficeActie[] = [];
+  const seen = new Set<string>();
+
   for (const lead of leads) {
-    // Alleen status afspraak_afgezegd_klant → taak open.
-    // Voltooien zet status op nieuw; definitief annuleren op geen_interesse.
     if (lead.status !== "afspraak_afgezegd_klant") continue;
     if (hasFutureActive.has(lead.id)) continue;
 
@@ -533,24 +641,65 @@ export function openHerplanAfspraakActies(
       cancelledByKlant.get(lead.id) || latestCancelled.get(lead.id);
     const startAt = cancelled?.start_at || now.toISOString();
     const deadlineAt = belSchouwDeadline(startAt);
+    const overdue = deadlineAt.getTime() < nowMs;
     const reden = annuleringsNotitieFromAfspraak(cancelled);
+    const doorNaam = resolveGeannuleerdDoorNaam(cancelled, adviseurById);
     items.push({
       id: `herplan-afspraak-${lead.id}`,
       soort: "herplan_afspraak",
-      titel: "Afspraak opnieuw inplannen",
+      titel: "Inplannen annulering klant",
       detail: cancelled
         ? `Klant heeft afspraak geannuleerd (${new Date(cancelled.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}). Plan een nieuw moment.`
         : "Klant heeft de afspraak afgezegd. Plan een nieuw huisbezoek.",
       deadlineAt: deadlineAt.toISOString(),
-      overdue: deadlineAt.getTime() < nowMs,
+      overdue,
+      prio: isPrioDeadline(deadlineAt, now),
       leadId: lead.id,
       leadNaam: lead.naam || "—",
       telefoon: lead.telefoon || null,
       plaats: lead.plaats || null,
       href: `/?tab=leads&lead=${lead.id}`,
       annuleringsReden: reden,
+      geannuleerdDoorNaam: doorNaam,
+      herplanBron: "klant",
     });
+    seen.add(lead.id);
   }
+
+  for (const [leadId, cancelled] of cancelledByCrm) {
+    if (seen.has(leadId)) continue;
+    if (hasFutureActive.has(leadId)) continue;
+    const lead = leadById.get(leadId);
+    if (!lead) continue;
+    if (HERPLAN_UITGESLOTEN_STATUS.has(lead.status || "")) continue;
+    if (leadHeeftVervangendeAfspraak(leadId, cancelled, afspraken)) continue;
+
+    const deadlineAt = belSchouwDeadline(cancelled.start_at);
+    const overdue = deadlineAt.getTime() < nowMs;
+    const reden = annuleringsNotitieFromAfspraak(cancelled);
+    const doorNaam = resolveGeannuleerdDoorNaam(cancelled, adviseurById);
+    items.push({
+      id: `herplan-afspraak-${leadId}`,
+      soort: "herplan_afspraak",
+      titel: "Inplannen — adviseur vraagt om herplannen van afspraak",
+      detail: reden
+        ? `Adviseur/CRM heeft afspraak geannuleerd. ${reden}`
+        : `Adviseur/CRM heeft afspraak geannuleerd (${new Date(cancelled.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}). Plan een nieuw moment.`,
+      deadlineAt: deadlineAt.toISOString(),
+      overdue,
+      prio: isPrioDeadline(deadlineAt, now),
+      leadId,
+      leadNaam: lead.naam || "—",
+      telefoon: lead.telefoon || null,
+      plaats: lead.plaats || null,
+      href: `/?tab=leads&lead=${leadId}`,
+      annuleringsReden: reden,
+      geannuleerdDoorNaam: doorNaam,
+      herplanBron: "adviseur",
+    });
+    seen.add(leadId);
+  }
+
   return items;
 }
 
@@ -651,37 +800,90 @@ export function openVolgendeStapActies(
   return items;
 }
 
+/** PRIO als deadline vandaag of morgen (≤ 1 kalenderdag) of overdue. */
+export function isPrioDeadline(deadlineAt: Date, now: Date = new Date()): boolean {
+  const nowMs = now.getTime();
+  if (deadlineAt.getTime() < nowMs) return true;
+  const z = toZonedTime(now, AMSTERDAM_TZ);
+  const tomorrowEnd = addDays(z, 1);
+  tomorrowEnd.setHours(23, 59, 59, 999);
+  const tomorrowEndUtc = fromZonedTime(tomorrowEnd, AMSTERDAM_TZ);
+  return deadlineAt.getTime() <= tomorrowEndUtc.getTime();
+}
+
+function softDueOverWerkdagen(from: Date, workdays: number): Date {
+  const z = toZonedTime(from, AMSTERDAM_TZ);
+  let left = workdays;
+  const cursor = new Date(z);
+  while (left > 0) {
+    cursor.setDate(cursor.getDate() + 1);
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) left -= 1;
+  }
+  cursor.setHours(17, 0, 0, 0);
+  return fromZonedTime(cursor, AMSTERDAM_TZ);
+}
+
+/** Alleen echte Warmtefonds-kolom — niet legacy project.status. */
+function isWarmtefondsGoedgekeurd(project: Project): boolean {
+  return project.financiering_status === "aanvraag_goedgekeurd";
+}
+
 /**
- * Batterij/materiaal moet uiterlijk 3 werkdagen (ma–vr) vóór installatie
- * besteld zijn — Apex levert niet in het weekend.
+ * Batterij bestellen: schouw gepland + order volledig betaald + installatie gezet
+ * + checklist nog open. Deadline = 3 werkdagen vóór installatie (17:00).
+ * PRIO als deadline ≤ morgen of overdue.
  */
 export function openBestelMateriaalActies(
   projecten: Project[],
+  facturen: Factuur[] = [],
   now = new Date()
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
   const nowMs = now.getTime();
+  const facturenByProject = new Map<string, Factuur[]>();
+  for (const f of facturen) {
+    if (!f.project_id) continue;
+    const list = facturenByProject.get(f.project_id) ?? [];
+    list.push(f);
+    facturenByProject.set(f.project_id, list);
+  }
+
   for (const project of projecten) {
+    if (project.status === "annulering") continue;
     if (!project.installatie_at) continue;
     if (!materiaalNogTeBestellen(project)) continue;
+    if (!isSchouwweekGepland(project)) continue;
+
+    const offerte = projectOfferte(project);
+    const orderIncBtw = Number(offerte?.totaal_inc_btw ?? 0) || 0;
+    if (
+      !isOrderVolledigBetaald({
+        facturen: facturenByProject.get(project.id) ?? [],
+        orderIncBtw,
+      })
+    ) {
+      continue;
+    }
 
     const deadlineAt = bestelDeadlineVoorInstallatie(project.installatie_at);
     const lead = leadFromProject(project);
-    const offerte = projectOfferte(project);
     const overdue = deadlineAt.getTime() < nowMs;
+    const prio = isPrioDeadline(deadlineAt, now);
+    const bestelLabel = formatDateNl(deadlineAt);
+    const installLabel = formatDateNl(project.installatie_at);
+    const pn = project.project_nummer?.trim();
+
     items.push({
       id: `bestel-materiaal-${project.id}`,
       soort: "bestel_materiaal",
-      titel: "Batterij bestellen (3 werkdagen vóór installatie)",
-      detail: overdue
-        ? `Installatie staat gepland — materiaal had uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen van tevoren besteld moeten zijn (levering alleen ma–vr).`
-        : `Bestel bij Apex uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór de installatie. Levering alleen ma–vr, niet in het weekend.`,
-      reden: overdue
-        ? `Installatie staat gepland — materiaal had uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen van tevoren besteld moeten zijn (levering alleen ma–vr).`
-        : `Bestel bij Apex uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór de installatie. Levering alleen ma–vr, niet in het weekend.`,
+      titel: "Batterij bestellen",
+      detail: `Besteldatum ${bestelLabel} · installatie ${installLabel}${pn ? ` · ${pn}` : ""}`,
+      reden: `Bestellen vóór ${bestelLabel} (${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór installatie)`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleMomentVanProject(project).toISOString(),
       overdue,
+      prio,
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -694,7 +896,100 @@ export function openBestelMateriaalActies(
       project,
     });
   }
-  return items;
+  return items.sort(
+    (a, b) =>
+      Number(b.prio) - Number(a.prio) ||
+      Number(b.overdue) - Number(a.overdue) ||
+      a.deadlineAt.localeCompare(b.deadlineAt)
+  );
+}
+
+/**
+ * Schouwdag inplannen: 1 week vóór schouwweek (window/overdue), of Warmtefonds
+ * goedgekeurd zonder definitieve schouwdag.
+ */
+export function openSchouwInplannenActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  const nowMs = now.getTime();
+
+  for (const project of projecten) {
+    if (project.status === "annulering") continue;
+    if (isSchouwdagDefinitief(project)) continue;
+
+    const jaar = project.schouw_jaar ?? null;
+    const week = project.schouw_week ?? null;
+    const wfGoedgekeurd = isWarmtefondsGoedgekeurd(project);
+
+    let deadlineAt: Date | null = null;
+    let detail = "";
+    let reden: string | null = null;
+
+    if (jaar && week) {
+      const dueIso = dueAtVoorSchouwdagInplan(jaar, week);
+      const due = new Date(dueIso);
+      const overdue = due.getTime() < nowMs;
+      const inWindow = isInSchouwdagPlannenWindow(jaar, week, now);
+      if (inWindow || overdue) {
+        deadlineAt = due;
+        const weekLabel = formatSchouwWeekLabel(jaar, week);
+        detail = `Schouwweek ${weekLabel} — plan de exacte schouwdag`;
+        reden = overdue
+          ? `Schouwdag had uiterlijk 1 week vóór schouwweek ${weekLabel} gepland moeten zijn.`
+          : `Plan de schouwdag in (window: 1 week vóór schouwweek ${weekLabel}).`;
+      }
+    }
+
+    if (!deadlineAt && wfGoedgekeurd) {
+      deadlineAt = softDueOverWerkdagen(now, 2);
+      detail = "Warmtefonds goedgekeurd — schouwdag inplannen";
+      reden =
+        "Warmtefonds is goedgekeurd; plan zo snel mogelijk de schouwdag.";
+    }
+
+    if (!deadlineAt) continue;
+
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const overdue = deadlineAt.getTime() < nowMs;
+    const schouwLabel =
+      jaar && week ? formatSchouwWeekLabel(jaar, week) : undefined;
+
+    items.push({
+      id: `schouw-inplannen-${project.id}`,
+      soort: "schouw_inplannen",
+      titel: "Schouw inplannen",
+      detail,
+      reden,
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue,
+      prio: isPrioDeadline(deadlineAt, now),
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      schouwJaar: jaar ?? undefined,
+      schouwWeek: week ?? undefined,
+      schouwWeekLabel: schouwLabel,
+      project,
+      planSchouwdag: true,
+    });
+  }
+
+  return items.sort(
+    (a, b) =>
+      Number(b.prio) - Number(a.prio) ||
+      Number(b.overdue) - Number(a.overdue) ||
+      a.deadlineAt.localeCompare(b.deadlineAt)
+  );
 }
 
 export function openBackofficeActies(
@@ -703,10 +998,8 @@ export function openBackofficeActies(
   now = new Date(),
   opts?: {
     leads?: Pick<Lead, "id" | "naam" | "telefoon" | "plaats" | "status">[];
-    afspraken?: Pick<
-      Afspraak,
-      "id" | "lead_id" | "start_at" | "status" | "soort" | "notities"
-    >[];
+    afspraken?: HerplanAfspraak[];
+    adviseurs?: Pick<{ id: string; naam: string }, "id" | "naam">[];
   }
 ): BackofficeActie[] {
   // bel-schouw + nabellen-factuur: gedekt door status-gekoppelde auto-taken
@@ -714,11 +1007,13 @@ export function openBackofficeActies(
     ...openHerplanAfspraakActies(
       opts?.leads || [],
       opts?.afspraken || [],
-      now
+      now,
+      opts?.adviseurs || []
     ),
+    ...openSchouwInplannenActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, now),
     ...openSchakelFinancieringActies(projecten, now),
-    ...openBestelMateriaalActies(projecten, now),
+    ...openBestelMateriaalActies(projecten, facturen, now),
     ...openVolgendeStapActies(projecten, facturen, now),
   ].sort(
     (a, b) =>
@@ -727,11 +1022,13 @@ export function openBackofficeActies(
 }
 
 /**
- * Acties-tab / sidebar-badge: nu alleen herplan (overige soorten tijdelijk
- * niet in de lijst). Badge en lijst moeten dezelfde set gebruiken.
+ * Acties-tab / sidebar-badge: herplan + schouw inplannen + purchasing.
+ * Badge en lijst moeten dezelfde set gebruiken.
  */
 export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "herplan_afspraak",
+  "bestel_materiaal",
+  "schouw_inplannen",
 ]);
 
 export function actiesVoorActiesTab(

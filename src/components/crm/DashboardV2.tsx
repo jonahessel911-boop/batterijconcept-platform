@@ -19,6 +19,7 @@ import {
   type DashboardV2Kpi,
   type DashboardV2Period,
   type DashboardV2Scope,
+  type DashboardV2SourceRow,
   type ForecastWeek,
 } from "@/lib/dashboard-v2";
 import { NETTO_COMMISSIE_PCT } from "@/lib/netto-boord";
@@ -947,6 +948,80 @@ function FinanceBarsSection({
   );
 }
 
+function BySourceSection({
+  rows,
+  periodLabel,
+}: {
+  rows: DashboardV2SourceRow[];
+  periodLabel: string;
+}) {
+  if (!rows.length) return null;
+  return (
+    <section className="mt-8">
+      <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+        Per source · {periodLabel.toLowerCase()}
+      </h3>
+      <p className="mb-3 text-xs text-muted">
+        Groep = bron (bijv. native) · anders utm_source · anders lander. L→A =
+        eerste nieuw-afspraak / leads (zelfde definitie als KPI hierboven).
+      </p>
+      <div className="overflow-x-auto rounded-2xl border border-line bg-white">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-line text-[10px] uppercase tracking-wide text-muted">
+              <th className="px-4 py-3 font-semibold">Source</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">Leads</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">L2A afspr.</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">L→A</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">Gepland</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">Voltooid</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">Orders</th>
+              <th className="px-3 py-3 font-semibold tabular-nums">A→S</th>
+              <th className="px-4 py-3 font-semibold tabular-nums">Omzet</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={r.key}
+                className="border-b border-line/70 last:border-0 hover:bg-wash/50"
+              >
+                <td className="px-4 py-2.5 font-medium text-ink">{r.label}</td>
+                <td className="px-3 py-2.5 tabular-nums text-ink">
+                  {num(r.leads)}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-ink">
+                  {num(r.afsprakenL2a)}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums font-semibold text-ink">
+                  {r.leadToAppt != null ? `${num(r.leadToAppt, 1)}%` : "—"}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-muted">
+                  {num(r.afsprakenGepland)}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-muted">
+                  {num(r.afsprakenVoltooid)}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-ink">
+                  {num(r.orders)}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-ink">
+                  {r.afspraakToSale != null
+                    ? `${num(r.afspraakToSale, 1)}%`
+                    : "—"}
+                </td>
+                <td className="px-4 py-2.5 tabular-nums text-ink">
+                  {money(r.omzet)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function CapacitySection({ capacity }: { capacity: DashboardV2Capacity }) {
   const l2aPct = Math.round(capacity.targetLeadToAppt * 1000) / 10;
   const [openWeekKey, setOpenWeekKey] = useState<string | null>(null);
@@ -1682,6 +1757,8 @@ export function DashboardV2() {
               </button>
             </div>
           </section>
+
+          <BySourceSection rows={data.bySource || []} periodLabel={data.periodLabel} />
 
           <section>
             <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">

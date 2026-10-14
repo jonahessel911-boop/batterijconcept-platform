@@ -55,7 +55,7 @@ export async function GET(req: Request) {
     const { data: afspraken, error } = await sb
       .from("afspraken")
       .select(
-        "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam)"
+        "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam)"
       )
       .in("status", ["gepland", "bevestigd", "verzet"])
       .gte("start_at", now.toISOString());
@@ -69,7 +69,7 @@ export async function GET(req: Request) {
         const retry = await sb
           .from("afspraken")
           .select(
-            "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs(naam)"
+            "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam)"
           )
           .in("status", ["gepland", "bevestigd", "verzet"])
           .gte("start_at", now.toISOString());

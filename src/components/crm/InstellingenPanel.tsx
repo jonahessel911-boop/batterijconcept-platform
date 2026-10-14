@@ -58,6 +58,7 @@ function naamInitialen(naam: string): string {
 
 const ROL_BADGE: Record<TeamRol, string> = {
   admin: "bg-[#1a2e24] text-white",
+  sales_manager: "bg-[#E8F0F6] text-[#1A4A6E]",
   adviseur: "bg-green-soft text-green-dark",
   beller: "bg-wash text-ink",
   backoffice: "bg-[#eef2f0] text-[#3d5248]",
@@ -660,6 +661,7 @@ export function InstellingenPanel({
   const teamRolCounts = useMemo(() => {
     const counts: Record<TeamRol, number> = {
       admin: 0,
+      sales_manager: 0,
       adviseur: 0,
       beller: 0,
       backoffice: 0,

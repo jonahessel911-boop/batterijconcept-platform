@@ -5,6 +5,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead } from "@/types/database";
 import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { resolveDayStartAdres } from "@/lib/start-adres";
 
 type AdresLead = Pick<
   Lead,
@@ -135,8 +136,13 @@ export function ReistijdHint({
           from = prevLead ? adresRegel(prevLead) : "";
           label = prevLead?.naam || "vorige afspraak";
         } else {
-          from = (startAdres || "").trim();
-          label = startAdresLabel?.trim() || "startpunt";
+          // Maandag → Daltonlaan 500 (ochtendmeeting); anders persoonlijk startadres
+          const dayStart = resolveDayStartAdres(startAdres, startAt);
+          from = (dayStart.address || startAdres || "").trim();
+          label =
+            dayStart.label ||
+            startAdresLabel?.trim() ||
+            "startpunt";
         }
         if (from && from !== "—") {
           try {

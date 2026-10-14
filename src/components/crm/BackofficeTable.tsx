@@ -19,6 +19,14 @@ import {
   projectStatusLabel,
 } from "@/lib/labels";
 import { openBackofficeActies } from "@/lib/backoffice-acties";
+import {
+  isOpleveringsrapport,
+  isSchouwFormulier,
+} from "@/lib/project-documenten";
+import {
+  formatProjectSchouwWeek,
+  isSchouwdagDefinitief,
+} from "@/lib/schouw-week";
 import { formatInTimeZone } from "date-fns-tz";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { nl } from "date-fns/locale";
@@ -117,7 +125,13 @@ function avatarTone(naam: string): string {
   return tones[h];
 }
 
-type ActiefFilter = "actief" | "afgerond" | "alles" | "actie_vereist" | "annuleringen";
+type ActiefFilter =
+  | "actief"
+  | "afgerond"
+  | "alles"
+  | "actie_vereist"
+  | "annuleringen"
+  | "hold_sales";
 
 function ActieIcon({ title }: { title?: string }) {
   return (
@@ -127,6 +141,45 @@ function ActieIcon({ title }: { title?: string }) {
       aria-label={title || "Openstaande actie"}
     >
       !
+    </span>
+  );
+}
+
+function schouwweekLabel(p: Project): string {
+  if (p.schouw_jaar && p.schouw_week) {
+    return `W${p.schouw_week} · ${p.schouw_jaar}`;
+  }
+  const full = formatProjectSchouwWeek(p);
+  return full || "—";
+}
+
+function schouwdagLabel(p: Project): string {
+  if (!isSchouwdagDefinitief(p) || !p.schouw_at) return "—";
+  return formatDateShort(p.schouw_at);
+}
+
+function installatieLabel(p: Project): string {
+  if (!p.installatie_at) return "—";
+  return formatDateShort(p.installatie_at);
+}
+
+function DatumMetVink({
+  label,
+  done,
+  doneTitle,
+}: {
+  label: string;
+  done: boolean;
+  doneTitle: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span className={label === "—" ? "text-muted" : "text-ink"}>{label}</span>
+      {done ? (
+        <span title={doneTitle} aria-label={doneTitle}>
+          ✅
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -162,6 +215,10 @@ export function BackofficeTable({
   const [contactProject, setContactProject] = useState<Project | null>(null);
   const [page, setPage] = useState(1);
   const [openTaken, setOpenTaken] = useState<ProjectTaak[]>([]);
+  /** projectId → schouwformulier / opleveringsrapport aanwezig */
+  const [docFlags, setDocFlags] = useState<
+    Record<string, { schouw: boolean; oplevering: boolean }>
+  >({});
 
   const loadTaken = useCallback(async () => {
     try {
@@ -198,8 +255,13 @@ export function BackofficeTable({
       const st = normalizeProjectStatus(p.status);
       if (actief === "annuleringen") {
         if (st !== "annulering") return false;
-      } else if (st === "annulering" && actief !== "alles") {
-        // Actief / afgerond / actie: geen geannuleerde orders
+      } else if (actief === "hold_sales") {
+        if (st !== "hold_sales_actie") return false;
+      } else if (
+        (st === "annulering" || st === "hold_sales_actie") &&
+        actief !== "alles"
+      ) {
+        // Actief / afgerond / actie: geen annuleringen of HOLD (die horen bij Offertes)
         return false;
       } else if (
         actief === "actief" &&
@@ -302,6 +364,56 @@ export function BackofficeTable({
     return filtered.slice(start, start + PAGE_SIZE);
   }, [filtered, safePage]);
 
+  const pageIdsKey = useMemo(
+    () => pageRows.map((p) => p.id).sort().join(","),
+    [pageRows]
+  );
+
+  useEffect(() => {
+    const ids = pageIdsKey ? pageIdsKey.split(",") : [];
+    if (ids.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const res = await fetch(`/api/projecten/${id}/fotos`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              return [id, { schouw: false, oplevering: false }] as const;
+            }
+            const fotos = (data.fotos || []) as Array<{
+              omschrijving: string | null;
+              url?: string | null;
+            }>;
+            return [
+              id,
+              {
+                schouw: fotos.some(
+                  (f) => isSchouwFormulier(f.omschrijving) && f.url
+                ),
+                oplevering: fotos.some(
+                  (f) => isOpleveringsrapport(f.omschrijving) && f.url
+                ),
+              },
+            ] as const;
+          } catch {
+            return [id, { schouw: false, oplevering: false }] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setDocFlags((prev) => {
+        const next = { ...prev };
+        for (const [id, flags] of entries) next[id] = flags;
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pageIdsKey]);
+
   useEffect(() => {
     setPage(1);
   }, [q, actief, statusFilter, medewerkerId, datumFilter, sortDir]);
@@ -366,6 +478,7 @@ export function BackofficeTable({
           <option value="actief">Actief</option>
           <option value="actie_vereist">Actie vereist</option>
           <option value="afgerond">Afgerond</option>
+          <option value="hold_sales">HOLD sales</option>
           <option value="annuleringen">Annuleringen</option>
           <option value="alles">Alles</option>
         </select>
@@ -466,6 +579,21 @@ export function BackofficeTable({
                   <p className="text-xs text-muted">
                     {p.leads?.naam || "—"} · {datumbereik(p)}
                   </p>
+                  <p className="text-xs text-muted">
+                    Schouw {schouwweekLabel(p)}
+                    {" · "}
+                    <DatumMetVink
+                      label={schouwdagLabel(p)}
+                      done={Boolean(docFlags[p.id]?.schouw)}
+                      doneTitle="Schouwformulier geüpload"
+                    />
+                    {" · Inst. "}
+                    <DatumMetVink
+                      label={installatieLabel(p)}
+                      done={Boolean(docFlags[p.id]?.oplevering)}
+                      doneTitle="Opleveringsformulier geüpload"
+                    />
+                  </p>
                   <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
                     <div className="flex min-w-0 items-center gap-2">
                       <span>{bijgewerktLabel(p.created_at)}</span>
@@ -504,7 +632,7 @@ export function BackofficeTable({
 
           {/* Desktop */}
           <div className="hidden overflow-x-auto md:block">
-            <table className="w-full min-w-[56rem] border-collapse text-left text-sm">
+            <table className="w-full min-w-[72rem] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   <th className="px-4 py-3 font-semibold normal-case tracking-normal text-ink">
@@ -517,7 +645,13 @@ export function BackofficeTable({
                     Status
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
-                    Datumbereik
+                    Schouwweek
+                  </th>
+                  <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
+                    Schouwdatum
+                  </th>
+                  <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
+                    Installatiedatum
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
                     Klant
@@ -548,6 +682,7 @@ export function BackofficeTable({
                   const leden = lidNamen(p);
                   const adres = leadAdres(p);
                   const hasActie = projectIdsWithActie.has(p.id);
+                  const docs = docFlags[p.id];
                   return (
                     <tr
                       key={p.id}
@@ -582,7 +717,21 @@ export function BackofficeTable({
                         />
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-ink">
-                        {datumbereik(p)}
+                        {schouwweekLabel(p)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3">
+                        <DatumMetVink
+                          label={schouwdagLabel(p)}
+                          done={Boolean(docs?.schouw)}
+                          doneTitle="Schouwformulier geüpload"
+                        />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3">
+                        <DatumMetVink
+                          label={installatieLabel(p)}
+                          done={Boolean(docs?.oplevering)}
+                          doneTitle="Opleveringsformulier geüpload"
+                        />
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-ink">
                         {p.leads?.naam || "—"}

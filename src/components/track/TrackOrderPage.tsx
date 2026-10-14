@@ -1,18 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Image from "next/image";
-import type { KlantAgendaItem, KlantTrackPayload } from "@/lib/klant-track";
-import { formatEuro } from "@/lib/format";
+import type {
+  KlantAgendaItem,
+  KlantServiceAfspraak,
+  KlantTrackPayload,
+} from "@/lib/klant-track";
+import {
+  formatDateNl,
+  formatDateTimeLongNl,
+  formatEuro,
+  formatTimeNl,
+} from "@/lib/format";
+import type {
+  DatumOptieSoort,
+  KlantDatumOptie,
+} from "@/lib/project-datum-opties";
+import { datumOptieSoortLabel } from "@/lib/project-datum-opties";
+import { FRANK_ENERGIE_OVERSTAP_URL } from "@/lib/frank-energie";
 
-type TabId = "overzicht" | "agenda" | "documenten";
-
-const TABS: { id: TabId; label: string }[] = [
-  { id: "overzicht", label: "Overzicht" },
-  { id: "agenda", label: "Agenda" },
-  { id: "documenten", label: "Documenten" },
-];
+type TabId = "overzicht" | "agenda" | "documenten" | "service" | "overstap";
 
 export function TrackOrderPage() {
   const { token } = useParams<{ token: string }>();
@@ -40,6 +49,60 @@ export function TrackOrderPage() {
     const id = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(id);
   }, [load]);
+
+  const tabs = useMemo(() => {
+    const base: { id: TabId; label: string; badge?: number }[] = [
+      { id: "overzicht", label: "Overzicht" },
+      { id: "agenda", label: "Agenda" },
+      { id: "documenten", label: "Documenten" },
+    ];
+    if (!data) return base;
+    const opts = data.datum_opties || [];
+    const openService = opts.filter(
+      (o) => o.soort === "service" && o.status === "open"
+    ).length;
+    const openOverstap = opts.filter(
+      (o) => o.soort === "overstap" && o.status === "open"
+    ).length;
+    const showService =
+      openService > 0 ||
+      opts.some((o) => o.soort === "service") ||
+      (data.service_afspraken || []).length > 0 ||
+      data.agenda.some((a) => a.id === "service");
+    const showOverstap =
+      openOverstap > 0 ||
+      opts.some((o) => o.soort === "overstap") ||
+      data.agenda.some((a) => a.id === "overstap");
+    if (showService) {
+      base.push({
+        id: "service",
+        label: "Service",
+        badge: openService > 0 ? openService : undefined,
+      });
+    }
+    if (showOverstap) {
+      base.push({
+        id: "overstap",
+        label: "Overstap",
+        badge: openOverstap > 0 ? openOverstap : undefined,
+      });
+    }
+    return base;
+  }, [data]);
+
+  // Deep-link ?tab=service|overstap
+  useEffect(() => {
+    if (!data) return;
+    try {
+      const q = new URLSearchParams(window.location.search).get("tab");
+      if (q === "service" || q === "overstap") {
+        const allowed = tabs.some((t) => t.id === q);
+        if (allowed) setTab(q);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [data, tabs]);
 
   if (loading) {
     return (
@@ -106,21 +169,26 @@ export function TrackOrderPage() {
       </header>
 
       <nav
-        className="mt-6 flex gap-1 border-b border-[#D8E4DC]"
+        className="mt-6 flex flex-wrap gap-1 border-b border-[#D8E4DC]"
         aria-label="Portaal menu"
       >
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`relative px-3 py-2.5 text-sm font-semibold transition ${
+            className={`relative inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-semibold transition ${
               tab === t.id
                 ? "text-[#0D5C32]"
                 : "text-[#7A8B80] hover:text-[#122018]"
             }`}
           >
             {t.label}
+            {t.badge != null && t.badge > 0 ? (
+              <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-[#C45A12] px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                {t.badge}
+              </span>
+            ) : null}
             {tab === t.id ? (
               <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-[#0D5C32]" />
             ) : null}
@@ -145,6 +213,14 @@ export function TrackOrderPage() {
       {tab === "agenda" ? <AgendaTab agenda={data.agenda || []} /> : null}
       {tab === "documenten" ? (
         <DocumentenTab data={data} token={token} />
+      ) : null}
+      {tab === "service" || tab === "overstap" ? (
+        <DatumOptieTab
+          soort={tab}
+          token={token}
+          data={data}
+          onDone={() => void load()}
+        />
       ) : null}
 
       <footer className="mt-12 border-t border-[#D8E4DC] pt-6 text-sm text-[#5A6B60]">
@@ -301,9 +377,645 @@ function agendaSortKey(id: KlantAgendaItem["id"]): number {
       return 40;
     case "service":
       return 50;
+    case "overstap":
+      return 60;
     default:
       return 99;
   }
+}
+
+function FrankEnergieLogo({
+  size = 56,
+}: {
+  size?: number;
+}) {
+  return (
+    <Image
+      src="/brands/frank-energie.png"
+      alt="Frank Energie"
+      width={size}
+      height={size}
+      className="shrink-0 rounded-xl object-cover"
+    />
+  );
+}
+
+function OverstapHeader({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-3">
+        <a
+          href={FRANK_ENERGIE_OVERSTAP_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 rounded-xl outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-[#0D5C32]"
+          aria-label="Naar Frank Energie (BatterijConcept-uitnodiging)"
+        >
+          <FrankEnergieLogo />
+        </a>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#0D5C32]">
+            Overstap · Frank Energie
+          </p>
+          <h2 className="mt-0.5 font-display text-lg font-semibold text-[#122018]">
+            {title}
+          </h2>
+          {subtitle ? (
+            <p className="mt-1 text-sm leading-relaxed text-[#5A6B60]">
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <a
+        href={FRANK_ENERGIE_OVERSTAP_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-2 rounded-xl border border-[#D8E4DC] bg-[#F4F8F5] px-3.5 py-2.5 text-sm font-semibold text-[#0D5C32] transition hover:border-[#0D5C32]/40 hover:bg-[#E8F5EE]"
+      >
+        Naar Frank Energie →
+      </a>
+    </div>
+  );
+}
+
+function serviceAfspraakStatus(at: string): string {
+  const ms = new Date(at).getTime();
+  if (Number.isNaN(ms)) return "Gepland";
+  return ms < Date.now() ? "Afgelopen" : "Gepland";
+}
+
+function ServiceAfsprakenTable({
+  afspraken,
+}: {
+  afspraken: KlantServiceAfspraak[];
+}) {
+  if (afspraken.length === 0) {
+    return (
+      <p className="mt-2 text-sm text-[#5A6B60]">
+        Er staan nog geen service-afspraken gepland.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full min-w-[280px] border-collapse text-left text-sm">
+        <thead>
+          <tr className="border-b border-[#D8E4DC] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5A6B60]">
+            <th className="pb-2 pr-3 font-semibold">Datum</th>
+            <th className="pb-2 pr-3 font-semibold">Tijd</th>
+            <th className="pb-2 font-semibold">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {afspraken.map((a) => (
+            <tr
+              key={a.at}
+              className="border-b border-[#E8F0EB] last:border-b-0"
+            >
+              <td className="py-2.5 pr-3 font-medium text-[#122018]">
+                {formatDateNl(a.at)}
+              </td>
+              <td className="py-2.5 pr-3 text-[#122018]">{formatTimeNl(a.at)}</td>
+              <td className="py-2.5 text-[#5A6B60]">
+                {serviceAfspraakStatus(a.at)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DatumOptieTab({
+  soort,
+  token,
+  data,
+  onDone,
+}: {
+  soort: DatumOptieSoort;
+  token: string;
+  data: KlantTrackPayload;
+  onDone: () => void;
+}) {
+  const optie =
+    (data.datum_opties || []).find((o) => o.soort === soort) || null;
+  const agendaItem =
+    data.agenda.find((a) => a.id === soort) || null;
+  const serviceAfspraken = data.service_afspraken || [];
+
+  // Service: overzichtstabel van alle geplande afspraken (niet clickable)
+  if (soort === "service") {
+    const openOptie = optie?.status === "open" ? optie : null;
+    if (openOptie) {
+      return (
+        <div className="mt-6 space-y-4">
+          <DatumOptieWizard
+            soort={soort}
+            token={token}
+            optie={openOptie}
+            prefNaam={data.klant_naam}
+            prefEmail={data.klant_email}
+            prefTelefoon={data.klant_telefoon}
+            onDone={onDone}
+          />
+          {serviceAfspraken.length > 0 ? (
+            <section className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+              <h2 className="font-display text-lg font-semibold text-[#122018]">
+                Jouw service-afspraken
+              </h2>
+              <ServiceAfsprakenTable afspraken={serviceAfspraken} />
+            </section>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        <h2 className="font-display text-lg font-semibold text-[#122018]">
+          Service-afspraken
+        </h2>
+        <p className="mt-1 text-sm text-[#5A6B60]">
+          Overzicht van je geplande service-afspraken.
+        </p>
+        <ServiceAfsprakenTable afspraken={serviceAfspraken} />
+      </section>
+    );
+  }
+
+  if (!optie && agendaItem) {
+    return (
+      <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        {soort === "overstap" ? (
+          <OverstapHeader
+            title="Overstap gepland"
+            subtitle={`Je afspraak staat gepland op ${agendaItem.when}.`}
+          />
+        ) : (
+          <>
+            <h2 className="font-display text-lg font-semibold text-[#122018]">
+              {datumOptieSoortLabel(soort)}
+            </h2>
+            <p className="mt-2 text-sm text-[#5A6B60]">
+              Je afspraak staat gepland op{" "}
+              <strong className="text-[#122018]">{agendaItem.when}</strong>.
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  if (!optie) {
+    return (
+      <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        {soort === "overstap" ? (
+          <OverstapHeader
+            title="Overstap"
+            subtitle="Er is nu geen open uitnodiging. We sturen je een mail zodra je een datum kunt kiezen."
+          />
+        ) : (
+          <>
+            <h2 className="font-display text-lg font-semibold text-[#122018]">
+              {datumOptieSoortLabel(soort)}
+            </h2>
+            <p className="mt-2 text-sm text-[#5A6B60]">
+              Er is nu geen open uitnodiging. We sturen je een mail zodra je een
+              datum kunt kiezen.
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  if (optie.status === "gekozen" && optie.gekozen_slot) {
+    return (
+      <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        {soort === "overstap" ? (
+          <OverstapHeader
+            title="Overstap bevestigd"
+            subtitle={`Je hebt gekozen voor ${formatDateTimeLongNl(optie.gekozen_slot)}. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven.`}
+          />
+        ) : (
+          <>
+            <h2 className="font-display text-lg font-semibold text-[#122018]">
+              {datumOptieSoortLabel(soort)} bevestigd
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-[#5A6B60]">
+              Je hebt gekozen voor{" "}
+              <strong className="text-[#122018]">
+                {formatDateTimeLongNl(optie.gekozen_slot)}
+              </strong>
+              .
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <DatumOptieWizard
+      soort={soort}
+      token={token}
+      optie={optie}
+      prefNaam={data.klant_naam}
+      prefEmail={data.klant_email}
+      prefTelefoon={data.klant_telefoon}
+      onDone={onDone}
+    />
+  );
+}
+
+type AltOverstapSlot = {
+  start_at: string;
+  end_at: string;
+  adviseur_id: string;
+  adviseur_naam: string;
+};
+
+function DatumOptieWizard({
+  soort,
+  token,
+  optie,
+  prefNaam,
+  prefEmail,
+  prefTelefoon,
+  onDone,
+}: {
+  soort: DatumOptieSoort;
+  token: string;
+  optie: KlantDatumOptie;
+  prefNaam: string;
+  prefEmail: string | null;
+  prefTelefoon: string | null;
+  onDone: () => void;
+}) {
+  const [step, setStep] = useState<
+    "slots" | "alt" | "gegevens" | "done"
+  >("slots");
+  const [slotIndex, setSlotIndex] = useState<number | null>(null);
+  const [altSlot, setAltSlot] = useState<AltOverstapSlot | null>(null);
+  const [altSlots, setAltSlots] = useState<AltOverstapSlot[]>([]);
+  const [altLoading, setAltLoading] = useState(false);
+  const [naam, setNaam] = useState(prefNaam || "");
+  const [email, setEmail] = useState(prefEmail || "");
+  const [telefoon, setTelefoon] = useState(prefTelefoon || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const gekozenIso =
+    altSlot?.start_at ||
+    (slotIndex != null ? optie.slots[slotIndex] : null) ||
+    null;
+
+  async function loadAltSlots() {
+    setAltLoading(true);
+    setError(null);
+    setAltSlot(null);
+    setSlotIndex(null);
+    try {
+      const res = await fetch(`/api/track/${token}/overstap-slots`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Slots laden mislukt"
+        );
+      }
+      setAltSlots(
+        ((json as { slots?: AltOverstapSlot[] }).slots || []).slice(0, 10)
+      );
+      setStep("alt");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Slots laden mislukt");
+    } finally {
+      setAltLoading(false);
+    }
+  }
+
+  async function bevestigen() {
+    if (!gekozenIso && slotIndex == null && !altSlot) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = altSlot
+        ? {
+            soort,
+            custom_start_at: altSlot.start_at,
+            adviseur_id: altSlot.adviseur_id,
+            naam: naam.trim(),
+            email: email.trim(),
+            telefoon: telefoon.trim(),
+          }
+        : {
+            soort,
+            slot_index: slotIndex,
+            naam: naam.trim(),
+            email: email.trim(),
+            telefoon: telefoon.trim(),
+          };
+      const res = await fetch(`/api/track/${token}/datum-opties`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Bevestigen mislukt"
+        );
+      }
+      setStep("done");
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Bevestigen mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (step === "done") {
+    const when = gekozenIso ? formatDateTimeLongNl(gekozenIso) : null;
+    if (soort === "overstap") {
+      return (
+        <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+          <OverstapHeader
+            title="Bedankt!"
+            subtitle={
+              when
+                ? `Je overstap-afspraak staat vast op ${when}. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven.`
+                : "Je overstap-afspraak staat vast. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven."
+            }
+          />
+        </section>
+      );
+    }
+    return (
+      <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        <h2 className="font-display text-lg font-semibold text-[#122018]">
+          Bedankt!
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-[#5A6B60]">
+          Je {datumOptieSoortLabel(soort).toLowerCase()}-afspraak staat vast
+          {when ? (
+            <>
+              {" "}
+              op <strong className="text-[#122018]">{when}</strong>
+            </>
+          ) : null}
+          . Je vindt hem ook terug onder Agenda.
+        </p>
+      </section>
+    );
+  }
+
+  const canNext =
+    step === "slots"
+      ? slotIndex != null
+      : step === "alt"
+        ? altSlot != null
+        : true;
+
+  const wizardTitle =
+    step === "gegevens"
+      ? "Gegevens bevestigen"
+      : step === "alt"
+        ? "Kies een ander tijdslot"
+        : "Kies een datum";
+  const wizardSubtitle =
+    step === "gegevens"
+      ? "Controleer je gegevens zodat we je kunnen bereiken."
+      : step === "alt"
+        ? "Andere vrije momenten (30 min · ma–vr 09:00–17:00, lunch 12:00–12:30 dicht)."
+        : soort === "overstap"
+          ? "Kies één van de drie voorgestelde tijden. Een overstap naar Frank Energie duurt ongeveer 30 minuten."
+          : "Kies één van de drie voorgestelde tijden. Een service duurt meestal 1 uur.";
+
+  return (
+    <section className="mt-6 space-y-4">
+      <div className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-4 sm:px-5">
+        {soort === "overstap" ? (
+          <OverstapHeader title={wizardTitle} subtitle={wizardSubtitle} />
+        ) : (
+          <>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#0D5C32]">
+              {datumOptieSoortLabel(soort)}
+            </p>
+            <h2 className="mt-1 font-display text-lg font-semibold text-[#122018]">
+              {wizardTitle}
+            </h2>
+            <p className="mt-1 text-sm text-[#5A6B60]">{wizardSubtitle}</p>
+          </>
+        )}
+        {step === "slots" || step === "alt" ? (
+          <p className="mt-3 inline-flex rounded-lg bg-[#F4F8F5] px-2.5 py-1 text-[11px] font-semibold text-[#0D5C32]">
+            {soort === "overstap"
+              ? "Duur · ca. 30 min"
+              : "Duur · meestal 1 uur"}
+          </p>
+        ) : null}
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-[#E8C4B8] bg-[#FFF6F2] px-3 py-2 text-sm text-[#9A3B1A]">
+          {error}
+        </p>
+      ) : null}
+
+      {step === "slots" || step === "alt" ? (
+        <div className="space-y-2">
+          {step === "slots"
+            ? optie.slots.map((iso, i) => {
+                const selected = slotIndex === i && !altSlot;
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    onClick={() => {
+                      setSlotIndex(i);
+                      setAltSlot(null);
+                    }}
+                    className={[
+                      "flex w-full items-center justify-between rounded-xl border px-4 py-3.5 text-left transition",
+                      selected
+                        ? "border-[#0D5C32] bg-[#E8F5EE] ring-1 ring-[#0D5C32]"
+                        : "border-[#D8E4DC] bg-white hover:border-[#0D5C32]/40",
+                    ].join(" ")}
+                  >
+                    <span className="text-sm font-semibold text-[#122018]">
+                      {formatDateTimeLongNl(iso)}
+                    </span>
+                    <span
+                      className={[
+                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
+                        selected
+                          ? "border-[#0D5C32] bg-[#0D5C32] text-white"
+                          : "border-[#C5D4CA] text-transparent",
+                      ].join(" ")}
+                    >
+                      ✓
+                    </span>
+                  </button>
+                );
+              })
+            : null}
+
+          {step === "alt" ? (
+            altLoading ? (
+              <p className="py-6 text-center text-sm text-[#5A6B60]">
+                Beschikbare tijden laden…
+              </p>
+            ) : altSlots.length === 0 ? (
+              <p className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-6 text-center text-sm text-[#5A6B60]">
+                Geen extra tijdsloten beschikbaar. Kies een van de drie
+                voorgestelde tijden.
+              </p>
+            ) : (
+              altSlots.map((s) => {
+                const selected = altSlot?.start_at === s.start_at;
+                return (
+                  <button
+                    key={s.start_at}
+                    type="button"
+                    onClick={() => {
+                      setAltSlot(s);
+                      setSlotIndex(null);
+                    }}
+                    className={[
+                      "flex w-full items-center justify-between rounded-xl border px-4 py-3.5 text-left transition",
+                      selected
+                        ? "border-[#0D5C32] bg-[#E8F5EE] ring-1 ring-[#0D5C32]"
+                        : "border-[#D8E4DC] bg-white hover:border-[#0D5C32]/40",
+                    ].join(" ")}
+                  >
+                    <span className="text-sm font-semibold text-[#122018]">
+                      {formatDateTimeLongNl(s.start_at)}
+                    </span>
+                    <span
+                      className={[
+                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
+                        selected
+                          ? "border-[#0D5C32] bg-[#0D5C32] text-white"
+                          : "border-[#C5D4CA] text-transparent",
+                      ].join(" ")}
+                    >
+                      ✓
+                    </span>
+                  </button>
+                );
+              })
+            )
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            {soort === "overstap" ? (
+              step === "slots" ? (
+                <button
+                  type="button"
+                  disabled={altLoading}
+                  onClick={() => void loadAltSlots()}
+                  className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-2.5 text-sm font-semibold text-[#122018] hover:bg-[#F4F8F5] disabled:opacity-50"
+                >
+                  {altLoading ? "Laden…" : "Kies ander tijdslot"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("slots");
+                    setAltSlot(null);
+                  }}
+                  className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-2.5 text-sm font-semibold text-[#122018] hover:bg-[#F4F8F5]"
+                >
+                  ← Voorgestelde tijden
+                </button>
+              )
+            ) : (
+              <span />
+            )}
+            <button
+              type="button"
+              disabled={!canNext}
+              onClick={() => setStep("gegevens")}
+              className="rounded-xl bg-[#0D5C32] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
+            >
+              Volgende
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3 rounded-xl border border-[#D8E4DC] bg-white px-4 py-4 sm:px-5">
+          <label className="block">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[#5A6B60]">
+              Naam
+            </span>
+            <input
+              value={naam}
+              onChange={(e) => setNaam(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[#D8E4DC] px-3 py-2 text-sm text-[#122018] outline-none focus:border-[#0D5C32]"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[#5A6B60]">
+              E-mail
+            </span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[#D8E4DC] px-3 py-2 text-sm text-[#122018] outline-none focus:border-[#0D5C32]"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-[#5A6B60]">
+              Telefoon
+            </span>
+            <input
+              type="tel"
+              value={telefoon}
+              onChange={(e) => setTelefoon(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[#D8E4DC] px-3 py-2 text-sm text-[#122018] outline-none focus:border-[#0D5C32]"
+            />
+          </label>
+          {gekozenIso ? (
+            <p className="rounded-lg bg-[#F4F8F5] px-3 py-2 text-xs text-[#5A6B60]">
+              Gekozen tijd:{" "}
+              <strong className="text-[#122018]">
+                {formatDateTimeLongNl(gekozenIso)}
+              </strong>
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setStep(altSlot ? "alt" : "slots")}
+              className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-2.5 text-sm font-semibold text-[#122018] hover:bg-[#F4F8F5]"
+            >
+              ← Terug
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void bevestigen()}
+              className="rounded-xl bg-[#0D5C32] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {busy ? "Bezig…" : "Bevestigen"}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function AgendaTab({ agenda }: { agenda: KlantAgendaItem[] }) {
@@ -473,17 +1185,25 @@ function DocumentenTab({
   data: KlantTrackPayload;
   token: string;
 }) {
+  const facturen = data.documenten.facturen;
+
   return (
-    <div className="mt-6">
-      <h2 className="font-display text-lg font-semibold text-[#122018]">
-        Documenten
-      </h2>
-      <p className="mt-1 text-sm text-[#5A6B60]">
-        Getekende offerte en facturen op één plek.
-      </p>
-      <ul className="mt-4 space-y-2">
-        <li>
-          {data.documenten.offerte.beschikbaar ? (
+    <div className="mt-6 space-y-6">
+      <div>
+        <h2 className="font-display text-lg font-semibold text-[#122018]">
+          Documenten
+        </h2>
+        <p className="mt-1 text-sm text-[#5A6B60]">
+          Alles wat je van ons hebt ontvangen: getekende offerte en facturen.
+        </p>
+      </div>
+
+      <section>
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#0D5C32]">
+          Getekende offerte
+        </h3>
+        <ul className="mt-2 space-y-2">
+          <li>
             <a
               href={`/api/track/${token}/offerte`}
               target="_blank"
@@ -496,48 +1216,56 @@ function DocumentenTab({
                 </span>
                 <span className="mt-0.5 block text-xs text-[#5A6B60]">
                   {data.documenten.offerte.nummer}
+                  {data.documenten.offerte.ondertekend_op
+                    ? ` · ondertekend`
+                    : null}
                 </span>
               </span>
               <span className="shrink-0 font-semibold text-[#0D5C32]">
                 Open PDF →
               </span>
             </a>
-          ) : (
-            <div className="rounded-xl border border-dashed border-[#D8E4DC] px-4 py-3 text-sm text-[#7A8B80]">
-              Getekende offerte volgt zo.
-            </div>
-          )}
-        </li>
-        {data.documenten.facturen.length === 0 ? (
-          <li className="rounded-xl border border-dashed border-[#D8E4DC] px-4 py-3 text-sm text-[#7A8B80]">
-            Nog geen facturen. Zodra we een factuur sturen, verschijnt die hier.
           </li>
-        ) : (
-          data.documenten.facturen.map((f) => (
-            <li key={f.id}>
-              <a
-                href={`/api/track/${token}/facturen/${f.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[#D8E4DC] bg-white px-4 py-3 text-sm transition hover:border-[#0D5C32]/40 hover:bg-[#F4F8F5]"
-              >
-                <span>
-                  <span className="font-semibold text-[#122018]">
-                    {f.label}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-[#5A6B60]">
-                    {f.factuur_nummer} · {formatEuro(f.bedrag_inc_btw)} ·{" "}
-                    {factuurStatusLabel(f.status, f.betaald_op)}
-                  </span>
-                </span>
-                <span className="shrink-0 font-semibold text-[#0D5C32]">
-                  Open PDF →
-                </span>
-              </a>
+        </ul>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#0D5C32]">
+          Facturen
+        </h3>
+        <ul className="mt-2 space-y-2">
+          {facturen.length === 0 ? (
+            <li className="rounded-xl border border-dashed border-[#D8E4DC] px-4 py-3 text-sm text-[#7A8B80]">
+              Nog geen facturen verstuurd. Zodra we een factuur mailen, staat die
+              hier klaar.
             </li>
-          ))
-        )}
-      </ul>
+          ) : (
+            facturen.map((f) => (
+              <li key={f.id}>
+                <a
+                  href={`/api/track/${token}/facturen/${f.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-[#D8E4DC] bg-white px-4 py-3 text-sm transition hover:border-[#0D5C32]/40 hover:bg-[#F4F8F5]"
+                >
+                  <span>
+                    <span className="font-semibold text-[#122018]">
+                      {f.label}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-[#5A6B60]">
+                      {f.factuur_nummer} · {formatEuro(f.bedrag_inc_btw)} ·{" "}
+                      {factuurStatusLabel(f.status, f.betaald_op)}
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-semibold text-[#0D5C32]">
+                    Open PDF →
+                  </span>
+                </a>
+              </li>
+            ))
+          )}
+        </ul>
+      </section>
     </div>
   );
 }

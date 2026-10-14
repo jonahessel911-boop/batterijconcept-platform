@@ -441,6 +441,10 @@ export function OffertePage() {
           />
           <InfoTile label="Klant" value={offerte.leads?.naam} />
           <InfoTile
+            label="Adviseur"
+            value={offerte.leads?.adviseurs?.naam || "Niet gekoppeld"}
+          />
+          <InfoTile
             label="Installateur (intern)"
             value={offerte.installatie_partners?.naam || "Niet gekoppeld"}
           />

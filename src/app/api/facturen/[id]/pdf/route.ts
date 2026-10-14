@@ -9,6 +9,7 @@ import { errMessage } from "@/lib/errors";
 import {
   COMPANY_ACCOUNT_NAME,
   COMPANY_IBAN_DISPLAY,
+  FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
   amsterdamDatePlusDays,
   factuurBetaaltermijnDagen,
 } from "@/lib/factuur-betaling";
@@ -162,6 +163,7 @@ export async function POST(
       "@/lib/financiering-status"
     );
     const isRestant = isRestantFactuurOmschrijving(factuur.omschrijving);
+    let isWarmtefondsRestant = false;
 
     if (isRestant && factuur.project_id) {
       const { data: project } = await sb
@@ -179,15 +181,18 @@ export async function POST(
       const off = Array.isArray(offJoin) ? offJoin[0] : offJoin;
       const isWf = Boolean(off?.financiering_voorbehoud);
       const fs = project ? resolveFinancieringStatus(project) : null;
-      if (isWf && fs !== "afgewezen" && !magWarmtefondsRestantFactuur(fs)) {
-        return NextResponse.json(
-          {
-            error:
-              "Restantfactuur Warmtefonds pas versturen na goedkeuring van de aanvraag",
-            code: "wf_niet_goedgekeurd",
-          },
-          { status: 409 }
-        );
+      if (isWf && fs !== "afgewezen") {
+        isWarmtefondsRestant = true;
+        if (!magWarmtefondsRestantFactuur(fs)) {
+          return NextResponse.json(
+            {
+              error:
+                "Restantfactuur Warmtefonds pas versturen na goedkeuring van de aanvraag",
+              code: "wf_niet_goedgekeurd",
+            },
+            { status: 409 }
+          );
+        }
       }
     }
 
@@ -216,10 +221,13 @@ export async function POST(
     const isCredit = Boolean(factuur.credit_van_factuur_id);
     const creditVanNummer = creditVan?.factuur_nummer || null;
 
-    const betaaltermijnDagen = factuurBetaaltermijnDagen({
-      factuurdatum: factuur.factuurdatum,
-      vervaldatum: factuur.vervaldatum,
-    });
+    // Warmtefonds-restant: altijd 14 dagen, ook als concept nog 3 had
+    const betaaltermijnDagen = isWarmtefondsRestant
+      ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
+      : factuurBetaaltermijnDagen({
+          factuurdatum: factuur.factuurdatum,
+          vervaldatum: factuur.vervaldatum,
+        });
     const vervaldatum = amsterdamDatePlusDays(new Date(), betaaltermijnDagen);
     const factuurVoorPdf = {
       ...factuur,
@@ -270,6 +278,7 @@ export async function POST(
       factuurNummer: factuur.factuur_nummer,
       bedrag: formatEuro(factuur.bedrag_inc_btw),
       vervaldatum: isCredit ? null : formatDateShort(vervaldatum),
+      betaaltermijnDagen: isCredit ? null : betaaltermijnDagen,
       iban: isCredit ? null : co.iban || COMPANY_IBAN_DISPLAY,
       accountName: co.accountName || COMPANY_ACCOUNT_NAME,
       betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,

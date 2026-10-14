@@ -15,7 +15,7 @@ export function planningVensterNl(at: Date | string): {
   return {
     start,
     end,
-    label: `${start} – ${end} (Amsterdam)`,
+    label: `${start} – ${end}`,
   };
 }
 

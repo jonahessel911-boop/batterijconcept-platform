@@ -30,7 +30,6 @@ import { LeadsTable } from "./LeadsTable";
 import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { useBoViewStore, setBoViewStore } from "@/lib/bo-view-store";
-import { isOpenstaandeSchouwweek } from "./SchouwweekList";
 import { FacturenTable } from "./FacturenTable";
 import { AdviseurFacturenPanel } from "./AdviseurFacturenPanel";
 import { PartnersPanel } from "./PartnersPanel";
@@ -67,11 +66,14 @@ import { NettoBoord } from "./NettoBoord";
 import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
 import { AdminTakenPanel } from "./AdminTakenPanel";
 import { TodayPanel } from "./TodayPanel";
+import { WeekmeetingPanel } from "./WeekmeetingPanel";
+import { AdviseurInstellingenPanel } from "./AdviseurInstellingenPanel";
 import { magTodayDashboard } from "@/lib/admin-adviseur";
 
 const VALID_TABS: CrmTab[] = [
   "today",
   "taken",
+  "weekmeeting",
   "leads",
   "bellen",
   "agenda",
@@ -88,17 +90,20 @@ const VALID_TABS: CrmTab[] = [
   "admin",
   "ai",
   "partners",
+  "instellingen",
 ];
 
 const ADVISEUR_FILTER_KEY = "bc_adviseur_filter_v3";
 
 function parseTab(value: string | null): CrmTab {
-  // Oude URL-tab → Partners (facturen / team zitten daar nu)
-  if (value === "creditfacturen" || value === "instellingen") return "partners";
+  // Oude URL-tab → Partners (creditfacturen zitten daar nu)
+  if (value === "creditfacturen") return "partners";
   // Inkomend-mailfacturen-tab uit menu gehaald
   if (value === "inkomend") return "facturen";
   // Service / AI zitten onder Backoffice
   if (value === "service" || value === "ai") return "projecten";
+  // Sales Manager zit onder Rapportage › Sales
+  if (value === "sales_manager") return "rapportage";
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
   return "leads";
 }
@@ -126,13 +131,6 @@ export function CrmShell() {
     if (searchParams.get("tab") === "service") {
       setBoViewStore("service");
     }
-    // Oude Instellingen-tab → Partners › Team
-    if (searchParams.get("tab") === "instellingen") {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("tab", "partners");
-      params.set("partners", "team");
-      router.replace(`/?${params.toString()}`, { scroll: false });
-    }
   }, [searchParams, router]);
 
   useEffect(() => {
@@ -143,6 +141,7 @@ export function CrmShell() {
     const pageNames: Partial<Record<CrmTab, string>> = {
       today: "Today",
       taken: "Agenda",
+      weekmeeting: "Weekmeeting",
       leads: "Leads",
       bellen: "Bellen",
       agenda: "Agenda",
@@ -159,7 +158,7 @@ export function CrmShell() {
       admin: "Admin",
       ai: "AI",
       partners: "Partners",
-      instellingen: "Partners",
+      instellingen: "Instellingen",
     };
     const name = pageNames[tab] || "CRM";
     document.title = `${name} · Batterijconcept CRM`;
@@ -418,7 +417,9 @@ export function CrmShell() {
     const params = new URLSearchParams(searchParams.toString());
     params.set(
       "tab",
-      magTodayDashboard(sessionUser?.email) ? "today" : "taken"
+      magTodayDashboard(sessionUser?.email, sessionUser?.rol)
+        ? "today"
+        : "taken"
     );
     router.replace(`/?${params.toString()}`, { scroll: false });
   }, [sessionReady, userRol, sessionUser?.email, searchParams, router]);
@@ -516,7 +517,7 @@ export function CrmShell() {
         sb
           .from("afspraken")
           .select(
-            "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities"
+            "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, adviseurs!adviseur_id(naam, email)"
           )
           .order("start_at", { ascending: true }),
         sb
@@ -544,7 +545,7 @@ export function CrmShell() {
       if (firstErr) throw firstErr;
 
       const nextLeads = (l.data as Lead[]) || [];
-      const nextAfspraken = (a.data as Afspraak[]) || [];
+      const nextAfspraken = (a.data as unknown as Afspraak[]) || [];
       const nextOffertes = (o.data as Offerte[]) || [];
       const nextProjecten = (p.data as Project[]) || [];
       const nextFacturen = (f.data as Factuur[]) || [];
@@ -703,6 +704,22 @@ export function CrmShell() {
     return m;
   }, [offertes]);
 
+  /** Offertes op HOLD SALES ACTIE — zichtbaar onder Offertes i.p.v. Projecten. */
+  const holdSalesByOfferteId = useMemo(() => {
+    const m = new Map<
+      string,
+      { projectId: string; notitie: string | null }
+    >();
+    for (const p of projecten) {
+      if (p.status !== "hold_sales_actie" || !p.offerte_id) continue;
+      m.set(p.offerte_id, {
+        projectId: p.id,
+        notitie: p.backoffice_notitie?.trim() || null,
+      });
+    }
+    return m;
+  }, [projecten]);
+
   const scopedProjecten = useMemo(() => {
     // Pas zichtbaar in backoffice nadat offerte-actie is afgerond
     let list = projecten.filter((p) => {
@@ -815,14 +832,10 @@ export function CrmShell() {
         openBackofficeActies(scopedProjecten, scopedFacturen, new Date(), {
           leads: scopedLeads,
           afspraken,
+          adviseurs,
         })
       ).length,
-    [scopedProjecten, scopedFacturen, scopedLeads, afspraken]
-  );
-
-  const schouwweekCount = useMemo(
-    () => scopedProjecten.filter(isOpenstaandeSchouwweek).length,
-    [scopedProjecten]
+    [scopedProjecten, scopedFacturen, scopedLeads, afspraken, adviseurs]
   );
 
   const counts = {
@@ -1017,6 +1030,15 @@ export function CrmShell() {
       title: "Sales Leaderboard",
       sub: "Live sale-momenten bij ondertekende offertes",
     },
+    weekmeeting: {
+      title: "Weekmeeting",
+      sub: "Weektargets, resultaat vorige week, aandachtspunten",
+    },
+    // Legacy tab → Rapportage › Sales (parseTab redirect)
+    sales_manager: {
+      title: "Sales",
+      sub: "Via Rapportage › Sales",
+    },
     instroom: {
       title: "Recruitment",
       sub: "Kanban + agenda · bevestigingsmail bij gesprek",
@@ -1025,24 +1047,22 @@ export function CrmShell() {
       title:
         boView === "agenda"
           ? "Planbord"
-          : boView === "acties"
-            ? "Acties"
-            : boView === "schouwweek"
-              ? "Schouwweek"
+          : boView === "taken_agenda"
+            ? "Taken agenda"
+            : boView === "acties"
+              ? "Acties"
               : boView === "service"
                 ? "Service"
                 : "Projecten",
       sub:
         boView === "agenda"
           ? "Schouw, installatie en service per week"
-          : boView === "acties"
-            ? backofficeActieCount > 0
-              ? `${backofficeActieCount} openstaande ${backofficeActieCount === 1 ? "actie" : "acties"}`
-              : "Herplannen, schouw, financiering en facturen"
-            : boView === "schouwweek"
-              ? schouwweekCount > 0
-                ? `${schouwweekCount} openstaande schouwweek${schouwweekCount === 1 ? "" : "en"}`
-                : "Orders met schouwweek · nog geen definitieve schouwdag"
+          : boView === "taken_agenda"
+            ? "Interne taken en agenda per backoffice-medewerker"
+            : boView === "acties"
+              ? backofficeActieCount > 0
+                ? `${backofficeActieCount} openstaande ${backofficeActieCount === 1 ? "actie" : "acties"}`
+                : "Herplannen, schouw, financiering en facturen"
               : boView === "service"
                 ? "Service-desk · tickets inplannen op het planbord"
                 : filterLabel
@@ -1087,8 +1107,8 @@ export function CrmShell() {
       sub: "Team (adviseurs · installatiepartners) en uitbetalingen",
     },
     instellingen: {
-      title: "Partners",
-      sub: "Doorverwezen naar Partners → Team",
+      title: "Instellingen",
+      sub: "Profielfoto en persoonlijke voorkeuren",
     },
   };
 
@@ -1189,7 +1209,6 @@ export function CrmShell() {
           onMobileClose={() => setSidebarMobileOpen(false)}
           boCounts={{
             acties: backofficeActieCount,
-            schouwweek: schouwweekCount,
           }}
         />
 
@@ -1271,6 +1290,8 @@ export function CrmShell() {
               projecten.length === 0 &&
               leads.length === 0 &&
               tab !== "today" &&
+              tab !== "weekmeeting" &&
+              tab !== "instellingen" &&
               tab !== "taken" &&
               tab !== "partners" &&
               tab !== "purchasing" &&
@@ -1288,6 +1309,8 @@ export function CrmShell() {
             ) : (
               <>
                 {tab === "today" && <TodayPanel />}
+                {tab === "weekmeeting" && <WeekmeetingPanel />}
+                {tab === "instellingen" && <AdviseurInstellingenPanel />}
                 {tab === "taken" && <AdminTakenPanel />}
                 {tab === "leads" && (
                   <LeadsTable
@@ -1391,6 +1414,7 @@ export function CrmShell() {
                 {tab === "offertes" && (
                   <OffertesTable
                     offertes={scopedOffertes}
+                    holdSalesByOfferteId={holdSalesByOfferteId}
                     onOpenSign={openSignLink}
                   />
                 )}
@@ -1422,6 +1446,8 @@ export function CrmShell() {
                     leads={scopedLeads}
                     afspraken={afspraken}
                     adviseurId={sessionUser?.id || null}
+                    sessionAdviseurId={sessionUser?.id || null}
+                    sessionRol={sessionUser?.rol || null}
                     onProjectUpdated={(project) => {
                       setProjecten((prev) =>
                         prev.map((p) =>

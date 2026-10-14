@@ -5,6 +5,9 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 /** Standaard betaaltermijn na verzenden factuur. */
 export const FACTUUR_BETAALTERMIJN_DAGEN = 3;
 
+/** Restantfactuur via Warmtefonds — altijd 14 dagen. */
+export const FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN = 14;
+
 export const COMPANY_IBAN_DISPLAY = "NL48 BUNQ 2209 5579 33";
 export const COMPANY_IBAN_COMPACT = "NL48BUNQ2209557933";
 export const COMPANY_ACCOUNT_NAME = "BatterijConcept";
