@@ -3,6 +3,7 @@ import { addMinutes, differenceInMinutes } from "date-fns";
 import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -57,6 +58,8 @@ export async function PATCH(req: NextRequest) {
     start_at?: string;
     mail_klant?: boolean;
     notitie?: string;
+    notities?: string | null;
+    adviseur_id?: string;
   };
   try {
     body = await req.json();
@@ -71,12 +74,14 @@ export async function PATCH(req: NextRequest) {
     "annuleer",
     "verwijder_definitief",
     "send_annuleringsmail",
+    "update_notities",
+    "overzetten_adviseur",
   ];
   if (!body.id || !body.action || !actions.includes(body.action)) {
     return NextResponse.json(
       {
         error:
-          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief | send_annuleringsmail) zijn verplicht",
+          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief | send_annuleringsmail | update_notities | overzetten_adviseur) zijn verplicht",
       },
       { status: 400 }
     );
@@ -105,6 +110,138 @@ export async function PATCH(req: NextRequest) {
     const adviseur = Array.isArray(afspraak.adviseurs)
       ? afspraak.adviseurs[0]
       : afspraak.adviseurs;
+
+    if (body.action === "update_notities") {
+      const prevNotities = ((afspraak.notities as string | null) || "").trim();
+      const notities =
+        typeof body.notities === "string"
+          ? body.notities.trim() || null
+          : body.notities === null
+            ? null
+            : (afspraak.notities as string | null);
+      const nextNotities = (notities || "").trim();
+
+      const { data: updated, error: updErr } = await sb
+        .from("afspraken")
+        .update({ notities })
+        .eq("id", afspraak.id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
+        )
+        .single();
+
+      if (updErr || !updated) {
+        return NextResponse.json(
+          { error: "Notitie opslaan mislukt", detail: updErr?.message },
+          { status: 500 }
+        );
+      }
+
+      // Nieuwe/gewijzigde afspraaknotitie ook op de lead zetten.
+      if (nextNotities && nextNotities !== prevNotities) {
+        const leadId = afspraak.lead_id as string;
+        const { appendStampedNotitie } = await import("@/lib/lead-notitie");
+        const { data: leadRow } = await sb
+          .from("leads")
+          .select("notities")
+          .eq("id", leadId)
+          .maybeSingle();
+        const merged = appendStampedNotitie(
+          (leadRow as { notities?: string | null } | null)?.notities,
+          `Afspraaknotitie: ${nextNotities}`
+        );
+        await sb.from("leads").update({ notities: merged }).eq("id", leadId);
+      }
+
+      return NextResponse.json({ ok: true, afspraak: updated });
+    }
+
+    if (body.action === "overzetten_adviseur") {
+      const newAdviseurId =
+        typeof body.adviseur_id === "string" ? body.adviseur_id.trim() : "";
+      if (!newAdviseurId) {
+        return NextResponse.json(
+          { error: "adviseur_id is verplicht" },
+          { status: 400 }
+        );
+      }
+      if (newAdviseurId === afspraak.adviseur_id) {
+        return NextResponse.json(
+          { error: "Kies een andere adviseur dan de huidige" },
+          { status: 400 }
+        );
+      }
+
+      const { data: nieuweAdviseur, error: advErr } = await sb
+        .from("adviseurs")
+        .select("id, naam, email, actief")
+        .eq("id", newAdviseurId)
+        .maybeSingle();
+      if (advErr || !nieuweAdviseur) {
+        return NextResponse.json(
+          { error: "Adviseur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (nieuweAdviseur.actief === false) {
+        return NextResponse.json(
+          { error: "Deze adviseur is niet actief" },
+          { status: 400 }
+        );
+      }
+
+      // Alleen intern: geen mail, geen overlap-check (mag over andere afspraken).
+      const { data: updated, error: upErr } = await sb
+        .from("afspraken")
+        .update({ adviseur_id: newAdviseurId })
+        .eq("id", afspraak.id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status, adviseur_id), adviseurs!adviseur_id(naam, email)"
+        )
+        .single();
+
+      if (upErr || !updated) {
+        return NextResponse.json(
+          { error: "Overzetten mislukt", detail: upErr?.message },
+          { status: 500 }
+        );
+      }
+
+      const leadId = afspraak.lead_id as string;
+      // Lead + alle open agenda-afspraken van deze lead meenemen
+      await sb
+        .from("leads")
+        .update({ adviseur_id: newAdviseurId })
+        .eq("id", leadId);
+      await sb
+        .from("afspraken")
+        .update({ adviseur_id: newAdviseurId })
+        .eq("lead_id", leadId)
+        .neq("status", "geannuleerd");
+
+      const oudNaam =
+        (adviseur as { naam?: string | null } | null)?.naam?.trim() ||
+        "Onbekend";
+      const nieuwNaam =
+        (nieuweAdviseur.naam as string | null)?.trim() || "Onbekend";
+      try {
+        const { logLeadEvent } = await import("@/lib/lead-events");
+        await logLeadEvent({
+          leadId,
+          soort: "afspraak",
+          titel: `Lead overgezet: ${oudNaam} → ${nieuwNaam}`,
+          detail: "Intern — agenda + lead; geen mail naar klant",
+        });
+      } catch {
+        /* best-effort */
+      }
+
+      return NextResponse.json({
+        ok: true,
+        afspraak: updated,
+        overgezet: true,
+      });
+    }
 
     if (body.action === "verwijder_definitief") {
       const leadId = afspraak.lead_id as string;
@@ -150,6 +287,11 @@ export async function PATCH(req: NextRequest) {
           startAt: afspraak.start_at,
         }),
         tag: "afspraak-verwijderd-klant",
+        replyTo: await replyToForAfspraak(sb, {
+          adviseurId: afspraak.adviseur_id,
+          leadId: afspraak.lead_id,
+          adviseurJoin: adviseur,
+        }),
       });
       if (!sent.ok) {
         return NextResponse.json(
@@ -340,6 +482,11 @@ export async function PATCH(req: NextRequest) {
           subject: "Afspraak verzet — nieuwe bevestiging",
           html: afspraakBevestigingSequenceEmail(vars),
           tag: "afspraak-verzet",
+          replyTo: await replyToForAfspraak(sb, {
+            adviseurId: afspraak.adviseur_id,
+            leadId: afspraak.lead_id,
+            adviseurJoin: adviseur,
+          }),
         });
         mailSent = sent.ok;
         if (sent.ok) {
@@ -398,6 +545,11 @@ export async function PATCH(req: NextRequest) {
       subject: "Afspraak bevestigd — Batterijconcept",
       html: afspraakBevestigingSequenceEmail(vars),
       tag: "afspraak-bevestiging",
+      replyTo: await replyToForAfspraak(sb, {
+        adviseurId: afspraak.adviseur_id,
+        leadId: afspraak.lead_id,
+        adviseurJoin: adviseur,
+      }),
     });
 
     if (!sent.ok) {

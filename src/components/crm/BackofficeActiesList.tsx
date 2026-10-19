@@ -37,6 +37,9 @@ import {
   schouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
+import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
+import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
+import { apexProductUrl } from "@/lib/apex-product-url";
 
 type SectionId =
   | "herplan"
@@ -269,7 +272,7 @@ function buildTaskRows(
         kind: "herplan",
         titel: actie.titel,
         klant: actie.leadNaam,
-        meta: actie.plaats || undefined,
+        meta: undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
         prio: actie.prio || actie.overdue,
@@ -331,7 +334,7 @@ function buildTaskRows(
         section: "aangetekend",
         actie,
         kind: "aangetekende_brief",
-        titel: actie.titel,
+        titel: "Annuleringskosten of installatie doorzetten",
         klant: actie.leadNaam,
         meta: actie.offerteNummer || actie.projectNummer || undefined,
         dueAt: actie.deadlineAt,
@@ -480,6 +483,10 @@ export function BackofficeActiesList({
   );
   const [partnerKeuze, setPartnerKeuze] = useState<Record<string, string>>({});
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [herplanActie, setHerplanActie] = useState<BackofficeActie | null>(
+    null
+  );
+  const [inkoopActie, setInkoopActie] = useState<BackofficeActie | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1159,15 +1166,13 @@ export function BackofficeActiesList({
     }
   }
 
-  const openActieCount =
-    openRows.length + nazorgTaken.length;
   const tabEmpty =
     actiesTab === "nazorg"
       ? visibleRows.length === 0 && nazorgTaken.length === 0
       : visibleRows.length === 0;
 
   return (
-    <div className="space-y-4 px-5 pb-6 pt-5">
+    <div className="space-y-3 px-5 pb-6 pt-3">
       {error && (
         <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
           {error}
@@ -1179,18 +1184,7 @@ export function BackofficeActiesList({
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="font-display text-lg font-semibold text-ink">Acties</p>
-          <p className="mt-0.5 text-sm text-muted">
-            {openActieCount === 0
-              ? "Geen openstaande acties."
-              : `${openActieCount} open`}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-1 border-b border-line">
+      <div className="flex flex-wrap gap-0 border-b border-line">
         {ACTIES_TABS.map((tab) => {
           const active = actiesTab === tab.id;
           const n = tabCounts[tab.id];
@@ -1200,25 +1194,21 @@ export function BackofficeActiesList({
               type="button"
               onClick={() => setActiesTab(tab.id)}
               className={[
-                "relative -mb-px px-3 py-2 text-sm font-semibold transition",
+                "relative -mb-px px-3.5 py-2.5 text-sm font-semibold transition",
                 active
-                  ? "border-b-2 border-green text-green-dark"
+                  ? "border-b-2 border-green text-ink"
                   : "text-muted hover:text-ink",
               ].join(" ")}
             >
               {tab.label}
-              {n > 0 ? (
-                <span
-                  className={[
-                    "ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums",
-                    active
-                      ? "bg-green-soft text-green-dark"
-                      : "bg-[#EEF1EF] text-muted",
-                  ].join(" ")}
-                >
-                  {n}
-                </span>
-              ) : null}
+              <span
+                className={[
+                  "ml-1.5 tabular-nums",
+                  active ? "text-green-dark" : "text-muted",
+                ].join(" ")}
+              >
+                {n}
+              </span>
             </button>
           );
         })}
@@ -1325,14 +1315,16 @@ export function BackofficeActiesList({
           Geen openstaande acties in deze tab.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-line">
+        <div className="overflow-x-auto border border-line">
           <table className="w-full min-w-[720px] border-collapse text-left text-sm">
             <thead>
-              <tr className="border-b border-line bg-[#F7F9F8] text-[10px] font-semibold uppercase tracking-wide text-muted">
-                <th className="px-3 py-2.5 font-semibold">Taak</th>
-                <th className="px-3 py-2.5 font-semibold">Klant</th>
-                <th className="px-3 py-2.5 font-semibold">Due</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Actie</th>
+              <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                <th className="px-3 py-2 font-semibold">Taak</th>
+                <th className="w-[28%] px-3 py-2 font-semibold">Klant</th>
+                <th className="w-[9rem] px-3 py-2 font-semibold">Due</th>
+                <th className="w-[11rem] px-3 py-2 text-right font-semibold">
+                  Actie
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1349,20 +1341,22 @@ export function BackofficeActiesList({
                     return (
                       <tr
                         key={taak.id}
-                        className="border-b border-line/70 last:border-b-0"
+                        className="border-b border-line last:border-b-0"
                       >
-                        <td className="px-3 py-3 align-top">
-                          <p className="font-medium text-ink">{taak.titel}</p>
+                        <td className="px-3 py-2.5 align-middle">
+                          <p className="truncate font-medium text-ink">
+                            {taak.titel}
+                          </p>
                           {taak.projecten?.project_nummer ? (
-                            <p className="mt-0.5 font-mono text-[10px] text-green-dark">
+                            <p className="mt-0.5 font-mono text-[10px] text-muted">
                               {taak.projecten.project_nummer}
                             </p>
                           ) : null}
                         </td>
-                        <td className="px-3 py-3 align-top text-xs text-muted">
+                        <td className="px-3 py-2.5 align-middle text-sm text-ink">
                           {leadNaam}
                         </td>
-                        <td className="px-3 py-3 align-top whitespace-nowrap text-xs">
+                        <td className="px-3 py-2.5 align-middle whitespace-nowrap text-xs">
                           {taak.due_at ? (
                             <span
                               className={
@@ -1372,20 +1366,19 @@ export function BackofficeActiesList({
                               }
                             >
                               {formatDateTimeNl(taak.due_at)}
-                              {overdue ? " · te laat" : ""}
                             </span>
                           ) : (
                             <span className="text-muted">—</span>
                           )}
                         </td>
-                        <td className="px-3 py-3 align-top">
-                          <div className="flex flex-wrap justify-end gap-1.5">
+                        <td className="px-3 py-2.5 align-middle">
+                          <div className="flex justify-end gap-1.5">
                             {taak.project_id ? (
                               <Link
                                 href={`/projecten/${taak.project_id}`}
                                 className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
                               >
-                                Project
+                                Open
                               </Link>
                             ) : null}
                             <button
@@ -1411,10 +1404,15 @@ export function BackofficeActiesList({
                           label: "Adviseur",
                           className: "bg-[#E8F0F6] text-[#1A4A6E]",
                         }
-                      : {
-                          label: "Klant",
-                          className: "bg-[#FFF0E6] text-[#C45A12]",
-                        }
+                      : actie.herplanBron === "deur_niet_open"
+                        ? {
+                            label: "Deur dicht",
+                            className: "bg-[#E3F2FD] text-[#0D47A1]",
+                          }
+                        : {
+                            label: "Klant",
+                            className: "bg-[#FFF0E6] text-[#C45A12]",
+                          }
                     : TYPE_PILL[row.kind];
                 const isOpen = expandedRow === row.key;
                 const drafts = draftFacturenVoorActie(actie, facturen);
@@ -1443,44 +1441,187 @@ export function BackofficeActiesList({
                 const selectedSchouwAt = schouwAtKeuze[actie.id] || "";
 
                 return (
+                  <>
                   <tr
                     key={row.key}
-                    className="border-b border-line/70 align-top last:border-b-0"
+                    className={[
+                      "border-b border-line last:border-b-0",
+                      isOpen ? "bg-wash/40" : "hover:bg-[#FAFBFA]",
+                    ].join(" ")}
                   >
-                    <td className="px-3 py-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="font-medium text-ink">{row.titel}</p>
-                          <span
-                            className={[
-                              "rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                              pill.className,
-                            ].join(" ")}
-                          >
-                            {pill.label}
+                    <td className="px-3 py-2.5 align-middle">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="truncate font-medium text-ink">
+                          {row.titel}
+                        </p>
+                        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          {pill.label}
+                        </span>
+                        {row.prio ? (
+                          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                            Prio
                           </span>
-                          {row.prio ? (
-                            <span className="rounded bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
-                              PRIO
-                            </span>
+                        ) : null}
+                      </div>
+                      {row.meta ? (
+                        <p className="mt-0.5 font-mono text-[10px] text-muted">
+                          {row.meta}
+                        </p>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      <p className="truncate text-sm font-medium text-ink">
+                        {row.klant}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-muted">
+                        {[actie.telefoon?.trim(), actie.plaats]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2.5 align-middle whitespace-nowrap">
+                      <span
+                        className={[
+                          "text-xs tabular-nums",
+                          row.overdue
+                            ? "font-semibold text-[#C45A12]"
+                            : "text-muted",
+                        ].join(" ")}
+                      >
+                        {formatDateTimeNl(row.dueAt)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 align-middle">
+                      {row.kind === "aangetekende_brief" ? (
+                        <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-4">
+                          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[11px] font-medium text-muted">
+                            {actie.projectId ? (
+                              <a
+                                href={`/api/projecten/${actie.projectId}/aangetekende-brief`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:text-ink hover:underline"
+                              >
+                                Download PDF
+                              </a>
+                            ) : null}
+                            {actie.projectId ? (
+                              <Link
+                                href={`/projecten/${actie.projectId}?from=acties`}
+                                className="hover:text-ink hover:underline"
+                              >
+                                Open project
+                              </Link>
+                            ) : null}
+                            <button
+                              type="button"
+                              disabled={busyId === actie.id}
+                              onClick={() => void verwijderActie(actie)}
+                              className="hover:text-[#C62828] hover:underline disabled:opacity-50"
+                            >
+                              Verwijderen
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={busyId === actie.id}
+                            onClick={() =>
+                              void markAangetekendeBriefAfgerond(actie)
+                            }
+                            className="inline-flex h-8 shrink-0 items-center bg-green px-3 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                          >
+                            {busyId === actie.id
+                              ? "Bezig…"
+                              : "Markeer verstuurd"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (row.kind === "herplan") {
+                                setHerplanActie(actie);
+                                return;
+                              }
+                              if (row.kind === "bestel_materiaal") {
+                                setInkoopActie(actie);
+                                return;
+                              }
+                              setExpandedRow(isOpen ? null : row.key);
+                            }}
+                            className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
+                          >
+                            {row.kind === "herplan"
+                              ? "Verwerken"
+                              : row.kind === "bestel_materiaal"
+                                ? "Purchasing"
+                                : isOpen
+                                  ? "Sluiten"
+                                  : "Details"}
+                          </button>
+                          {row.kind === "bestel_materiaal" ? (
+                            <button
+                              type="button"
+                              onClick={() => setInkoopActie(actie)}
+                              className="inline-flex h-8 items-center bg-orange px-2.5 text-[11px] font-semibold text-white hover:opacity-90"
+                            >
+                              Purchasing
+                            </button>
+                          ) : null}
+                          {row.kind === "herplan" ? (
+                            <button
+                              type="button"
+                              onClick={() => setHerplanActie(actie)}
+                              className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
+                            >
+                              Herplannen
+                            </button>
+                          ) : null}
+                          {row.kind !== "herplan" && actie.projectId ? (
+                            <Link
+                              href={`/projecten/${actie.projectId}?from=acties`}
+                              className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
+                            >
+                              Project
+                            </Link>
+                          ) : actie.factuurId && row.kind !== "herplan" ? (
+                            <Link
+                              href={`/facturen/${actie.factuurId}`}
+                              className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
+                            >
+                              Factuur
+                            </Link>
                           ) : null}
                         </div>
-                        {row.meta ? (
-                          <p className="mt-0.5 font-mono text-[10px] text-green-dark">
-                            {row.meta}
-                          </p>
-                        ) : null}
+                      )}
+                    </td>
+                  </tr>
+                  {isOpen ? (
+                  <tr
+                    key={`${row.key}-detail`}
+                    className="border-b border-line bg-wash/60 last:border-b-0"
+                  >
+                    <td colSpan={4} className="px-3 py-3">
+                      <div className="max-w-3xl space-y-3">
                                 {row.kind === "herplan" ? (
-                                  <div className="mt-1 max-w-md space-y-0.5 text-xs leading-snug text-ink">
+                                  <div className="space-y-1 text-sm leading-snug text-ink">
                                     {actie.herplanBron === "adviseur" ? (
-                                      <p className="text-[11px] text-muted">
+                                      <p className="text-muted">
                                         {actie.geannuleerdDoorNaam?.trim()
                                           ? `Geannuleerd door ${actie.geannuleerdDoorNaam.trim()}`
                                           : "Adviseur vraagt om herplannen"}
                                       </p>
+                                    ) : actie.herplanBron === "deur_niet_open" ? (
+                                      <p className="text-muted">
+                                        {actie.geannuleerdDoorNaam?.trim()
+                                          ? `Afgeboekt door ${actie.geannuleerdDoorNaam.trim()} — deur niet open`
+                                          : "Afspraak afgeboekt: deur niet open / klant niet bereikbaar"}
+                                      </p>
                                     ) : actie.geannuleerdDoorNaam?.trim() ? (
-                                      <p className="text-[11px] text-muted">
-                                        Adviseur: {actie.geannuleerdDoorNaam.trim()}
+                                      <p className="text-muted">
+                                        Adviseur:{" "}
+                                        {actie.geannuleerdDoorNaam.trim()}
                                       </p>
                                     ) : null}
                                     {actie.annuleringsReden?.trim() ? (
@@ -1497,7 +1638,7 @@ export function BackofficeActiesList({
                                   row.kind === "bestel_materiaal" ||
                                   row.kind === "schouw_inplannen") &&
                                 (actie.reden || actie.detail) ? (
-                                  <div className="mt-1.5 max-w-md space-y-0.5 text-xs leading-snug">
+                                  <div className="space-y-0.5 text-sm leading-snug">
                                     <p className="text-ink">
                                       <span className="font-semibold text-muted">
                                         {row.kind === "bestel_materiaal"
@@ -1509,20 +1650,20 @@ export function BackofficeActiesList({
                                         : actie.reden || actie.detail}
                                     </p>
                                     {actie.later ? (
-                                      <p className="text-[11px] text-muted">
+                                      <p className="text-xs text-muted">
                                         Nog niet belweek — staat klaar met
                                         deadline.
                                       </p>
                                     ) : null}
                                     {actie.schouwWeekLabel ? (
-                                      <p className="text-[11px] text-muted">
+                                      <p className="text-xs text-muted">
                                         Schouwweek: {actie.schouwWeekLabel}
                                       </p>
                                     ) : null}
                                   </div>
                                 ) : null}
                                 <SaleNotities actie={actie} projecten={projecten} />
-                                {isOpen && row.kind === "financiering" ? (
+                                {row.kind === "financiering" ? (
                                   <div className="mt-2 space-y-0.5 rounded border border-line bg-wash/50 px-2 py-1.5 text-[11px] text-muted">
                                     <p>
                                       {actie.leadNaam} · {actie.telefoon || "—"} ·{" "}
@@ -1539,7 +1680,7 @@ export function BackofficeActiesList({
                                     </p>
                                   </div>
                                 ) : null}
-                                {isOpen && row.kind === "factuur_versturen" ? (
+                                {row.kind === "factuur_versturen" ? (
                                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                     <select
                                       value={selectedFactuur}
@@ -1574,8 +1715,7 @@ export function BackofficeActiesList({
                                     </button>
                                   </div>
                                 ) : null}
-                                {isOpen &&
-                                (row.kind === "volgende_stap" ||
+                                {(row.kind === "volgende_stap" ||
                                   row.kind === "schouw_inplannen") &&
                                 (actie.planSchouwdag ||
                                   actie.planSchouwweek) ? (
@@ -1666,7 +1806,7 @@ export function BackofficeActiesList({
                                     </div>
                                   </div>
                                 ) : null}
-                                {isOpen && row.kind === "schouw_week" ? (
+                                {row.kind === "schouw_week" ? (
                                   <div className="mt-2 space-y-1.5">
                                     <p className="max-w-md text-[11px] leading-snug text-muted">
                                       {warmtefonds
@@ -1761,85 +1901,13 @@ export function BackofficeActiesList({
                                     )}
                                   </div>
                                 ) : null}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <p className="text-sm font-medium text-ink">{row.klant}</p>
-                      {actie.telefoon?.trim() ? (
-                        <a
-                          href={`tel:${actie.telefoon.trim()}`}
-                          className="mt-0.5 block text-xs text-green-dark hover:underline"
-                        >
-                          {actie.telefoon.trim()}
-                        </a>
-                      ) : null}
-                      {actie.plaats ? (
-                        <p className="mt-0.5 text-xs text-muted">{actie.plaats}</p>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-3 align-top whitespace-nowrap">
-                      <span
-                        className={[
-                          "text-xs tabular-nums",
-                          row.overdue
-                            ? "font-semibold text-[#C45A12]"
-                            : "text-muted",
-                        ].join(" ")}
-                      >
-                        {formatDateTimeNl(row.dueAt)}
-                        {row.overdue ? " · te laat" : ""}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <div className="flex flex-wrap items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedRow(isOpen ? null : row.key)
-                          }
-                          className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
-                        >
-                          {isOpen ? "Sluiten" : "Open"}
-                        </button>
-                              {row.kind === "aangetekende_brief" ? (
-                                <>
-                                  {actie.projectId ? (
-                                    <a
-                                      href={`/api/projecten/${actie.projectId}/aangetekende-brief`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="min-h-8 bg-[#9A3B1A] px-2.5 text-[11px] font-semibold leading-8 text-white hover:bg-[#7A2E14]"
-                                    >
-                                      Download PDF
-                                    </a>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    disabled={busyId === actie.id}
-                                    onClick={() =>
-                                      void markAangetekendeBriefAfgerond(actie)
-                                    }
-                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                                  >
-                                    {busyId === actie.id
-                                      ? "…"
-                                      : "Brief verstuurd"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={busyId === actie.id}
-                                    onClick={() => void verwijderActie(actie)}
-                                    className="min-h-8 border border-[#C62828]/40 px-2 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
-                                  >
-                                    Verwijderen
-                                  </button>
-                                </>
-                              ) : null}
-                              {row.kind === "financiering" && isOpen ? (
+
+                        <div className="flex flex-wrap gap-1.5 border-t border-line pt-2.5">
+                              {row.kind === "financiering" ? (
                                 <>
                                   <a
                                     href={FINANCIERINGSMAN_TEL_HREF}
-                                    className="min-h-8 bg-green px-2 text-[11px] font-semibold leading-8 text-white hover:bg-green-dark"
+                                    className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
                                   >
                                     Bel
                                   </a>
@@ -1848,7 +1916,7 @@ export function BackofficeActiesList({
                                       href={`/api/offertes/${actie.offerteId}/pdf`}
                                       target="_blank"
                                       rel="noreferrer"
-                                      className="min-h-8 border border-line px-2 text-[11px] font-semibold leading-8 text-ink hover:bg-wash"
+                                      className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-white"
                                     >
                                       PDF
                                     </a>
@@ -1856,7 +1924,7 @@ export function BackofficeActiesList({
                                   <button
                                     type="button"
                                     onClick={() => void copyBericht(actie)}
-                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash"
+                                    className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-white"
                                   >
                                     {copiedId === actie.id ? "OK" : "Kopieer"}
                                   </button>
@@ -1866,60 +1934,29 @@ export function BackofficeActiesList({
                                     onClick={() =>
                                       void markFinancieringGeschakeld(actie)
                                     }
-                                    className="min-h-8 border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                    className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-white disabled:opacity-50"
                                   >
                                     Afgerond
                                   </button>
                                 </>
                               ) : null}
-                              {row.kind === "nabellen" && isOpen ? (
+                              {row.kind === "nabellen" ? (
                                 <button
                                   type="button"
                                   disabled={busyId === actie.id}
                                   onClick={() => void markFactuurBetaald(actie)}
-                                  className="min-h-8 bg-green px-2 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                                  className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
                                 >
                                   Betaald
                                 </button>
                               ) : null}
-                              {row.kind === "bestel_materiaal" ? (
-                                <Link
-                                  href="/?tab=purchasing"
-                                  className="inline-flex h-8 items-center bg-orange px-2.5 text-[11px] font-semibold text-white hover:opacity-90"
-                                >
-                                  Purchasing
-                                </Link>
-                              ) : null}
                               {row.kind === "herplan" ? (
-                                <Link
-                                  href={`/?tab=leads&lead=${actie.leadId}`}
-                                  className="inline-flex h-8 items-center bg-green px-2.5 text-[11px] font-semibold text-white hover:bg-green-dark"
-                                >
-                                  Herplannen
-                                </Link>
-                              ) : null}
-                              {actie.projectId ? (
-                                <Link
-                                  href={`/projecten/${actie.projectId}?from=acties`}
-                                  className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
-                                >
-                                  Project
-                                </Link>
-                              ) : actie.factuurId ? (
-                                <Link
-                                  href={`/facturen/${actie.factuurId}`}
-                                  className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
-                                >
-                                  Factuur
-                                </Link>
-                              ) : null}
-                              {isOpen && row.kind === "herplan" ? (
                                 <>
                                   <button
                                     type="button"
                                     disabled={busyId === actie.id}
                                     onClick={() => void voltooiHerplan(actie)}
-                                    className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                                    className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-white disabled:opacity-50"
                                   >
                                     {busyId === actie.id ? "…" : "Voltooien"}
                                   </button>
@@ -1931,12 +1968,21 @@ export function BackofficeActiesList({
                                     }
                                     className="inline-flex h-8 items-center border border-[#C62828]/40 px-2.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
                                   >
-                                    Annuleren
+                                    Definitief annuleren
                                   </button>
                                 </>
                               ) : null}
-                              {isOpen &&
-                              row.kind !== "aangetekende_brief" &&
+                              {row.kind === "aangetekende_brief" ? (
+                                <button
+                                  type="button"
+                                  disabled={busyId === actie.id}
+                                  onClick={() => void verwijderActie(actie)}
+                                  className="inline-flex h-8 items-center border border-[#C62828]/40 px-2.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                >
+                                  Verwijderen
+                                </button>
+                              ) : null}
+                              {row.kind !== "aangetekende_brief" &&
                               (actie.soort === "schakel_financiering" ||
                                 actie.soort === "bel_schouw_aanbetaling" ||
                                 actie.soort === "herplan_afspraak") ? (
@@ -1949,15 +1995,222 @@ export function BackofficeActiesList({
                                   Verwijderen
                                 </button>
                               ) : null}
-                            </div>
-                          </td>
-                        </tr>
+                              {actie.projectId && row.kind === "herplan" ? (
+                                <Link
+                                  href={`/projecten/${actie.projectId}?from=acties`}
+                                  className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-white"
+                                >
+                                  Project
+                                </Link>
+                              ) : null}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  ) : null}
+                  </>
                       );
                     })}
             </tbody>
           </table>
         </div>
       )}
+
+      {herplanActie ? (
+        <HerplanPopup
+          actie={herplanActie}
+          lead={leads.find((l) => l.id === herplanActie.leadId) || null}
+          adviseurs={adviseurs}
+          onClose={() => setHerplanActie(null)}
+          onPlanned={async () => {
+            const actie = herplanActie;
+            setHerplanActie(null);
+            await voltooiHerplan(actie);
+            setMsg("Afspraak herpland — actie afgerond.");
+          }}
+        />
+      ) : null}
+
+      {inkoopActie ? (
+        <InkoopPopup
+          actie={inkoopActie}
+          onClose={() => setInkoopActie(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function InkoopPopup({
+  actie,
+  onClose,
+}: {
+  actie: BackofficeActie;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-ink/40 p-3 sm:items-center sm:p-6">
+      <div
+        role="dialog"
+        aria-modal
+        aria-label="Materiaal inkopen"
+        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden border border-line bg-white shadow-xl"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Purchasing · inkoop
+            </p>
+            <h2 className="mt-0.5 font-display text-xl font-semibold text-ink">
+              {actie.leadNaam || "Materiaal bestellen"}
+            </h2>
+            <p className="mt-0.5 text-sm text-muted">
+              {[actie.projectNummer, actie.plaats].filter(Boolean).join(" · ") ||
+                "Standaard accessoires bij Apex"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-line bg-white px-3 py-1.5 text-sm font-semibold text-ink hover:bg-wash"
+          >
+            Sluiten
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+          <ul className="grid gap-3 sm:grid-cols-3">
+            {INKOOP_PRODUCT_IMAGES.map((p) => (
+              <li
+                key={p.key}
+                className="flex flex-col overflow-hidden border border-line bg-wash"
+              >
+                <div className="flex aspect-square items-center justify-center bg-[#0a0a0a] p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={p.imageSrc}
+                    alt={p.naam}
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-2 p-3">
+                  <p className="text-sm font-semibold leading-snug text-ink">
+                    {p.naam}
+                  </p>
+                  <a
+                    href={apexProductUrl(p.sku, p.naam)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-auto text-xs font-semibold text-green-dark hover:underline"
+                  >
+                    Apex → winkelwagen
+                  </a>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4">
+            <Link
+              href="/?tab=purchasing"
+              className="inline-flex h-10 items-center bg-orange px-4 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Open purchasing-tab
+            </Link>
+            {actie.projectId ? (
+              <Link
+                href={`/projecten/${actie.projectId}?from=acties`}
+                className="inline-flex h-10 items-center border border-line bg-white px-4 text-sm font-semibold text-ink hover:bg-wash"
+              >
+                Open project
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HerplanPopup({
+  actie,
+  lead,
+  adviseurs,
+  onClose,
+  onPlanned,
+}: {
+  actie: BackofficeActie;
+  lead: Lead | null;
+  adviseurs: Adviseur[];
+  onClose: () => void;
+  onPlanned: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-ink/40 p-3 sm:items-center sm:p-6">
+      <div
+        role="dialog"
+        aria-modal
+        aria-label="Afspraak herplannen"
+        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden border border-line bg-white shadow-xl"
+      >
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Herplannen
+            </p>
+            <h2 className="mt-0.5 font-display text-xl font-semibold text-ink">
+              {actie.leadNaam}
+            </h2>
+            <p className="mt-0.5 text-sm text-muted">
+              {[actie.telefoon, actie.plaats].filter(Boolean).join(" · ") ||
+                "Kies adviseur + slot via route planner"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-line bg-white px-3 py-1.5 text-sm font-semibold text-ink hover:bg-wash"
+          >
+            Sluiten
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+          {lead ? (
+            <LeadAfspraakPlannen
+              lead={lead}
+              adviseurs={adviseurs}
+              onCancel={onClose}
+              onPlanned={onPlanned}
+            />
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-muted">
+                Lead niet in geheugen — open de lead om te herplannen.
+              </p>
+              <Link
+                href={`/leads/${actie.leadId}`}
+                className="inline-flex h-10 items-center bg-green px-4 text-sm font-semibold text-white hover:bg-green-dark"
+              >
+                Open lead
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

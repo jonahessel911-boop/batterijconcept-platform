@@ -4,13 +4,13 @@
 
 import { addDays } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
-import {
-  afspraakBlokkeertAgenda,
-  normalizeAfspraakSoort,
-} from "@/lib/afspraak-soort";
 import { isAdminEmail } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { round2, safeDiv } from "@/lib/management-dashboard/periods";
+import {
+  PROVINCIE_ONBEKEND,
+  provincieVanPostcode,
+} from "@/lib/postcode-provincie";
 import { normalizeRol } from "@/lib/rollen";
 import { schouwWeekToMondayIso } from "@/lib/schouw-week";
 
@@ -19,6 +19,7 @@ export type BelConversieLead = {
   naam: string | null;
   lead_number: string | null;
   status: string | null;
+  postcode?: string | null;
   laatst_gebeld_at: string | null;
   laatst_gebeld_door?: string | null;
   bel_claimed_by?: string | null;
@@ -44,6 +45,8 @@ export type BelConversieRecenteAfspraak = {
   leadNaam: string;
   leadNumber: string | null;
   bellerNaam: string | null;
+  /** Provincie van de lead (via postcode), waar de afspraak gepland is */
+  provincie: string | null;
   /** Adviseur voor wie het huisbezoek in de agenda staat */
   adviseurNaam: string | null;
   /** Moment waarop de afspraak is gezet (created_at) */
@@ -363,12 +366,13 @@ export function resolveBellerId(
   return null;
 }
 
-/** Huisbezoek-soort (geen terugbel), ongeacht status. */
+/**
+ * Echte fysieke nieuwe afspraak (soort `nieuw`).
+ * Geen vervolg_fysiek, bel, warme_bel, warmtefonds of andere soorten.
+ * Strict: alleen expliciet `nieuw` (geen fallback via normalize).
+ */
 export function isHuisbezoekSoort(a: BelConversieAfspraak): boolean {
-  if (!afspraakBlokkeertAgenda(a.soort)) return false;
-  const soort = normalizeAfspraakSoort(a.soort);
-  if (soort === "bel" || soort === "warme_bel") return false;
-  return true;
+  return (a.soort || "").trim() === "nieuw";
 }
 
 /** Actief huisbezoek (geen terugbel, niet geannuleerd) — telt mee voor L→A. */
@@ -378,19 +382,80 @@ export function isHuisbezoekAfspraak(a: BelConversieAfspraak): boolean {
 }
 
 /**
+ * Eerste actieve (niet-geannuleerde) nieuwe huisbezoek per lead.
+ * Bijklanten / 2e bezoek / vervolg tellen niet als bel-credit.
+ */
+export function eersteNieuweHuisbezoekIdPerLead(
+  afspraken: BelConversieAfspraak[]
+): Map<string, string> {
+  const best = new Map<string, { id: string; at: number }>();
+  for (const a of afspraken) {
+    if (!isHuisbezoekAfspraak(a) || !a.created_at) continue;
+    const at = new Date(a.created_at).getTime();
+    if (!Number.isFinite(at)) continue;
+    const prev = best.get(a.lead_id);
+    if (!prev || at < prev.at) {
+      best.set(a.lead_id, { id: a.id, at });
+    }
+  }
+  const out = new Map<string, string>();
+  for (const [leadId, v] of best) out.set(leadId, v.id);
+  return out;
+}
+
+/**
+ * true als dit het eerste nieuwe huisbezoek van de lead is.
+ * Actief: exact de chronologisch eerste niet-geannuleerde.
+ * Geannuleerd: alleen als er geen actief 1e is én dit de vroegste nieuw-rij is.
+ */
+export function isEersteNieuweHuisbezoek(
+  a: BelConversieAfspraak,
+  eersteActiefIds: Map<string, string>,
+  historie: BelConversieAfspraak[] = []
+): boolean {
+  if (!isHuisbezoekSoort(a)) return false;
+  const actiefId = eersteActiefIds.get(a.lead_id);
+  if (a.status !== "geannuleerd") {
+    return actiefId === a.id;
+  }
+  if (actiefId) return false;
+  let earliestId: string | null = null;
+  let earliestAt = Infinity;
+  for (const x of historie) {
+    if (x.lead_id !== a.lead_id || !isHuisbezoekSoort(x) || !x.created_at) {
+      continue;
+    }
+    const at = new Date(x.created_at).getTime();
+    if (!Number.isFinite(at)) continue;
+    if (at < earliestAt) {
+      earliestAt = at;
+      earliestId = x.id;
+    }
+  }
+  return earliestId === a.id;
+}
+
+/**
  * Huisbezoek gezet in het Amsterdam-venster.
  * Alleen created_at telt (ingepland) — niet start_at (dat is gelopen/bezoek).
+ * Alleen het eerste nieuwe huisbezoek per lead (geen bijklant / 2e bezoek).
  */
 export function huisbezoekLeadIdsOpDag(
   afspraken: BelConversieAfspraak[],
   start: Date,
-  end: Date
+  end: Date,
+  /** Volledige historie (of minstens alle nieuw-afspraken van deze leads). */
+  historieAfspraken?: BelConversieAfspraak[]
 ): Set<string> {
+  const eersteIds = eersteNieuweHuisbezoekIdPerLead(
+    historieAfspraken ?? afspraken
+  );
   const ids = new Set<string>();
   for (const a of afspraken) {
     if (!isHuisbezoekAfspraak(a)) continue;
     if (!a.created_at) continue;
     if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    if (eersteIds.get(a.lead_id) !== a.id) continue;
     ids.add(a.lead_id);
   }
   return ids;
@@ -542,6 +607,11 @@ export function buildBelConversie(opts: {
   periodDays?: number;
   leads: BelConversieLead[];
   afspraken: BelConversieAfspraak[];
+  /**
+   * Alle nieuw-huisbezoeken van deze leads (ook buiten de periode).
+   * Nodig om 2e bezoek / bijklant uit te sluiten.
+   */
+  huisbezoekHistorie?: BelConversieAfspraak[];
   adviseurs: {
     id: string;
     naam: string;
@@ -562,7 +632,14 @@ export function buildBelConversie(opts: {
   const rangeStartYmd = opts.rangeStartYmd || opts.dateYmd;
   const { start } = amsDayBounds(rangeStartYmd);
   const { end } = amsDayBounds(opts.dateYmd);
-  const ingeplandIds = huisbezoekLeadIdsOpDag(opts.afspraken, start, end);
+  const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const eersteIds = eersteNieuweHuisbezoekIdPerLead(historie);
+  const ingeplandIds = huisbezoekLeadIdsOpDag(
+    opts.afspraken,
+    start,
+    end,
+    historie
+  );
 
   // Admin krijgt geen bel-credit (sessie-stamp tijdens meekijken/inplannen).
   const skipAdminIds = new Set<string>();
@@ -596,6 +673,7 @@ export function buildBelConversie(opts: {
   const ingeplandDoorByLead = new Map<string, string>();
   for (const a of opts.afspraken) {
     if (!isHuisbezoekAfspraak(a)) continue;
+    if (eersteIds.get(a.lead_id) !== a.id) continue;
     const door = (a.ingepland_door_id || "").trim();
     if (!door || !a.created_at) continue;
     if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
@@ -721,14 +799,15 @@ export function buildBelConversie(opts: {
     leadsBelbaarVandaag: baseTargets.leadsBelbaarVandaag,
   });
 
-  // Ingeplande huisbezoeken (created_at in periode): actief + nog niet gelopen,
-  // én geannuleerde (doorstreept in UI, tellen niet mee in totals).
+  // Ingeplande nieuwe huisbezoeken (created_at in periode): alleen 1e per lead.
+  // Actief + nog niet gelopen, én geannuleerde (doorstreept; tellen niet in totals).
   const now = new Date();
   const recenteAfspraken: BelConversieRecenteAfspraak[] = [];
   for (const a of opts.afspraken) {
     if (!isHuisbezoekSoort(a)) continue;
     if (!a.created_at) continue;
     if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    if (!isEersteNieuweHuisbezoek(a, eersteIds, historie)) continue;
     const geannuleerd = a.status === "geannuleerd";
     if (!geannuleerd && !isAfspraakNogNietGelopen(a, now)) continue;
     const lead =
@@ -740,12 +819,17 @@ export function buildBelConversie(opts: {
       "";
     const bellerId = doorRaw || null;
     const adviseurId = (a.adviseur_id || "").trim() || null;
+    const provincieRaw = provincieVanPostcode(lead?.postcode);
     recenteAfspraken.push({
       id: a.id,
       leadId: a.lead_id,
       leadNaam: lead?.naam?.trim() || "Onbekende lead",
       leadNumber: lead?.lead_number ?? null,
       bellerNaam: bellerId ? naamById.get(bellerId) || null : null,
+      provincie:
+        provincieRaw && provincieRaw !== PROVINCIE_ONBEKEND
+          ? provincieRaw
+          : null,
       adviseurNaam: adviseurId ? naamById.get(adviseurId) || null : null,
       ingeplandAt: a.created_at,
       afspraakAt: a.start_at,

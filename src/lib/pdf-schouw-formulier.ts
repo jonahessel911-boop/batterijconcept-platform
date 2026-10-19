@@ -4,7 +4,43 @@ import {
   companyInfo,
   loadLogoDataUrl,
 } from "@/lib/pdf-brand";
-import type { SchouwFormulierData } from "@/lib/schouw-formulier";
+import {
+  SCHOUW_AKKOORD_TEKST,
+  type SchouwFormulierData,
+} from "@/lib/schouw-formulier";
+
+function embedSignature(
+  doc: jsPDF,
+  dataUrl: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  if (!dataUrl.startsWith("data:image")) return;
+  const jpeg = /image\/jpe?g/i.test(dataUrl);
+  const formats = jpeg
+    ? (["JPEG", "PNG"] as const)
+    : (["PNG", "JPEG"] as const);
+  const alias = `schouw-sig-${Math.random().toString(36).slice(2, 8)}`;
+  for (const format of formats) {
+    try {
+      doc.addImage(dataUrl, format, x, y, w, h, alias, "FAST");
+      return;
+    } catch {
+      /* try next */
+    }
+    try {
+      const b64 = dataUrl.split(",")[1];
+      if (b64) {
+        doc.addImage(b64, format, x, y, w, h, alias, "FAST");
+        return;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+}
 
 const { green: GREEN, dark: DARK, orange: ORANGE, charcoal: CHARCOAL, muted: MUTED, line: LINE, wash: WASH, grayRow: GRAY } =
   PDF_COLORS;
@@ -428,36 +464,57 @@ export async function buildSchouwFormulierPdf(
   y = fullWidthField(y, "", data.aanvullendeOpmerkingen, 22);
 
   y += 4;
-  const boxW = (contentW - 6) / 2;
-  const boxH = 28;
-  function sigBox(x: number, title: string, naam: string) {
-    doc.setDrawColor(...LINE);
-    doc.setFillColor(...WASH);
-    doc.rect(x, y, boxW, boxH, "FD");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.setTextColor(...DARK);
-    doc.text(title.toUpperCase(), x + 3, y + 5);
-    doc.setDrawColor(...LINE);
-    doc.line(x + 3, y + 18, x + boxW - 3, y + 18);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(...CHARCOAL);
-    doc.text(dash(naam), x + 3, y + 24);
+  // Akkoord monteur
+  const akkoordBox = 4.2;
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.35);
+  doc.rect(margin, y - 3.2, akkoordBox, akkoordBox);
+  if (data.akkoordInstallatie) {
+    doc.setDrawColor(...GREEN);
+    doc.setLineWidth(0.7);
+    doc.line(margin + 0.8, y - 1.1, margin + 1.7, y + 0.4);
+    doc.line(margin + 1.7, y + 0.4, margin + 3.4, y - 2.6);
   }
-  sigBox(
-    margin,
-    "Handtekening opnemer",
-    data.handtekeningOpnemerNaam
-      ? `${data.handtekeningOpnemerNaam} — ${formatDatumNl(data.datum)}`
-      : formatDatumNl(data.datum)
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  const akkoordLines = doc.splitTextToSize(
+    SCHOUW_AKKOORD_TEKST,
+    contentW - 10
   );
-  sigBox(
-    margin + boxW + 6,
-    "Handtekening klant (akkoord opname)",
-    data.handtekeningKlantNaam
-      ? `Naam: ${data.handtekeningKlantNaam}`
-      : ""
+  doc.text(akkoordLines, margin + 7, y);
+  y += Math.max(8, akkoordLines.length * 4.5 + 3);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(...DARK);
+  doc.text("HANDTEKENING MONTEUR / OPNEMER", margin, y);
+  y += 3;
+
+  const sigH = 26;
+  const sigW = Math.min(95, contentW);
+  doc.setDrawColor(...LINE);
+  doc.setFillColor(255, 255, 255);
+  doc.setLineWidth(0.3);
+  doc.rect(margin, y, sigW, sigH, "FD");
+  if (data.handtekeningDataUrl) {
+    embedSignature(
+      doc,
+      data.handtekeningDataUrl,
+      margin + 2,
+      y + 1,
+      sigW - 4,
+      sigH - 4
+    );
+  }
+  y += sigH + 4;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...CHARCOAL);
+  doc.text(
+    `${dash(data.handtekeningOpnemerNaam || data.opnemer)} · ${formatDatumNl(data.datum)}`,
+    margin,
+    y
   );
 
   drawFooter(2, 2);

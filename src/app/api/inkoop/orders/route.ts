@@ -5,7 +5,7 @@ import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { isAdminAdviseur, isAdminEmail } from "@/lib/admin-adviseur";
 import { remapLegacyProjectStatus } from "@/lib/project-status-config";
-import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
+import { orderBetalingProgress } from "@/lib/aanbetaling";
 import { isSchouwFormulier } from "@/lib/project-documenten";
 import {
   formatProjectSchouwWeek,
@@ -224,33 +224,42 @@ export async function GET(_req: NextRequest) {
       facturenByLead.set(lid, list);
     }
 
-    const paidCandidates = candidates.filter((p) => {
+    function relatedFacturen(p: (typeof candidates)[number]) {
       const projectId = p.id as string;
       const offerteId = (p.offerte_id as string | null) || null;
       const leadId = (p.lead_id as string | null) || null;
-      const off = p.offertes as
-        | { totaal_inc_btw?: number | null }
-        | null
-        | undefined;
-      const orderIncBtw = Number(off?.totaal_inc_btw) || 0;
-
       const leadFacs = (leadId ? facturenByLead.get(leadId) : null) || [];
-      const related = leadFacs.filter(
+      return leadFacs.filter(
         (f) =>
           f.project_id === projectId ||
           (offerteId && f.offerte_id === offerteId) ||
           f.project_id == null
       );
+    }
 
-      return isOrderVolledigBetaald({
-        facturen: related,
-        orderIncBtw,
+    function betalingVoor(p: (typeof candidates)[number]) {
+      const off = p.offertes as
+        | { totaal_inc_btw?: number | null }
+        | null
+        | undefined;
+      return orderBetalingProgress({
+        facturen: relatedFacturen(p),
+        orderIncBtw: Number(off?.totaal_inc_btw) || 0,
       });
+    }
+
+    // Pipeline: ook deels/niet betaald (voortgangsbalk).
+    // Te bestellen blijft: volledig betaald + schouw PDF (client-side desk).
+    const visibleCandidates = candidates.filter((p) => {
+      const betaling = betalingVoor(p);
+      if (betaling.volledig || betaling.betaaldInc > 0) return true;
+      // Nog niets betaald maar wel factuur open / status in pipeline → toch tonen
+      return relatedFacturen(p).length > 0 || betaling.orderInc > 0;
     });
 
     const offerteIds = [
       ...new Set(
-        paidCandidates
+        visibleCandidates
           .map((p) => p.offerte_id as string | null)
           .filter((id): id is string => Boolean(id))
       ),
@@ -285,12 +294,12 @@ export async function GET(_req: NextRequest) {
 
     if (regelsRes.error) throw regelsRes.error;
 
-    const paidIds = paidCandidates.map((p) => p.id as string);
-    const fotosRes = paidIds.length
+    const visibleIds = visibleCandidates.map((p) => p.id as string);
+    const fotosRes = visibleIds.length
       ? await sb
           .from("project_fotos")
           .select("id, project_id, storage_path, bestandsnaam, omschrijving, created_at")
-          .in("project_id", paidIds)
+          .in("project_id", visibleIds)
       : { data: [] as Record<string, unknown>[], error: null };
     if (fotosRes.error) throw fotosRes.error;
 
@@ -353,15 +362,16 @@ export async function GET(_req: NextRequest) {
       regelsByOfferte.set(oid, list);
     }
 
-    const built = paidCandidates.map((p) => {
+    const built = visibleCandidates.map((p) => {
       const status = remapLegacyProjectStatus(String(p.status || ""));
       const offerteId = (p.offerte_id as string | null) || null;
       const regels = offerteId
         ? regelsByOfferte.get(offerteId) || []
         : [];
-      const items = buildInkoopChecklist(regels, producten);
       const checks = (p.materiaal_checks || {}) as MateriaalChecks;
+      const items = buildInkoopChecklist(regels, producten, checks);
       const summary = orderInkoopSamenvatting(items, checks);
+      const betaling = betalingVoor(p);
       const lead = p.leads as
         | {
             naam?: string | null;
@@ -435,11 +445,21 @@ export async function GET(_req: NextRequest) {
         lead_number: lead?.lead_number || null,
         offerte_nummer: off?.offerte_nummer || null,
         updated_at: p.updated_at as string,
-        inkoop_totaal_ex_btw: inkoopChecklistTotaalExBtw(items),
+        inkoop_totaal_ex_btw: inkoopChecklistTotaalExBtw(items, checks),
         te_bestellen_ex_btw: teBestellenEx,
         besteld_ex_btw: besteldEx,
+        inkoop_extra_notities: (() => {
+          const raw = checks.__inkoop_extra_notities;
+          return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+        })(),
         inkoop_leverancier_status: levStatus,
         inkoop_leverancier_betaald_op: levBetaaldOp,
+        klant_betaling: {
+          pct: betaling.pct,
+          betaald_inc: betaling.betaaldInc,
+          order_inc: betaling.orderInc,
+          volledig: betaling.volledig,
+        },
         schouw: {
           kind: schouwKind,
           at: dagDefinitief ? schouwProj.schouw_at : null,
@@ -468,6 +488,7 @@ export async function GET(_req: NextRequest) {
             aantal: item.aantal,
             inkoop_ex_btw: item.inkoopExBtw,
             status: lineStatus,
+            notitie: item.notitie || null,
           };
         }),
       };

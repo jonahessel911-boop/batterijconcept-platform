@@ -236,7 +236,8 @@ export function StartAdresPostcodeField({
       <p className="text-[11px] text-muted">
         Vertrekpunt bij inplannen (reistijd / Fast Direction). Op maandag
         start de eerste afspraak vanaf Daltonlaan 500, Utrecht
-        (ochtendmeeting). Inclusief huisnummer + postcode.
+        (ochtendmeeting) — tenzij je die meeting overslaat, dan vanaf dit
+        adres. Inclusief huisnummer + postcode.
       </p>
       {value.trim() && !usable ? (
         <p className="text-xs text-[#C45A12]">

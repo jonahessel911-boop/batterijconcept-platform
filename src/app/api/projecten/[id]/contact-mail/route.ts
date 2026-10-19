@@ -117,10 +117,12 @@ export async function POST(
       await logLeadEvent({
         leadId: (lead?.id || project.lead_id) as string,
         soort: "email",
-        titel: "Klantmail verstuurd",
-        detail: subject,
+        titel: "Contactmail verstuurd",
+        detail: bericht,
         meta: {
           to,
+          subject,
+          bericht,
           project_id: id,
           message_id: result.messageId || null,
           by: medewerkerNaam,

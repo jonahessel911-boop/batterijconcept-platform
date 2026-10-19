@@ -21,7 +21,7 @@ values
   ('AE-G3-S5-27.9', 'Alpha ESS G3 S5 — 27,9 kWh', '1-fase pakket incl. 5 kW omvormer + installatie · 27,9 kWh', 13291.50, 21, 'stuk', true),
   ('AE-G3-S5-37.2', 'Alpha ESS G3 S5 — 37,2 kWh', '1-fase pakket incl. 5 kW omvormer + installatie · 37,2 kWh', 17791.50, 21, 'stuk', true),
   ('AE-G3-S5-46.5', 'Alpha ESS G3 S5 — 46,5 kWh', '1-fase pakket incl. 5 kW omvormer + installatie · 46,5 kWh', 22791.50, 21, 'stuk', true),
-  ('AE-G3-T10-9.3', 'Alpha ESS G3 T10 — 9,3 kWh', '3-fase pakket incl. 10 kW omvormer + installatie · 9,3 kWh', 8585.00, 21, 'stuk', true),
+  ('AE-G3-T10-9.3', 'Alpha ESS G3 T10 — 9,3 kWh', '3-fase pakket incl. 10 kW omvormer + installatie · 9,3 kWh', 8500.00, 21, 'stuk', true),
   ('AE-G3-T10-18.6', 'Alpha ESS G3 T10 — 18,6 kWh', '3-fase pakket incl. 10 kW omvormer + installatie · 18,6 kWh', 11420.00, 21, 'stuk', true),
   ('AE-G3-T10-27.9', 'Alpha ESS G3 T10 — 27,9 kWh', '3-fase pakket incl. 10 kW omvormer + installatie · 27,9 kWh', 13495.00, 21, 'stuk', true),
   ('AE-G3-T10-37.2', 'Alpha ESS G3 T10 — 37,2 kWh', '3-fase pakket incl. 10 kW omvormer + installatie · 37,2 kWh', 17995.00, 21, 'stuk', true),

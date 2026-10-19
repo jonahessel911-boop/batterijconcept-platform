@@ -638,7 +638,8 @@ export async function loadBestSlotsForLead(
         stops,
         depotAddress,
         40,
-        freeDayKeys
+        freeDayKeys,
+        adv.id
       );
       if (addresses.length >= 1) {
         const { durationMap, distanceMap } = await buildDurationMap(addresses);
@@ -651,6 +652,7 @@ export async function loadBestSlotsForLead(
             stops,
             depotAddress,
             depotLabel: adv.naam,
+            adviseurId: adv.id,
             durationSecBetween: (from, to) => {
               if (from === to) return 0;
               return durationMap.get(`${from}|||${to}`) ?? null;

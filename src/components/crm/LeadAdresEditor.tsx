@@ -132,6 +132,29 @@ export function LeadAdresEditor({
       if (err) throw err;
       onSaved(patch);
       setOkMsg("Adres opgeslagen");
+      const detail = [
+        patch.postcode !== (lead.postcode || null)
+          ? `Postcode: ${patch.postcode || "—"}`
+          : null,
+        patch.huisnummer !== (lead.huisnummer || null)
+          ? `Huisnr: ${patch.huisnummer || "—"}`
+          : null,
+        patch.straat !== (lead.straat || null) ||
+        patch.plaats !== (lead.plaats || null)
+          ? [patch.straat, patch.plaats].filter(Boolean).join(", ") || null
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      void fetch(`/api/leads/${lead.id}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "contact",
+          titel: "Adresgegevens aangepast",
+          detail: detail || "Adres bijgewerkt",
+        }),
+      }).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {

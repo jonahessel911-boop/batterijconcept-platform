@@ -5,7 +5,8 @@
  * die opnieuw ingepland moeten worden.
  *
  * Criteria:
- *   - lead.status = afspraak_afgezegd_klant  OF  (mode=all) geannuleerde fysieke afspraak
+ *   - lead.status = afspraak_afgezegd_klant / deur_niet_open
+ *     OF  (mode=all) geannuleerde fysieke afspraak
  *   - geen actieve toekomstige huisbezoek-afspraak
  *   - telefoon aanwezig
  *
@@ -86,21 +87,21 @@ export async function GET(req: NextRequest) {
       if (!lead.telefoon?.trim()) continue;
 
       const cancelled = latestCancelledVisitAfspraak(afs, lead.id);
-      if (!cancelled && mode === "all") continue;
+      const isDeurNietOpen = lead.status === "deur_niet_open";
+      const isKlantAfgezegd = lead.status === "afspraak_afgezegd_klant";
 
       if (mode === "klant") {
-        if (lead.status !== "afspraak_afgezegd_klant") continue;
+        if (!isKlantAfgezegd && !isDeurNietOpen) continue;
       } else {
-        // all: geannuleerde fysieke afspraak OF status afspraak_afgezegd_klant
-        if (
-          lead.status !== "afspraak_afgezegd_klant" &&
-          !cancelled
-        ) {
-          continue;
-        }
+        // all: geannuleerde fysieke afspraak OF herplan-statussen
+        if (!isKlantAfgezegd && !isDeurNietOpen && !cancelled) continue;
       }
 
-      const reden = annuleringsNotitieFromAfspraak(cancelled);
+      const reden =
+        annuleringsNotitieFromAfspraak(cancelled) ||
+        (isDeurNietOpen
+          ? "Deur niet open / klant niet bereikbaar"
+          : null);
       const firstName = (lead.naam || "").trim().split(/\s+/)[0] || "daar";
       const oudeLabel = cancelled
         ? formatDateTimeLongNl(cancelled.start_at)

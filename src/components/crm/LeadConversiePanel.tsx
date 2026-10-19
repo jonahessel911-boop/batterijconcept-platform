@@ -93,8 +93,8 @@ export function LeadConversiePanel() {
           Lead conversie dashboard
         </p>
         <p className="mt-0.5 max-w-2xl text-xs text-muted">
-          Op schema voor lead-generatie komende 14 dagen · L→A obv afgelopen
-          14 dagen
+          Op schema voor lead-generatie komende 14 dagen · L→A = cohort
+          afgelopen 14d (van die leads: hoeveel ingepland)
           {data?.leadToApptActueel != null
             ? ` (${num(data.leadToApptActueel, 1)}%)`
             : ""}
@@ -141,12 +141,13 @@ export function LeadConversiePanel() {
               )}
             </p>
             <p className="mt-2 text-sm text-muted">
-              Tempo om komende 14 dagen vol te plannen · L→A afgelopen 14d{" "}
+              Tempo om komende 14 dagen vol te plannen · L→A cohort 14d{" "}
               {data.leadToApptActueel != null
                 ? `${num(data.leadToApptActueel, 1)}%`
                 : "—"}
               {" · "}
-              {num(data.l2aLeads)} leads · {num(data.l2aAfspraken)} afspraken
+              {num(data.l2aLeads)} leads · {num(data.l2aAfspraken)} daarvan
+              ingepland
             </p>
             <div className="mt-5">
               <div className="relative h-4 overflow-hidden rounded-full bg-wash">
@@ -412,10 +413,11 @@ export function LeadConversiePanel() {
                     ? ` · ${data.rangeStartYmd} t/m ${data.rangeEndYmd}`
                     : ""}
                   {" · "}
-                  Meta spend {formatEuro(data.metaSpend ?? 0)} · Afspraken =
-                  huisbezoeken ingepland in periode · Netto deals = getekend in
-                  periode (ig/fb → Meta, minus annuleringen) · CPL = spend÷leads
-                  · CPA = spend÷netto deals
+                  Meta spend {formatEuro(data.metaSpend ?? 0)} · L→A = van de
+                  leads die in deze periode binnenkwamen, hoeveel daarvan een
+                  huisbezoek hebben · Netto deals = getekend in periode (ig/fb →
+                  Meta, minus annuleringen) · CPL = spend÷leads · CPA =
+                  spend÷netto deals
                 </p>
               </div>
               <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">

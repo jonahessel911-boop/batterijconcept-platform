@@ -10,6 +10,7 @@ import {
   SOLLICITATIE_STATUS_MET_VERVOLG,
   SOLLICITATIE_STATUSES,
 } from "@/lib/sollicitatie";
+import { resolveSollicitatieAdres } from "@/lib/sollicitatie-adres";
 import type { SollicitatieStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -42,6 +43,11 @@ export async function PATCH(
       status?: SollicitatieStatus;
       notitie?: string | null;
       training_moment_id?: string | null;
+      postcode?: string | null;
+      huisnummer?: string | null;
+      toevoeging?: string | null;
+      straat?: string | null;
+      plaats?: string | null;
     } = {};
 
     if ("naam" in body) patch.naam = pickStr(body.naam);
@@ -52,6 +58,7 @@ export async function PATCH(
     if ("training_moment_id" in body) {
       patch.training_moment_id = pickStr(body.training_moment_id);
     }
+
     if ("status" in body) {
       const status = parseSollicitatieStatus(body.status);
       if (!SOLLICITATIE_STATUSES.includes(status)) {
@@ -73,10 +80,63 @@ export async function PATCH(
 
     const { data: current, error: curErr } = await sb
       .from("sollicitaties")
-      .select("status, notitie, email, naam, functie, training_moment_id")
+      .select(
+        "status, notitie, email, naam, functie, training_moment_id, postcode, huisnummer, toevoeging, straat, plaats"
+      )
       .eq("id", id)
       .single();
-    if (curErr) throw curErr;
+    if (curErr) {
+      if (
+        curErr.message?.includes("postcode") ||
+        curErr.code === "42703"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-sollicitatie-adres.sql uit in Supabase.",
+            detail: curErr.message,
+          },
+          { status: 400 }
+        );
+      }
+      throw curErr;
+    }
+
+    const adresFieldsTouched =
+      "postcode" in body ||
+      "huisnummer" in body ||
+      "toevoeging" in body ||
+      "straat" in body ||
+      "plaats" in body;
+    if (adresFieldsTouched) {
+      const resolved = await resolveSollicitatieAdres({
+        postcode:
+          "postcode" in body
+            ? pickStr(body.postcode)
+            : (current?.postcode as string | null) || null,
+        huisnummer:
+          "huisnummer" in body
+            ? pickStr(body.huisnummer)
+            : (current?.huisnummer as string | null) || null,
+        toevoeging:
+          "toevoeging" in body
+            ? pickStr(body.toevoeging)
+            : (current?.toevoeging as string | null) || null,
+        straat:
+          "straat" in body
+            ? pickStr(body.straat)
+            : (current?.straat as string | null) || null,
+        plaats:
+          "plaats" in body
+            ? pickStr(body.plaats)
+            : (current?.plaats as string | null) || null,
+      });
+      patch.postcode = resolved.postcode;
+      patch.huisnummer = resolved.huisnummer;
+      patch.toevoeging = resolved.toevoeging;
+      patch.straat = resolved.straat;
+      patch.plaats = resolved.plaats;
+    }
 
     // Beoordeling-popup (notitie + vervolgtaak): alleen verplicht als die
     // velden meegestuurd worden. Pure status-drag mag zonder.

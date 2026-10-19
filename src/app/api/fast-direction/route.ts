@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       stops?: FastDirectionStop[];
       depotAddress?: string | null;
       depotLabel?: string | null;
+      adviseurId?: string | null;
     };
 
     const targetAddress = (body.targetAddress || "").trim();
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest) {
     const stops = Array.isArray(body.stops) ? body.stops : [];
     const depotAddress = (body.depotAddress || "").trim() || null;
     const depotLabel = (body.depotLabel || "").trim() || null;
+    const adviseurId = (body.adviseurId || "").trim() || null;
 
     if (!targetAddress || targetAddress === "—") {
       return NextResponse.json(
@@ -44,7 +46,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const addresses = uniqueAddresses(targetAddress, stops, depotAddress);
+    const addresses = uniqueAddresses(
+      targetAddress,
+      stops,
+      depotAddress,
+      25,
+      undefined,
+      adviseurId
+    );
     const { durationMap, distanceMap, provider } =
       await buildDurationMap(addresses);
 
@@ -66,6 +75,7 @@ export async function POST(req: NextRequest) {
         stops,
         depotAddress,
         depotLabel,
+        adviseurId,
         durationSecBetween: (from, to) => {
           if (from === to) return 0;
           return durationMap.get(`${from}|||${to}`) ?? null;

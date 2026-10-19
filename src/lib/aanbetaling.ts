@@ -1,3 +1,5 @@
+import { financieringMagRestantFactuur } from "@/lib/financiering-status";
+
 /** BTW-tarief op de aanbetalingsfactuur. */
 export const AANBETALING_BTW_PERCENTAGE = 21;
 
@@ -56,9 +58,8 @@ export function warmtefondsRestantIncBtw(orderExBtw: number): number {
 export function magWarmtefondsRestantFactuur(
   financieringStatus: string | null | undefined
 ): boolean {
-  return (
-    financieringStatus === "aanvraag_goedgekeurd" ||
-    financieringStatus === "uitbetaald"
+  return financieringMagRestantFactuur(
+    financieringStatus as Parameters<typeof financieringMagRestantFactuur>[0]
   );
 }
 
@@ -133,36 +134,64 @@ export function isOrderVolledigBetaald(opts: {
   }[];
   orderIncBtw?: number | null;
 }): boolean {
-  const orderInc = round2(Number(opts.orderIncBtw) || 0);
-  if (orderInc <= 0) return false;
+  const progress = orderBetalingProgress(opts);
+  return progress.volledig;
+}
 
+/** Klant-betalingsvoortgang t.o.v. offertebedrag (incl. btw). */
+export function orderBetalingProgress(opts: {
+  facturen: {
+    status: string;
+    bedrag_inc_btw: number | null;
+    omschrijving?: string | null;
+    credit_van_factuur_id?: string | null;
+  }[];
+  orderIncBtw?: number | null;
+}): {
+  orderInc: number;
+  betaaldInc: number;
+  pct: number;
+  volledig: boolean;
+} {
+  const orderInc = round2(Number(opts.orderIncBtw) || 0);
   const facs = opts.facturen.filter(
     (f) => !f.credit_van_factuur_id && f.status !== "vervallen"
+  );
+
+  const betaaldInc = round2(
+    facs
+      .filter((f) => f.status === "betaald")
+      .reduce((s, f) => s + (Number(f.bedrag_inc_btw) || 0), 0)
   );
 
   const open = facs.filter(
     (f) => f.status === "verzonden" || f.status === "deels_betaald"
   );
-  if (open.length > 0) return false;
 
-  const paidSum = facs
-    .filter((f) => f.status === "betaald")
-    .reduce((s, f) => round2(s + (Number(f.bedrag_inc_btw) || 0)), 0);
+  let volledig = false;
+  if (orderInc > 0 && open.length === 0 && betaaldInc > 0) {
+    const teFactureren = nogTeFacturerenRestant({
+      orderIncBtw: orderInc,
+      facturen: facs.map((f) => ({
+        status: f.status,
+        bedrag_inc_btw: Number(f.bedrag_inc_btw) || 0,
+        omschrijving: f.omschrijving,
+      })),
+    });
+    volledig = teFactureren <= 1 && betaaldInc + 1 >= orderInc;
+  }
 
-  if (paidSum <= 0) return false;
+  const pct =
+    orderInc > 0
+      ? Math.min(100, Math.round((betaaldInc / orderInc) * 100))
+      : 0;
 
-  // Nog iets te factureren t.o.v. offerte → niet volledig
-  const teFactureren = nogTeFacturerenRestant({
-    orderIncBtw: orderInc,
-    facturen: facs.map((f) => ({
-      status: f.status,
-      bedrag_inc_btw: Number(f.bedrag_inc_btw) || 0,
-      omschrijving: f.omschrijving,
-    })),
-  });
-  if (teFactureren > 1) return false;
-
-  return paidSum + 1 >= orderInc;
+  return {
+    orderInc,
+    betaaldInc,
+    pct: volledig ? 100 : pct,
+    volledig,
+  };
 }
 
 /**

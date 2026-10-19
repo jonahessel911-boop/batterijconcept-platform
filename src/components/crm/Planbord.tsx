@@ -49,6 +49,7 @@ import {
   formatDuurLabel,
 } from "@/lib/planning-duur";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
+import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import { SchouwFormulierModal } from "@/components/crm/SchouwFormulierModal";
 import {
   agendaWeekJumpOptions,
@@ -1605,6 +1606,7 @@ function AgendaItemSidebar({
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
   const [serviceDoneLocal, setServiceDoneLocal] = useState(false);
   const [schouwFormOpen, setSchouwFormOpen] = useState(false);
+  const [opleverFormOpen, setOpleverFormOpen] = useState(false);
   const [serviceVerzoeken, setServiceVerzoeken] = useState<
     Pick<
       ServiceVerzoek,
@@ -2213,11 +2215,11 @@ function AgendaItemSidebar({
               </DetailRow>
             ) : showOplevering &&
               (allowOpleveringUpload || localOplevering !== undefined) ? (
-              <DetailRow label="Opleveringsrapport *">
+              <DetailRow label="Opleveringsrapport">
                 <RequiredDocUploadBlock
-                  label="Verplicht · PDF of foto met handtekening van de klant dat alles goed is"
-                  missingLabel="Nog niet geüpload — verplicht om installatie af te ronden"
-                  uploadLabel="Opleveringsrapport uploaden"
+                  label="Optioneel · opleverformulier met checklist + handtekening installateur"
+                  missingLabel="Nog niet ingevuld"
+                  uploadLabel="Of upload PDF / foto"
                   defaultFilename="opleveringsrapport.pdf"
                   doc={localOplevering}
                   allowUpload={allowOpleveringUpload}
@@ -2226,6 +2228,11 @@ function AgendaItemSidebar({
                   uploadError={uploadError}
                   onUpload={(file) =>
                     void uploadRequiredDoc(file, "oplevering")
+                  }
+                  onMaakFormulier={
+                    allowOpleveringUpload
+                      ? () => setOpleverFormOpen(true)
+                      : null
                   }
                   noteDraft={noteDraft}
                   onNoteChange={setNoteDraft}
@@ -2441,6 +2448,44 @@ function AgendaItemSidebar({
               setUploadOk("Formulier gemaakt · schouw voltooid.");
             } else {
               setUploadOk("Schouwformulier-PDF aangemaakt.");
+            }
+            setUploadError(null);
+          }}
+        />
+      ) : null}
+
+      {allowOpleveringUpload && showOplevering ? (
+        <OpleverFormulierModal
+          open={opleverFormOpen}
+          project={project}
+          submitUrl={
+            fotosUploadUrl
+              ? fotosUploadUrl.replace(/\/fotos\/?$/, "/oplever-formulier")
+              : `/api/projecten/${project.id}/oplever-formulier`
+          }
+          monteurDefault={partner?.naam || project.monteur || null}
+          onClose={() => setOpleverFormOpen(false)}
+          onCreated={(result) => {
+            const foto = result.foto;
+            const nextDoc =
+              foto?.url
+                ? {
+                    url: foto.url,
+                    bestandsnaam: foto.bestandsnaam || null,
+                  }
+                : null;
+            if (nextDoc) {
+              setLocalOplevering(nextDoc);
+              onOpleveringDocChange?.(project.id, nextDoc);
+            }
+            if (result.project && typeof result.project === "object") {
+              onProjectUpdated?.(result.project as Project);
+            }
+            const adv = result.status_advance;
+            if (adv?.advanced) {
+              setUploadOk("Opleverformulier opgeslagen · installatie voltooid.");
+            } else {
+              setUploadOk("Opleverformulier-PDF aangemaakt.");
             }
             setUploadError(null);
           }}

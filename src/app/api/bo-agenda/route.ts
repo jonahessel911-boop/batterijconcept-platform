@@ -57,9 +57,12 @@ export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
+    const agendaSelectWithProject =
+      "*, projecten(id, project_nummer, titel, leads(naam, plaats))";
+
     let agendaQ = sb
       .from("bo_agenda")
-      .select("*")
+      .select(agendaSelectWithProject)
       .eq("adviseur_id", adviseurId)
       .order("start_at", { ascending: true })
       .limit(500);
@@ -68,7 +71,25 @@ export async function GET(req: NextRequest) {
     if (from) agendaQ = agendaQ.gte("start_at", from);
     if (to) agendaQ = agendaQ.lte("start_at", to);
 
-    const { data: agenda, error: agendaErr } = await agendaQ;
+    let { data: agenda, error: agendaErr } = await agendaQ;
+    // Zonder project_id-kolom / FK: opnieuw zonder join.
+    if (
+      agendaErr &&
+      /project/i.test(agendaErr.message || "")
+    ) {
+      let plainQ = sb
+        .from("bo_agenda")
+        .select("*")
+        .eq("adviseur_id", adviseurId)
+        .order("start_at", { ascending: true })
+        .limit(500);
+      if (openOnly) plainQ = plainQ.eq("status", "todo");
+      if (from) plainQ = plainQ.gte("start_at", from);
+      if (to) plainQ = plainQ.lte("start_at", to);
+      const plain = await plainQ;
+      agenda = plain.data;
+      agendaErr = plain.error;
+    }
     if (agendaErr) {
       if (
         agendaErr.code === "42P01" ||
@@ -117,7 +138,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/bo-agenda
- * { titel, inhoud?, start_at, end_at?, soort?, adviseur_id? }
+ * { titel, inhoud?, start_at, end_at?, soort?, adviseur_id?, project_id? }
  */
 export async function POST(req: NextRequest) {
   const auth = await requireBackofficeSession();
@@ -133,6 +154,7 @@ export async function POST(req: NextRequest) {
       end_at?: string | null;
       soort?: string;
       adviseur_id?: string | null;
+      project_id?: string | null;
     };
 
     const titel = body.titel?.trim() || "";
@@ -158,22 +180,44 @@ export async function POST(req: NextRequest) {
     }
     const endAt =
       soort === "afspraak" ? parseDueAt(body.end_at) || null : null;
+    const projectId = body.project_id?.trim() || null;
 
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const row: Record<string, unknown> = {
+      adviseur_id: adviseurId,
+      titel,
+      inhoud: body.inhoud?.trim() || null,
+      soort,
+      start_at: startAt,
+      end_at: endAt,
+      status: "todo",
+      created_by_id: auth.session.adviseurId,
+    };
+    if (projectId) row.project_id = projectId;
+
+    let { data, error } = await sb
       .from("bo_agenda")
-      .insert({
-        adviseur_id: adviseurId,
-        titel,
-        inhoud: body.inhoud?.trim() || null,
-        soort,
-        start_at: startAt,
-        end_at: endAt,
-        status: "todo",
-        created_by_id: auth.session.adviseurId,
-      })
-      .select("*")
+      .insert(row)
+      .select(
+        "*, projecten(id, project_nummer, titel, leads(naam, plaats))"
+      )
       .single();
+
+    // Oude DB zonder project_id-kolom: opnieuw zonder die kolom.
+    if (
+      error &&
+      projectId &&
+      /project_id/i.test(error.message || "")
+    ) {
+      delete row.project_id;
+      const retry = await sb
+        .from("bo_agenda")
+        .insert(row)
+        .select("*")
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       if (

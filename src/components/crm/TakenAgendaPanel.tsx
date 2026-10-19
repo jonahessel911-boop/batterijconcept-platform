@@ -17,6 +17,16 @@ type AgendaItem = {
   end_at: string | null;
   status: "todo" | "done";
   adviseur_id: string;
+  project_id?: string | null;
+  projecten?: {
+    id?: string;
+    project_nummer?: string | null;
+    titel?: string | null;
+    leads?:
+      | { naam?: string | null; plaats?: string | null }
+      | { naam?: string | null; plaats?: string | null }[]
+      | null;
+  } | null;
 };
 
 type ProjectTaakRow = {
@@ -48,6 +58,7 @@ type Chip =
       detail: string | null;
       soort: "taak" | "afspraak";
       overdue: boolean;
+      projectId?: string | null;
     }
   | {
       kind: "project";
@@ -59,6 +70,21 @@ type Chip =
       projectId: string;
       overdue: boolean;
     };
+
+function projectDetailLabel(
+  p:
+    | AgendaItem["projecten"]
+    | ProjectTaakRow["projecten"]
+    | null
+    | undefined
+): string | null {
+  if (!p) return null;
+  const leadRaw = p.leads;
+  const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+  return (
+    [p.project_nummer, lead?.naam].filter(Boolean).join(" · ") || null
+  );
+}
 
 function weekDaysFrom(anchor: Date): DayCol[] {
   const local = toZonedTime(anchor, AMSTERDAM_TZ);
@@ -247,6 +273,9 @@ export function TakenAgendaPanel({
       const list = map.get(key);
       if (!list) continue;
       const end = it.end_at || it.start_at;
+      const projectId =
+        it.project_id || it.projecten?.id || null;
+      const projectLabel = projectDetailLabel(it.projecten);
       list.push({
         kind: "persoonlijk",
         id: it.id,
@@ -256,9 +285,11 @@ export function TakenAgendaPanel({
           it.soort === "afspraak" && it.end_at
             ? `${formatTimeNl(it.start_at)}–${formatTimeNl(it.end_at)}`
             : formatTimeNl(it.start_at),
-        detail: it.inhoud,
+        detail:
+          [projectLabel, it.inhoud].filter(Boolean).join(" · ") || null,
         soort: it.soort,
         overdue: new Date(end).getTime() < now,
+        projectId,
       });
     }
 
@@ -267,15 +298,13 @@ export function TakenAgendaPanel({
       const key = dayKeyOf(t.due_at);
       const list = map.get(key);
       if (!list) continue;
-      const klant = leadNaam(t);
-      const nr = t.projecten?.project_nummer;
       list.push({
         kind: "project",
         id: t.id,
         dayKey: key,
         titel: t.titel,
         timeLabel: formatTimeNl(t.due_at),
-        detail: [nr, klant].filter(Boolean).join(" · ") || null,
+        detail: projectDetailLabel(t.projecten) || leadNaam(t),
         projectId: t.project_id,
         overdue: new Date(t.due_at).getTime() < now,
       });
@@ -566,7 +595,7 @@ export function TakenAgendaPanel({
                           {c.kind === "project" ? " · taak" : ""}
                         </p>
                         <p className="text-[11px] font-semibold leading-snug text-ink">
-                          {c.kind === "project" ? (
+                          {c.projectId ? (
                             <a
                               href={`/projecten/${c.projectId}?from=taken-agenda`}
                               className="hover:underline"

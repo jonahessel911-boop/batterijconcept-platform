@@ -32,6 +32,14 @@ import {
   formatDateTimeNl,
   formatTimeNl,
 } from "@/lib/format";
+import { normalizePostcode } from "@/lib/postcode";
+import {
+  NL_PROVINCIES,
+  PROVINCIE_ONBEKEND,
+  provincieVanPostcode,
+  type NlProvincie,
+} from "@/lib/postcode-provincie";
+import { formatSollicitatieAdres } from "@/lib/sollicitatie-adres";
 
 const STATUS_TONE: Record<
   SollicitatieStatus,
@@ -402,6 +410,190 @@ function SoftTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) 
   );
 }
 
+function SollicitatieAdresEditor({
+  kandidaat,
+  saving,
+  onSave,
+}: {
+  kandidaat: Sollicitatie;
+  saving: boolean;
+  onSave: (patch: Partial<Sollicitatie>) => Promise<void>;
+}) {
+  const [postcode, setPostcode] = useState(kandidaat.postcode || "");
+  const [huisnummer, setHuisnummer] = useState(kandidaat.huisnummer || "");
+  const [toevoeging, setToevoeging] = useState(kandidaat.toevoeging || "");
+  const [straat, setStraat] = useState(kandidaat.straat || "");
+  const [plaats, setPlaats] = useState(kandidaat.plaats || "");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPostcode(kandidaat.postcode || "");
+    setHuisnummer(kandidaat.huisnummer || "");
+    setToevoeging(kandidaat.toevoeging || "");
+    setStraat(kandidaat.straat || "");
+    setPlaats(kandidaat.plaats || "");
+    setMsg(null);
+    setErr(null);
+  }, [
+    kandidaat.id,
+    kandidaat.postcode,
+    kandidaat.huisnummer,
+    kandidaat.toevoeging,
+    kandidaat.straat,
+    kandidaat.plaats,
+  ]);
+
+  const dirty =
+    (postcode.trim() || null) !== (kandidaat.postcode || null) ||
+    (huisnummer.trim() || null) !== (kandidaat.huisnummer || null) ||
+    (toevoeging.trim() || null) !== (kandidaat.toevoeging || null) ||
+    (straat.trim() || null) !== (kandidaat.straat || null) ||
+    (plaats.trim() || null) !== (kandidaat.plaats || null);
+
+  async function lookupAdres() {
+    const pc = postcode.trim();
+    const nr = huisnummer.trim();
+    if (!pc || !nr) {
+      setErr("Vul postcode en huisnummer in");
+      return;
+    }
+    setLookupBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const qs = new URLSearchParams({ postcode: pc, number: nr });
+      if (toevoeging.trim()) qs.set("toevoeging", toevoeging.trim());
+      const res = await fetch(`/api/postcode?${qs}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Adres niet gevonden");
+      if (data.postcode) setPostcode(normalizePostcode(String(data.postcode)));
+      if (data.huisnummer) setHuisnummer(String(data.huisnummer));
+      if (data.straat) setStraat(String(data.straat));
+      if (data.plaats) setPlaats(String(data.plaats));
+      setMsg("Adres opgehaald — klik Opslaan om te bewaren");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Lookup mislukt");
+    } finally {
+      setLookupBusy(false);
+    }
+  }
+
+  async function save() {
+    setErr(null);
+    setMsg(null);
+    try {
+      await onSave({
+        postcode: postcode.trim()
+          ? normalizePostcode(postcode)
+          : null,
+        huisnummer: huisnummer.trim() || null,
+        toevoeging: toevoeging.trim() || null,
+        straat: straat.trim() || null,
+        plaats: plaats.trim() || null,
+      });
+      setMsg("Adres opgeslagen");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Opslaan mislukt");
+    }
+  }
+
+  return (
+    <section className="border border-line bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+        <h2 className="font-display text-base font-semibold text-ink">
+          Adres
+        </h2>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={lookupBusy || !postcode.trim() || !huisnummer.trim()}
+            onClick={() => void lookupAdres()}
+            className="border border-line px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          >
+            {lookupBusy ? "Zoeken…" : "Haal adres op"}
+          </button>
+          <button
+            type="button"
+            disabled={saving || !dirty}
+            onClick={() => void save()}
+            className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
+          >
+            Opslaan
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-3.5 p-5 sm:grid-cols-[1fr_88px_72px]">
+        <label className="block">
+          <FieldLabel>Postcode</FieldLabel>
+          <SoftInput
+            value={postcode}
+            onChange={(e) => setPostcode(e.target.value.toUpperCase())}
+            onBlur={() => {
+              if (postcode.trim() && huisnummer.trim() && !straat.trim()) {
+                void lookupAdres();
+              }
+            }}
+            placeholder="1234AB"
+            disabled={saving}
+          />
+        </label>
+        <label className="block">
+          <FieldLabel>Nr</FieldLabel>
+          <SoftInput
+            value={huisnummer}
+            onChange={(e) => setHuisnummer(e.target.value)}
+            onBlur={() => {
+              if (postcode.trim() && huisnummer.trim() && !straat.trim()) {
+                void lookupAdres();
+              }
+            }}
+            inputMode="numeric"
+            disabled={saving}
+          />
+        </label>
+        <label className="block">
+          <FieldLabel>Toev.</FieldLabel>
+          <SoftInput
+            value={toevoeging}
+            onChange={(e) => setToevoeging(e.target.value)}
+            disabled={saving}
+          />
+        </label>
+      </div>
+      <div className="grid gap-3.5 border-t border-line px-5 py-4 sm:grid-cols-2">
+        <label className="block">
+          <FieldLabel>Straat</FieldLabel>
+          <SoftInput
+            value={straat}
+            onChange={(e) => setStraat(e.target.value)}
+            disabled={saving}
+          />
+        </label>
+        <label className="block">
+          <FieldLabel>Plaats</FieldLabel>
+          <SoftInput
+            value={plaats}
+            onChange={(e) => setPlaats(e.target.value)}
+            disabled={saving}
+          />
+        </label>
+      </div>
+      {(msg || err) && (
+        <p
+          className={[
+            "border-t border-line px-5 py-2.5 text-xs",
+            err ? "bg-[#FFF0E6] text-[#C45A12]" : "bg-wash text-muted",
+          ].join(" ")}
+        >
+          {err || msg}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function CopyIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -520,6 +712,13 @@ function RecruitmentAddModal({
   const [telefoon, setTelefoon] = useState("");
   const [email, setEmail] = useState("");
   const [functie, setFunctie] = useState("");
+  const [postcode, setPostcode] = useState("");
+  const [huisnummer, setHuisnummer] = useState("");
+  const [toevoeging, setToevoeging] = useState("");
+  const [straat, setStraat] = useState("");
+  const [plaats, setPlaats] = useState("");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMsg, setLookupMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -530,7 +729,46 @@ function RecruitmentAddModal({
     setTelefoon("");
     setEmail("");
     setFunctie("");
+    setPostcode("");
+    setHuisnummer("");
+    setToevoeging("");
+    setStraat("");
+    setPlaats("");
+    setLookupMsg(null);
     setError(null);
+  }
+
+  async function lookupAdres(opts?: { force?: boolean }) {
+    const pc = postcode.trim();
+    const nr = huisnummer.trim();
+    if (!pc || !nr) {
+      setLookupMsg("Vul postcode en huisnummer in");
+      return false;
+    }
+    if (!opts?.force && straat.trim() && plaats.trim()) return true;
+    setLookupBusy(true);
+    setLookupMsg(null);
+    try {
+      const qs = new URLSearchParams({ postcode: pc, number: nr });
+      if (toevoeging.trim()) qs.set("toevoeging", toevoeging.trim());
+      const res = await fetch(`/api/postcode?${qs}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setLookupMsg(data.error || "Adres niet gevonden");
+        return false;
+      }
+      if (data.postcode) setPostcode(normalizePostcode(String(data.postcode)));
+      if (data.huisnummer) setHuisnummer(String(data.huisnummer));
+      if (data.straat) setStraat(String(data.straat));
+      if (data.plaats) setPlaats(String(data.plaats));
+      setLookupMsg("Adres opgehaald");
+      return true;
+    } catch {
+      setLookupMsg("Lookup mislukt");
+      return false;
+    } finally {
+      setLookupBusy(false);
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -542,6 +780,9 @@ function RecruitmentAddModal({
     setSaving(true);
     setError(null);
     try {
+      if ((!straat.trim() || !plaats.trim()) && postcode && huisnummer) {
+        await lookupAdres({ force: true });
+      }
       const res = await fetch("/api/instroom", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -550,6 +791,13 @@ function RecruitmentAddModal({
           telefoon,
           email,
           functie,
+          postcode: postcode.trim()
+            ? normalizePostcode(postcode)
+            : undefined,
+          huisnummer: huisnummer.trim() || undefined,
+          toevoeging: toevoeging.trim() || undefined,
+          straat: straat.trim() || undefined,
+          plaats: plaats.trim() || undefined,
           bron: "crm",
           status: "nieuw",
         }),
@@ -579,7 +827,7 @@ function RecruitmentAddModal({
       />
       <form
         onSubmit={submit}
-        className="relative z-10 w-full max-w-md border border-line bg-white p-6 shadow-lg"
+        className="relative z-10 max-h-[92vh] w-full max-w-lg overflow-y-auto border border-line bg-white p-6 shadow-lg"
       >
         <h2 className="font-display text-xl tracking-tight text-ink">
           Kandidaat toevoegen
@@ -629,6 +877,78 @@ function RecruitmentAddModal({
               ))}
             </datalist>
           </label>
+          <div className="grid gap-3.5 sm:grid-cols-[1fr_88px_72px]">
+            <label className="block">
+              <FieldLabel>Postcode</FieldLabel>
+              <SoftInput
+                value={postcode}
+                onChange={(e) => {
+                  setPostcode(e.target.value.toUpperCase());
+                  setLookupMsg(null);
+                }}
+                onBlur={() => {
+                  if (postcode.trim() && huisnummer.trim()) {
+                    void lookupAdres();
+                  }
+                }}
+                placeholder="1234AB"
+                autoComplete="postal-code"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>Nr</FieldLabel>
+              <SoftInput
+                value={huisnummer}
+                onChange={(e) => {
+                  setHuisnummer(e.target.value);
+                  setLookupMsg(null);
+                }}
+                onBlur={() => {
+                  if (postcode.trim() && huisnummer.trim()) {
+                    void lookupAdres();
+                  }
+                }}
+                inputMode="numeric"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>Toev.</FieldLabel>
+              <SoftInput
+                value={toevoeging}
+                onChange={(e) => setToevoeging(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={lookupBusy || !postcode.trim() || !huisnummer.trim()}
+              onClick={() => void lookupAdres({ force: true })}
+              className="border border-line px-3 py-2 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+            >
+              {lookupBusy ? "Zoeken…" : "Haal adres op"}
+            </button>
+            {lookupMsg ? (
+              <span className="text-xs text-muted">{lookupMsg}</span>
+            ) : null}
+          </div>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <label className="block">
+              <FieldLabel>Straat</FieldLabel>
+              <SoftInput
+                value={straat}
+                onChange={(e) => setStraat(e.target.value)}
+                placeholder="Wordt automatisch gevuld"
+              />
+            </label>
+            <label className="block">
+              <FieldLabel>Plaats</FieldLabel>
+              <SoftInput
+                value={plaats}
+                onChange={(e) => setPlaats(e.target.value)}
+              />
+            </label>
+          </div>
         </div>
         {error && (
           <p className="mt-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
@@ -1297,7 +1617,7 @@ function KandidaatDetail({
           </div>
         </div>
 
-        <div className="grid gap-px bg-line sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-px bg-line sm:grid-cols-2 lg:grid-cols-5">
           <div className="bg-wash px-5 py-4">
             <FieldLabel>Telefoon</FieldLabel>
             {kandidaat.telefoon ? (
@@ -1327,6 +1647,12 @@ function KandidaatDetail({
               <p className="text-sm text-muted">—</p>
             )}
           </div>
+          <div className="bg-wash px-5 py-4 lg:col-span-1">
+            <FieldLabel>Adres</FieldLabel>
+            <p className="truncate text-sm font-medium text-ink">
+              {formatSollicitatieAdres(kandidaat) || "—"}
+            </p>
+          </div>
           <div className="bg-wash px-5 py-4">
             <FieldLabel>Bron</FieldLabel>
             <p className="truncate text-sm font-medium text-ink">
@@ -1341,6 +1667,12 @@ function KandidaatDetail({
           </div>
         </div>
       </section>
+
+      <SollicitatieAdresEditor
+        kandidaat={kandidaat}
+        saving={saving}
+        onSave={onSave}
+      />
 
       <div className="grid gap-5 lg:grid-cols-5">
         <section className="border border-line bg-white lg:col-span-3">
@@ -1517,6 +1849,7 @@ export function RecruitmentPanel() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [functieFilter, setFunctieFilter] = useState("");
+  const [provincieFilter, setProvincieFilter] = useState<"" | NlProvincie | typeof PROVINCIE_ONBEKEND>("");
   const [searchQ, setSearchQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
@@ -1683,12 +2016,18 @@ export function RecruitmentPanel() {
       ) {
         return false;
       }
+      if (provincieFilter) {
+        const prov = provincieVanPostcode(s.postcode);
+        if (prov !== provincieFilter) return false;
+      }
       if (!q && !digits) return true;
       const hay = [
         s.naam,
         s.email,
         s.telefoon,
         s.functie,
+        s.plaats,
+        s.postcode,
         s.notitie,
         SOLLICITATIE_STATUS_LABEL[normalizeSollicitatieStatus(s.status)],
       ]
@@ -1701,7 +2040,7 @@ export function RecruitmentPanel() {
       }
       return false;
     });
-  }, [items, functieFilter, searchQ]);
+  }, [items, functieFilter, provincieFilter, searchQ]);
 
   const byStatus = useMemo(() => {
     const map = new Map<SollicitatieStatus, Sollicitatie[]>();
@@ -2074,7 +2413,7 @@ export function RecruitmentPanel() {
             type="search"
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
-            placeholder="Zoek naam, telefoon, e-mail…"
+            placeholder="Zoek naam, telefoon, e-mail, plaats…"
             className="min-w-[12rem] flex-1 border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green sm:max-w-xs"
             aria-label="Zoek kandidaten"
           />
@@ -2093,6 +2432,24 @@ export function RecruitmentPanel() {
               ))}
             </select>
           )}
+          <select
+            value={provincieFilter}
+            onChange={(e) =>
+              setProvincieFilter(
+                e.target.value as "" | NlProvincie | typeof PROVINCIE_ONBEKEND
+              )
+            }
+            className="border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+            aria-label="Filter op provincie"
+          >
+            <option value="">Alle provincies</option>
+            {NL_PROVINCIES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+            <option value={PROVINCIE_ONBEKEND}>Zonder postcode</option>
+          </select>
           <span className="text-xs tabular-nums text-muted">
             {filtered.length}
             {filtered.length !== items.length ? ` / ${items.length}` : ""}{" "}
@@ -2249,6 +2606,11 @@ export function RecruitmentPanel() {
                             {s.functie ? (
                               <p className="mt-0.5 truncate text-xs text-green-deeper">
                                 {s.functie}
+                              </p>
+                            ) : null}
+                            {s.plaats || s.postcode ? (
+                              <p className="mt-0.5 truncate text-xs text-muted">
+                                {[s.postcode, s.plaats].filter(Boolean).join(" ")}
                               </p>
                             ) : null}
                             <PhoneCopyLine telefoon={s.telefoon} email={s.email} />

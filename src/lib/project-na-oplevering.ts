@@ -18,7 +18,7 @@ async function ensureOpleveringAfrondTaken(
 }
 
 /**
- * Na upload opleveringsrapport (met klant-handtekening):
+ * Na upload opleveringsrapport / opleverformulier (handtekening installateur):
  * zet status op installatie_voltooid + concept creditfactuur voor partner
  * + 2 backoffice-acties (overstap dynamische leverancier + BTW terugvrage, deadline 2 dagen).
  */

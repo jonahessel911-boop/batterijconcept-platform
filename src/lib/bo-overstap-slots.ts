@@ -60,12 +60,21 @@ export async function findBoOverstapSlots(
   opts?: {
     limit?: number;
     daysAhead?: number;
+    /**
+     * Max slots per Amsterdam-dag (spreidt over meerdere dagen).
+     * Zonder limiet: vult eerst de hele eerste dag (was: alleen 15 okt).
+     */
+    maxPerDay?: number;
     /** Slots die al in de uitnodiging staan — overslaan */
     excludeStarts?: string[];
   }
 ): Promise<BoOverstapSlot[]> {
   const limit = opts?.limit ?? 10;
   const daysAhead = opts?.daysAhead ?? 21;
+  const maxPerDay =
+    opts?.maxPerDay != null && opts.maxPerDay > 0
+      ? Math.floor(opts.maxPerDay)
+      : null;
   const exclude = new Set(
     (opts?.excludeStarts || [])
       .map((s) => {
@@ -149,14 +158,21 @@ export async function findBoOverstapSlots(
 
   const found: BoOverstapSlot[] = [];
   const usedStarts = new Set<number>();
+  const countByDay = new Map<string, number>();
 
   for (let dayOffset = 0; dayOffset < daysAhead && found.length < limit; dayOffset++) {
     const day = addDays(new Date(), dayOffset);
     if (!isWeekdayAmsterdam(day)) continue;
     const ymd = formatInTimeZone(day, AMSTERDAM_TZ, "yyyy-MM-dd");
+    if (maxPerDay != null && (countByDay.get(ymd) || 0) >= maxPerDay) {
+      continue;
+    }
 
     for (const startDate of candidateStartsForDay(ymd)) {
       if (found.length >= limit) break;
+      if (maxPerDay != null && (countByDay.get(ymd) || 0) >= maxPerDay) {
+        break;
+      }
       const startMs = startDate.getTime();
       if (startMs < rangeStart.getTime()) continue;
       if (exclude.has(startMs) || usedStarts.has(startMs)) continue;
@@ -177,6 +193,7 @@ export async function findBoOverstapSlots(
       if (!owner) continue;
 
       usedStarts.add(startMs);
+      countByDay.set(ymd, (countByDay.get(ymd) || 0) + 1);
       found.push({
         start_at: new Date(startMs).toISOString(),
         end_at: new Date(endMs).toISOString(),

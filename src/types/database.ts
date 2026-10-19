@@ -100,6 +100,7 @@ export type CrmTab =
   | "rapportage"
   | "admin"
   | "ai"
+  | "adviseurs"
   | "partners"
   | "instellingen";
 
@@ -165,6 +166,10 @@ export interface Adviseur {
   contract_bc_handtekening?: string | null;
   contract_sent_at?: string | null;
   contract_signed_at?: string | null;
+  /** KvK-uittreksel (PDF/afbeelding) */
+  kvk_uitreksel_storage_path?: string | null;
+  kvk_uitreksel_bestandsnaam?: string | null;
+  kvk_uitreksel_uploaded_at?: string | null;
 }
 
 export type AdviseurCreditFactuurStatus =
@@ -351,6 +356,7 @@ export type LeadEventSoort =
   | "terugbel"
   | "notitie"
   | "contact"
+  | "email"
   | "betaling"
   | "factuur"
   | "inkoop"
@@ -434,6 +440,17 @@ export interface InstallatiePartner {
   contract_storage_path?: string | null;
   contract_bestandsnaam?: string | null;
   contract_uploaded_at?: string | null;
+  /** KvK-uittreksel */
+  kvk_uitreksel_storage_path?: string | null;
+  kvk_uitreksel_bestandsnaam?: string | null;
+  kvk_uitreksel_uploaded_at?: string | null;
+  /** Certificaten (monteur) */
+  certificaten_storage_path?: string | null;
+  certificaten_bestandsnaam?: string | null;
+  certificaten_uploaded_at?: string | null;
+  /** Google Calendar OAuth gekoppeld (geen tokens in API) */
+  google_connected_email?: string | null;
+  google_connected_at?: string | null;
 }
 
 export interface Offerte {
@@ -565,11 +582,16 @@ export interface Project {
    */
   financiering_status?:
     | "doorgestuurd_naar_edwin"
+    | "documenten_aanleveren"
+    | "in_behandeling"
+    | "aanbod_ondertekenen"
+    | "declaratie_indienen"
+    | "wacht_op_betaling"
+    | "uitbetaald"
+    | "afgewezen"
     | "afspraak_ingepland"
     | "aanvraag_gedaan"
     | "aanvraag_goedgekeurd"
-    | "uitbetaald"
-    | "afgewezen"
     | null;
   /** Interne datum/tijd Warmtefonds-afspraak (geen mail). */
   warmtefonds_afspraak_at?: string | null;
@@ -660,6 +682,11 @@ export interface Sollicitatie {
   bron: string | null;
   status: SollicitatieStatus;
   notitie: string | null;
+  postcode?: string | null;
+  huisnummer?: string | null;
+  toevoeging?: string | null;
+  straat?: string | null;
+  plaats?: string | null;
   training_moment_id?: string | null;
   raw_payload?: unknown;
   created_at: string;
@@ -886,6 +913,8 @@ export interface Factuur {
   /** bunq Payment id bij auto-match */
   bunq_payment_id?: number | null;
   notities: string | null;
+  /** Interne notitie (CRM); niet op klant-PDF */
+  interne_notitie?: string | null;
   /** Gezet = creditfactuur bij deze oorspronkelijke factuur. */
   credit_van_factuur_id?: string | null;
   created_at: string;

@@ -2,13 +2,24 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { randomBytes } from "crypto";
+import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 
 export const runtime = "nodejs";
 
 const PUBLIC_FIELDS =
-  "id, naam, email, telefoon, actief, portal_token, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, portal_token, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, created_at, updated_at";
 const PUBLIC_FIELDS_FALLBACK =
   "id, naam, email, telefoon, actief, portal_token, created_at, updated_at";
+
+function isMissingGoogleCols(error: SbError): boolean {
+  if (!error?.message) return false;
+  return (
+    error.code === "42703" ||
+    /google_connected_email|google_connected_at|schema cache/i.test(
+      error.message
+    )
+  );
+}
 
 type SbError = { code?: string; message?: string } | null;
 
@@ -38,15 +49,32 @@ export async function GET(req: NextRequest) {
     }
 
     let { data, error } = await query;
-    if (error && isMissingCompanyCols(error)) {
+    if (error && (isMissingCompanyCols(error) || isMissingGoogleCols(error))) {
       let q2 = sb
         .from("installatie_partners")
-        .select(PUBLIC_FIELDS_FALLBACK)
+        .select(
+          isMissingCompanyCols(error)
+            ? PUBLIC_FIELDS_FALLBACK
+            : PUBLIC_FIELDS.replace(
+                ", google_connected_email, google_connected_at",
+                ""
+              )
+        )
         .order("naam");
       if (!includeInactive) q2 = q2.eq("actief", true);
       const retry = await q2;
       data = (retry.data || null) as typeof data;
       error = retry.error;
+      if (error && isMissingCompanyCols(error)) {
+        let q3 = sb
+          .from("installatie_partners")
+          .select(PUBLIC_FIELDS_FALLBACK)
+          .order("naam");
+        if (!includeInactive) q3 = q3.eq("actief", true);
+        const retry2 = await q3;
+        data = (retry2.data || null) as typeof data;
+        error = retry2.error;
+      }
     }
     if (error) throw error;
     return NextResponse.json({ partners: data || [] });
@@ -267,6 +295,16 @@ export async function PATCH(req: NextRequest) {
         { error: error?.message || "Bijwerken mislukt" },
         { status: 500 }
       );
+    }
+
+    if (typeof patch.iban === "string" && patch.iban.trim()) {
+      await logRelatieActiviteit(sb, {
+        kind: "partner",
+        relatieId: body.id as string,
+        soort: "iban",
+        titel: "IBAN opgeslagen",
+        detail: String(patch.iban),
+      });
     }
 
     return NextResponse.json({ partner: data });

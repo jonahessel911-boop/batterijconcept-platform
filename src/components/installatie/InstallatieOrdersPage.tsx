@@ -43,6 +43,18 @@ export function InstallatieOrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
   const [approveBusy, setApproveBusy] = useState<string | null>(null);
+  const [calCopied, setCalCopied] = useState(false);
+
+  function copyCalendarUrl() {
+    const url = `${window.location.origin}/api/installatie/${token}/calendar`;
+    void navigator.clipboard.writeText(url).then(
+      () => {
+        setCalCopied(true);
+        window.setTimeout(() => setCalCopied(false), 2500);
+      },
+      () => setError("Kopiëren mislukt")
+    );
+  }
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -173,6 +185,28 @@ export function InstallatieOrdersPage() {
             Facturen
           </button>
         </div>
+
+        {tab === "agenda" && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink">
+                Google Calendar (backup-feed)
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Voor directe sync koppelt Batterijconcept je Google-account via
+                Partners in het CRM. Deze URL is een backup (kan vertraagd
+                vernieuwen).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={copyCalendarUrl}
+              className="shrink-0 border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
+            >
+              {calCopied ? "Gekopieerd" : "Kopieer agenda-URL"}
+            </button>
+          </div>
+        )}
 
         {error && (
           <p className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">

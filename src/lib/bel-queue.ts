@@ -83,6 +83,41 @@ export function geenContactPogingLabel(pogingen: number): string {
   return `Geen contact ${n}/${MAX_BELPOGINGEN}`;
 }
 
+/**
+ * Patch + mailvlag bij status «geen contact» (BelPanel én Leads-tab).
+ * Elke keer dat je op geen contact zet = +1 belpoging; mail bij poging 1 en 3.
+ */
+export function buildGeenContactOutcomePatch(
+  lead: Pick<Lead, "belpogingen" | "belpogingen_vandaag" | "laatst_gebeld_at">
+): {
+  patch: {
+    status: "geen_contact";
+    belpogingen: number;
+    belpogingen_vandaag: number;
+    terugbellen: false;
+    terugbel_notitie: null;
+  };
+  pogingen: number;
+  sendGeenContactMail: boolean;
+} {
+  const pogingen = Math.min(belpogingenOf(lead) + 1, MAX_BELPOGINGEN);
+  const vandaag = Math.min(
+    belpogingenVandaagOf(lead) + 1,
+    MAX_BELPOGINGEN_PER_DAG
+  );
+  return {
+    patch: {
+      status: "geen_contact",
+      belpogingen: pogingen,
+      belpogingen_vandaag: vandaag,
+      terugbellen: false,
+      terugbel_notitie: null,
+    },
+    pogingen,
+    sendGeenContactMail: pogingen === 1 || pogingen === 3,
+  };
+}
+
 /** Actieve terugbel-afspraak (bel / warme_bel) voor deze lead. */
 export function activeBelAfspraak(
   afspraken: Afspraak[],
@@ -229,7 +264,7 @@ export function inBelQueue(
   appointmentLeadIds?: Set<string>,
   /**
    * @deprecated Genegeerd. Annuleringen horen via leadstatus
-   * (`afspraak_afgezegd_klant` → backoffice herplannen), niet via deze filter —
+   * (`afspraak_afgezegd_klant` / `deur_niet_open` → backoffice herplannen), niet via deze filter —
    * die haalde belbare nieuw/geen_contact-leads ten onrechte uit de queue.
    */
   _cancelledAppointmentLeadIds?: Set<string>

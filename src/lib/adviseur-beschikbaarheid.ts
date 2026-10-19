@@ -3,6 +3,7 @@ import { getISOWeek, getISOWeekYear } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
+import { skipsMaandagOchtendmeeting } from "@/lib/start-adres";
 
 export type WeekKey = { jaar: number; week: number };
 
@@ -97,13 +98,17 @@ export function isMaandagTienAmsterdam(
 
 /**
  * Hard geblokkeerd (niet te openen): maandag 10:00 weekmeeting.
+ * Uitzondering: adviseurs die de ochtendmeeting overslaan (bijv. Marcel).
  * Zondag is standaard dicht maar mag via vrijgave open.
  */
 export function isHardGeblokkeerdSlot(
   dateOrDayKey: Date | string,
-  hour?: number
+  hour?: number,
+  adviseurId?: string | null
 ): boolean {
-  return isMaandagTienAmsterdam(dateOrDayKey, hour);
+  if (!isMaandagTienAmsterdam(dateOrDayKey, hour)) return false;
+  if (skipsMaandagOchtendmeeting(adviseurId)) return false;
+  return true;
 }
 
 /**
@@ -112,26 +117,29 @@ export function isHardGeblokkeerdSlot(
  */
 export function isStandaardGeblokkeerdSlot(
   dateOrDayKey: Date | string,
-  hour?: number
+  hour?: number,
+  adviseurId?: string | null
 ): boolean {
   if (isZondagAmsterdam(dateOrDayKey)) return true;
-  return isMaandagTienAmsterdam(dateOrDayKey, hour);
+  return isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId);
 }
 
 /** Mag dit standaard-slot via afblok-modus worden geopend? (alleen zondag). */
 export function magStandaardSlotOntblokken(
   dateOrDayKey: Date | string,
-  hour?: number
+  hour?: number,
+  adviseurId?: string | null
 ): boolean {
-  if (isHardGeblokkeerdSlot(dateOrDayKey, hour)) return false;
+  if (isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId)) return false;
   return isZondagAmsterdam(dateOrDayKey);
 }
 
 export function standaardBlokkadeLabel(
   dateOrDayKey: Date | string,
-  hour?: number
+  hour?: number,
+  adviseurId?: string | null
 ): string | null {
-  if (isMaandagTienAmsterdam(dateOrDayKey, hour)) {
+  if (isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId)) {
     return "Maandag 10:00 is standaard geblokkeerd (weekmeeting)";
   }
   if (isZondagAmsterdam(dateOrDayKey)) {
@@ -152,7 +160,7 @@ export function isSlotGeblokkeerd(
   afblokkingen: Set<string>,
   vrijgaven: Set<string> = new Set()
 ): boolean {
-  if (isHardGeblokkeerdSlot(dayKey, hour)) return true;
+  if (isHardGeblokkeerdSlot(dayKey, hour, adviseurId)) return true;
   const key = afblokKey(adviseurId, dayKey, hour);
   if (isZondagAmsterdam(dayKey)) {
     return !vrijgaven.has(key);
@@ -301,7 +309,7 @@ export async function isSlotAfgeblokt(
   adviseurId: string,
   startAt: Date
 ): Promise<boolean> {
-  if (isHardGeblokkeerdSlot(startAt)) return true;
+  if (isHardGeblokkeerdSlot(startAt, undefined, adviseurId)) return true;
 
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);

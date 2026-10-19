@@ -5,8 +5,9 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { ensureOfferteTrackToken } from "@/lib/ensure-track-token";
 import { logLeadEvent } from "@/lib/lead-events";
-import { formatDateTimeNl } from "@/lib/format";
+import { formatDateTimeLongNl, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { overstapFrankEnergieEmail } from "@/lib/email/templates";
 import { FRANK_ENERGIE_OVERSTAP_URL } from "@/lib/frank-energie";
 import { batterijMerkUitRegels } from "@/lib/offerte-batterij-merk";
@@ -140,13 +141,17 @@ export async function POST(
 
     let { data: project } = await sb
       .from("projecten")
-      .select("id, lead_id, service_notities, project_nummer, offerte_id")
+      .select(
+        "id, lead_id, service_notities, project_nummer, offerte_id, installatie_partner_id, service_gcal_event_id, titel"
+      )
       .eq("offerte_id", offerte.id)
       .maybeSingle();
     if (!project) {
       const { data: byLead } = await sb
         .from("projecten")
-        .select("id, lead_id, service_notities, project_nummer, offerte_id")
+        .select(
+          "id, lead_id, service_notities, project_nummer, offerte_id, installatie_partner_id, service_gcal_event_id, titel"
+        )
         .eq("lead_id", offerte.lead_id)
         .order("updated_at", { ascending: false })
         .limit(1)
@@ -266,6 +271,35 @@ export async function POST(
         })
         .eq("id", project.id);
       if (pErr) throw pErr;
+
+      const partnerId = (
+        project as { installatie_partner_id?: string | null }
+      ).installatie_partner_id;
+      if (partnerId) {
+        const { data: leadRow } = await sb
+          .from("leads")
+          .select(
+            "naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats"
+          )
+          .eq("id", (project.lead_id || offerte.lead_id) as string)
+          .maybeSingle();
+        const { syncPartnerGoogleEvent } = await import(
+          "@/lib/google-calendar"
+        );
+        await syncPartnerGoogleEvent({
+          partnerId,
+          projectId: project.id,
+          kind: "service",
+          startIso: gekozen,
+          projectNummer: project.project_nummer,
+          titel: (project as { titel?: string | null }).titel,
+          notities: installerNote,
+          lead: leadRow,
+          existingEventId:
+            (project as { service_gcal_event_id?: string | null })
+              .service_gcal_event_id || null,
+        });
+      }
 
       // Serviceverzoek: update open verzoek of maak nieuw
       const { data: openVerzoek } = await sb
@@ -420,10 +454,13 @@ export async function POST(
         });
         const sent = await sendEmail({
           to: email,
-          subject:
-            "Overstap dynamische energie · BatterijConcept × Frank Energie",
+          subject: `Overstap gepland op ${formatDateTimeLongNl(gekozen)} · BatterijConcept × Frank`,
           html,
           tag: "overstap-frank",
+          replyTo: await replyToForLeadAdviseur(
+            sb,
+            (project.lead_id || offerte.lead_id) as string | null
+          ),
         });
         if (!sent.ok) {
           console.error("overstap Frank-mail:", sent.error);

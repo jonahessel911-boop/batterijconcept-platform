@@ -170,8 +170,8 @@ const GROUPS: SidebarGroup[] = [
     label: "Sturing",
     items: [
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
-      { id: "admin", label: "Admin", icon: ICONS.admin },
-      { id: "partners", label: "Partners", icon: ICONS.partners },
+      { id: "adviseurs", label: "Adviseurs", icon: ICONS.partners },
+      { id: "partners", label: "Team", icon: ICONS.partners },
       { id: "instellingen", label: "Instellingen", icon: ICONS.instellingen },
     ],
   },
@@ -304,8 +304,8 @@ export function CrmSidebar({
 
   function renderNav() {
     return (
-      <div className="flex h-full flex-col">
-        <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-3">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-3">
           {!collapsed ? (
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
               Menu
@@ -581,7 +581,7 @@ export function CrmSidebar({
     <>
       <aside
         className={[
-          "hidden shrink-0 border-r border-line bg-white md:flex md:flex-col",
+          "hidden min-h-0 shrink-0 self-stretch border-r border-line bg-white md:flex md:flex-col",
           collapsed ? "w-[4.25rem]" : "w-56",
         ].join(" ")}
       >

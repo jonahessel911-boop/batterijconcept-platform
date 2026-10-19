@@ -10,6 +10,8 @@ import {
   type InkoopRegelStatus,
 } from "@/lib/project-inkoop-checklist";
 import { bestelDeadlineVoorInstallatie } from "@/lib/inkoop-sla";
+import { apexProductUrl } from "@/lib/apex-product-url";
+import { inkoopProductImageFor } from "@/lib/inkoop-product-images";
 
 type OrderLine = {
   key: string;
@@ -18,6 +20,7 @@ type OrderLine = {
   aantal: number;
   inkoop_ex_btw: number;
   status: InkoopRegelStatus;
+  notitie?: string | null;
 };
 
 type SchouwInfo = {
@@ -44,9 +47,16 @@ type PurchasingOrder = {
   besteld_ex_btw?: number;
   inkoop_leverancier_status: InkoopLeverancierStatus;
   inkoop_leverancier_betaald_op: string | null;
+  klant_betaling?: {
+    pct: number;
+    betaald_inc: number;
+    order_inc: number;
+    volledig: boolean;
+  } | null;
   schouw: SchouwInfo;
   installatie_at: string | null;
   materiaal_leverdatum: string | null;
+  inkoop_extra_notities?: string | null;
   summary: {
     te_kopen: number;
     besteld: number;
@@ -54,22 +64,6 @@ type PurchasingOrder = {
     overall: InkoopRegelStatus | "deels";
   };
   items: OrderLine[];
-};
-
-type PurchasingTotals = {
-  te_bestellen_ex_btw: number;
-  op_krediet_ex_btw: number;
-  op_krediet_count: number;
-  betaald_ex_btw: number;
-  betaald_count: number;
-};
-
-const EMPTY_TOTALS: PurchasingTotals = {
-  te_bestellen_ex_btw: 0,
-  op_krediet_ex_btw: 0,
-  op_krediet_count: 0,
-  betaald_ex_btw: 0,
-  betaald_count: 0,
 };
 
 function defaultLeverdatumYmd(daysAhead = 7): string {
@@ -99,7 +93,7 @@ function askLeverdatum(existingIso?: string | null): string | null {
 type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd" | "te_betalen";
 
 const ROW =
-  "grid grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_4.5rem_3.5rem_6.5rem] items-center gap-x-3";
+  "grid grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] items-center gap-x-3";
 
 function defaultSchouw(): SchouwInfo {
   return {
@@ -126,8 +120,46 @@ function openEuro(o: PurchasingOrder): number {
 function deskOf(o: PurchasingOrder): Exclude<Desk, "te_betalen"> {
   if (o.summary.overall === "geleverd") return "geleverd";
   if (o.summary.overall === "besteld") return "onderweg";
-  if (o.schouw.kind === "voltooid") return "bestellen";
+  // Te bestellen: schouw PDF + klant volledig betaald
+  const klantOk =
+    o.klant_betaling == null ? true : Boolean(o.klant_betaling.volledig);
+  if (o.schouw.kind === "voltooid" && klantOk) return "bestellen";
   return "pipeline";
+}
+
+function KlantBetalingBar({
+  betaling,
+}: {
+  betaling: NonNullable<PurchasingOrder["klant_betaling"]>;
+}) {
+  const pct = Math.min(100, Math.max(0, betaling.pct));
+  const done = betaling.volledig || pct >= 100;
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-1">
+        <p
+          className={[
+            "text-[10px] font-semibold tabular-nums",
+            done ? "text-green-dark" : "text-[#C45A12]",
+          ].join(" ")}
+        >
+          {pct}%
+        </p>
+        <p className="truncate text-[10px] text-muted">
+          {done ? "Volledig" : "Klant"}
+        </p>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-wash">
+        <div
+          className={[
+            "h-full rounded-full transition-[width]",
+            done ? "bg-green" : "bg-[#C45A12]",
+          ].join(" ")}
+          style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 function levBadge(status: InkoopLeverancierStatus): {
@@ -193,14 +225,15 @@ function installatieHint(order: PurchasingOrder): {
 }
 
 function pipelineSortKey(o: PurchasingOrder): string {
-  if (o.schouw.at) return `0:${o.schouw.at}`;
-  if (o.schouw.week_label) return `1:${o.schouw.week_label}`;
-  return `2:${o.updated_at || ""}`;
+  const pct = o.klant_betaling?.pct ?? 100;
+  const pay = String(pct).padStart(3, "0");
+  if (o.schouw.at) return `${pay}:0:${o.schouw.at}`;
+  if (o.schouw.week_label) return `${pay}:1:${o.schouw.week_label}`;
+  return `${pay}:2:${o.updated_at || ""}`;
 }
 
 export function PurchasingPanel() {
   const [orders, setOrders] = useState<PurchasingOrder[]>([]);
-  const [totals, setTotals] = useState<PurchasingTotals>(EMPTY_TOTALS);
   const [leverancier, setLeverancier] = useState(INKOOP_LEVERANCIER);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -226,15 +259,9 @@ export function PurchasingPanel() {
           inkoop_leverancier_status: o.inkoop_leverancier_status || "geen",
           inkoop_leverancier_betaald_op:
             o.inkoop_leverancier_betaald_op || null,
+          klant_betaling: o.klant_betaling || null,
         }))
       );
-      setTotals({
-        te_bestellen_ex_btw: Number(data.totals?.te_bestellen_ex_btw) || 0,
-        op_krediet_ex_btw: Number(data.totals?.op_krediet_ex_btw) || 0,
-        op_krediet_count: Number(data.totals?.op_krediet_count) || 0,
-        betaald_ex_btw: Number(data.totals?.betaald_ex_btw) || 0,
-        betaald_count: Number(data.totals?.betaald_count) || 0,
-      });
       setLeverancier(data.leverancier || INKOOP_LEVERANCIER);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
@@ -305,18 +332,6 @@ export function PurchasingPanel() {
     }
   }, [loading, autoSwitched, counts.bestellen, counts.pipeline]);
 
-  const deskEuro = useMemo(() => {
-    const list = byDesk[desk];
-    let euro = 0;
-    for (const o of list) {
-      if (desk === "bestellen" || desk === "pipeline") euro += openEuro(o);
-      else if (desk === "te_betalen")
-        euro += o.besteld_ex_btw ?? o.inkoop_totaal_ex_btw;
-      else euro += o.inkoop_totaal_ex_btw;
-    }
-    return Math.round(euro * 100) / 100;
-  }, [byDesk, desk]);
-
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = byDesk[desk];
@@ -349,10 +364,15 @@ export function PurchasingPanel() {
       ...i,
       status: nextChecks[i.key] || i.status,
     }));
-    const allBesteldOrMore = items.every(
-      (i) => i.status === "besteld" || i.status === "geleverd"
-    );
-    const allGeleverd = items.every((i) => i.status === "geleverd");
+    const activeItems = items.filter((i) => i.status !== "geannuleerd");
+    const allBesteldOrMore =
+      activeItems.length > 0 &&
+      activeItems.every(
+        (i) => i.status === "besteld" || i.status === "geleverd"
+      );
+    const allGeleverd =
+      activeItems.length > 0 &&
+      activeItems.every((i) => i.status === "geleverd");
     const wasAlreadyBesteld =
       order.summary.overall === "besteld" ||
       order.summary.overall === "geleverd";
@@ -418,14 +438,17 @@ export function PurchasingPanel() {
           let te_kopen = 0;
           let besteld = 0;
           let geleverd = 0;
+          let active = 0;
           for (const i of items) {
+            if (i.status === "geannuleerd") continue;
+            active += 1;
             if (i.status === "geleverd") geleverd += 1;
             else if (i.status === "besteld") besteld += 1;
             else te_kopen += 1;
           }
           let overall: InkoopRegelStatus | "deels" = "te_kopen";
-          if (items.length > 0 && geleverd === items.length) overall = "geleverd";
-          else if (items.length > 0 && te_kopen === 0) overall = "besteld";
+          if (active > 0 && geleverd === active) overall = "geleverd";
+          else if (active > 0 && te_kopen === 0) overall = "besteld";
           else if (besteld > 0 || geleverd > 0) overall = "deels";
           return {
             ...o,
@@ -544,7 +567,10 @@ export function PurchasingPanel() {
     setOkMsg(null);
     try {
       const nextChecks: Record<string, InkoopRegelStatus> = {};
-      for (const item of order.items) nextChecks[item.key] = status;
+      for (const item of order.items) {
+        nextChecks[item.key] =
+          item.status === "geannuleerd" ? "geannuleerd" : status;
+      }
       await persistChecks(order, nextChecks, {
         reload: true,
         askLeverdatum: status === "besteld",
@@ -563,19 +589,12 @@ export function PurchasingPanel() {
 
   const emptyCopy: Record<Desk, string> = {
     bestellen:
-      "Niets te bestellen. Orders komen hier zodra het schouwrapport (PDF) binnen is.",
-    pipeline: "Geen betaalde orders die nog op schouw wachten.",
+      "Niets te bestellen. Orders komen hier zodra het schouwrapport (PDF) binnen is én de klant volledig heeft betaald.",
+    pipeline:
+      "Geen orders in pipeline (wacht op betaling en/of schouw).",
     onderweg: "Geen bestellingen onderweg.",
     geleverd: "Nog geen geleverde orders.",
     te_betalen: "Geen openstaande leveranciersfacturen (op krediet).",
-  };
-
-  const euroLabel: Record<Desk, string> = {
-    bestellen: "te bestellen",
-    pipeline: "in pipeline",
-    onderweg: "besteld",
-    geleverd: "geleverd",
-    te_betalen: "nog te betalen",
   };
 
   return (
@@ -586,16 +605,7 @@ export function PurchasingPanel() {
             Purchasing
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            {leverancier}
-            {!loading && filtered.length > 0 ? (
-              <>
-                {" · "}
-                <span className="tabular-nums text-ink">
-                  {formatEuro(deskEuro)}
-                </span>{" "}
-                {euroLabel[desk]}
-              </>
-            ) : null}
+            Materiaal inkopen bij {leverancier} · status en levering
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -615,44 +625,6 @@ export function PurchasingPanel() {
           </button>
         </div>
       </div>
-
-      {!loading ? (
-        <div className="grid gap-2 border-b border-line px-4 py-3 sm:grid-cols-3 sm:px-5">
-          <div className="rounded-xl border border-line bg-wash/40 px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Te bestellen
-            </p>
-            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-ink">
-              {formatEuro(totals.te_bestellen_ex_btw)}
-            </p>
-            <p className="text-[11px] text-muted">ex. btw · nog in te kopen</p>
-          </div>
-          <div className="rounded-xl border border-[#C45A12]/30 bg-[#C45A12]/5 px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Op krediet open
-            </p>
-            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-[#C45A12]">
-              {formatEuro(totals.op_krediet_ex_btw)}
-            </p>
-            <p className="text-[11px] text-muted">
-              {totals.op_krediet_count} order
-              {totals.op_krediet_count === 1 ? "" : "s"} · nog te betalen
-            </p>
-          </div>
-          <div className="rounded-xl border border-green/30 bg-green-soft/30 px-3 py-2.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Betaald aan leverancier
-            </p>
-            <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-green-deeper">
-              {formatEuro(totals.betaald_ex_btw)}
-            </p>
-            <p className="text-[11px] text-muted">
-              {totals.betaald_count} order
-              {totals.betaald_count === 1 ? "" : "s"}
-            </p>
-          </div>
-        </div>
-      ) : null}
 
       <div className="flex flex-wrap border-b border-line">
         {(
@@ -828,14 +800,18 @@ export function PurchasingPanel() {
                         })()}
                       </div>
                       <div className="min-w-0">
-                        <p
-                          className={[
-                            "truncate text-xs font-semibold",
-                            badge.className,
-                          ].join(" ")}
-                        >
-                          {badge.label}
-                        </p>
+                        {desk === "pipeline" && order.klant_betaling ? (
+                          <KlantBetalingBar betaling={order.klant_betaling} />
+                        ) : (
+                          <p
+                            className={[
+                              "truncate text-xs font-semibold",
+                              badge.className,
+                            ].join(" ")}
+                          >
+                            {badge.label}
+                          </p>
+                        )}
                       </div>
                       <div className="text-right tabular-nums text-sm text-ink">
                         {order.summary.te_kopen > 0
@@ -974,51 +950,136 @@ export function PurchasingPanel() {
                             <span className="text-right">Regel</span>
                           </div>
                           <ul className="divide-y divide-line">
-                            {order.items.map((item) => (
+                            {order.inkoop_extra_notities ? (
+                              <p className="border-b border-line bg-[#FFF8D6]/60 px-3 py-2 text-xs text-ink">
+                                <span className="font-semibold">
+                                  Schouw · inkoop:{" "}
+                                </span>
+                                {order.inkoop_extra_notities}
+                              </p>
+                            ) : null}
+                            {order.items.map((item) => {
+                              const foto = inkoopProductImageFor(
+                                item.sku,
+                                item.label
+                              );
+                              const cancelled = item.status === "geannuleerd";
+                              return (
                               <li
                                 key={item.key}
-                                className="grid grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] items-center gap-x-3 px-3 py-2"
+                                className={[
+                                  "grid grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] items-center gap-x-3 px-3 py-2",
+                                  cancelled ? "opacity-60" : "",
+                                ].join(" ")}
                               >
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium text-ink">
-                                    {item.label}
+                                <div className="flex min-w-0 items-center gap-2.5">
+                                  {foto ? (
+                                    <div
+                                      className={[
+                                        "flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden border border-line bg-[#0a0a0a]",
+                                        cancelled ? "opacity-50" : "",
+                                      ].join(" ")}
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={foto.imageSrc}
+                                        alt=""
+                                        className="h-full w-full object-contain"
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <div className="min-w-0">
+                                  <p
+                                    className={[
+                                      "truncate text-sm font-medium",
+                                      cancelled
+                                        ? "text-muted line-through"
+                                        : "text-ink",
+                                    ].join(" ")}
+                                  >
+                                    {foto?.naam || item.label}
                                   </p>
-                                  {item.sku ? (
-                                    <p className="truncate text-xs text-muted">
-                                      {item.sku}
+                                  {item.notitie ? (
+                                    <p className="mt-0.5 text-[11px] font-medium text-[#C45A12]">
+                                      {item.notitie}
                                     </p>
                                   ) : null}
+                                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                    {item.sku ? (
+                                      <span className="truncate text-xs text-muted">
+                                        {item.sku}
+                                      </span>
+                                    ) : null}
+                                    {!cancelled ? (
+                                      <a
+                                        href={apexProductUrl(
+                                          item.sku,
+                                          item.label
+                                        )}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="shrink-0 text-xs font-semibold text-green-dark hover:underline"
+                                        title="Open bij Apex Power Supplies (winkelwagen)"
+                                      >
+                                        Apex → winkelwagen
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                  </div>
                                 </div>
-                                <p className="text-right tabular-nums text-sm text-ink">
+                                <p
+                                  className={[
+                                    "text-right tabular-nums text-sm",
+                                    cancelled
+                                      ? "text-muted line-through"
+                                      : "text-ink",
+                                  ].join(" ")}
+                                >
                                   {item.aantal}×
                                 </p>
-                                <p className="text-right tabular-nums text-sm text-ink">
+                                <p
+                                  className={[
+                                    "text-right tabular-nums text-sm",
+                                    cancelled
+                                      ? "text-muted line-through"
+                                      : "text-ink",
+                                  ].join(" ")}
+                                >
                                   {formatEuro(item.inkoop_ex_btw)}
                                 </p>
                                 <div className="flex justify-end">
-                                  <select
-                                    value={item.status}
-                                    disabled={
-                                      busyKey === `${order.id}:${item.key}`
-                                    }
-                                    onChange={(e) =>
-                                      void setLineStatus(
-                                        order,
-                                        item.key,
-                                        e.target.value as InkoopRegelStatus
-                                      )
-                                    }
-                                    className="border border-line bg-white px-2 py-1 text-xs font-semibold text-ink outline-none focus:border-green"
-                                  >
-                                    <option value="te_kopen">
-                                      Te bestellen
-                                    </option>
-                                    <option value="besteld">Besteld</option>
-                                    <option value="geleverd">Geleverd</option>
-                                  </select>
+                                  {cancelled ? (
+                                    <span className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                                      Vervallen
+                                    </span>
+                                  ) : (
+                                    <select
+                                      value={item.status}
+                                      disabled={
+                                        busyKey === `${order.id}:${item.key}`
+                                      }
+                                      onChange={(e) =>
+                                        void setLineStatus(
+                                          order,
+                                          item.key,
+                                          e.target.value as InkoopRegelStatus
+                                        )
+                                      }
+                                      className="border border-line bg-white px-2 py-1 text-xs font-semibold text-ink outline-none focus:border-green"
+                                    >
+                                      <option value="te_kopen">
+                                        Te bestellen
+                                      </option>
+                                      <option value="besteld">Besteld</option>
+                                      <option value="geleverd">
+                                        Geleverd
+                                      </option>
+                                    </select>
+                                  )}
                                 </div>
                               </li>
-                            ))}
+                              );
+                            })}
                           </ul>
                         </div>
                       </div>

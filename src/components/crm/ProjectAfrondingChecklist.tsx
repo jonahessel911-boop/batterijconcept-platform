@@ -58,10 +58,15 @@ export function ProjectAfrondingChecklist({
     setError(null);
     const next = isDone(project, id) ? null : new Date().toISOString();
     try {
+      const body: Record<string, string | null> = { [id]: next };
+      // Review afvinken → status Review gevraagd → sales-actie referrals
+      if (id === "review_gevraagd_at" && next) {
+        body.status = "review_gevraagd";
+      }
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [id]: next }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

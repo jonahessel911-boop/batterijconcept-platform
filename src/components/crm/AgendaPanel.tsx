@@ -37,6 +37,7 @@ import {
   isWarmtefondsAanvraagSoort,
   needsVervolgPunt,
   normalizeAfspraakSoort,
+  soortVoorVervolgUitkomst,
   uitkomstVereistVervolgPunt,
 } from "@/lib/afspraak-soort";
 import {
@@ -108,8 +109,22 @@ function formatWeekRange(days: AgendaDay[]): string {
   return `${a} – ${b}`;
 }
 
-function appointmentNote(a: Afspraak): string {
-  return a.notities?.trim() || a.leads?.notities?.trim() || "";
+function PencilIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
 }
 
 function jaNeeLabel(v: boolean | null | undefined): string | null {
@@ -542,7 +557,9 @@ export function AfspraakDetail({
   onCreated: (a: Afspraak) => void;
 }) {
   const [current, setCurrent] = useState(afspraak);
-  const [mode, setMode] = useState<"view" | "verzet" | "annuleer">("view");
+  const [mode, setMode] = useState<
+    "view" | "verzet" | "annuleer" | "adviseur"
+  >("view");
   const [slots, setSlots] = useState<{ start_at: string; end_at: string }[]>(
     []
   );
@@ -557,6 +574,9 @@ export function AfspraakDetail({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [adviseurKeuze, setAdviseurKeuze] = useState("");
+  const [adviseurOpties, setAdviseurOpties] = useState<Adviseur[]>([]);
+  const [adviseurOptiesLoading, setAdviseurOptiesLoading] = useState(false);
   const [saleOfferte, setSaleOfferte] = useState<Offerte | null>(null);
   const [saleOfferteLoading, setSaleOfferteLoading] = useState(false);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
@@ -569,10 +589,19 @@ export function AfspraakDetail({
   const [wfProjectId, setWfProjectId] = useState<string | null>(null);
   const [wfAangevraagdAt, setWfAangevraagdAt] = useState<string | null>(null);
   const [wfBusy, setWfBusy] = useState(false);
+  const [editingNotitie, setEditingNotitie] = useState(false);
+  const [notitieDraft, setNotitieDraft] = useState("");
+  const [notitieSaving, setNotitieSaving] = useState(false);
+  const [notitieSavedMsg, setNotitieSavedMsg] = useState<string | null>(null);
   const actionSectionRef = useRef<HTMLElement | null>(null);
   const saleFormRef = useRef<HTMLDivElement | null>(null);
+  const notitieTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const note = appointmentNote(current);
+  const afspraakNotitie = current.notities?.trim() || "";
+  const leadFallbackNotitie =
+    !afspraakNotitie && current.leads?.notities?.trim()
+      ? current.leads.notities.trim()
+      : null;
   const mailed = Boolean(current.bevestiging_verstuurd);
   const magKlantMail = afspraakStuurtMail(current.soort);
   const isWarmtefondsAfspraak = isWarmtefondsAanvraagSoort(current.soort);
@@ -614,6 +643,7 @@ export function AfspraakDetail({
     setMode("view");
     setError(null);
     setOkMsg(null);
+    setAdviseurKeuze("");
     setNewStart("");
     setCustomStart("");
     setUseCustomTime(false);
@@ -625,6 +655,9 @@ export function AfspraakDetail({
     setSaleOfferte(null);
     setWfProjectId(null);
     setWfAangevraagdAt(null);
+    setEditingNotitie(false);
+    setNotitieDraft(afspraak.notities?.trim() || "");
+    setNotitieSavedMsg(null);
     setBoValues({
       aanbetalingModus: "restant",
       aanbetalingHandmatig: "",
@@ -632,6 +665,14 @@ export function AfspraakDetail({
       installateurNotitie: "",
     });
   }, [afspraak]);
+
+  useEffect(() => {
+    if (!editingNotitie) return;
+    const el = notitieTextareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [editingNotitie]);
 
   useEffect(() => {
     if (!isWarmtefondsAanvraagSoort(afspraak.soort) || !afspraak.lead_id) {
@@ -778,6 +819,132 @@ export function AfspraakDetail({
       cancelledReq = true;
     };
   }, [current.adviseur_id]);
+
+  function startEditNotitie() {
+    setNotitieDraft(current.notities?.trim() || "");
+    setNotitieSavedMsg(null);
+    setError(null);
+    setEditingNotitie(true);
+  }
+
+  async function saveNotitie(nextRaw: string) {
+    const next = nextRaw.trim() || null;
+    const prev = current.notities?.trim() || null;
+    if (next === prev) {
+      setEditingNotitie(false);
+      return;
+    }
+    setNotitieSaving(true);
+    setError(null);
+    setNotitieSavedMsg(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "update_notities",
+          notities: next,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Notitie opslaan mislukt");
+      const updated = (data.afspraak as Afspraak) || {
+        ...current,
+        notities: next,
+      };
+      setCurrent(updated);
+      onUpdated(updated);
+      setEditingNotitie(false);
+      setNotitieSavedMsg("Opgeslagen");
+      window.setTimeout(() => setNotitieSavedMsg(null), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
+    } finally {
+      setNotitieSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (mode !== "adviseur") return;
+    let cancelled = false;
+    setAdviseurOptiesLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch("/api/adviseurs", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const list = ((data.adviseurs as Adviseur[]) || [])
+          .filter((a) => a.actief !== false)
+          .sort((a, b) => a.naam.localeCompare(b.naam, "nl"));
+        setAdviseurOpties(list);
+        if (!adviseurKeuze) {
+          const other = list.find((a) => a.id !== current.adviseur_id);
+          if (other) setAdviseurKeuze(other.id);
+        }
+      } catch {
+        if (!cancelled) setAdviseurOpties([]);
+      } finally {
+        if (!cancelled) setAdviseurOptiesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen laden bij openen adviseur-modus
+  }, [mode, current.adviseur_id]);
+
+  async function overzettenAdviseur() {
+    if (!adviseurKeuze) {
+      setError("Kies een adviseur");
+      return;
+    }
+    if (adviseurKeuze === current.adviseur_id) {
+      setError("Kies een andere adviseur dan de huidige");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "overzetten_adviseur",
+          adviseur_id: adviseurKeuze,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Overzetten mislukt"
+        );
+      }
+      const next = (data.afspraak as Afspraak) || {
+        ...current,
+        adviseur_id: adviseurKeuze,
+        adviseurs:
+          adviseurOpties.find((a) => a.id === adviseurKeuze) ||
+          current.adviseurs,
+      };
+      setCurrent(next);
+      onUpdated(next);
+      setMode("view");
+      const naam =
+        next.adviseurs?.naam ||
+        adviseurOpties.find((a) => a.id === adviseurKeuze)?.naam ||
+        "andere adviseur";
+      setOkMsg(
+        `Overgezet naar ${naam} — lead + agenda. Geen mail naar de klant.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Overzetten mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function verzet() {
     setBusy(true);
@@ -1012,7 +1179,7 @@ export function AfspraakDetail({
             adviseur_id: current.adviseur_id,
             start_at: parsed.toISOString(),
             notities: noteText,
-            soort: "vervolg_punt",
+            soort: soortVoorVervolgUitkomst(uitkomst),
           }),
         });
         const data = await res.json();
@@ -1073,7 +1240,9 @@ export function AfspraakDetail({
           ? `Sale opgeslagen en backoffice-actie afgerond.`
           : needsVervolg
             ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
-            : `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen.`
+            : uitkomst === "deur_niet_open"
+              ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen — backoffice plant opnieuw in.`
+              : `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen.`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -1485,16 +1654,81 @@ export function AfspraakDetail({
             </section>
           )}
 
-          {note ? (
-            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+          <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+            <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                 Notitie
               </p>
+              <div className="flex items-center gap-2">
+                {notitieSaving ? (
+                  <span className="text-[10px] font-semibold text-muted">
+                    Opslaan…
+                  </span>
+                ) : notitieSavedMsg ? (
+                  <span className="text-[10px] font-semibold text-green-dark">
+                    {notitieSavedMsg}
+                  </span>
+                ) : null}
+                {!editingNotitie ? (
+                  <button
+                    type="button"
+                    onClick={startEditNotitie}
+                    className="inline-flex h-7 w-7 items-center justify-center text-muted transition hover:bg-wash hover:text-ink"
+                    title={
+                      afspraakNotitie
+                        ? "Notitie bewerken"
+                        : "Notitie toevoegen"
+                    }
+                    aria-label={
+                      afspraakNotitie
+                        ? "Notitie bewerken"
+                        : "Notitie toevoegen"
+                    }
+                  >
+                    <PencilIcon />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {editingNotitie ? (
+              <textarea
+                ref={notitieTextareaRef}
+                value={notitieDraft}
+                onChange={(e) => setNotitieDraft(e.target.value)}
+                onBlur={() => {
+                  void saveNotitie(notitieDraft);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setEditingNotitie(false);
+                    setNotitieDraft(current.notities?.trim() || "");
+                  }
+                }}
+                disabled={notitieSaving}
+                rows={4}
+                placeholder="Notitie bij deze afspraak…"
+                className="mt-2 w-full resize-y rounded-xl border border-line bg-wash px-3.5 py-3 text-sm leading-relaxed text-ink outline-none focus:border-green focus:bg-white disabled:opacity-60"
+              />
+            ) : afspraakNotitie ? (
               <p className="mt-2 whitespace-pre-wrap rounded-xl bg-wash px-3.5 py-3 text-sm leading-relaxed text-ink">
-                {note}
+                {afspraakNotitie}
               </p>
-            </section>
-          ) : null}
+            ) : leadFallbackNotitie ? (
+              <div className="mt-2 space-y-1.5">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Leadnotitie (nog geen afspraaknotitie)
+                </p>
+                <p className="whitespace-pre-wrap rounded-xl bg-wash px-3.5 py-3 text-sm leading-relaxed text-ink">
+                  {leadFallbackNotitie}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-muted">
+                Geen notitie — klik het potloodje om er een toe te voegen.
+              </p>
+            )}
+          </section>
 
           {error && (
             <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
@@ -1505,6 +1739,69 @@ export function AfspraakDetail({
             <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
               {okMsg}
             </p>
+          )}
+
+          {!cancelled && mode === "adviseur" && (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Adviseur wijzigen
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Intern overzetten: lead + afspraak gaan naar de gekozen
+                adviseur. Mag over bestaande afspraken heen. Geen mail naar de
+                klant.
+              </p>
+              <p className="mt-3 text-xs text-muted">
+                Nu:{" "}
+                <span className="font-semibold text-ink">
+                  {current.adviseurs?.naam || "—"}
+                </span>
+              </p>
+              <label className="mt-3 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Nieuwe adviseur
+                <select
+                  value={adviseurKeuze}
+                  onChange={(e) => setAdviseurKeuze(e.target.value)}
+                  disabled={busy || adviseurOptiesLoading}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm font-semibold text-ink outline-none focus:border-green disabled:opacity-60"
+                >
+                  <option value="">
+                    {adviseurOptiesLoading ? "Laden…" : "Kies adviseur…"}
+                  </option>
+                  {adviseurOpties.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.naam}
+                      {a.id === current.adviseur_id ? " (huidig)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={
+                    busy ||
+                    !adviseurKeuze ||
+                    adviseurKeuze === current.adviseur_id
+                  }
+                  onClick={() => void overzettenAdviseur()}
+                  className="min-h-11 bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+                >
+                  {busy ? "Bezig…" : "Overzetten"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setMode("view");
+                    setError(null);
+                  }}
+                  className="min-h-11 border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash"
+                >
+                  Terug
+                </button>
+              </div>
+            </section>
           )}
 
           {!cancelled && mode === "verzet" && (
@@ -1672,6 +1969,26 @@ export function AfspraakDetail({
               </Icon>
             }
           />
+          {!cancelled && (
+            <FooterAction
+              label="Adviseur"
+              tone="ink"
+              disabled={busy}
+              onClick={() => {
+                setMode((m) => (m === "adviseur" ? "view" : "adviseur"));
+                setMailKlant(null);
+                setError(null);
+                setOkMsg(null);
+              }}
+              icon={
+                <Icon>
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+                </Icon>
+              }
+            />
+          )}
           {!cancelled && (
             <FooterAction
               label="Verzetten"

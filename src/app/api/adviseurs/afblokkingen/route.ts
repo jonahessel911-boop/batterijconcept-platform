@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
 
   const geblokkeerd = body.geblokkeerd !== false;
 
-  if (isHardGeblokkeerdSlot(dag, slot_hour)) {
+  if (isHardGeblokkeerdSlot(dag, slot_hour, adviseur_id)) {
     return NextResponse.json(
       {
         error:
@@ -177,7 +177,10 @@ export async function POST(req: NextRequest) {
     const sb = getSupabaseAdmin();
 
     // Zondag: standaard dicht → openen = vrijgave; dichtzetten = vrijgave weg
-    if (isZondagAmsterdam(dag) && magStandaardSlotOntblokken(dag, slot_hour)) {
+    if (
+      isZondagAmsterdam(dag) &&
+      magStandaardSlotOntblokken(dag, slot_hour, adviseur_id)
+    ) {
       if (!geblokkeerd) {
         const { data, error } = await sb
           .from("adviseur_slot_vrijgaven")

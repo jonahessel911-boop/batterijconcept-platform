@@ -23,6 +23,7 @@ import {
   activeBelAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
+  buildGeenContactOutcomePatch,
   geenContactPogingLabel,
   inBelQueue,
   isTerugbelDue,
@@ -329,27 +330,42 @@ export function BelPanel({
     return allBelQueue;
   }, [allBelQueue, bakMode, selectedProvincie]);
 
-  /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld). */
+  /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld), 1× per lead. */
   const terugbelDue = useMemo(() => {
-    const items: { lead: Lead; afspraak: Afspraak; warm: boolean }[] = [];
+    const byLead = new Map<
+      string,
+      { lead: Lead; afspraak: Afspraak; warm: boolean }
+    >();
     for (const a of afspraken) {
       if (!isTerugbelDue(a)) continue;
       const lead = leads.find((l) => l.id === a.lead_id);
       if (!lead?.telefoon?.trim()) continue;
-      items.push({
-        lead,
-        afspraak: a,
-        warm: normalizeAfspraakSoort(a.soort) === "warme_bel",
-      });
+      const warm = normalizeAfspraakSoort(a.soort) === "warme_bel";
+      const prev = byLead.get(lead.id);
+      if (!prev) {
+        byLead.set(lead.id, { lead, afspraak: a, warm });
+        continue;
+      }
+      // Warme terugbel wint; anders vroegste moment
+      const prevWarm = prev.warm ? 1 : 0;
+      const nextWarm = warm ? 1 : 0;
+      if (nextWarm > prevWarm) {
+        byLead.set(lead.id, { lead, afspraak: a, warm });
+      } else if (
+        nextWarm === prevWarm &&
+        new Date(a.start_at).getTime() <
+          new Date(prev.afspraak.start_at).getTime()
+      ) {
+        byLead.set(lead.id, { lead, afspraak: a, warm });
+      }
     }
-    items.sort((a, b) => {
+    return [...byLead.values()].sort((a, b) => {
       if (a.warm !== b.warm) return a.warm ? -1 : 1;
       return (
         new Date(a.afspraak.start_at).getTime() -
         new Date(b.afspraak.start_at).getTime()
       );
     });
-    return items;
   }, [afspraken, leads]);
 
   /**
@@ -639,14 +655,26 @@ export function BelPanel({
     })();
   }
 
+  /** Alle openstaande terugbels van de lead afronden (niet alleen de eerste). */
   async function completeTerugbelAfspraak(leadId: string) {
-    const afspraak = activeBelAfspraak(afspraken, leadId);
-    if (!afspraak) return;
+    const open = afspraken.filter(
+      (a) =>
+        a.lead_id === leadId &&
+        (a.status === "gepland" ||
+          a.status === "bevestigd" ||
+          a.status === "verzet") &&
+        (normalizeAfspraakSoort(a.soort) === "bel" ||
+          normalizeAfspraakSoort(a.soort) === "warme_bel")
+    );
+    if (open.length === 0) return;
     const sb = getSupabaseBrowser();
     await sb
       .from("afspraken")
       .update({ status: "voltooid" })
-      .eq("id", afspraak.id);
+      .in(
+        "id",
+        open.map((a) => a.id)
+      );
   }
 
   /** Terugbel afvinken zonder status te wijzigen — uit prioriteit, terug naar normale regels. */
@@ -751,21 +779,20 @@ export function BelPanel({
     setBusy(true);
     setError(null);
     try {
-      const pogingen =
+      const gc =
         status === "geen_contact"
-          ? Math.min(belpogingenOf(current) + 1, MAX_BELPOGINGEN)
-          : belpogingenOf(current);
-      const vandaag =
-        status === "geen_contact"
-          ? belpogingenVandaagOf(current) + 1
-          : belpogingenVandaagOf(current);
-      const patch: Partial<Lead> = {
-        status,
-        belpogingen: pogingen,
-        belpogingen_vandaag: Math.min(vandaag, MAX_BELPOGINGEN_PER_DAG),
-        terugbellen: false,
-        terugbel_notitie: null,
-      };
+          ? buildGeenContactOutcomePatch(current)
+          : null;
+      const pogingen = gc?.pogingen ?? belpogingenOf(current);
+      const patch: Partial<Lead> = gc
+        ? { ...gc.patch }
+        : {
+            status,
+            belpogingen: pogingen,
+            belpogingen_vandaag: belpogingenVandaagOf(current),
+            terugbellen: false,
+            terugbel_notitie: null,
+          };
       const sb = getSupabaseBrowser();
       let { error: err } = await sb
         .from("leads")
@@ -811,11 +838,7 @@ export function BelPanel({
             ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}`
             : null,
       });
-      if (
-        status === "geen_contact" &&
-        (pogingen === 1 || pogingen === 3) &&
-        current.email?.trim()
-      ) {
+      if (gc?.sendGeenContactMail && current.email?.trim()) {
         void fetch(`/api/leads/${current.id}/geen-contact-mail`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1342,6 +1365,7 @@ export function BelPanel({
                 setClaimedLead((prev) =>
                   prev?.id === current.id ? { ...prev, ...patch } : prev
                 );
+                setTimelineTick((t) => t + 1);
               }}
             />
             <LeadAdresEditor
@@ -1351,6 +1375,7 @@ export function BelPanel({
                 setClaimedLead((prev) =>
                   prev?.id === current.id ? { ...prev, ...patch } : prev
                 );
+                setTimelineTick((t) => t + 1);
               }}
             />
           </div>

@@ -35,7 +35,12 @@ const STATUS_UI: Record<
   },
 };
 
-export function OvereenkomstenPanel() {
+export function OvereenkomstenPanel({
+  embedded = false,
+}: {
+  /** Zonder eigen page-header (parent toont die al). */
+  embedded?: boolean;
+}) {
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,15 +100,17 @@ export function OvereenkomstenPanel() {
 
   return (
     <div className="space-y-4 px-4 py-4 sm:px-5">
-      <div>
-        <h2 className="font-display text-xl font-semibold text-ink">
-          Overeenkomsten
-        </h2>
-        <p className="mt-0.5 text-sm text-muted">
-          ZZP-samenwerkingsovereenkomst versturen · contactpersoon tekent
-          digitaal · ondertekende PDF hier terugzien
-        </p>
-      </div>
+      {!embedded ? (
+        <div>
+          <h2 className="font-display text-xl font-semibold text-ink">
+            Overeenkomsten
+          </h2>
+          <p className="mt-0.5 text-sm text-muted">
+            ZZP-samenwerkingsovereenkomst versturen · contactpersoon tekent
+            digitaal · ondertekende PDF hier terugzien
+          </p>
+        </div>
+      ) : null}
 
       {error ? (
         <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">

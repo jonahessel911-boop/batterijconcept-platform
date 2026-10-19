@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildSignedOffertePdf } from "@/lib/pdf-offerte";
 import { adresRegel } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { offerteOndertekendEmail } from "@/lib/email/templates";
 import { ensureBtwDraftFactuur } from "@/lib/ensure-btw-factuur";
 // Project pas na backoffice-actie afronden (niet bij ondertekenen)
@@ -210,6 +211,10 @@ export async function POST(
           subject: `Ondertekende offerte ${offerte.offerte_nummer}`,
           html,
           tag: "offerte-ondertekend",
+          replyTo: await replyToForLeadAdviseur(
+            supabase,
+            offerte.lead_id as string
+          ),
           attachments: [
             {
               name: filename,

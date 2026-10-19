@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import {
   geenContactPoging1Email,
   geenContactPoging3Email,
@@ -71,6 +72,7 @@ export async function POST(
       subject,
       html,
       tag,
+      replyTo: await replyToForLeadAdviseur(sb, id),
     });
 
     if (!result.ok) {

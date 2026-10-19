@@ -3,6 +3,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   MAANDAG_MEETING_START_ADRES,
   resolveDayStartAdres,
+  skipsMaandagOchtendmeeting,
 } from "@/lib/start-adres";
 
 export type FastDirectionStop = {
@@ -102,6 +103,8 @@ export type PickFastDirectionOptions = {
     address: string | null;
     label?: string | null;
   } | null;
+  /** Voor maandag-uitzondering (geen Daltonlaan / meeting). */
+  adviseurId?: string | null;
   durationSecBetween: (from: string, to: string) => number | null;
   distanceMBetween?: (from: string, to: string) => number | null;
 };
@@ -138,7 +141,11 @@ export function pickTopFastDirectionSlots(
         };
       }
     }
-    const resolved = resolveDayStartAdres(homeDepot || null, dayKey);
+    const resolved = resolveDayStartAdres(
+      homeDepot || null,
+      dayKey,
+      opts.adviseurId
+    );
     if (resolved.address) {
       return {
         address: resolved.address,
@@ -389,7 +396,8 @@ export function uniqueAddresses(
   depotAddress?: string | null,
   limit = 25,
   /** Dagen (yyyy-MM-dd) waarvan stops voorrang krijgen — bv. dagen met vrije slots. */
-  preferDayKeys?: Set<string> | string[]
+  preferDayKeys?: Set<string> | string[],
+  adviseurId?: string | null
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -401,8 +409,10 @@ export function uniqueAddresses(
   };
   push(target);
   if (depotAddress) push(depotAddress);
-  // Maandag-ochtendmeeting: altijd in matrix (best-slots over meerdere weken)
-  push(MAANDAG_MEETING_START_ADRES);
+  // Maandag-ochtendmeeting: in matrix tenzij deze adviseur de meeting overslaat
+  if (!skipsMaandagOchtendmeeting(adviseurId)) {
+    push(MAANDAG_MEETING_START_ADRES);
+  }
 
   const prefer =
     preferDayKeys instanceof Set

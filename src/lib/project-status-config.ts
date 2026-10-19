@@ -154,7 +154,8 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "schouwdag_ingepland",
-    label: "Schouwdag ingepland",
+    /** Week of exacte dag — na Opstarten, vóór Schouw voltooid */
+    label: "Schouw gepland",
     fase: "schouw",
     scope: "beide",
     inPipeline: true,
@@ -246,8 +247,8 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     scope: "beide",
     inPipeline: true,
     taak: {
-      autoKeySuffix: "review",
-      titel: "Review-verzoek versturen",
+      autoKeySuffix: "referrals",
+      titel: "PROJECT IS AFGEROND, VRAAG REFERRALS",
       afdeling: "Verkoop",
       due: { kind: "days", days: 1 },
     },

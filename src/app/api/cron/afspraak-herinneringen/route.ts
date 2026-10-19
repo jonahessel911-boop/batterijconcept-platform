@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -55,7 +56,7 @@ export async function GET(req: Request) {
     const { data: afspraken, error } = await sb
       .from("afspraken")
       .select(
-        "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam)"
+        "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
       )
       .in("status", ["gepland", "bevestigd", "verzet"])
       .gte("start_at", now.toISOString());
@@ -69,7 +70,7 @@ export async function GET(req: Request) {
         const retry = await sb
           .from("afspraken")
           .select(
-            "id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam)"
+            "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
           )
           .in("status", ["gepland", "bevestigd", "verzet"])
           .gte("start_at", now.toISOString());
@@ -101,6 +102,8 @@ async function processBatch(
   sb: ReturnType<typeof getSupabaseAdmin>,
   afspraken: {
     id: string;
+    lead_id?: string | null;
+    adviseur_id?: string | null;
     start_at: string;
     created_at: string;
     manage_token: string | null;
@@ -109,7 +112,10 @@ async function processBatch(
     opwarm_verstuurd?: boolean;
     soort?: string | null;
     leads?: LeadRow | LeadRow[] | null;
-    adviseurs?: { naam?: string | null } | { naam?: string | null }[] | null;
+    adviseurs?:
+      | { naam?: string | null; email?: string | null }
+      | { naam?: string | null; email?: string | null }[]
+      | null;
   }[],
   now: Date
 ) {
@@ -129,6 +135,11 @@ async function processBatch(
     const startAt = new Date(a.start_at);
     const createdAt = new Date(a.created_at);
     const manageUrl = `${appBaseUrl()}/afspraak/${a.manage_token}`;
+    const replyTo = await replyToForAfspraak(sb, {
+      adviseurId: a.adviseur_id,
+      leadId: a.lead_id,
+      adviseurJoin: adviseur,
+    });
     const vars = afspraakMailVars({
       naam: lead?.naam || "klant",
       startAt,
@@ -151,6 +162,7 @@ async function processBatch(
         subject: "Afspraak bevestigd — Batterijconcept",
         html: afspraakBevestigingSequenceEmail(vars),
         tag: "afspraak-bevestiging",
+        replyTo,
       });
       if (result.ok) {
         await sb
@@ -177,6 +189,7 @@ async function processBatch(
         subject: "Salderingsregeling stopt in 2027 — Batterijconcept",
         html: afspraakOpwarmSalderingEmail(vars),
         tag: "afspraak-opwarm",
+        replyTo,
       });
       if (result.ok) {
         const { error: upErr } = await sb
@@ -203,6 +216,7 @@ async function processBatch(
         subject: "Morgen je adviesafspraak — Batterijconcept",
         html: afspraakReminder24uEmail(vars),
         tag: "afspraak-herinnering",
+        replyTo,
       });
       if (result.ok) {
         await sb

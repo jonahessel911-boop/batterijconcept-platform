@@ -136,8 +136,8 @@ export function ReistijdHint({
           from = prevLead ? adresRegel(prevLead) : "";
           label = prevLead?.naam || "vorige afspraak";
         } else {
-          // Maandag → Daltonlaan 500 (ochtendmeeting); anders persoonlijk startadres
-          const dayStart = resolveDayStartAdres(startAdres, startAt);
+          // Maandag → Daltonlaan (ochtendmeeting), tenzij adviseur meeting overslaat
+          const dayStart = resolveDayStartAdres(startAdres, startAt, adviseurId);
           from = (dayStart.address || startAdres || "").trim();
           label =
             dayStart.label ||

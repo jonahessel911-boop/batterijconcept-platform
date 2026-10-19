@@ -143,7 +143,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   warmtefonds_in_behandeling: "Warmtefonds in behandeling",
   warmtefonds_afgewezen: "Warmtefonds afgewezen",
   warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
-  schouwdag_ingepland: "Schouwdag ingepland",
+  schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
   restfactuur_betaald: "Restfactuur betaald — materiaal inkopen",

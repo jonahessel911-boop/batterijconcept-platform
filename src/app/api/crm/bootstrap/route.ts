@@ -99,13 +99,14 @@ export async function GET() {
       const myLeadIds = new Set(
         (leads as { id: string }[]).map((l) => l.id)
       );
-      offertes = offertes.filter((o) => {
-        if (o.aangemaakt_door_id) return o.aangemaakt_door_id === me;
-        // Legacy zonder maker: alleen lead van deze adviseur
-        return (
-          o.leads?.adviseur_id === me || myLeadIds.has(o.lead_id)
-        );
-      });
+      // Zelf aangemaakt ÓF lead van deze adviseur (bijv. na overzetten /
+      // collega die de offerte schreef).
+      offertes = offertes.filter(
+        (o) =>
+          o.aangemaakt_door_id === me ||
+          o.leads?.adviseur_id === me ||
+          myLeadIds.has(o.lead_id)
+      );
       // Schouw/installatie/service: alleen orders van eigen leads
       projectenScoped = projectenScoped.filter((p) => {
         const lead = Array.isArray(p.leads) ? p.leads[0] : p.leads;

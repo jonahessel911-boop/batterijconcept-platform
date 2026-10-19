@@ -10,6 +10,11 @@ import {
   parseSollicitatieStatus,
   sanitizeSollicitatiePayload,
 } from "@/lib/sollicitatie";
+import {
+  formatSollicitatieAdres,
+  pickAdresFromPayload,
+  resolveSollicitatieAdres,
+} from "@/lib/sollicitatie-adres";
 import { sendEmail } from "@/lib/email/postmark";
 import { emailBox, emailH1, emailLayout, emailMuted, emailP } from "@/lib/email/layout";
 
@@ -115,38 +120,75 @@ export async function POST(req: NextRequest) {
 
   const status = parseSollicitatieStatus(body.status);
   const notitie = buildNotitie(body, uploadFiles);
+  const adres = await resolveSollicitatieAdres(pickAdresFromPayload(body));
 
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const insertRow: Record<string, unknown> = {
+      naam,
+      email: pickStr(body.email, body.mail),
+      telefoon: pickStr(body.telefoon, body.phone, body.mobiel),
+      functie: pickStr(
+        body.functie,
+        body.function,
+        body.role,
+        body.vacature,
+        body.job
+      ),
+      status,
+      notitie,
+      bron: pickStr(body.bron, body.source) || "webhook",
+      postcode: adres.postcode,
+      huisnummer: adres.huisnummer,
+      toevoeging: adres.toevoeging,
+      straat: adres.straat,
+      plaats: adres.plaats,
+      raw_payload: sanitizeSollicitatiePayload({
+        ...body,
+        _bestanden: uploadFiles.map((f) => ({
+          name: f.name,
+          size: f.size,
+          type: f.type,
+        })),
+      }),
+    };
+
+    let { data, error } = await sb
       .from("sollicitaties")
-      .insert({
-        naam,
-        email: pickStr(body.email, body.mail),
-        telefoon: pickStr(body.telefoon, body.phone, body.mobiel),
-        functie: pickStr(
-          body.functie,
-          body.function,
-          body.role,
-          body.vacature,
-          body.job
-        ),
-        status,
-        notitie,
-        bron: pickStr(body.bron, body.source) || "webhook",
-        raw_payload: sanitizeSollicitatiePayload({
-          ...body,
-          _bestanden: uploadFiles.map((f) => ({
-            name: f.name,
-            size: f.size,
-            type: f.type,
-          })),
-        }),
-      })
-      .select("id, naam, email, status, notitie, created_at")
+      .insert(insertRow)
+      .select(
+        "id, naam, email, status, notitie, postcode, huisnummer, toevoeging, straat, plaats, created_at"
+      )
       .single();
 
+    // Migratie nog niet gedraaid → opnieuw zonder adreskolommen
+    if (
+      error &&
+      (error.message?.includes("postcode") ||
+        error.message?.includes("huisnummer") ||
+        error.message?.includes("straat") ||
+        error.message?.includes("plaats") ||
+        error.code === "42703")
+    ) {
+      const {
+        postcode: _pc,
+        huisnummer: _hn,
+        toevoeging: _tv,
+        straat: _st,
+        plaats: _pl,
+        ...withoutAdres
+      } = insertRow;
+      const retry = await sb
+        .from("sollicitaties")
+        .insert(withoutAdres)
+        .select("id, naam, email, status, notitie, created_at")
+        .single();
+      data = retry.data as typeof data;
+      error = retry.error;
+    }
+
     if (error) throw error;
+    if (!data) throw new Error("Opslaan mislukt");
 
     const bestanden = [];
     const uploadErrors: string[] = [];
@@ -173,6 +215,7 @@ export async function POST(req: NextRequest) {
         `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${data.email || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${pickStr(body.telefoon, body.phone, body.mobiel) || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Functie</strong><br />${pickStr(body.functie, body.function, body.role, body.vacature, body.job) || "-"}</p>`,
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${formatSollicitatieAdres(adres) || "-"}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Status</strong><br />${status}</p>`,
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Notitie</strong><br />${notitieHtml || "-"}</p>`,
         `<p style="margin:0;font-size:15px;"><strong>Bestanden</strong><br />${
@@ -241,6 +284,9 @@ export async function GET() {
         email: "jona@example.com",
         telefoon: "0612345678",
         functie: "Adviseur",
+        postcode: "1234AB",
+        huisnummer: "12",
+        toevoeging: "",
         status: "nieuw",
         notitie: "Beschikbaar vanaf september",
         bron: "werkenbij-formulier",
@@ -253,6 +299,11 @@ export async function GET() {
           "email",
           "telefoon",
           "functie",
+          "postcode",
+          "huisnummer",
+          "toevoeging",
+          "straat",
+          "plaats",
           "status",
           "notitie|notities|notes|opmerking|bericht|motivatie",
           "bron",

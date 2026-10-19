@@ -231,6 +231,16 @@ function iconForLeadEvent(ev: LeadEvent): FeedIcon {
   }
   if (s === "status" || t.startsWith("projectstatus")) return "status";
   if (s === "factuur" || t.includes("factuur")) return "factuur";
+  if (
+    s === "contact" ||
+    s === "email" ||
+    t.includes("e-mail") ||
+    t.includes("klantmail") ||
+    t.includes("contactmail") ||
+    t.includes("contactgegeven")
+  ) {
+    return "default";
+  }
   if (s === "notitie") return "note";
   return "default";
 }
@@ -354,10 +364,15 @@ export function ProjectPage() {
   const [contactOpen, setContactOpen] = useState(false);
 
   const [newTaakOpen, setNewTaakOpen] = useState(false);
+  /** agenda = bo_agenda (Taken agenda); taak = project_taken */
+  const [newSoort, setNewSoort] = useState<"agenda" | "taak">("agenda");
   const [newTitel, setNewTitel] = useState("");
-  const [newAfdeling, setNewAfdeling] = useState("");
+  const [newInhoud, setNewInhoud] = useState("");
+  const [newAfdeling, setNewAfdeling] = useState("Backoffice");
   const [newPersonId, setNewPersonId] = useState("");
   const [newDue, setNewDue] = useState("");
+  const [newStartLocal, setNewStartLocal] = useState("");
+  const [newEndLocal, setNewEndLocal] = useState("");
   const [creatingTaak, setCreatingTaak] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [trackLinkCopied, setTrackLinkCopied] = useState(false);
@@ -603,7 +618,10 @@ export function ProjectPage() {
       if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
       void refreshLeadEvents(project.lead_id);
       // Bij goedkeuring: restantconcept laden
-      if (status === "aanvraag_goedgekeurd") {
+      if (
+        status === "aanvraag_goedgekeurd" ||
+        status === "aanbod_ondertekenen"
+      ) {
         try {
           const fRes = await fetch(`/api/projecten/${project.id}/facturen`);
           const fData = await fRes.json().catch(() => ({}));
@@ -861,6 +879,7 @@ export function ProjectPage() {
       });
       setOkMsg("Gegevens bijgewerkt.");
       closeGegevensEditor();
+      void refreshLeadEvents(project.lead_id);
     } catch (e) {
       setGegevensError(
         e instanceof Error ? e.message : "Opslaan mislukt"
@@ -870,43 +889,126 @@ export function ProjectPage() {
     }
   }
 
+  function defaultAgendaDatetimeLocal(hour = 10): string {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    // Skip weekend → maandag
+    const day = d.getDay();
+    if (day === 6) d.setDate(d.getDate() + 2);
+    if (day === 0) d.setDate(d.getDate() + 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dayStr = String(d.getDate()).padStart(2, "0");
+    const h = String(hour).padStart(2, "0");
+    return `${y}-${m}-${dayStr}T${h}:00`;
+  }
+
+  function plusOneHourLocal(v: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) return v;
+    const [datePart, timePart] = v.slice(0, 16).split("T");
+    const [hh, mm] = timePart.split(":").map(Number);
+    const nextH = (hh + 1) % 24;
+    return `${datePart}T${String(nextH).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  }
+
+  function openNewTaakForm() {
+    const start = defaultAgendaDatetimeLocal(10);
+    setNewSoort("agenda");
+    setNewTitel("");
+    setNewInhoud("");
+    setNewAfdeling("Backoffice");
+    setNewPersonId(
+      project?.verantwoordelijke_id || session?.id || ""
+    );
+    setNewDue(start.slice(0, 10));
+    setNewStartLocal(start);
+    setNewEndLocal(plusOneHourLocal(start));
+    setNewTaakOpen(true);
+  }
+
   async function createTaak() {
     if (!project) return;
-    if (!newTitel.trim() || !newAfdeling || !newPersonId || !newDue) {
-      setError("Vul titel, afdeling, persoon en due date in.");
+    if (!newTitel.trim() || !newPersonId) {
+      setError("Vul titel en verantwoordelijke in.");
+      return;
+    }
+    if (newSoort === "agenda" && !newStartLocal) {
+      setError("Kies een starttijd voor het agenda-punt.");
+      return;
+    }
+    if (newSoort === "taak" && (!newAfdeling || !newDue)) {
+      setError("Vul afdeling en due date in.");
       return;
     }
     setCreatingTaak(true);
     setError(null);
     try {
-      const due = new Date(`${newDue}T17:00:00`);
-      const res = await fetch("/api/taken", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_id: project.id,
-          titel: newTitel.trim(),
-          afdeling: newAfdeling,
-          verantwoordelijke_id: newPersonId,
-          due_at: due.toISOString(),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Taak aanmaken mislukt"
+      if (newSoort === "agenda") {
+        const lead = Array.isArray(project.leads)
+          ? project.leads[0]
+          : project.leads;
+        const res = await fetch("/api/bo-agenda", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            titel: newTitel.trim(),
+            inhoud:
+              newInhoud.trim() ||
+              [project.project_nummer, lead?.naam, lead?.plaats]
+                .filter(Boolean)
+                .join(" · ") ||
+              null,
+            soort: "afspraak",
+            start_at: newStartLocal,
+            end_at: newEndLocal || null,
+            adviseur_id: newPersonId,
+            project_id: project.id,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error ||
+              "Agenda-punt aanmaken mislukt"
+          );
+        }
+        setNewTaakOpen(false);
+        setOkMsg(
+          "Agenda-punt aangemaakt — zichtbaar in Taken agenda."
         );
+      } else {
+        const due = new Date(`${newDue}T17:00:00`);
+        const res = await fetch("/api/taken", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_id: project.id,
+            titel: newTitel.trim(),
+            afdeling: newAfdeling,
+            verantwoordelijke_id: newPersonId,
+            due_at: due.toISOString(),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Taak aanmaken mislukt"
+          );
+        }
+        const taak = data.taak as ProjectTaak;
+        setTaken((prev) => [taak, ...prev]);
+        setNewTaakOpen(false);
+        setOkMsg("Taak aangemaakt — zichtbaar in Taken agenda.");
       }
-      const taak = data.taak as ProjectTaak;
-      setTaken((prev) => [taak, ...prev]);
-      setNewTaakOpen(false);
       setNewTitel("");
-      setNewAfdeling("");
+      setNewInhoud("");
+      setNewAfdeling("Backoffice");
       setNewPersonId("");
       setNewDue("");
-      setOkMsg("Taak aangemaakt.");
+      setNewStartLocal("");
+      setNewEndLocal("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Taak aanmaken mislukt");
+      setError(e instanceof Error ? e.message : "Aanmaken mislukt");
     } finally {
       setCreatingTaak(false);
     }
@@ -1659,10 +1761,15 @@ export function ProjectPage() {
       soort === "schouw" ||
       soort === "installatie" ||
       soort === "betaling" ||
+      soort === "contact" ||
+      soort === "email" ||
       titel.toLowerCase().startsWith("projectstatus") ||
       titel.toLowerCase().includes("bestelling volledig") ||
       titel.toLowerCase().includes("warmtefonds") ||
-      titel.toLowerCase().includes("materiaal");
+      titel.toLowerCase().includes("materiaal") ||
+      titel.toLowerCase().includes("contact") ||
+      titel.toLowerCase().includes("e-mail") ||
+      titel.toLowerCase().includes("klantmail");
 
     if (!relevant) continue;
 
@@ -1701,6 +1808,7 @@ export function ProjectPage() {
     seenEventTitles.add(dedupeKey);
 
     let displayTitle = titel;
+    let displayBody = ev.detail || undefined;
     if (titel.toLowerCase().startsWith("projectstatus:")) {
       const rest = titel.slice("Projectstatus:".length).trim();
       if (
@@ -1714,12 +1822,37 @@ export function ProjectPage() {
         displayTitle = rest || titel;
       }
     }
+    if (soort === "email" || /klantmail|contactmail/i.test(titel)) {
+      displayTitle = "Contactmail verstuurd";
+      const to =
+        typeof meta.to === "string" && meta.to.trim() ? meta.to.trim() : null;
+      const by =
+        typeof meta.by === "string" && meta.by.trim() ? meta.by.trim() : null;
+      const subject =
+        typeof meta.subject === "string" && meta.subject.trim()
+          ? meta.subject.trim()
+          : null;
+      const bericht =
+        (typeof meta.bericht === "string" && meta.bericht.trim()
+          ? meta.bericht.trim()
+          : null) ||
+        // Oudere events: detail = onderwerp; nieuw: detail = berichttekst
+        (subject ? null : ev.detail?.trim() || null);
+      const header = [
+        to ? `Aan ${to}` : null,
+        subject ? `Onderwerp: ${subject}` : null,
+        by ? `Door ${by}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      displayBody = [header, bericht].filter(Boolean).join("\n\n");
+    }
 
     feed.push({
       key: `ev-${ev.id}`,
       at: ev.created_at,
       title: displayTitle,
-      body: ev.detail || undefined,
+      body: displayBody,
       kind: "event",
       icon: iconForLeadEvent(ev),
     });
@@ -1906,36 +2039,39 @@ export function ProjectPage() {
                   const mailed = off?.track_mail_verstuurd_at || null;
                   const views = off?.track_view_count ?? 0;
                   const hasOfferte = Boolean(off?.id || project.offerte_id);
-                  if (!hasOfferte) return null;
                   return (
                     <div className="mt-2 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        {track ? (
-                          <a
-                            href={`/track/${track}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex text-xs font-semibold text-green-dark underline-offset-2 hover:underline"
+                        {hasOfferte ? (
+                          track ? (
+                            <a
+                              href={`/track/${track}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex text-xs font-semibold text-green-dark underline-offset-2 hover:underline"
+                            >
+                              Klant track &amp; trace →
+                            </a>
+                          ) : (
+                            <span className="text-xs font-semibold text-muted">
+                              Track &amp; trace
+                            </span>
+                          )
+                        ) : null}
+                        {hasOfferte ? (
+                          <button
+                            type="button"
+                            disabled={trackLinkBusy}
+                            onClick={() => void copyTrackLink()}
+                            className="border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
                           >
-                            Klant track &amp; trace →
-                          </a>
-                        ) : (
-                          <span className="text-xs font-semibold text-muted">
-                            Track &amp; trace
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          disabled={trackLinkBusy}
-                          onClick={() => void copyTrackLink()}
-                          className="border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                        >
-                          {trackLinkBusy
-                            ? "…"
-                            : trackLinkCopied
-                              ? "Gekopieerd!"
-                              : "Copy link"}
-                        </button>
+                            {trackLinkBusy
+                              ? "…"
+                              : trackLinkCopied
+                                ? "Gekopieerd!"
+                                : "Copy link"}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setDatumOptieOpen(true)}
@@ -1956,17 +2092,24 @@ export function ProjectPage() {
                           </button>
                         ) : null}
                       </div>
-                      <p className="text-[11px] text-muted">
-                        {mailed
-                          ? `Mail ${formatDateTimeNl(mailed)}`
-                          : "Nog niet gemaild"}
-                        {" · "}
-                        {lastSeen
-                          ? `Laatst geopend ${formatDateTimeNl(lastSeen)}${
-                              views > 1 ? ` (${views}×)` : ""
-                            }`
-                          : "Nog niet geopend"}
-                      </p>
+                      {hasOfferte ? (
+                        <p className="text-[11px] text-muted">
+                          {mailed
+                            ? `Mail ${formatDateTimeNl(mailed)}`
+                            : "Nog niet gemaild"}
+                          {" · "}
+                          {lastSeen
+                            ? `Laatst geopend ${formatDateTimeNl(lastSeen)}${
+                                views > 1 ? ` (${views}×)` : ""
+                              }`
+                            : "Nog niet geopend"}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-muted">
+                          Geen offerte gekoppeld — datumopties kunnen wel, track
+                          &amp; trace nog niet.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}
@@ -2424,38 +2567,85 @@ export function ProjectPage() {
                   </h2>
                   <button
                     type="button"
-                    onClick={() => setNewTaakOpen((v) => !v)}
+                    onClick={() =>
+                      newTaakOpen ? setNewTaakOpen(false) : openNewTaakForm()
+                    }
                     className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c]"
                   >
-                    {newTaakOpen ? "Sluiten" : "+ Taak"}
+                    {newTaakOpen ? "Sluiten" : "+ Agenda"}
                   </button>
                 </div>
                 {newTaakOpen ? (
                   <div className="space-y-3 border-b border-line bg-wash/40 px-4 py-4">
+                    <div className="flex flex-wrap gap-2">
+                      {(
+                        [
+                          ["agenda", "Agenda-punt"],
+                          ["taak", "Taak"],
+                        ] as const
+                      ).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => setNewSoort(id)}
+                          className={[
+                            "border px-2.5 py-1 text-xs font-semibold",
+                            newSoort === id
+                              ? "border-green bg-green-soft text-green-dark"
+                              : "border-line bg-white text-ink",
+                          ].join(" ")}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted">
+                      {newSoort === "agenda"
+                        ? "Verschijnt in Taken agenda van de gekozen medewerker (met link naar dit project)."
+                        : "Projecttaak met due-datum — ook zichtbaar in Taken agenda."}
+                    </p>
                     <label className="block text-[10px] font-semibold uppercase text-muted">
                       Titel
                       <input
                         value={newTitel}
                         onChange={(e) => setNewTitel(e.target.value)}
+                        placeholder={
+                          newSoort === "agenda"
+                            ? "Bijv. Klant bellen over schouw"
+                            : "Bijv. Documenten nalopen"
+                        }
                         className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
                       />
                     </label>
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    {newSoort === "agenda" ? (
                       <label className="block text-[10px] font-semibold uppercase text-muted">
-                        Afdeling
-                        <select
-                          value={newAfdeling}
-                          onChange={(e) => setNewAfdeling(e.target.value)}
-                          className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
-                        >
-                          <option value="">Kies…</option>
-                          {PROJECT_AFDELINGEN.map((a) => (
-                            <option key={a} value={a}>
-                              {a}
-                            </option>
-                          ))}
-                        </select>
+                        Notitie (optioneel)
+                        <textarea
+                          value={newInhoud}
+                          onChange={(e) => setNewInhoud(e.target.value)}
+                          rows={2}
+                          className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                        />
                       </label>
+                    ) : null}
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {newSoort === "taak" ? (
+                        <label className="block text-[10px] font-semibold uppercase text-muted">
+                          Afdeling
+                          <select
+                            value={newAfdeling}
+                            onChange={(e) => setNewAfdeling(e.target.value)}
+                            className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
+                          >
+                            <option value="">Kies…</option>
+                            {PROJECT_AFDELINGEN.map((a) => (
+                              <option key={a} value={a}>
+                                {a}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
                       <label className="block text-[10px] font-semibold uppercase text-muted">
                         Verantwoordelijke
                         <select
@@ -2471,15 +2661,43 @@ export function ProjectPage() {
                           ))}
                         </select>
                       </label>
-                      <label className="block text-[10px] font-semibold uppercase text-muted">
-                        Due
-                        <input
-                          type="date"
-                          value={newDue}
-                          onChange={(e) => setNewDue(e.target.value)}
-                          className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
-                        />
-                      </label>
+                      {newSoort === "taak" ? (
+                        <label className="block text-[10px] font-semibold uppercase text-muted">
+                          Due
+                          <input
+                            type="date"
+                            value={newDue}
+                            onChange={(e) => setNewDue(e.target.value)}
+                            className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
+                          />
+                        </label>
+                      ) : (
+                        <>
+                          <label className="block text-[10px] font-semibold uppercase text-muted">
+                            Start
+                            <input
+                              type="datetime-local"
+                              value={newStartLocal}
+                              onChange={(e) => {
+                                setNewStartLocal(e.target.value);
+                                setNewEndLocal(
+                                  plusOneHourLocal(e.target.value)
+                                );
+                              }}
+                              className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
+                            />
+                          </label>
+                          <label className="block text-[10px] font-semibold uppercase text-muted">
+                            Eind
+                            <input
+                              type="datetime-local"
+                              value={newEndLocal}
+                              onChange={(e) => setNewEndLocal(e.target.value)}
+                              className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm"
+                            />
+                          </label>
+                        </>
+                      )}
                     </div>
                     <div className="flex justify-end">
                       <button
@@ -2488,7 +2706,11 @@ export function ProjectPage() {
                         onClick={() => void createTaak()}
                         className="bg-orange px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
                       >
-                        {creatingTaak ? "Bezig…" : "Taak aanmaken"}
+                        {creatingTaak
+                          ? "Bezig…"
+                          : newSoort === "agenda"
+                            ? "Agenda-punt aanmaken"
+                            : "Taak aanmaken"}
                       </button>
                     </div>
                   </div>
@@ -3124,6 +3346,7 @@ export function ProjectPage() {
         <KlantContactMailModal
           project={project}
           onClose={() => setContactOpen(false)}
+          onSent={() => void refreshLeadEvents(project.lead_id)}
         />
       ) : null}
       {datumOptieOpen ? (

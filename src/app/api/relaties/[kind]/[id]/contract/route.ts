@@ -11,6 +11,7 @@ import {
   uploadRelatieContract,
   type RelatieKind,
 } from "@/lib/relatie-contract";
+import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 
 export const runtime = "nodejs";
 
@@ -140,6 +141,14 @@ export async function POST(
         { status: result.status }
       );
     }
+    await logRelatieActiviteit(auth.sb, {
+      kind,
+      relatieId: id,
+      soort: "contract_upload",
+      titel: "Samenwerkingscontract geüpload",
+      detail: result.contract_bestandsnaam,
+      createdBy: auth.session.adviseurId,
+    });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
     return NextResponse.json(

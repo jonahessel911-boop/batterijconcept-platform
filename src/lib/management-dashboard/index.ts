@@ -3,7 +3,13 @@ export {
   serializeManagementDashboard,
   type MgmtRaw,
 } from "./build";
-export type { ManagementDashboardData, MgmtKpi, MgmtAlert, DrilldownRef } from "./types";
+export type {
+  ManagementDashboardData,
+  MgmtCeoRollup,
+  MgmtKpi,
+  MgmtAlert,
+  DrilldownRef,
+} from "./types";
 export {
   PERIOD_PRESET_LABELS,
   DEFAULT_INSTELLINGEN,

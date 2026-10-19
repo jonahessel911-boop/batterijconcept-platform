@@ -6,13 +6,17 @@ import {
   FINANCIERING_PIPELINE,
   FINANCIERING_STATUS_LABEL,
   FINANCIERING_STATUS_LABEL_KORT,
+  normalizeFinancieringStatus,
 } from "@/lib/financiering-status";
-import { magWarmtefondsRestantFactuur, RESTANT_VAST_INC_BTW } from "@/lib/aanbetaling";
+import {
+  magWarmtefondsRestantFactuur,
+  RESTANT_VAST_INC_BTW,
+} from "@/lib/aanbetaling";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 
 /**
  * Parallel Warmtefonds-spoor — los van orderstatus.
- * Stap 2 (afspraak gepland) vraagt interne datum/tijd.
+ * Interne afspraak is apart (geen pipeline-stap).
  */
 export function ProjectFinancieringPath({
   status,
@@ -31,20 +35,18 @@ export function ProjectFinancieringPath({
     extra?: { warmtefonds_afspraak_at?: string | null }
   ) => void;
   disabled?: boolean;
-  /** Klant-aanbetaling (meestal BTW). */
   aanbetalingInc?: number | null;
-  /** Warmtefonds-aanvraagbedrag (max € 8.500). */
   warmtefondsInc?: number | null;
-  /** Status van bestaande restantfactuur, indien aanwezig. */
   restantFactuurStatus?: string | null;
   onOpenFinancieel?: () => void;
 }) {
-  const [pendingAfspraak, setPendingAfspraak] = useState(false);
+  const [editAfspraak, setEditAfspraak] = useState(false);
   const [afspraakLocal, setAfspraakLocal] = useState("");
 
+  const pipelineStatus = normalizeFinancieringStatus(status);
   const currentIdx =
-    status && status !== "afgewezen"
-      ? FINANCIERING_PIPELINE.indexOf(status)
+    pipelineStatus && pipelineStatus !== "afgewezen"
+      ? FINANCIERING_PIPELINE.indexOf(pipelineStatus)
       : -1;
   const clickable = Boolean(onChange) && !disabled;
   const isAfgewezen = status === "afgewezen";
@@ -54,27 +56,25 @@ export function ProjectFinancieringPath({
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
     const pad = (n: number) => String(n).padStart(2, "0");
-    // Europe/Amsterdam approx via local browser — CRM users are NL
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   function selectStep(step: FinancieringStatus) {
     if (!onChange || disabled) return;
-    if (step === "afspraak_ingepland") {
-      setAfspraakLocal(toDatetimeLocalValue(afspraakAt) || "");
-      setPendingAfspraak(true);
-      return;
-    }
-    setPendingAfspraak(false);
     onChange(step);
+  }
+
+  function openAfspraakEditor() {
+    setAfspraakLocal(toDatetimeLocalValue(afspraakAt) || "");
+    setEditAfspraak(true);
   }
 
   function confirmAfspraak() {
     if (!onChange || !afspraakLocal) return;
     const d = new Date(afspraakLocal);
     if (Number.isNaN(d.getTime())) return;
-    setPendingAfspraak(false);
-    onChange("afspraak_ingepland", {
+    setEditAfspraak(false);
+    onChange(status || "doorgestuurd_naar_edwin", {
       warmtefonds_afspraak_at: d.toISOString(),
     });
   }
@@ -89,13 +89,13 @@ export function ProjectFinancieringPath({
           <p className="mt-0.5 text-[15px] font-semibold text-ink">
             {isAfgewezen
               ? "Afgewezen"
-              : status
-                ? FINANCIERING_STATUS_LABEL_KORT[status]
+              : pipelineStatus
+                ? FINANCIERING_STATUS_LABEL_KORT[pipelineStatus]
                 : "Nog niet gestart"}
           </p>
-          {status === "afspraak_ingepland" && afspraakAt ? (
+          {afspraakAt ? (
             <p className="mt-0.5 text-[12px] text-muted">
-              Afspraak: {formatDateTimeNl(afspraakAt)}
+              Interne afspraak: {formatDateTimeNl(afspraakAt)}
             </p>
           ) : null}
         </div>
@@ -164,39 +164,73 @@ export function ProjectFinancieringPath({
         })}
       </ol>
 
-      {pendingAfspraak ? (
-        <div className="space-y-2 border border-[#FDBA74]/50 bg-[#FFF7ED] px-3 py-3">
-          <p className="text-[12px] font-semibold text-ink">
-            Wanneer is de Warmtefonds-afspraak?
-          </p>
-          <p className="text-[11px] text-muted">
-            Alleen interne info — geen mail naar de klant.
-          </p>
-          <input
-            type="datetime-local"
-            value={afspraakLocal}
-            onChange={(e) => setAfspraakLocal(e.target.value)}
-            disabled={disabled}
-            className="w-full border border-line bg-white px-2.5 py-2 text-sm text-ink outline-none focus:border-[#C45A12]"
-          />
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={disabled || !afspraakLocal}
-              onClick={confirmAfspraak}
-              className="bg-[#C45A12] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-50"
-            >
-              Opslaan
-            </button>
+      {clickable ? (
+        <div className="border border-line bg-wash/50 px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Interne afspraak
+              </p>
+              <p className="mt-0.5 text-[12px] text-ink">
+                {afspraakAt
+                  ? formatDateTimeNl(afspraakAt)
+                  : "Nog geen afspraak gezet"}
+              </p>
+            </div>
             <button
               type="button"
               disabled={disabled}
-              onClick={() => setPendingAfspraak(false)}
-              className="px-3 py-1.5 text-[12px] font-semibold text-muted hover:bg-wash"
+              onClick={openAfspraakEditor}
+              className="text-[12px] font-semibold text-[#C45A12] hover:underline"
             >
-              Annuleren
+              {afspraakAt ? "Wijzigen" : "Plannen"}
             </button>
           </div>
+          {editAfspraak ? (
+            <div className="mt-2 space-y-2 border-t border-line pt-2">
+              <p className="text-[11px] text-muted">
+                Alleen intern — geen mail naar de klant.
+              </p>
+              <input
+                type="datetime-local"
+                value={afspraakLocal}
+                onChange={(e) => setAfspraakLocal(e.target.value)}
+                disabled={disabled}
+                className="w-full border border-line bg-white px-2.5 py-2 text-sm text-ink outline-none focus:border-[#C45A12]"
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={disabled || !afspraakLocal}
+                  onClick={confirmAfspraak}
+                  className="bg-[#C45A12] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-50"
+                >
+                  Opslaan
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setEditAfspraak(false)}
+                  className="px-3 py-1.5 text-[12px] font-semibold text-muted hover:bg-wash"
+                >
+                  Annuleren
+                </button>
+                {afspraakAt ? (
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      setEditAfspraak(false);
+                      onChange?.(status, { warmtefonds_afspraak_at: null });
+                    }}
+                    className="px-3 py-1.5 text-[12px] font-semibold text-[#C45A12] hover:bg-wash"
+                  >
+                    Wissen
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -242,7 +276,7 @@ export function ProjectFinancieringPath({
             </p>
           ) : (
             <p className="pt-1 text-[11px] text-muted">
-              Restantfactuur pas versturen ná “Aanvraag goedgekeurd”.
+              Restantfactuur pas versturen ná “Aanbod ondertekenen”.
             </p>
           )}
         </div>

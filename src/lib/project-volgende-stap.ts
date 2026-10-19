@@ -160,7 +160,7 @@ function volgendeStapNaOpstarten(
   if (isSchouwdagDefinitief(project)) {
     return {
       eyebrow: "Volgende stap",
-      titel: "Zet orderstatus op Schouwdag ingepland",
+      titel: "Zet orderstatus op Schouw gepland",
       reden: "Exacte schouwdag staat — trek de orderstatus gelijk.",
       uiterlijkLabel: "Nu",
       uiterlijkAt: null,
@@ -168,7 +168,7 @@ function volgendeStapNaOpstarten(
       overdue: false,
       actie: {
         kind: "status",
-        label: "Zet op Schouwdag ingepland",
+        label: "Zet op Schouw gepland",
         status: "schouwdag_ingepland",
       },
     };

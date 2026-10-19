@@ -62,8 +62,9 @@ export function FactuurPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState<
-    "pdf" | "send" | "paid" | "delete" | "save" | "credit" | null
+    "pdf" | "send" | "paid" | "delete" | "save" | "credit" | "note" | null
   >(null);
+  const [interneNotitie, setInterneNotitie] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [betaaldOp, setBetaaldOp] = useState(() =>
@@ -122,6 +123,7 @@ export function FactuurPage() {
 
         setCredits((creditRows || []) as Factuur[]);
         setFactuur(fac);
+        setInterneNotitie(fac.interne_notitie || "");
         setEditBedrag(
           Number(fac.bedrag_inc_btw).toLocaleString("nl-NL", {
             minimumFractionDigits: 2,
@@ -206,6 +208,36 @@ export function FactuurPage() {
       setMsg("Concept bijgewerkt.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveInterneNotitie() {
+    if (!factuur) return;
+    setBusy("note");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          interne_notitie: interneNotitie.trim() || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Notitie opslaan mislukt"
+        );
+      }
+      const updated = data.factuur as Factuur;
+      setFactuur(updated);
+      setInterneNotitie(updated.interne_notitie || "");
+      setMsg("Notitie opgeslagen.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
     } finally {
       setBusy(null);
     }
@@ -866,6 +898,33 @@ export function FactuurPage() {
                 </dd>
               </div>
             </dl>
+          </section>
+
+          <section className="border border-line bg-white p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+              Notitie
+            </p>
+            <p className="mt-1 text-[11px] text-muted">
+              Alleen intern — niet op de PDF naar de klant.
+            </p>
+            <textarea
+              value={interneNotitie}
+              onChange={(e) => setInterneNotitie(e.target.value)}
+              rows={4}
+              placeholder="Bijv. belafspraak, belofte, reden openstaand…"
+              className="mt-3 w-full resize-y border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+            />
+            <button
+              type="button"
+              disabled={
+                busy !== null ||
+                interneNotitie.trim() === (factuur.interne_notitie || "").trim()
+              }
+              onClick={() => void saveInterneNotitie()}
+              className="mt-2 w-full bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+            >
+              {busy === "note" ? "Opslaan…" : "Notitie opslaan"}
+            </button>
           </section>
 
           <section className="border border-line bg-white p-4">

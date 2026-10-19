@@ -81,23 +81,29 @@ export function LeadContactEditor({
       if (err) throw err;
       onSaved(patch);
       setOkMsg("Opgeslagen");
+      const beforeEmail = (lead.email || "").trim() || null;
+      const afterEmail = (patch.email || "").trim() || null;
+      const beforeTel = (lead.telefoon || "").trim() || null;
+      const afterTel = (patch.telefoon || "").trim() || null;
+      const detail = [
+        patch.naam !== lead.naam ? `Naam: ${patch.naam}` : null,
+        afterTel !== beforeTel ? `Tel: ${afterTel || "—"}` : null,
+        afterEmail !== beforeEmail ? `E-mail: ${afterEmail || "—"}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
       void fetch(`/api/leads/${lead.id}/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "contact",
-          titel: "Contactgegevens aangepast",
-          detail: [
-            patch.naam !== lead.naam ? `Naam: ${patch.naam}` : null,
-            patch.telefoon !== lead.telefoon
-              ? `Tel: ${patch.telefoon || "—"}`
-              : null,
-            patch.email !== lead.email
-              ? `E-mail: ${patch.email || "—"}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" · "),
+          titel:
+            afterEmail !== beforeEmail &&
+            afterTel === beforeTel &&
+            patch.naam === lead.naam
+              ? "E-mailadres aangepast"
+              : "Contactgegevens aangepast",
+          detail: detail || "Contactgegevens bijgewerkt",
         }),
       }).catch(() => {});
     } catch (e) {

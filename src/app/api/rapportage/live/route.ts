@@ -1,0 +1,145 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getSupabaseAdmin } from "@/lib/supabase";
+import { errMessage } from "@/lib/errors";
+import { isHuisbezoekAfspraak } from "@/lib/bel-conversie";
+import { dayKeyAmsterdam } from "@/lib/adviseur-beschikbaarheid";
+import {
+  amsDayBounds,
+  hoursBetween,
+  liveRangeYmd,
+  parseLiveDays,
+  summarizeLiveRows,
+  type LiveLeadRow,
+} from "@/lib/live-rapportage";
+import { todayAmsterdamYmd } from "@/lib/lead-conversie";
+
+export const runtime = "nodejs";
+
+type Sb = ReturnType<typeof getSupabaseAdmin>;
+
+type AfspraakHit = {
+  lead_id: string;
+  created_at: string;
+  start_at: string | null;
+};
+
+/**
+ * Eerste (vroegste created_at) niet-geannuleerde huisbezoek per lead.
+ */
+async function loadEersteHuisbezoekPerLead(
+  sb: Sb,
+  leadIds: string[]
+): Promise<Map<string, AfspraakHit>> {
+  const out = new Map<string, AfspraakHit>();
+  const unique = [...new Set(leadIds.filter(Boolean))];
+  if (unique.length === 0) return out;
+  const chunk = 200;
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    const { data, error } = await sb
+      .from("afspraken")
+      .select("id, lead_id, created_at, start_at, status, soort")
+      .in("lead_id", slice)
+      .neq("status", "geannuleerd");
+    if (error) throw error;
+    for (const a of data || []) {
+      const leadId = a.lead_id as string;
+      if (!leadId) continue;
+      if (
+        !isHuisbezoekAfspraak({
+          id: a.id as string,
+          lead_id: leadId,
+          created_at: (a.created_at as string) || null,
+          start_at: (a.start_at as string) || "",
+          status: (a.status as string) || null,
+          soort: (a.soort as string) || null,
+        })
+      ) {
+        continue;
+      }
+      const created = (a.created_at as string) || "";
+      if (!created) continue;
+      const prev = out.get(leadId);
+      if (!prev || created < prev.created_at) {
+        out.set(leadId, {
+          lead_id: leadId,
+          created_at: created,
+          start_at: (a.start_at as string) || null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * GET /api/rapportage/live?days=1|3|7
+ *
+ * Cohort: leads die in de afgelopen N dagen (Amsterdam) binnenkwamen.
+ * L→A = hoeveel van díe leads ooit een huisbezoek kregen.
+ * "Wanneer ingepland" = afspraak.created_at van het eerste huisbezoek.
+ * Oude leads die nu pas worden ingepland tellen níet mee.
+ */
+export async function GET(req: NextRequest) {
+  const days = parseLiveDays(req.nextUrl.searchParams.get("days"));
+  const todayYmd = todayAmsterdamYmd();
+  const { startYmd, endYmd } = liveRangeYmd(days, todayYmd);
+
+  try {
+    const sb = getSupabaseAdmin();
+    const { start } = amsDayBounds(startYmd);
+    const { end } = amsDayBounds(endYmd);
+
+    const { data: leadRows, error: leadsErr } = await sb
+      .from("leads")
+      .select("id, naam, plaats, bron, status, created_at")
+      .gte("created_at", start.toISOString())
+      .lte("created_at", end.toISOString())
+      .order("created_at", { ascending: false });
+    if (leadsErr) throw leadsErr;
+
+    const leads = (leadRows || []) as Array<{
+      id: string;
+      naam: string | null;
+      plaats: string | null;
+      bron: string | null;
+      status: string | null;
+      created_at: string;
+    }>;
+
+    const huisbezoek = await loadEersteHuisbezoekPerLead(
+      sb,
+      leads.map((l) => l.id)
+    );
+
+    const rows: LiveLeadRow[] = leads.map((l) => {
+      const hit = huisbezoek.get(l.id) || null;
+      const createdYmd = dayKeyAmsterdam(l.created_at);
+      const ingeplandAt = hit?.created_at ?? null;
+      return {
+        id: l.id,
+        naam: (l.naam || "").trim() || "Onbekend",
+        plaats: l.plaats,
+        bron: l.bron,
+        status: l.status,
+        created_at: l.created_at,
+        created_ymd: createdYmd,
+        ingepland_at: ingeplandAt,
+        ingepland_ymd: ingeplandAt ? dayKeyAmsterdam(ingeplandAt) : null,
+        afspraak_start_at: hit?.start_at ?? null,
+        uren_tot_ingepland: hit
+          ? hoursBetween(l.created_at, hit.created_at)
+          : null,
+      };
+    });
+
+    return NextResponse.json(
+      summarizeLiveRows(rows, days, todayYmd, startYmd, endYmd)
+    );
+  } catch (e) {
+    return NextResponse.json(
+      { error: errMessage(e) || "Live-rapportage mislukt" },
+      { status: 500 }
+    );
+  }
+}

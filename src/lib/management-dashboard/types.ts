@@ -160,6 +160,29 @@ export type MgmtForecast = {
   missing: string[];
 };
 
+/** CEO one-pager: volume + omzet + kosten + winst voor één periode. */
+export type MgmtCeoRollup = {
+  leads: number;
+  /** Netto fysieke huisbezoeken gezet in de periode */
+  afsprakenNetto: number;
+  deals: number;
+  /** Getekende orderwaarde excl. btw */
+  orderWorth: number;
+  revenueInvoiced: number;
+  revenuePaid: number;
+  avgOrderWorth: number | null;
+  costs: {
+    product: number;
+    installation: number;
+    salesCommission: number;
+    leadAds: number;
+    total: number;
+  };
+  /** orderWorth − alle kosten */
+  profit: number;
+  profitMarginPct: number | null;
+};
+
 export type MgmtFinanceOverview = {
   getekendeOrderwaarde: number;
   gefactureerdeOmzet: number;
@@ -178,6 +201,8 @@ export type MgmtFinanceOverview = {
   btwNetto: number | null;
   btwReservering: number;
   btwTekortOverschot: number | null;
+  /** Compacte CEO-rollup (zelfde periode als finance). */
+  ceo: MgmtCeoRollup;
   aging: MgmtAgingBucket[];
   cashflow: {
     horizonDays: number;

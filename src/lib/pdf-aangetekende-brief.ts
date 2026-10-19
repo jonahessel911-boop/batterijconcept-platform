@@ -9,9 +9,11 @@ import {
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 
-export const AV_ANNULERING_ARTIKEL =
-  process.env.AV_ANNULERING_ARTIKEL?.trim() || "8";
+import { AV_ANNULERING_ARTIKEL } from "@/lib/av-annulering";
 
+export { AV_ANNULERING_ARTIKEL };
+
+/** Aangetekende brief (WF): dreiging 50% bij niet-meewerken. */
 export const ANNULERING_PCT = 0.5;
 
 export type AangetekendeBriefInput = {

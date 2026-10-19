@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import {
   installatieKlantEmail,
   installatiePartnerEmail,
@@ -184,6 +185,10 @@ export async function POST(
         subject: "Installatie gepland — Batterijconcept",
         html,
         tag: "installatie-klant",
+        replyTo: await replyToForLeadAdviseur(
+          sb,
+          updated.lead_id as string | null
+        ),
       });
       mails.klant = sent.ok
         ? { ok: true }
@@ -264,9 +269,25 @@ export async function POST(
       });
     }
 
+    const { syncPartnerGoogleEvent } = await import("@/lib/google-calendar");
+    const googleCalendar = await syncPartnerGoogleEvent({
+      partnerId: partner.id,
+      projectId: id,
+      kind: "installatie",
+      startIso: whenIso,
+      projectNummer: updated.project_nummer,
+      titel: updated.titel,
+      notities: installatieNotities,
+      lead,
+      existingEventId:
+        (updated as { installatie_gcal_event_id?: string | null })
+          .installatie_gcal_event_id || null,
+    });
+
     return NextResponse.json({
       project: { ...updated, ...mailPatch },
       mails,
+      googleCalendar,
     });
   } catch (e) {
     return NextResponse.json(

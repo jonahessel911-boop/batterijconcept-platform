@@ -5,6 +5,7 @@ import { type BoView, backofficeHref, parseBoView } from "@/lib/bo-view";
 import { useBoViewStore } from "@/lib/bo-view-store";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
+import { BelConversiePanel } from "./BelConversiePanel";
 import { Planbord } from "./Planbord";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
 import { TakenAgendaPanel } from "./TakenAgendaPanel";
@@ -79,6 +80,14 @@ export function BackofficePanel({
     return (
       <div className="px-5 pb-5 pt-5">
         <ServiceVerzoekenPanel />
+      </div>
+    );
+  }
+
+  if (view === "bel_rapportage") {
+    return (
+      <div className="bg-wash/40 px-4 py-5 sm:px-5">
+        <BelConversiePanel />
       </div>
     );
   }

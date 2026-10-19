@@ -13,6 +13,8 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith("/api/cron/")) return true;
   if (pathname.startsWith("/api/v1")) return true;
   if (pathname.startsWith("/api/auth/login")) return true;
+  if (pathname.startsWith("/api/installatie-partners/google/callback"))
+    return true;
 
   if (
     pathname.startsWith("/api/afspraken/") &&

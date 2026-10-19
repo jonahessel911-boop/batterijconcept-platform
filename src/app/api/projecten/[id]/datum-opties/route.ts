@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { requireBackofficeSession } from "@/lib/auth-require-backoffice";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { datumOptieKlantEmail } from "@/lib/email/templates";
 import { ensureOfferteTrackToken } from "@/lib/ensure-track-token";
 import { logLeadEvent } from "@/lib/lead-events";
@@ -228,6 +229,10 @@ export async function POST(
       subject: `Kies een datum — ${soortLabel} · BatterijConcept`,
       html,
       tag: `datum-optie-${soort}`,
+      replyTo: await replyToForLeadAdviseur(
+        sb,
+        project.lead_id as string | null
+      ),
     });
 
     if (!sent.ok) {

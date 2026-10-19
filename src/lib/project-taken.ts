@@ -11,6 +11,10 @@ import {
   isFinancieringStatus,
   type FinancieringStatus,
 } from "@/lib/financiering-status";
+import {
+  REFERRAL_TAK_AUTO_KEY,
+  REFERRAL_TAK_TITEL,
+} from "@/lib/sales-referral-taak";
 export type TaakStatus = "todo" | "doing" | "done";
 
 export type AutoTaakDef = {
@@ -85,6 +89,18 @@ export function autoTakenVoorStatus(
         titel: "BTW terugvrage starten",
         afdeling: "Backoffice",
         dueInDays: 2,
+      },
+    ];
+  }
+
+  // Review afgevinkt → sales vraagt referrals
+  if (key === "review_gevraagd") {
+    return [
+      {
+        autoKey: REFERRAL_TAK_AUTO_KEY,
+        titel: REFERRAL_TAK_TITEL,
+        afdeling: "Verkoop",
+        dueInDays: 1,
       },
     ];
   }

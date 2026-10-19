@@ -3,6 +3,11 @@
 import { useMemo, useState } from "react";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
+import {
+  CONVERSIE_PERIOD_LABELS,
+  CONVERSIE_PERIODS,
+  type ConversiePeriod,
+} from "@/lib/conversie-period";
 import { normalizeProvincieLabel, PROVINCIE_ONBEKEND } from "@/lib/postcode-provincie";
 import { formatEuro } from "@/lib/format";
 
@@ -10,6 +15,9 @@ const GEO_URL = "/geo/NL.geojson";
 
 type Props = {
   regions: GeoRegionMetrics[];
+  period?: ConversiePeriod;
+  periodLabel?: string;
+  onPeriodChange?: (period: ConversiePeriod) => void;
 };
 
 function heatColor(leads: number, max: number): string {
@@ -22,7 +30,12 @@ function heatColor(leads: number, max: number): string {
   return "#1f6b3a";
 }
 
-export function RapportageMap({ regions }: Props) {
+export function RapportageMap({
+  regions,
+  period = "all_time",
+  periodLabel,
+  onPeriodChange,
+}: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
 
@@ -64,13 +77,38 @@ export function RapportageMap({ regions }: Props) {
   return (
     <div className="grid gap-0 lg:grid-cols-[1fr_280px]">
       <div className="min-w-0 border-b border-line p-4 lg:border-b-0 lg:border-r">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
-          Nederland · provincies
-        </p>
-        <p className="mt-1 text-sm text-muted">
-          Klik op een provincie voor leads, afspraken en deals. Kleur = aantal
-          leads.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+              Nederland · provincies
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Leads die binnenkwamen in{" "}
+              <span className="font-semibold text-ink">
+                {periodLabel || CONVERSIE_PERIOD_LABELS[period]}
+              </span>
+              . Kleur = aantal leads. Klik op een provincie voor details.
+            </p>
+          </div>
+          {onPeriodChange ? (
+            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Periode
+              <select
+                value={period}
+                onChange={(e) =>
+                  onPeriodChange(e.target.value as ConversiePeriod)
+                }
+                className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+              >
+                {CONVERSIE_PERIODS.map((p) => (
+                  <option key={p} value={p}>
+                    {CONVERSIE_PERIOD_LABELS[p]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
 
         <div className="mx-auto mt-3 w-full max-w-[640px]">
           <ComposableMap

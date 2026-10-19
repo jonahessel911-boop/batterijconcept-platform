@@ -55,7 +55,7 @@ export function DetailShell({
   const allowedTabs = visibleTabs.map((t) => t.id);
 
   return (
-    <div className="crm-bg min-h-screen">
+    <div className="crm-bg flex min-h-screen flex-col">
       <CrmHeader
         onRefresh={onRefresh}
         loading={loading}
@@ -71,7 +71,7 @@ export function DetailShell({
         onOpenSidebar={() => setSidebarMobileOpen(true)}
       />
 
-      <div className="flex min-w-0 w-full flex-1">
+      <div className="flex min-h-0 min-w-0 w-full flex-1">
         {ready ? (
           <CrmSidebar
             active={activeTab}
@@ -97,7 +97,7 @@ export function DetailShell({
           />
         ) : null}
 
-        <div className="min-w-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto">
           <main className="px-3 py-4 sm:px-6 sm:py-8">{children}</main>
         </div>
       </div>

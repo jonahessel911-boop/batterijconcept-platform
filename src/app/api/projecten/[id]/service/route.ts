@@ -238,9 +238,25 @@ export async function POST(
       });
     }
 
+    const { syncPartnerGoogleEvent } = await import("@/lib/google-calendar");
+    const googleCalendar = await syncPartnerGoogleEvent({
+      partnerId: partner.id,
+      projectId: id,
+      kind: "service",
+      startIso: whenIso,
+      projectNummer: updated.project_nummer,
+      titel: updated.titel,
+      notities: serviceNotities,
+      lead,
+      existingEventId:
+        (updated as { service_gcal_event_id?: string | null })
+          .service_gcal_event_id || null,
+    });
+
     return NextResponse.json({
       project: updated,
       mails,
+      googleCalendar,
     });
   } catch (e) {
     return NextResponse.json(

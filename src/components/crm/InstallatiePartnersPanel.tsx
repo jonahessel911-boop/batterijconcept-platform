@@ -88,6 +88,17 @@ export function InstallatiePartnersPanel() {
     );
   }
 
+  function copyCalendarLink(p: InstallatiePartner) {
+    const url = `${portalBase()}/api/installatie/${p.portal_token}/calendar`;
+    void navigator.clipboard.writeText(url).then(
+      () =>
+        setOkMsg(
+          `Agenda-URL gekopieerd voor ${p.naam}. Plak in Google Calendar → Instellingen → Agenda toevoegen → Via URL.`
+        ),
+      () => setError("Kopiëren mislukt")
+    );
+  }
+
   return (
     <div className="border-t border-line">
       <div className="grid gap-0 lg:grid-cols-[340px_1fr]">
@@ -96,8 +107,8 @@ export function InstallatiePartnersPanel() {
             Installatiepartner toevoegen
           </h2>
           <p className="mt-1 text-xs text-muted">
-            Partners ontvangen schouw-mails en zien hun orders in het
-            installatieportaal.
+            Partners ontvangen schouw-mails, zien orders in het portaal en
+            kunnen schouw/installatie/service abonneren via Google Calendar.
           </p>
 
           <form onSubmit={addPartner} className="mt-4 space-y-3">
@@ -186,6 +197,13 @@ export function InstallatiePartnersPanel() {
                       className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
                     >
                       Kopieer portaallink
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyCalendarLink(p)}
+                      className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                    >
+                      Kopieer Google Calendar-URL
                     </button>
                     <button
                       type="button"

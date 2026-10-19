@@ -642,14 +642,15 @@ function MateriaalModal({
           aantal: r.aantal,
           product_id: r.product_id,
         })),
-        producten
+        producten,
+        checks
       ),
-    [regels, producten]
+    [regels, producten, checks]
   );
 
   const inkoopTotaal = useMemo(
-    () => inkoopChecklistTotaalExBtw(items),
-    [items]
+    () => inkoopChecklistTotaalExBtw(items, checks),
+    [items, checks]
   );
 
   const cash = useMemo(

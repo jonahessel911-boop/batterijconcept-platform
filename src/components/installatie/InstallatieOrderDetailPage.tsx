@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Project, ProjectFoto, ProjectStatus } from "@/types/database";
+import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import { adresRegel, formatDateTimeLongNl } from "@/lib/format";
+import { isOpleveringsrapport } from "@/lib/project-documenten";
 import {
   formatProjectSchouwWeek,
   isSchouwdagDefinitief,
@@ -64,6 +66,7 @@ export function InstallatieOrderDetailPage() {
   const [status, setStatus] = useState<ProjectStatus>("schouwdag_ingepland");
   const [schouwNotities, setSchouwNotities] = useState("");
   const [installatieNotities, setInstallatieNotities] = useState("");
+  const [opleverFormOpen, setOpleverFormOpen] = useState(false);
 
   const syncForm = useCallback((o: OrderDetail) => {
     setStatus(installerStatusOf(o));
@@ -464,6 +467,30 @@ export function InstallatieOrderDetailPage() {
           >
             {busy === "notities" ? "Opslaan…" : "Notities opslaan"}
           </button>
+
+          <div className="mt-6 border-t border-line pt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Oplevering
+            </p>
+            {fotos.some((f) => isOpleveringsrapport(f.omschrijving)) ? (
+              <p className="mt-2 text-sm font-semibold text-green-dark">
+                Opleverformulier is ingevuld.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-muted">
+                Vink de opleverpunten af en zet je handtekening als installateur.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setOpleverFormOpen(true)}
+              className="mt-3 min-h-11 w-full bg-green px-4 text-sm font-semibold text-white hover:bg-green-dark sm:w-auto"
+            >
+              {fotos.some((f) => isOpleveringsrapport(f.omschrijving))
+                ? "Opnieuw opleverformulier"
+                : "Opleverformulier invullen"}
+            </button>
+          </div>
         </section>
 
         <section className="border border-line bg-white p-5">
@@ -516,6 +543,18 @@ export function InstallatieOrderDetailPage() {
         </section>
 
       </main>
+
+      <OpleverFormulierModal
+        open={opleverFormOpen}
+        project={order}
+        submitUrl={`/api/installatie/${token}/orders/${projectId}/oplever-formulier`}
+        monteurDefault={order.monteur || null}
+        onClose={() => setOpleverFormOpen(false)}
+        onCreated={() => {
+          setOkMsg("Opleverformulier opgeslagen · installatie afgerond.");
+          void load();
+        }}
+      />
     </div>
   );
 }

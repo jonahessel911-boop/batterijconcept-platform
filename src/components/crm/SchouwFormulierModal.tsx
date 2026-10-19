@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Lead, Project } from "@/types/database";
+import { SignaturePadField } from "@/components/offerte/SignaturePadField";
 import {
   emptySchouwFormulier,
   formatSchouwAdres,
   SCHOUW_AANSLUITING_OPTIES,
   SCHOUW_AANVOER_OPTIES,
   SCHOUW_AARDLEK_OPTIES,
+  SCHOUW_AKKOORD_TEKST,
   SCHOUW_BINNEN_BUITEN_OPTIES,
   SCHOUW_BOORMATERIAAL_OPTIES,
   SCHOUW_HOOFDZEKERING_OPTIES,
@@ -19,6 +21,8 @@ import {
   SCHOUW_RUIMTE_GROEP_OPTIES,
   SCHOUW_WANDTYPE_OPTIES,
   SCHOUW_WIFI_OPTIES,
+  validateSchouwFormulierHandtekening,
+  SCHOUW_MONTAGE_ACCESSOIRE_OPTIES,
   type SchouwFormulierData,
   type SchouwJaNee,
 } from "@/lib/schouw-formulier";
@@ -197,6 +201,13 @@ export function SchouwFormulierModal({
     setBusy(false);
   }, [open, project.id, opnemerDefault]);
 
+  const onSigChange = useCallback((dataUrl: string | null) => {
+    setForm((prev) => ({
+      ...prev,
+      handtekeningDataUrl: dataUrl || "",
+    }));
+  }, []);
+
   if (!open) return null;
 
   function patch<K extends keyof SchouwFormulierData>(
@@ -221,6 +232,11 @@ export function SchouwFormulierModal({
   async function submit() {
     if (!form.klantNaam.trim()) {
       setError("Klantnaam is verplicht");
+      return;
+    }
+    const handtekeningErr = validateSchouwFormulierHandtekening(form);
+    if (handtekeningErr) {
+      setError(handtekeningErr);
       return;
     }
     setBusy(true);
@@ -484,6 +500,46 @@ export function SchouwFormulierModal({
                   options={SCHOUW_MONTAGE_OPTIES}
                 />
               </Field>
+              <Field
+                label="Baseplate of wall bracket (inkoop)"
+                className="sm:col-span-2"
+              >
+                <div className="flex flex-wrap gap-2">
+                  {SCHOUW_MONTAGE_ACCESSOIRE_OPTIES.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => patch("montageAccessoire", o.value)}
+                      className={[
+                        "border px-3 py-2 text-left text-sm font-semibold",
+                        form.montageAccessoire === o.value
+                          ? "border-[#0D5C32] bg-[#E8F6EC] text-[#0D5C32]"
+                          : "border-line bg-white text-ink hover:bg-wash",
+                      ].join(" ")}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-muted">
+                  Alleen voor purchasing — komt niet in de PDF. Bij wissel wordt
+                  de oude regel doorstreept.
+                </p>
+              </Field>
+              <Field
+                label="Extra inkoop-notities (niet in PDF)"
+                className="sm:col-span-2"
+              >
+                <textarea
+                  className={inputCls}
+                  rows={2}
+                  value={form.inkoopExtraNotities}
+                  onChange={(e) =>
+                    patch("inkoopExtraNotities", e.target.value)
+                  }
+                  placeholder="Bijv. speciale bevestiging, afwijkende kabel…"
+                />
+              </Field>
               <Field label="Wandtype">
                 <OptionSelect
                   value={form.wandtype}
@@ -683,25 +739,37 @@ export function SchouwFormulierModal({
                 }
               />
             </Field>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Naam opnemer (handtekening)">
-                <input
-                  className={inputCls}
-                  value={form.handtekeningOpnemerNaam}
-                  onChange={(e) =>
-                    patch("handtekeningOpnemerNaam", e.target.value)
-                  }
-                />
-              </Field>
-              <Field label="Naam klant (handtekening)">
-                <input
-                  className={inputCls}
-                  value={form.handtekeningKlantNaam}
-                  onChange={(e) =>
-                    patch("handtekeningKlantNaam", e.target.value)
-                  }
-                />
-              </Field>
+            <Field label="Naam monteur / opnemer *">
+              <input
+                className={inputCls}
+                value={form.handtekeningOpnemerNaam}
+                onChange={(e) =>
+                  patch("handtekeningOpnemerNaam", e.target.value)
+                }
+              />
+            </Field>
+
+            <label className="flex cursor-pointer items-start gap-3 border border-line bg-wash px-3 py-3">
+              <input
+                type="checkbox"
+                checked={form.akkoordInstallatie}
+                onChange={(e) =>
+                  patch("akkoordInstallatie", e.target.checked)
+                }
+                className="mt-0.5 h-5 w-5 shrink-0 accent-[#0D9488]"
+              />
+              <span className="text-sm font-semibold leading-snug text-ink">
+                {SCHOUW_AKKOORD_TEKST}
+              </span>
+            </label>
+
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                Handtekening monteur *
+              </p>
+              <div className="mt-2 border border-line bg-white p-2">
+                <SignaturePadField onChange={onSigChange} />
+              </div>
             </div>
           </section>
         </div>

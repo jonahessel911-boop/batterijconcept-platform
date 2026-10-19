@@ -15,6 +15,7 @@ const SELECT_FALLBACK =
 /** GET /api/taken — open + recente taken (optioneel ?project_id=) */
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("project_id");
+  const autoKey = req.nextUrl.searchParams.get("auto_key")?.trim() || null;
   const openOnly = req.nextUrl.searchParams.get("open") !== "0";
   const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "200");
   const limit = Math.min(
@@ -24,46 +25,61 @@ export async function GET(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
-    let q = sb
-      .from("project_taken")
-      .select(SELECT)
-      .order("due_at", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: false })
-      .limit(limit);
 
-    if (projectId) q = q.eq("project_id", projectId);
-    if (openOnly) q = q.neq("status", "done");
+    async function run(select: string, withNullsFirst: boolean) {
+      let q = sb
+        .from("project_taken")
+        .select(select)
+        .order(
+          "due_at",
+          withNullsFirst
+            ? { ascending: true, nullsFirst: false }
+            : { ascending: true }
+        )
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (projectId) q = q.eq("project_id", projectId);
+      if (autoKey) q = q.eq("auto_key", autoKey);
+      if (openOnly) q = q.neq("status", "done");
+      return q;
+    }
 
-    let { data, error } = await q;
+    let { data, error } = await run(SELECT, true);
+
+    // Fallbacks: nullsFirst / aangemaakt_door / auto_key kolom ontbreekt
+    if (error) {
+      const msg = error.message || "";
+      if (msg.includes("nullsFirst") || msg.includes("nulls first")) {
+        const retry = await run(SELECT, false);
+        data = retry.data;
+        error = retry.error;
+      }
+    }
     if (
       error &&
       (error.message?.includes("aangemaakt_door") || error.code === "42703")
     ) {
-      let q2 = sb
-        .from("project_taken")
-        .select(SELECT_FALLBACK)
-        .order("due_at", { ascending: true, nullsFirst: false })
-        .order("created_at", { ascending: false })
-        .limit(limit);
-      if (projectId) q2 = q2.eq("project_id", projectId);
-      if (openOnly) q2 = q2.neq("status", "done");
-      const retry = await q2;
+      const retry = await run(SELECT_FALLBACK, false);
       data = retry.data;
       error = retry.error;
+    }
+    if (
+      error &&
+      autoKey &&
+      (error.message?.includes("auto_key") || error.code === "42703")
+    ) {
+      // Zonder auto_key-filter: lege lijst i.p.v. 500 (migratie nog niet gedraaid)
+      return NextResponse.json({ taken: [] });
     }
     if (error) {
       if (
         error.code === "42P01" ||
         error.message?.includes("project_taken")
       ) {
-        return NextResponse.json({
-          taken: [],
-          error:
-            "Voer supabase/migrate-project-taken.sql uit in Supabase.",
-        });
+        return NextResponse.json({ taken: [] });
       }
       return NextResponse.json(
-        { error: "Laden mislukt", detail: error.message },
+        { error: "Laden mislukt", detail: error.message, taken: [] },
         { status: 500 }
       );
     }
@@ -71,7 +87,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ taken: data || [] });
   } catch (e) {
     return NextResponse.json(
-      { error: errMessage(e, "Fout") },
+      { error: errMessage(e, "Fout"), taken: [] },
       { status: 500 }
     );
   }

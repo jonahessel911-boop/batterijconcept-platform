@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Project } from "@/types/database";
 import { useCrmSession } from "@/hooks/useCrmSession";
-import { gebruikerRolLabel, normalizeRol } from "@/lib/rollen";
+import { formatEuro } from "@/lib/format";
+import {
+  CONTACT_MAIL_TEMPLATES,
+  contactMailAnnuleringOfInstallatie,
+  type ContactMailTemplateId,
+} from "@/lib/contact-mail-templates";
+import { annuleringskostenIncBtw } from "@/lib/av-annulering";
 
 function firstName(naam: string | null | undefined): string {
   const t = naam?.trim() || "";
@@ -11,23 +17,47 @@ function firstName(naam: string | null | undefined): string {
   return t.split(/\s+/)[0] || t;
 }
 
+function offerteVanProject(project: Project): {
+  offerteNummer: string | null;
+  totaalIncBtw: number | null;
+} {
+  const raw = project.offertes as
+    | Project["offertes"]
+    | Project["offertes"][]
+    | null
+    | undefined;
+  const off = Array.isArray(raw) ? raw[0] : raw;
+  const totaal = Number(off?.totaal_inc_btw);
+  return {
+    offerteNummer: off?.offerte_nummer?.trim() || null,
+    totaalIncBtw: Number.isFinite(totaal) && totaal > 0 ? totaal : null,
+  };
+}
+
 export function KlantContactMailModal({
   project,
   onClose,
+  onSent,
 }: {
   project: Project;
   onClose: () => void;
+  /** Na succesvol versturen (tijdlijn verversen). */
+  onSent?: () => void;
 }) {
   const { session } = useCrmSession();
   const lead = project.leads || null;
   const klantNaam = lead?.naam?.trim() || project.titel?.trim() || "klant";
-
-  const afdelingLabel = useMemo(() => {
-    const rol = normalizeRol(session?.rol);
-    return rol === "admin" ? "Backoffice" : gebruikerRolLabel[rol];
-  }, [session?.rol]);
-
   const medewerkerNaam = session?.naam?.trim() || "Batterijconcept";
+
+  const offFromProject = useMemo(() => offerteVanProject(project), [project]);
+  const [orderTotaal, setOrderTotaal] = useState<number | null>(
+    offFromProject.totaalIncBtw
+  );
+  const [offerteNummer, setOfferteNummer] = useState<string | null>(
+    offFromProject.offerteNummer
+  );
+  const [activeTemplate, setActiveTemplate] =
+    useState<ContactMailTemplateId | null>(null);
 
   const [to, setTo] = useState(lead?.email?.trim() || "");
   const [subject, setSubject] = useState(
@@ -41,6 +71,66 @@ export function KlantContactMailModal({
   useEffect(() => {
     setTo(lead?.email?.trim() || "");
   }, [lead?.email]);
+
+  useEffect(() => {
+    setOrderTotaal(offFromProject.totaalIncBtw);
+    setOfferteNummer(offFromProject.offerteNummer);
+  }, [offFromProject]);
+
+  useEffect(() => {
+    if (offFromProject.totaalIncBtw != null) return;
+    if (!project.offerte_id && !project.id) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projecten/${project.id}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        const p = (data as { project?: Project }).project || (data as Project);
+        const off = offerteVanProject(p);
+        if (off.totaalIncBtw != null) {
+          setOrderTotaal(off.totaalIncBtw);
+          setOfferteNummer(off.offerteNummer);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, project.offerte_id, offFromProject.totaalIncBtw]);
+
+  function applyTemplate(id: ContactMailTemplateId) {
+    setActiveTemplate(id);
+    if (id === "annulering_of_installatie") {
+      const built = contactMailAnnuleringOfInstallatie({
+        orderTotaalIncBtw: orderTotaal,
+        projectNummer: project.project_nummer,
+        offerteNummer,
+      });
+      setSubject(built.subject);
+      setBericht(built.bericht);
+    }
+  }
+
+  // Herbouw als orderbedrag later binnenkomt en template actief is
+  useEffect(() => {
+    if (activeTemplate !== "annulering_of_installatie") return;
+    if (orderTotaal == null) return;
+    const built = contactMailAnnuleringOfInstallatie({
+      orderTotaalIncBtw: orderTotaal,
+      projectNummer: project.project_nummer,
+      offerteNummer,
+    });
+    setSubject(built.subject);
+    setBericht(built.bericht);
+  }, [
+    activeTemplate,
+    orderTotaal,
+    offerteNummer,
+    project.project_nummer,
+  ]);
 
   async function verstuur() {
     setBusy(true);
@@ -63,6 +153,7 @@ export function KlantContactMailModal({
         );
       }
       setOk("Mail verstuurd.");
+      onSent?.();
       window.setTimeout(() => onClose(), 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Versturen mislukt");
@@ -75,6 +166,11 @@ export function KlantContactMailModal({
     .trim()
     .split(/\n+/)
     .filter(Boolean);
+
+  const kostenPreview =
+    orderTotaal != null && orderTotaal > 0
+      ? formatEuro(annuleringskostenIncBtw(orderTotaal))
+      : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 sm:items-center sm:p-4">
@@ -93,6 +189,7 @@ export function KlantContactMailModal({
             <p className="mt-0.5 truncate text-sm text-muted">
               {klantNaam}
               {project.project_nummer ? ` · ${project.project_nummer}` : ""}
+              {kostenPreview ? ` · annuleringskosten ${kostenPreview}` : ""}
             </p>
           </div>
           <button
@@ -106,6 +203,31 @@ export function KlantContactMailModal({
 
         <div className="grid min-h-0 flex-1 gap-0 overflow-y-auto lg:grid-cols-2">
           <div className="space-y-3 border-b border-line px-5 py-4 lg:border-b-0 lg:border-r">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                Sjabloon
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {CONTACT_MAIL_TEMPLATES.map((t) => {
+                  const active = activeTemplate === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => applyTemplate(t.id)}
+                      className={[
+                        "border px-2.5 py-1.5 text-[11px] font-semibold",
+                        active
+                          ? "border-green bg-green text-white"
+                          : "border-line bg-white text-ink hover:bg-wash",
+                      ].join(" ")}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
               Naar (e-mail)
               <input
@@ -129,9 +251,12 @@ export function KlantContactMailModal({
               Bericht
               <textarea
                 value={bericht}
-                onChange={(e) => setBericht(e.target.value)}
-                rows={8}
-                placeholder="Schrijf hier je bericht…"
+                onChange={(e) => {
+                  setActiveTemplate(null);
+                  setBericht(e.target.value);
+                }}
+                rows={10}
+                placeholder="Kies een sjabloon of schrijf je bericht…"
                 className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
               />
             </label>
@@ -142,8 +267,8 @@ export function KlantContactMailModal({
               <p>Beste {firstName(klantNaam)},</p>
               <p className="mt-2 text-muted">… jouw bericht …</p>
               <p className="mt-3">Met vriendelijke groet,</p>
-              <p className="mt-1 font-semibold">{afdelingLabel}</p>
-              <p>{medewerkerNaam}</p>
+              <p className="mt-1 font-semibold">{medewerkerNaam}</p>
+              <p>Batterijconcept</p>
             </div>
           </div>
 
@@ -160,14 +285,14 @@ export function KlantContactMailModal({
               <div className="space-y-3 px-4 py-4 text-sm leading-relaxed text-ink">
                 <p>Beste {firstName(klantNaam)},</p>
                 {previewParas.length > 0 ? (
-                  previewParas.map((p) => <p key={p}>{p}</p>)
+                  previewParas.map((p, i) => <p key={`${i}-${p.slice(0, 24)}`}>{p}</p>)
                 ) : (
                   <p className="text-muted italic">Jouw bericht komt hier…</p>
                 )}
                 <p>Met vriendelijke groet,</p>
                 <div>
-                  <p className="font-semibold">{afdelingLabel}</p>
-                  <p>{medewerkerNaam}</p>
+                  <p className="font-semibold">{medewerkerNaam}</p>
+                  <p>Batterijconcept</p>
                 </div>
               </div>
               <div className="border-t border-[#e2e8e4] bg-[#F4F8F5] px-4 py-3 text-[11px] text-muted">

@@ -27,15 +27,28 @@ import {
   markInkoopSchemaMissing,
   type ProductInkoop,
 } from "@/lib/inkoop";
+import {
+  parseConversiePeriod,
+  resolveConversiePeriod,
+  type ConversiePeriod,
+} from "@/lib/conversie-period";
+import { amsDayBounds, inAmsterdamDayRange } from "@/lib/lead-conversie";
 
 export const runtime = "nodejs";
 
-/** GET /api/rapportage?adviseur_id=&financial_range=last_30_days */
+function parseGeoPeriod(raw: string | null): ConversiePeriod {
+  if (!raw?.trim()) return "all_time";
+  return parseConversiePeriod(raw);
+}
+
+/** GET /api/rapportage?adviseur_id=&financial_range=last_30_days&geo_period=last_7_days */
 export async function GET(req: NextRequest) {
   const adviseurId = req.nextUrl.searchParams.get("adviseur_id");
   const financialRange = parseFinancialRange(
     req.nextUrl.searchParams.get("financial_range")
   );
+  const geoPeriod = parseGeoPeriod(req.nextUrl.searchParams.get("geo_period"));
+  const geoResolved = resolveConversiePeriod(geoPeriod);
 
   try {
     const sb = getSupabaseAdmin();
@@ -457,11 +470,9 @@ export async function GET(req: NextRequest) {
           aantal: Math.max(0, Number(r.aantal) || 0),
           product_id: r.product_id ?? null,
         }));
-        const items = buildInkoopChecklist(regels, producten);
-        const teBestellen = inkoopTeBestellenTotaalExBtw(
-          items,
-          (p.materiaal_checks || {}) as MateriaalChecks
-        );
+        const checks = (p.materiaal_checks || {}) as MateriaalChecks;
+        const items = buildInkoopChecklist(regels, producten, checks);
+        const teBestellen = inkoopTeBestellenTotaalExBtw(items, checks);
         return {
           ...p,
           heeft_schouw_pdf: heeftPdf,
@@ -480,7 +491,14 @@ export async function GET(req: NextRequest) {
 
     const tree = buildRapportageTree(raw, adviseurId);
     const attribution = buildAttributionTree(raw, adviseurId);
-    const geo = buildGeoBreakdown(raw, adviseurId);
+
+    // Kaart: leads die in de gekozen periode binnenkwamen (+ hun afspraken/deals)
+    const { start: geoStart } = amsDayBounds(geoResolved.startYmd);
+    const { end: geoEnd } = amsDayBounds(geoResolved.endYmd);
+    const geoLeads = leads.filter((l) =>
+      inAmsterdamDayRange(l.created_at, geoStart, geoEnd)
+    );
+    const geo = buildGeoBreakdown({ ...raw, leads: geoLeads }, adviseurId);
 
     const kosten = (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
       datum: k.datum as string,
@@ -541,7 +559,16 @@ export async function GET(req: NextRequest) {
       { beginsaldoCash, btwReservering, tarikId }
     );
 
-    return NextResponse.json({ tree, attribution, financial, geo });
+    return NextResponse.json({
+      tree,
+      attribution,
+      financial,
+      geo,
+      geoPeriod: geoResolved.period,
+      geoPeriodLabel: geoResolved.label,
+      geoRangeStartYmd: geoResolved.startYmd,
+      geoRangeEndYmd: geoResolved.endYmd,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Rapportage laden mislukt") },

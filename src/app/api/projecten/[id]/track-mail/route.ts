@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { trackAndTraceIntroEmail } from "@/lib/email/templates";
 import { ensureOfferteTrackToken } from "@/lib/ensure-track-token";
 import { logLeadEvent } from "@/lib/lead-events";
@@ -100,6 +101,10 @@ export async function POST(
       subject: "Volg je order — BatterijConcept",
       html,
       tag: "track-trace-intro",
+      replyTo: await replyToForLeadAdviseur(
+        sb,
+        project.lead_id as string | null
+      ),
     });
 
     if (!sent.ok) {

@@ -120,10 +120,49 @@ function weekOverlapsRange(
   return mon <= rangeEnd && sun >= rangeStart;
 }
 
+/** Lead-ids met minstens één (niet-geannuleerd) huisbezoek. */
+async function loadLeadsMetHuisbezoek(
+  sb: Sb,
+  leadIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const unique = [...new Set(leadIds.filter(Boolean))];
+  if (unique.length === 0) return out;
+  const chunk = 200;
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    const { data, error } = await sb
+      .from("afspraken")
+      .select("id, lead_id, created_at, start_at, status, soort")
+      .in("lead_id", slice)
+      .neq("status", "geannuleerd");
+    if (error) throw error;
+    for (const a of data || []) {
+      const leadId = a.lead_id as string;
+      if (!leadId || out.has(leadId)) continue;
+      if (
+        !isHuisbezoekAfspraak({
+          id: a.id as string,
+          lead_id: leadId,
+          created_at: (a.created_at as string) || null,
+          start_at: a.start_at as string,
+          status: (a.status as string) || null,
+          soort: (a.soort as string) || null,
+        })
+      ) {
+        continue;
+      }
+      out.add(leadId);
+    }
+  }
+  return out;
+}
+
 /**
  * GET /api/rapportage/lead-conversie?period=…
- * Targets = altijd op schema voor komende 14d (L→A = afgelopen 14d).
+ * Targets = altijd op schema voor komende 14d (L→A = cohort afgelopen 14d).
  * `period` stuurt alleen Per kanaal (leads/CPL/deals/CPA).
+ * L→A = van de leads die in de periode binnenkwamen, hoeveel daarvan zijn ingepland.
  */
 export async function GET(req: NextRequest) {
   const channelPeriod = parseConversiePeriod(
@@ -170,16 +209,11 @@ export async function GET(req: NextRequest) {
     const earliest = new Date(earliestMs);
     const latest = new Date(latestMs);
 
-    const [leadsRes, afsRes, adviseursRes, metaSpendRes, kostenRes] =
+    const [leadsRes, adviseursRes, metaSpendRes, kostenRes] =
       await Promise.all([
         sb
           .from("leads")
           .select("id, created_at, bron, utm_source, lander, status")
-          .gte("created_at", earliest.toISOString())
-          .lte("created_at", latest.toISOString()),
-        sb
-          .from("afspraken")
-          .select("id, lead_id, created_at, start_at, status, soort")
           .gte("created_at", earliest.toISOString())
           .lte("created_at", latest.toISOString()),
         sb
@@ -203,7 +237,6 @@ export async function GET(req: NextRequest) {
       ]);
 
     if (leadsRes.error) throw leadsRes.error;
-    if (afsRes.error) throw afsRes.error;
     if (adviseursRes.error) throw adviseursRes.error;
 
     const adviseurRows = (adviseursRes.data || []).map((a) => ({
@@ -225,16 +258,16 @@ export async function GET(req: NextRequest) {
     };
     const allLeads = (leadsRes.data || []) as LeadRow[];
 
-    let targetL2aLeads = 0;
     let leadsDag = 0;
     let leadsWeek = 0;
     let leadsMaand = 0;
     let leadsBiweekly = 0;
     const channelLeadRows: LeadRow[] = [];
+    const targetL2aLeadRows: LeadRow[] = [];
     for (const l of allLeads) {
       const at = l.created_at;
       if (inAmsterdamDayRange(at, targetL2aStart, targetL2aEnd)) {
-        targetL2aLeads += 1;
+        targetL2aLeadRows.push(l);
       }
       if (inAmsterdamDayRange(at, channelStart, channelEnd)) {
         channelLeadRows.push(l);
@@ -245,31 +278,24 @@ export async function GET(req: NextRequest) {
       if (inAmsterdamDayRange(at, biStart, biEnd)) leadsBiweekly += 1;
     }
 
-    const channelAfspraakLeadIds = new Set<string>();
-    let targetL2aAfspraken = 0;
-    for (const a of afsRes.data || []) {
-      if (
-        !isHuisbezoekAfspraak({
-          id: a.id as string,
-          lead_id: a.lead_id as string,
-          created_at: (a.created_at as string) || null,
-          start_at: a.start_at as string,
-          status: (a.status as string) || null,
-          soort: (a.soort as string) || null,
-        })
-      ) {
-        continue;
-      }
-      const at = (a.created_at as string) || (a.start_at as string);
-      if (inAmsterdamDayRange(at, targetL2aStart, targetL2aEnd)) {
-        targetL2aAfspraken += 1;
-      }
-      if (inAmsterdamDayRange(at, channelStart, channelEnd)) {
-        channelAfspraakLeadIds.add(a.lead_id as string);
-      }
-    }
+    // Cohort L→A: van leads die in het venster binnenkwamen, hoeveel hebben
+    // (ooit) een huisbezoek — niet “afspraken ingepland in periode” van oude leads.
+    const cohortLeadIds = [
+      ...new Set([
+        ...targetL2aLeadRows.map((l) => l.id),
+        ...channelLeadRows.map((l) => l.id),
+      ]),
+    ];
+    const leadsMetHuisbezoek = await loadLeadsMetHuisbezoek(sb, cohortLeadIds);
+    const targetL2aLeads = targetL2aLeadRows.length;
+    const targetL2aAfspraken = targetL2aLeadRows.filter((l) =>
+      leadsMetHuisbezoek.has(l.id)
+    ).length;
+    const channelAfspraakLeadIds = new Set(
+      channelLeadRows.filter((l) => leadsMetHuisbezoek.has(l.id)).map((l) => l.id)
+    );
 
-    // Targets: L→A altijd afgelopen 14 dagen
+    // Targets: L→A altijd cohort afgelopen 14 dagen
     const l2a = leadToApptPct(targetL2aAfspraken, targetL2aLeads);
 
     // Per kanaal: spend in gekozen filterperiode
@@ -364,57 +390,13 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Afspraken Per kanaal = huisbezoeken *ingepland* in de periode
-    // (niet alleen leads die ook in die periode binnenkwamen). Incl. vandaag.
-    const channelApptLeadIds: string[] = [];
-    for (const a of afsRes.data || []) {
-      if (
-        !isHuisbezoekAfspraak({
-          id: a.id as string,
-          lead_id: a.lead_id as string,
-          created_at: (a.created_at as string) || null,
-          start_at: a.start_at as string,
-          status: (a.status as string) || null,
-          soort: (a.soort as string) || null,
-        })
-      ) {
-        continue;
-      }
-      const at = (a.created_at as string) || (a.start_at as string);
-      if (!inAmsterdamDayRange(at, channelStart, channelEnd)) continue;
-      channelApptLeadIds.push(a.lead_id as string);
-    }
-    const knownLeads = new Map(allLeads.map((l) => [l.id, l] as const));
-    const missingApptLeadIds = [
-      ...new Set(channelApptLeadIds.filter((id) => id && !knownLeads.has(id))),
-    ];
-    if (missingApptLeadIds.length > 0) {
-      const chunk = 200;
-      for (let i = 0; i < missingApptLeadIds.length; i += chunk) {
-        const slice = missingApptLeadIds.slice(i, i + chunk);
-        const { data: extra, error: extraErr } = await sb
-          .from("leads")
-          .select("id, created_at, bron, utm_source, lander, status")
-          .in("id", slice);
-        if (extraErr) throw extraErr;
-        for (const row of (extra || []) as LeadRow[]) {
-          knownLeads.set(row.id, row);
-        }
-      }
-    }
-    const afsprakenBySource: Record<string, number> = {};
-    for (const leadId of channelApptLeadIds) {
-      const lead = knownLeads.get(leadId);
-      const source = normalizeLeadSource(lead || {});
-      afsprakenBySource[source] = (afsprakenBySource[source] || 0) + 1;
-    }
-
+    // Per kanaal L→A = cohort (leads in periode → hoeveel daarvan ingepland)
     const bySource = buildSourceRows(
       channelLeadRows,
       channelAfspraakLeadIds,
       { Meta: metaSpend },
       new Set(),
-      afsprakenBySource,
+      {},
       dealsBySource
     );
 

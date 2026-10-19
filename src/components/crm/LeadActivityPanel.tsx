@@ -35,6 +35,8 @@ type ActivityKind =
   | "installatie"
   | "service"
   | "project"
+  | "contact"
+  | "email"
   | "overig";
 
 type ActivityItem = {
@@ -64,6 +66,8 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   installatie: "Installatie",
   service: "Service",
   project: "Backoffice",
+  contact: "Contact",
+  email: "E-mail",
   overig: "Overig",
 };
 
@@ -76,7 +80,7 @@ const PROJECT_STATUS_LABEL: Record<string, string> = {
   warmtefonds_in_behandeling: "Warmtefonds in behandeling",
   warmtefonds_afgewezen: "Warmtefonds afgewezen",
   warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
-  schouwdag_ingepland: "Schouwdag ingepland",
+  schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
   restfactuur_betaald: "Restfactuur betaald",
@@ -116,6 +120,8 @@ const EVENT_KINDS = new Set<ActivityKind>([
   "installatie",
   "schouw",
   "service",
+  "contact",
+  "email",
 ]);
 
 function buildFromEntities(opts: {

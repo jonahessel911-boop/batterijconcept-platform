@@ -86,16 +86,18 @@ export async function GET(
       }
     }
 
+    // Komende ~5 werkdagen spreiden (niet 10 slots op 1 dag)
     const slots = await findBoOverstapSlots(sb, {
-      limit: 10,
-      daysAhead: 21,
+      limit: 20,
+      daysAhead: 8,
+      maxPerDay: 4,
       excludeStarts: exclude,
     });
 
     return NextResponse.json({
       slots,
       duur_minuten: 30,
-      opening: "09:00–17:00 · lunch 12:00–12:30 geblokkeerd",
+      opening: "09:00–17:00 · lunch 12:00–12:30 geblokkeerd · komende werkdagen",
     });
   } catch (e) {
     return NextResponse.json({ error: errMessage(e) }, { status: 500 });

@@ -11,7 +11,7 @@ export const GEBRUIKER_ROLLEN = [
 
 export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
 
-/** Login-accounts in Partners → Team (geen installateur-portaalrol). */
+/** Login-accounts in Team (geen monteur-/portaalrol). */
 export const TEAM_ROLLEN = [
   "admin",
   "sales_manager",
@@ -32,13 +32,13 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
 };
 
 export const teamRolUitleg: Record<TeamRol, string> = {
-  admin: "Alles: leads, bellen, agenda, backoffice, rapportage, partners",
+  admin: "Alles: leads, bellen, agenda, backoffice, rapportage, team",
   sales_manager:
     "Sales sturen: Today, weekmeeting, leads, offertes, netto, rapportage",
   adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen, instellingen",
   beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
   backoffice:
-    "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing",
+    "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing, adviseurs-contact",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -76,6 +76,7 @@ export function tabsVoorRol(
         "projecten",
         "facturen",
         "purchasing",
+        "adviseurs",
       ];
       break;
     case "sales_manager":
@@ -86,6 +87,7 @@ export function tabsVoorRol(
         "offertes",
         "netto",
         "rapportage",
+        "adviseurs",
       ];
       break;
     case "installateur":
@@ -107,7 +109,7 @@ export function tabsVoorRol(
         "facturen",
         "purchasing",
         "rapportage",
-        "admin",
+        "adviseurs",
         "partners",
       ];
       break;
@@ -172,7 +174,7 @@ export function magInkomend(rol: GebruikerRol): boolean {
 
 /** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */
 export function isPlanbareAdviseur(a: {
-  actief?: boolean;
+  actief?: boolean | null;
   rol?: string | null;
   naam: string;
   email?: string | null;
@@ -186,7 +188,7 @@ export function isPlanbareAdviseur(a: {
  * Inactief mag wél — alleen bel/auto-planning sluit hen uit.
  */
 export function isAgendaAdviseur(a: {
-  actief?: boolean;
+  actief?: boolean | null;
   rol?: string | null;
   naam: string;
   email?: string | null;
@@ -199,7 +201,7 @@ export function isAgendaAdviseur(a: {
  * Inactief (`actief === false`) → niet automatisch inplannen.
  */
 export function isBelPlanAdviseur(a: {
-  actief?: boolean;
+  actief?: boolean | null;
   rol?: string | null;
   naam: string;
   email?: string | null;

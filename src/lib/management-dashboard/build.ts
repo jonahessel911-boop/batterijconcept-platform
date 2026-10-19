@@ -1612,6 +1612,15 @@ function buildFinance(
   });
 
   const winst = brutowinst(agg);
+  const costsTotal = round2(
+    agg.inkoop + agg.projectkosten + agg.salesKosten + agg.adSpend
+  );
+  const avgOrder =
+    agg.deals > 0 ? round2(agg.omzetGetekend / agg.deals) : null;
+  const marginPct =
+    agg.omzetGetekend > 0
+      ? round2((winst / agg.omzetGetekend) * 100)
+      : null;
 
   return {
     getekendeOrderwaarde: round2(agg.omzetGetekend),
@@ -1636,6 +1645,24 @@ function buildFinance(
       agg.btwOntvangen > 0
         ? round2(instellingen.btw_reservering - agg.btwOntvangen)
         : null,
+    ceo: {
+      leads: agg.leads,
+      afsprakenNetto: agg.afsprakenNetto,
+      deals: agg.deals,
+      orderWorth: round2(agg.omzetGetekend),
+      revenueInvoiced: round2(agg.omzetGefactureerd),
+      revenuePaid: round2(agg.omzetBetaald),
+      avgOrderWorth: avgOrder,
+      costs: {
+        product: round2(agg.inkoop),
+        installation: round2(agg.projectkosten),
+        salesCommission: round2(agg.salesKosten),
+        leadAds: round2(agg.adSpend),
+        total: costsTotal,
+      },
+      profit: winst,
+      profitMarginPct: marginPct,
+    },
     aging,
     cashflow,
     missing,
@@ -2153,7 +2180,7 @@ export function buildManagementDashboard(
         { id: "warmtefonds_in_behandeling", label: "Warmtefonds in behandeling" },
         { id: "warmtefonds_afgewezen", label: "Warmtefonds afgewezen" },
         { id: "warmtefonds_goedgekeurd", label: "Warmtefonds goedgekeurd" },
-        { id: "schouwdag_ingepland", label: "Schouwdag ingepland" },
+        { id: "schouwdag_ingepland", label: "Schouw gepland" },
         { id: "schouw_voltooid", label: "Schouw voltooid" },
         { id: "restfactuur_verstuurd", label: "Restfactuur verstuurd" },
         { id: "restfactuur_betaald", label: "Restfactuur betaald" },

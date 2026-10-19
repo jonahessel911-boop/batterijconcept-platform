@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { buildOffertePdfForId } from "@/lib/offerte-pdf-build";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { offerteVerstuurdEmail } from "@/lib/email/templates";
 
 export const runtime = "nodejs";
@@ -77,6 +78,10 @@ export async function POST(
 
     const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;
     const pdfBytes = Buffer.from(await built.blob.arrayBuffer());
+    const replyTo = await replyToForLeadAdviseur(
+      sb,
+      built.offerte.lead_id
+    );
 
     const sent = await sendEmail({
       to: email,
@@ -87,6 +92,7 @@ export async function POST(
         signUrl,
       }),
       tag: "offerte-verstuurd",
+      replyTo,
       attachments: [
         {
           name: built.filename,

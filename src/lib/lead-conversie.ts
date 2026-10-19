@@ -42,10 +42,14 @@ export type LeadConversieHorizonWeek = {
 export type LeadConversieSourceRow = {
   source: string;
   leads: number;
+  /**
+   * Unieke leads uit het cohort (binnengekomen in periode) die minstens
+   * één huisbezoek hebben (ingepland) — niet “alle afspraken in de periode”.
+   */
   afspraken: number;
   /** Netto sales: unieke leads met getekende offerte, minus annuleringen */
   deals: number;
-  /** afspraken ÷ leads (%) */
+  /** Cohort L→A: afspraken ÷ leads (%) — max 100% */
   leadToAppt: number | null;
   /** deals ÷ afspraken (%) */
   apptToSale: number | null;
@@ -301,22 +305,20 @@ export function buildSourceRows(
     status?: string | null;
   }[],
   /**
-   * @deprecated Cohort-ids — genegeerd als `afsprakenBySource` is gezet.
-   * Afspraken = huisbezoeken *ingepland* in de periode (niet alleen nieuwe leads).
+   * Cohort: lead-ids uit `leads` die minstens één huisbezoek hebben.
+   * L→A = |afspraakLeadIds ∩ leads| ÷ leads (per bron).
    */
-  _afspraakLeadIds: Set<string> = new Set(),
+  afspraakLeadIds: Set<string> = new Set(),
   /** Spend per genormaliseerde bron (bijv. Meta ← meta_ad_spend) */
   spendBySource: Record<string, number> = {},
   /**
-   * @deprecated Cohort-ids — genegeerd als `dealsBySource` is gezet.
-   * Deals = getekend in de periode (ondertekend_op), niet alleen nieuwe leads.
+   * @deprecated Genegeerd — deals komen uit `dealsBySource`.
    */
   _nettoDealLeadIds: Set<string> = new Set(),
   /**
-   * Huisbezoeken ingepland in de periode, per bron (incl. oude leads).
-   * Dit is wat “Afspraken” in Per kanaal toont.
+   * @deprecated Genegeerd — afspraken komen uit cohort `afspraakLeadIds`.
    */
-  afsprakenBySource: Record<string, number> = {},
+  _afsprakenBySource: Record<string, number> = {},
   /**
    * Netto deals getekend in de periode, per bron (incl. oudere Meta/ig/fb leads).
    * CPA = spend ÷ deze deals.
@@ -333,15 +335,10 @@ export function buildSourceRows(
       by.set(source, acc);
     }
     acc.leads += 1;
-  }
-  // Afspraken = activiteit in periode (niet cohort)
-  for (const [source, n] of Object.entries(afsprakenBySource)) {
-    let acc = by.get(source);
-    if (!acc) {
-      acc = { leads: 0, afspraken: 0, deals: 0 };
-      by.set(source, acc);
+    // Cohort: alleen meegetelde leads die zelf een huisbezoek hebben
+    if (afspraakLeadIds.has(l.id)) {
+      acc.afspraken += 1;
     }
-    acc.afspraken = Math.max(0, Math.round(n));
   }
   // Deals = getekend in periode (niet cohort); unieke leads per bron
   for (const [source, n] of Object.entries(dealsBySource)) {

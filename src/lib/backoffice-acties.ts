@@ -39,7 +39,7 @@ export type BackofficeActieSoort =
   | "aangetekende_brief"
   | "schouw_inplannen";
 
-export type HerplanBron = "klant" | "adviseur";
+export type HerplanBron = "klant" | "adviseur" | "deur_niet_open";
 
 /** Edwin van Veenendaal — plant Warmtefonds-afspraken / aanvragen. */
 export const FINANCIERINGSMAN_NAAM = "Edwin van Veenendaal";
@@ -497,6 +497,7 @@ export function openNabellenFactuurActies(
 /**
  * Huisbezoek opnieuw inplannen:
  * - Klant: status `afspraak_afgezegd_klant` (zonder nieuwe actieve afspraak)
+ * - Deur niet open: status `deur_niet_open` (afgeboekt bezoek, opnieuw plannen)
  * - Adviseur/CRM: `Annulering (CRM)` zonder vervangende afspraak, en lead
  *   nog niet afgeboekt/sale (anders hoort herplannen niet meer)
  */
@@ -523,7 +524,6 @@ const HERPLAN_UITGESLOTEN_STATUS = new Set([
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
-  "deur_niet_open",
   "afspraak",
   "na_afspraak",
   "vervolg_fysiek",
@@ -647,7 +647,7 @@ export function openHerplanAfspraakActies(
     items.push({
       id: `herplan-afspraak-${lead.id}`,
       soort: "herplan_afspraak",
-      titel: "Inplannen annulering klant",
+      titel: "Herplannen — klant geannuleerd",
       detail: cancelled
         ? `Klant heeft afspraak geannuleerd (${new Date(cancelled.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}). Plan een nieuw moment.`
         : "Klant heeft de afspraak afgezegd. Plan een nieuw huisbezoek.",
@@ -662,6 +662,48 @@ export function openHerplanAfspraakActies(
       annuleringsReden: reden,
       geannuleerdDoorNaam: doorNaam,
       herplanBron: "klant",
+    });
+    seen.add(lead.id);
+  }
+
+  for (const lead of leads) {
+    if (lead.status !== "deur_niet_open") continue;
+    if (seen.has(lead.id)) continue;
+    if (hasFutureActive.has(lead.id)) continue;
+
+    let latestVisit: HerplanAfspraak | undefined;
+    for (const a of afspraken) {
+      if (a.lead_id !== lead.id) continue;
+      if (!afspraakBlokkeertAgenda(a.soort)) continue;
+      if (
+        !latestVisit ||
+        new Date(a.start_at).getTime() > new Date(latestVisit.start_at).getTime()
+      ) {
+        latestVisit = a;
+      }
+    }
+    const startAt = latestVisit?.start_at || now.toISOString();
+    const deadlineAt = belSchouwDeadline(startAt);
+    const overdue = deadlineAt.getTime() < nowMs;
+    const doorNaam = resolveGeannuleerdDoorNaam(latestVisit, adviseurById);
+    items.push({
+      id: `herplan-afspraak-${lead.id}`,
+      soort: "herplan_afspraak",
+      titel: "Herplannen — deur niet open",
+      detail: latestVisit
+        ? `Deur niet open / klant niet bereikbaar bij bezoek op ${new Date(latestVisit.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}. Plan een nieuw huisbezoek.`
+        : "Deur niet open / klant niet bereikbaar. Plan een nieuw huisbezoek.",
+      deadlineAt: deadlineAt.toISOString(),
+      overdue,
+      prio: isPrioDeadline(deadlineAt, now),
+      leadId: lead.id,
+      leadNaam: lead.naam || "—",
+      telefoon: lead.telefoon || null,
+      plaats: lead.plaats || null,
+      href: `/?tab=leads&lead=${lead.id}`,
+      annuleringsReden: "Deur niet open / klant niet bereikbaar",
+      geannuleerdDoorNaam: doorNaam,
+      herplanBron: "deur_niet_open",
     });
     seen.add(lead.id);
   }
@@ -681,7 +723,7 @@ export function openHerplanAfspraakActies(
     items.push({
       id: `herplan-afspraak-${leadId}`,
       soort: "herplan_afspraak",
-      titel: "Inplannen — adviseur vraagt om herplannen van afspraak",
+      titel: "Herplannen — adviseur",
       detail: reden
         ? `Adviseur/CRM heeft afspraak geannuleerd. ${reden}`
         : `Adviseur/CRM heeft afspraak geannuleerd (${new Date(cancelled.start_at).toLocaleString("nl-NL", { timeZone: AMSTERDAM_TZ })}). Plan een nieuw moment.`,

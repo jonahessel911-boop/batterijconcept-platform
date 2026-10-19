@@ -1,7 +1,7 @@
 /** Vaste omschrijving voor schouwformulier-uploads (client + server). */
 export const SCHOUW_FORMULIER_OMSCHRIJVING = "Schouw formulier";
 
-/** Vaste omschrijving voor opleveringsrapport met klant-handtekening. */
+/** Vaste omschrijving voor opleveringsrapport (formulier + handtekening monteur). */
 export const OPLEVERINGSRAPPORT_OMSCHRIJVING = "Opleveringsrapport";
 
 /** Optionele foto’s bij service-afspraak (niet verplicht). */

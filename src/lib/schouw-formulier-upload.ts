@@ -3,7 +3,15 @@ import { buildSchouwFormulierPdf } from "@/lib/pdf-schouw-formulier";
 import { uploadProjectFotoFile } from "@/lib/project-fotos";
 import { SCHOUW_FORMULIER_OMSCHRIJVING } from "@/lib/project-documenten";
 import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
-import type { SchouwFormulierData } from "@/lib/schouw-formulier";
+import {
+  applySchouwMontageToChecks,
+  parseMontageAccessoire,
+  type MateriaalChecks,
+} from "@/lib/project-inkoop-checklist";
+import {
+  validateSchouwFormulierHandtekening,
+  type SchouwFormulierData,
+} from "@/lib/schouw-formulier";
 
 export async function generateAndUploadSchouwFormulier(
   sb: SupabaseClient,
@@ -26,6 +34,9 @@ export async function generateAndUploadSchouwFormulier(
     }
   | { error: string; status: number; detail?: string }
 > {
+  const handtekeningErr = validateSchouwFormulierHandtekening(data);
+  if (handtekeningErr) return { error: handtekeningErr, status: 400 };
+
   const blob = await buildSchouwFormulierPdf(data);
   const filename = `schouwformulier-${(data.rapportNr || projectId).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`;
   const file = new File([blob], filename, { type: "application/pdf" });
@@ -40,14 +51,39 @@ export async function generateAndUploadSchouwFormulier(
   if ("error" in result) return result;
 
   const notitie = (opts?.notitie || "").trim();
-  if (notitie) {
-    await sb
-      .from("projecten")
-      .update({
-        schouw_notities: notitie,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", projectId);
+  const montage = parseMontageAccessoire(data.montageAccessoire);
+  const inkoopExtra = (data.inkoopExtraNotities || "").trim();
+
+  // Purchasing: baseplate ↔ wall bracket + optionele inkoop-notities (niet in PDF).
+  const { data: projectRow } = await sb
+    .from("projecten")
+    .select("materiaal_checks, schouw_notities")
+    .eq("id", projectId)
+    .maybeSingle();
+
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (notitie) patch.schouw_notities = notitie;
+
+  if (montage) {
+    const prevChecks = (projectRow?.materiaal_checks ||
+      {}) as MateriaalChecks;
+    patch.materiaal_checks = applySchouwMontageToChecks(
+      prevChecks,
+      montage,
+      inkoopExtra || null
+    );
+  } else if (inkoopExtra) {
+    const prevChecks = {
+      ...((projectRow?.materiaal_checks || {}) as MateriaalChecks),
+    };
+    prevChecks.__inkoop_extra_notities = inkoopExtra;
+    patch.materiaal_checks = prevChecks;
+  }
+
+  if (Object.keys(patch).length > 1) {
+    await sb.from("projecten").update(patch).eq("id", projectId);
   }
 
   const statusAdvance = await maybeAdvanceProjectNaSchouw(sb, projectId);
@@ -102,6 +138,8 @@ export function parseSchouwFormulierBody(
     plekBatterij: str("plekBatterij"),
     binnenBuiten: str("binnenBuiten"),
     montagewijze: str("montagewijze"),
+    montageAccessoire: str("montageAccessoire"),
+    inkoopExtraNotities: str("inkoopExtraNotities"),
     wandtype: str("wandtype"),
     beschikbareRuimte: str("beschikbareRuimte"),
     vorstvrij: str("vorstvrij") as SchouwFormulierData["vorstvrij"],
@@ -124,11 +162,18 @@ export function parseSchouwFormulierBody(
     meeTeNemen,
     meerwerkObstakels: str("meerwerkObstakels"),
     aanvullendeOpmerkingen: str("aanvullendeOpmerkingen"),
+    akkoordInstallatie:
+      form.akkoordInstallatie === true ||
+      form.akkoordInstallatie === "true" ||
+      form.akkoordInstallatie === 1,
+    handtekeningDataUrl: str("handtekeningDataUrl"),
     handtekeningOpnemerNaam: str("handtekeningOpnemerNaam"),
     handtekeningKlantNaam: str("handtekeningKlantNaam"),
   };
 
   if (!data.klantNaam) return { error: "Klantnaam is verplicht" };
+  const handtekeningErr = validateSchouwFormulierHandtekening(data);
+  if (handtekeningErr) return { error: handtekeningErr };
 
   const notitieRaw = b.notitie;
   const notitie =

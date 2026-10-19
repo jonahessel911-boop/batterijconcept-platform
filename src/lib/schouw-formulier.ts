@@ -33,6 +33,13 @@ export type SchouwFormulierData = {
   plekBatterij: string;
   binnenBuiten: string;
   montagewijze: string;
+  /**
+   * Inkoop: baseplate of wall bracket — alleen UI/purchasing, niet in PDF.
+   * "baseplate" | "wallbracket" | ""
+   */
+  montageAccessoire: string;
+  /** Extra inkoop-notities na schouw — niet in PDF. */
+  inkoopExtraNotities: string;
   wandtype: string;
   beschikbareRuimte: string;
   vorstvrij: SchouwJaNee;
@@ -60,10 +67,46 @@ export type SchouwFormulierData = {
   meerwerkObstakels: string;
   aanvullendeOpmerkingen: string;
 
-  // Handtekeningen (optioneel tekst)
+  // Akkoord + handtekening monteur (verplicht om formulier af te ronden)
+  akkoordInstallatie: boolean;
+  /** data:image/png;base64,… */
+  handtekeningDataUrl: string;
   handtekeningOpnemerNaam: string;
   handtekeningKlantNaam: string;
 };
+
+export const SCHOUW_AKKOORD_TEKST =
+  "Ik ga akkoord met dat deze installatie vakkundig en goed kan worden uitgevoerd.";
+
+export function validateSchouwFormulierHandtekening(
+  data: Pick<
+    SchouwFormulierData,
+    | "akkoordInstallatie"
+    | "handtekeningDataUrl"
+    | "handtekeningOpnemerNaam"
+    | "montageAccessoire"
+  >
+): string | null {
+  if (!data.handtekeningOpnemerNaam.trim()) {
+    return "Naam van de monteur/opnemer is verplicht";
+  }
+  if (
+    data.montageAccessoire !== "baseplate" &&
+    data.montageAccessoire !== "wallbracket"
+  ) {
+    return "Kies baseplate of wall bracket (voor purchasing)";
+  }
+  if (!data.akkoordInstallatie) {
+    return "Bevestig dat de installatie vakkundig en goed kan worden uitgevoerd";
+  }
+  if (
+    !data.handtekeningDataUrl.trim() ||
+    !data.handtekeningDataUrl.startsWith("data:image")
+  ) {
+    return "Handtekening van de monteur is verplicht";
+  }
+  return null;
+}
 
 export const SCHOUW_MODEL_OPTIES = [
   "SMILE-T10 (3-fase)",
@@ -106,6 +149,12 @@ export const SCHOUW_MONTAGE_OPTIES = [
   "Vloerstaand",
   "Wandmontage",
   "Gemengd",
+] as const;
+
+/** Inkoop-montage (niet in PDF) — past purchasing aan. */
+export const SCHOUW_MONTAGE_ACCESSOIRE_OPTIES = [
+  { value: "baseplate", label: "Baseplate (vloer / standaard)" },
+  { value: "wallbracket", label: "Wall bracket (wandmontage)" },
 ] as const;
 
 export const SCHOUW_WANDTYPE_OPTIES = [
@@ -197,6 +246,8 @@ export function emptySchouwFormulier(
     plekBatterij: "",
     binnenBuiten: "Binnen",
     montagewijze: "",
+    montageAccessoire: "",
+    inkoopExtraNotities: "",
     wandtype: "",
     beschikbareRuimte: "",
     vorstvrij: "",
@@ -219,6 +270,8 @@ export function emptySchouwFormulier(
     meeTeNemen: [],
     meerwerkObstakels: "",
     aanvullendeOpmerkingen: "",
+    akkoordInstallatie: false,
+    handtekeningDataUrl: "",
     handtekeningOpnemerNaam: "",
     handtekeningKlantNaam: "",
     ...prefill,

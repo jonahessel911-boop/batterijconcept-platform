@@ -49,6 +49,7 @@ export async function PATCH(
     bedrag_inc_btw?: number | string | null;
     omschrijving?: string | null;
     betaaltermijn_dagen?: number | string | null;
+    interne_notitie?: string | null;
   };
   try {
     body = await req.json();
@@ -130,6 +131,10 @@ export async function PATCH(
       patch.betaald_op = body.betaald_op?.trim() || null;
     }
 
+    if (body.interne_notitie !== undefined) {
+      patch.interne_notitie = body.interne_notitie?.trim() || null;
+    }
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
         { error: "Niets om bij te werken" },
@@ -137,12 +142,28 @@ export async function PATCH(
       );
     }
 
-    const { data, error } = await sb
+    let { data, error } = await sb
       .from("facturen")
       .update(patch)
       .eq("id", id)
       .select("*, leads(naam, email, lead_number)")
       .single();
+
+    if (
+      error &&
+      body.interne_notitie !== undefined &&
+      (error.code === "42703" ||
+        error.message?.includes("interne_notitie"))
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Voer supabase/migrate-factuur-interne-notitie.sql uit in Supabase.",
+          detail: error.message,
+        },
+        { status: 500 }
+      );
+    }
 
     if (error || !data) {
       return NextResponse.json(

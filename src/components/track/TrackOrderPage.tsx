@@ -693,7 +693,7 @@ function DatumOptieWizard({
         );
       }
       setAltSlots(
-        ((json as { slots?: AltOverstapSlot[] }).slots || []).slice(0, 10)
+        ((json as { slots?: AltOverstapSlot[] }).slots || []).slice(0, 20)
       );
       setStep("alt");
     } catch (e) {
@@ -748,15 +748,31 @@ function DatumOptieWizard({
     const when = gekozenIso ? formatDateTimeLongNl(gekozenIso) : null;
     if (soort === "overstap") {
       return (
-        <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
+        <section className="mt-6 space-y-4 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
           <OverstapHeader
             title="Bedankt!"
             subtitle={
               when
-                ? `Je overstap-afspraak staat vast op ${when}. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven.`
-                : "Je overstap-afspraak staat vast. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven."
+                ? `We gaan de overstap samen met je inregelen op ${when}. Je ontvangt zo een mail — bewaar die voor het gesprek.`
+                : "We gaan de overstap samen met je inregelen. Je ontvangt zo een mail — bewaar die voor het gesprek."
             }
           />
+          <div className="rounded-xl bg-[#F4F8F5] px-4 py-3 text-sm leading-relaxed text-[#122018]">
+            <p className="font-semibold text-[#0D5C32]">Leg alvast klaar</p>
+            <p className="mt-1.5 text-[#5A6B60]">
+              Het groene boekje van de adviseur, of je laatste jaarrekening —
+              met je <strong className="text-[#122018]">stroomverbruik</strong>{" "}
+              en <strong className="text-[#122018]">gasverbruik</strong>.
+            </p>
+          </div>
+          <a
+            href={FRANK_ENERGIE_OVERSTAP_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-full items-center justify-center rounded-xl bg-[#0D5C32] px-4 py-3 text-sm font-semibold text-white hover:bg-[#0a4a28] sm:w-auto"
+          >
+            Naar Frank Energie
+          </a>
         </section>
       );
     }
@@ -796,9 +812,9 @@ function DatumOptieWizard({
     step === "gegevens"
       ? "Controleer je gegevens zodat we je kunnen bereiken."
       : step === "alt"
-        ? "Andere vrije momenten (30 min · ma–vr 09:00–17:00, lunch 12:00–12:30 dicht)."
+        ? "Andere vrije momenten over de komende werkdagen (30 min · ma–vr 09:00–17:00, lunch 12:00–12:30 dicht)."
         : soort === "overstap"
-          ? "Kies één van de drie voorgestelde tijden. Een overstap naar Frank Energie duurt ongeveer 30 minuten."
+          ? "Kies één van de drie voorgestelde tijden. Na je keuze krijg je een mail met wat je klaar moet leggen en de knop naar Frank Energie."
           : "Kies één van de drie voorgestelde tijden. Een service duurt meestal 1 uur.";
 
   return (

@@ -202,7 +202,12 @@ function KindBadge({ kind, label }: { kind: InvoiceKind; label: string }) {
   );
 }
 
-export function CreditfacturenPanel() {
+export function CreditfacturenPanel({
+  embedded = false,
+}: {
+  /** In Team-hub: iets compactere top (parent heeft al titel). */
+  embedded?: boolean;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -655,17 +660,29 @@ export function CreditfacturenPanel() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+    <div className={embedded ? "" : "space-y-4"}>
+      <div className={embedded ? "" : "border border-line bg-white"}>
+        <div
+          className={[
+            "flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5",
+            embedded ? "border-b border-line" : "border-b border-line",
+          ].join(" ")}
+        >
           <div>
-            <h2 className="font-display text-lg font-semibold text-ink">
-              Uitbetalingen
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Versturen, goedkeuring en betalen — verkopers &amp;
-              installatiepartners
-            </p>
+            {!embedded ? (
+              <>
+                <h2 className="font-display text-lg font-semibold text-ink">
+                  Uitbetalingen
+                </h2>
+                <p className="mt-1 text-sm text-muted">
+                  Versturen, goedkeuring en betalen — verkopers &amp; monteurs
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted">
+                Filter op status · verkopers &amp; monteurs
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -741,7 +758,7 @@ export function CreditfacturenPanel() {
                     : "border border-line bg-white text-muted hover:bg-wash",
                 ].join(" ")}
               >
-                Installatiepartner
+                Monteur
               </button>
             </div>
 
@@ -934,7 +951,7 @@ export function CreditfacturenPanel() {
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Installatiepartner
+                  Monteur
                   <select
                     value={createPartnerId}
                     onChange={(e) => setCreatePartnerId(e.target.value)}
@@ -1040,7 +1057,7 @@ export function CreditfacturenPanel() {
                 [
                   ["alles", "Alles"],
                   ["verkopers", "Verkopers"],
-                  ["installateurs", "Installateurs"],
+                  ["installateurs", "Monteurs"],
                 ] as const
               ).map(([id, label]) => (
                 <button

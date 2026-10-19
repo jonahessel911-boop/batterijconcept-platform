@@ -20,6 +20,8 @@ import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { isAgendaAdviseur } from "@/lib/rollen";
 import {
+  afspraakBlokkeertAgenda,
+  afspraakTypeLabel,
   afspraakZichtbaarInAgenda,
   needsVervolgPunt,
   normalizeAfspraakSoort,
@@ -255,11 +257,7 @@ function StickerCard({
   const naam = a.leads?.naam || "Onbekend";
   const plaats = a.leads?.plaats || a.leads?.postcode || "—";
   const tijd = formatTimeNl(a.start_at);
-  const soort = normalizeAfspraakSoort(a.soort);
-  const typeLabel =
-    soort === "vervolg_tel" || soort === "bel" || soort === "warme_bel"
-      ? "Tel"
-      : "Fysiek";
+  const typeLabel = afspraakTypeLabel(a.soort, leadStatus);
   const typeColor =
     typeLabel === "Tel" ? "#CA8A04" : "#16A34A";
 
@@ -435,30 +433,26 @@ export function AgendaPanel({
     return list.filter((a) => !hiddenIds.has(a.id));
   }, [planAdviseurs, defaultAdviseurId, hiddenIds]);
 
-  /** Aantal geplande (niet-geannuleerde) agenda-afspraken per adviseur in deze week. */
-  const afsprakenCountByAdviseur = useMemo(() => {
-    const dayKeys = new Set(days.map((d) => d.key));
-    const counts = new Map<string, number>();
-    for (const a of afspraken) {
-      if (a.status === "geannuleerd") continue;
-      if (!afspraakZichtbaarInAgenda(a, afspraken)) continue;
-      if (!dayKeys.has(dayKeyAmsterdam(a.start_at))) continue;
-      if (!a.adviseur_id) continue;
-      counts.set(a.adviseur_id, (counts.get(a.adviseur_id) || 0) + 1);
-    }
-    return counts;
-  }, [afspraken, days]);
-
   /**
-   * Vrije planbare slots in de geselecteerde week (admin).
-   * Zelfde regels als de agenda-cellen: week/slot-blokkade, startdatum, bezet.
+   * Per adviseur deze week: geplande blokken / totaal beschikbare blokken.
+   * Beschikbaar = elk niet-geblokkeerd planbaar slot (ongeacht of er al iets in staat).
+   * Gepland = zo’n slot met minstens één actieve fysieke afspraak.
    */
-  const beschikbareSlotsWeek = useMemo(() => {
-    if (!showAdminSlots) return 0;
-    let vrij = 0;
+  const slotStatsByAdviseur = useMemo(() => {
+    const gepland = new Map<string, number>();
+    const beschikbaar = new Map<string, number>();
+    const vrij = new Map<string, number>();
+
     for (const adv of planAdviseurs) {
       const weekKey = `${adv.id}:${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
-      if (beschikbaarMap.get(weekKey) === false) continue;
+      if (beschikbaarMap.get(weekKey) === false) {
+        gepland.set(adv.id, 0);
+        beschikbaar.set(adv.id, 0);
+        vrij.set(adv.id, 0);
+        continue;
+      }
+      let geplandN = 0;
+      let beschikbaarN = 0;
       for (const day of days) {
         if (isBeforeStartdatum(`${day.key}T12:00:00`, adv.startdatum)) {
           continue;
@@ -476,19 +470,24 @@ export function AgendaPanel({
           ) {
             continue;
           }
+          beschikbaarN += 1;
           const bezet = afspraken.some((a) => {
+            if (a.status === "geannuleerd") return false;
             if (a.adviseur_id !== adv.id) return false;
-            if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
+            if (!afspraakBlokkeertAgenda(a.soort)) return false;
             if (dayKeyAmsterdam(a.start_at) !== day.key) return false;
             return nearestSlotIndex(a.start_at) === slotIdx;
           });
-          if (!bezet) vrij += 1;
+          if (bezet) geplandN += 1;
         }
       }
+      gepland.set(adv.id, geplandN);
+      beschikbaar.set(adv.id, beschikbaarN);
+      vrij.set(adv.id, Math.max(0, beschikbaarN - geplandN));
     }
-    return vrij;
+
+    return { gepland, beschikbaar, vrij };
   }, [
-    showAdminSlots,
     planAdviseurs,
     weekInfo.jaar,
     weekInfo.week,
@@ -498,6 +497,21 @@ export function AgendaPanel({
     vrijgaven,
     afspraken,
   ]);
+
+  const afsprakenCountByAdviseur = slotStatsByAdviseur.gepland;
+  const beschikbaarSlotsByAdviseur = slotStatsByAdviseur.beschikbaar;
+
+  /**
+   * Nog vrije (lege) planbare slots in de geselecteerde week (admin-kpi).
+   */
+  const beschikbareSlotsWeek = useMemo(() => {
+    if (!showAdminSlots) return 0;
+    let n = 0;
+    for (const adv of planAdviseurs) {
+      n += slotStatsByAdviseur.vrij.get(adv.id) || 0;
+    }
+    return n;
+  }, [showAdminSlots, planAdviseurs, slotStatsByAdviseur]);
 
   /** Leads met een zichtbare agenda-afspraak vandaag (op starttijd). */
   const leadsVandaag = useMemo(() => {
@@ -773,9 +787,9 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ) {
-    if (isHardGeblokkeerdSlot(dayKey, hour)) {
+    if (isHardGeblokkeerdSlot(dayKey, hour, adviseurId)) {
       setError(
-        `${standaardBlokkadeLabel(dayKey, hour) || "Dit slot"} kan niet worden geopend.`
+        `${standaardBlokkadeLabel(dayKey, hour, adviseurId) || "Dit slot"} kan niet worden geopend.`
       );
       return;
     }
@@ -909,9 +923,9 @@ export function AgendaPanel({
       return;
     }
     const row = SLOT_ROWS[slotIdx];
-    if (isHardGeblokkeerdSlot(dayKey, row.hour)) {
+    if (isHardGeblokkeerdSlot(dayKey, row.hour, adviseurId)) {
       setError(
-        standaardBlokkadeLabel(dayKey, row.hour) ||
+        standaardBlokkadeLabel(dayKey, row.hour, adviseurId) ||
           "Dit tijdslot is standaard geblokkeerd"
       );
       return;
@@ -1217,7 +1231,8 @@ export function AgendaPanel({
             >
               <div className="border-r border-line bg-[#FAFBFA]" />
               {visibleAdviseurs.map((a) => {
-                const weekCount = afsprakenCountByAdviseur.get(a.id) || 0;
+                const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
+                const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
                 return (
                   <div
                     key={a.id}
@@ -1225,8 +1240,11 @@ export function AgendaPanel({
                   >
                     <p className="truncate text-xs font-semibold text-ink">
                       {a.naam}
-                      <span className="ml-1 font-medium tabular-nums text-muted">
-                        ({weekCount})
+                      <span
+                        className="ml-1 font-medium tabular-nums text-muted"
+                        title="Geplande blokken / totaal beschikbare blokken deze week"
+                      >
+                        ({gepland}/{totaal})
                       </span>
                     </p>
                     {isWeekBlocked(a.id) && (
@@ -1281,12 +1299,13 @@ export function AgendaPanel({
                           {blocked && items.length === 0 ? (
                             <GeblokkeerdCell
                               onClick={
-                                isHardGeblokkeerdSlot(day.key, row.hour)
+                                isHardGeblokkeerdSlot(day.key, row.hour, adv.id)
                                   ? () =>
                                       setError(
                                         standaardBlokkadeLabel(
                                           day.key,
-                                          row.hour
+                                          row.hour,
+                                          adv.id
                                         ) || "Standaard geblokkeerd"
                                       )
                                   : afblokMode && !blockBusy && !weekBlocked
@@ -1303,7 +1322,8 @@ export function AgendaPanel({
                                           )
                                       : magStandaardSlotOntblokken(
                                             day.key,
-                                            row.hour
+                                            row.hour,
+                                            adv.id
                                           ) && !afblokMode
                                         ? () =>
                                             setError(
@@ -1312,10 +1332,11 @@ export function AgendaPanel({
                                         : undefined
                               }
                               hint={
-                                isHardGeblokkeerdSlot(day.key, row.hour)
+                                isHardGeblokkeerdSlot(day.key, row.hour, adv.id)
                                   ? standaardBlokkadeLabel(
                                       day.key,
-                                      row.hour
+                                      row.hour,
+                                      adv.id
                                     ) || undefined
                                   : afblokMode
                                     ? slotBlocked
@@ -1485,9 +1506,7 @@ export function AgendaPanel({
                 className="mt-1 w-full border border-line px-3 py-2 text-sm"
               >
                 <option value="nieuw">Nieuw (huisbezoek)</option>
-                <option value="vervolg_fysiek">1e/volgend vervolg fysiek</option>
-                <option value="vervolg_tel">Vervolg telefonisch</option>
-                <option value="bel">Belafspraak</option>
+                <option value="vervolg_fysiek">Vervolg op locatie</option>
               </select>
             </label>
             <ReistijdHint

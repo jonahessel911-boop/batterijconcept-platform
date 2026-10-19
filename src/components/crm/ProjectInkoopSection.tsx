@@ -154,14 +154,15 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
           aantal: r.aantal,
           product_id: r.product_id,
         })),
-        producten
+        producten,
+        checks
       ),
-    [regels, producten]
+    [regels, producten, checks]
   );
 
   const inkoopTotaal = useMemo(
-    () => inkoopChecklistTotaalExBtw(items),
-    [items]
+    () => inkoopChecklistTotaalExBtw(items, checks),
+    [items, checks]
   );
 
   const order = useMemo(() => orderTotalsFromOfferte(offerte), [offerte]);
@@ -189,9 +190,10 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
     if (batterijItems.length === 0) {
       return batterijPurchasingStatus(checks);
     }
-    const statuses = batterijItems.map((i) =>
-      resolveInkoopRegelStatus(i, checks)
-    );
+    const statuses = batterijItems
+      .map((i) => resolveInkoopRegelStatus(i, checks))
+      .filter((s) => s !== "geannuleerd");
+    if (statuses.length === 0) return { besteld: false, geleverd: false };
     return {
       besteld: statuses.every((s) => s === "besteld" || s === "geleverd"),
       geleverd: statuses.every((s) => s === "geleverd"),
@@ -202,13 +204,20 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
 
   async function toggleItem(item: InkoopChecklistItem, next: boolean) {
     if (!cash.inkoopUnlocked) return;
-    const nextChecks = { ...checks, [item.key]: next };
+    if (resolveInkoopRegelStatus(item, checks) === "geannuleerd") return;
+    const nextChecks = {
+      ...checks,
+      [item.key]: next ? "besteld" : "te_kopen",
+    };
+    const active = items.filter(
+      (i) => resolveInkoopRegelStatus(i, checks) !== "geannuleerd"
+    );
     const wasVolledig =
-      items.length > 0 &&
-      items.every((i) => isInkoopItemBesteld(i, checks));
+      active.length > 0 &&
+      active.every((i) => isInkoopItemBesteld(i, checks));
     const nuVolledig =
-      items.length > 0 &&
-      items.every((i) => isInkoopItemBesteld(i, nextChecks));
+      active.length > 0 &&
+      active.every((i) => isInkoopItemBesteld(i, nextChecks));
     const setKredietDefault = nuVolledig && !wasVolledig && levStatus === "geen";
     setChecks(nextChecks);
     if (setKredietDefault) setLevStatus("op_krediet");
@@ -429,35 +438,59 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
                   items.map((item) => {
                     const besteld = isInkoopItemBesteld(item, checks);
                     const locked = !cash.inkoopUnlocked;
+                    const cancelled =
+                      resolveInkoopRegelStatus(item, checks) === "geannuleerd";
                     return (
                       <li key={item.key}>
                         <label
                           className={[
                             "flex items-center gap-2 px-2.5 py-1.5",
-                            locked
-                              ? "cursor-not-allowed opacity-55"
-                              : "cursor-pointer hover:bg-wash",
+                            cancelled
+                              ? "cursor-default opacity-55"
+                              : locked
+                                ? "cursor-not-allowed opacity-55"
+                                : "cursor-pointer hover:bg-wash",
                           ].join(" ")}
                         >
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm text-ink">
+                            <span
+                              className={[
+                                "block truncate text-sm",
+                                cancelled
+                                  ? "text-muted line-through"
+                                  : "text-ink",
+                              ].join(" ")}
+                            >
                               {item.label}
                             </span>
+                            {item.notitie ? (
+                              <span className="block text-[11px] font-medium text-[#C45A12]">
+                                {item.notitie}
+                              </span>
+                            ) : null}
                             <span className="block text-[11px] text-muted">
-                              {formatEuro(item.inkoopExBtw)} ex. btw
-                              {item.sku ? ` · ${item.sku}` : ""}
+                              {cancelled
+                                ? "Vervallen na schouw"
+                                : `${formatEuro(item.inkoopExBtw)} ex. btw`}
+                              {!cancelled && item.sku ? ` · ${item.sku}` : ""}
                             </span>
                           </span>
-                          <input
-                            type="checkbox"
-                            checked={besteld}
-                            disabled={locked || saving}
-                            onChange={(e) =>
-                              void toggleItem(item, e.target.checked)
-                            }
-                            className="h-4 w-4 shrink-0"
-                            aria-label={`${item.label} besteld`}
-                          />
+                          {cancelled ? (
+                            <span className="text-[10px] font-semibold uppercase text-muted">
+                              —
+                            </span>
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={besteld}
+                              disabled={locked || saving}
+                              onChange={(e) =>
+                                void toggleItem(item, e.target.checked)
+                              }
+                              className="h-4 w-4 shrink-0"
+                              aria-label={`${item.label} besteld`}
+                            />
+                          )}
                         </label>
                       </li>
                     );

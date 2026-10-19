@@ -18,6 +18,7 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 import { Panel } from "./DetailChrome";
+import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import {
   isOpleveringsrapport,
   isSchouwFormulier,
@@ -120,6 +121,7 @@ export function ProjectSchouwSection({
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
+  const [opleverFormOpen, setOpleverFormOpen] = useState(false);
 
   const loadPartnersAndFotos = useCallback(async () => {
     try {
@@ -313,11 +315,6 @@ export function ProjectSchouwSection({
     setError(null);
     setOkMsg(null);
     try {
-      if (!fotos.some((f) => isOpleveringsrapport(f.omschrijving))) {
-        throw new Error(
-          "Upload eerst het opleveringsrapport met handtekening van de klant."
-        );
-      }
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -479,7 +476,7 @@ export function ProjectSchouwSection({
         />
         <CheckRow
           done={heeftOplevering}
-          label="Opleveringsrapport (handtekening)"
+          label="Opleverformulier (installateur)"
         />
         <CheckRow done={installatieVoltooid} label="Installatie voltooid" />
       </ul>
@@ -646,25 +643,14 @@ export function ProjectSchouwSection({
               {installatieGepland && !installatieVoltooid ? (
                 <button
                   type="button"
-                  disabled={installatieSaving || !heeftOplevering}
+                  disabled={installatieSaving}
                   onClick={() => void markInstallatieVoltooid()}
-                  title={
-                    heeftOplevering
-                      ? undefined
-                      : "Upload eerst het opleveringsrapport"
-                  }
                   className="border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
                 >
                   Markeer voltooid
                 </button>
               ) : null}
             </div>
-            {installatieGepland && !heeftOplevering ? (
-              <p className="text-xs text-[#C45A12]">
-                Upload het opleveringsrapport met handtekening van de klant om
-                de installatie af te ronden.
-              </p>
-            ) : null}
           </form>
         </>
       ) : null}
@@ -685,23 +671,32 @@ export function ProjectSchouwSection({
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
             Opleveringsrapport ({opleveringsrapporten.length})
           </p>
-          <label className="cursor-pointer text-xs font-semibold text-green-dark underline-offset-2 hover:underline">
-            {uploadingOplevering ? "Uploaden…" : "Opleveringsrapport"}
-            <input
-              type="file"
-              accept="image/*,application/pdf,.pdf"
-              className="hidden"
-              disabled={uploadingOplevering}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void uploadOpleveringsrapport(file);
-                e.target.value = "";
-              }}
-            />
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setOpleverFormOpen(true)}
+              className="text-xs font-semibold text-green-dark underline-offset-2 hover:underline"
+            >
+              Opleverformulier
+            </button>
+            <label className="cursor-pointer text-xs font-semibold text-muted underline-offset-2 hover:underline">
+              {uploadingOplevering ? "Uploaden…" : "Of upload PDF"}
+              <input
+                type="file"
+                accept="image/*,application/pdf,.pdf"
+                className="hidden"
+                disabled={uploadingOplevering}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void uploadOpleveringsrapport(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
         </div>
         <p className="mt-1 text-xs text-muted">
-          Verplicht · met handtekening van de klant dat alles goed is
+          Verplicht · checklist + handtekening van de installateur
         </p>
         {opleveringsrapporten.length === 0 ? (
           <p className="mt-2 text-sm text-[#C45A12]">
@@ -852,6 +847,19 @@ export function ProjectSchouwSection({
           </div>
         )}
       </div>
+
+      <OpleverFormulierModal
+        open={opleverFormOpen}
+        project={project}
+        submitUrl={`/api/projecten/${project.id}/oplever-formulier`}
+        monteurDefault={project.monteur || null}
+        onClose={() => setOpleverFormOpen(false)}
+        onCreated={() => {
+          setOkMsg("Opleverformulier opgeslagen.");
+          onChanged();
+          void loadPartnersAndFotos();
+        }}
+      />
     </>
   );
 

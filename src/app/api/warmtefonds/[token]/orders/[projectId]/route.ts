@@ -160,7 +160,9 @@ export async function PATCH(
       } else {
         patch.financiering_status = body.financiering_status;
         if (
-          body.financiering_status === "aanvraag_gedaan" &&
+          (body.financiering_status === "aanvraag_gedaan" ||
+            body.financiering_status === "in_behandeling" ||
+            body.financiering_status === "documenten_aanleveren") &&
           !(before as { warmtefonds_aangevraagd_at?: string | null })
             .warmtefonds_aangevraagd_at
         ) {

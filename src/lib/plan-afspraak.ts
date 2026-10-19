@@ -7,6 +7,7 @@ import { fromZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -32,6 +33,7 @@ import {
   standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
 import type { AfspraakSoort } from "@/types/database";
+import { isFinancieringStatus } from "@/lib/financiering-status";
 import { normalizeRol } from "@/lib/rollen";
 
 export const AFSPRAAK_SELECT =
@@ -202,7 +204,7 @@ export async function planAfspraak(
         ok: false,
         status: 409,
         error:
-          standaardBlokkadeLabel(start) ||
+          standaardBlokkadeLabel(start, undefined, input.adviseur_id) ||
           "Dit tijdsblok is afgeblokt voor deze adviseur",
       };
     }
@@ -220,6 +222,25 @@ export async function planAfspraak(
         status: 409,
         error: "Dit tijdslot is al bezet voor deze adviseur",
       };
+    }
+  }
+
+  // Nieuwe terugbel → oude openstaande terugbels voor dezelfde lead afronden
+  // (voorkomt dubbele chips in de belbak).
+  if (isTerugbelSoort(soort)) {
+    const { data: oude } = await sb
+      .from("afspraken")
+      .select("id, soort, status")
+      .eq("lead_id", input.lead_id)
+      .in("status", ["gepland", "bevestigd", "verzet"]);
+    const oudeIds = (oude || [])
+      .filter((a) => isTerugbelSoort(a.soort as string | null))
+      .map((a) => a.id as string);
+    if (oudeIds.length > 0) {
+      await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .in("id", oudeIds);
     }
   }
 
@@ -315,7 +336,7 @@ async function afterCreate(
       straat?: string | null;
       plaats?: string | null;
     } | null;
-    adviseurs?: { naam?: string | null } | null;
+    adviseurs?: { naam?: string | null; email?: string | null } | null;
   },
   body: { lead_id: string; adviseur_id: string },
   soort: AfspraakSoort
@@ -373,6 +394,25 @@ async function afterCreate(
       .eq("id", body.lead_id);
   }
 
+  // Afspraak-notitie ook op de lead zetten (zichtbaar bij lead-notities).
+  const afspraakNotitie = (afspraak.notities || "").trim();
+  if (afspraakNotitie) {
+    const { appendStampedNotitie } = await import("@/lib/lead-notitie");
+    const { data: leadNotes } = await sb
+      .from("leads")
+      .select("notities")
+      .eq("id", body.lead_id)
+      .maybeSingle();
+    const merged = appendStampedNotitie(
+      (leadNotes as { notities?: string | null } | null)?.notities,
+      `Afspraaknotitie: ${afspraakNotitie}`
+    );
+    await sb
+      .from("leads")
+      .update({ notities: merged })
+      .eq("id", body.lead_id);
+  }
+
   await logLeadEvent({
     leadId: body.lead_id,
     soort: isTerugbelSoort(soort) ? "terugbel" : "afspraak",
@@ -412,6 +452,11 @@ async function afterCreate(
         subject: "Afspraak bevestigd — Batterijconcept",
         html: afspraakBevestigingSequenceEmail(vars),
         tag: "afspraak-bevestiging",
+        replyTo: await replyToForAfspraak(sb, {
+          adviseurId: body.adviseur_id,
+          leadId: body.lead_id,
+          adviseurJoin: afspraak.adviseurs,
+        }),
       });
       if (sent.ok) {
         await sb
@@ -459,25 +504,21 @@ async function markWarmtefondsAfspraakIngepland(
 
   const prevFs = (project as { financiering_status?: string | null })
     .financiering_status;
-  if (
-    prevFs === "aanvraag_gedaan" ||
-    prevFs === "aanvraag_goedgekeurd" ||
-    prevFs === "uitbetaald" ||
-    prevFs === "afgewezen"
-  ) {
-    // Al verder in financiering — niet terugzetten
-    return;
-  }
 
-  const patch: Record<string, unknown> = {
-    financiering_status: "afspraak_ingepland",
-  };
+  // Alleen interne afspraakdatum zetten — pipeline niet terugzetten.
+  const patch: Record<string, unknown> = {};
   if (startAt) {
     const d = new Date(startAt);
     if (!Number.isNaN(d.getTime())) {
       patch.warmtefonds_afspraak_at = d.toISOString();
     }
   }
+  // Nog geen fase → start op doorgestuurd (afspraak is apart)
+  if (!prevFs || prevFs === "afspraak_ingepland") {
+    patch.financiering_status = "doorgestuurd_naar_edwin";
+  }
+
+  if (Object.keys(patch).length === 0) return;
 
   const { error } = await sb.from("projecten").update(patch).eq("id", project.id);
 
@@ -486,7 +527,7 @@ async function markWarmtefondsAfspraakIngepland(
   await logLeadEvent({
     leadId,
     soort: "status",
-    titel: "Financiering: Afspraak gepland",
+    titel: "Warmtefonds: interne afspraak gezet",
     detail: prevFs
       ? `Was: ${prevFs}`
       : project.project_nummer
@@ -495,9 +536,9 @@ async function markWarmtefondsAfspraakIngepland(
     meta: {
       project_id: project.id,
       project_nummer: project.project_nummer,
-      veld: "financiering_status",
+      veld: "warmtefonds_afspraak_at",
       van: prevFs ?? null,
-      naar: "afspraak_ingepland",
+      naar: patch.financiering_status ?? prevFs ?? null,
       afspraak_id: afspraakId,
       warmtefonds_afspraak_at: patch.warmtefonds_afspraak_at ?? null,
     },
@@ -505,11 +546,12 @@ async function markWarmtefondsAfspraakIngepland(
 
   try {
     const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
+    const nextFs = patch.financiering_status ?? prevFs ?? null;
     await syncAutoTakenVoorProject(
       sb,
       project.id,
       project.status as string,
-      "afspraak_ingepland"
+      typeof nextFs === "string" && isFinancieringStatus(nextFs) ? nextFs : null
     );
   } catch {
     /* best-effort */

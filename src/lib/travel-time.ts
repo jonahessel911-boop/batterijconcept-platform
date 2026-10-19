@@ -9,7 +9,16 @@ export type TravelLeg = {
   provider: "google" | "osrm" | "estimate";
 };
 
-type LatLng = { lat: number; lon: number };
+export type LatLng = { lat: number; lon: number };
+
+/** Max. 1 uur rijden (schatting) voor dekkingsstraal. */
+export const ONE_HOUR_DRIVE_SEC = 3600;
+
+/**
+ * Hemelsbreed ≈ 1u rijden: 48 km/u over weg × 1.35 factor → ~35,6 km.
+ * Gebruikt voor kaartcirkels.
+ */
+export const ONE_HOUR_DRIVE_RADIUS_M = Math.round(48_000 / 1.35);
 
 function mapsKey(): string | undefined {
   return (
@@ -36,7 +45,7 @@ function formatDistanceNl(meters: number): string {
   })} km`;
 }
 
-function haversineM(a: LatLng, b: LatLng): number {
+export function haversineM(a: LatLng, b: LatLng): number {
   const R = 6371000;
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);
@@ -50,7 +59,7 @@ function haversineM(a: LatLng, b: LatLng): number {
 }
 
 /** Ruwe rijtijd: hemelsbreed × 1.35 (wegen) @ ~48 km/u. */
-function estimateDriveSec(a: LatLng, b: LatLng): {
+export function estimateDriveSec(a: LatLng, b: LatLng): {
   durationSec: number;
   distanceM: number;
 } {
@@ -58,6 +67,10 @@ function estimateDriveSec(a: LatLng, b: LatLng): {
   const roadM = straight * 1.35;
   const durationSec = Math.max(60, Math.round((roadM / 1000 / 48) * 3600));
   return { durationSec, distanceM: Math.round(roadM) };
+}
+
+export function withinOneHourDrive(a: LatLng, b: LatLng): boolean {
+  return estimateDriveSec(a, b).durationSec <= ONE_HOUR_DRIVE_SEC;
 }
 
 function detectGeocodeCountry(

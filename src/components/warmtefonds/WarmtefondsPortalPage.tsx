@@ -1,9 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
-import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import { wfPortalStatusLabel } from "@/lib/warmtefonds-portal";
+import { addDays, format, isSameDay, startOfWeek } from "date-fns";
+import { nl } from "date-fns/locale";
+import { formatDateTimeNl } from "@/lib/format";
+import {
+  FINANCIERING_PIPELINE,
+  normalizeFinancieringStatus,
+} from "@/lib/financiering-status";
+import {
+  wfPortalOpenRank,
+  wfPortalStatusLabelKort,
+} from "@/lib/warmtefonds-portal";
 
 type LeadLite = {
   naam?: string | null;
@@ -23,11 +33,10 @@ type OrderRow = {
   status: string;
   financiering_status?: string | null;
   warmtefonds_afspraak_at?: string | null;
-  warmtefonds_notities?: string | null;
   leads?: LeadLite | LeadLite[] | null;
 };
 
-type TabId = "agenda" | "aanvragen";
+type TabId = "aanvragen" | "agenda";
 
 function leadOf(o: OrderRow): LeadLite | null {
   if (!o.leads) return null;
@@ -35,13 +44,14 @@ function leadOf(o: OrderRow): LeadLite | null {
 }
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
-  const label = wfPortalStatusLabel(status);
+  const n = normalizeFinancieringStatus(status);
+  const label = wfPortalStatusLabelKort(status);
   const tone =
     status === "afgewezen"
       ? "text-[#C45A12]"
-      : status === "uitbetaald" || status === "aanvraag_goedgekeurd"
+      : n === "uitbetaald"
         ? "text-green-dark"
-        : status === "afspraak_ingepland" || status === "aanvraag_gedaan"
+        : n && FINANCIERING_PIPELINE.indexOf(n) >= 3
           ? "text-[#C45A12]"
           : "text-muted";
   return (
@@ -61,6 +71,9 @@ export function WarmtefondsPortalPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [weekStart, setWeekStart] = useState(() =>
+    startOfWeek(new Date(), { weekStartsOn: 1 })
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,56 +96,79 @@ export function WarmtefondsPortalPage() {
     return () => cancelAnimationFrame(id);
   }, [load]);
 
-  const agendaItems = useMemo(() => {
-    return [...orders]
-      .filter((o) => o.warmtefonds_afspraak_at)
-      .sort(
+  const openQueue = useMemo(() => {
+    return [...orders].sort(
+      (a, b) =>
+        wfPortalOpenRank(a.financiering_status) -
+        wfPortalOpenRank(b.financiering_status)
+    );
+  }, [orders]);
+
+  const openCount = openQueue.filter((o) => {
+    const n = normalizeFinancieringStatus(o.financiering_status);
+    if (!n || n === "afgewezen" || n === "uitbetaald") return false;
+    return true;
+  }).length;
+
+  const weekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
+    [weekStart]
+  );
+
+  const agendaByDay = useMemo(() => {
+    const map = new Map<string, OrderRow[]>();
+    for (const d of weekDays) {
+      map.set(format(d, "yyyy-MM-dd"), []);
+    }
+    for (const o of orders) {
+      if (!o.warmtefonds_afspraak_at) continue;
+      const at = new Date(o.warmtefonds_afspraak_at);
+      if (Number.isNaN(at.getTime())) continue;
+      const key = format(at, "yyyy-MM-dd");
+      const list = map.get(key);
+      if (list) list.push(o);
+    }
+    for (const list of map.values()) {
+      list.sort(
         (a, b) =>
           new Date(a.warmtefonds_afspraak_at!).getTime() -
           new Date(b.warmtefonds_afspraak_at!).getTime()
       );
-  }, [orders]);
+    }
+    return map;
+  }, [orders, weekDays]);
 
-  const openQueue = useMemo(() => {
-    return [...orders].sort((a, b) => {
-      const rank = (s: string | null | undefined) => {
-        if (s === "doorgestuurd_naar_edwin") return 0;
-        if (s === "afspraak_ingepland") return 1;
-        if (s === "aanvraag_gedaan") return 2;
-        if (!s) return 3;
-        if (s === "aanvraag_goedgekeurd") return 4;
-        if (s === "uitbetaald") return 5;
-        if (s === "afgewezen") return 6;
-        return 7;
-      };
-      return rank(a.financiering_status) - rank(b.financiering_status);
-    });
-  }, [orders]);
-
-  const openCount = openQueue.filter(
-    (o) =>
-      !o.financiering_status ||
-      o.financiering_status === "doorgestuurd_naar_edwin" ||
-      o.financiering_status === "afspraak_ingepland" ||
-      o.financiering_status === "aanvraag_gedaan"
-  ).length;
+  const weekLabel = `${format(weekStart, "d MMM", { locale: nl })} – ${format(
+    addDays(weekStart, 6),
+    "d MMM yyyy",
+    { locale: nl }
+  )}`;
 
   return (
     <div className="crm-bg flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
-        <div className="mx-auto flex h-14 w-full max-w-[1200px] items-center justify-between gap-3 px-4 sm:px-6">
-          <div className="min-w-0">
-            <p className="font-display text-sm font-bold text-white">
-              Batterij<span className="text-orange">concept</span>
-              <span className="ml-2 text-xs font-medium text-white/60">
-                Warmtefonds
-              </span>
-            </p>
-            {operatorNaam ? (
-              <p className="truncate text-[11px] text-white/55">
-                {operatorNaam}
+        <div className="mx-auto flex h-16 w-full max-w-[1200px] items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <Image
+              src="/brands/warmtefonds-logo.png"
+              alt="Nationaal Warmtefonds"
+              width={120}
+              height={36}
+              className="h-8 w-auto object-contain brightness-0 invert"
+              priority
+            />
+            <div className="min-w-0 border-l border-white/20 pl-3">
+              <p className="font-display text-sm font-bold text-white">
+                Batterij<span className="text-orange">concept</span>
               </p>
-            ) : null}
+              {operatorNaam ? (
+                <p className="truncate text-[11px] text-white/55">
+                  {operatorNaam}
+                </p>
+              ) : (
+                <p className="text-[11px] text-white/55">Warmtefonds-portaal</p>
+              )}
+            </div>
           </div>
           <button
             type="button"
@@ -162,7 +198,7 @@ export function WarmtefondsPortalPage() {
                   className={[
                     "px-3 py-1.5 text-xs font-semibold",
                     tab === t.id
-                      ? "bg-green text-white"
+                      ? "bg-[#C45A12] text-white"
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
@@ -173,7 +209,7 @@ export function WarmtefondsPortalPage() {
             <p className="text-xs text-muted">
               {tab === "aanvragen"
                 ? `${orders.length} aanvraag${orders.length === 1 ? "" : "en"} · ${openCount} open`
-                : `${agendaItems.length} afspraak${agendaItems.length === 1 ? "" : "en"}`}
+                : "Interne Warmtefonds-afspraken (geen klantmail)"}
             </p>
           </div>
         </div>
@@ -190,64 +226,97 @@ export function WarmtefondsPortalPage() {
           </p>
         ) : tab === "agenda" ? (
           <section className="border border-line bg-white">
-            <div className="border-b border-line px-4 py-3 sm:px-5">
-              <h2 className="font-display text-base font-semibold text-ink">
-                Warmtefonds-afspraken
-              </h2>
-              <p className="mt-0.5 text-xs text-muted">
-                Afspraken die je hebt ingepland bij klanten
-              </p>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+              <div>
+                <h2 className="font-display text-base font-semibold text-ink">
+                  Weekagenda
+                </h2>
+                <p className="mt-0.5 text-xs text-muted">{weekLabel}</p>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setWeekStart((w) => addDays(w, -7))}
+                  className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))
+                  }
+                  className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
+                >
+                  Vandaag
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWeekStart((w) => addDays(w, 7))}
+                  className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
+                >
+                  →
+                </button>
+              </div>
             </div>
-            {agendaItems.length === 0 ? (
-              <div className="px-5 py-14 text-center">
-                <p className="font-display text-base font-semibold text-ink">
-                  Nog geen afspraken
-                </p>
-                <p className="mt-1 text-sm text-muted">
-                  Open een aanvraag om een datum in te plannen.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="crm-table w-full">
-                  <thead>
-                    <tr>
-                      <th>Wanneer</th>
-                      <th>Klant</th>
-                      <th>Project</th>
-                      <th>Adres</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {agendaItems.map((o) => {
-                      const lead = leadOf(o);
-                      const href = `/warmtefonds/${token}/orders/${o.id}`;
-                      return (
-                        <tr
-                          key={o.id}
-                          onClick={() => router.push(href)}
-                        >
-                          <td className="font-semibold text-ink">
-                            {formatDateTimeNl(o.warmtefonds_afspraak_at)}
-                          </td>
-                          <td className="font-medium text-ink">
-                            {lead?.naam || o.titel || "—"}
-                          </td>
-                          <td className="text-muted">{o.project_nummer}</td>
-                          <td className="text-muted">
-                            {lead ? adresRegel(lead) || "—" : "—"}
-                          </td>
-                          <td>
-                            <StatusBadge status={o.financiering_status} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="grid grid-cols-1 divide-y divide-line sm:grid-cols-7 sm:divide-x sm:divide-y-0">
+              {weekDays.map((day) => {
+                const key = format(day, "yyyy-MM-dd");
+                const items = agendaByDay.get(key) || [];
+                const isToday = isSameDay(day, new Date());
+                return (
+                  <div
+                    key={key}
+                    className={[
+                      "min-h-[140px] p-2.5",
+                      isToday ? "bg-[#FFF7ED]" : "bg-white",
+                    ].join(" ")}
+                  >
+                    <p
+                      className={[
+                        "text-[11px] font-semibold uppercase tracking-wide",
+                        isToday ? "text-[#C45A12]" : "text-muted",
+                      ].join(" ")}
+                    >
+                      {format(day, "EEE d", { locale: nl })}
+                    </p>
+                    <ul className="mt-2 space-y-1.5">
+                      {items.length === 0 ? (
+                        <li className="text-[11px] text-muted/70">—</li>
+                      ) : (
+                        items.map((o) => {
+                          const lead = leadOf(o);
+                          const time = format(
+                            new Date(o.warmtefonds_afspraak_at!),
+                            "HH:mm"
+                          );
+                          return (
+                            <li key={o.id}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  router.push(
+                                    `/warmtefonds/${token}/orders/${o.id}`
+                                  )
+                                }
+                                className="w-full border border-[#FDBA74]/50 bg-white px-2 py-1.5 text-left hover:border-[#C45A12]"
+                              >
+                                <p className="text-[11px] font-bold text-[#C45A12]">
+                                  {time}
+                                </p>
+                                <p className="truncate text-[12px] font-semibold text-ink">
+                                  {lead?.naam || o.project_nummer}
+                                </p>
+                              </button>
+                            </li>
+                          );
+                        })
+                      )}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
           </section>
         ) : (
           <section className="border border-line bg-white">
@@ -256,16 +325,13 @@ export function WarmtefondsPortalPage() {
                 Warmtefonds-aanvragen
               </h2>
               <p className="mt-0.5 text-xs text-muted">
-                Alle lopende Warmtefonds-orders
+                Klik een klant om de volledige flow en stap te zien
               </p>
             </div>
             {openQueue.length === 0 ? (
               <div className="px-5 py-14 text-center">
                 <p className="font-display text-base font-semibold text-ink">
                   Geen aanvragen
-                </p>
-                <p className="mt-1 text-sm text-muted">
-                  Er staan nog geen Warmtefonds-orders klaar.
                 </p>
               </div>
             ) : (
@@ -277,17 +343,25 @@ export function WarmtefondsPortalPage() {
                       <th>Project</th>
                       <th>Telefoon</th>
                       <th>Afspraak</th>
-                      <th>Status</th>
+                      <th>Stap</th>
                     </tr>
                   </thead>
                   <tbody>
                     {openQueue.map((o) => {
                       const lead = leadOf(o);
                       const href = `/warmtefonds/${token}/orders/${o.id}`;
+                      const n = normalizeFinancieringStatus(
+                        o.financiering_status
+                      );
+                      const stapNr =
+                        n && n !== "afgewezen"
+                          ? FINANCIERING_PIPELINE.indexOf(n) + 1
+                          : null;
                       return (
                         <tr
                           key={o.id}
                           onClick={() => router.push(href)}
+                          className="cursor-pointer"
                         >
                           <td className="font-medium text-ink">
                             {lead?.naam || o.titel || "Klant"}
@@ -312,7 +386,14 @@ export function WarmtefondsPortalPage() {
                               : "—"}
                           </td>
                           <td>
-                            <StatusBadge status={o.financiering_status} />
+                            <div className="flex flex-col gap-0.5">
+                              {stapNr ? (
+                                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                                  Stap {stapNr}/7
+                                </span>
+                              ) : null}
+                              <StatusBadge status={o.financiering_status} />
+                            </div>
                           </td>
                         </tr>
                       );

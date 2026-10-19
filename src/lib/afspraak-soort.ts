@@ -85,6 +85,33 @@ export function afspraakBlokkeertAgenda(
   return s === "nieuw" || s === "vervolg_fysiek";
 }
 
+/**
+ * Agenda-sticker: Tel vs Fysiek.
+ * `vervolg_punt` is legacy/generiek — leadstatus bepaalt of het bel of fysiek is.
+ */
+export function afspraakTypeLabel(
+  soort: string | null | undefined,
+  leadStatus?: string | null
+): "Tel" | "Fysiek" {
+  const s = normalizeAfspraakSoort(soort);
+  if (s === "vervolg_tel" || s === "bel" || s === "warme_bel") return "Tel";
+  if (s === "vervolg_punt") {
+    if (leadStatus === "vervolg_fysiek") return "Fysiek";
+    // Default: vervolg-punt na huisbezoek is telefonisch (of lead=vervolg_tel)
+    return "Tel";
+  }
+  return "Fysiek";
+}
+
+/** Afspraak-soort bij uitkomst “vervolg …” (niet meer altijd vervolg_punt). */
+export function soortVoorVervolgUitkomst(
+  uitkomst: string | null | undefined
+): AfspraakSoort {
+  if (uitkomst === "vervolg_tel") return "vervolg_tel";
+  if (uitkomst === "vervolg_fysiek") return "vervolg_fysiek";
+  return "vervolg_punt";
+}
+
 export function afspraakStuurtMail(soort: string | null | undefined): boolean {
   return normalizeAfspraakSoort(soort) === "nieuw";
 }
@@ -162,14 +189,17 @@ export function leadHadFysiekeAfspraak(
 
 /**
  * Mag deze afspraak in de agenda-week?
- * Terugbel / warme terugbel alleen in Bellen — niet in de agenda.
+ * Huisbezoek + vervolg (fysiek én telefonisch/punt).
+ * Koude/warme terugbel en Warmtefonds → Bellen / WF-portaal.
  */
 export function afspraakZichtbaarInAgenda(
   afspraak: Afspraak,
   _allAfspraken: Afspraak[]
 ): boolean {
   const s = normalizeAfspraakSoort(afspraak.soort);
-  if (s === "bel" || s === "warme_bel") return false;
+  if (s === "bel" || s === "warme_bel" || s === "warmtefonds_aanvraag") {
+    return false;
+  }
   return true;
 }
 

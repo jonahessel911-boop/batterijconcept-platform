@@ -22,13 +22,58 @@ function round2(n: number): number {
 export const INKOOP_LEVERANCIER = "Apex Power Supplies";
 
 /** Status per inkoopregel (opgeslagen in project.materiaal_checks). */
-export type InkoopRegelStatus = "te_kopen" | "besteld" | "geleverd";
+export type InkoopRegelStatus =
+  | "te_kopen"
+  | "besteld"
+  | "geleverd"
+  | "geannuleerd";
 
 export const INKOOP_REGEL_STATUS_LABEL: Record<InkoopRegelStatus, string> = {
   te_kopen: "Nog in te kopen",
   besteld: "Besteld — wacht op levering",
   geleverd: "Geleverd",
+  geannuleerd: "Vervallen (na schouw)",
 };
+
+/** Montage-accessoire keuze na schouw (niet in PDF). */
+export type MontageAccessoire = "baseplate" | "wallbracket";
+
+export const SCHOUW_MONTAGE_CHECK_KEY = "__schouw_montage";
+export const INKOOP_EXTRA_NOTITIES_KEY = "__inkoop_extra_notities";
+export const INKOOP_NOTE_PREFIX = "__note:";
+
+export const SCHOUW_MONTAGE_NA_SCHOUW_NOTE =
+  "Na schouw blijkt dat deze nodig is.";
+
+export function inkoopNoteKey(itemKey: string): string {
+  return `${INKOOP_NOTE_PREFIX}${itemKey}`;
+}
+
+export function parseMontageAccessoire(
+  value: unknown
+): MontageAccessoire | null {
+  if (value === "baseplate" || value === "wallbracket") return value;
+  return null;
+}
+
+export function getInkoopItemNote(
+  checks: MateriaalChecks | null | undefined,
+  itemKey: string
+): string | null {
+  const raw = checks?.[inkoopNoteKey(itemKey)];
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  return t || null;
+}
+
+export function getInkoopExtraNotities(
+  checks: MateriaalChecks | null | undefined
+): string | null {
+  const raw = checks?.[INKOOP_EXTRA_NOTITIES_KEY];
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  return t || null;
+}
 
 /** Leverancierbetaling per project (kolommen op projecten). */
 export type InkoopLeverancierStatus = "geen" | "betaald" | "op_krediet";
@@ -59,6 +104,7 @@ export function parseInkoopRegelStatus(
 ): InkoopRegelStatus {
   if (value === true || value === "besteld") return "besteld";
   if (value === "geleverd") return "geleverd";
+  if (value === "geannuleerd") return "geannuleerd";
   return "te_kopen";
 }
 
@@ -66,7 +112,10 @@ export function parseInkoopRegelStatus(
 export function batterijPurchasingStatus(
   checks: MateriaalChecks | null | undefined
 ): { besteld: boolean; geleverd: boolean } {
-  const entries = Object.entries(checks || {});
+  const entries = Object.entries(checks || {}).filter(
+    ([k, v]) =>
+      !k.startsWith("__") && parseInkoopRegelStatus(v) !== "geannuleerd"
+  );
   const batterij = entries.filter(([k]) => /batterij/i.test(k));
   const source = batterij.length > 0 ? batterij : entries;
   if (source.length === 0) {
@@ -103,31 +152,44 @@ export function orderInkoopSamenvatting(
   let te_kopen = 0;
   let besteld = 0;
   let geleverd = 0;
+  let active = 0;
   for (const item of items) {
     const s = resolveInkoopRegelStatus(item, checks);
+    if (s === "geannuleerd") continue;
+    active += 1;
     if (s === "geleverd") geleverd += 1;
     else if (s === "besteld") besteld += 1;
     else te_kopen += 1;
   }
   let overall: InkoopRegelStatus | "deels" = "te_kopen";
-  if (items.length > 0 && geleverd === items.length) overall = "geleverd";
-  else if (items.length > 0 && te_kopen === 0) overall = "besteld";
+  if (active > 0 && geleverd === active) overall = "geleverd";
+  else if (active > 0 && te_kopen === 0) overall = "besteld";
   else if (besteld > 0 || geleverd > 0) overall = "deels";
   return { te_kopen, besteld, geleverd, overall };
 }
 
-/** Standaard accessoires (ex. btw) — Apex / Alpha ESS G3. */
+/** Standaard montage: baseplate. Wall bracket alleen na schouw-wissel. */
+export const INKOOP_BASEPLATE = {
+  key: "std:baseplate",
+  sku: "smile-3g-baseplate",
+  naam: "Alpha ESS Baseplate G3 Universal",
+  inkoopExBtw: DEFAULT_BASEPLATE_EX_BTW,
+} as const;
+
+export const INKOOP_WALLBRACKET = {
+  key: "std:wallbracket",
+  sku: "smile-g3-s5-wall-bracket",
+  naam: "Alpha ESS Smile G3 S5 inverter wall bracket",
+  inkoopExBtw: DEFAULT_BASEPLATE_EX_BTW,
+} as const;
+
+/** Overige standaard accessoires (ex. btw) — Apex / Alpha ESS G3. */
 export const STANDAARD_INKOOP_ACCESSOIRES = [
-  {
-    key: "std:baseplate",
-    sku: "smile-3g-baseplate",
-    naam: "Alpha ESS Baseplate G3 Universal",
-    inkoopExBtw: DEFAULT_BASEPLATE_EX_BTW,
-  },
+  INKOOP_BASEPLATE,
   {
     key: "std:koppelkabel",
     sku: "smile-g3-kabelset-9.3",
-    naam: "AlphaESS Koppelkabel Single kolom 9.3 kWh modules",
+    naam: "Koppelkabel",
     inkoopExBtw: DEFAULT_KOPPELKABEL_EX_BTW,
   },
   {
@@ -147,6 +209,8 @@ export type InkoopChecklistItem = {
   bron: "offerte" | "standaard";
   /** Offerte-regel id indien van toepassing. */
   regelId?: string;
+  /** Toelichting (bijv. na schouw) — niet op offerte. */
+  notitie?: string | null;
 };
 
 export type OfferteRegelInkoop = {
@@ -180,12 +244,77 @@ export function isInkoopUitsluitenRegel(omschrijving: string): boolean {
 }
 
 /**
+ * Na schouw: wissel baseplate ↔ wall bracket in purchasing.
+ * Oude regel → geannuleerd (doorstreept), nieuwe → te_kopen + notitie.
+ */
+export function applySchouwMontageToChecks(
+  checks: MateriaalChecks | null | undefined,
+  montage: MontageAccessoire,
+  extraNotities?: string | null
+): MateriaalChecks {
+  const next: MateriaalChecks = { ...(checks || {}) };
+  const prev = parseMontageAccessoire(next[SCHOUW_MONTAGE_CHECK_KEY]);
+  next[SCHOUW_MONTAGE_CHECK_KEY] = montage;
+
+  const extra = (extraNotities || "").trim();
+  if (extra) next[INKOOP_EXTRA_NOTITIES_KEY] = extra;
+  else delete next[INKOOP_EXTRA_NOTITIES_KEY];
+
+  const keepIfOrdered = (key: string) => {
+    const s = parseInkoopRegelStatus(next[key]);
+    return s === "besteld" || s === "geleverd";
+  };
+
+  if (montage === "wallbracket") {
+    if (!keepIfOrdered(INKOOP_BASEPLATE.key)) {
+      next[INKOOP_BASEPLATE.key] = "geannuleerd";
+    }
+    delete next[inkoopNoteKey(INKOOP_BASEPLATE.key)];
+    if (!keepIfOrdered(INKOOP_WALLBRACKET.key)) {
+      next[INKOOP_WALLBRACKET.key] = "te_kopen";
+    }
+    // Notitie alleen als we wisselen t.o.v. standaard/baseplate
+    if (prev !== "wallbracket") {
+      next[inkoopNoteKey(INKOOP_WALLBRACKET.key)] =
+        SCHOUW_MONTAGE_NA_SCHOUW_NOTE;
+    }
+  } else {
+    // baseplate bevestigd
+    if (prev === "wallbracket" || next[INKOOP_WALLBRACKET.key] != null) {
+      if (!keepIfOrdered(INKOOP_WALLBRACKET.key)) {
+        next[INKOOP_WALLBRACKET.key] = "geannuleerd";
+      }
+      if (!keepIfOrdered(INKOOP_BASEPLATE.key)) {
+        next[INKOOP_BASEPLATE.key] = "te_kopen";
+      }
+      next[inkoopNoteKey(INKOOP_BASEPLATE.key)] =
+        SCHOUW_MONTAGE_NA_SCHOUW_NOTE;
+      delete next[inkoopNoteKey(INKOOP_WALLBRACKET.key)];
+    } else {
+      // Standaard bevestigd — geen doorstrepen nodig
+      if (!keepIfOrdered(INKOOP_BASEPLATE.key)) {
+        // laat te_kopen/undefined
+        if (next[INKOOP_BASEPLATE.key] === "geannuleerd") {
+          next[INKOOP_BASEPLATE.key] = "te_kopen";
+        }
+      }
+      delete next[inkoopNoteKey(INKOOP_BASEPLATE.key)];
+      delete next[inkoopNoteKey(INKOOP_WALLBRACKET.key)];
+    }
+  }
+
+  return next;
+}
+
+/**
  * Bouw checklist: per hardware-regel batterij (+ omvormer) en vaste accessoires.
  * Check-keys blijven stabiel voor `project.materiaal_checks`.
+ * Optioneel `checks` voor schouw-montage (wall bracket tonen / notities).
  */
 export function buildInkoopChecklist(
   regels: OfferteRegelInkoop[],
-  producten: ProductInkoop[] = []
+  producten: ProductInkoop[] = [],
+  checks?: MateriaalChecks | null
 ): InkoopChecklistItem[] {
   const items: InkoopChecklistItem[] = [];
 
@@ -264,7 +393,37 @@ export function buildInkoopChecklist(
     // Geen overige diensten/regels in de inkooplijst
   }
 
+  const montage = parseMontageAccessoire(checks?.[SCHOUW_MONTAGE_CHECK_KEY]);
+  const showWallbracket =
+    montage === "wallbracket" ||
+    checks?.[INKOOP_WALLBRACKET.key] != null ||
+    Boolean(getInkoopItemNote(checks, INKOOP_WALLBRACKET.key));
+
+  // Baseplate altijd (standaard); doorstreept als schouw wall bracket koos.
+  items.push({
+    key: INKOOP_BASEPLATE.key,
+    label: INKOOP_BASEPLATE.naam,
+    sku: INKOOP_BASEPLATE.sku,
+    aantal: 1,
+    inkoopExBtw: INKOOP_BASEPLATE.inkoopExBtw,
+    bron: "standaard",
+    notitie: getInkoopItemNote(checks, INKOOP_BASEPLATE.key),
+  });
+
+  if (showWallbracket) {
+    items.push({
+      key: INKOOP_WALLBRACKET.key,
+      label: INKOOP_WALLBRACKET.naam,
+      sku: INKOOP_WALLBRACKET.sku,
+      aantal: 1,
+      inkoopExBtw: INKOOP_WALLBRACKET.inkoopExBtw,
+      bron: "standaard",
+      notitie: getInkoopItemNote(checks, INKOOP_WALLBRACKET.key),
+    });
+  }
+
   for (const a of STANDAARD_INKOOP_ACCESSOIRES) {
+    if (a.key === INKOOP_BASEPLATE.key) continue;
     items.push({
       key: a.key,
       label: a.naam,
@@ -272,6 +431,7 @@ export function buildInkoopChecklist(
       aantal: 1,
       inkoopExBtw: a.inkoopExBtw,
       bron: "standaard",
+      notitie: getInkoopItemNote(checks, a.key),
     });
   }
 
@@ -279,9 +439,20 @@ export function buildInkoopChecklist(
 }
 
 export function inkoopChecklistTotaalExBtw(
-  items: InkoopChecklistItem[]
+  items: InkoopChecklistItem[],
+  checks?: MateriaalChecks | null
 ): number {
-  return round2(items.reduce((s, i) => s + (Number(i.inkoopExBtw) || 0), 0));
+  return round2(
+    items.reduce((s, i) => {
+      if (
+        checks &&
+        resolveInkoopRegelStatus(i, checks) === "geannuleerd"
+      ) {
+        return s;
+      }
+      return s + (Number(i.inkoopExBtw) || 0);
+    }, 0)
+  );
 }
 
 /** true als regel minstens besteld is (of geleverd). Legacy boolean true telt mee. */

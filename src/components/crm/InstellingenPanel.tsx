@@ -12,10 +12,10 @@ import {
   type TeamRol,
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
+import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
 import { isUsableStartAdres } from "@/lib/start-adres";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
-import Link from "next/link";
 
 type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
@@ -72,17 +72,32 @@ export function InstellingenPanel({
   listFilter,
   /** Verberg Team/Installatie/Warmtefonds-tabs (nav zit in parent). */
   hideListTabs = false,
+  /** Verberg interne rol-chips (parent toont die). */
+  hideTeamRolFilter = false,
+  /** Extern gestuurde teamrol (bij hideTeamRolFilter). */
+  forcedTeamRol,
+  /** UI-tekst “Monteur” i.p.v. “Installatiepartner”. */
+  monteurLabel = false,
 }: {
   onAdviseursChange?: () => void;
   teamOnly?: boolean;
   listFilter?: ListFilter;
   hideListTabs?: boolean;
+  hideTeamRolFilter?: boolean;
+  forcedTeamRol?: "all" | TeamRol;
+  monteurLabel?: boolean;
 }) {
   const [filter, setFilter] = useState<ListFilter>(
     listFilter ?? "medewerkers"
   );
   /** Rolfilter binnen Team: all of een specifieke login-rol. */
-  const [teamRolFilter, setTeamRolFilter] = useState<"all" | TeamRol>("all");
+  const [teamRolFilter, setTeamRolFilter] = useState<"all" | TeamRol>(
+    forcedTeamRol ?? "all"
+  );
+  const partnerWoord = monteurLabel ? "Monteur" : "Installatiepartner";
+  const partnerWoordMeervoud = monteurLabel
+    ? "monteurs"
+    : "installatiepartners";
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [wfOperators, setWfOperators] = useState<WarmtefondsOperator[]>([]);
@@ -128,6 +143,11 @@ export function InstellingenPanel({
     setWfDraft(null);
     setAddOpen(false);
   }, [listFilter]);
+
+  useEffect(() => {
+    if (forcedTeamRol == null) return;
+    setTeamRolFilter(forcedTeamRol);
+  }, [forcedTeamRol]);
 
   const activeFilter: ListFilter = teamOnly
     ? "medewerkers"
@@ -251,6 +271,11 @@ export function InstellingenPanel({
       contract_storage_path: a.contract_storage_path ?? null,
       contract_bestandsnaam: a.contract_bestandsnaam ?? null,
       contract_uploaded_at: a.contract_uploaded_at ?? null,
+      contract_sign_status: a.contract_sign_status ?? null,
+      contract_signed_at: a.contract_signed_at ?? null,
+      kvk_uitreksel_storage_path: a.kvk_uitreksel_storage_path ?? null,
+      kvk_uitreksel_bestandsnaam: a.kvk_uitreksel_bestandsnaam ?? null,
+      kvk_uitreksel_uploaded_at: a.kvk_uitreksel_uploaded_at ?? null,
     });
     setNewPassword("");
     setConfirmPassword("");
@@ -278,6 +303,12 @@ export function InstellingenPanel({
       contract_storage_path: p.contract_storage_path ?? null,
       contract_bestandsnaam: p.contract_bestandsnaam ?? null,
       contract_uploaded_at: p.contract_uploaded_at ?? null,
+      kvk_uitreksel_storage_path: p.kvk_uitreksel_storage_path ?? null,
+      kvk_uitreksel_bestandsnaam: p.kvk_uitreksel_bestandsnaam ?? null,
+      kvk_uitreksel_uploaded_at: p.kvk_uitreksel_uploaded_at ?? null,
+      certificaten_storage_path: p.certificaten_storage_path ?? null,
+      certificaten_bestandsnaam: p.certificaten_bestandsnaam ?? null,
+      certificaten_uploaded_at: p.certificaten_uploaded_at ?? null,
     });
     setError(null);
     setOkMsg(null);
@@ -374,7 +405,9 @@ export function InstellingenPanel({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-        setOkMsg(`${data.partner.naam} is toegevoegd als installatiepartner.`);
+        setOkMsg(
+          `${data.partner.naam} is toegevoegd als ${partnerWoord.toLowerCase()}.`
+        );
       }
       resetAddForm();
       setAddOpen(false);
@@ -619,6 +652,32 @@ export function InstellingenPanel({
     );
   }
 
+  async function disconnectGoogle(partnerId: string) {
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(
+        `/api/installatie-partners/${partnerId}/google/disconnect`,
+        { method: "POST" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Ontkoppelen mislukt");
+      setOkMsg("Google Calendar ontkoppeld.");
+      await load();
+      setPartnerDraft((d) =>
+        d
+          ? {
+              ...d,
+              google_connected_email: null,
+              google_connected_at: null,
+            }
+          : d
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    }
+  }
+
   function wfPortalUrl(o: WarmtefondsOperator): string {
     return `${portalBase()}/warmtefonds/${o.portal_token}`;
   }
@@ -680,7 +739,11 @@ export function InstellingenPanel({
         : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
       : activeFilter === "warmtefonds"
         ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
-        : `${partners.length} installatiepartner${partners.length === 1 ? "" : "s"}`;
+        : `${partners.length} ${
+            partners.length === 1
+              ? partnerWoord.toLowerCase()
+              : partnerWoordMeervoud
+          }`;
 
   // ── Detail view ──────────────────────────────────────────────────────────
   if (selectedAdviseur && draft) {
@@ -958,6 +1021,7 @@ export function InstellingenPanel({
                   </Field>
                   <Field label="IBAN">
                     <input
+                      id="relatie-iban-adviseur"
                       value={draft.iban || ""}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, iban: e.target.value }))
@@ -986,13 +1050,50 @@ export function InstellingenPanel({
                   </Field>
                 </FormSection>
 
-                <div className="lg:col-span-2">
-                  <AdviseurCreditFacturenBlock />
-                </div>
               </>
             ) : null}
 
-            <FormSection title="Contract" className="lg:col-span-2">
+            {sales ? (
+              <TeamRelatieOnboarding
+                kind="adviseur"
+                id={selectedAdviseur.id}
+                naam={draft.naam || selectedAdviseur.naam}
+                fields={draft}
+                onFieldsPatch={(patch) =>
+                  setDraft((d) =>
+                    d ? ({ ...d, ...patch } as Partial<Adviseur>) : d
+                  )
+                }
+                onMessage={(msg, isError) => {
+                  if (isError) setError(msg);
+                  else {
+                    setError(null);
+                    setOkMsg(msg);
+                  }
+                }}
+                onFocusIban={() => {
+                  document
+                    .getElementById("relatie-iban-adviseur")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  (
+                    document.getElementById(
+                      "relatie-iban-adviseur"
+                    ) as HTMLInputElement | null
+                  )?.focus();
+                }}
+                onOpenContract={() => {
+                  document
+                    .getElementById("relatie-contract-adviseur")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+              />
+            ) : null}
+
+            <FormSection
+              title="Contract"
+              className="lg:col-span-2"
+              id="relatie-contract-adviseur"
+            >
               <div className="sm:col-span-2">
                 <RelatieContractUpload
                   kind="adviseur"
@@ -1126,7 +1227,7 @@ export function InstellingenPanel({
               <h2 className="font-display text-xl font-semibold text-ink">
                 {selectedPartner.naam}
               </h2>
-              <p className="mt-0.5 text-sm text-muted">Installatiepartner</p>
+              <p className="mt-0.5 text-sm text-muted">{partnerWoord}</p>
             </div>
             <span
               className={
@@ -1222,6 +1323,40 @@ export function InstellingenPanel({
             </div>
           </div>
 
+          <TeamRelatieOnboarding
+            kind="partner"
+            id={selectedPartner.id}
+            naam={partnerDraft.naam || selectedPartner.naam}
+            fields={partnerDraft}
+            onFieldsPatch={(patch) =>
+              setPartnerDraft((d) =>
+                d ? ({ ...d, ...patch } as Partial<InstallatiePartner>) : d
+              )
+            }
+            onMessage={(msg, isError) => {
+              if (isError) setError(msg);
+              else {
+                setError(null);
+                setOkMsg(msg);
+              }
+            }}
+            onFocusIban={() => {
+              document
+                .getElementById("relatie-iban-partner")
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+              (
+                document.getElementById(
+                  "relatie-iban-partner"
+                ) as HTMLInputElement | null
+              )?.focus();
+            }}
+            onOpenContract={() => {
+              document
+                .getElementById("relatie-contract-partner")
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
+          />
+
           <div className="border border-line p-4">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
               Bedrijfs- / KvK-gegevens
@@ -1301,6 +1436,7 @@ export function InstellingenPanel({
               </Field>
               <Field label="IBAN">
                 <input
+                  id="relatie-iban-partner"
                   value={partnerDraft.iban || ""}
                   onChange={(e) =>
                     setPartnerDraft((d) => ({ ...d, iban: e.target.value }))
@@ -1311,29 +1447,70 @@ export function InstellingenPanel({
             </div>
           </div>
 
-          <RelatieContractUpload
-            kind="partner"
-            id={selectedPartner.id}
-            bestandsnaam={
-              partnerDraft.contract_bestandsnaam ||
-              selectedPartner.contract_bestandsnaam
-            }
-            uploadedAt={
-              partnerDraft.contract_uploaded_at ||
-              selectedPartner.contract_uploaded_at
-            }
-            onUploaded={(meta) => {
-              setPartnerDraft((d) => ({ ...d, ...meta }));
-              void load();
-            }}
-            onMessage={(msg, isError) => {
-              if (isError) setError(msg);
-              else {
-                setError(null);
-                setOkMsg(msg);
+          <div id="relatie-contract-partner">
+            <RelatieContractUpload
+              kind="partner"
+              id={selectedPartner.id}
+              bestandsnaam={
+                partnerDraft.contract_bestandsnaam ||
+                selectedPartner.contract_bestandsnaam
               }
-            }}
-          />
+              uploadedAt={
+                partnerDraft.contract_uploaded_at ||
+                selectedPartner.contract_uploaded_at
+              }
+              onUploaded={(meta) => {
+                setPartnerDraft((d) => ({ ...d, ...meta }));
+                void load();
+              }}
+              onMessage={(msg, isError) => {
+                if (isError) setError(msg);
+                else {
+                  setError(null);
+                  setOkMsg(msg);
+                }
+              }}
+            />
+          </div>
+
+          <div className="border border-line bg-wash px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Google Calendar
+            </p>
+            {selectedPartner.google_connected_email ? (
+              <p className="mt-1 text-sm text-ink">
+                Gekoppeld:{" "}
+                <span className="font-medium">
+                  {selectedPartner.google_connected_email}
+                </span>
+                . Schouw, installatie en service gaan direct naar deze agenda.
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-muted">
+                Nog niet gekoppeld. Laat de monteur (of jij met zijn Google-account)
+                één keer inloggen — daarna synct elke planning direct.
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a
+                href={`/api/installatie-partners/${selectedPartner.id}/google/connect`}
+                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+              >
+                {selectedPartner.google_connected_email
+                  ? "Opnieuw koppelen"
+                  : "Koppel Google Calendar"}
+              </a>
+              {selectedPartner.google_connected_email && (
+                <button
+                  type="button"
+                  onClick={() => void disconnectGoogle(selectedPartner.id)}
+                  className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
+                >
+                  Ontkoppelen
+                </button>
+              )}
+            </div>
+          </div>
 
           <div className="flex flex-wrap gap-2">
             <button
@@ -1576,7 +1753,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Installatiepartners
+                  Monteurs
                 </button>
                 <button
                   type="button"
@@ -1611,11 +1788,11 @@ export function InstellingenPanel({
                 : "+ Medewerker"
               : activeFilter === "warmtefonds"
                 ? "+ Warmtefondspartner"
-                : "+ Installatiepartner"}
+                : `+ ${partnerWoord}`}
           </button>
         </div>
 
-        {activeFilter === "medewerkers" ? (
+        {activeFilter === "medewerkers" && !hideTeamRolFilter ? (
           <div className="flex flex-wrap border border-line p-0.5">
             <button
               type="button"
@@ -1677,14 +1854,14 @@ export function InstellingenPanel({
                 : `Nog geen ${gebruikerRolLabel[teamRolFilter].toLowerCase()}-accounts`
               : activeFilter === "warmtefonds"
                 ? "Nog geen Warmtefondspartners"
-                : "Nog geen installatiepartners"}
+                : `Nog geen ${partnerWoordMeervoud}`}
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
               ? "Kies een rol (Admin, Adviseur, Beller of Backoffice) en voeg een account toe."
               : activeFilter === "warmtefonds"
                 ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
-                : "Voeg een installatiepartner toe voor schouw/installatie en portaallink."}
+                : `Voeg een ${partnerWoord.toLowerCase()} toe voor schouw/installatie en portaallink.`}
           </p>
         </div>
       ) : activeFilter === "medewerkers" ? (
@@ -1916,6 +2093,7 @@ export function InstellingenPanel({
               <tr>
                 <th>Naam</th>
                 <th>E-mail</th>
+                <th>Google Calendar</th>
                 <th>KvK</th>
                 <th>Contract</th>
                 <th>Status</th>
@@ -1931,6 +2109,15 @@ export function InstellingenPanel({
                 >
                   <td className="font-medium text-ink">{p.naam}</td>
                   <td className="text-muted">{p.email || "—"}</td>
+                  <td className="text-muted text-xs">
+                    {p.google_connected_email ? (
+                      <span className="font-medium text-green-dark">
+                        Gekoppeld
+                      </span>
+                    ) : (
+                      <span className="text-[#C45A12]">Niet gekoppeld</span>
+                    )}
+                  </td>
                   <td className="text-muted text-xs">
                     {p.kvk_nummer || (
                       <span className="text-[#C45A12]">Ontbreekt</span>
@@ -1972,7 +2159,7 @@ export function InstellingenPanel({
                   ? `${gebruikerRolLabel[normalizeRol(rol)]} toevoegen`
                   : activeFilter === "warmtefonds"
                     ? "Warmtefondspartner toevoegen"
-                    : "Installatiepartner toevoegen"}
+                    : `${partnerWoord} toevoegen`}
               </h3>
               <button
                 type="button"
@@ -2112,6 +2299,7 @@ function FormSection({
   children,
   className,
   wide = false,
+  id,
 }: {
   title: string;
   hint?: string;
@@ -2119,9 +2307,11 @@ function FormSection({
   className?: string;
   /** Meer kolommen op brede schermen (factuur e.d.) */
   wide?: boolean;
+  id?: string;
 }) {
   return (
     <section
+      id={id}
       className={["border border-line", className].filter(Boolean).join(" ")}
     >
       <div className="border-b border-line bg-[#fafbfa] px-3.5 py-2.5 sm:px-4">
@@ -2148,26 +2338,3 @@ function FormSection({
   );
 }
 
-function AdviseurCreditFacturenBlock() {
-  return (
-    <div className="border border-line">
-      <div className="border-b border-line px-4 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Uitbetalingen
-        </p>
-        <p className="mt-1 text-sm text-muted">
-          Commissie-creditfacturen maak en verstuur je in de
-          uitbetalingen-inbox.
-        </p>
-      </div>
-      <div className="px-4 py-4">
-        <Link
-          href="/?tab=partners&partners=uitbetalingen"
-          className="inline-flex bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper"
-        >
-          Open Uitbetalingen
-        </Link>
-      </div>
-    </div>
-  );
-}

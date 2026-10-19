@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { addMinutes, differenceInMinutes } from "date-fns";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
 import { afspraakGeannuleerdAdviseurEmail } from "@/lib/email/templates";
 import {
   afspraakBevestigingSequenceEmail,
@@ -414,7 +415,7 @@ async function afterVerzet(
       straat?: string | null;
       plaats?: string | null;
     } | null;
-    adviseurs?: { naam?: string | null } | null;
+    adviseurs?: { naam?: string | null; email?: string | null } | null;
   }
 ) {
   if (updated.lead_id) {
@@ -436,6 +437,10 @@ async function afterVerzet(
       subject: "Afspraak verzet — nieuwe bevestiging",
       html: afspraakBevestigingSequenceEmail(vars),
       tag: "afspraak-verzet",
+      replyTo: await replyToForAfspraak(sb, {
+        leadId: updated.lead_id,
+        adviseurJoin: updated.adviseurs,
+      }),
     });
     if (sent.ok) {
       await sb

@@ -6,7 +6,12 @@ import {
   emailMuted,
   emailP,
 } from "./layout";
-import { formatDateNl, formatDateTimeLongNl, formatTimeNl } from "@/lib/format";
+import {
+  formatDateNl,
+  formatDateTimeLongNl,
+  formatEuro,
+  formatTimeNl,
+} from "@/lib/format";
 import { planningVensterNl } from "@/lib/planning-window";
 import { FRANK_ENERGIE_OVERSTAP_URL } from "@/lib/frank-energie";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
@@ -549,34 +554,81 @@ export function afspraakGeannuleerdKlantEmail(opts: {
   });
 }
 
-/** Klant: project/bestelling definitief geannuleerd (wettelijk herroepingsrecht) */
+/** Klant: project/bestelling definitief geannuleerd (AV art. 4A — 20%) */
 export function projectGeannuleerdKlantEmail(opts: {
   naam: string;
   projectNummer?: string | null;
+  offerteNummer?: string | null;
+  /** Totaal orderbedrag incl. btw */
+  orderTotaalIncBtw?: number | null;
+  /** Berekende annuleringskosten (20% van order) */
+  annuleringskostenIncBtw?: number | null;
+  /** Bijv. "4A" */
+  avArtikel?: string | null;
+  /** Bijv. 20 */
+  annuleringsPctLabel?: number | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const nr = opts.projectNummer?.trim() || null;
+  const offNr = opts.offerteNummer?.trim() || null;
+  const artikel = (opts.avArtikel || "4A").trim() || "4A";
+  const pct =
+    opts.annuleringsPctLabel != null &&
+    Number.isFinite(opts.annuleringsPctLabel)
+      ? opts.annuleringsPctLabel
+      : 20;
+  const orderTotaal = Number(opts.orderTotaalIncBtw);
+  const kosten = Number(opts.annuleringskostenIncBtw);
+  const hasBedragen =
+    Number.isFinite(orderTotaal) &&
+    orderTotaal > 0 &&
+    Number.isFinite(kosten) &&
+    kosten > 0;
+
+  const orderRegels = [
+    nr
+      ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Order</strong><br />${nr}</p>`
+      : "",
+    offNr
+      ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Offerte</strong><br />${offNr}</p>`
+      : "",
+    hasBedragen
+      ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Orderbedrag</strong><br />${formatEuro(orderTotaal)} incl. btw</p>
+         <p style="margin:0;font-size:15px;"><strong>Annuleringskosten (${pct}%)</strong><br />${formatEuro(kosten)} incl. btw</p>`
+      : `<p style="margin:0;font-size:15px;"><strong>Annuleringskosten</strong><br />${pct}% van het totale orderbedrag (art. ${artikel} AV)</p>`,
+  ]
+    .filter(Boolean)
+    .join("");
+
   return emailLayout({
     title: "Bestelling geannuleerd — Batterijconcept",
-    preheader: "Je bestelling is definitief opgeheven.",
+    preheader: hasBedragen
+      ? `Bestelling geannuleerd · annuleringskosten ${formatEuro(kosten)}.`
+      : "Je bestelling is geannuleerd.",
     bodyHtml: [
       emailH1("Bestelling geannuleerd"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Hierbij bevestigen we dat je bestelling bij Batterijconcept definitief is geannuleerd en daarmee is opgeheven."
+        "Hierbij bevestigen we dat je bestelling bij Batterijconcept is geannuleerd."
       ),
-      nr
-        ? emailBox(
-            `<p style="margin:0;font-size:15px;"><strong>Order</strong><br />${nr}</p>`
+      orderRegels ? emailBox(orderRegels) : "",
+      emailP(
+        `Op grond van <strong>artikel ${artikel}</strong> van onze algemene voorwaarden ben je bij annulering (na Definitieve Financieringsgoedkeuring) <strong>${pct}% annuleringskosten</strong> van het totale orderbedrag verschuldigd.`
+      ),
+      hasBedragen
+        ? emailP(
+            `Dat komt neer op <strong>${formatEuro(kosten)} inclusief btw</strong> (${pct}% van ${formatEuro(orderTotaal)}). Je ontvangt hiervoor een aparte factuur.`
           )
-        : "",
+        : emailP(
+            "Je ontvangt hiervoor een aparte factuur met het berekende bedrag."
+          ),
       emailP(
-        "Je maakt hiermee gebruik van je <strong>wettelijke annuleringsrecht</strong> (herroepingsrecht). Er volgen vanuit ons geen verdere verplichtingen meer voor deze bestelling."
+        "Deze annuleringskosten gelden niet bij een rechtsgeldige herroeping binnen de wettelijke bedenktijd, bij afgewezen of ontoereikende financiering volgens artikel 4, of bij ontbinding wegens een toerekenbare tekortkoming van BatterijConcept."
       ),
       emailP(
-        "Heb je vragen of wil je later opnieuw advies? Mail ons op info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
+        "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
       ),
-      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+      emailMuted("Met vriendelijke groet, team BatterijConcept"),
     ]
       .filter(Boolean)
       .join(""),
@@ -972,13 +1024,13 @@ export function installatieHerinneringKlantEmail(opts: {
 export function klantContactEmail(opts: {
   klantNaam: string;
   bericht: string;
-  afdelingLabel: string;
+  /** @deprecated niet meer in de afsluiting; blijft optioneel voor oude callers */
+  afdelingLabel?: string;
   medewerkerNaam: string;
 }) {
   const first = escapeHtml(
     opts.klantNaam.split(/\s+/)[0]?.trim() || opts.klantNaam || "daar"
   );
-  const afdeling = escapeHtml(opts.afdelingLabel);
   const medewerker = escapeHtml(opts.medewerkerNaam);
   const body = opts.bericht
     .trim()
@@ -993,8 +1045,8 @@ export function klantContactEmail(opts: {
       emailP(`Beste ${first},`),
       body || emailP(""),
       emailP("Met vriendelijke groet,"),
-      `<p style="margin:0 0 4px;font-size:15px;line-height:1.5;color:#1A1F1C;font-weight:600;">${afdeling}</p>
-       <p style="margin:0 0 14px;font-size:15px;line-height:1.5;color:#1A1F1C;">${medewerker}</p>`,
+      `<p style="margin:0 0 4px;font-size:15px;line-height:1.5;color:#1A1F1C;font-weight:600;">${medewerker}</p>
+       <p style="margin:0 0 14px;font-size:15px;line-height:1.5;color:#1A1F1C;">Batterijconcept</p>`,
       emailMuted("Batterijconcept · info@batterijconcept.nl · 085 800 1645"),
     ].join(""),
   });
@@ -1149,8 +1201,8 @@ export function zzpContractOndertekendEmail(opts: { naam: string }) {
 }
 
 /**
- * Na bevestigde overstap-datum: BatterijConcept × Frank Energie,
- * link naar frankenergie.nl + batterijmerk uit offerte.
+ * Na bevestigde overstap-datum (pas na kiezen): klaarzetten + knop Frank Energie.
+ * Uitnodiging om te plannen = datumOptieKlantEmail (zonder Frank-knop).
  */
 export function overstapFrankEnergieEmail(opts: {
   naam: string;
@@ -1164,7 +1216,6 @@ export function overstapFrankEnergieEmail(opts: {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const when = formatDateTimeLongNl(opts.afspraakAt);
   const frankUrl = opts.frankUrl || FRANK_ENERGIE_OVERSTAP_URL;
-  const merk = opts.batterijMerk || "thuisbatterij";
   const logos = `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 18px;">
   <tr>
     <td style="padding:0 14px 0 0;vertical-align:middle;">
@@ -1181,29 +1232,24 @@ export function overstapFrankEnergieEmail(opts: {
 
   return emailLayout({
     title: "Overstap dynamische energie — BatterijConcept × Frank",
-    preheader: `Je overstap staat gepland op ${when}. We bellen je om dit voor je te regelen.`,
+    preheader: `We regelen je overstap samen op ${when}. Bewaar deze mail.`,
     bodyHtml: [
       logos,
-      emailH1("Je overstap-afspraak staat"),
+      emailH1("Je overstap-moment staat vast"),
       emailP(`Hoi ${first},`),
       emailP(
-        `Bedankt voor je bevestiging. We helpen je graag met de <strong>overstap naar een dynamische energieleverancier</strong> — in samenwerking met <strong>Frank Energie</strong>.`
-      ),
-      emailBox(
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Afspraak</strong><br />${when}</p>
-         <p style="margin:0 0 8px;font-size:15px;"><strong>Duur</strong><br />Ca. 30 minuten</p>
-         <p style="margin:0;font-size:15px;"><strong>Jouw thuisbatterij</strong><br />${merk}</p>`
+        `We gaan de overstap samen met je inregelen op <strong>${when}</strong>.`
       ),
       emailP(
-        "<strong>We nemen telefonisch contact met je op</strong> om de overstap voor je te regelen. We bellen naar het telefoonnummer dat je hebt doorgegeven."
-      ),
-      emailP(
-        `Voor jouw <strong>${merk}</strong> is een dynamisch energiecontract extra interessant: zo haal je meer uit je batterij en speel je in op goedkope momenten.`
-      ),
-      emailP(
-        "Je kunt alvast meer lezen over Frank Energie en een dynamisch contract:"
+        "Bewaar deze mail voor als we je gaan helpen met overstappen — dat doen we door op de knop hieronder te klikken:"
       ),
       emailButton("Naar Frank Energie", frankUrl),
+      emailBox(
+        `<p style="margin:0 0 10px;font-size:15px;font-weight:600;color:#0D5C32;">Leg alvast klaar</p>
+         <p style="margin:0 0 10px;font-size:14px;line-height:1.55;">Het <strong>groene boekje</strong> dat de adviseur met je heeft doorgenomen. Daarin kun je handig al deze gegevens terugvinden, of je kunt je laatste jaarrekening erbij pakken.</p>
+         <p style="margin:0 0 6px;font-size:14px;line-height:1.55;"><strong>Die zijn nodig voor de overstap:</strong></p>
+         <p style="margin:0;font-size:14px;line-height:1.55;">• Je stroomverbruik<br />• Je gasverbruik</p>`
+      ),
       opts.projectNummer
         ? emailP(`<strong>Order</strong><br />${opts.projectNummer}`)
         : "",
@@ -1239,7 +1285,9 @@ export function datumOptieKlantEmail(opts: {
       emailH1(`Kies een datum voor ${opts.soortLabel.toLowerCase()}`),
       emailP(`Hoi ${first},`),
       emailP(
-        `We hebben drie mogelijke tijden voor je <strong>${opts.soortLabel.toLowerCase()}</strong>-afspraak. Open je portaal, kies de tijd die jou het best uitkomt en bevestig je gegevens.`
+        opts.soortLabel.toLowerCase().includes("overstap")
+          ? `We hebben drie mogelijke tijden voor je <strong>overstap</strong>. Open je portaal, kies het moment dat jou het best uitkomt en bevestig je gegevens. <strong>Daarna</strong> ontvang je een aparte mail met uitleg en de knop naar Frank Energie.`
+          : `We hebben drie mogelijke tijden voor je <strong>${opts.soortLabel.toLowerCase()}</strong>-afspraak. Open je portaal, kies de tijd die jou het best uitkomt en bevestig je gegevens.`
       ),
       emailBox(
         `<p style="margin:0 0 10px;font-size:15px;font-weight:600;color:#0D5C32;">Voorgestelde tijden</p>${slotLines}`

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
   Afspraak,
@@ -10,7 +10,7 @@ import type {
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { formatDateTimeNl } from "@/lib/format";
-import { statusTone } from "@/lib/labels";
+import { leadStatusLabel, statusTone } from "@/lib/labels";
 import { LeadStatusSelectOptions } from "./LeadStatusSelectOptions";
 import {
   afspraakSoortLabel,
@@ -18,6 +18,10 @@ import {
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
+import {
+  MAX_BELPOGINGEN,
+  buildGeenContactOutcomePatch,
+} from "@/lib/bel-queue";
 import { MaakOfferteModal } from "./MaakOfferteModal";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
@@ -168,6 +172,8 @@ export function LeadPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const focusAfspraakId = searchParams.get("afspraak");
   const { session, rol } = useCrmSession();
   const eigenLeadsOnly = rol ? alleenEigenLeads(rol) : false;
   const kanToewijzen = rol ? magBekijkAls(rol) || rol === "backoffice" : false;
@@ -307,32 +313,99 @@ export function LeadPage() {
     }
     const prev = lead.status;
     const prevNotes = lead.notities;
+    const prevBel = {
+      belpogingen: lead.belpogingen,
+      belpogingen_vandaag: lead.belpogingen_vandaag,
+      laatst_gebeld_at: lead.laatst_gebeld_at,
+      eerste_gebeld_at: lead.eerste_gebeld_at,
+      beller_id: lead.beller_id,
+      laatst_gebeld_door: lead.laatst_gebeld_door,
+    };
     const notities = extraNotitie?.trim()
       ? appendLeadNotitie(lead.notities, extraNotitie.trim())
       : lead.notities;
-    setLead({ ...lead, status, notities });
+    const gc =
+      status === "geen_contact" ? buildGeenContactOutcomePatch(lead) : null;
+    const patch: Partial<Lead> = gc
+      ? { ...gc.patch, notities }
+      : { status, notities };
+    setLead({ ...lead, ...patch });
     setShowKwalForm(false);
     setKwalReden("");
     try {
       const sb = getSupabaseBrowser();
-      const { error } = await sb
-        .from("leads")
-        .update({ status, notities })
-        .eq("id", lead.id);
+      let { error } = await sb.from("leads").update(patch).eq("id", lead.id);
+      if (
+        error &&
+        (error.message?.includes("belpogingen_vandaag") ||
+          error.code === "42703")
+      ) {
+        const { belpogingen_vandaag: _, ...withoutDay } = patch;
+        const retry = await sb
+          .from("leads")
+          .update(withoutDay)
+          .eq("id", lead.id);
+        error = retry.error;
+      }
       if (error) throw error;
+
+      if (status === "geen_contact") {
+        try {
+          const res = await fetch("/api/bel/mark-called", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lead_id: lead.id,
+              status: "geen_contact",
+              eerste_gebeld: !lead.eerste_gebeld_at,
+            }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            patch?: Partial<Lead>;
+          };
+          if (data.patch) {
+            setLead((cur) => (cur ? { ...cur, ...data.patch } : cur));
+          }
+        } catch {
+          /* non-blocking */
+        }
+      }
+
       void fetch(`/api/leads/${lead.id}/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
-          titel: `Status → ${status}`,
-          detail: extraNotitie?.trim() || null,
+          titel: `Status → ${leadStatusLabel[status] || status}`,
+          detail:
+            status === "geen_contact" && gc
+              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}`
+              : extraNotitie?.trim() || null,
         }),
       }).catch(() => {});
+
+      if (gc?.sendGeenContactMail && lead.email?.trim()) {
+        void fetch(`/api/leads/${lead.id}/geen-contact-mail`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poging: gc.pogingen }),
+        }).catch(() => {});
+      }
+      if (status === "foutief_nummer" && lead.email?.trim()) {
+        void fetch(`/api/leads/${lead.id}/foutief-nummer-mail`, {
+          method: "POST",
+        }).catch(() => {});
+      }
+
       const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
       fireMetaCapiSync(lead.id);
     } catch {
-      setLead({ ...lead, status: prev, notities: prevNotes });
+      setLead({
+        ...lead,
+        status: prev,
+        notities: prevNotes,
+        ...prevBel,
+      });
     }
   }
 
@@ -557,6 +630,13 @@ export function LeadPage() {
     }
   }
 
+  useEffect(() => {
+    if (!focusAfspraakId || loading || !lead) return;
+    const el = document.getElementById(`afspraak-${focusAfspraakId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusAfspraakId, loading, lead, afspraken]);
+
   if (loading && !lead) {
     return (
       <DetailShell activeTab="leads">
@@ -590,19 +670,38 @@ export function LeadPage() {
         a.status !== "voltooid"
       )
   );
+  const focusAfspraak = focusAfspraakId
+    ? afspraken.find((a) => a.id === focusAfspraakId)
+    : undefined;
+  const pastVisible = (() => {
+    if (
+      focusAfspraak &&
+      !upcoming.some((a) => a.id === focusAfspraak.id)
+    ) {
+      return [
+        focusAfspraak,
+        ...past.filter((a) => a.id !== focusAfspraak.id),
+      ].slice(0, 5);
+    }
+    return past.slice(0, 4);
+  })();
   const openTerugbel = afspraken.filter(isActieveTerugbel);
   const showTerugbelBanner = Boolean(lead.terugbellen) || openTerugbel.length > 0;
 
   function afspraakRow(a: Afspraak, variant: "upcoming" | "past") {
     const terugbel = isActieveTerugbel(a);
+    const focused = focusAfspraakId === a.id;
     return (
       <li
+        id={`afspraak-${a.id}`}
         key={a.id}
         className={[
           "flex items-start gap-3 px-3 py-2.5",
-          variant === "upcoming"
-            ? "bg-green-soft/50"
-            : "border-b border-line last:border-b-0",
+          focused
+            ? "bg-green-soft ring-2 ring-inset ring-green"
+            : variant === "upcoming"
+              ? "bg-green-soft/50"
+              : "border-b border-line last:border-b-0",
         ].join(" ")}
       >
         <span
@@ -1076,7 +1175,7 @@ export function LeadPage() {
             ) : (
               <ul>
                 {upcoming.map((a) => afspraakRow(a, "upcoming"))}
-                {past.slice(0, 4).map((a) => afspraakRow(a, "past"))}
+                {pastVisible.map((a) => afspraakRow(a, "past"))}
               </ul>
             )}
           </div>

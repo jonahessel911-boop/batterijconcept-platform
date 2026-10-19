@@ -27,6 +27,7 @@ import {
   clearCrmShellCache,
 } from "@/lib/crm-shell-cache";
 import { LeadsTable } from "./LeadsTable";
+import { SalesReferralActies } from "./SalesReferralActies";
 import { OffertesTable } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { useBoViewStore, setBoViewStore } from "@/lib/bo-view-store";
@@ -39,10 +40,14 @@ import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
-import { AdminTargetsPanel } from "./AdminTargetsPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
-import { LEAD_STATUSES } from "@/lib/labels";
-import { inBelQueue, isTerugbelDue } from "@/lib/bel-queue";
+import { LEAD_STATUSES, leadStatusLabel } from "@/lib/labels";
+import {
+  MAX_BELPOGINGEN,
+  buildGeenContactOutcomePatch,
+  inBelQueue,
+  isTerugbelDue,
+} from "@/lib/bel-queue";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import {
@@ -67,6 +72,8 @@ import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
 import { AdminTakenPanel } from "./AdminTakenPanel";
 import { TodayPanel } from "./TodayPanel";
 import { WeekmeetingPanel } from "./WeekmeetingPanel";
+import { AdviseursKaartPanel } from "./AdviseursKaartPanel";
+import { AdviseursContactLijst } from "./AdviseursContactLijst";
 import { AdviseurInstellingenPanel } from "./AdviseurInstellingenPanel";
 import { magTodayDashboard } from "@/lib/admin-adviseur";
 
@@ -87,8 +94,8 @@ const VALID_TABS: CrmTab[] = [
   "inkomend",
   "purchasing",
   "rapportage",
-  "admin",
   "ai",
+  "adviseurs",
   "partners",
   "instellingen",
 ];
@@ -104,6 +111,8 @@ function parseTab(value: string | null): CrmTab {
   if (value === "service" || value === "ai") return "projecten";
   // Sales Manager zit onder Rapportage › Sales
   if (value === "sales_manager") return "rapportage";
+  // Admin-tab verwijderd
+  if (value === "admin") return "rapportage";
   if (value && VALID_TABS.includes(value as CrmTab)) return value as CrmTab;
   return "leads";
 }
@@ -157,7 +166,8 @@ export function CrmShell() {
       rapportage: "Rapportage",
       admin: "Admin",
       ai: "AI",
-      partners: "Partners",
+      adviseurs: "Adviseurs",
+      partners: "Team",
       instellingen: "Instellingen",
     };
     const name = pageNames[tab] || "CRM";
@@ -438,7 +448,9 @@ export function CrmShell() {
     try {
       // Incl. inactief: agenda/afblokken; bel-systeem filtert zelf op actief.
       const res = await fetch("/api/adviseurs?include_inactive=1");
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as {
+        adviseurs?: Adviseur[];
+      };
       if (res.ok) setAdviseurs(data.adviseurs || []);
     } catch {
       /* ignore */
@@ -523,7 +535,7 @@ export function CrmShell() {
         sb
           .from("offertes")
           .select(
-            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats), installatie_partners(id, naam)"
+            "*, leads(naam, email, lead_number, postcode, huisnummer, plaats, adviseur_id), installatie_partners(id, naam)"
           )
           .order("created_at", { ascending: false }),
         sb
@@ -671,21 +683,17 @@ export function CrmShell() {
 
   const scopedOffertes = useMemo(() => {
     if (!userRol) return offertes;
-    // Adviseur: alleen eigen aangemaakte offertes (fallback: lead van hen)
+    const ownerMatch = (o: Offerte, ownerId: string) =>
+      o.aangemaakt_door_id === ownerId ||
+      scopedLeadIds.has(o.lead_id) ||
+      o.leads?.adviseur_id === ownerId;
+    // Adviseur: zelf gemaakt ÓF lead van jou (overzetten / collega schreef offerte).
     if (alleenEigenLeads(userRol) && sessionUser?.id) {
-      const me = sessionUser.id;
-      return offertes.filter((o) => {
-        if (o.aangemaakt_door_id) return o.aangemaakt_door_id === me;
-        return scopedLeadIds.has(o.lead_id);
-      });
+      return offertes.filter((o) => ownerMatch(o, sessionUser.id));
     }
     // Admin “Bekijk als”: door hen aangemaakt óf lead van hen
     if (magBekijkAls(userRol) && adviseurFilter) {
-      return offertes.filter(
-        (o) =>
-          o.aangemaakt_door_id === adviseurFilter ||
-          scopedLeadIds.has(o.lead_id)
-      );
+      return offertes.filter((o) => ownerMatch(o, adviseurFilter));
     }
     return offertes;
   }, [
@@ -853,7 +861,8 @@ export function CrmShell() {
 
   async function updateLeadStatus(leadId: string, status: LeadStatus) {
     const current = leads.find((l) => l.id === leadId);
-    let notities = current?.notities ?? null;
+    if (!current) return;
+    let notities = current.notities ?? null;
     if (status === "niet_gekwalificeerd") {
       const reden = window.prompt("Reden: niet goed gekwalificeerd");
       if (reden === null) return;
@@ -866,18 +875,89 @@ export function CrmShell() {
         `Niet gekwalificeerd: ${reden.trim()}`
       );
     }
+    const gc =
+      status === "geen_contact"
+        ? buildGeenContactOutcomePatch(current)
+        : null;
+    const patch: Partial<Lead> = gc
+      ? { ...gc.patch, notities }
+      : { status, notities };
     setLeads((prev) =>
-      prev.map((l) =>
-        l.id === leadId ? { ...l, status, notities } : l
-      )
+      prev.map((l) => (l.id === leadId ? { ...l, ...patch } : l))
     );
     try {
       const sb = getSupabaseBrowser();
-      const { error: err } = await sb
+      let { error: err } = await sb
         .from("leads")
-        .update({ status, notities })
+        .update(patch)
         .eq("id", leadId);
+      if (
+        err &&
+        (err.message?.includes("belpogingen_vandaag") || err.code === "42703")
+      ) {
+        const { belpogingen_vandaag: _, ...withoutDay } = patch;
+        const retry = await sb
+          .from("leads")
+          .update(withoutDay)
+          .eq("id", leadId);
+        err = retry.error;
+      }
       if (err) throw err;
+
+      if (status === "geen_contact") {
+        try {
+          const res = await fetch("/api/bel/mark-called", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lead_id: leadId,
+              status: "geen_contact",
+              eerste_gebeld: !current.eerste_gebeld_at,
+            }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            patch?: Partial<Lead>;
+          };
+          if (data.patch) {
+            setLeads((prev) =>
+              prev.map((l) =>
+                l.id === leadId ? { ...l, ...data.patch } : l
+              )
+            );
+          }
+        } catch {
+          /* non-blocking */
+        }
+      }
+
+      void fetch(`/api/leads/${leadId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "status",
+          titel: `Status → ${leadStatusLabel[status] || status}`,
+          detail:
+            status === "geen_contact" && gc
+              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}`
+              : status === "niet_gekwalificeerd"
+                ? notities
+                : null,
+        }),
+      }).catch(() => {});
+
+      if (gc?.sendGeenContactMail && current.email?.trim()) {
+        void fetch(`/api/leads/${leadId}/geen-contact-mail`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poging: gc.pogingen }),
+        }).catch(() => {});
+      }
+      if (status === "foutief_nummer" && current.email?.trim()) {
+        void fetch(`/api/leads/${leadId}/foutief-nummer-mail`, {
+          method: "POST",
+        }).catch(() => {});
+      }
+
       // Sale-type syncen naar offerte, zodat schouw-mail/UI geen Warmtefonds-tekst tonen bij eigen middelen
       if (status === "sale_eigen_middelen" || status === "sale_financiering") {
         const warmtefonds = status === "sale_financiering";
@@ -1053,7 +1133,9 @@ export function CrmShell() {
               ? "Acties"
               : boView === "service"
                 ? "Service"
-                : "Projecten",
+                : boView === "bel_rapportage"
+                  ? "Bel rapportage"
+                  : "Projecten",
       sub:
         boView === "agenda"
           ? "Schouw, installatie en service per week"
@@ -1065,9 +1147,11 @@ export function CrmShell() {
                 : "Herplannen, schouw, financiering en facturen"
               : boView === "service"
                 ? "Service-desk · tickets inplannen op het planbord"
-                : filterLabel
-                  ? `Backoffice van ${filterLabel}`
-                  : "Backoffice in planning en uitvoering",
+                : boView === "bel_rapportage"
+                  ? "Bel-conversie · periodefilter · dagoel uit open slots (+20% uitval)"
+                  : filterLabel
+                    ? `Backoffice van ${filterLabel}`
+                    : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
@@ -1080,7 +1164,7 @@ export function CrmShell() {
     },
     creditfacturen: {
       title: "Creditfacturen",
-      sub: "Adviseurs en installatiepartners · versturen en goedkeuring",
+      sub: "Adviseurs en monteurs · versturen en goedkeuring",
     },
     inkomend: {
       title: "Inkomend",
@@ -1088,7 +1172,7 @@ export function CrmShell() {
     },
     purchasing: {
       title: "Purchasing",
-      sub: "Materiaal inkopen bij Apex Power Supplies · status en levering",
+      sub: "Materiaal inkopen · schouw · betaling · Apex",
     },
     rapportage: {
       title: "Rapportage",
@@ -1102,9 +1186,16 @@ export function CrmShell() {
       title: "AI interface",
       sub: "Verborgen",
     },
+    adviseurs: {
+      title: "Adviseurs",
+      sub:
+        userRol === "backoffice"
+          ? "Naam · e-mail · telefoon · startadres"
+          : "Dekking op de kaart · 1u-rijden straal · leads per maand",
+    },
     partners: {
-      title: "Partners",
-      sub: "Team (adviseurs · installatiepartners) en uitbetalingen",
+      title: "Team",
+      sub: "Medewerkers · monteurs · Warmtefonds · overeenkomsten · uitbetalingen",
     },
     instellingen: {
       title: "Instellingen",
@@ -1184,7 +1275,7 @@ export function CrmShell() {
         </div>
       ) : null}
 
-      <div className="flex min-w-0 w-full flex-1">
+      <div className="flex min-h-0 min-w-0 w-full flex-1">
         <CrmSidebar
           active={tab}
           onChange={changeTab}
@@ -1214,7 +1305,7 @@ export function CrmShell() {
 
         <main
           className={[
-            "flex min-w-0 flex-1 flex-col",
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-auto",
             tab === "leaderboard"
               ? "px-0 py-0"
               : "px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
@@ -1277,7 +1368,7 @@ export function CrmShell() {
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm text-muted">
                 Installateurs werken via het installatieportaal (aparte link per
-                partner). Beheer partners onder Partners als admin.
+                partner). Beheer monteurs onder Team als admin.
               </p>
             </div>
           ) : (
@@ -1294,9 +1385,9 @@ export function CrmShell() {
               tab !== "instellingen" &&
               tab !== "taken" &&
               tab !== "partners" &&
+              tab !== "adviseurs" &&
               tab !== "purchasing" &&
               tab !== "ai" &&
-              tab !== "admin" &&
               tab !== "netto" &&
               tab !== "leaderboard" &&
               tab !== "instroom" ? (
@@ -1313,23 +1404,28 @@ export function CrmShell() {
                 {tab === "instellingen" && <AdviseurInstellingenPanel />}
                 {tab === "taken" && <AdminTakenPanel />}
                 {tab === "leads" && (
-                  <LeadsTable
-                    leads={filteredLeads}
-                    adviseurs={adviseurs}
-                    afspraken={afspraken}
-                    statusFilter={statusFilter}
-                    onStatusFilterChange={changeStatusFilter}
-                    onStatusChange={updateLeadStatus}
-                    onAdviseurChange={
-                      userRol && magBekijkAls(userRol)
-                        ? updateLeadAdviseur
-                        : undefined
-                    }
-                    onBellerChange={
-                      userRol === "admin" ? updateLeadBeller : undefined
-                    }
-                    showBellerColumn={userRol === "admin"}
-                  />
+                  <div>
+                    <div className="px-4 pt-4 sm:px-5">
+                      <SalesReferralActies />
+                    </div>
+                    <LeadsTable
+                      leads={filteredLeads}
+                      adviseurs={adviseurs}
+                      afspraken={afspraken}
+                      statusFilter={statusFilter}
+                      onStatusFilterChange={changeStatusFilter}
+                      onStatusChange={updateLeadStatus}
+                      onAdviseurChange={
+                        userRol && magBekijkAls(userRol)
+                          ? updateLeadAdviseur
+                          : undefined
+                      }
+                      onBellerChange={
+                        userRol === "admin" ? updateLeadBeller : undefined
+                      }
+                      showBellerColumn={userRol === "admin"}
+                    />
+                  </div>
                 )}
                 {tab === "bellen" && (
                   <BelPanel
@@ -1485,7 +1581,12 @@ export function CrmShell() {
                 {tab === "rapportage" && (
                   <RapportagePanel />
                 )}
-                {tab === "admin" && <AdminTargetsPanel />}
+                {tab === "adviseurs" &&
+                  (userRol === "backoffice" ? (
+                    <AdviseursContactLijst adviseurs={adviseurs} />
+                  ) : (
+                    <AdviseursKaartPanel />
+                  ))}
                 {tab === "partners" && (
                   <PartnersPanel onAdviseursChange={loadAdviseurs} />
                 )}

@@ -19,6 +19,7 @@ import {
   normalizeRol,
 } from "@/lib/rollen";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 import {
   afblokKey,
   blockAgendaUntilStartdatum,
@@ -40,7 +41,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_MID =
@@ -879,6 +880,16 @@ export async function PATCH(req: NextRequest) {
       } catch (blockErr) {
         console.error("startdatum afblokken mislukt:", blockErr);
       }
+    }
+
+    if (typeof patch.iban === "string" && patch.iban.trim()) {
+      await logRelatieActiviteit(sb, {
+        kind: "adviseur",
+        relatieId: body.id,
+        soort: "iban",
+        titel: "IBAN opgeslagen",
+        detail: String(patch.iban),
+      });
     }
 
     return NextResponse.json({

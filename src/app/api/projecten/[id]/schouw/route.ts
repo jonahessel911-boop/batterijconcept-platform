@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { schouwKlantEmail, schouwPartnerEmail } from "@/lib/email/templates";
 import {
   isValidSchouwWeek,
@@ -271,6 +272,10 @@ export async function POST(
           : "Schouwweek gepland — Batterijconcept",
         html: klantHtml,
         tag: hasExactDay ? "schouw-klant-dag" : "schouw-klant-week",
+        replyTo: await replyToForLeadAdviseur(
+          sb,
+          updated.lead_id as string | null
+        ),
       });
       mails.klant = sent.ok
         ? { ok: true }
@@ -377,9 +382,30 @@ export async function POST(
       });
     }
 
+    let googleCalendar: unknown = null;
+    if (exactSchouwAt && partnerId) {
+      const { syncPartnerGoogleEvent, leadFromProjectJoin } = await import(
+        "@/lib/google-calendar"
+      );
+      googleCalendar = await syncPartnerGoogleEvent({
+        partnerId,
+        projectId: id,
+        kind: "schouw",
+        startIso: schouwAtIso,
+        projectNummer: updated.project_nummer,
+        titel: updated.titel,
+        notities: schouwNotities,
+        lead,
+        existingEventId:
+          (updated as { schouw_gcal_event_id?: string | null })
+            .schouw_gcal_event_id || null,
+      });
+    }
+
     return NextResponse.json({
       project: { ...updated, ...mailPatch },
       mails,
+      googleCalendar,
     });
   } catch (e) {
     return NextResponse.json(
@@ -420,13 +446,29 @@ export async function DELETE(
 
   try {
     const sb = getSupabaseAdmin();
-    const { data: project, error: projErr } = await sb
+    let { data: project, error: projErr } = await sb
       .from("projecten")
       .select(
-        "id, status, schouw_at, schouw_jaar, schouw_week"
+        "id, status, schouw_at, schouw_jaar, schouw_week, installatie_partner_id, schouw_gcal_event_id"
       )
       .eq("id", id)
       .single();
+
+    if (
+      projErr &&
+      (projErr.code === "42703" ||
+        projErr.message?.includes("schouw_gcal_event_id"))
+    ) {
+      const retry = await sb
+        .from("projecten")
+        .select(
+          "id, status, schouw_at, schouw_jaar, schouw_week, installatie_partner_id"
+        )
+        .eq("id", id)
+        .single();
+      project = retry.data as typeof project;
+      projErr = retry.error;
+    }
 
     if (projErr || !project) {
       return NextResponse.json(
@@ -442,6 +484,13 @@ export async function DELETE(
       );
     }
 
+    const gcalEventId =
+      (project as { schouw_gcal_event_id?: string | null }).schouw_gcal_event_id ||
+      null;
+    const partnerIdForGcal =
+      (project as { installatie_partner_id?: string | null })
+        .installatie_partner_id || null;
+
     const patch: Record<string, unknown> = {
       schouw_at: null,
       schouw_jaar: null,
@@ -450,11 +499,12 @@ export async function DELETE(
       schouw_mail_klant_verstuurd: false,
       schouw_mail_partner_verstuurd: false,
     };
+    if (gcalEventId) patch.schouw_gcal_event_id = null;
     if (SCHOUW_PLAN_STATUS.has(project.status)) {
       patch.status = "schouwweek_inplannen";
     }
 
-    const { data: updated, error: updateErr } = await sb
+    let { data: updated, error: updateErr } = await sb
       .from("projecten")
       .update(patch)
       .eq("id", id)
@@ -462,6 +512,25 @@ export async function DELETE(
         "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
       )
       .single();
+
+    if (
+      updateErr &&
+      patch.schouw_gcal_event_id === null &&
+      (updateErr.code === "42703" ||
+        updateErr.message?.includes("schouw_gcal_event_id"))
+    ) {
+      delete patch.schouw_gcal_event_id;
+      const retry = await sb
+        .from("projecten")
+        .update(patch)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+        )
+        .single();
+      updated = retry.data;
+      updateErr = retry.error;
+    }
 
     if (updateErr || !updated) {
       return NextResponse.json(
@@ -471,6 +540,18 @@ export async function DELETE(
         },
         { status: 500 }
       );
+    }
+
+    if (partnerIdForGcal && gcalEventId) {
+      const { deletePartnerGoogleEvent } = await import(
+        "@/lib/google-calendar"
+      );
+      await deletePartnerGoogleEvent({
+        partnerId: partnerIdForGcal,
+        projectId: id,
+        kind: "schouw",
+        eventId: gcalEventId,
+      });
     }
 
     return NextResponse.json({ project: updated, mailed: false });

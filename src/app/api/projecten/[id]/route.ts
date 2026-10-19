@@ -14,7 +14,6 @@ import {
 } from "@/lib/schouw-week";
 import { logLeadEvent } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
-import { projectHeeftOpleveringsrapport } from "@/lib/project-na-oplevering";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
 import { fromZonedTime } from "date-fns-tz";
@@ -398,7 +397,9 @@ export async function PATCH(
   // Datum Warmtefonds aangevraagd: alleen auto-zetten als die nog ontbreekt
   const autoWfAangevraagdAt =
     (body.status === "warmtefonds_aangevraagd" ||
-      body.financiering_status === "aanvraag_gedaan") &&
+      body.financiering_status === "aanvraag_gedaan" ||
+      body.financiering_status === "in_behandeling" ||
+      body.financiering_status === "documenten_aanleveren") &&
     body.warmtefonds_aangevraagd_at === undefined;
 
   if (Object.keys(patch).length === 0 && !autoWfAangevraagdAt) {
@@ -411,10 +412,23 @@ export async function PATCH(
     const { data: before } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at"
+        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at"
       )
       .eq("id", id)
       .maybeSingle();
+
+    // Review-checkbox → status Review gevraagd (sales-actie referrals)
+    const reviewAtComing =
+      typeof patch.review_gevraagd_at === "string" &&
+      !(before as { review_gevraagd_at?: string | null } | null)
+        ?.review_gevraagd_at;
+    if (
+      reviewAtComing &&
+      patch.status === undefined &&
+      before?.status !== "review_gevraagd"
+    ) {
+      patch.status = "review_gevraagd";
+    }
 
     if (
       autoWfAangevraagdAt &&
@@ -424,20 +438,28 @@ export async function PATCH(
       patch.warmtefonds_aangevraagd_at = new Date().toISOString();
     }
 
+    // Bewaar schouw/inkoop-meta (__…) als client alleen regelstatussen stuurt.
+    if (
+      patch.materiaal_checks &&
+      typeof patch.materiaal_checks === "object"
+    ) {
+      const prev = ((before as { materiaal_checks?: Record<string, unknown> | null } | null)
+        ?.materiaal_checks || {}) as Record<string, unknown>;
+      const next = {
+        ...(patch.materiaal_checks as Record<string, unknown>),
+      };
+      for (const [k, v] of Object.entries(prev)) {
+        if (k.startsWith("__") && next[k] === undefined) {
+          next[k] = v;
+        }
+      }
+      patch.materiaal_checks = next;
+    }
+
     if (
       body.status === "installatie_voltooid" &&
       before?.status !== "installatie_voltooid"
     ) {
-      const hasRapport = await projectHeeftOpleveringsrapport(sb, id);
-      if (!hasRapport) {
-        return NextResponse.json(
-          {
-            error:
-              "Upload eerst het opleveringsrapport met handtekening van de klant.",
-          },
-          { status: 400 }
-        );
-      }
       if (
         !(before as { installatie_voltooid_at?: string | null } | null)
           ?.installatie_voltooid_at
@@ -673,10 +695,12 @@ export async function PATCH(
           });
         }
 
-        // Na goedkeuring: concept-restantfactuur Warmtefonds klaarzetten
+        // Na goedkeuring / aanbod: concept-restantfactuur Warmtefonds klaarzetten
         if (
-          nextFs === "aanvraag_goedgekeurd" &&
-          prevFs !== "aanvraag_goedgekeurd"
+          (nextFs === "aanvraag_goedgekeurd" ||
+            nextFs === "aanbod_ondertekenen") &&
+          prevFs !== "aanvraag_goedgekeurd" &&
+          prevFs !== "aanbod_ondertekenen"
         ) {
           const offRaw = data.offertes;
           const off = Array.isArray(offRaw) ? offRaw[0] : offRaw;
@@ -740,17 +764,25 @@ export async function PATCH(
       }
     }
 
-    if (body.status || body.financiering_status !== undefined) {
+    const statusForSync =
+      (patch.status as string | undefined) ||
+      body.status ||
+      (data as { status?: string }).status ||
+      before?.status ||
+      "";
+    if (
+      body.status ||
+      patch.status ||
+      body.financiering_status !== undefined ||
+      reviewAtComing
+    ) {
       const { syncAutoTakenVoorProject } = await import(
         "@/lib/sync-auto-taken"
       );
       await syncAutoTakenVoorProject(
         sb,
         id,
-        (body.status ||
-          (data as { status?: string }).status ||
-          before?.status ||
-          "") as string,
+        statusForSync,
         body.financiering_status !== undefined
           ? body.financiering_status
           : undefined

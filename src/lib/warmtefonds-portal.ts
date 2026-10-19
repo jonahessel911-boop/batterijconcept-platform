@@ -5,7 +5,9 @@ import type { FinancieringStatus } from "@/lib/financiering-status";
 import {
   FINANCIERING_PIPELINE,
   FINANCIERING_STATUS_LABEL,
+  FINANCIERING_STATUS_LABEL_KORT,
   isFinancieringStatus,
+  normalizeFinancieringStatus,
 } from "@/lib/financiering-status";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -19,18 +21,24 @@ export type WarmtefondsOperator = {
 };
 
 export const WF_PORTAL_STATUSES: FinancieringStatus[] = [
-  "doorgestuurd_naar_edwin",
-  "afspraak_ingepland",
-  "aanvraag_gedaan",
-  "aanvraag_goedgekeurd",
-  "uitbetaald",
+  ...FINANCIERING_PIPELINE,
   "afgewezen",
 ];
 
 export function wfPortalStatusLabel(status: string | null | undefined): string {
+  const n = normalizeFinancieringStatus(status);
+  if (n) return FINANCIERING_STATUS_LABEL[n];
   if (status && isFinancieringStatus(status)) {
     return FINANCIERING_STATUS_LABEL[status];
   }
+  return "Nog niet gestart";
+}
+
+export function wfPortalStatusLabelKort(
+  status: string | null | undefined
+): string {
+  const n = normalizeFinancieringStatus(status);
+  if (n) return FINANCIERING_STATUS_LABEL_KORT[n];
   return "Nog niet gestart";
 }
 
@@ -45,6 +53,14 @@ export function wfPortalStatusOptions(): {
     })),
     { value: "afgewezen", label: FINANCIERING_STATUS_LABEL.afgewezen },
   ];
+}
+
+export function wfPortalOpenRank(status: string | null | undefined): number {
+  const n = normalizeFinancieringStatus(status);
+  if (!n) return 0;
+  if (n === "afgewezen") return 90;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  return idx >= 0 ? idx + 1 : 50;
 }
 
 export async function resolveWarmtefondsOperator(
