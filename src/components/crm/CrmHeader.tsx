@@ -58,7 +58,7 @@ export function CrmHeader({
   }, [menuOpen]);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
+    <header className="sticky top-0 z-40 shrink-0 border-b border-green-deeper bg-green-dark pt-[env(safe-area-inset-top)]">
       <div
         className={[
           "flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-6 sm:py-0 sm:h-14",

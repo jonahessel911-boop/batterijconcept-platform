@@ -13,6 +13,7 @@ import { isSchouwFormulierBewijs } from "@/lib/project-documenten";
 import {
   boardStatusOf,
   buildNettoFases,
+  commissiePctToFraction,
   isNettoGeannuleerd,
   resolveNettoCommissie,
   resolveNettoVorm,
@@ -51,8 +52,8 @@ type LeadJoin = {
   adviseur_id: string | null;
   status: string | null;
   adviseurs?:
-    | { id: string; naam: string }
-    | { id: string; naam: string }[]
+    | { id: string; naam: string; commissie_pct?: number | null }
+    | { id: string; naam: string; commissie_pct?: number | null }[]
     | null;
 };
 
@@ -130,7 +131,7 @@ export async function GET(req: NextRequest) {
     const { data: offertes, error: offErr } = await sb
       .from("offertes")
       .select(
-        "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam))"
+        "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam, commissie_pct))"
       )
       .in("status", ["ondertekend", "afgewezen"])
       .order("ondertekend_op", { ascending: false, nullsFirst: false })
@@ -331,6 +332,38 @@ export async function GET(req: NextRequest) {
     }
 
     const adviseursMap = new Map<string, string>();
+    const commissiePctByAdviseur = new Map<string, number>();
+    {
+      const advIds = [
+        ...new Set(
+          (offertes || [])
+            .map((o) => {
+              const leadRaw = o.leads as LeadJoin | LeadJoin[] | null;
+              const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+              return lead?.adviseur_id || null;
+            })
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      if (advIds.length) {
+        const { data: advRows } = await sb
+          .from("adviseurs")
+          .select("id, naam, commissie_pct")
+          .in("id", advIds);
+        for (const a of advRows || []) {
+          const row = a as {
+            id: string;
+            naam: string;
+            commissie_pct?: number | null;
+          };
+          adviseursMap.set(row.id, row.naam);
+          commissiePctByAdviseur.set(
+            row.id,
+            Math.round(commissiePctToFraction(row.commissie_pct) * 100)
+          );
+        }
+      }
+    }
     const rows: NettoBoardRow[] = [];
 
     for (const o of offertes || []) {
@@ -341,10 +374,16 @@ export async function GET(req: NextRequest) {
       const advRaw = lead.adviseurs;
       const adv = Array.isArray(advRaw) ? advRaw[0] : advRaw;
       const adviseurId = lead.adviseur_id || adv?.id || null;
-      const adviseurNaam = adv?.naam || null;
+      const adviseurNaam =
+        (adviseurId ? adviseursMap.get(adviseurId) : null) ||
+        adv?.naam ||
+        null;
       if (adviseurId && adviseurNaam) {
         adviseursMap.set(adviseurId, adviseurNaam);
       }
+      const commissiePct =
+        (adviseurId ? commissiePctByAdviseur.get(adviseurId) : null) ??
+        Math.round(commissiePctToFraction(adv?.commissie_pct) * 100);
 
       const project =
         projectByOfferte.get(o.id as string) ||
@@ -440,6 +479,7 @@ export async function GET(req: NextRequest) {
           Boolean(restBetaald) ||
           installatieVoltooid ||
           projStatus === "restfactuur_betaald",
+        commissiePct,
       });
 
       const offNr = (o.offerte_nummer as string | null) || null;
@@ -520,6 +560,7 @@ export async function GET(req: NextRequest) {
           (creditId ? creditNummerById.get(creditId) || null : null),
         creditfactuur_b_id: creditB?.id || null,
         creditfactuur_b_nummer: creditB?.nummer || null,
+        commissie_pct: commissiePct,
         commissie_verwacht: commissie.verwacht,
         commissie_tranche_a: commissie.tranche_a,
         commissie_tranche_b: commissie.tranche_b,

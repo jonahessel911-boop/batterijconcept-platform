@@ -161,7 +161,7 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
         sb
           .from("offertes")
           .select(
-            "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, offerte_nummer, leads(naam, lead_number, adviseur_id)"
+            "id, lead_id, status, ondertekend_op, created_at, subtotaal_ex_btw, offerte_nummer, financiering_voorbehoud, leads(naam, lead_number, adviseur_id)"
           )
           .in("status", ["ondertekend", "afgewezen"])
           .not("ondertekend_op", "is", null)
@@ -243,6 +243,9 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
       created_at: o.created_at as string,
       subtotaal_ex_btw: Number(o.subtotaal_ex_btw) || 0,
       offerte_nummer: (o.offerte_nummer as string) || null,
+      financiering_voorbehoud:
+        (o as { financiering_voorbehoud?: boolean | null })
+          .financiering_voorbehoud ?? null,
       lead_naam: lead?.naam || null,
       lead_number: lead?.lead_number || null,
       geannuleerd,
@@ -319,6 +322,7 @@ function toDashboardRaw(raw: DrilldownRaw): DashboardV2Raw {
       created_at: o.created_at,
       subtotaal_ex_btw: o.subtotaal_ex_btw,
       geannuleerd: Boolean(o.geannuleerd),
+      financiering_voorbehoud: o.financiering_voorbehoud ?? null,
     })),
     adviseurs: raw.adviseurs,
   };

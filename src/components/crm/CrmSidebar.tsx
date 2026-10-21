@@ -160,6 +160,7 @@ const GROUPS: SidebarGroup[] = [
     label: "Operatie",
     items: [
       { id: "projecten", label: "Backoffice", icon: ICONS.projecten },
+      { id: "inbox", label: "Inbox", icon: ICONS.inkomend },
       { id: "purchasing", label: "Purchasing", icon: ICONS.purchasing },
       { id: "facturen", label: "Facturen", icon: ICONS.facturen },
       { id: "instroom", label: "Recruitment", icon: ICONS.instroom },
@@ -170,6 +171,7 @@ const GROUPS: SidebarGroup[] = [
     label: "Sturing",
     items: [
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
+      { id: "voice_ai", label: "Voice AI", icon: ICONS.bellen },
       { id: "adviseurs", label: "Adviseurs", icon: ICONS.partners },
       { id: "partners", label: "Team", icon: ICONS.partners },
       { id: "instellingen", label: "Instellingen", icon: ICONS.instellingen },

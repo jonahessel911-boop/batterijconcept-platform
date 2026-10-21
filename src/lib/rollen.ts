@@ -74,6 +74,7 @@ export function tabsVoorRol(
         "bellen",
         "agenda",
         "projecten",
+        "inbox",
         "facturen",
         "purchasing",
         "adviseurs",
@@ -87,6 +88,7 @@ export function tabsVoorRol(
         "offertes",
         "netto",
         "rapportage",
+        "voice_ai",
         "adviseurs",
       ];
       break;
@@ -106,9 +108,11 @@ export function tabsVoorRol(
         "leaderboard",
         "instroom",
         "projecten",
+        "inbox",
         "facturen",
         "purchasing",
         "rapportage",
+        "voice_ai",
         "adviseurs",
         "partners",
       ];

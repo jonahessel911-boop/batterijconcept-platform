@@ -13,11 +13,22 @@ import {
 import type { ProjectStatus } from "@/types/database";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 
-/** Verwachte totale commissie = 10% van omzet (excl. btw). */
+/** Standaard totale commissie = 10% van omzet (excl. btw). */
 export const NETTO_COMMISSIE_PCT = 0.1;
 
 /** Eerste commissie-tranche bij betaalde aanbetaling. */
 export const NETTO_AANBETALING_COMMISSIE = 250;
+
+/** Adviseur.commissie_pct (bijv. 12) → fractie; fallback standaard 10%. */
+export function commissiePctToFraction(
+  pct: number | null | undefined
+): number {
+  const n = Number(pct);
+  if (!Number.isFinite(n) || n <= 0) return NETTO_COMMISSIE_PCT;
+  // Al als fractie opgeslagen (0.12) óf als procent (12)
+  if (n > 0 && n <= 1) return n;
+  return Math.min(n, 100) / 100;
+}
 
 export type NettoVorm = "EM" | "WF";
 
@@ -71,6 +82,8 @@ export type NettoBoardRow = {
   /** Tranche B creditfactuur (rest na netto sale). */
   creditfactuur_b_id: string | null;
   creditfactuur_b_nummer: string | null;
+  /** Effectief commissie-% (bijv. 12), voor weergave in UI. */
+  commissie_pct: number;
   commissie_verwacht: number;
   commissie_tranche_a: number;
   commissie_tranche_b: number;
@@ -128,20 +141,35 @@ function withPlanMoment(base: string, iso: string | null | undefined): string {
   return stamp ? `${base} - ${stamp}` : base;
 }
 
-export function commissieVerwacht(omzetExBtw: number): number {
-  return Math.round(omzetExBtw * NETTO_COMMISSIE_PCT * 100) / 100;
+export function commissieVerwacht(
+  omzetExBtw: number,
+  commissiePct?: number | null
+): number {
+  const frac = commissiePctToFraction(commissiePct);
+  return Math.round(omzetExBtw * frac * 100) / 100;
 }
 
 /** Tranche A = min(€250, totaal verwacht). */
-export function commissieTrancheA(omzetExBtw: number): number {
-  return Math.min(NETTO_AANBETALING_COMMISSIE, commissieVerwacht(omzetExBtw));
+export function commissieTrancheA(
+  omzetExBtw: number,
+  commissiePct?: number | null
+): number {
+  return Math.min(
+    NETTO_AANBETALING_COMMISSIE,
+    commissieVerwacht(omzetExBtw, commissiePct)
+  );
 }
 
 /** Tranche B = rest na Tranche A. */
-export function commissieTrancheB(omzetExBtw: number): number {
+export function commissieTrancheB(
+  omzetExBtw: number,
+  commissiePct?: number | null
+): number {
   return (
     Math.round(
-      (commissieVerwacht(omzetExBtw) - commissieTrancheA(omzetExBtw)) * 100
+      (commissieVerwacht(omzetExBtw, commissiePct) -
+        commissieTrancheA(omzetExBtw, commissiePct)) *
+        100
     ) / 100
   );
 }
@@ -152,6 +180,8 @@ export function resolveNettoCommissie(opts: {
   aanbetalingBetaald: boolean;
   /** Restfactuur betaald óf installatie voltooid → tranche B. */
   restOfInstallatieDone: boolean;
+  /** Adviseur.commissie_pct (bijv. 12 voor eerste sales). */
+  commissiePct?: number | null;
 }): {
   verwacht: number;
   tranche_a: number;
@@ -160,8 +190,9 @@ export function resolveNettoCommissie(opts: {
   tranche_b_triggered: boolean;
   verdiend: number;
 } {
-  const tranche_a = commissieTrancheA(opts.omzetExBtw);
-  const tranche_b = commissieTrancheB(opts.omzetExBtw);
+  const pct = opts.commissiePct;
+  const tranche_a = commissieTrancheA(opts.omzetExBtw, pct);
+  const tranche_b = commissieTrancheB(opts.omzetExBtw, pct);
   if (opts.geannuleerd) {
     return {
       verwacht: 0,
@@ -178,7 +209,7 @@ export function resolveNettoCommissie(opts: {
     (tranche_a_triggered ? tranche_a : 0) +
     (tranche_b_triggered ? tranche_b : 0);
   return {
-    verwacht: commissieVerwacht(opts.omzetExBtw),
+    verwacht: commissieVerwacht(opts.omzetExBtw, pct),
     tranche_a,
     tranche_b,
     tranche_a_triggered,

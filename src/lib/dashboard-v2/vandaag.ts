@@ -7,12 +7,24 @@ import {
   afspraakBlokkeertAgenda,
   afspraakIsAfgelopen,
   isAfgeboekteFysiekeAfspraak,
+  isSaleUitkomst,
   needsVervolgPunt,
 } from "@/lib/afspraak-soort";
 import { inIsoRange, round2 } from "@/lib/management-dashboard/periods";
 import type { DashboardV2Raw } from "./build";
 
 const TZ = "Europe/Amsterdam";
+
+export type VandaagSaleRoute = "warmtefonds" | "buijv";
+
+function saleRouteFor(
+  leadStatus: string | null,
+  financieringVoorbehoud: boolean | null | undefined
+): VandaagSaleRoute {
+  if (leadStatus === "sale_eigen_middelen") return "buijv";
+  if (leadStatus === "sale_financiering") return "warmtefonds";
+  return financieringVoorbehoud ? "warmtefonds" : "buijv";
+}
 
 export type VandaagAfspraakRow = {
   id: string;
@@ -29,6 +41,10 @@ export type VandaagAfspraakRow = {
   status: string;
   /** gelopen | te_lopen | niet_afgeboekt */
   bucket: "gelopen" | "te_lopen" | "niet_afgeboekt";
+  /** Warmtefonds vs Buijv (eigen middelen), alleen bij sale/deal */
+  sale_route: VandaagSaleRoute | null;
+  /** Getekende orderwaarde ex btw, indien offerte bekend */
+  orderwaarde_ex_btw: number | null;
 };
 
 export type VandaagVerkoperRow = {
@@ -191,6 +207,28 @@ export function buildDashboardV2Vandaag(
     return inIsoRange(a.start_at, start, end);
   });
 
+  /** Per lead: meest recente niet-geannuleerde getekende offerte */
+  const offerteByLead = new Map<
+    string,
+    {
+      subtotaal_ex_btw: number;
+      financiering_voorbehoud: boolean | null;
+      at: number;
+    }
+  >();
+  for (const o of offertes) {
+    if (o.geannuleerd || !o.ondertekend_op) continue;
+    const at = new Date(o.ondertekend_op).getTime();
+    if (!Number.isFinite(at)) continue;
+    const prev = offerteByLead.get(o.lead_id);
+    if (prev && at < prev.at) continue;
+    offerteByLead.set(o.lead_id, {
+      subtotaal_ex_btw: Number(o.subtotaal_ex_btw) || 0,
+      financiering_voorbehoud: o.financiering_voorbehoud ?? null,
+      at,
+    });
+  }
+
   const afspraakRows: VandaagAfspraakRow[] = [];
   const afspraakCountsByAdv = new Map<
     string,
@@ -250,6 +288,18 @@ export function buildDashboardV2Vandaag(
     else cnt.gelopen += 1;
     afspraakCountsByAdv.set(aid, cnt);
 
+    const offerte = offerteByLead.get(a.lead_id) ?? null;
+    const isSale = isSaleUitkomst(leadStatus) || leadStatus === "deal";
+    let sale_route: VandaagSaleRoute | null = null;
+    let orderwaarde_ex_btw: number | null = null;
+    if (isSale) {
+      sale_route = saleRouteFor(
+        leadStatus,
+        offerte?.financiering_voorbehoud ?? null
+      );
+      if (offerte) orderwaarde_ex_btw = round2(offerte.subtotaal_ex_btw);
+    }
+
     afspraakRows.push({
       id: a.id,
       start_at: a.start_at,
@@ -265,6 +315,8 @@ export function buildDashboardV2Vandaag(
       lead_status: leadStatus,
       status: a.status,
       bucket,
+      sale_route,
+      orderwaarde_ex_btw,
     });
   }
 

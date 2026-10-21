@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   NETTO_AANBETALING_COMMISSIE,
+  commissiePctToFraction,
   commissieTrancheA,
   commissieTrancheB,
   isAanbetalingFactuur,
@@ -169,7 +170,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
   const { data: adv } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief"
+      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
     )
     .eq("id", lead.adviseur_id)
     .maybeSingle();
@@ -196,9 +197,10 @@ export async function ensureNettoAanbetalingCreditfactuur(
     .maybeSingle();
 
   const omzetEx = await omzetExFromOfferte(sb, fac.offerte_id, off || undefined);
+  const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
   let fee =
     omzetEx > 0
-      ? commissieTrancheA(omzetEx)
+      ? commissieTrancheA(omzetEx, pct)
       : NETTO_AANBETALING_COMMISSIE;
   fee = applyMaxFee(fee, adv.max_factuur_bedrag);
   if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_a" };
@@ -476,14 +478,10 @@ export async function ensureAdviseurCommissieTrancheB(
   if (!lead?.adviseur_id) return { ok: true, skipped: "geen_adviseur" };
   if (!off?.offerte_nummer) return { ok: true, skipped: "geen_offerte" };
 
-  const omzetEx = await omzetExFromOfferte(sb, off.id || project.offerte_id, off);
-  let fee = commissieTrancheB(omzetEx);
-  if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_b", bedrag: 0 };
-
   const { data: adv } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief"
+      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
     )
     .eq("id", lead.adviseur_id)
     .maybeSingle();
@@ -492,6 +490,11 @@ export async function ensureAdviseurCommissieTrancheB(
   if (!adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
     return { ok: true, skipped: "zzp_gegevens_incompleet" };
   }
+
+  const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
+  const omzetEx = await omzetExFromOfferte(sb, off.id || project.offerte_id, off);
+  let fee = commissieTrancheB(omzetEx, pct);
+  if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_b", bedrag: 0 };
 
   fee = applyMaxFee(fee, adv.max_factuur_bedrag);
 
@@ -538,7 +541,8 @@ export async function ensureAdviseurCommissieTrancheB(
     off.offerte_nummer
   );
   const betaaldag = weekInfo.betaalWoensdag;
-  const trancheA = commissieTrancheA(omzetEx);
+  const trancheA = commissieTrancheA(omzetEx, pct);
+  const pctLabel = Math.round(commissiePctToFraction(pct) * 100);
 
   const { data: created, error: createErr } = await sb
     .from("adviseur_creditfacturen")
@@ -557,7 +561,7 @@ export async function ensureAdviseurCommissieTrancheB(
       factuurdatum: betaaldag,
       notities: [
         tag,
-        `Commissie restant (€${fee} excl. btw = 10% − €${trancheA}) · Offerte ${off.offerte_nummer}`,
+        `Commissie restant (€${fee} excl. btw = ${pctLabel}% − €${trancheA}) · Offerte ${off.offerte_nummer}`,
         project.project_nummer
           ? `Project ${project.project_nummer}`
           : null,

@@ -94,6 +94,8 @@ export type DashboardV2Raw = {
     subtotaal_ex_btw: number;
     /** Getekend maar later geannuleerd (projectstatus / afgewezen) */
     geannuleerd?: boolean;
+    /** true = Warmtefonds, false/null = eigen middelen (Buijv) */
+    financiering_voorbehoud?: boolean | null;
   }[];
   adviseurs: { id: string; naam: string; actief: boolean; rol: string | null }[];
 };

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { isProjectAfdeling, PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import { dueAtFromDays } from "@/lib/project-taken";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { normalizeRol } from "@/lib/rollen";
+import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 
 export const runtime = "nodejs";
 
@@ -25,6 +29,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    const rol = session ? normalizeRol(session.rol) : null;
+
+    // Referral-banner: alleen de sale-adviseur (admin mag alles zien)
+    const filterReferralToSelf =
+      autoKey === REFERRAL_TAK_AUTO_KEY &&
+      rol !== "admin" &&
+      Boolean(session?.adviseurId);
 
     async function run(select: string, withNullsFirst: boolean) {
       let q = sb
@@ -41,6 +54,9 @@ export async function GET(req: NextRequest) {
       if (projectId) q = q.eq("project_id", projectId);
       if (autoKey) q = q.eq("auto_key", autoKey);
       if (openOnly) q = q.neq("status", "done");
+      if (filterReferralToSelf && session?.adviseurId) {
+        q = q.eq("verantwoordelijke_id", session.adviseurId);
+      }
       return q;
     }
 

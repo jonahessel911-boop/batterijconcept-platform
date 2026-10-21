@@ -60,7 +60,7 @@ type LegendItem = { color: string; label: string };
 
 const LEGEND: LegendItem[] = [
   { color: "#94A3B8", label: "Afspraak ingepland" },
-  { color: "#F37021", label: "Afspraak verplaatst" },
+  { color: "#C45A12", label: "Afspraak verzet" },
   { color: "#16A34A", label: "Doorgegaan" },
   { color: "#B91C1C", label: "Afgezegd" },
   { color: "#1E3A8A", label: "Deur niet open" },
@@ -153,8 +153,8 @@ function stickerMeta(
   let border = "#CBD5E1";
 
   if (a.status === "verzet") {
-    statusLabel = "Afspraak verplaatst";
-    statusColor = "#F37021";
+    statusLabel = "Afspraak verzet";
+    statusColor = "#C45A12";
     tint = "#FFF7ED";
     border = "#FDBA74";
   } else if (a.status === "geannuleerd") {
@@ -195,6 +195,7 @@ function stickerMeta(
       ls === "geen_interesse_al_batterij" ||
       ls === "geen_interesse_plugin" ||
       ls === "geen_interesse_alleen_info" ||
+      ls === "geen_interesse_vertrouwt_niet" ||
       ls === "offerte_afgewezen" ||
       ls === "vervolg_geen_contact"
     ) {
@@ -254,6 +255,7 @@ function StickerCard({
   onClick: () => void;
 }) {
   const meta = stickerMeta(a, leadStatus, vervolgIndex, needsCheckout);
+  const struck = a.status === "geannuleerd" || a.status === "verzet";
   const naam = a.leads?.naam || "Onbekend";
   const plaats = a.leads?.plaats || a.leads?.postcode || "—";
   const tijd = formatTimeNl(a.start_at);
@@ -266,7 +268,10 @@ function StickerCard({
       type="button"
       onClick={onClick}
       title={`${needsCheckout ? "Nog niet afgeboekt · " : ""}${meta.badge} · ${typeLabel} · ${meta.statusLabel} · ${naam} · ${plaats} · ${tijd}`}
-      className="w-full rounded-md border px-1.5 py-1 text-left transition hover:brightness-[0.98]"
+      className={[
+        "relative w-full overflow-hidden rounded-md border px-1.5 py-1 text-left transition hover:brightness-[0.98]",
+        struck ? "opacity-80" : "",
+      ].join(" ")}
       style={{
         background: meta.tint,
         borderColor: meta.border,
@@ -274,13 +279,20 @@ function StickerCard({
         borderLeftColor: meta.statusColor,
       }}
     >
-      <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+      {struck ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-2 top-1/2 z-[1] h-[1.5px] -translate-y-1/2 rotate-[-8deg]"
+          style={{ background: meta.statusColor, opacity: 0.85 }}
+        />
+      ) : null}
+      <div className="relative z-[2] flex min-w-0 items-center gap-1 overflow-hidden">
         <span
           className={`shrink-0 rounded px-1 py-px text-[9px] font-bold leading-tight ${meta.badgeClass}`}
         >
           {meta.badge}
         </span>
-        {needsCheckout ? (
+        {needsCheckout && !struck ? (
           <span
             className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[8px] font-bold leading-none text-white"
             title="Nog niet afgeboekt"
@@ -295,14 +307,30 @@ function StickerCard({
           />
           {typeLabel}
         </span>
-        <span className="truncate text-[9px] font-medium" style={{ color: meta.statusColor }}>
+        <span
+          className={[
+            "truncate text-[9px] font-medium",
+            struck ? "line-through" : "",
+          ].join(" ")}
+          style={{ color: meta.statusColor }}
+        >
           {meta.statusLabel}
         </span>
       </div>
-      <p className="mt-0.5 truncate text-[11px] font-bold leading-tight text-[#111827]">
+      <p
+        className={[
+          "relative z-[2] mt-0.5 truncate text-[11px] font-bold leading-tight text-[#111827]",
+          struck ? "line-through" : "",
+        ].join(" ")}
+      >
         {naam}
       </p>
-      <p className="truncate text-[9px] leading-tight text-[#6B7280]">
+      <p
+        className={[
+          "relative z-[2] truncate text-[9px] leading-tight text-[#6B7280]",
+          struck ? "line-through" : "",
+        ].join(" ")}
+      >
         {plaats} · {tijd}
       </p>
     </button>

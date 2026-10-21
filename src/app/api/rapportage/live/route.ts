@@ -90,22 +90,53 @@ export async function GET(req: NextRequest) {
     const { start } = amsDayBounds(startYmd);
     const { end } = amsDayBounds(endYmd);
 
-    const { data: leadRows, error: leadsErr } = await sb
-      .from("leads")
-      .select("id, naam, plaats, bron, status, created_at")
-      .gte("created_at", start.toISOString())
-      .lte("created_at", end.toISOString())
-      .order("created_at", { ascending: false });
-    if (leadsErr) throw leadsErr;
+    const selectFull =
+      "id, naam, plaats, bron, utm_source, lander, campaign_name, ad_name, status, created_at";
+    const selectLegacy = "id, naam, plaats, bron, status, created_at";
 
-    const leads = (leadRows || []) as Array<{
-      id: string;
-      naam: string | null;
-      plaats: string | null;
-      bron: string | null;
-      status: string | null;
-      created_at: string;
-    }>;
+    let leadRows: Record<string, unknown>[] | null = null;
+    {
+      const full = await sb
+        .from("leads")
+        .select(selectFull)
+        .gte("created_at", start.toISOString())
+        .lte("created_at", end.toISOString())
+        .order("created_at", { ascending: false });
+      if (
+        full.error &&
+        (full.error.code === "42703" ||
+          full.error.message?.includes("lander") ||
+          full.error.message?.includes("campaign_name") ||
+          full.error.message?.includes("ad_name") ||
+          full.error.message?.includes("utm_source"))
+      ) {
+        const legacy = await sb
+          .from("leads")
+          .select(selectLegacy)
+          .gte("created_at", start.toISOString())
+          .lte("created_at", end.toISOString())
+          .order("created_at", { ascending: false });
+        if (legacy.error) throw legacy.error;
+        leadRows = (legacy.data || []) as Record<string, unknown>[];
+      } else if (full.error) {
+        throw full.error;
+      } else {
+        leadRows = (full.data || []) as Record<string, unknown>[];
+      }
+    }
+
+    const leads = (leadRows || []).map((l) => ({
+      id: l.id as string,
+      naam: (l.naam as string | null) ?? null,
+      plaats: (l.plaats as string | null) ?? null,
+      bron: (l.bron as string | null) ?? null,
+      utm_source: (l.utm_source as string | null) ?? null,
+      lander: (l.lander as string | null) ?? null,
+      campaign_name: (l.campaign_name as string | null) ?? null,
+      ad_name: (l.ad_name as string | null) ?? null,
+      status: (l.status as string | null) ?? null,
+      created_at: l.created_at as string,
+    }));
 
     const huisbezoek = await loadEersteHuisbezoekPerLead(
       sb,
@@ -121,6 +152,10 @@ export async function GET(req: NextRequest) {
         naam: (l.naam || "").trim() || "Onbekend",
         plaats: l.plaats,
         bron: l.bron,
+        utm_source: l.utm_source,
+        lander: l.lander,
+        campaign_name: l.campaign_name,
+        ad_name: l.ad_name,
         status: l.status,
         created_at: l.created_at,
         created_ymd: createdYmd,

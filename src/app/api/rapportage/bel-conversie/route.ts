@@ -319,7 +319,7 @@ export async function GET(req: NextRequest) {
         sb
           .from("leads")
           .select(
-            "id, naam, lead_number, status, postcode, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
+            "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
           )
           .gte("laatst_gebeld_at", padStart)
           .lte("laatst_gebeld_at", padEnd),
@@ -341,14 +341,18 @@ export async function GET(req: NextRequest) {
     let leadsRows: BelConversieLead[] = (leadsFull.data ||
       []) as BelConversieLead[];
     if (leadsFull.error) {
-      const missingDoor =
+      const missingCol =
         leadsFull.error.message?.includes("laatst_gebeld_door") ||
+        leadsFull.error.message?.includes("lander") ||
+        leadsFull.error.message?.includes("campaign_name") ||
+        leadsFull.error.message?.includes("ad_name") ||
+        leadsFull.error.message?.includes("utm_source") ||
         leadsFull.error.code === "42703";
-      if (!missingDoor) throw leadsFull.error;
+      if (!missingCol) throw leadsFull.error;
       const retry = await sb
         .from("leads")
         .select(
-          "id, naam, lead_number, status, postcode, laatst_gebeld_at, bel_claimed_by, beller_id"
+          "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id"
         )
         .gte("laatst_gebeld_at", padStart)
         .lte("laatst_gebeld_at", padEnd);
@@ -356,6 +360,10 @@ export async function GET(req: NextRequest) {
       leadsRows = (retry.data || []).map((l) => ({
         ...(l as BelConversieLead),
         laatst_gebeld_door: null,
+        utm_source: null,
+        lander: null,
+        campaign_name: null,
+        ad_name: null,
       }));
     }
 
@@ -423,7 +431,7 @@ export async function GET(req: NextRequest) {
       const { data: extra, error: extraErr } = await sb
         .from("leads")
         .select(
-          "id, naam, lead_number, status, postcode, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
+          "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
         )
         .in("id", missingLeadIds);
       if (!extraErr && extra) {

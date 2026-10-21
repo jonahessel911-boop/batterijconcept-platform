@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { isSaleUitkomst } from "@/lib/afspraak-soort";
 import { formatEuro, formatTimeNl } from "@/lib/format";
 import { leadStatusLabel } from "@/lib/labels";
 import type { DashboardV2Vandaag } from "@/lib/dashboard-v2";
@@ -14,9 +15,26 @@ const GEEN_AFBOEK_STATUS = new Set([
   "deal",
 ]);
 
+function isSaleStatus(status: string | null | undefined): boolean {
+  return isSaleUitkomst(status) || status === "deal";
+}
+
 function afboekRedenLabel(status: string | null | undefined): string | null {
   if (!status || GEEN_AFBOEK_STATUS.has(status)) return null;
   return leadStatusLabel[status as LeadStatus] || status;
+}
+
+function saleRouteLabel(
+  route: "warmtefonds" | "buijv" | null | undefined
+): string | null {
+  if (route === "warmtefonds") return "Warmtefonds";
+  if (route === "buijv") return "Buijv";
+  return null;
+}
+
+function orderwaardeLabel(n: number | null | undefined): string | null {
+  if (n == null || Number.isNaN(n)) return null;
+  return `${formatEuro(n)} ex btw`;
 }
 
 function num(n: number | null | undefined, digits = 0): string {
@@ -409,7 +427,12 @@ export function TodayPanel() {
           ) : (
             <ul className="max-h-[32rem] overflow-y-auto">
               {data.afspraken.map((a, idx) => {
-                const reden = afboekRedenLabel(a.lead_status);
+                const sale = isSaleStatus(a.lead_status);
+                const route = saleRouteLabel(a.sale_route);
+                const orderwaarde = orderwaardeLabel(a.orderwaarde_ex_btw);
+                const reden = sale
+                  ? null
+                  : afboekRedenLabel(a.lead_status);
                 return (
                   <li
                     key={a.id}
@@ -426,7 +449,7 @@ export function TodayPanel() {
                         <span
                           className={[
                             "h-2 w-2 shrink-0 rounded-full",
-                            BUCKET_DOT[a.bucket],
+                            sale ? "bg-[#DB2777]" : BUCKET_DOT[a.bucket],
                           ].join(" ")}
                           aria-hidden
                         />
@@ -441,7 +464,12 @@ export function TodayPanel() {
                         {a.adviseur_naam}
                         {a.lead_plaats ? ` · ${a.lead_plaats}` : ""}
                       </p>
-                      {reden ? (
+                      {sale ? (
+                        <p className="mt-1 truncate text-[11px] font-semibold text-[#DB2777]">
+                          {[route, orderwaarde].filter(Boolean).join(" · ") ||
+                            "Sale"}
+                        </p>
+                      ) : reden ? (
                         <p
                           className={[
                             "mt-1 truncate text-[11px] font-medium",
@@ -454,14 +482,33 @@ export function TodayPanel() {
                         </p>
                       ) : null}
                     </div>
-                    <span
-                      className={[
-                        "mt-0.5 shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
-                        BUCKET_CLS[a.bucket],
-                      ].join(" ")}
-                    >
-                      {BUCKET_LABEL[a.bucket]}
-                    </span>
+                    <div className="mt-0.5 flex shrink-0 flex-col items-end gap-1">
+                      {sale ? (
+                        <span className="rounded-full bg-[#FDF2F8] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#DB2777] ring-1 ring-[#F9A8D4]/60">
+                          Sale
+                        </span>
+                      ) : null}
+                      {route ? (
+                        <span
+                          className={[
+                            "rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                            a.sale_route === "warmtefonds"
+                              ? "bg-[#EFF6FF] text-[#1D4ED8] ring-1 ring-[#93C5FD]/60"
+                              : "bg-wash text-ink ring-1 ring-line",
+                          ].join(" ")}
+                        >
+                          {route}
+                        </span>
+                      ) : null}
+                      <span
+                        className={[
+                          "rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                          BUCKET_CLS[a.bucket],
+                        ].join(" ")}
+                      >
+                        {BUCKET_LABEL[a.bucket]}
+                      </span>
+                    </div>
                   </li>
                 );
               })}

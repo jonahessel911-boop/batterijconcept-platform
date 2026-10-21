@@ -12,7 +12,7 @@ export function CrmPageSkeleton({
   activeTab?: CrmTab;
 }) {
   const tabs = CRM_TABS.filter((t) =>
-    ["taken", "leads", "bellen", "agenda", "offertes", "netto", "instroom", "projecten", "facturen", "purchasing", "rapportage", "adviseurs", "partners"].includes(
+    ["taken", "leads", "bellen", "agenda", "offertes", "netto", "instroom", "projecten", "facturen", "purchasing", "rapportage", "voice_ai", "adviseurs", "partners"].includes(
       t.id
     )
   );

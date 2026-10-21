@@ -155,6 +155,7 @@ export type DrilldownRaw = {
     lead_naam: string | null;
     lead_number: string | null;
     geannuleerd?: boolean;
+    financiering_voorbehoud?: boolean | null;
   }[];
   adviseurs: {
     id: string;

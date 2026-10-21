@@ -10,6 +10,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   amsDayBounds,
   leadToApptPct,
+  normalizeLeadSource,
   todayAmsterdamYmd,
 } from "@/lib/lead-conversie";
 import { dayKeyAmsterdam } from "@/lib/adviseur-beschikbaarheid";
@@ -22,6 +23,10 @@ export type LiveLeadRow = {
   naam: string;
   plaats: string | null;
   bron: string | null;
+  utm_source: string | null;
+  lander: string | null;
+  campaign_name: string | null;
+  ad_name: string | null;
   status: string | null;
   /** Wanneer de lead binnenkwam */
   created_at: string;
@@ -33,6 +38,16 @@ export type LiveLeadRow = {
   afspraak_start_at: string | null;
   /** Uren tussen binnenkomst en inplannen */
   uren_tot_ingepland: number | null;
+};
+
+/** Telling per attributie-dimensie (source / lander / campaign / ad). */
+export type LiveAttributionBucket = {
+  key: string;
+  label: string;
+  leads: number;
+  ingepland: number;
+  open: number;
+  leadToAppt: number | null;
 };
 
 export type LiveDayBucket = {
@@ -63,6 +78,10 @@ export type LiveRapportageResult = {
   /** Gemiddelde uren tot inplannen (alleen voor ingeplande leads) */
   avgUrenTotIngepland: number | null;
   byDay: LiveDayBucket[];
+  bySource: LiveAttributionBucket[];
+  byLander: LiveAttributionBucket[];
+  byCampaign: LiveAttributionBucket[];
+  byAd: LiveAttributionBucket[];
   rows: LiveLeadRow[];
 };
 
@@ -152,6 +171,44 @@ export function buildLiveDayBuckets(
   return buckets;
 }
 
+function attrLabel(raw: string | null | undefined, fallback = "(onbekend)"): string {
+  const t = (raw || "").trim();
+  return t || fallback;
+}
+
+function buildAttributionBuckets(
+  rows: LiveLeadRow[],
+  pick: (r: LiveLeadRow) => string
+): LiveAttributionBucket[] {
+  const by = new Map<
+    string,
+    { label: string; leads: number; ingepland: number }
+  >();
+  for (const r of rows) {
+    const label = pick(r);
+    const key = label.toLowerCase();
+    const acc = by.get(key) || { label, leads: 0, ingepland: 0 };
+    acc.leads += 1;
+    if (r.ingepland_at) acc.ingepland += 1;
+    by.set(key, acc);
+  }
+  return [...by.entries()]
+    .map(([key, acc]) => ({
+      key,
+      label: acc.label,
+      leads: acc.leads,
+      ingepland: acc.ingepland,
+      open: Math.max(0, acc.leads - acc.ingepland),
+      leadToAppt: leadToApptPct(acc.ingepland, acc.leads),
+    }))
+    .sort(
+      (a, b) =>
+        b.leads - a.leads ||
+        b.ingepland - a.ingepland ||
+        a.label.localeCompare(b.label, "nl")
+    );
+}
+
 export function summarizeLiveRows(
   rows: LiveLeadRow[],
   days: LiveDays,
@@ -189,6 +246,22 @@ export function summarizeLiveRows(
     leadToAppt: leadToApptPct(ingepland, leads),
     avgUrenTotIngepland,
     byDay: buildLiveDayBuckets(rows, startYmd, endYmd, todayYmd),
+    bySource: buildAttributionBuckets(rows, (r) =>
+      normalizeLeadSource({
+        bron: r.bron,
+        utm_source: r.utm_source,
+        lander: r.lander,
+      })
+    ),
+    byLander: buildAttributionBuckets(rows, (r) =>
+      attrLabel(r.lander, "(geen lander)")
+    ),
+    byCampaign: buildAttributionBuckets(rows, (r) =>
+      attrLabel(r.campaign_name, "(geen campagne)")
+    ),
+    byAd: buildAttributionBuckets(rows, (r) =>
+      attrLabel(r.ad_name, "(geen ad)")
+    ),
     rows,
   };
 }

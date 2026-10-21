@@ -13,6 +13,13 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
     ...(commit ? { NEXT_PUBLIC_APP_COMMIT: commit } : {}),
   },
+  // Voice-uploads: body limiet voor proxy (geen FormData door Next meer, wel veiligheidsmarge)
+  experimental: {
+    proxyClientMaxBodySize: "30mb",
+    serverActions: {
+      bodySizeLimit: "30mb",
+    },
+  },
   outputFileTracingIncludes: {
     "/api/contract/[token]": ["./assets/contracts/**/*"],
     "/api/contract/[token]/sign": ["./assets/contracts/**/*"],

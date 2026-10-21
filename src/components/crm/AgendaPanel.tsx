@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import {
   addDays,
@@ -62,9 +70,16 @@ import { getSupabaseBrowser } from "@/lib/supabase";
 import { LeadZoekVeld } from "./LeadZoekVeld";
 import { ReistijdHint } from "./ReistijdHint";
 import {
+  BestSlotsOptionsList,
+  bestSlotsHelpText,
+  useBestSlots,
+  type BestSlotOption,
+} from "./BestSlotsOptions";
+import {
   BackofficeActieForm,
   type BackofficeActieFormValues,
 } from "./BackofficeActieForm";
+import { planSaleOpbel } from "@/lib/sale-opbel";
 
 type AgendaDay = { key: string; date: Date };
 
@@ -301,6 +316,8 @@ function AfspraakChip({
   onOpen: (a: Afspraak) => void;
 }) {
   const cancelled = afspraak.status === "geannuleerd";
+  const verzet = afspraak.status === "verzet";
+  const struck = cancelled || verzet;
   const done = afspraak.status === "voltooid";
   const needsAction = needsVervolgPunt(afspraak, allAfspraken);
   const afboek =
@@ -322,12 +339,14 @@ function AfspraakChip({
       ? leadStatusLabel[afboek as LeadStatus]
       : null;
   const statusNote = cancelled
-    ? "Geannuleerd"
-    : afboekLabel
-      ? afboekLabel
-      : done
-        ? "Voltooid"
-        : null;
+    ? "Afgezegd"
+    : verzet
+      ? "Afspraak verzet"
+      : afboekLabel
+        ? afboekLabel
+        : done
+          ? "Voltooid"
+          : null;
 
   if (variant === "day") {
     return (
@@ -349,7 +368,7 @@ function AfspraakChip({
               className={[
                 "block font-display text-lg font-semibold tabular-nums leading-none",
                 accent.time,
-                cancelled ? "line-through" : "",
+                struck ? "line-through" : "",
               ].join(" ")}
             >
               {formatTimeNl(afspraak.start_at)}
@@ -357,7 +376,7 @@ function AfspraakChip({
             <span
               className={[
                 "mt-1 block text-[11px] tabular-nums text-muted",
-                cancelled ? "line-through" : "",
+                struck ? "line-through" : "",
               ].join(" ")}
             >
               {formatTimeNl(afspraak.end_at)}
@@ -368,7 +387,7 @@ function AfspraakChip({
               <span
                 className={[
                   "block truncate text-sm font-semibold text-ink",
-                  cancelled ? "line-through" : "",
+                  struck ? "line-through" : "",
                 ].join(" ")}
               >
                 {naam}
@@ -433,7 +452,7 @@ function AfspraakChip({
           className={[
             "block text-[11px] font-bold tabular-nums leading-none",
             accent.time,
-            cancelled ? "line-through" : "",
+            struck ? "line-through" : "",
           ].join(" ")}
         >
           {formatTimeNl(afspraak.start_at)}
@@ -441,7 +460,7 @@ function AfspraakChip({
         <span
           className={[
             "mt-1 block truncate pr-4 text-[12px] font-semibold leading-tight text-ink",
-            cancelled ? "line-through" : "",
+            struck ? "line-through" : "",
           ].join(" ")}
         >
           {naam}
@@ -566,6 +585,16 @@ export function AfspraakDetail({
   const [newStart, setNewStart] = useState("");
   const [useCustomTime, setUseCustomTime] = useState(false);
   const [customStart, setCustomStart] = useState("");
+  const [selectedBestSlotId, setSelectedBestSlotId] = useState<string | null>(
+    null
+  );
+  const [showHandmatigVerzet, setShowHandmatigVerzet] = useState(false);
+  const [voicePendingFiles, setVoicePendingFiles] = useState<File[]>([]);
+  const [voiceQueueMsg, setVoiceQueueMsg] = useState<string | null>(null);
+  const [voiceErr, setVoiceErr] = useState<string | null>(null);
+  const [voiceBgBusy, setVoiceBgBusy] = useState(false);
+  const voiceFileRef = useRef<HTMLInputElement | null>(null);
+  const voicePendingRef = useRef<File[]>([]);
   const [mailKlant, setMailKlant] = useState<boolean | null>(null);
   const [annuleerNotitie, setAnnuleerNotitie] = useState("");
   const [vervolgAt, setVervolgAt] = useState("");
@@ -580,11 +609,15 @@ export function AfspraakDetail({
   const [saleOfferte, setSaleOfferte] = useState<Offerte | null>(null);
   const [saleOfferteLoading, setSaleOfferteLoading] = useState(false);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
+  const [sessionAdviseurId, setSessionAdviseurId] = useState<string | null>(
+    null
+  );
   const [boValues, setBoValues] = useState<BackofficeActieFormValues>({
     aanbetalingModus: "restant",
     aanbetalingHandmatig: "",
     backofficeNotitie: "",
     installateurNotitie: "",
+    opbelMoment: null,
   });
   const [wfProjectId, setWfProjectId] = useState<string | null>(null);
   const [wfAangevraagdAt, setWfAangevraagdAt] = useState<string | null>(null);
@@ -647,6 +680,13 @@ export function AfspraakDetail({
     setNewStart("");
     setCustomStart("");
     setUseCustomTime(false);
+    setSelectedBestSlotId(null);
+    setShowHandmatigVerzet(false);
+    setVoicePendingFiles([]);
+    voicePendingRef.current = [];
+    setVoiceQueueMsg(null);
+    setVoiceErr(null);
+    setVoiceBgBusy(false);
     setMailKlant(null);
     setAnnuleerNotitie("");
     setVervolgAt("");
@@ -719,8 +759,13 @@ export function AfspraakDetail({
         const res = await fetch("/api/auth/login");
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled && data.adviseur?.naam) {
-          setSessionNaam(data.adviseur.naam as string);
+        if (!cancelled) {
+          if (data.adviseur?.naam) {
+            setSessionNaam(data.adviseur.naam as string);
+          }
+          if (data.adviseur?.id) {
+            setSessionAdviseurId(data.adviseur.id as string);
+          }
         }
       } catch {
         /* ignore */
@@ -819,6 +864,205 @@ export function AfspraakDetail({
       cancelledReq = true;
     };
   }, [current.adviseur_id]);
+
+  /** Lead-shape voor best-slots (reistijd) — id zit op afspraak.lead_id. */
+  const verzetLead = useMemo(() => {
+    if (!current.lead_id || !current.leads) return null;
+    return {
+      id: current.lead_id,
+      straat: current.leads.straat ?? null,
+      huisnummer: current.leads.huisnummer ?? null,
+      toevoeging: current.leads.toevoeging ?? null,
+      postcode: current.leads.postcode ?? null,
+      plaats: current.leads.plaats ?? null,
+    };
+  }, [current.lead_id, current.leads]);
+
+  const {
+    bestSlots,
+    bestSlotsLoading,
+    bestSlotsLoadingMore,
+    bestSlotsError,
+    bestSlotsMode,
+    bestSlotsLimit,
+    loadMeerBestSlots,
+  } = useBestSlots({
+    lead: verzetLead,
+    lockAdviseur: true,
+    defaultAdviseurId: current.adviseur_id,
+    enabled: mode === "verzet" && Boolean(verzetLead?.id && current.adviseur_id),
+  });
+
+  /** Huidige slot eruit — je kunt niet naar hetzelfde moment verzetten. */
+  const verzetBestSlots = useMemo(
+    () =>
+      bestSlots.filter(
+        (s) =>
+          s.start_at !== current.start_at &&
+          (!current.adviseur_id || s.adviseur_id === current.adviseur_id)
+      ),
+    [bestSlots, current.start_at, current.adviseur_id]
+  );
+
+  function selectVerzetBestSlot(slot: BestSlotOption) {
+    setSelectedBestSlotId(slot.slot_id);
+    setNewStart(slot.start_at);
+    setUseCustomTime(false);
+    setCustomStart("");
+    setError(null);
+  }
+
+  const magVoiceUpload =
+    !cancelled &&
+    mode === "view" &&
+    afspraakBlokkeertAgenda(current.soort);
+
+  function onVoiceFilesChosen(e: ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (picked.length === 0) return;
+    setVoiceErr(null);
+    setVoiceQueueMsg(null);
+    setVoicePendingFiles((prev) => {
+      const next = [...prev, ...picked];
+      voicePendingRef.current = next;
+      return next;
+    });
+  }
+
+  function removeVoicePending(index: number) {
+    setVoicePendingFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      voicePendingRef.current = next;
+      return next;
+    });
+  }
+
+  function startVoiceUploadsBackground(afspraakId: string, files: File[]) {
+    if (files.length === 0) return;
+    setVoiceBgBusy(true);
+    setVoiceErr(null);
+    setVoiceQueueMsg(
+      files.length === 1
+        ? "1 opname wordt op de achtergrond geüpload…"
+        : `${files.length} opnames worden op de achtergrond geüpload…`
+    );
+    setVoicePendingFiles([]);
+    voicePendingRef.current = [];
+    void (async () => {
+      try {
+        const { uploadAfspraakVoiceNotesBackground } = await import(
+          "@/lib/voice-ai-upload-client"
+        );
+        const result = await uploadAfspraakVoiceNotesBackground(
+          afspraakId,
+          files
+        );
+        if (result.errors.length > 0) {
+          setVoiceErr(result.errors.join(" · "));
+        }
+        if (result.queued > 0) {
+          setVoiceQueueMsg(
+            result.queued === 1
+              ? "Opname staat klaar — transcriptie loopt op de achtergrond."
+              : `${result.queued} opnames staan klaar — transcriptie loopt op de achtergrond.`
+          );
+        } else if (result.errors.length > 0) {
+          setVoiceQueueMsg(null);
+        }
+      } catch (err) {
+        setVoiceErr(err instanceof Error ? err.message : "Upload mislukt");
+        setVoiceQueueMsg(null);
+      } finally {
+        setVoiceBgBusy(false);
+      }
+    })();
+  }
+
+  const voiceUploadPanel = magVoiceUpload ? (
+    <div
+      className={
+        needsAction
+          ? "rounded-xl border border-[#C45A12]/25 bg-white p-3"
+          : "rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]"
+      }
+    >
+      <p
+        className={
+          needsAction
+            ? "text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]"
+            : "text-[10px] font-semibold uppercase tracking-[0.08em] text-muted"
+        }
+      >
+        Voice uploaden
+      </p>
+      <p className="mt-1 text-[11px] text-muted">mp3 · m4a · wav · webm</p>
+      <input
+        ref={voiceFileRef}
+        type="file"
+        multiple
+        accept="audio/*,.mp3,.m4a,.wav,.webm,.ogg,.flac"
+        className="hidden"
+        onChange={onVoiceFilesChosen}
+      />
+      <button
+        type="button"
+        disabled={voiceBgBusy}
+        onClick={() => voiceFileRef.current?.click()}
+        className="mt-3 min-h-11 w-full border border-orange bg-white px-4 py-2.5 text-sm font-semibold text-orange hover:bg-[#FFF8F3] disabled:opacity-60"
+      >
+        {voicePendingFiles.length > 0
+          ? "Meer voices toevoegen"
+          : "Voice toevoegen"}
+      </button>
+      {voicePendingFiles.length > 0 ? (
+        <ul className="mt-2 space-y-1">
+          {voicePendingFiles.map((f, i) => (
+            <li
+              key={`${f.name}-${f.size}-${i}`}
+              className="flex items-center justify-between gap-2 text-xs text-ink"
+            >
+              <span className="min-w-0 truncate font-medium">{f.name}</span>
+              <button
+                type="button"
+                onClick={() => removeVoicePending(i)}
+                className="shrink-0 text-muted hover:text-[#C45A12]"
+              >
+                Weg
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {needsAction && voicePendingFiles.length > 0 ? (
+        <p className="mt-2 text-[11px] text-muted">
+          Wordt meegeüpload bij Opslaan (op de achtergrond).
+        </p>
+      ) : null}
+      {!needsAction && voicePendingFiles.length > 0 ? (
+        <button
+          type="button"
+          disabled={voiceBgBusy}
+          onClick={() =>
+            startVoiceUploadsBackground(current.id, voicePendingRef.current)
+          }
+          className="mt-3 min-h-11 w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
+        >
+          {voiceBgBusy ? "Bezig…" : "Uploaden op achtergrond"}
+        </button>
+      ) : null}
+      {voiceQueueMsg ? (
+        <p className="mt-2 text-xs font-medium text-green-deeper">
+          {voiceQueueMsg}
+        </p>
+      ) : null}
+      {voiceErr ? (
+        <p className="mt-2 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+          {voiceErr}
+        </p>
+      ) : null}
+    </div>
+  ) : null;
 
   function startEditNotitie() {
     setNotitieDraft(current.notities?.trim() || "");
@@ -1151,6 +1395,14 @@ export function AfspraakDetail({
         if (!res.ok) {
           throw new Error(data.error || "Backoffice-actie afronden mislukt");
         }
+        if (boValues.opbelMoment) {
+          const opbelErr = await planSaleOpbel({
+            leadId: current.lead_id,
+            moment: boValues.opbelMoment,
+            sessionAdviseurId,
+          });
+          if (opbelErr) throw new Error(opbelErr);
+        }
       }
 
       const sb = getSupabaseBrowser();
@@ -1235,15 +1487,27 @@ export function AfspraakDetail({
       setVervolgNotitie("");
       setUitkomst("");
       setSaleOfferte(null);
-      setOkMsg(
-        isSale
-          ? `Sale opgeslagen en backoffice-actie afgerond.`
-          : needsVervolg
-            ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
-            : uitkomst === "deur_niet_open"
-              ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen — backoffice plant opnieuw in.`
-              : `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen.`
-      );
+      const plannedOpbel = isSale ? boValues.opbelMoment : null;
+      setBoValues((prev) => ({ ...prev, opbelMoment: null }));
+
+      const pendingVoices = [...voicePendingRef.current];
+      const baseOk = isSale
+        ? plannedOpbel
+          ? `Sale opgeslagen, backoffice afgerond, opbel gepland (${plannedOpbel}).`
+          : `Sale opgeslagen en backoffice-actie afgerond.`
+        : needsVervolg
+          ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen en vervolg punt gepland.`
+          : uitkomst === "deur_niet_open"
+            ? `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen — backoffice plant opnieuw in.`
+            : `Uitkomst “${leadStatusLabel[uitkomst] || uitkomst}” opgeslagen.`;
+      if (pendingVoices.length > 0) {
+        startVoiceUploadsBackground(current.id, pendingVoices);
+        setOkMsg(
+          `${baseOk} ${pendingVoices.length === 1 ? "Voice" : `${pendingVoices.length} voices`} uploaden op de achtergrond.`
+        );
+      } else {
+        setOkMsg(baseOk);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
     } finally {
@@ -1523,6 +1787,8 @@ export function AfspraakDetail({
                     </label>
                   </>
                 )}
+                {voiceUploadPanel}
+
                 <button
                   type="submit"
                   disabled={
@@ -1544,6 +1810,8 @@ export function AfspraakDetail({
               </form>
             </section>
           )}
+
+          {magVoiceUpload && !needsAction ? voiceUploadPanel : null}
 
           <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -1811,48 +2079,109 @@ export function AfspraakDetail({
               </p>
               <p className="mt-1 text-sm text-muted">
                 {magKlantMail
-                  ? "Kies een nieuw slot. De herinnering van 24 uur schuift mee naar de nieuwe datum."
-                  : "Kies een nieuw slot. De klant krijgt hier geen mail van."}
+                  ? "Slimme slots op reistijd in de agenda van de adviseur. De herinnering van 24 uur schuift mee."
+                  : "Slimme slots op reistijd in de agenda van de adviseur. De klant krijgt hier geen mail van."}
               </p>
-              <div className="mt-4 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Nieuw tijdstip
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUseCustomTime((v) => !v);
-                      setNewStart("");
+              <p className="mt-1 text-xs text-muted">
+                {bestSlotsHelpText({ lockAdviseur: true, limit: bestSlotsLimit })}
+              </p>
+
+              <div className="mt-4 space-y-3">
+                <BestSlotsOptionsList
+                  slots={verzetBestSlots}
+                  selectedSlotId={selectedBestSlotId}
+                  onSelect={selectVerzetBestSlot}
+                  loading={bestSlotsLoading}
+                  error={bestSlotsError}
+                  mode={bestSlotsMode}
+                  limit={bestSlotsLimit}
+                  loadingMore={bestSlotsLoadingMore}
+                  onLoadMore={() => void loadMeerBestSlots()}
+                  lockAdviseur
+                />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowHandmatigVerzet((v) => !v);
+                    if (showHandmatigVerzet) {
+                      setUseCustomTime(false);
                       setCustomStart("");
-                    }}
-                    className="text-xs font-medium text-green hover:underline"
-                  >
-                    {useCustomTime ? "Kies vast slot" : "Ander tijdstip…"}
-                  </button>
-                </div>
-                {useCustomTime ? (
-                  <input
-                    type="datetime-local"
-                    value={customStart}
-                    onChange={(e) => setCustomStart(e.target.value)}
-                    className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                    } else {
+                      setSelectedBestSlotId(null);
+                    }
+                  }}
+                  className="text-xs font-medium text-green hover:underline"
+                >
+                  {showHandmatigVerzet
+                    ? "Handmatig verbergen"
+                    : "Handmatig tijdstip…"}
+                </button>
+
+                {showHandmatigVerzet ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                        Nieuw tijdstip
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseCustomTime((v) => !v);
+                          setNewStart("");
+                          setCustomStart("");
+                          setSelectedBestSlotId(null);
+                        }}
+                        className="text-xs font-medium text-green hover:underline"
+                      >
+                        {useCustomTime ? "Kies vast slot" : "Ander tijdstip…"}
+                      </button>
+                    </div>
+                    {useCustomTime ? (
+                      <input
+                        type="datetime-local"
+                        value={customStart}
+                        onChange={(e) => {
+                          setCustomStart(e.target.value);
+                          setSelectedBestSlotId(null);
+                        }}
+                        className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                      />
+                    ) : (
+                      <select
+                        value={newStart}
+                        onChange={(e) => {
+                          setNewStart(e.target.value);
+                          setSelectedBestSlotId(null);
+                        }}
+                        className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                      >
+                        <option value="">Kies tijd…</option>
+                        {slots
+                          .filter((s) => s.start_at !== current.start_at)
+                          .slice(0, 80)
+                          .map((s) => (
+                            <option key={s.start_at} value={s.start_at}>
+                              {formatDateTimeNl(s.start_at)}
+                            </option>
+                          ))}
+                      </select>
+                    )}
+                  </div>
+                ) : null}
+
+                {!useCustomTime && newStart ? (
+                  <ReistijdHint
+                    adviseurId={current.adviseur_id || ""}
+                    startAt={newStart}
+                    lead={verzetLead}
+                    afspraken={allAfspraken.filter((a) => a.id !== current.id)}
+                    startAdres={null}
+                    startAdresLabel={current.adviseurs?.naam || null}
                   />
-                ) : (
-                  <select
-                    value={newStart}
-                    onChange={(e) => setNewStart(e.target.value)}
-                    className="w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-                  >
-                    <option value="">Kies tijd…</option>
-                    {slots.slice(0, 80).map((s) => (
-                      <option key={s.start_at} value={s.start_at}>
-                        {formatDateTimeNl(s.start_at)}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                ) : null}
               </div>
+
               {magKlantMail && (
                 <div className="mt-4">
                   <JaNeeField
@@ -1877,6 +2206,8 @@ export function AfspraakDetail({
                   onClick={() => {
                     setMode("view");
                     setMailKlant(null);
+                    setSelectedBestSlotId(null);
+                    setShowHandmatigVerzet(false);
                     setError(null);
                   }}
                   className="min-h-11 border border-line px-4 py-2.5 text-sm font-semibold text-muted hover:bg-wash"

@@ -20,6 +20,8 @@ import {
   resolveFinancieringStatus,
   type FinancieringStatus,
 } from "@/lib/financiering-status";
+import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
+import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
@@ -197,9 +199,14 @@ export async function syncAutoTakenVoorProject(
 
   const wantedKeys = new Set(defs.map((d) => d.autoKey));
 
+  const saleAdviseurId =
+    wantedKeys.has(REFERRAL_TAK_AUTO_KEY)
+      ? await resolveSaleAdviseurId(sb, projectId)
+      : null;
+
   const { data: existing, error } = await sb
     .from("project_taken")
-    .select("id, auto_key, status, due_at")
+    .select("id, auto_key, status, due_at, verantwoordelijke_id")
     .eq("project_id", projectId)
     .not("auto_key", "is", null);
 
@@ -217,21 +224,33 @@ export async function syncAutoTakenVoorProject(
 
   const byKey = new Map<
     string,
-    { id: string; status: string; due_at: string | null }
+    {
+      id: string;
+      status: string;
+      due_at: string | null;
+      verantwoordelijke_id: string | null;
+    }
   >();
   const duplicateIds: string[] = [];
   for (const row of existing || []) {
     if (!row.auto_key) continue;
+    const mapped = {
+      id: row.id as string,
+      status: row.status as string,
+      due_at: (row.due_at as string | null) ?? null,
+      verantwoordelijke_id:
+        (row.verantwoordelijke_id as string | null) ?? null,
+    };
     const prev = byKey.get(row.auto_key);
     if (prev) {
-      if (prev.status !== "done" && row.status === "done") {
-        duplicateIds.push(row.id);
+      if (prev.status !== "done" && mapped.status === "done") {
+        duplicateIds.push(mapped.id);
       } else {
         duplicateIds.push(prev.id);
-        byKey.set(row.auto_key, row);
+        byKey.set(row.auto_key, mapped);
       }
     } else {
-      byKey.set(row.auto_key, row);
+      byKey.set(row.auto_key, mapped);
     }
   }
 
@@ -255,6 +274,7 @@ export async function syncAutoTakenVoorProject(
     const cur = byKey.get(def.autoKey);
     const dueAt =
       def.dueAt !== undefined ? def.dueAt : dueAtFromDays(def.dueInDays);
+    const isReferral = def.autoKey === REFERRAL_TAK_AUTO_KEY;
     if (cur) {
       if (
         def.autoKey === SCHOUWDAG_INPLAN_KEY &&
@@ -280,6 +300,20 @@ export async function syncAutoTakenVoorProject(
             updated_at: new Date().toISOString(),
           })
           .eq("id", cur.id);
+      } else if (
+        isReferral &&
+        cur.status !== "done" &&
+        saleAdviseurId &&
+        cur.verantwoordelijke_id !== saleAdviseurId
+      ) {
+        // Altijd bij de sale-adviseur — ook bestaande open taken corrigeren
+        await sb
+          .from("project_taken")
+          .update({
+            verantwoordelijke_id: saleAdviseurId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", cur.id);
       }
       continue;
     }
@@ -290,6 +324,9 @@ export async function syncAutoTakenVoorProject(
       afdeling: def.afdeling,
       due_at: dueAt,
       auto_key: def.autoKey,
+      ...(isReferral && saleAdviseurId
+        ? { verantwoordelijke_id: saleAdviseurId }
+        : {}),
     });
   }
 }

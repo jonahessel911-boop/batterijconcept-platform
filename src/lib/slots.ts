@@ -43,7 +43,8 @@ export function generateDayBlocks(opts: {
   const from = opts.fromDate ?? new Date();
   const slots: DayBlock[] = [];
 
-  for (let d = 1; d <= daysAhead; d++) {
+  // d=0 = vandaag (nog vrije blokken later vandaag); al gestarte slots vallen weg via startUtc <= from
+  for (let d = 0; d <= daysAhead; d++) {
     const dayLocal = toZonedTime(addDays(from, d), AMSTERDAM_TZ);
     const dow = dayLocal.getDay();
     // Zondag nooit; zaterdag wél (tenzij weekdaysOnly expliciet true)

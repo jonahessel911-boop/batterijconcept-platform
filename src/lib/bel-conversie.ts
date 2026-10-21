@@ -20,6 +20,11 @@ export type BelConversieLead = {
   lead_number: string | null;
   status: string | null;
   postcode?: string | null;
+  bron?: string | null;
+  utm_source?: string | null;
+  lander?: string | null;
+  campaign_name?: string | null;
+  ad_name?: string | null;
   laatst_gebeld_at: string | null;
   laatst_gebeld_door?: string | null;
   bel_claimed_by?: string | null;
@@ -55,6 +60,11 @@ export type BelConversieRecenteAfspraak = {
   afspraakAt: string;
   /** Geannuleerd na inplannen — zichtbaar doorstreept, telt niet mee */
   geannuleerd?: boolean;
+  bron?: string | null;
+  utmSource?: string | null;
+  lander?: string | null;
+  campaignName?: string | null;
+  adName?: string | null;
 };
 
 /** Cost per appointment over een rollend venster (ad spend ÷ huisbezoeken). */
@@ -834,6 +844,11 @@ export function buildBelConversie(opts: {
       ingeplandAt: a.created_at,
       afspraakAt: a.start_at,
       geannuleerd,
+      bron: lead?.bron ?? null,
+      utmSource: lead?.utm_source ?? null,
+      lander: lead?.lander ?? null,
+      campaignName: lead?.campaign_name ?? null,
+      adName: lead?.ad_name ?? null,
     });
   }
   recenteAfspraken.sort(

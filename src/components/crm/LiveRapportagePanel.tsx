@@ -6,10 +6,12 @@ import { formatDateTimeNl } from "@/lib/format";
 import {
   LIVE_DAY_OPTIONS,
   isLiveGeenContactStatus,
+  type LiveAttributionBucket,
   type LiveDays,
   type LiveRapportageResult,
 } from "@/lib/live-rapportage";
 import { leadStatusLabel } from "@/lib/labels";
+import { normalizeLeadSource } from "@/lib/lead-conversie";
 
 function num(n: number | null | undefined, digits = 0): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -259,6 +261,29 @@ export function LiveRapportagePanel() {
         </div>
       </div>
 
+      <div className="grid gap-3 lg:grid-cols-2">
+        <AttributionTable
+          title="Per source"
+          hint="bron · anders utm_source"
+          rows={data.bySource || []}
+        />
+        <AttributionTable
+          title="Per landingspagina"
+          hint="lander"
+          rows={data.byLander || []}
+        />
+        <AttributionTable
+          title="Per campagne"
+          hint="campaign_name"
+          rows={data.byCampaign || []}
+        />
+        <AttributionTable
+          title="Per ad"
+          hint="ad_name"
+          rows={data.byAd || []}
+        />
+      </div>
+
       {popupOpen ? (
         <LiveDaysOverlay
           data={data}
@@ -266,6 +291,65 @@ export function LiveRapportagePanel() {
           onClose={() => setPopupOpen(false)}
         />
       ) : null}
+    </div>
+  );
+}
+
+function AttributionTable({
+  title,
+  hint,
+  rows,
+}: {
+  title: string;
+  hint: string;
+  rows: LiveAttributionBucket[];
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-line bg-white">
+      <div className="border-b border-line px-4 py-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+          {title}
+        </p>
+        <p className="mt-0.5 text-xs text-muted">{hint}</p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-muted">Geen data</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[320px] text-left text-sm">
+            <thead className="border-b border-line bg-wash/60 text-[10px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-4 py-2 font-semibold">Naam</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Leads</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Ingepland</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Open</th>
+                <th className="px-4 py-2 font-semibold tabular-nums">L→A</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {rows.map((r) => (
+                <tr key={r.key} className="hover:bg-wash/40">
+                  <td className="max-w-[14rem] truncate px-4 py-2 font-medium text-ink">
+                    {r.label}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-ink">
+                    {num(r.leads)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-ink">
+                    {num(r.ingepland)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-muted">
+                    {num(r.open)}
+                  </td>
+                  <td className="px-4 py-2 font-semibold tabular-nums text-ink">
+                    {pct(r.leadToAppt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -406,14 +490,18 @@ function LiveDaysOverlay({
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-sm">
+              <table className="w-full min-w-[960px] text-left text-sm">
                 <thead className="border-b border-line bg-wash/60 text-[11px] uppercase tracking-wide text-muted">
                   <tr>
                     <th className="px-4 py-2 font-semibold">Lead</th>
-                    <th className="px-4 py-2 font-semibold">Status</th>
-                    <th className="px-4 py-2 font-semibold">Binnen</th>
-                    <th className="px-4 py-2 font-semibold">Ingepland</th>
-                    <th className="px-4 py-2 font-semibold">Snelheid</th>
+                    <th className="px-3 py-2 font-semibold">Source</th>
+                    <th className="px-3 py-2 font-semibold">Lander</th>
+                    <th className="px-3 py-2 font-semibold">Campagne</th>
+                    <th className="px-3 py-2 font-semibold">Ad</th>
+                    <th className="px-3 py-2 font-semibold">Status</th>
+                    <th className="px-3 py-2 font-semibold">Binnen</th>
+                    <th className="px-3 py-2 font-semibold">Ingepland</th>
+                    <th className="px-3 py-2 font-semibold">Snelheid</th>
                     <th className="px-4 py-2 font-semibold">Afspraak</th>
                   </tr>
                 </thead>
@@ -421,56 +509,83 @@ function LiveDaysOverlay({
                   {rows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={10}
                         className="px-4 py-8 text-center text-muted"
                       >
                         Geen leads in dit filter
                       </td>
                     </tr>
                   ) : (
-                    rows.map((r) => (
-                      <tr key={r.id} className="hover:bg-wash/40">
-                        <td className="px-4 py-2.5">
-                          <Link
-                            href={`/?tab=leads&lead=${r.id}`}
-                            className="font-semibold text-ink hover:underline"
+                    rows.map((r) => {
+                      const source = normalizeLeadSource({
+                        bron: r.bron,
+                        utm_source: r.utm_source,
+                        lander: r.lander,
+                      });
+                      return (
+                        <tr key={r.id} className="hover:bg-wash/40">
+                          <td className="px-4 py-2.5">
+                            <Link
+                              href={`/?tab=leads&lead=${r.id}`}
+                              className="font-semibold text-ink hover:underline"
+                            >
+                              {r.naam}
+                            </Link>
+                            <p className="text-xs text-muted">
+                              {r.plaats || "—"}
+                            </p>
+                          </td>
+                          <td className="max-w-[8rem] truncate px-3 py-2.5 text-xs text-ink">
+                            {source}
+                          </td>
+                          <td
+                            className="max-w-[8rem] truncate px-3 py-2.5 text-xs text-muted"
+                            title={r.lander || undefined}
                           >
-                            {r.naam}
-                          </Link>
-                          <p className="text-xs text-muted">
-                            {[r.plaats, r.bron].filter(Boolean).join(" · ") ||
-                              "—"}
-                          </p>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-muted">
-                          {r.status
-                            ? leadStatusLabel[
-                                r.status as keyof typeof leadStatusLabel
-                              ] || r.status
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs tabular-nums text-muted">
-                          {formatDateTimeNl(r.created_at)}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs tabular-nums">
-                          {r.ingepland_at ? (
-                            <span className="font-medium text-ink">
-                              {formatDateTimeNl(r.ingepland_at)}
-                            </span>
-                          ) : (
-                            <span className="text-[#C45A12]">Nog open</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 tabular-nums text-muted">
-                          {urenLabel(r.uren_tot_ingepland)}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs tabular-nums text-muted">
-                          {r.afspraak_start_at
-                            ? formatDateTimeNl(r.afspraak_start_at)
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))
+                            {r.lander || "—"}
+                          </td>
+                          <td
+                            className="max-w-[9rem] truncate px-3 py-2.5 text-xs text-muted"
+                            title={r.campaign_name || undefined}
+                          >
+                            {r.campaign_name || "—"}
+                          </td>
+                          <td
+                            className="max-w-[9rem] truncate px-3 py-2.5 text-xs text-muted"
+                            title={r.ad_name || undefined}
+                          >
+                            {r.ad_name || "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-muted">
+                            {r.status
+                              ? leadStatusLabel[
+                                  r.status as keyof typeof leadStatusLabel
+                                ] || r.status
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs tabular-nums text-muted">
+                            {formatDateTimeNl(r.created_at)}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs tabular-nums">
+                            {r.ingepland_at ? (
+                              <span className="font-medium text-ink">
+                                {formatDateTimeNl(r.ingepland_at)}
+                              </span>
+                            ) : (
+                              <span className="text-[#C45A12]">Nog open</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 tabular-nums text-muted">
+                            {urenLabel(r.uren_tot_ingepland)}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs tabular-nums text-muted">
+                            {r.afspraak_start_at
+                              ? formatDateTimeNl(r.afspraak_start_at)
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

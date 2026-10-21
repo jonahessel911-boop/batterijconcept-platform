@@ -36,10 +36,12 @@ import { AdviseurFacturenPanel } from "./AdviseurFacturenPanel";
 import { PartnersPanel } from "./PartnersPanel";
 import { PurchasingPanel } from "./PurchasingPanel";
 import { RapportagePanel } from "./RapportagePanel";
+import { VoiceAiPanel } from "./VoiceAiPanel";
 import { AgendaPanel } from "./AgendaV2Panel";
 import { BelPanel } from "./BelPanel";
 import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
+import { InboxPanel } from "./InboxPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
 import { LEAD_STATUSES, leadStatusLabel } from "@/lib/labels";
 import {
@@ -92,9 +94,11 @@ const VALID_TABS: CrmTab[] = [
   "facturen",
   "creditfacturen",
   "inkomend",
+  "inbox",
   "purchasing",
   "rapportage",
   "ai",
+  "voice_ai",
   "adviseurs",
   "partners",
   "instellingen",
@@ -162,10 +166,12 @@ export function CrmShell() {
       facturen: "Facturen",
       creditfacturen: "Creditfacturen",
       inkomend: "Inkomend",
+      inbox: "Inbox",
       purchasing: "Purchasing",
       rapportage: "Rapportage",
       admin: "Admin",
       ai: "AI",
+      voice_ai: "Voice AI",
       adviseurs: "Adviseurs",
       partners: "Team",
       instellingen: "Instellingen",
@@ -1170,6 +1176,10 @@ export function CrmShell() {
       title: "Inkomend",
       sub: "Maandmappen · mail wordt automatisch verwerkt",
     },
+    inbox: {
+      title: "Inbox",
+      sub: "info@ · mappen · templates · acties (IMAP/SMTP volgt)",
+    },
     purchasing: {
       title: "Purchasing",
       sub: "Materiaal inkopen · schouw · betaling · Apex",
@@ -1185,6 +1195,10 @@ export function CrmShell() {
     ai: {
       title: "AI interface",
       sub: "Verborgen",
+    },
+    voice_ai: {
+      title: "Voice AI",
+      sub: "Huisbezoek-opnames · beluisteren · Straight Line feedback",
     },
     adviseurs: {
       title: "Adviseurs",
@@ -1204,7 +1218,14 @@ export function CrmShell() {
   };
 
   return (
-    <div className="crm-bg flex min-h-screen flex-col">
+    <div
+      className={[
+        "crm-bg flex flex-col",
+        tab === "voice_ai"
+          ? "h-dvh max-h-dvh overflow-hidden"
+          : "min-h-screen",
+      ].join(" ")}
+    >
       <CrmHeader
         onRefresh={load}
         loading={loading}
@@ -1305,13 +1326,13 @@ export function CrmShell() {
 
         <main
           className={[
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-auto",
-            tab === "leaderboard"
-              ? "px-0 py-0"
-              : "px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
+            "flex min-h-0 min-w-0 flex-1 flex-col",
+            tab === "leaderboard" || tab === "voice_ai"
+              ? "overflow-hidden px-0 py-0"
+              : "overflow-auto px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
           ].join(" ")}
         >
-        {tab !== "leaderboard" ? (
+        {tab !== "leaderboard" && tab !== "voice_ai" ? (
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -1347,7 +1368,7 @@ export function CrmShell() {
         </div>
         ) : null}
 
-        {error && tab !== "leaderboard" && (
+        {error && tab !== "leaderboard" && tab !== "voice_ai" && (
           <div className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
             {error}
           </div>
@@ -1358,7 +1379,9 @@ export function CrmShell() {
             "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
             tab === "leaderboard"
               ? "border-0 bg-black"
-              : "border border-line bg-white",
+              : tab === "voice_ai"
+                ? "border-0 bg-wash"
+                : "border border-line bg-white",
           ].join(" ")}
         >
           {userRol === "installateur" ? (
@@ -1373,7 +1396,14 @@ export function CrmShell() {
             </div>
           ) : (
             <>
-          <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+          <div
+            className={[
+              "min-h-0 min-w-0 flex-1",
+              tab === "voice_ai" || tab === "leaderboard"
+                ? "overflow-hidden"
+                : "overflow-auto",
+            ].join(" ")}
+          >
             {(!sessionReady || !userRol) && !sessionUser ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : loading &&
@@ -1388,6 +1418,7 @@ export function CrmShell() {
               tab !== "adviseurs" &&
               tab !== "purchasing" &&
               tab !== "ai" &&
+              tab !== "voice_ai" &&
               tab !== "netto" &&
               tab !== "leaderboard" &&
               tab !== "instroom" ? (
@@ -1577,10 +1608,12 @@ export function CrmShell() {
                     />
                   ))}
                 {tab === "inkomend" && <InkomendPanel />}
+                {tab === "inbox" && <InboxPanel />}
                 {tab === "purchasing" && <PurchasingPanel />}
                 {tab === "rapportage" && (
                   <RapportagePanel />
                 )}
+                {tab === "voice_ai" && <VoiceAiPanel />}
                 {tab === "adviseurs" &&
                   (userRol === "backoffice" ? (
                     <AdviseursContactLijst adviseurs={adviseurs} />

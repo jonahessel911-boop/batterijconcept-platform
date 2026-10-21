@@ -66,6 +66,7 @@ export {
   buildDashboardV2Vandaag,
   type DashboardV2Vandaag,
   type VandaagAfspraakRow,
+  type VandaagSaleRoute,
   type VandaagVerkoperRow,
   type VandaagRaw,
 } from "./vandaag";

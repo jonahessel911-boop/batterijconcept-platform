@@ -22,6 +22,7 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
   geen_interesse_al_batterij: "Geen interesse — heeft al een batterij",
   geen_interesse_plugin: "Geen interesse — interesse in een plugin batterij",
   geen_interesse_alleen_info: "Geen interesse — wilde alleen informatie",
+  geen_interesse_vertrouwt_niet: "Geen interesse — vertrouwt niet",
   geen_contact: "Geen contact",
   deal: "Deal",
   sale_financiering: "Sale met financiering",
@@ -54,10 +55,11 @@ export const BEL_UITKOMSTEN: LeadStatus[] = [
   "geen_interesse_al_batterij",
   "geen_interesse_plugin",
   "geen_interesse_alleen_info",
+  "geen_interesse_vertrouwt_niet",
   "geen_interesse",
 ];
 
-/** Geen-interesse (generiek + subredenen uit Bel). */
+/** Geen-interesse (generiek + subredenen uit Bel / herplan). */
 export function isGeenInteresseStatus(
   status: string | null | undefined
 ): boolean {
@@ -65,7 +67,8 @@ export function isGeenInteresseStatus(
     status === "geen_interesse" ||
     status === "geen_interesse_al_batterij" ||
     status === "geen_interesse_plugin" ||
-    status === "geen_interesse_alleen_info"
+    status === "geen_interesse_alleen_info" ||
+    status === "geen_interesse_vertrouwt_niet"
   );
 }
 
@@ -103,6 +106,7 @@ export const LEAD_STATUS_GROUPS: {
       "geen_interesse_al_batterij",
       "geen_interesse_plugin",
       "geen_interesse_alleen_info",
+      "geen_interesse_vertrouwt_niet",
       "geen_interesse",
       "geen_contact",
       "huurwoning",
@@ -198,7 +202,7 @@ export const serviceVerzoekStatusLabel: Record<ServiceVerzoekStatus, string> = {
 export const afspraakStatusLabel: Record<AfspraakStatus, string> = {
   gepland: "Gepland",
   bevestigd: "Bevestigd",
-  verzet: "Verzet",
+  verzet: "Afspraak verzet",
   geannuleerd: "Geannuleerd",
   voltooid: "Voltooid",
 };
@@ -246,6 +250,8 @@ export function statusTone(
       geen_interesse_plugin:
         "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
       geen_interesse_alleen_info:
+        "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
+      geen_interesse_vertrouwt_niet:
         "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
       geen_contact: "border border-[#37474F]/30 bg-[#ECEFF1] text-[#37474F]",
       deal: "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
@@ -491,6 +497,7 @@ function afboekAgendaAccent(
     case "geen_interesse_al_batterij":
     case "geen_interesse_plugin":
     case "geen_interesse_alleen_info":
+    case "geen_interesse_vertrouwt_niet":
     case "offerte_afgewezen":
       return {
         bar: "bg-[#C62828]",

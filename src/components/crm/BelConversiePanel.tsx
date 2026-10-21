@@ -7,6 +7,7 @@ import type {
   BelConversieTargets,
 } from "@/lib/bel-conversie";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
+import { normalizeLeadSource } from "@/lib/lead-conversie";
 
 /** Netto (niet-geannuleerde) huisbezoeken × dit bedrag. */
 const EURO_PER_NETTO_AFSPRAAK = 10;
@@ -446,10 +447,14 @@ export function BelConversiePanel() {
                 doorstreept
               </p>
             </div>
-            <table className="w-full min-w-[780px] text-left text-sm">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead>
                 <tr className="border-b border-line text-[10px] uppercase tracking-wide text-muted">
                   <th className="px-4 py-2.5 font-semibold">Lead</th>
+                  <th className="px-3 py-2.5 font-semibold">Source</th>
+                  <th className="px-3 py-2.5 font-semibold">Lander</th>
+                  <th className="px-3 py-2.5 font-semibold">Campagne</th>
+                  <th className="px-3 py-2.5 font-semibold">Ad</th>
                   <th className="px-3 py-2.5 font-semibold">Ingepland door</th>
                   <th className="px-3 py-2.5 font-semibold">Provincie</th>
                   <th className="px-3 py-2.5 font-semibold">Adviseur</th>
@@ -465,102 +470,98 @@ export function BelConversiePanel() {
                 {afspraken.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={10}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Nog geen huisbezoeken ingepland in deze periode.
                     </td>
                   </tr>
                 ) : (
-                  afspraken.map((a) => (
-                    <tr
-                      key={a.id}
-                      className={[
-                        "border-b border-line/70 last:border-0",
-                        a.geannuleerd
-                          ? "bg-[#FAFAFA] text-muted"
-                          : "hover:bg-wash/50",
-                      ].join(" ")}
-                    >
-                      <td
+                  afspraken.map((a) => {
+                    const source = normalizeLeadSource({
+                      bron: a.bron,
+                      utm_source: a.utmSource,
+                      lander: a.lander,
+                    });
+                    const muted = a.geannuleerd
+                      ? "line-through text-muted"
+                      : "text-ink";
+                    return (
+                      <tr
+                        key={a.id}
                         className={[
-                          "px-4 py-2.5",
-                          a.geannuleerd ? "line-through" : "text-ink",
-                        ].join(" ")}
-                      >
-                        {a.leadId ? (
-                          <Link
-                            href={`/leads/${a.leadId}?afspraak=${a.id}`}
-                            className="font-medium text-ink hover:text-green-dark hover:underline"
-                          >
-                            {a.leadNaam}
-                          </Link>
-                        ) : (
-                          <span className="font-medium">{a.leadNaam}</span>
-                        )}
-                        {a.geannuleerd ? (
-                          <span className="ml-2 inline-block no-underline text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
-                            Geannuleerd
-                          </span>
-                        ) : null}
-                        {a.leadNumber ? (
-                          <span className="mt-0.5 block text-xs text-muted no-underline">
-                            {a.leadNumber}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td
-                        className={[
-                          "px-3 py-2.5",
+                          "border-b border-line/70 last:border-0",
                           a.geannuleerd
-                            ? "line-through text-muted"
-                            : "text-ink",
+                            ? "bg-[#FAFAFA] text-muted"
+                            : "hover:bg-wash/50",
                         ].join(" ")}
                       >
-                        {a.bellerNaam || "—"}
-                      </td>
-                      <td
-                        className={[
-                          "px-3 py-2.5",
-                          a.geannuleerd
-                            ? "line-through text-muted"
-                            : "text-ink",
-                        ].join(" ")}
-                      >
-                        {a.provincie || "—"}
-                      </td>
-                      <td
-                        className={[
-                          "px-3 py-2.5",
-                          a.geannuleerd
-                            ? "line-through text-muted"
-                            : "text-ink",
-                        ].join(" ")}
-                      >
-                        {a.adviseurNaam || "—"}
-                      </td>
-                      <td
-                        className={[
-                          "px-3 py-2.5 tabular-nums",
-                          a.geannuleerd
-                            ? "line-through text-muted"
-                            : "text-ink",
-                        ].join(" ")}
-                      >
-                        {formatDateTimeNl(a.ingeplandAt)}
-                      </td>
-                      <td
-                        className={[
-                          "px-4 py-2.5 tabular-nums",
-                          a.geannuleerd
-                            ? "line-through text-muted"
-                            : "text-ink",
-                        ].join(" ")}
-                      >
-                        {formatDateTimeNl(a.afspraakAt)}
-                      </td>
-                    </tr>
-                  ))
+                        <td
+                          className={[
+                            "px-4 py-2.5",
+                            a.geannuleerd ? "line-through" : "text-ink",
+                          ].join(" ")}
+                        >
+                          {a.leadId ? (
+                            <Link
+                              href={`/leads/${a.leadId}?afspraak=${a.id}`}
+                              className="font-medium text-ink hover:text-green-dark hover:underline"
+                            >
+                              {a.leadNaam}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{a.leadNaam}</span>
+                          )}
+                          {a.geannuleerd ? (
+                            <span className="ml-2 inline-block no-underline text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                              Geannuleerd
+                            </span>
+                          ) : null}
+                          {a.leadNumber ? (
+                            <span className="mt-0.5 block text-xs text-muted no-underline">
+                              {a.leadNumber}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className={`max-w-[7rem] truncate px-3 py-2.5 text-xs ${muted}`}>
+                          {source}
+                        </td>
+                        <td
+                          className={`max-w-[7rem] truncate px-3 py-2.5 text-xs ${muted}`}
+                          title={a.lander || undefined}
+                        >
+                          {a.lander || "—"}
+                        </td>
+                        <td
+                          className={`max-w-[8rem] truncate px-3 py-2.5 text-xs ${muted}`}
+                          title={a.campaignName || undefined}
+                        >
+                          {a.campaignName || "—"}
+                        </td>
+                        <td
+                          className={`max-w-[8rem] truncate px-3 py-2.5 text-xs ${muted}`}
+                          title={a.adName || undefined}
+                        >
+                          {a.adName || "—"}
+                        </td>
+                        <td className={`px-3 py-2.5 ${muted}`}>
+                          {a.bellerNaam || "—"}
+                        </td>
+                        <td className={`px-3 py-2.5 ${muted}`}>
+                          {a.provincie || "—"}
+                        </td>
+                        <td className={`px-3 py-2.5 ${muted}`}>
+                          {a.adviseurNaam || "—"}
+                        </td>
+                        <td className={`px-3 py-2.5 tabular-nums ${muted}`}>
+                          {formatDateTimeNl(a.ingeplandAt)}
+                        </td>
+                        <td className={`px-4 py-2.5 tabular-nums ${muted}`}>
+                          {formatDateTimeNl(a.afspraakAt)}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

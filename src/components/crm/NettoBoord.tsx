@@ -723,7 +723,9 @@ function DetailDrawer({
                   <div className="flex justify-between gap-3">
                     <dt className="text-muted">
                       Verwachte commissie (
-                      {Math.round(NETTO_COMMISSIE_PCT * 100)}%)
+                      {row.commissie_pct ??
+                        Math.round(NETTO_COMMISSIE_PCT * 100)}
+                      %)
                     </dt>
                     <dd className="font-semibold tabular-nums text-ink">
                       {formatEuro(row.commissie_verwacht)}
@@ -1152,7 +1154,8 @@ function DetailDrawer({
             </p>
           ) : (
             <p className="mt-1 text-xs text-muted">
-              10% van {formatEuro(row.bedrag_ex_btw)} · A{" "}
+              {row.commissie_pct ?? Math.round(NETTO_COMMISSIE_PCT * 100)}% van{" "}
+              {formatEuro(row.bedrag_ex_btw)} · A{" "}
               {row.commissie_tranche_a_triggered
                 ? formatEuro(row.commissie_tranche_a)
                 : "—"}{" "}
