@@ -423,7 +423,7 @@ export function magWoensdagVersturen(cf: {
 }
 
 /**
- * Rest-commissie (tranche B = 10% omzet ex − tranche A) bij installatie voltooid.
+ * Rest-commissie (tranche B = adviseur-% omzet ex − tranche A) bij installatie voltooid.
  * Maakt concept; versturen gebeurt woensdag via `runWoensdagCommissieBatch`.
  */
 export async function ensureAdviseurCommissieTrancheB(

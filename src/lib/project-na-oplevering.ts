@@ -128,6 +128,66 @@ export async function maybeAdvanceProjectNaOplevering(
     console.error("ensureAdviseurCommissieTrancheB:", e);
   }
 
+  // Eigen middelen: 50% restantfactuur ná installatie
+  try {
+    const { ensureRestantDraftFactuur } = await import(
+      "@/lib/ensure-btw-factuur"
+    );
+    const { isWarmtefondsSale } = await import("@/lib/backoffice-acties");
+    const { data: full } = await sb
+      .from("projecten")
+      .select(
+        "id, lead_id, project_nummer, betaalwijze, offerte_id, leads(status), offertes(id, offerte_nummer, totaal_inc_btw, subtotaal_ex_btw, financiering_voorbehoud)"
+      )
+      .eq("id", projectId)
+      .maybeSingle();
+    if (full) {
+      const lead = Array.isArray(full.leads) ? full.leads[0] : full.leads;
+      const off = Array.isArray(full.offertes)
+        ? full.offertes[0]
+        : full.offertes;
+      const warmtefonds =
+        full.betaalwijze === "warmtefonds"
+          ? true
+          : full.betaalwijze === "eigen_middelen"
+            ? false
+            : isWarmtefondsSale({
+                leadStatus: (lead as { status?: string | null } | null)?.status,
+                financieringVoorbehoud: (
+                  off as { financiering_voorbehoud?: boolean | null } | null
+                )?.financiering_voorbehoud,
+              });
+      const offerteId =
+        (off as { id?: string } | null)?.id ||
+        (full.offerte_id as string | null);
+      if (!warmtefonds && offerteId && full.lead_id) {
+        await ensureRestantDraftFactuur(sb, {
+          offerteId,
+          leadId: full.lead_id as string,
+          projectId,
+          offerteNummer:
+            (off as { offerte_nummer?: string } | null)?.offerte_nummer ||
+            (full.project_nummer as string) ||
+            "order",
+          orderIncBtw:
+            Number(
+              (off as { totaal_inc_btw?: number | null } | null)?.totaal_inc_btw
+            ) || 0,
+          orderExBtw:
+            (off as { subtotaal_ex_btw?: number | null } | null)
+              ?.subtotaal_ex_btw != null
+              ? Number(
+                  (off as { subtotaal_ex_btw?: number | null }).subtotaal_ex_btw
+                )
+              : null,
+          warmtefonds: false,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("ensureRestantDraftFactuur (eigen middelen):", e);
+  }
+
   await ensureOpleveringAfrondTaken(sb, projectId, to);
 
   return {

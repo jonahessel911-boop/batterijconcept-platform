@@ -94,6 +94,11 @@ export async function ensureProjectForOfferte(
     if (defaultBackofficeId && !existing.verantwoordelijke_id) {
       patch.verantwoordelijke_id = defaultBackofficeId;
     }
+    // Sale-type syncen (eigen middelen ↔ Warmtefonds)
+    patch.betaalwijze = betaalwijze;
+    if (aanbetalingTeInnen != null) {
+      patch.aanbetaling_te_innen_inc = aanbetalingTeInnen;
+    }
     if (Object.keys(patch).length > 0) {
       await sb.from("projecten").update(patch).eq("id", existing.id);
     }

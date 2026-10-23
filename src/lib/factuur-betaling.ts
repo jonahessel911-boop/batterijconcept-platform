@@ -175,17 +175,36 @@ export function factuurBtwBuckets(factuur: {
   return empty;
 }
 
-/** Verzonden + na vervaldatum + niet betaald → rood / nabellen. */
+/**
+ * Effectieve deadline voor “verlopen” / nabellen:
+ * later van vervaldatum en afgesproken_betaaldatum (als gezet).
+ * Zo blijft een klantbelofte (bijv. 20ste i.p.v. verval 19de) rustig tot die dag.
+ */
+export function factuurEffectieveDeadline(opts: {
+  vervaldatum?: string | null;
+  afgesproken_betaaldatum?: string | null;
+}): string | null {
+  const verval = opts.vervaldatum?.slice(0, 10) || null;
+  const afspraak = opts.afgesproken_betaaldatum?.slice(0, 10) || null;
+  if (verval && afspraak) return afspraak > verval ? afspraak : verval;
+  return afspraak || verval;
+}
+
+/** Verzonden + na effectieve deadline + niet betaald → rood / nabellen. */
 export function factuurIsOverdue(opts: {
   status: string;
   vervaldatum?: string | null;
+  afgesproken_betaaldatum?: string | null;
   betaald_op?: string | null;
+  credit_van_factuur_id?: string | null;
   now?: Date;
 }): boolean {
+  if (opts.credit_van_factuur_id) return false;
   if (opts.status === "betaald" || opts.betaald_op) return false;
   if (!factuurIsOpenstaand(opts.status)) return false;
-  if (!opts.vervaldatum) return false;
-  const end = vervaldatumEndOfDay(opts.vervaldatum);
+  const deadline = factuurEffectieveDeadline(opts);
+  if (!deadline) return false;
+  const end = vervaldatumEndOfDay(deadline);
   return end.getTime() < (opts.now || new Date()).getTime();
 }
 

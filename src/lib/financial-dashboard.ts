@@ -18,6 +18,7 @@ import {
 } from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import {
+  commissiePctToFraction,
   commissieTrancheA,
   commissieTrancheB,
 } from "@/lib/netto-boord";
@@ -1124,8 +1125,12 @@ export function buildFreeCashflow(
           factuurIsBetaald(f.status, f.betaald_op) &&
           isAanbetalingFactuurOmschrijving(f.omschrijving)
       );
-      const trancheA = commissieTrancheA(omzetEx);
-      const trancheB = commissieTrancheB(omzetEx);
+      const salesAdvId = o.adviseur_id || project?.adviseur_id || null;
+      const salesPct =
+        salesAdvId && commissieMap ? commissieMap.get(salesAdvId) : undefined;
+      const trancheA = commissieTrancheA(omzetEx, salesPct);
+      const trancheB = commissieTrancheB(omzetEx, salesPct);
+      const salesPctLabel = Math.round(commissiePctToFraction(salesPct) * 100);
 
       function pushSales(
         bedrag: number,
@@ -1186,7 +1191,7 @@ export function buildFreeCashflow(
           doneAt,
           `Commissie rest · ${oLabel}`,
           "Woensdag na installatie voltooid",
-          `Tranche B · 10% − €${trancheA}`
+          `Tranche B · ${salesPctLabel}% − €${trancheA}`
         );
       }
     }

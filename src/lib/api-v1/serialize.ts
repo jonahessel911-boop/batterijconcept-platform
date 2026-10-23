@@ -6,8 +6,15 @@ import {
 import { round2 } from "@/lib/management-dashboard/periods";
 
 export function serializeFactuur(f: Factuur) {
-  const openstaand = factuurIsOpenstaand(f.status);
-  const overdue = factuurIsOverdue(f);
+  const isCredit = Boolean(f.credit_van_factuur_id);
+  const openstaand = !isCredit && factuurIsOpenstaand(f.status);
+  const overdue = factuurIsOverdue({
+    status: f.status,
+    vervaldatum: f.vervaldatum,
+    afgesproken_betaaldatum: f.afgesproken_betaaldatum,
+    betaald_op: f.betaald_op,
+    credit_van_factuur_id: f.credit_van_factuur_id,
+  });
   return {
     id: f.id,
     factuur_nummer: f.factuur_nummer,
@@ -22,6 +29,7 @@ export function serializeFactuur(f: Factuur) {
     factuurdatum: f.factuurdatum,
     vervaldatum: f.vervaldatum,
     betaald_op: f.betaald_op,
+    afgesproken_betaaldatum: f.afgesproken_betaaldatum ?? null,
     notities: f.notities,
     credit_van_factuur_id: f.credit_van_factuur_id ?? null,
     openstaand,
@@ -46,7 +54,9 @@ export function serializeProject(
   }
 ) {
   const facturen = extra?.facturen || [];
-  const open = facturen.filter((f) => factuurIsOpenstaand(f.status));
+  const open = facturen.filter(
+    (f) => !f.credit_van_factuur_id && factuurIsOpenstaand(f.status)
+  );
   const openstaandBedrag = round2(
     open.reduce((s, f) => s + (Number(f.bedrag_inc_btw) || 0), 0)
   );
@@ -96,8 +106,18 @@ export function serializeProject(
 }
 
 export function openstaandFromFacturen(facturen: Factuur[]) {
-  const open = facturen.filter((f) => factuurIsOpenstaand(f.status));
-  const overdue = open.filter((f) => factuurIsOverdue(f));
+  const open = facturen.filter(
+    (f) => !f.credit_van_factuur_id && factuurIsOpenstaand(f.status)
+  );
+  const overdue = open.filter((f) =>
+    factuurIsOverdue({
+      status: f.status,
+      vervaldatum: f.vervaldatum,
+      afgesproken_betaaldatum: f.afgesproken_betaaldatum,
+      betaald_op: f.betaald_op,
+      credit_van_factuur_id: f.credit_van_factuur_id,
+    })
+  );
   return {
     openstaand_aantal: open.length,
     openstaand_bedrag: round2(

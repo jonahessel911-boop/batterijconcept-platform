@@ -120,10 +120,18 @@ function ActionCard({
           }),
         }
       );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Versturen mislukt");
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        messageId?: string;
+        to?: string;
+      };
+      if (!res.ok || !data.messageId) {
+        throw new Error(
+          data.error || "Versturen mislukt — mail is niet verzonden"
+        );
+      }
       setDone(true);
-      onDone(`Mail verstuurd naar ${draft.klant}.`);
+      onDone(`Mail verstuurd naar ${data.to || draft.to || draft.klant}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Mislukt");
     } finally {

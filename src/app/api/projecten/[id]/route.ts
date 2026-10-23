@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
-import type { Betaalwijze, ProjectStatus } from "@/types/database";
+import type { Betaalwijze, Project, ProjectStatus } from "@/types/database";
 import { PROJECT_STATUSES, projectStatusLabel } from "@/lib/labels";
 import {
   FINANCIERING_STATUS_LABEL,
@@ -627,6 +627,58 @@ export async function PATCH(
         await ensureAdviseurCommissieTrancheB(sb, id);
       } catch (e) {
         console.error("ensureAdviseurCommissieTrancheB:", e);
+      }
+      // Eigen middelen: 50% restantfactuur ná installatie
+      try {
+        const { ensureRestantDraftFactuur } = await import(
+          "@/lib/ensure-btw-factuur"
+        );
+        const { isWarmtefondsProject } = await import(
+          "@/lib/backoffice-acties"
+        );
+        const projectRow = data as Project & {
+          offertes?:
+            | {
+                id?: string;
+                offerte_nummer?: string;
+                totaal_inc_btw?: number | null;
+                subtotaal_ex_btw?: number | null;
+              }
+            | {
+                id?: string;
+                offerte_nummer?: string;
+                totaal_inc_btw?: number | null;
+                subtotaal_ex_btw?: number | null;
+              }[]
+            | null;
+        };
+        if (!isWarmtefondsProject(projectRow)) {
+          const off = Array.isArray(projectRow.offertes)
+            ? projectRow.offertes[0]
+            : projectRow.offertes;
+          const offerteId =
+            (off?.id as string | undefined) ||
+            (projectRow.offerte_id as string | undefined);
+          if (offerteId && projectRow.lead_id) {
+            await ensureRestantDraftFactuur(sb, {
+              offerteId,
+              leadId: projectRow.lead_id as string,
+              projectId: id,
+              offerteNummer:
+                (off?.offerte_nummer as string | undefined) ||
+                (projectRow.project_nummer as string) ||
+                "order",
+              orderIncBtw: Number(off?.totaal_inc_btw) || 0,
+              orderExBtw:
+                off?.subtotaal_ex_btw != null
+                  ? Number(off.subtotaal_ex_btw)
+                  : null,
+              warmtefonds: false,
+            });
+          }
+        }
+      } catch (e) {
+        console.error("ensureRestantDraftFactuur (eigen middelen):", e);
       }
     }
 

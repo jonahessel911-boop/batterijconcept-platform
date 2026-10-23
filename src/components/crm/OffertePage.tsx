@@ -20,6 +20,7 @@ import {
 import { isKortingRegel, kortingIncVanRegels } from "@/lib/offerte-regels";
 import {
   aanbetalingVanOrder,
+  EIGEN_MIDDELEN_AANBETALING_MODUS,
   normalizeAanbetalingModus,
   parseEuroInput,
   type AanbetalingModus,
@@ -236,7 +237,9 @@ export function OffertePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actie_required: !markComplete,
-          aanbetaling_modus: isWarmtefonds ? aanbetalingModus : null,
+          aanbetaling_modus: isWarmtefonds
+            ? aanbetalingModus
+            : EIGEN_MIDDELEN_AANBETALING_MODUS,
           aanbetaling_bedrag_inc:
             isWarmtefonds && aanbetalingModus === "handmatig"
               ? parseEuroInput(aanbetalingHandmatig)

@@ -494,13 +494,13 @@ function formatTimeRangeNl(
   return `${start}–${formatTimeNl(endAtFromStart(at, duurMinuten))}`;
 }
 
-/** Maand-chip hoogte ~ evenredig aan duur (schouw 30m klein, installatie 3u groot). */
+/** Maand-chip hoogte ~ evenredig aan duur (schouw 30m klein, installatie 4u groot). */
 function monthChipHeightPx(duurMinuten: number): number {
   const minH = 44;
   const maxH = 132;
   if (duurMinuten <= 0) return minH;
-  // 30 min → minH, 180 min → maxH
-  const t = (Math.min(Math.max(duurMinuten, 30), 180) - 30) / 150;
+  // 30 min → minH, 240 min → maxH
+  const t = (Math.min(Math.max(duurMinuten, 30), 240) - 30) / 210;
   return Math.round(minH + t * (maxH - minH));
 }
 

@@ -1,6 +1,6 @@
 /** Vaste duur op het planbord / installateursagenda. */
 export const SCHOUW_DUUR_MINUTEN = 30;
-export const INSTALLATIE_DUUR_MINUTEN = 180; // 3 uur
+export const INSTALLATIE_DUUR_MINUTEN = 240; // 4 uur (middagvenster 13–17)
 export const SERVICE_DUUR_MINUTEN = 60; // 1 uur
 export const LEVERING_DUUR_MINUTEN = 60; // 1 uur (ochtend-slot)
 

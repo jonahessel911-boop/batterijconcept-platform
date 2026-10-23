@@ -500,6 +500,13 @@ export function InstellingenPanel({
             partnerDraft.factuur_postcode?.toString().trim() || null,
           factuur_plaats: partnerDraft.factuur_plaats?.toString().trim() || null,
           iban: partnerDraft.iban?.toString().trim().toUpperCase() || null,
+          start_adres: partnerDraft.start_adres?.toString().trim() || null,
+          reistijd_buffer_min:
+            typeof partnerDraft.reistijd_buffer_min === "number"
+              ? partnerDraft.reistijd_buffer_min
+              : partnerDraft.reistijd_buffer_min != null
+                ? Number(partnerDraft.reistijd_buffer_min)
+                : 30,
         }),
       });
       const data = await res.json();
@@ -1286,6 +1293,49 @@ export function InstellingenPanel({
                 className={inputCls}
               />
             </Field>
+            <div className="sm:col-span-2">
+              <FormSection
+                title="Startadres & agenda"
+                hint="Vertrekpunt voor reistijd bij schouw/installatie · ochtend 09–12 / middag 13–17"
+              >
+                <div className="sm:col-span-2">
+                  <StartAdresPostcodeField
+                    value={partnerDraft.start_adres || ""}
+                    onChange={(next) =>
+                      setPartnerDraft((d) => ({ ...d, start_adres: next }))
+                    }
+                    inputClassName={inputCls}
+                  />
+                </div>
+                <Field label="Reistijd-buffer (min)">
+                  <input
+                    type="number"
+                    min={0}
+                    max={180}
+                    value={
+                      partnerDraft.reistijd_buffer_min != null
+                        ? String(partnerDraft.reistijd_buffer_min)
+                        : "30"
+                    }
+                    onChange={(e) =>
+                      setPartnerDraft((d) => ({
+                        ...d,
+                        reistijd_buffer_min: Number(e.target.value) || 0,
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </Field>
+                <div className="sm:col-span-2">
+                  <a
+                    href={`/?tab=agenda&partner_agenda=${encodeURIComponent(selectedPartner.id)}`}
+                    className="text-sm font-medium text-green-dark underline-offset-2 hover:underline"
+                  >
+                    Partner-agenda openen (afblokken)
+                  </a>
+                </div>
+              </FormSection>
+            </div>
             <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                 Status

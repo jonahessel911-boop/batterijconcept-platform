@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import {
-  isHardGeblokkeerdSlot,
   isSlotHour,
-  isZondagAmsterdam,
+  isStandaardGeblokkeerdSlot,
   magStandaardSlotOntblokken,
 } from "@/lib/adviseur-beschikbaarheid";
 
@@ -162,25 +161,14 @@ export async function POST(req: NextRequest) {
   }
 
   const geblokkeerd = body.geblokkeerd !== false;
-
-  if (isHardGeblokkeerdSlot(dag, slot_hour, adviseur_id)) {
-    return NextResponse.json(
-      {
-        error:
-          "Maandag 10:00 is standaard geblokkeerd (weekmeeting) en kan niet worden geopend.",
-      },
-      { status: 400 }
-    );
-  }
+  const isStandaard = isStandaardGeblokkeerdSlot(dag, slot_hour, adviseur_id);
 
   try {
     const sb = getSupabaseAdmin();
 
-    // Zondag: standaard dicht → openen = vrijgave; dichtzetten = vrijgave weg
-    if (
-      isZondagAmsterdam(dag) &&
-      magStandaardSlotOntblokken(dag, slot_hour, adviseur_id)
-    ) {
+    // Standaard dicht (zondag / maandag 10 weekmeeting) → openen = vrijgave
+    if (isStandaard && magStandaardSlotOntblokken(dag, slot_hour, adviseur_id)) {
+      const slotLabel = `${String(slot_hour).padStart(2, "0")}:00`;
       if (!geblokkeerd) {
         const { data, error } = await sb
           .from("adviseur_slot_vrijgaven")
@@ -207,7 +195,7 @@ export async function POST(req: NextRequest) {
           item: data,
           geblokkeerd: false,
           vrijgave: true,
-          message: `Zondag ${String(slot_hour).padStart(2, "0")}:00 weer open`,
+          message: `${dag} ${slotLabel} weer open`,
         });
       }
 
@@ -233,7 +221,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         geblokkeerd: true,
         vrijgave: false,
-        message: `Zondag ${String(slot_hour).padStart(2, "0")}:00 weer geblokkeerd`,
+        message: `${dag} ${slotLabel} weer geblokkeerd`,
       });
     }
 

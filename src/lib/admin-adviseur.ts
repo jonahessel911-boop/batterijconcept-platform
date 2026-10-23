@@ -114,31 +114,58 @@ export function findAdminAdviseurId(
   return byName?.id ?? null;
 }
 
-/** Standaard backoffice-medewerker op nieuwe projecten. */
-export function defaultBackofficeEmail(): string {
-  return (
-    process.env.DEFAULT_BACKOFFICE_EMAIL || "jona@batterijconcept.nl"
-  ).toLowerCase();
+/**
+ * Standaard backoffice-medewerker op nieuwe projecten.
+ * Override via DEFAULT_BACKOFFICE_EMAIL; anders Tarik (naam-match).
+ */
+export function defaultBackofficeEmail(): string | null {
+  const raw = process.env.DEFAULT_BACKOFFICE_EMAIL?.trim();
+  return raw ? raw.toLowerCase() : null;
 }
 
-/** Zoekt Jona Hessel (of DEFAULT_BACKOFFICE_EMAIL) als project-verantwoordelijke. */
+/** Zoekt Tarik (of DEFAULT_BACKOFFICE_EMAIL) als project-verantwoordelijke. */
 export async function getDefaultBackofficeMedewerkerId(
   sb: SupabaseClient
 ): Promise<string | null> {
   const email = defaultBackofficeEmail();
-  const { data: byEmail } = await sb
-    .from("adviseurs")
-    .select("id")
-    .ilike("email", email)
-    .limit(1)
-    .maybeSingle();
-  if (byEmail?.id) return byEmail.id;
+  if (email) {
+    const { data: byEmail } = await sb
+      .from("adviseurs")
+      .select("id")
+      .ilike("email", email)
+      .limit(1)
+      .maybeSingle();
+    if (byEmail?.id) return byEmail.id;
+  }
 
-  const { data: byName } = await sb
+  const { data: rows } = await sb
     .from("adviseurs")
-    .select("id")
-    .ilike("naam", "%jona%hessel%")
-    .limit(1)
-    .maybeSingle();
-  return byName?.id ?? null;
+    .select("id, naam")
+    .eq("actief", true);
+  const tarik = (rows || []).find((r) => {
+    const n = String(r.naam || "")
+      .trim()
+      .toLowerCase();
+    return n === "tarik" || n.startsWith("tarik ");
+  });
+  return tarik?.id ?? null;
+}
+
+/** Client-side: Tarik (of DEFAULT_BACKOFFICE_EMAIL) uit geladen adviseurslijst. */
+export function findDefaultBackofficeMedewerkerId(
+  adviseurs: { id: string; naam: string; email?: string | null; actief?: boolean | null }[]
+): string | null {
+  const email = defaultBackofficeEmail();
+  if (email) {
+    const byEmail = adviseurs.find(
+      (a) => a.email?.trim().toLowerCase() === email
+    );
+    if (byEmail) return byEmail.id;
+  }
+  const tarik = adviseurs.find((a) => {
+    if (a.actief === false) return false;
+    const n = a.naam.trim().toLowerCase();
+    return n === "tarik" || n.startsWith("tarik ");
+  });
+  return tarik?.id ?? null;
 }

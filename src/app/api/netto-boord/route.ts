@@ -217,11 +217,16 @@ export async function GET(req: NextRequest) {
       : { data: [] as { project_id: string; omschrijving: string | null; created_at: string }[] };
 
     const projectByOfferte = new Map<string, ProjectRow>();
-    const projectByLead = new Map<string, ProjectRow>();
     for (const p of (projecten || []) as ProjectRow[]) {
-      if (p.offerte_id) projectByOfferte.set(p.offerte_id, p);
-      if (p.lead_id && !projectByLead.has(p.lead_id)) {
-        projectByLead.set(p.lead_id, p);
+      if (!p.offerte_id) continue;
+      const prev = projectByOfferte.get(p.offerte_id);
+      // Annulering wint: die status mag niet “verdwijnen” achter een ouder project
+      if (
+        !prev ||
+        normalizeProjectStatus(p.status) === "annulering" ||
+        normalizeProjectStatus(prev.status) !== "annulering"
+      ) {
+        projectByOfferte.set(p.offerte_id, p);
       }
     }
 
@@ -332,17 +337,20 @@ export async function GET(req: NextRequest) {
     }
 
     const adviseursMap = new Map<string, string>();
-    const commissiePctByAdviseur = new Map<string, number>();
+    /** Ruwe adviseur.commissie_pct uit DB (bijv. 12 of 0.12) — niet display-%. */
+    const commissiePctByAdviseur = new Map<string, number | null>();
     {
       const advIds = [
         ...new Set(
-          (offertes || [])
-            .map((o) => {
+          [
+            ...(offertes || []).map((o) => {
               const leadRaw = o.leads as LeadJoin | LeadJoin[] | null;
               const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
               return lead?.adviseur_id || null;
-            })
-            .filter((id): id is string => Boolean(id))
+            }),
+            // Gefilterde / ingelogde adviseur altijd meenemen (ook zonder deals)
+            adviseurFilter || null,
+          ].filter((id): id is string => Boolean(id))
         ),
       ];
       if (advIds.length) {
@@ -357,10 +365,11 @@ export async function GET(req: NextRequest) {
             commissie_pct?: number | null;
           };
           adviseursMap.set(row.id, row.naam);
-          commissiePctByAdviseur.set(
-            row.id,
-            Math.round(commissiePctToFraction(row.commissie_pct) * 100)
-          );
+          const raw =
+            row.commissie_pct != null && Number.isFinite(Number(row.commissie_pct))
+              ? Number(row.commissie_pct)
+              : null;
+          commissiePctByAdviseur.set(row.id, raw);
         }
       }
     }
@@ -381,14 +390,20 @@ export async function GET(req: NextRequest) {
       if (adviseurId && adviseurNaam) {
         adviseursMap.set(adviseurId, adviseurNaam);
       }
-      const commissiePct =
-        (adviseurId ? commissiePctByAdviseur.get(adviseurId) : null) ??
-        Math.round(commissiePctToFraction(adv?.commissie_pct) * 100);
+      const rawCommissiePct =
+        (adviseurId && commissiePctByAdviseur.has(adviseurId)
+          ? commissiePctByAdviseur.get(adviseurId)
+          : undefined) ??
+        (adv?.commissie_pct != null && Number.isFinite(Number(adv.commissie_pct))
+          ? Number(adv.commissie_pct)
+          : null);
+      const commissiePct = Math.round(
+        commissiePctToFraction(rawCommissiePct) * 100
+      );
 
-      const project =
-        projectByOfferte.get(o.id as string) ||
-        projectByLead.get(lead.id) ||
-        undefined;
+      // Alleen project dat aan deze offerte hangt — geen lead-fallback
+      // (voorkomt dat een annulering van deal A een deal B “mee-annuleert”).
+      const project = projectByOfferte.get(o.id as string) || undefined;
       const geannuleerd = isNettoGeannuleerd({
         projectStatus: project?.status,
         offerteStatus: o.status as string,
@@ -467,6 +482,9 @@ export async function GET(req: NextRequest) {
       const projStatus = project
         ? normalizeProjectStatus(project.status)
         : null;
+      // Annulering: geen voortgang/commissie in het netto-pad
+      const progressDone = geannuleerd ? 0 : progress.done;
+      const progressPct = geannuleerd ? 0 : progress.pct;
       const installatieVoltooid =
         projStatus === "installatie_voltooid" ||
         projStatus === "review_gevraagd" ||
@@ -479,7 +497,8 @@ export async function GET(req: NextRequest) {
           Boolean(restBetaald) ||
           installatieVoltooid ||
           projStatus === "restfactuur_betaald",
-        commissiePct,
+        // Ruwe DB-waarde (12 of 0.12) — niet het display-%
+        commissiePct: rawCommissiePct,
       });
 
       const offNr = (o.offerte_nummer as string | null) || null;
@@ -568,9 +587,9 @@ export async function GET(req: NextRequest) {
         commissie_tranche_b_triggered: commissie.tranche_b_triggered,
         commissie_verdiend: commissie.verdiend,
         fases,
-        progress_done: progress.done,
+        progress_done: progressDone,
         progress_total: progress.total,
-        progress_pct: progress.pct,
+        progress_pct: progressPct,
         offerte_nummer: (o.offerte_nummer as string | null) || null,
         project_nummer: project?.project_nummer || null,
         project_status: projStatus,
@@ -603,35 +622,45 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const annuleringenCount = scoped.filter((r) => r.geannuleerd).length;
+    const annuleringenCount = scoped.filter(
+      (r) => r.geannuleerd || r.board_status === "geannuleerd"
+    ).length;
+    const actiefScoped = scoped.filter(
+      (r) => !r.geannuleerd && r.board_status !== "geannuleerd"
+    );
 
-    // Standaard ("alles"): annuleringen eruit — die horen niet in het Netto-overzicht.
-    // Filter "geannuleerd" = alleen annuleringen (label: Annulering door klant).
+    // Annuleringen horen NOOIT in actief/netto/"alles" — alleen via aparte status.
     let filtered = scoped;
     if (statusFilter === "netto") {
-      filtered = scoped.filter((r) => r.board_status === "netto");
+      filtered = actiefScoped.filter((r) => r.board_status === "netto");
     } else if (statusFilter === "actief") {
-      filtered = scoped.filter((r) => r.board_status === "actief");
+      filtered = actiefScoped.filter((r) => r.board_status === "actief");
     } else if (statusFilter === "geannuleerd") {
-      filtered = scoped.filter((r) => r.board_status === "geannuleerd");
+      filtered = scoped.filter(
+        (r) => r.geannuleerd || r.board_status === "geannuleerd"
+      );
     } else {
-      // alles → actief + netto, géén annulering
-      filtered = scoped.filter((r) => r.board_status !== "geannuleerd");
+      // alles → alleen actief + netto
+      filtered = actiefScoped;
     }
 
-    const actiefRows = filtered.filter((r) => !r.geannuleerd);
+    // Commissie nooit uit annuleringen; bij filter “geannuleerd” omzet ter info, commissie 0
+    const commissieRows =
+      statusFilter === "geannuleerd"
+        ? []
+        : filtered.filter((r) => !r.geannuleerd);
     const totals = {
-      aantal: actiefRows.length,
-      omzet_ex_btw: round2(actiefRows.reduce((s, r) => s + r.bedrag_ex_btw, 0)),
+      aantal: filtered.length,
+      omzet_ex_btw: round2(filtered.reduce((s, r) => s + r.bedrag_ex_btw, 0)),
       commissie_verwacht: round2(
-        actiefRows.reduce((s, r) => s + r.commissie_verwacht, 0)
+        commissieRows.reduce((s, r) => s + r.commissie_verwacht, 0)
       ),
       commissie_verdiend: round2(
-        actiefRows.reduce((s, r) => s + r.commissie_verdiend, 0)
+        commissieRows.reduce((s, r) => s + r.commissie_verdiend, 0)
       ),
       geannuleerd: annuleringenCount,
-      netto: scoped.filter((r) => r.board_status === "netto").length,
-      actief: scoped.filter((r) => r.board_status === "actief").length,
+      netto: actiefScoped.filter((r) => r.board_status === "netto").length,
+      actief: actiefScoped.filter((r) => r.board_status === "actief").length,
     };
 
     const adviseurs = [...adviseursMap.entries()]

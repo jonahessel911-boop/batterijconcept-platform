@@ -223,9 +223,10 @@ export function ProjectKickoffChecklist({
       }
 
       const email = lead?.email?.trim();
+      const facLabel = wf ? "BTW-factuur" : "50%-aanbetaling";
       if (
         !confirm(
-          `BTW-factuur${nummer ? ` ${nummer}` : ""} mailen${
+          `${facLabel}${nummer ? ` ${nummer}` : ""} mailen${
             email ? ` naar ${email}` : " naar de klant"
           }?`
         )
@@ -245,7 +246,7 @@ export function ProjectKickoffChecklist({
         );
       }
       setActionHint(
-        `BTW-factuur${nummer ? ` ${nummer}` : ""} verstuurd.`
+        `${facLabel}${nummer ? ` ${nummer}` : ""} verstuurd.`
       );
       onFacturenChanged?.();
     } catch (e) {

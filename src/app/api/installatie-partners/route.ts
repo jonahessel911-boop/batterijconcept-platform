@@ -7,9 +7,11 @@ import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 export const runtime = "nodejs";
 
 const PUBLIC_FIELDS =
-  "id, naam, email, telefoon, actief, portal_token, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, portal_token, start_adres, reistijd_buffer_min, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, created_at, updated_at";
 const PUBLIC_FIELDS_FALLBACK =
   "id, naam, email, telefoon, actief, portal_token, created_at, updated_at";
+const PUBLIC_FIELDS_NO_AGENDA =
+  "id, naam, email, telefoon, actief, portal_token, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, created_at, updated_at";
 
 function isMissingGoogleCols(error: SbError): boolean {
   if (!error?.message) return false;
@@ -33,6 +35,14 @@ function isMissingCompanyCols(error: SbError): boolean {
   );
 }
 
+function isMissingAgendaCols(error: SbError): boolean {
+  if (!error?.message) return false;
+  return (
+    error.code === "42703" ||
+    /start_adres|reistijd_buffer_min|schema cache/i.test(error.message)
+  );
+}
+
 /** GET /api/installatie-partners */
 export async function GET(req: NextRequest) {
   try {
@@ -49,23 +59,29 @@ export async function GET(req: NextRequest) {
     }
 
     let { data, error } = await query;
-    if (error && (isMissingCompanyCols(error) || isMissingGoogleCols(error))) {
+    if (
+      error &&
+      (isMissingAgendaCols(error) ||
+        isMissingCompanyCols(error) ||
+        isMissingGoogleCols(error))
+    ) {
+      const selectFields = isMissingCompanyCols(error)
+        ? PUBLIC_FIELDS_FALLBACK
+        : isMissingAgendaCols(error)
+          ? PUBLIC_FIELDS_NO_AGENDA
+          : PUBLIC_FIELDS.replace(
+              ", google_connected_email, google_connected_at",
+              ""
+            );
       let q2 = sb
         .from("installatie_partners")
-        .select(
-          isMissingCompanyCols(error)
-            ? PUBLIC_FIELDS_FALLBACK
-            : PUBLIC_FIELDS.replace(
-                ", google_connected_email, google_connected_at",
-                ""
-              )
-        )
+        .select(selectFields)
         .order("naam");
       if (!includeInactive) q2 = q2.eq("actief", true);
       const retry = await q2;
       data = (retry.data || null) as typeof data;
       error = retry.error;
-      if (error && isMissingCompanyCols(error)) {
+      if (error && (isMissingCompanyCols(error) || isMissingAgendaCols(error))) {
         let q3 = sb
           .from("installatie_partners")
           .select(PUBLIC_FIELDS_FALLBACK)
@@ -182,6 +198,8 @@ export async function PATCH(req: NextRequest) {
     telefoon?: string | null;
     actief?: boolean;
     regenerate_token?: boolean;
+    start_adres?: string | null;
+    reistijd_buffer_min?: number | null;
     bedrijfsnaam?: string | null;
     kvk_nummer?: string | null;
     btw_nummer?: string | null;
@@ -217,6 +235,17 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.regenerate_token) {
       patch.portal_token = randomBytes(24).toString("hex");
+    }
+    if (body.start_adres !== undefined) {
+      patch.start_adres =
+        typeof body.start_adres === "string"
+          ? body.start_adres.trim() || null
+          : null;
+    }
+    if (body.reistijd_buffer_min !== undefined) {
+      const n = Number(body.reistijd_buffer_min);
+      patch.reistijd_buffer_min =
+        Number.isFinite(n) && n >= 0 ? Math.round(n) : 30;
     }
 
     const companyKeys = [
@@ -255,10 +284,31 @@ export async function PATCH(req: NextRequest) {
       .select(PUBLIC_FIELDS)
       .single();
 
-    if (error && isMissingCompanyCols(error)) {
+    if (error && (isMissingCompanyCols(error) || isMissingAgendaCols(error))) {
+      if (
+        isMissingAgendaCols(error) &&
+        (patch.start_adres !== undefined ||
+          patch.reistijd_buffer_min !== undefined)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-partner-agenda.sql uit in Supabase",
+          },
+          { status: 503 }
+        );
+      }
       // Probeer zonder bedrijfsvelden als migratie nog niet is gedraaid
       const basePatch: Record<string, unknown> = {};
-      for (const k of ["naam", "email", "telefoon", "actief", "portal_token"]) {
+      for (const k of [
+        "naam",
+        "email",
+        "telefoon",
+        "actief",
+        "portal_token",
+        "start_adres",
+        "reistijd_buffer_min",
+      ]) {
         if (k in patch) basePatch[k] = patch[k];
       }
       if (Object.keys(basePatch).length === 0) {
@@ -274,7 +324,11 @@ export async function PATCH(req: NextRequest) {
         .from("installatie_partners")
         .update(basePatch)
         .eq("id", body.id)
-        .select(PUBLIC_FIELDS_FALLBACK)
+        .select(
+          isMissingAgendaCols(error)
+            ? PUBLIC_FIELDS_FALLBACK
+            : PUBLIC_FIELDS_NO_AGENDA
+        )
         .single();
       data = (retry.data || null) as typeof data;
       error = retry.error;

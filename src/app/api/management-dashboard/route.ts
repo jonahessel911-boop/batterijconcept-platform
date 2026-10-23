@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
       sb
         .from("facturen")
         .select(
-          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, leads(adviseur_id)"
+          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, afgesproken_betaaldatum, leads(adviseur_id)"
         ),
       sb
         .from("rapportage_kosten")
@@ -226,22 +226,34 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const facturen = (facturenRes.error ? [] : facturenRes.data || []).map(
-      (f) => {
-        const lead = f.leads as { adviseur_id?: string | null } | null;
-        return {
-          id: f.id,
-          lead_id: f.lead_id,
-          status: f.status,
-          bedrag_ex_btw: Number(f.bedrag_ex_btw) || 0,
-          btw_bedrag: Number(f.btw_bedrag) || 0,
-          betaald_op: f.betaald_op as string | null,
-          factuurdatum: f.factuurdatum as string,
-          vervaldatum: (f.vervaldatum as string) || null,
-          adviseur_id: lead?.adviseur_id ?? null,
-        };
-      }
-    );
+    let facturenRows = facturenRes.error ? null : facturenRes.data;
+    if (facturenRes.error) {
+      const retry = await sb
+        .from("facturen")
+        .select(
+          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, leads(adviseur_id)"
+        );
+      if (retry.error) throw retry.error;
+      facturenRows = retry.data;
+    }
+
+    const facturen = (facturenRows || []).map((f) => {
+      const lead = f.leads as { adviseur_id?: string | null } | null;
+      return {
+        id: f.id,
+        lead_id: f.lead_id,
+        status: f.status,
+        bedrag_ex_btw: Number(f.bedrag_ex_btw) || 0,
+        btw_bedrag: Number(f.btw_bedrag) || 0,
+        betaald_op: f.betaald_op as string | null,
+        factuurdatum: f.factuurdatum as string,
+        vervaldatum: (f.vervaldatum as string) || null,
+        afgesproken_betaaldatum:
+          ((f as { afgesproken_betaaldatum?: string | null })
+            .afgesproken_betaaldatum as string) || null,
+        adviseur_id: lead?.adviseur_id ?? null,
+      };
+    });
 
     const kosten = (kostenRes.error ? [] : kostenRes.data || []).map((k) => ({
       datum: k.datum as string,

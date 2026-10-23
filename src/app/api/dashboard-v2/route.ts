@@ -175,7 +175,9 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
           .not("offerte_id", "is", null)
           .range(from, to)
       ),
-      sb.from("adviseurs").select("id, naam, email, actief, rol, startdatum"),
+      sb
+        .from("adviseurs")
+        .select("id, naam, email, actief, rol, startdatum, commissie_pct"),
     ]);
 
   if (adviseursRes.error) throw adviseursRes.error;
@@ -261,6 +263,11 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
     startdatum:
       ((a as { startdatum?: string | null }).startdatum as string | null) ||
       null,
+    commissie_pct:
+      (a as { commissie_pct?: number | null }).commissie_pct != null &&
+      Number.isFinite(Number((a as { commissie_pct?: number | null }).commissie_pct))
+        ? Number((a as { commissie_pct?: number | null }).commissie_pct)
+        : null,
   }));
 
   return {

@@ -16,7 +16,7 @@ import {
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { afspraakBlokkeertAgenda, isAfgeboekteFysiekeAfspraak, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { deltaPct, inIsoRange, round2, safeDiv } from "@/lib/management-dashboard/periods";
-import { NETTO_COMMISSIE_PCT } from "@/lib/netto-boord";
+import { commissiePctToFraction } from "@/lib/netto-boord";
 import {
   formatSchouwWeekLabel,
   parseSchouwWeekValue,
@@ -97,7 +97,14 @@ export type DashboardV2Raw = {
     /** true = Warmtefonds, false/null = eigen middelen (Buijv) */
     financiering_voorbehoud?: boolean | null;
   }[];
-  adviseurs: { id: string; naam: string; actief: boolean; rol: string | null }[];
+  adviseurs: {
+    id: string;
+    naam: string;
+    actief: boolean;
+    rol: string | null;
+    /** Adviseur.commissie_pct (bijv. 12 of 0.12) */
+    commissie_pct?: number | null;
+  }[];
 };
 
 export type Range = { start: Date; end: Date };
@@ -667,6 +674,8 @@ function metricsForAdviseur(
 
   const getekendTotaal = orders + annuleringen;
   const a2s = safeDiv(orders, afsprakenVoltooid);
+  const rawPct = raw.adviseurs.find((a) => a.id === adviseurId)?.commissie_pct;
+  const pctFrac = commissiePctToFraction(rawPct);
   return {
     omzet: round2(omzet),
     orders,
@@ -678,7 +687,7 @@ function metricsForAdviseur(
       getekendTotaal > 0
         ? round2((annuleringen / getekendTotaal) * 100)
         : null,
-    commissie: round2(omzet * NETTO_COMMISSIE_PCT),
+    commissie: round2(omzet * pctFrac),
   };
 }
 

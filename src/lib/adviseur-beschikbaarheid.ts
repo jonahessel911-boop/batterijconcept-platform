@@ -97,41 +97,37 @@ export function isMaandagTienAmsterdam(
 }
 
 /**
- * Hard geblokkeerd (niet te openen): maandag 10:00 weekmeeting.
- * Uitzondering: adviseurs die de ochtendmeeting overslaan (bijv. Marcel).
- * Zondag is standaard dicht maar mag via vrijgave open.
+ * Maandag 10:00 weekmeeting — standaard dicht (tenzij adviseur de meeting overslaat).
+ * Adviseurs mogen dit zelf openzetten via vrijgave (Afblokken), net als zondag.
+ * @deprecated Geen hard slot meer; gebruik `isStandaardGeblokkeerdSlot` + vrijgave.
  */
 export function isHardGeblokkeerdSlot(
-  dateOrDayKey: Date | string,
-  hour?: number,
-  adviseurId?: string | null
+  _dateOrDayKey: Date | string,
+  _hour?: number,
+  _adviseurId?: string | null
 ): boolean {
-  if (!isMaandagTienAmsterdam(dateOrDayKey, hour)) return false;
-  if (skipsMaandagOchtendmeeting(adviseurId)) return false;
-  return true;
+  return false;
 }
 
-/**
- * Standaard-geblokkeerd vóór vrijgave-check.
- * Zondag + maandag 10:00. Gebruik `isSlotGeblokkeerd` met vrijgaven voor effectieve status.
- */
+/** Standaard-dicht: zondag, of maandag 10:00 weekmeeting (tenzij adviseur overslaat). */
 export function isStandaardGeblokkeerdSlot(
   dateOrDayKey: Date | string,
   hour?: number,
   adviseurId?: string | null
 ): boolean {
   if (isZondagAmsterdam(dateOrDayKey)) return true;
-  return isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId);
+  if (!isMaandagTienAmsterdam(dateOrDayKey, hour)) return false;
+  if (skipsMaandagOchtendmeeting(adviseurId)) return false;
+  return true;
 }
 
-/** Mag dit standaard-slot via afblok-modus worden geopend? (alleen zondag). */
+/** Mag dit standaard-slot via afblok-modus worden geopend? (zondag + maandag 10:00). */
 export function magStandaardSlotOntblokken(
   dateOrDayKey: Date | string,
   hour?: number,
   adviseurId?: string | null
 ): boolean {
-  if (isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId)) return false;
-  return isZondagAmsterdam(dateOrDayKey);
+  return isStandaardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId);
 }
 
 export function standaardBlokkadeLabel(
@@ -139,18 +135,21 @@ export function standaardBlokkadeLabel(
   hour?: number,
   adviseurId?: string | null
 ): string | null {
-  if (isHardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId)) {
-    return "Maandag 10:00 is standaard geblokkeerd (weekmeeting)";
+  if (
+    isMaandagTienAmsterdam(dateOrDayKey, hour) &&
+    !skipsMaandagOchtendmeeting(adviseurId)
+  ) {
+    return "Maandag 10:00 is standaard geblokkeerd (weekmeeting) — open via Afblokken";
   }
   if (isZondagAmsterdam(dateOrDayKey)) {
-    return "Zondag is standaard geblokkeerd";
+    return "Zondag is standaard geblokkeerd — open via Afblokken";
   }
   return null;
 }
 
 /**
- * Effectieve blokkade: hard (ma 10) → altijd dicht;
- * zondag → dicht tenzij vrijgegeven;
+ * Effectieve blokkade:
+ * standaard (zondag / ma 10) → dicht tenzij vrijgegeven;
  * overige → alleen via afblokkingen-set.
  */
 export function isSlotGeblokkeerd(
@@ -160,9 +159,8 @@ export function isSlotGeblokkeerd(
   afblokkingen: Set<string>,
   vrijgaven: Set<string> = new Set()
 ): boolean {
-  if (isHardGeblokkeerdSlot(dayKey, hour, adviseurId)) return true;
   const key = afblokKey(adviseurId, dayKey, hour);
-  if (isZondagAmsterdam(dayKey)) {
+  if (isStandaardGeblokkeerdSlot(dayKey, hour, adviseurId)) {
     return !vrijgaven.has(key);
   }
   return afblokkingen.has(key);
@@ -309,12 +307,11 @@ export async function isSlotAfgeblokt(
   adviseurId: string,
   startAt: Date
 ): Promise<boolean> {
-  if (isHardGeblokkeerdSlot(startAt, undefined, adviseurId)) return true;
-
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);
 
-  if (isZondagAmsterdam(startAt)) {
+  // Zondag / maandag 10: standaard dicht tenzij vrijgegeven
+  if (isStandaardGeblokkeerdSlot(startAt, hour, adviseurId)) {
     const { data, error } = await sb
       .from("adviseur_slot_vrijgaven")
       .select("id")
@@ -346,7 +343,7 @@ export async function isSlotAfgeblokt(
 
 /**
  * Filter slots die als tijdsblok zijn afgeblokt
- * (ma 10 hard, zondag tenzij vrijgegeven, overige via afblokkingen).
+ * (zondag / ma 10 tenzij vrijgegeven, overige via afblokkingen).
  */
 export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
   slots: T[],

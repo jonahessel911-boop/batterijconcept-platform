@@ -6,6 +6,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol, gebruikerRolLabel } from "@/lib/rollen";
 import { sendEmail } from "@/lib/email/postmark";
 import { klantContactEmail } from "@/lib/email/templates";
+import { formatReplyTo } from "@/lib/email/adviseur-reply-to";
 import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
@@ -88,8 +89,10 @@ export async function POST(
       rol === "admin" ? "Backoffice" : gebruikerRolLabel[rol] || "Backoffice";
     const medewerkerNaam =
       adviseur?.naam?.trim() || session.naam || "Batterijconcept";
-    const medewerkerEmail =
-      adviseur?.email?.trim() || session.email?.trim() || null;
+    const replyTo = formatReplyTo(
+      adviseur?.email?.trim() || session.email?.trim() || null,
+      medewerkerNaam
+    );
 
     const html = klantContactEmail({
       klantNaam,
@@ -98,17 +101,41 @@ export async function POST(
       medewerkerNaam,
     });
 
+    // Kopie naar info@ zodat we altijd kunnen bewijzen dat de mail uitging
+    // (tenzij de klant zelf al info@ is).
+    const bcc =
+      to.toLowerCase() === "info@batterijconcept.nl"
+        ? null
+        : "info@batterijconcept.nl";
+
     const result = await sendEmail({
       to,
       subject,
       html,
       tag: "project-klant-contact",
-      replyTo: medewerkerEmail,
+      replyTo,
+      bcc,
     });
 
-    if (!result.ok) {
+    if (!result.ok || !result.messageId) {
+      if (lead?.id || project.lead_id) {
+        await logLeadEvent({
+          leadId: (lead?.id || project.lead_id) as string,
+          soort: "email",
+          titel: "Contactmail mislukt",
+          detail: result.error || "Mail versturen mislukt",
+          meta: {
+            to,
+            subject,
+            project_id: id,
+            ok: false,
+            by: medewerkerNaam,
+            reply_to: replyTo,
+          },
+        });
+      }
       return NextResponse.json(
-        { error: result.error || "Mail versturen mislukt" },
+        { error: result.error || "Mail versturen mislukt", sent: false },
         { status: 502 }
       );
     }
@@ -118,20 +145,27 @@ export async function POST(
         leadId: (lead?.id || project.lead_id) as string,
         soort: "email",
         titel: "Contactmail verstuurd",
-        detail: bericht,
+        detail: `Naar ${to}\n\n${bericht}`,
         meta: {
           to,
           subject,
           bericht,
           project_id: id,
-          message_id: result.messageId || null,
+          message_id: result.messageId,
           by: medewerkerNaam,
-          reply_to: medewerkerEmail,
+          reply_to: replyTo,
+          bcc,
+          ok: true,
         },
       });
     }
 
-    return NextResponse.json({ ok: true, messageId: result.messageId });
+    return NextResponse.json({
+      ok: true,
+      sent: true,
+      to,
+      messageId: result.messageId,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

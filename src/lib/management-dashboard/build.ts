@@ -107,7 +107,9 @@ export type MgmtFactuur = {
   betaald_op: string | null;
   factuurdatum: string;
   vervaldatum?: string | null;
+  afgesproken_betaaldatum?: string | null;
   adviseur_id: string | null;
+  credit_van_factuur_id?: string | null;
 };
 
 export type MgmtKosten = {
@@ -429,6 +431,7 @@ function computeAgg(
       agg.omzetGefactureerd += Number(f.bedrag_ex_btw) || 0;
     }
     if (
+      !f.credit_van_factuur_id &&
       !factuurIsBetaald(f.status, f.betaald_op) &&
       f.status !== "concept" &&
       f.status !== "vervallen"
@@ -1541,8 +1544,14 @@ function buildFinance(
     const ids: string[] = [];
     let bedrag = 0;
     for (const f of open) {
-      const due = f.vervaldatum
-        ? new Date(f.vervaldatum)
+      const deadline =
+        f.afgesproken_betaaldatum && f.vervaldatum
+          ? f.afgesproken_betaaldatum > f.vervaldatum
+            ? f.afgesproken_betaaldatum
+            : f.vervaldatum
+          : f.afgesproken_betaaldatum || f.vervaldatum || null;
+      const due = deadline
+        ? new Date(deadline)
         : addDays(
             new Date(f.factuurdatum),
             instellingen.verwachte_betaaltermijn_dagen
@@ -1582,8 +1591,14 @@ function buildFinance(
     const horizonEnd = addDays(now, horizonDays);
     const verwachteOntvangsten = open
       .filter((f) => {
-        const due = f.vervaldatum
-          ? new Date(f.vervaldatum)
+        const deadline =
+          f.afgesproken_betaaldatum && f.vervaldatum
+            ? f.afgesproken_betaaldatum > f.vervaldatum
+              ? f.afgesproken_betaaldatum
+              : f.vervaldatum
+            : f.afgesproken_betaaldatum || f.vervaldatum || null;
+        const due = deadline
+          ? new Date(deadline)
           : addDays(
               new Date(f.factuurdatum),
               instellingen.verwachte_betaaltermijn_dagen

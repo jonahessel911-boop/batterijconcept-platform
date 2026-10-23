@@ -110,13 +110,13 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
     case "schouwdag_ingepland":
       return "De schouwdag staat; zorg dat klant en installateur scherp staan.";
     case "schouw_voltooid":
-      return "Schouwformulier binnen. Check Financieel: is alles betaald? Zo ja → materiaal inkopen; zo nee → restfactuur.";
+      return "Schouwformulier binnen. Check Financieel: is alles betaald? Zo ja → installatie plannen; zo nee → restfactuur.";
     case "restfactuur_verstuurd":
-      return "Zonder betaling kunnen we materiaal niet veilig inkopen.";
+      return "Zonder betaling kunnen we niet veilig door naar installatie/inkoop.";
     case "restfactuur_betaald":
-      return "Alles betaald — volgende stap is materiaal inkopen/bestellen.";
+      return "Alles betaald — plan eerst de installatiedatum. Purchasing verschijnt daarna automatisch (5 werkdagen vóór installatie).";
     case "materiaal_besteld":
-      return "Zodra levering rond is, kan de installatie worden ingepland.";
+      return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in.";
     case "installatie_ingepland":
       return "Bevestig tijdig zodat klant en monteur niet voor verrassingen staan.";
     case "installatie_voltooid":

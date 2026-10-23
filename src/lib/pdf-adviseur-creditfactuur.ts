@@ -49,8 +49,10 @@ function stripRef(
 
 function defaultCommissieOmschrijving(notities: string | null): string {
   const n = notities || "";
-  if (/tranche_b|rest-commissie|rest commissie/i.test(n)) {
-    return "Commissie restant (10% omzet excl. btw − €250)";
+  const pctMatch = n.match(/(\d+(?:[.,]\d+)?)\s*%/);
+  const pctLabel = pctMatch ? pctMatch[1].replace(".", ",") : "10";
+  if (/tranche_b|rest-commissie|rest commissie|ref_offerte_tranche_b/i.test(n)) {
+    return `Commissie restant (${pctLabel}% omzet excl. btw − €250)`;
   }
   return "Commissie 1e deel (€250 excl. btw bij aanbetaling)";
 }

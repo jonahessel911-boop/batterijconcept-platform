@@ -12,6 +12,7 @@ import {
   schouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
+import { PartnerSlotPicker } from "@/components/crm/PartnerSlotPicker";
 
 type AfspraakSoort = "schouwweek" | "schouwdag" | "installatie" | "service";
 
@@ -145,13 +146,11 @@ export function ProjectAgendaAfspraakSection({
   const [schouwWeek, setSchouwWeek] = useState(() =>
     initialWeekValue(project)
   );
-  const [schouwAtLocal, setSchouwAtLocal] = useState(
-    isSchouwdagDefinitief(project)
-      ? toDatetimeLocalValue(project.schouw_at)
-      : ""
+  const [schouwAtIso, setSchouwAtIso] = useState<string | null>(
+    isSchouwdagDefinitief(project) ? project.schouw_at || null : null
   );
-  const [installatieAt, setInstallatieAt] = useState(
-    toDatetimeLocalValue(project.installatie_at)
+  const [installatieAtIso, setInstallatieAtIso] = useState<string | null>(
+    project.installatie_at || null
   );
   const [serviceAt, setServiceAt] = useState(
     toDatetimeLocalValue(project.service_at)
@@ -208,12 +207,10 @@ export function ProjectAgendaAfspraakSection({
 
   useEffect(() => {
     setSchouwWeek(initialWeekValue(project));
-    setSchouwAtLocal(
-      isSchouwdagDefinitief(project)
-        ? toDatetimeLocalValue(project.schouw_at)
-        : ""
+    setSchouwAtIso(
+      isSchouwdagDefinitief(project) ? project.schouw_at || null : null
     );
-    setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
+    setInstallatieAtIso(project.installatie_at || null);
     setServiceAt(toDatetimeLocalValue(project.service_at));
     if (project.installatie_partner_id) {
       setPartnerId(project.installatie_partner_id);
@@ -263,10 +260,10 @@ export function ProjectAgendaAfspraakSection({
         };
 
         if (soort === "schouwdag") {
-          if (!schouwAtLocal.trim()) {
-            throw new Error("Kies schouwdatum + tijd");
+          if (!schouwAtIso) {
+            throw new Error("Kies een schouw-slot");
           }
-          const parsed = new Date(schouwAtLocal);
+          const parsed = new Date(schouwAtIso);
           if (Number.isNaN(parsed.getTime())) {
             throw new Error("Ongeldige schouwdatum");
           }
@@ -339,10 +336,10 @@ export function ProjectAgendaAfspraakSection({
         return;
       }
 
-      if (!installatieAt.trim()) {
-        throw new Error("Kies installatiedatum + tijd");
+      if (!installatieAtIso) {
+        throw new Error("Kies een installatie-slot");
       }
-      const parsed = new Date(installatieAt);
+      const parsed = new Date(installatieAtIso);
       if (Number.isNaN(parsed.getTime())) {
         throw new Error("Ongeldige installatiedatum");
       }
@@ -506,29 +503,27 @@ export function ProjectAgendaAfspraakSection({
           ) : null}
 
           {soort === "schouwdag" ? (
-            <label className="block text-[10px] font-semibold uppercase text-muted">
-              Schouwdatum + tijd
-              <input
-                type="datetime-local"
-                required
-                value={schouwAtLocal}
-                onChange={(e) => setSchouwAtLocal(e.target.value)}
-                className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-              />
-            </label>
+            <PartnerSlotPicker
+              partnerId={partnerId}
+              soort="schouw"
+              leadId={project.lead_id}
+              excludeProjectId={project.id}
+              value={schouwAtIso}
+              onChange={setSchouwAtIso}
+              disabled={busy}
+            />
           ) : null}
 
           {soort === "installatie" ? (
-            <label className="block text-[10px] font-semibold uppercase text-muted">
-              Installatiedatum + tijd
-              <input
-                type="datetime-local"
-                required
-                value={installatieAt}
-                onChange={(e) => setInstallatieAt(e.target.value)}
-                className="mt-1 w-full border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-              />
-            </label>
+            <PartnerSlotPicker
+              partnerId={partnerId}
+              soort="installatie"
+              leadId={project.lead_id}
+              excludeProjectId={project.id}
+              value={installatieAtIso}
+              onChange={setInstallatieAtIso}
+              disabled={busy}
+            />
           ) : null}
 
           {soort === "service" ? (

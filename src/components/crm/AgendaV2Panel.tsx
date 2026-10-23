@@ -37,9 +37,7 @@ import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
 import {
   afblokKey,
   isBeforeStartdatum,
-  isHardGeblokkeerdSlot,
   isSlotGeblokkeerd,
-  isZondagAmsterdam,
   magStandaardSlotOntblokken,
   standaardBlokkadeLabel,
 } from "@/lib/adviseur-beschikbaarheid";
@@ -403,6 +401,10 @@ export function AgendaPanel({
   const [selectedDayKey, setSelectedDayKey] = useState(() =>
     dayKeyAmsterdam(new Date())
   );
+  /** Leads-tab: welke dag (standaard vandaag; › = morgen, enz.). */
+  const [leadsDayKey, setLeadsDayKey] = useState(() =>
+    dayKeyAmsterdam(new Date())
+  );
   const [calendarView, setCalendarView] = useState<"dag" | "week">("week");
   const [mainView, setMainView] = useState<"agenda" | "leads">("agenda");
   const slideRef = useRef<HTMLDivElement>(null);
@@ -425,7 +427,7 @@ export function AgendaPanel({
   /** Klik op Afblokken → modus aan; daarna tijdslots aan/uit blokkeren. */
   const [afblokMode, setAfblokMode] = useState(false);
   const [afblokkingen, setAfblokkingen] = useState<Set<string>>(new Set());
-  /** Zondag-vrijgaven: key = afblokKey → slot is open i.p.v. standaard dicht */
+  /** Standaard-vrijgaven (zondag / ma 10): key = afblokKey → slot is open */
   const [vrijgaven, setVrijgaven] = useState<Set<string>>(new Set());
 
   const todayKey = dayKeyAmsterdam(new Date());
@@ -541,14 +543,14 @@ export function AgendaPanel({
     return n;
   }, [showAdminSlots, planAdviseurs, slotStatsByAdviseur]);
 
-  /** Leads met een zichtbare agenda-afspraak vandaag (op starttijd). */
-  const leadsVandaag = useMemo(() => {
+  /** Leads met een zichtbare agenda-afspraak op de gekozen leads-dag. */
+  const leadsVoorDag = useMemo(() => {
     const visibleAdvIds = new Set(visibleAdviseurs.map((a) => a.id));
-    const todays = afspraken
+    const opDag = afspraken
       .filter((a) => {
         if (a.status === "geannuleerd") return false;
         if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
-        if (dayKeyAmsterdam(a.start_at) !== todayKey) return false;
+        if (dayKeyAmsterdam(a.start_at) !== leadsDayKey) return false;
         if (defaultAdviseurId && a.adviseur_id !== defaultAdviseurId) {
           return false;
         }
@@ -565,7 +567,7 @@ export function AgendaPanel({
     const byId = new Map(leads.map((l) => [l.id, l]));
     const seen = new Set<string>();
     const out: Lead[] = [];
-    for (const a of todays) {
+    for (const a of opDag) {
       if (seen.has(a.lead_id)) continue;
       seen.add(a.lead_id);
       const lead = byId.get(a.lead_id);
@@ -575,7 +577,7 @@ export function AgendaPanel({
   }, [
     afspraken,
     leads,
-    todayKey,
+    leadsDayKey,
     defaultAdviseurId,
     visibleAdviseurs,
   ]);
@@ -733,7 +735,7 @@ export function AgendaPanel({
     };
   }, [planAdviseurs, weekInfo.jaar]);
 
-  // Slot-afblokkingen + zondag-vrijgaven voor de zichtbare week
+  // Slot-afblokkingen + standaard-vrijgaven (zondag / ma 10) voor de zichtbare week
   useEffect(() => {
     const ids = planAdviseurs.map((a) => a.id);
     if (!ids.length || !days.length) {
@@ -815,21 +817,15 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ) {
-    if (isHardGeblokkeerdSlot(dayKey, hour, adviseurId)) {
-      setError(
-        `${standaardBlokkadeLabel(dayKey, hour, adviseurId) || "Dit slot"} kan niet worden geopend.`
-      );
-      return;
-    }
     const key = afblokKey(adviseurId, dayKey, hour);
     const currentlyBlocked = isSlotBlocked(adviseurId, dayKey, hour);
     const nextBlocked = !currentlyBlocked;
-    const isZondag = isZondagAmsterdam(dayKey);
+    const viaVrijgave = magStandaardSlotOntblokken(dayKey, hour, adviseurId);
     setBlockBusy(true);
     setError(null);
     setOkMsg(null);
     // Optimistic
-    if (isZondag) {
+    if (viaVrijgave) {
       setVrijgaven((prev) => {
         const copy = new Set(prev);
         if (nextBlocked) copy.delete(key); // dicht = geen vrijgave
@@ -865,7 +861,7 @@ export function AgendaPanel({
       );
     } catch (e) {
       // Rollback
-      if (isZondag) {
+      if (viaVrijgave) {
         setVrijgaven((prev) => {
           const copy = new Set(prev);
           if (currentlyBlocked) copy.delete(key);
@@ -951,17 +947,10 @@ export function AgendaPanel({
       return;
     }
     const row = SLOT_ROWS[slotIdx];
-    if (isHardGeblokkeerdSlot(dayKey, row.hour, adviseurId)) {
-      setError(
-        standaardBlokkadeLabel(dayKey, row.hour, adviseurId) ||
-          "Dit tijdslot is standaard geblokkeerd"
-      );
-      return;
-    }
     if (isSlotBlocked(adviseurId, dayKey, row.hour)) {
       setError(
-        isZondagAmsterdam(dayKey)
-          ? "Zondag is standaard geblokkeerd — open eerst via Afblokken"
+        magStandaardSlotOntblokken(dayKey, row.hour, adviseurId)
+          ? `${standaardBlokkadeLabel(dayKey, row.hour, adviseurId) || "Standaard geblokkeerd"} — open eerst via Afblokken`
           : "Dit tijdslot is afgeblokt"
       );
       return;
@@ -977,7 +966,13 @@ export function AgendaPanel({
   }
 
   const weekTitle = `Week ${weekInfo.week} — ${format(days[0].date, "d MMM.", { locale: nl })} t/m ${format(days[6].date, "d MMM. yyyy", { locale: nl })}`;
-  const leadsTitle = `Leads vandaag · ${formatInTimeZone(new Date(), AMSTERDAM_TZ, "EEEE d MMMM", { locale: nl })}`;
+  const leadsDayDate = fromZonedTime(`${leadsDayKey}T12:00:00`, AMSTERDAM_TZ);
+  const leadsIsToday = leadsDayKey === todayKey;
+  const leadsDayLabel = format(leadsDayDate, "EEEE d MMMM", { locale: nl });
+  const leadsTitle = leadsIsToday
+    ? `Leads vandaag · ${leadsDayLabel}`
+    : `Leads · ${leadsDayLabel}`;
+  const gridCols = `72px repeat(${visibleAdviseurs.length}, minmax(160px, 1fr))`;
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col bg-white">
@@ -1006,10 +1001,10 @@ export function AgendaPanel({
                 : "text-muted hover:text-ink",
             ].join(" ")}
           >
-            Leads vandaag
-            {leadsVandaag.length > 0 ? (
+            {leadsIsToday ? "Leads vandaag" : "Leads"}
+            {leadsVoorDag.length > 0 ? (
               <span className="ml-1.5 tabular-nums opacity-80">
-                ({leadsVandaag.length})
+                ({leadsVoorDag.length})
               </span>
             ) : null}
           </button>
@@ -1047,11 +1042,64 @@ export function AgendaPanel({
             </div>
             ) : (
               <p className="mt-1 text-sm text-muted">
-                Leads met een afspraak op de agenda vandaag — swipe of wissel van
-                tab.
+                Leads met een afspraak op deze dag — blader vooruit naar morgen
+                of later.
               </p>
             )}
           </div>
+
+          {mainView === "leads" ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                setLeadsDayKey(dayKeyAmsterdam(addDays(leadsDayDate, -1)))
+              }
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-line hover:bg-wash"
+              title="Vorige dag"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeadsDayKey(todayKey)}
+              className={[
+                "rounded-lg border px-3 py-1.5 text-xs font-semibold",
+                leadsIsToday
+                  ? "border-green bg-green-soft text-green-dark"
+                  : "border-line hover:bg-wash",
+              ].join(" ")}
+            >
+              Vandaag
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setLeadsDayKey(dayKeyAmsterdam(addDays(leadsDayDate, 1)))
+              }
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-line hover:bg-wash"
+              title="Volgende dag"
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setLeadsDayKey(
+                  dayKeyAmsterdam(
+                    addDays(
+                      fromZonedTime(`${todayKey}T12:00:00`, AMSTERDAM_TZ),
+                      1
+                    )
+                  )
+                )
+              }
+              className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
+            >
+              Morgen
+            </button>
+          </div>
+          ) : null}
 
           {mainView === "agenda" ? (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1250,14 +1298,12 @@ export function AgendaPanel({
           </p>
         ) : (
           <div className="min-w-max">
-            {/* Column headers */}
+            {/* Column headers — linker kolom sticky zodat dagen zichtbaar blijven bij scroll */}
             <div
-              className="sticky top-0 z-10 grid border-b border-line bg-white"
-              style={{
-                gridTemplateColumns: `72px repeat(${visibleAdviseurs.length}, minmax(160px, 1fr))`,
-              }}
+              className="sticky top-0 z-20 grid border-b border-line bg-white"
+              style={{ gridTemplateColumns: gridCols }}
             >
-              <div className="border-r border-line bg-[#FAFBFA]" />
+              <div className="sticky left-0 z-30 border-r border-line bg-[#FAFBFA]" />
               {visibleAdviseurs.map((a) => {
                 const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
                 const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
@@ -1287,18 +1333,32 @@ export function AgendaPanel({
 
             {visibleDays.map((day) => (
               <div key={day.key}>
-                <div className="border-b border-line bg-[#F3F4F6] px-3 py-1.5 text-xs font-semibold capitalize text-[#4B5563]">
-                  {format(day.date, "EEEE d MMM.", { locale: nl })}
+                <div
+                  className="grid border-b border-line bg-[#F3F4F6]"
+                  style={{ gridTemplateColumns: gridCols }}
+                >
+                  <div className="sticky left-0 z-10 flex items-center border-r border-line bg-[#F3F4F6] px-1.5 py-1.5">
+                    <span className="w-full text-center text-[10px] font-bold uppercase leading-tight tracking-wide text-[#4B5563]">
+                      {format(day.date, "EEE", { locale: nl })}
+                      <span className="mt-0.5 block text-[11px] font-semibold tabular-nums normal-case tracking-normal">
+                        {format(day.date, "d", { locale: nl })}
+                      </span>
+                    </span>
+                  </div>
+                  <div
+                    className="flex items-center px-3 py-1.5 text-xs font-semibold capitalize text-[#4B5563]"
+                    style={{ gridColumn: `2 / -1` }}
+                  >
+                    {format(day.date, "EEEE d MMM.", { locale: nl })}
+                  </div>
                 </div>
                 {SLOT_ROWS.map((row, slotIdx) => (
                   <div
                     key={`${day.key}-${row.label}`}
                     className="grid border-b border-line"
-                    style={{
-                      gridTemplateColumns: `72px repeat(${visibleAdviseurs.length}, minmax(160px, 1fr))`,
-                    }}
+                    style={{ gridTemplateColumns: gridCols }}
                   >
-                    <div className="flex items-start justify-end border-r border-line bg-[#FAFBFA] px-2 py-1.5 text-[10px] font-semibold tabular-nums text-muted">
+                    <div className="sticky left-0 z-10 flex items-start justify-end border-r border-line bg-[#FAFBFA] px-2 py-1.5 text-[10px] font-semibold tabular-nums text-muted">
                       {row.label}
                     </div>
                     {visibleAdviseurs.map((adv) => {
@@ -1327,54 +1387,56 @@ export function AgendaPanel({
                           {blocked && items.length === 0 ? (
                             <GeblokkeerdCell
                               onClick={
-                                isHardGeblokkeerdSlot(day.key, row.hour, adv.id)
+                                afblokMode && !blockBusy && !weekBlocked
                                   ? () =>
-                                      setError(
-                                        standaardBlokkadeLabel(
+                                      void toggleSlotAfblok(
+                                        adv.id,
+                                        day.key,
+                                        row.hour
+                                      )
+                                  : afblokMode && weekBlocked
+                                    ? () =>
+                                        setError(
+                                          "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                        )
+                                    : magStandaardSlotOntblokken(
                                           day.key,
                                           row.hour,
                                           adv.id
-                                        ) || "Standaard geblokkeerd"
-                                      )
-                                  : afblokMode && !blockBusy && !weekBlocked
-                                    ? () =>
-                                        void toggleSlotAfblok(
-                                          adv.id,
-                                          day.key,
-                                          row.hour
-                                        )
-                                    : afblokMode && weekBlocked
+                                        ) && !afblokMode
                                       ? () =>
                                           setError(
-                                            "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                            standaardBlokkadeLabel(
+                                              day.key,
+                                              row.hour,
+                                              adv.id
+                                            ) ||
+                                              "Standaard dicht — zet Afblokken aan om te openen"
                                           )
-                                      : magStandaardSlotOntblokken(
-                                            day.key,
-                                            row.hour,
-                                            adv.id
-                                          ) && !afblokMode
-                                        ? () =>
-                                            setError(
-                                              "Zondag is standaard dicht — zet Afblokken aan om te openen"
-                                            )
-                                        : undefined
+                                      : undefined
                               }
                               hint={
-                                isHardGeblokkeerdSlot(day.key, row.hour, adv.id)
-                                  ? standaardBlokkadeLabel(
-                                      day.key,
-                                      row.hour,
-                                      adv.id
-                                    ) || undefined
-                                  : afblokMode
-                                    ? slotBlocked
-                                      ? isZondagAmsterdam(day.key)
-                                        ? "Klik om zondag te openen"
-                                        : "Klik om dit slot weer te openen"
-                                      : "Week geblokkeerd"
-                                    : isZondagAmsterdam(day.key)
-                                      ? "Zondag · standaard dicht"
-                                      : undefined
+                                afblokMode
+                                  ? slotBlocked
+                                    ? magStandaardSlotOntblokken(
+                                        day.key,
+                                        row.hour,
+                                        adv.id
+                                      )
+                                      ? "Klik om standaard-blok te openen"
+                                      : "Klik om dit slot weer te openen"
+                                    : "Week geblokkeerd"
+                                  : magStandaardSlotOntblokken(
+                                        day.key,
+                                        row.hour,
+                                        adv.id
+                                      )
+                                    ? standaardBlokkadeLabel(
+                                        day.key,
+                                        row.hour,
+                                        adv.id
+                                      ) || "Standaard dicht"
+                                    : undefined
                               }
                             />
                           ) : items.length > 0 ? (
@@ -1447,19 +1509,22 @@ export function AgendaPanel({
         </div>
 
         <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-auto">
-          {leadsVandaag.length === 0 ? (
+          {leadsVoorDag.length === 0 ? (
             <div className="px-5 py-14 text-center">
               <p className="font-display text-base font-semibold text-ink">
-                Geen leads vandaag op de agenda
+                {leadsIsToday
+                  ? "Geen leads vandaag op de agenda"
+                  : `Geen leads op ${leadsDayLabel}`}
               </p>
               <p className="mt-1 text-sm text-muted">
-                Zodra er huisbezoeken of vervolgafspraken voor vandaag staan,
-                zie je ze hier in de leadtabel.
+                {leadsIsToday
+                  ? "Zodra er huisbezoeken of vervolgafspraken voor vandaag staan, zie je ze hier. Gebruik › of Morgen om vooruit te kijken."
+                  : "Geen huisbezoeken of vervolgafspraken op deze dag. Blader met ‹ › of spring naar Vandaag."}
               </p>
             </div>
           ) : (
             <LeadsTable
-              leads={leadsVandaag}
+              leads={leadsVoorDag}
               adviseurs={adviseurs}
               afspraken={afspraken}
               onStatusChange={onStatusChange}

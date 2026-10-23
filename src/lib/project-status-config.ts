@@ -194,15 +194,19 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "restfactuur_betaald",
-    label: "Restfactuur betaald — materiaal inkopen",
+    label: "Restfactuur betaald — installatie plannen",
     fase: "eindafrekening",
     scope: "beide",
     inPipeline: true,
+    /**
+     * Eerst installatiedatum zetten. Purchasing volgt daarna automatisch
+     * (Acties → Purchasing) met deadline = 5 werkdagen vóór installatie.
+     */
     taak: {
-      autoKeySuffix: "materiaal",
-      titel: "Materiaal inkopen / bestellen",
-      afdeling: "Installatie",
-      due: { kind: "days", days: 2 },
+      autoKeySuffix: "installatie",
+      titel: "Installatiedatum inplannen",
+      afdeling: "Planning",
+      due: { kind: "none" },
     },
   },
   {
@@ -211,6 +215,10 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "uitvoering",
     scope: "beide",
     inPipeline: true,
+    /**
+     * Als installatie nog niet gezet is (legacy), plan die nu.
+     * Anders volgt bevestigen via status installatie_ingepland.
+     */
     taak: {
       autoKeySuffix: "installatie",
       titel: "Installatiedatum inplannen",
@@ -369,11 +377,12 @@ export function resolveBetaalwijze(opts: {
   leadStatus?: string | null;
   financieringVoorbehoud?: boolean | null;
 }): Betaalwijze {
+  // Lead-sale-status wint (kan later wijzigen van WF ↔ EM)
+  if (opts.leadStatus === "sale_eigen_middelen") return "eigen_middelen";
+  if (opts.leadStatus === "sale_financiering") return "warmtefonds";
   if (opts.betaalwijze === "warmtefonds" || opts.betaalwijze === "eigen_middelen") {
     return opts.betaalwijze;
   }
-  if (opts.leadStatus === "sale_eigen_middelen") return "eigen_middelen";
-  if (opts.leadStatus === "sale_financiering") return "warmtefonds";
   if (opts.financieringVoorbehoud === false) return "eigen_middelen";
   if (opts.financieringVoorbehoud === true) return "warmtefonds";
   return "warmtefonds";

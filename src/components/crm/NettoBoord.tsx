@@ -147,7 +147,7 @@ function FaseCell({ fase }: { fase: NettoFase }) {
 }
 
 function StatusBadge({ row }: { row: NettoBoardRow }) {
-  if (row.board_status === "geannuleerd") {
+  if (row.board_status === "geannuleerd" || row.geannuleerd) {
     return (
       <div>
         <span className="inline-flex items-center rounded-full bg-[#f3e8e8] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[#9b3b3b]">
@@ -750,11 +750,19 @@ function DetailDrawer({
                             : "text-muted",
                         ].join(" ")}
                       >
-                        {row.commissie_tranche_a_triggered
-                          ? formatEuro(row.commissie_tranche_a)
-                          : "—"}
+                        {formatEuro(row.commissie_tranche_a)}
+                        {!row.commissie_tranche_a_triggered ? (
+                          <span className="ml-1 text-[11px] font-normal">
+                            open
+                          </span>
+                        ) : null}
                       </dd>
                     </div>
+                    {!row.commissie_tranche_a_triggered ? (
+                      <p className="mt-1 text-[11px] text-muted">
+                        Volgt zodra de aanbetaling is betaald.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex justify-between gap-3">
@@ -773,6 +781,12 @@ function DetailDrawer({
                       ].join(" ")}
                     >
                       {formatEuro(row.commissie_tranche_b)}
+                      {!row.commissie_tranche_b_triggered &&
+                      row.commissie_tranche_b > 0 ? (
+                        <span className="ml-1 text-[11px] font-normal">
+                          open
+                        </span>
+                      ) : null}
                     </dd>
                   </div>
                   {!row.commissie_tranche_b_triggered &&
@@ -1155,15 +1169,18 @@ function DetailDrawer({
           ) : (
             <p className="mt-1 text-xs text-muted">
               {row.commissie_pct ?? Math.round(NETTO_COMMISSIE_PCT * 100)}% van{" "}
-              {formatEuro(row.bedrag_ex_btw)} · A{" "}
-              {row.commissie_tranche_a_triggered
-                ? formatEuro(row.commissie_tranche_a)
-                : "—"}{" "}
-              + B{" "}
-              {row.commissie_tranche_b_triggered
-                ? formatEuro(row.commissie_tranche_b)
-                : formatEuro(row.commissie_tranche_b) + " open"}{" "}
-              · getriggerd {formatEuro(row.commissie_verdiend)}
+              {formatEuro(row.bedrag_ex_btw)}
+              {" · "}
+              A {formatEuro(row.commissie_tranche_a)}
+              {row.commissie_tranche_a_triggered ? "" : " open"}
+              {" + "}
+              B {formatEuro(row.commissie_tranche_b)}
+              {row.commissie_tranche_b_triggered ||
+              row.commissie_tranche_b <= 0
+                ? ""
+                : " open"}
+              {" · "}
+              getriggerd {formatEuro(row.commissie_verdiend)}
             </p>
           )}
         </div>
@@ -1242,9 +1259,14 @@ export function NettoBoord({
   );
 
   const agendaProjects = useMemo(() => {
-    if (!adviseurId) return projecten;
+    const base = projecten.filter((p) => {
+      const st = (p.status || "").toLowerCase();
+      // Annuleringen horen niet op het netto-planbord
+      return st !== "annulering" && st !== "geannuleerd";
+    });
+    if (!adviseurId) return base;
     // Altijd filteren op gekoppelde adviseur (ook bij lockAdviseur)
-    return projecten.filter((p) => projectAdviseurId(p) === adviseurId);
+    return base.filter((p) => projectAdviseurId(p) === adviseurId);
   }, [projecten, adviseurId]);
 
   return (
@@ -1345,10 +1367,12 @@ export function NettoBoord({
                 onChange={(e) => setStatus(e.target.value as StatusFilter)}
                 className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
               >
-                <option value="alles">Alles (zonder annulering)</option>
+                <option value="alles">Alles (actief + netto)</option>
                 <option value="actief">Actief</option>
                 <option value="netto">Netto</option>
-                <option value="geannuleerd">Annulering door klant</option>
+                <option value="geannuleerd">
+                  Annulering door klant (apart)
+                </option>
               </select>
             </div>
 
@@ -1378,40 +1402,79 @@ export function NettoBoord({
 
           {totals ? (
             <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-5">
-              {[
-                { label: "Deals", value: String(totals.aantal) },
-                {
-                  label: "Omzet ex btw",
-                  value: formatEuro(totals.omzet_ex_btw),
-                },
-                {
-                  label: "Commissie verwacht",
-                  value: formatEuro(totals.commissie_verwacht),
-                  accent: true,
-                },
-                {
-                  label: "Getriggerd (€250)",
-                  value: formatEuro(totals.commissie_verdiend),
-                },
-                {
-                  label: "Annulering klant",
-                  value: String(totals.geannuleerd),
-                },
-              ].map((kpi) => (
-                <div key={kpi.label} className="bg-white px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    {kpi.label}
-                  </p>
-                  <p
+              {(
+                [
+                  { id: "deals", label: "Deals", value: String(totals.aantal) },
+                  {
+                    id: "omzet",
+                    label: "Omzet ex btw",
+                    value: formatEuro(totals.omzet_ex_btw),
+                  },
+                  {
+                    id: "commissie",
+                    label: "Commissie verwacht",
+                    value: formatEuro(totals.commissie_verwacht),
+                    accent: true,
+                  },
+                  {
+                    id: "getriggerd",
+                    label: "Getriggerd (€250)",
+                    value: formatEuro(totals.commissie_verdiend),
+                  },
+                  {
+                    id: "geannuleerd",
+                    label: "Annulering klant",
+                    value: String(totals.geannuleerd),
+                    filter: "geannuleerd" as StatusFilter,
+                  },
+                ] as const
+              ).map((kpi) => {
+                const clickable = "filter" in kpi && kpi.filter;
+                const active =
+                  clickable && status === (kpi as { filter: StatusFilter }).filter;
+                return (
+                  <button
+                    key={kpi.id}
+                    type="button"
+                    disabled={!clickable}
+                    onClick={() => {
+                      if (!clickable) return;
+                      const next = (kpi as { filter: StatusFilter }).filter;
+                      setStatus((prev) =>
+                        prev === next ? "alles" : next
+                      );
+                    }}
                     className={[
-                      "mt-0.5 font-display text-lg font-semibold tabular-nums",
-                      kpi.accent ? "text-green-deeper" : "text-ink",
+                      "bg-white px-4 py-3 text-left",
+                      clickable
+                        ? "cursor-pointer hover:bg-wash/80"
+                        : "cursor-default",
+                      active ? "ring-2 ring-inset ring-[#C45A12]/40" : "",
                     ].join(" ")}
                   >
-                    {kpi.value}
-                  </p>
-                </div>
-              ))}
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      {kpi.label}
+                      {clickable ? (
+                        <span className="ml-1 font-normal normal-case tracking-normal">
+                          {active ? "(filter aan)" : "(filter)"}
+                        </span>
+                      ) : null}
+                    </p>
+                    <p
+                      className={[
+                        "mt-0.5 font-display text-lg font-semibold tabular-nums",
+                        "accent" in kpi && kpi.accent
+                          ? "text-green-deeper"
+                          : clickable
+                            ? "text-[#9b3b3b]"
+                            : "text-ink",
+                      ].join(" ")}
+                    >
+                      {kpi.value}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
 

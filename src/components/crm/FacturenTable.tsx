@@ -415,6 +415,11 @@ export function FacturenTable({
                       {f.status === "betaald" && f.betaald_op
                         ? ` · Betaald ${formatDateShort(f.betaald_op)}`
                         : ""}
+                      {!overdue &&
+                      f.status !== "betaald" &&
+                      f.afgesproken_betaaldatum
+                        ? ` · Betaalt ${formatDateShort(f.afgesproken_betaaldatum)}`
+                        : ""}
                       {overdue ? " · Verlopen" : ""}
                     </p>
                   </button>
@@ -442,6 +447,7 @@ export function FacturenTable({
                   <th>BTW</th>
                   <th>Factuurdatum</th>
                   <th>Vervaldatum</th>
+                  <th>Betaaldatum</th>
                   <th>Betaald op</th>
                 </tr>
               </thead>
@@ -502,6 +508,11 @@ export function FacturenTable({
                       >
                         {formatDateShort(f.vervaldatum)}
                         {overdue ? " · Verlopen" : ""}
+                      </td>
+                      <td className="whitespace-nowrap text-muted">
+                        {f.afgesproken_betaaldatum
+                          ? formatDateShort(f.afgesproken_betaaldatum)
+                          : "—"}
                       </td>
                       <td
                         className={[

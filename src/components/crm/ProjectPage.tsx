@@ -21,6 +21,7 @@ import { nl } from "date-fns/locale";
 import { appendStampedNotitie, parseProjectNotitieEntries } from "@/lib/lead-notitie";
 import { openActiesVoorProject, isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
+import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { projectStatusLabel } from "@/lib/labels";
 import {
   formatProjectSchouwWeek,
@@ -56,11 +57,15 @@ import {
   kickoffWarmtefondsBedragen,
 } from "@/lib/project-kickoff";
 import {
+  aanbetalingVanOrder,
   isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
 import { KlantContactMailModal } from "./KlantContactMailModal";
-
-const BEDENKTIJD_DAGEN = 14;
+import {
+  AnnuleringBedenktijdModal,
+  type AnnuleringKeuze,
+} from "./AnnuleringBedenktijdModal";
+import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
 
 type FeedIcon =
   | "calendar"
@@ -257,30 +262,15 @@ function resolveOfferte(
   return Array.isArray(raw) ? raw[0] || null : raw;
 }
 
-function bedenktijdState(ondertekendOp: string | null | undefined): {
-  pct: number;
-  klaar: boolean;
-  startLabel: string;
-  eindLabel: string;
-  dagenOver: number;
-} | null {
-  if (!ondertekendOp) return null;
-  const start = new Date(ondertekendOp);
-  if (Number.isNaN(start.getTime())) return null;
-  const eind = new Date(start.getTime() + BEDENKTIJD_DAGEN * 24 * 60 * 60 * 1000);
-  const now = Date.now();
-  const span = eind.getTime() - start.getTime();
-  const pct = Math.min(1, Math.max(0, (now - start.getTime()) / span));
-  const klaar = now >= eind.getTime();
-  const dagenOver = klaar
-    ? 0
-    : Math.max(1, Math.ceil((eind.getTime() - now) / (24 * 60 * 60 * 1000)));
+function bedenktijdState(ondertekendOp: string | null | undefined) {
+  const info = bedenktijdVanOndertekening(ondertekendOp);
+  if (!info) return null;
   return {
-    pct,
-    klaar,
-    startLabel: formatDateShort(start),
-    eindLabel: formatDateShort(eind),
-    dagenOver,
+    pct: info.pct,
+    klaar: info.klaar,
+    startLabel: formatDateShort(info.start),
+    eindLabel: formatDateShort(info.eind),
+    dagenOver: info.dagenOver,
   };
 }
 
@@ -342,6 +332,10 @@ export function ProjectPage() {
   const [notFound, setNotFound] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
   const [annuleringsMailBusy, setAnnuleringsMailBusy] = useState(false);
+  /** Popup vóór annuleren of vóór (her)sturen annuleringsmail. */
+  const [annuleringModal, setAnnuleringModal] = useState<
+    null | "status" | "mail"
+  >(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -511,28 +505,37 @@ export function ProjectPage() {
     el.scrollTop = el.scrollHeight;
   }, [project?.id, project?.notities, facturen.length]);
 
-  async function verstuurAnnuleringsmail() {
+  async function verstuurAnnuleringsmail(keuze: AnnuleringKeuze) {
     if (!project || project.status !== "annulering") return;
+    if (!keuze.stuurMail) {
+      setAnnuleringModal(null);
+      return;
+    }
     setAnnuleringsMailBusy(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/projecten/${project.id}/annuleringsmail`,
-        { method: "POST" }
-      );
+      const res = await fetch(`/api/projecten/${project.id}/annuleringsmail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          binnenBedenktijd: keuze.binnenBedenktijd,
+        }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
           (data as { error?: string }).error || "Mailen mislukt"
         );
       }
+      const binnen = Boolean((data as { binnenBedenktijd?: boolean }).binnenBedenktijd);
       setOkMsg(
         `Annuleringsmail verstuurd${
           (data as { to?: string }).to
             ? ` naar ${(data as { to?: string }).to}`
             : ""
-        }.`
+        }${binnen ? " (geen annuleringskosten)" : " (met annuleringskosten)"}.`
       );
+      setAnnuleringModal(null);
       void refreshLeadEvents(project.lead_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Mailen mislukt");
@@ -541,14 +544,13 @@ export function ProjectPage() {
     }
   }
 
-  async function updateStatus(status: ProjectStatus) {
+  async function updateStatus(
+    status: ProjectStatus,
+    annulering?: AnnuleringKeuze
+  ) {
     if (!project) return;
-    if (
-      status === "annulering" &&
-      !window.confirm(
-        "Weet je zeker dat je deze order definitief wilt annuleren?\n\nDe klant krijgt niet automatisch een mail — die kun je daarna apart versturen."
-      )
-    ) {
+    if (status === "annulering" && !annulering) {
+      setAnnuleringModal("status");
       return;
     }
     setStatusSaving(true);
@@ -565,13 +567,44 @@ export function ProjectPage() {
       if (!res.ok) throw new Error((data as { error?: string }).error);
       const updated = (data as { project?: Project }).project;
       if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+
+      if (status === "annulering" && annulering?.stuurMail) {
+        const mailRes = await fetch(
+          `/api/projecten/${project.id}/annuleringsmail`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              binnenBedenktijd: annulering.binnenBedenktijd,
+            }),
+          }
+        );
+        const mailData = await mailRes.json().catch(() => ({}));
+        if (!mailRes.ok) {
+          setError(
+            (mailData as { error?: string }).error ||
+              "Status gezet, maar annuleringsmail mislukt"
+          );
+          setOkMsg("Order geannuleerd.");
+        } else {
+          setOkMsg(
+            `Order geannuleerd en mail verstuurd${
+              annulering.binnenBedenktijd
+                ? " (geen annuleringskosten)"
+                : " (met annuleringskosten)"
+            }.`
+          );
+        }
+      } else {
+        setOkMsg(
+          status === "annulering"
+            ? "Order geannuleerd."
+            : "Status bijgewerkt."
+        );
+      }
+
+      setAnnuleringModal(null);
       void refreshLeadEvents(project.lead_id);
-      setOkMsg(
-        status === "annulering"
-          ? "Order geannuleerd. Verstuur desgewenst de annuleringsmail via de knop."
-          : "Status bijgewerkt."
-      );
-      // Auto-taken herladen
       const takenRes = await fetch(`/api/taken?project_id=${project.id}&open=0`);
       const takenData = await takenRes.json().catch(() => ({}));
       if (takenRes.ok) setTaken((takenData.taken as ProjectTaak[]) || []);
@@ -2467,13 +2500,14 @@ export function ProjectPage() {
                     Order geannuleerd
                   </p>
                   <p className="mt-1 text-sm text-ink">
-                    De klant krijgt niet automatisch een mail. Verstuur desgewenst
-                    de annuleringsbevestiging.
+                    Verstuur desgewenst de annuleringsbevestiging. Je kiest eerst
+                    of de klant binnen of na de bedenktijd heeft geannuleerd —
+                    dat bepaalt of annuleringskosten in de mail staan.
                   </p>
                   <button
                     type="button"
                     disabled={annuleringsMailBusy || statusSaving}
-                    onClick={() => void verstuurAnnuleringsmail()}
+                    onClick={() => setAnnuleringModal("mail")}
                     className="mt-3 min-h-10 bg-[#C45A12] px-4 py-2 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-50"
                   >
                     {annuleringsMailBusy
@@ -2499,25 +2533,21 @@ export function ProjectPage() {
                     }}
                   />
 
-                  <div
-                    className={[
-                      "grid gap-3",
-                      isWarmtefondsProject(project)
-                        ? "lg:grid-cols-2"
-                        : "grid-cols-1",
-                    ].join(" ")}
-                  >
+                  <div className="grid gap-3 lg:grid-cols-2">
                     <section className="border border-line bg-white px-4 py-4 sm:px-5">
                       <ProjectStatusPath
                         status={project.status}
                         betaalwijze={
-                          project.betaalwijze === "eigen_middelen"
-                            ? "eigen_middelen"
-                            : project.betaalwijze === "warmtefonds"
-                              ? "warmtefonds"
-                              : lead?.status === "sale_eigen_middelen"
-                                ? "eigen_middelen"
-                                : "warmtefonds"
+                          resolveBetaalwijze({
+                            betaalwijze: project.betaalwijze,
+                            leadStatus: lead?.status,
+                            financieringVoorbehoud:
+                              (
+                                Array.isArray(project.offertes)
+                                  ? project.offertes[0]
+                                  : project.offertes
+                              )?.financiering_voorbehoud,
+                          })
                         }
                         disabled={statusSaving}
                         onChange={(s) => void updateStatus(s)}
@@ -2553,7 +2583,57 @@ export function ProjectPage() {
                           );
                         })()}
                       </section>
-                    ) : null}
+                    ) : (
+                      <section className="border border-line bg-white px-4 py-4 sm:px-5">
+                        {(() => {
+                          const off = Array.isArray(project.offertes)
+                            ? project.offertes[0]
+                            : project.offertes;
+                          const preview = aanbetalingVanOrder({
+                            subtotaalExBtw: Number(off?.subtotaal_ex_btw) || 0,
+                            btwBedrag: Number(off?.btw_bedrag) || 0,
+                            totaalIncBtw: Number(off?.totaal_inc_btw) || 0,
+                            financieringVoorbehoud: false,
+                          });
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+                                  Betaalplan
+                                </h2>
+                                <span className="rounded-md bg-wash px-2 py-0.5 text-[11px] font-semibold text-ink">
+                                  Eigen middelen
+                                </span>
+                              </div>
+                              <p className="text-sm text-ink">
+                                50% vooraf, 50% achteraf na de installatie.
+                              </p>
+                              <div className="space-y-1 text-sm text-muted">
+                                <p className="flex justify-between gap-3">
+                                  Aanbetaling (50% vooraf)
+                                  <span className="tabular-nums font-medium text-ink">
+                                    {formatEuro(preview.bedragIncBtw)}
+                                  </span>
+                                </p>
+                                <p className="flex justify-between gap-3">
+                                  Restant (50% na installatie)
+                                  <span className="tabular-nums text-ink">
+                                    {formatEuro(preview.restantIncBtw)}
+                                  </span>
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setMainTab("financieel")}
+                                className="text-xs font-semibold text-[#0F766E] hover:underline"
+                              >
+                                Open Financieel →
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </section>
+                    )}
                   </div>
                 </div>
               ) : null}
@@ -3347,6 +3427,23 @@ export function ProjectPage() {
           project={project}
           onClose={() => setContactOpen(false)}
           onSent={() => void refreshLeadEvents(project.lead_id)}
+        />
+      ) : null}
+      {annuleringModal && project ? (
+        <AnnuleringBedenktijdModal
+          project={project}
+          mailOnly={annuleringModal === "mail"}
+          busy={statusSaving || annuleringsMailBusy}
+          onClose={() => {
+            if (!statusSaving && !annuleringsMailBusy) {
+              setAnnuleringModal(null);
+            }
+          }}
+          onConfirm={(keuze) =>
+            annuleringModal === "mail"
+              ? verstuurAnnuleringsmail(keuze)
+              : updateStatus("annulering", keuze)
+          }
         />
       ) : null}
       {datumOptieOpen ? (

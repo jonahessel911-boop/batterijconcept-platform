@@ -26,10 +26,23 @@ export function AanbetalingSamenvatting({
   financieringVoorbehoud?: boolean;
 }) {
   if (!financieringVoorbehoud) {
+    const preview = aanbetalingVanOrder({
+      subtotaalExBtw,
+      btwBedrag,
+      totaalIncBtw,
+      financieringVoorbehoud: false,
+    });
     return (
       <p className="text-xs text-muted">
-        Eigen middelen · order{" "}
-        <span className="tabular-nums text-ink">{formatEuro(totaalIncBtw)}</span>
+        Eigen middelen · 50% vooraf{" "}
+        <span className="tabular-nums text-ink">
+          {formatEuro(preview.bedragIncBtw)}
+        </span>
+        {" · "}
+        50% na installatie{" "}
+        <span className="tabular-nums text-ink">
+          {formatEuro(preview.restantIncBtw)}
+        </span>
       </p>
     );
   }
@@ -94,15 +107,14 @@ export function AanbetalingInstelling({
       <div className="space-y-3 border border-line bg-white px-3 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Betaalroute
+            Betaalplan
           </p>
           <span className="rounded-md bg-wash px-2 py-0.5 text-[11px] font-semibold text-ink">
             Eigen middelen
           </span>
         </div>
         <p className="text-xs text-muted">
-          Geen voorbehoud financiering Warmtefonds op deze offerte. De klant
-          betaalt met eigen middelen — er is geen Warmtefonds-aanbetaling.
+          50% vooraf, 50% achteraf na de installatie. Geen Warmtefonds.
         </p>
         <div className="space-y-1 border-t border-line pt-3 text-sm">
           <p className="flex justify-between gap-3 text-muted">
@@ -112,8 +124,16 @@ export function AanbetalingInstelling({
             </span>
           </p>
           <p className="flex justify-between gap-3 text-muted">
-            Aanbetaling Warmtefonds
-            <span className="tabular-nums text-ink">{formatEuro(0)}</span>
+            Aanbetaling (50% vooraf)
+            <span className="tabular-nums font-medium text-ink">
+              {formatEuro(preview.bedragIncBtw)}
+            </span>
+          </p>
+          <p className="flex justify-between gap-3 text-muted">
+            Restant (50% na installatie)
+            <span className="tabular-nums text-ink">
+              {formatEuro(preview.restantIncBtw)}
+            </span>
           </p>
         </div>
       </div>

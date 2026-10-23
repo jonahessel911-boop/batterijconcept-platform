@@ -6,7 +6,7 @@ import { toOperationalStatus } from "@/lib/project-status-config";
 import type { Project } from "@/types/database";
 
 /** Batterij/materiaal uiterlijk zoveel werkdagen (ma–vr) vóór installatie besteld. */
-export const INKOOP_DAGEN_VOOR_INSTALLATIE = 3;
+export const INKOOP_DAGEN_VOOR_INSTALLATIE = 5;
 
 const KLAAR_ZONDER_INKOOP = new Set([
   "installatie_voltooid",
@@ -37,7 +37,7 @@ export function subtractWeekdaysAmsterdam(at: Date, days: number): Date {
   return iso;
 }
 
-/** 17:00 Amsterdam, 3 werkdagen vóór de installatie (levering alleen ma–vr). */
+/** 17:00 Amsterdam, N werkdagen vóór de installatie (levering alleen ma–vr). */
 export function bestelDeadlineVoorInstallatie(
   installatieAt: Date | string
 ): Date {

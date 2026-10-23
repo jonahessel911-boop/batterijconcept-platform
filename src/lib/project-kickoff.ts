@@ -67,13 +67,15 @@ export function projectKickoffItems(
   const items: KickoffItem[] = [
     {
       id: "aanbetaling",
-      label: "BTW-factuur versturen",
+      label: wf ? "BTW-factuur versturen" : "50% aanbetaling versturen",
       done: aanbetalingDone,
       detail: aanbetalingBetaald
         ? "Verstuurd én betaald"
         : aanbetalingDone
           ? "Verstuurd — wacht op betaling"
-          : "Nog te versturen",
+          : wf
+            ? "Nog te versturen"
+            : "50% vooraf · 50% na installatie",
     },
     {
       id: "schouwweek",
@@ -106,7 +108,7 @@ function projectOfferte(project: Project) {
   return Array.isArray(raw) ? raw[0] : raw;
 }
 
-/** Aanbetaling + Warmtefonds-deel voor Edwin-bericht. */
+/** Aanbetaling (+ Warmtefonds-deel bij WF) voor kickoff / Edwin-bericht. */
 export function kickoffWarmtefondsBedragen(
   project: Project,
   facturen: Factuur[] = []
@@ -134,6 +136,8 @@ export function kickoffWarmtefondsBedragen(
         f.status === "concept")
   );
 
+  const warmtefonds = isWarmtefondsProject(project);
+
   if (
     off &&
     (off.subtotaal_ex_btw != null || off.totaal_inc_btw != null)
@@ -144,7 +148,7 @@ export function kickoffWarmtefondsBedragen(
       totaalIncBtw: off.totaal_inc_btw ?? undefined,
       modus: off.aanbetaling_modus,
       handmatigIncBtw: off.aanbetaling_bedrag_inc,
-      financieringVoorbehoud: true,
+      financieringVoorbehoud: warmtefonds,
     });
     return {
       aanbetalingInc:
@@ -153,7 +157,7 @@ export function kickoffWarmtefondsBedragen(
         off.aanbetaling_te_innen_inc ??
         a.bedragIncBtw,
       /** Warmtefonds-aanvraag: max € 8.500 */
-      warmtefondsInc: a.warmtefondsIncBtw,
+      warmtefondsInc: warmtefonds ? a.warmtefondsIncBtw : null,
     };
   }
 

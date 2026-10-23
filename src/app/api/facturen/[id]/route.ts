@@ -46,6 +46,7 @@ export async function PATCH(
   let body: {
     status?: FactuurStatus;
     betaald_op?: string | null;
+    afgesproken_betaaldatum?: string | null;
     bedrag_inc_btw?: number | string | null;
     omschrijving?: string | null;
     betaaltermijn_dagen?: number | string | null;
@@ -131,6 +132,17 @@ export async function PATCH(
       patch.betaald_op = body.betaald_op?.trim() || null;
     }
 
+    if (body.afgesproken_betaaldatum !== undefined) {
+      const raw = body.afgesproken_betaaldatum?.trim() || null;
+      if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return NextResponse.json(
+          { error: "Ongeldige afgesproken betaaldatum (verwacht JJJJ-MM-DD)" },
+          { status: 400 }
+        );
+      }
+      patch.afgesproken_betaaldatum = raw;
+    }
+
     if (body.interne_notitie !== undefined) {
       patch.interne_notitie = body.interne_notitie?.trim() || null;
     }
@@ -159,6 +171,22 @@ export async function PATCH(
         {
           error:
             "Voer supabase/migrate-factuur-interne-notitie.sql uit in Supabase.",
+          detail: error.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    if (
+      error &&
+      body.afgesproken_betaaldatum !== undefined &&
+      (error.code === "42703" ||
+        error.message?.includes("afgesproken_betaaldatum"))
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Voer supabase/migrate-factuur-afgesproken-betaaldatum.sql uit in Supabase.",
           detail: error.message,
         },
         { status: 500 }

@@ -17,6 +17,7 @@ type Profile = {
   naam: string;
   email: string | null;
   profielfoto_url: string | null;
+  commissie_pct?: number | null;
   migration_needed?: boolean;
 };
 
@@ -114,6 +115,11 @@ export function AdviseurInstellingenPanel() {
 
   const naam = profile?.naam || "Jij";
   const foto = profile?.profielfoto_url;
+  const commissiePct =
+    profile?.commissie_pct != null &&
+    Number.isFinite(Number(profile.commissie_pct))
+      ? Number(profile.commissie_pct)
+      : null;
 
   return (
     <div className="space-y-5 px-4 py-4 sm:px-5 sm:py-5">
@@ -170,6 +176,18 @@ export function AdviseurInstellingenPanel() {
               <p className="font-semibold text-ink">{naam}</p>
               {profile?.email ? (
                 <p className="text-sm text-muted">{profile.email}</p>
+              ) : null}
+              {commissiePct != null && commissiePct > 0 ? (
+                <p className="text-sm text-ink">
+                  Commissie{" "}
+                  <span className="font-semibold tabular-nums">
+                    {commissiePct.toLocaleString("nl-NL", {
+                      maximumFractionDigits: 2,
+                    })}
+                    %
+                  </span>
+                  <span className="text-muted"> · van omzet excl. btw</span>
+                </p>
               ) : null}
               <div className="flex flex-wrap gap-2 pt-1">
                 <input

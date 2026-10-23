@@ -939,7 +939,7 @@ export function CreditfacturenPanel({
                         onChange={(e) => setCreateBedrag(e.target.value)}
                         placeholder={
                           createTranche === "b"
-                            ? "10% − €250"
+                            ? "commissie% − €250"
                             : `€${VERKOPER_AANBETALING_FEE}`
                         }
                         className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"

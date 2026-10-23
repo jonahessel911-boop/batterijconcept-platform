@@ -4,13 +4,22 @@ const INK = "#1A1F1C";
 const MUTED = "#5A635C";
 const WASH = "#F4F8F5";
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export function emailLayout(opts: {
   title: string;
   preheader?: string;
   bodyHtml: string;
 }): string {
+  // Preheader/title altijd escapen — vrije klanttekst (Contact-mail) mag HTML niet breken
   const pre = opts.preheader
-    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${opts.preheader}</div>`
+    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${escapeHtml(opts.preheader)}</div>`
     : "";
 
   return `<!DOCTYPE html>
@@ -19,7 +28,7 @@ export function emailLayout(opts: {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Outfit:wght@600;700&display=swap" rel="stylesheet" />
-  <title>${opts.title}</title>
+  <title>${escapeHtml(opts.title)}</title>
 </head>
 <body style="margin:0;padding:0;background:${WASH};color:${INK};font-family:'DM Sans',Arial,Helvetica,sans-serif;">
   ${pre}

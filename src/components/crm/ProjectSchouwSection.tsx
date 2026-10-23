@@ -19,20 +19,13 @@ import {
 } from "@/lib/schouw-week";
 import { Panel } from "./DetailChrome";
 import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
+import { PartnerSlotPicker } from "@/components/crm/PartnerSlotPicker";
 import {
   isOpleveringsrapport,
   isSchouwFormulier,
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
-
-function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function initialSchouwWeekValue(project: Project): string {
   if (project.schouw_jaar && project.schouw_week) {
@@ -102,13 +95,11 @@ export function ProjectSchouwSection({
     project.installatie_partner_id || ""
   );
   const [notities, setNotities] = useState(project.schouw_notities || "");
-  const [schouwAtLocal, setSchouwAtLocal] = useState(
-    isSchouwdagDefinitief(project)
-      ? toDatetimeLocalValue(project.schouw_at)
-      : ""
+  const [schouwAtIso, setSchouwAtIso] = useState<string | null>(
+    isSchouwdagDefinitief(project) ? project.schouw_at || null : null
   );
-  const [installatieAt, setInstallatieAt] = useState(
-    toDatetimeLocalValue(project.installatie_at)
+  const [installatieAtIso, setInstallatieAtIso] = useState<string | null>(
+    project.installatie_at || null
   );
   const [installatieNotities, setInstallatieNotities] = useState(
     project.installatie_notities || ""
@@ -145,12 +136,10 @@ export function ProjectSchouwSection({
     setSchouwWeek(initialSchouwWeekValue(project));
     setPartnerId(project.installatie_partner_id || "");
     setNotities(project.schouw_notities || "");
-    setSchouwAtLocal(
-      isSchouwdagDefinitief(project)
-        ? toDatetimeLocalValue(project.schouw_at)
-        : ""
+    setSchouwAtIso(
+      isSchouwdagDefinitief(project) ? project.schouw_at || null : null
     );
-    setInstallatieAt(toDatetimeLocalValue(project.installatie_at));
+    setInstallatieAtIso(project.installatie_at || null);
     setInstallatieNotities(project.installatie_notities || "");
   }, [
     project.schouw_at,
@@ -224,8 +213,8 @@ export function ProjectSchouwSection({
         installatie_partner_id: partnerId || null,
         schouw_notities: notities || null,
       };
-      if (schouwAtLocal.trim()) {
-        const parsed = new Date(schouwAtLocal);
+      if (schouwAtIso) {
+        const parsed = new Date(schouwAtIso);
         if (Number.isNaN(parsed.getTime())) {
           throw new Error("Ongeldige schouwdag");
         }
@@ -248,26 +237,18 @@ export function ProjectSchouwSection({
       const mailErr = data.mails?.klant?.error as string | undefined;
       if (mailOk) {
         setOkMsg(
-          schouwAtLocal.trim()
+          schouwAtIso
             ? "Schouwdag gezet — bevestiging naar klant verstuurd."
             : "Schouwweek ingepland — bevestiging naar klant verstuurd."
         );
       } else if (mailSkipped) {
-        setOkMsg(
-          schouwAtLocal.trim()
-            ? "Schouwdag gezet."
-            : "Schouwweek ingepland."
-        );
+        setOkMsg(schouwAtIso ? "Schouwdag gezet." : "Schouwweek ingepland.");
         setError(
           mailErr ||
             "Geen bevestigingsmail: vul een e-mailadres in bij de lead."
         );
       } else {
-        setOkMsg(
-          schouwAtLocal.trim()
-            ? "Schouwdag gezet."
-            : "Schouwweek ingepland."
-        );
+        setOkMsg(schouwAtIso ? "Schouwdag gezet." : "Schouwweek ingepland.");
         setError(mailErr || "Bevestigingsmail naar klant is mislukt.");
       }
       onChanged();
@@ -284,9 +265,9 @@ export function ProjectSchouwSection({
     setError(null);
     setOkMsg(null);
     try {
-      if (!installatieAt) throw new Error("Kies een installatiedatum");
+      if (!installatieAtIso) throw new Error("Kies een installatie-slot");
       if (!partnerId) throw new Error("Kies een installatiepartner");
-      const parsed = new Date(installatieAt);
+      const parsed = new Date(installatieAtIso);
       if (Number.isNaN(parsed.getTime())) throw new Error("Ongeldige datum");
 
       const res = await fetch(`/api/projecten/${project.id}/installatie`, {
@@ -531,20 +512,14 @@ export function ProjectSchouwSection({
                 </select>
               </label>
               <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                Exacte schouwdag (optioneel)
-                <input
-                  type="datetime-local"
-                  value={schouwAtLocal}
-                  onChange={(e) => setSchouwAtLocal(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                />
-              </label>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                 Installatiepartner
                 <select
                   required
                   value={partnerId}
-                  onChange={(e) => setPartnerId(e.target.value)}
+                  onChange={(e) => {
+                    setPartnerId(e.target.value);
+                    setSchouwAtIso(null);
+                  }}
                   className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
                 >
                   <option value="">Kies partner…</option>
@@ -556,6 +531,16 @@ export function ProjectSchouwSection({
                 </select>
               </label>
             </div>
+
+            <PartnerSlotPicker
+              partnerId={partnerId}
+              soort="schouw"
+              leadId={project.lead_id}
+              excludeProjectId={project.id}
+              value={schouwAtIso}
+              onChange={setSchouwAtIso}
+              disabled={saving}
+            />
 
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Schouw-notities
@@ -575,7 +560,7 @@ export function ProjectSchouwSection({
             >
               {saving
                 ? "Bezig…"
-                : schouwAtLocal.trim()
+                : schouwAtIso
                   ? "Schouwdag opslaan"
                   : weekGepland
                     ? "Schouwweek bijwerken"
@@ -590,34 +575,34 @@ export function ProjectSchouwSection({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Installatie plannen
             </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                Installatiedatum
-                <input
-                  type="datetime-local"
-                  required
-                  value={installatieAt}
-                  onChange={(e) => setInstallatieAt(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                />
-              </label>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                Installatiepartner
-                <select
-                  required
-                  value={partnerId}
-                  onChange={(e) => setPartnerId(e.target.value)}
-                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-                >
-                  <option value="">Kies partner…</option>
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.naam}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+              Installatiepartner
+              <select
+                required
+                value={partnerId}
+                onChange={(e) => {
+                  setPartnerId(e.target.value);
+                  setInstallatieAtIso(null);
+                }}
+                className="mt-1 w-full max-w-md border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              >
+                <option value="">Kies partner…</option>
+                {partners.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.naam}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <PartnerSlotPicker
+              partnerId={partnerId}
+              soort="installatie"
+              leadId={project.lead_id}
+              excludeProjectId={project.id}
+              value={installatieAtIso}
+              onChange={setInstallatieAtIso}
+              disabled={installatieSaving}
+            />
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
               Installatie-notities
               <textarea

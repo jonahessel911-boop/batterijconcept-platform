@@ -28,7 +28,7 @@ import {
 } from "@/lib/crm-shell-cache";
 import { LeadsTable } from "./LeadsTable";
 import { SalesReferralActies } from "./SalesReferralActies";
-import { OffertesTable } from "./OffertesTable";
+import { OffertesTable, type HoldSalesOfferteInfo } from "./OffertesTable";
 import { BackofficePanel } from "./BackofficePanel";
 import { useBoViewStore, setBoViewStore } from "@/lib/bo-view-store";
 import { FacturenTable } from "./FacturenTable";
@@ -38,6 +38,7 @@ import { PurchasingPanel } from "./PurchasingPanel";
 import { RapportagePanel } from "./RapportagePanel";
 import { VoiceAiPanel } from "./VoiceAiPanel";
 import { AgendaPanel } from "./AgendaV2Panel";
+import { PartnerAgendaPanel } from "./PartnerAgendaPanel";
 import { BelPanel } from "./BelPanel";
 import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
@@ -722,17 +723,68 @@ export function CrmShell() {
   const holdSalesByOfferteId = useMemo(() => {
     const m = new Map<
       string,
-      { projectId: string; notitie: string | null }
+      {
+        projectId: string;
+        notitie: string | null;
+        projectNummer: string | null;
+        klantNaam: string | null;
+        adviseurId: string | null;
+        adviseurNaam: string | null;
+      }
     >();
     for (const p of projecten) {
       if (p.status !== "hold_sales_actie" || !p.offerte_id) continue;
+      const lead = p.leads as
+        | {
+            naam?: string | null;
+            adviseur_id?: string | null;
+            adviseurs?: { id?: string; naam?: string } | { id?: string; naam?: string }[] | null;
+          }
+        | null
+        | undefined;
+      const advRaw = lead?.adviseurs;
+      const adv = Array.isArray(advRaw) ? advRaw[0] : advRaw;
+      const adviseurId = lead?.adviseur_id || adv?.id || null;
+      const adviseurNaam =
+        adv?.naam ||
+        (adviseurId
+          ? adviseurs.find((a) => a.id === adviseurId)?.naam || null
+          : null);
       m.set(p.offerte_id, {
         projectId: p.id,
         notitie: p.backoffice_notitie?.trim() || null,
+        projectNummer: p.project_nummer || null,
+        klantNaam: lead?.naam || null,
+        adviseurId,
+        adviseurNaam,
       });
     }
     return m;
-  }, [projecten]);
+  }, [projecten, adviseurs]);
+
+  /**
+   * HOLD SALES ACTIE: alleen voor de adviseur-eigenaar van de offerte.
+   * Admin / “Bekijk als” ziet en handelt geen HOLD — dat is sales-werk.
+   */
+  const holdSalesForOffertes = useMemo(() => {
+    const empty = new Map<string, HoldSalesOfferteInfo>();
+    if (!userRol || !alleenEigenLeads(userRol) || !sessionUser?.id) {
+      return empty;
+    }
+    const m = new Map<string, HoldSalesOfferteInfo>();
+    for (const o of scopedOffertes) {
+      const hold = holdSalesByOfferteId.get(o.id);
+      if (!hold) continue;
+      // Eigenaar = adviseur op de lead (of zelf aangemaakt)
+      const isOwner =
+        o.leads?.adviseur_id === sessionUser.id ||
+        o.aangemaakt_door_id === sessionUser.id ||
+        hold.adviseurId === sessionUser.id;
+      if (!isOwner) continue;
+      m.set(o.id, hold);
+    }
+    return m;
+  }, [userRol, sessionUser?.id, scopedOffertes, holdSalesByOfferteId]);
 
   const scopedProjecten = useMemo(() => {
     // Pas zichtbaar in backoffice nadat offerte-actie is afgerond
@@ -964,19 +1016,94 @@ export function CrmShell() {
         }).catch(() => {});
       }
 
-      // Sale-type syncen naar offerte, zodat schouw-mail/UI geen Warmtefonds-tekst tonen bij eigen middelen
+      // Sale-type syncen naar offerte + project (WF-logo/pad ↔ eigen middelen 50/50)
       if (status === "sale_eigen_middelen" || status === "sale_financiering") {
+        const { aanbetalingVanOrder, EIGEN_MIDDELEN_AANBETALING_MODUS } =
+          await import("@/lib/aanbetaling");
         const warmtefonds = status === "sale_financiering";
-        await sb
-          .from("offertes")
-          .update({ financiering_voorbehoud: warmtefonds })
-          .eq("lead_id", leadId)
-          .eq("status", "ondertekend");
+        const betaalwijze = warmtefonds ? "warmtefonds" : "eigen_middelen";
+        const signed = offertes.filter(
+          (o) => o.lead_id === leadId && o.status === "ondertekend"
+        );
+        let teInnen: number | null = null;
+        for (const o of signed) {
+          const preview = aanbetalingVanOrder({
+            subtotaalExBtw: Number(o.subtotaal_ex_btw) || 0,
+            btwBedrag: Number(o.btw_bedrag) || 0,
+            totaalIncBtw: Number(o.totaal_inc_btw) || 0,
+            modus: warmtefonds
+              ? o.aanbetaling_modus || "btw"
+              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+            handmatigIncBtw: o.aanbetaling_bedrag_inc,
+            financieringVoorbehoud: warmtefonds,
+          });
+          teInnen = preview.bedragIncBtw;
+          const patchBody: Record<string, unknown> = {
+            financiering_voorbehoud: warmtefonds,
+            aanbetaling_modus: warmtefonds
+              ? o.aanbetaling_modus || "btw"
+              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+            aanbetaling_te_innen_inc: preview.bedragIncBtw,
+            aanbetaling_bedrag_inc:
+              warmtefonds && o.aanbetaling_modus === "handmatig"
+                ? o.aanbetaling_bedrag_inc
+                : null,
+          };
+          const res = await fetch(`/api/offertes/${o.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patchBody),
+          });
+          if (!res.ok) {
+            // Fallback zonder helft-modus als DB-migratie nog niet gedraaid is
+            await sb
+              .from("offertes")
+              .update({
+                financiering_voorbehoud: warmtefonds,
+                aanbetaling_te_innen_inc: preview.bedragIncBtw,
+              })
+              .eq("id", o.id);
+          }
+        }
         setOffertes((prev) =>
           prev.map((o) =>
             o.lead_id === leadId && o.status === "ondertekend"
-              ? { ...o, financiering_voorbehoud: warmtefonds }
+              ? {
+                  ...o,
+                  financiering_voorbehoud: warmtefonds,
+                  aanbetaling_modus: warmtefonds
+                    ? o.aanbetaling_modus || "btw"
+                    : EIGEN_MIDDELEN_AANBETALING_MODUS,
+                  aanbetaling_te_innen_inc:
+                    teInnen ?? o.aanbetaling_te_innen_inc,
+                }
               : o
+          )
+        );
+        const projectPatch: Record<string, unknown> = {
+          betaalwijze,
+          betaalwijze_gewijzigd_at: new Date().toISOString(),
+          betaalwijze_reden: warmtefonds
+            ? "Sale Warmtefonds"
+            : "Sale eigen middelen",
+        };
+        if (teInnen != null) {
+          projectPatch.aanbetaling_te_innen_inc = teInnen;
+        }
+        await sb.from("projecten").update(projectPatch).eq("lead_id", leadId);
+        setProjecten((prev) =>
+          prev.map((p) =>
+            p.lead_id === leadId
+              ? {
+                  ...p,
+                  betaalwijze,
+                  aanbetaling_te_innen_inc:
+                    teInnen ?? p.aanbetaling_te_innen_inc,
+                  leads: p.leads
+                    ? { ...p.leads, status }
+                    : p.leads,
+                }
+              : p
           )
         );
       }
@@ -1505,7 +1632,17 @@ export function CrmShell() {
                   />
                 )}
                 {tab === "agenda" &&
-                  (agendaIsInstallatie(userRol) ? (
+                  (searchParams.get("partner_agenda") != null ? (
+                    <PartnerAgendaPanel
+                      initialPartnerId={
+                        searchParams.get("partner_agenda") &&
+                        searchParams.get("partner_agenda") !== "1"
+                          ? searchParams.get("partner_agenda")
+                          : null
+                      }
+                      projects={scopedProjecten}
+                    />
+                  ) : agendaIsInstallatie(userRol) ? (
                     <div className="p-5">
                       <PlanningAgenda
                         orders={scopedProjecten}
@@ -1521,28 +1658,51 @@ export function CrmShell() {
                       />
                     </div>
                   ) : (
-                    <AgendaPanel
-                      key={adviseurFilter || "all"}
-                      leads={scopedLeads}
-                      afspraken={afspraken}
-                      adviseurs={adviseurs}
-                      defaultAdviseurId={
-                        alleenEigenLeads(userRol)
-                          ? sessionUser?.id
-                          : adviseurFilter || undefined
-                      }
-                      onStatusChange={updateLeadStatus}
-                      onBellerChange={
-                        userRol === "admin" ? updateLeadBeller : undefined
-                      }
-                      showAdminSlots={userRol === "admin"}
-                    />
+                    <div>
+                      {(userRol === "admin" ||
+                        userRol === "backoffice" ||
+                        userRol === "sales_manager") && (
+                        <div className="flex items-center justify-end border-b border-line px-4 py-2 sm:px-5">
+                          <a
+                            href={`/?tab=agenda&partner_agenda=1`}
+                            className="text-xs font-semibold text-green-dark hover:underline"
+                          >
+                            Partner-agenda (afblokken)
+                          </a>
+                        </div>
+                      )}
+                      <AgendaPanel
+                        key={adviseurFilter || "all"}
+                        leads={scopedLeads}
+                        afspraken={afspraken}
+                        adviseurs={adviseurs}
+                        defaultAdviseurId={
+                          alleenEigenLeads(userRol)
+                            ? sessionUser?.id
+                            : adviseurFilter || undefined
+                        }
+                        onStatusChange={updateLeadStatus}
+                        onBellerChange={
+                          userRol === "admin" ? updateLeadBeller : undefined
+                        }
+                        showAdminSlots={userRol === "admin"}
+                      />
+                    </div>
                   ))}
                 {tab === "offertes" && (
                   <OffertesTable
                     offertes={scopedOffertes}
-                    holdSalesByOfferteId={holdSalesByOfferteId}
+                    holdSalesByOfferteId={holdSalesForOffertes}
+                    holdActieModus="adviseur"
+                    sessionNaam={sessionUser?.naam || null}
                     onOpenSign={openSignLink}
+                    onHoldReleased={(project) => {
+                      setProjecten((prev) =>
+                        prev.map((p) =>
+                          p.id === project.id ? { ...p, ...project } : p
+                        )
+                      );
+                    }}
                   />
                 )}
                 {tab === "netto" && (

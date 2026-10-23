@@ -15,15 +15,21 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/projecten/[id]/annuleringsmail
- * Verstuur bevestiging van order-annulering naar de klant (AV art. 4A — 20%).
+ * Verstuur bevestiging van order-annulering naar de klant.
+ * Body: { binnenBedenktijd?: boolean } — true = geen annuleringskosten in de mail.
  * Alleen toegestaan als projectstatus = annulering.
  */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
   try {
+    const body = (await req.json().catch(() => ({}))) as {
+      binnenBedenktijd?: boolean;
+    };
+    const binnenBedenktijd = Boolean(body.binnenBedenktijd);
+
     const sb = getSupabaseAdmin();
     const { data: project, error } = await sb
       .from("projecten")
@@ -84,7 +90,9 @@ export async function POST(
       (offerte as { totaal_inc_btw?: number | null } | null)?.totaal_inc_btw
     );
     const kosten =
-      Number.isFinite(orderTotaal) && orderTotaal > 0
+      !binnenBedenktijd &&
+      Number.isFinite(orderTotaal) &&
+      orderTotaal > 0
         ? annuleringskostenIncBtw(orderTotaal)
         : 0;
     const offerteNummer =
@@ -95,17 +103,19 @@ export async function POST(
       naam,
       projectNummer: (project.project_nummer as string) || null,
       offerteNummer,
-      orderTotaalIncBtw: Number.isFinite(orderTotaal) && orderTotaal > 0
-        ? orderTotaal
-        : null,
+      orderTotaalIncBtw:
+        Number.isFinite(orderTotaal) && orderTotaal > 0 ? orderTotaal : null,
       annuleringskostenIncBtw: kosten > 0 ? kosten : null,
       avArtikel: AV_ANNULERING_ARTIKEL,
       annuleringsPctLabel: Math.round(AV_ANNULERING_PCT * 100),
+      binnenBedenktijd,
     });
     const leadId = project.lead_id as string | null;
     const mail = await sendEmail({
       to,
-      subject: "Bestelling geannuleerd — BatterijConcept",
+      subject: binnenBedenktijd
+        ? "Bestelling geannuleerd (binnen bedenktijd) — BatterijConcept"
+        : "Bestelling geannuleerd — BatterijConcept",
       html,
       tag: "project-annulering",
       replyTo: await replyToForLeadAdviseur(sb, leadId),
@@ -116,13 +126,17 @@ export async function POST(
         leadId,
         soort: "email",
         titel: mail.ok
-          ? "Annuleringsmail verstuurd naar klant"
+          ? binnenBedenktijd
+            ? "Annuleringsmail verstuurd (binnen bedenktijd, geen kosten)"
+            : "Annuleringsmail verstuurd naar klant"
           : "Annuleringsmail mislukt",
         detail: mail.ok
           ? `Naar ${to}${
-              kosten > 0
-                ? ` · annuleringskosten € ${kosten.toFixed(2)} (art. ${AV_ANNULERING_ARTIKEL})`
-                : ""
+              binnenBedenktijd
+                ? " · geen annuleringskosten (bedenktijd)"
+                : kosten > 0
+                  ? ` · annuleringskosten € ${kosten.toFixed(2)} (art. ${AV_ANNULERING_ARTIKEL})`
+                  : ""
             }`
           : mail.error || "Onbekende fout",
         meta: {
@@ -130,6 +144,7 @@ export async function POST(
           project_nummer: project.project_nummer,
           to,
           ok: mail.ok,
+          binnen_bedenktijd: binnenBedenktijd,
           order_totaal_inc_btw: Number.isFinite(orderTotaal) ? orderTotaal : null,
           annuleringskosten_inc_btw: kosten > 0 ? kosten : null,
           av_artikel: AV_ANNULERING_ARTIKEL,
@@ -148,7 +163,9 @@ export async function POST(
       ok: true,
       sent: true,
       to,
-      orderTotaalIncBtw: Number.isFinite(orderTotaal) && orderTotaal > 0 ? orderTotaal : null,
+      binnenBedenktijd,
+      orderTotaalIncBtw:
+        Number.isFinite(orderTotaal) && orderTotaal > 0 ? orderTotaal : null,
       annuleringskostenIncBtw: kosten > 0 ? kosten : null,
       avArtikel: AV_ANNULERING_ARTIKEL,
     });

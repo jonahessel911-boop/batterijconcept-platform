@@ -62,7 +62,15 @@ export function FactuurPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState<
-    "pdf" | "send" | "paid" | "delete" | "save" | "credit" | "note" | null
+    | "pdf"
+    | "send"
+    | "paid"
+    | "delete"
+    | "save"
+    | "credit"
+    | "note"
+    | "afspraak"
+    | null
   >(null);
   const [interneNotitie, setInterneNotitie] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -70,6 +78,7 @@ export function FactuurPage() {
   const [betaaldOp, setBetaaldOp] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
+  const [afgesprokenBetaaldatum, setAfgesprokenBetaaldatum] = useState("");
   const [editBedrag, setEditBedrag] = useState("");
   const [editOmschrijving, setEditOmschrijving] = useState("");
   const [editBetaaltermijn, setEditBetaaltermijn] = useState(
@@ -124,6 +133,9 @@ export function FactuurPage() {
         setCredits((creditRows || []) as Factuur[]);
         setFactuur(fac);
         setInterneNotitie(fac.interne_notitie || "");
+        setAfgesprokenBetaaldatum(
+          fac.afgesproken_betaaldatum?.slice(0, 10) || ""
+        );
         setEditBedrag(
           Number(fac.bedrag_inc_btw).toLocaleString("nl-NL", {
             minimumFractionDigits: 2,
@@ -238,6 +250,47 @@ export function FactuurPage() {
       setMsg("Notitie opgeslagen.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Notitie opslaan mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveAfgesprokenBetaaldatum(value?: string | null) {
+    if (!factuur) return;
+    const next =
+      value === undefined ? afgesprokenBetaaldatum.trim() || null : value;
+    setBusy("afspraak");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          afgesproken_betaaldatum: next,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error ||
+            "Betaaldatum opslaan mislukt"
+        );
+      }
+      const updated = data.factuur as Factuur;
+      setFactuur(updated);
+      setAfgesprokenBetaaldatum(
+        updated.afgesproken_betaaldatum?.slice(0, 10) || ""
+      );
+      setMsg(
+        updated.afgesproken_betaaldatum
+          ? `Betaaldatum gezet op ${formatDateShort(updated.afgesproken_betaaldatum)} — tot die dag geen verlopen/nabellen.`
+          : "Afgesproken betaaldatum gewist."
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Betaaldatum opslaan mislukt"
+      );
     } finally {
       setBusy(null);
     }
@@ -554,6 +607,14 @@ export function FactuurPage() {
             Verlopen
           </span>
         ) : null}
+        {!isPaid &&
+        !overdue &&
+        factuur.afgesproken_betaaldatum &&
+        !heeftCredit ? (
+          <span className="text-[11px] font-medium text-ink">
+            Betaalt {formatDateShort(factuur.afgesproken_betaaldatum)}
+          </span>
+        ) : null}
         {isPaid && factuur.betaald_op ? (
           <span className="text-[11px] font-medium text-green-deeper">
             Betaald {formatDateShort(factuur.betaald_op)}
@@ -828,10 +889,56 @@ export function FactuurPage() {
           {!isPaid && !isCredit ? (
             <section className="border border-line bg-white p-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                Betaaldatum
+              </p>
+              <p className="mt-1 text-[11px] text-muted">
+                Zegt de klant later te betalen dan de vervaldatum? Zet hier die
+                datum — tot die dag geen “verlopen” en geen nabellen-actie.
+              </p>
+              <label className="mt-3 block text-xs text-muted">
+                Afgesproken betaaldatum
+                <input
+                  type="date"
+                  value={afgesprokenBetaaldatum}
+                  onChange={(e) => setAfgesprokenBetaaldatum(e.target.value)}
+                  className="mt-1 block w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={
+                    busy !== null ||
+                    afgesprokenBetaaldatum ===
+                      (factuur.afgesproken_betaaldatum?.slice(0, 10) || "")
+                  }
+                  onClick={() => void saveAfgesprokenBetaaldatum()}
+                  className="flex-1 bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                >
+                  {busy === "afspraak" ? "Opslaan…" : "Opslaan"}
+                </button>
+                {factuur.afgesproken_betaaldatum ||
+                afgesprokenBetaaldatum ? (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void saveAfgesprokenBetaaldatum(null)}
+                    className="border border-line bg-white px-3 py-2 text-sm font-semibold text-muted hover:bg-wash disabled:opacity-50"
+                  >
+                    Wissen
+                  </button>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
+          {!isPaid && !isCredit ? (
+            <section className="border border-line bg-white p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
                 Markeer als betaald
               </p>
               <label className="mt-3 block text-xs text-muted">
-                Betaaldatum
+                Betaald op
                 <input
                   type="date"
                   value={betaaldOp}
@@ -878,6 +985,31 @@ export function FactuurPage() {
                 <dt className="text-[11px] text-muted">Aangemaakt</dt>
                 <dd className="mt-0.5 text-sm font-medium text-ink">
                   {formatDateTimeNl(factuur.created_at)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-muted">Vervaldatum</dt>
+                <dd className="mt-0.5 text-sm font-medium text-ink">
+                  {factuur.vervaldatum
+                    ? formatDateShort(factuur.vervaldatum)
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-muted">
+                  Afgesproken betaaldatum
+                </dt>
+                <dd
+                  className={[
+                    "mt-0.5 text-sm font-medium",
+                    factuur.afgesproken_betaaldatum
+                      ? "text-ink"
+                      : "text-muted",
+                  ].join(" ")}
+                >
+                  {factuur.afgesproken_betaaldatum
+                    ? formatDateShort(factuur.afgesproken_betaaldatum)
+                    : "Niet gezet"}
                 </dd>
               </div>
               <div>

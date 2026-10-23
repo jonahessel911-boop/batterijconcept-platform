@@ -146,15 +146,18 @@ export function KlantContactMailModal({
           bericht: bericht.trim(),
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Versturen mislukt"
-        );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        to?: string;
+        messageId?: string;
+        sent?: boolean;
+      };
+      if (!res.ok || !data.messageId) {
+        throw new Error(data.error || "Versturen mislukt — mail is niet verzonden");
       }
-      setOk("Mail verstuurd.");
+      setOk(`Mail verstuurd naar ${data.to || to.trim()}.`);
       onSent?.();
-      window.setTimeout(() => onClose(), 900);
+      window.setTimeout(() => onClose(), 1200);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Versturen mislukt");
     } finally {

@@ -312,13 +312,24 @@ export async function POST(
       );
     }
 
+    // Credit: er is niets te innen → direct voltooid (niet als openstaand laten staan)
+    const todayYmd = amsterdamDatePlusDays(new Date(), 0);
     const { data: updated, error: upErr } = await sb
       .from("facturen")
-      .update({
-        status: "verzonden",
-        factuurdatum: amsterdamDatePlusDays(new Date(), 0),
-        vervaldatum,
-      })
+      .update(
+        isCredit
+          ? {
+              status: "betaald",
+              betaald_op: todayYmd,
+              factuurdatum: todayYmd,
+              vervaldatum: null,
+            }
+          : {
+              status: "verzonden",
+              factuurdatum: todayYmd,
+              vervaldatum,
+            }
+      )
       .eq("id", id)
       .select("*, leads(naam, email, telefoon, lead_number)")
       .single();

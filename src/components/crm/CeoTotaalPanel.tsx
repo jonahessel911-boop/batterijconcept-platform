@@ -44,11 +44,16 @@ export function CeoTotaalPanel() {
       const res = await fetch(
         `/api/management-dashboard?period=${encodeURIComponent(p)}`
       );
-      const json = (await res.json()) as ManagementDashboardData & {
+      const json = (await res.json()) as {
+        dashboard?: ManagementDashboardData;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error || "Laden mislukt");
-      setData(json);
+      const dashboard = json.dashboard;
+      if (!dashboard?.finance?.ceo) {
+        throw new Error("CEO-data ontbreekt in response");
+      }
+      setData(dashboard);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
       setData(null);

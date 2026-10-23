@@ -193,6 +193,9 @@ export async function PATCH(
 
       if (projectId) {
         const projectPatch: Record<string, unknown> = {
+          betaalwijze: Boolean(offerte.financiering_voorbehoud)
+            ? "warmtefonds"
+            : "eigen_middelen",
           aanbetaling_te_innen_inc:
             offerte.aanbetaling_te_innen_inc != null
               ? Number(offerte.aanbetaling_te_innen_inc)
@@ -235,6 +238,25 @@ export async function PATCH(
           .update({ project_id: projectId })
           .eq("offerte_id", offerte.id)
           .is("project_id", null);
+      }
+
+      // Doorzetten naar backoffice = sale afgeboekt (geen oranje “I” meer in agenda)
+      if (typeof body.actie_required === "boolean" && body.actie_required === false) {
+        const saleStatus = Boolean(offerte.financiering_voorbehoud)
+          ? "sale_financiering"
+          : "sale_eigen_middelen";
+        await sb
+          .from("leads")
+          .update({ status: saleStatus })
+          .eq("id", offerte.lead_id)
+          .in("status", ["deal", "afspraak", "na_afspraak", "offerte"]);
+
+        await sb
+          .from("afspraken")
+          .update({ status: "voltooid" })
+          .eq("lead_id", offerte.lead_id)
+          .in("status", ["gepland", "bevestigd", "verzet"])
+          .in("soort", ["nieuw", "vervolg_fysiek"]);
       }
 
       await ensureBtwDraftFactuur(sb, {

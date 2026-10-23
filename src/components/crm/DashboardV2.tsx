@@ -22,7 +22,6 @@ import {
   type DashboardV2SourceRow,
   type ForecastWeek,
 } from "@/lib/dashboard-v2";
-import { NETTO_COMMISSIE_PCT } from "@/lib/netto-boord";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,

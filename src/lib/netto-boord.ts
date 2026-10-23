@@ -606,6 +606,8 @@ export function isNettoGeannuleerd(opts: {
   offerteStatus?: string | null;
 }): boolean {
   if (opts.offerteStatus === "afgewezen") return true;
+  const raw = (opts.projectStatus || "").trim().toLowerCase();
+  if (raw === "annulering" || raw === "geannuleerd") return true;
   return normalizeProjectStatus(opts.projectStatus) === "annulering";
 }
 

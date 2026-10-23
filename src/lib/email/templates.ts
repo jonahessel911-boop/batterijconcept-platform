@@ -567,6 +567,11 @@ export function projectGeannuleerdKlantEmail(opts: {
   avArtikel?: string | null;
   /** Bijv. 20 */
   annuleringsPctLabel?: number | null;
+  /**
+   * Herroeping binnen wettelijke bedenktijd → geen annuleringskosten in de mail.
+   * Default false (kosten wel noemen).
+   */
+  binnenBedenktijd?: boolean;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const nr = opts.projectNummer?.trim() || null;
@@ -577,9 +582,11 @@ export function projectGeannuleerdKlantEmail(opts: {
     Number.isFinite(opts.annuleringsPctLabel)
       ? opts.annuleringsPctLabel
       : 20;
+  const binnenBedenktijd = Boolean(opts.binnenBedenktijd);
   const orderTotaal = Number(opts.orderTotaalIncBtw);
   const kosten = Number(opts.annuleringskostenIncBtw);
   const hasBedragen =
+    !binnenBedenktijd &&
     Number.isFinite(orderTotaal) &&
     orderTotaal > 0 &&
     Number.isFinite(kosten) &&
@@ -592,19 +599,50 @@ export function projectGeannuleerdKlantEmail(opts: {
     offNr
       ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Offerte</strong><br />${offNr}</p>`
       : "",
-    hasBedragen
-      ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Orderbedrag</strong><br />${formatEuro(orderTotaal)} incl. btw</p>
+    binnenBedenktijd
+      ? Number.isFinite(orderTotaal) && orderTotaal > 0
+        ? `<p style="margin:0;font-size:15px;"><strong>Orderbedrag</strong><br />${formatEuro(orderTotaal)} incl. btw</p>`
+        : ""
+      : hasBedragen
+        ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Orderbedrag</strong><br />${formatEuro(orderTotaal)} incl. btw</p>
          <p style="margin:0;font-size:15px;"><strong>Annuleringskosten (${pct}%)</strong><br />${formatEuro(kosten)} incl. btw</p>`
-      : `<p style="margin:0;font-size:15px;"><strong>Annuleringskosten</strong><br />${pct}% van het totale orderbedrag (art. ${artikel} AV)</p>`,
+        : `<p style="margin:0;font-size:15px;"><strong>Annuleringskosten</strong><br />${pct}% van het totale orderbedrag (art. ${artikel} AV)</p>`,
   ]
     .filter(Boolean)
     .join("");
 
+  const kostenParagrafen = binnenBedenktijd
+    ? [
+        emailP(
+          "Omdat je binnen de wettelijke bedenktijd hebt geannuleerd, brengen wij <strong>geen annuleringskosten</strong> in rekening."
+        ),
+        emailP(
+          "Eventuele reeds betaalde bedragen verrekenen we volgens onze algemene voorwaarden — je hoort van ons als dat van toepassing is."
+        ),
+      ]
+    : [
+        emailP(
+          `Op grond van <strong>artikel ${artikel}</strong> van onze algemene voorwaarden ben je bij annulering (na Definitieve Financieringsgoedkeuring) <strong>${pct}% annuleringskosten</strong> van het totale orderbedrag verschuldigd.`
+        ),
+        hasBedragen
+          ? emailP(
+              `Dat komt neer op <strong>${formatEuro(kosten)} inclusief btw</strong> (${pct}% van ${formatEuro(orderTotaal)}). Je ontvangt hiervoor een aparte factuur.`
+            )
+          : emailP(
+              "Je ontvangt hiervoor een aparte factuur met het berekende bedrag."
+            ),
+        emailP(
+          "Deze annuleringskosten gelden niet bij een rechtsgeldige herroeping binnen de wettelijke bedenktijd, bij afgewezen of ontoereikende financiering volgens artikel 4, of bij ontbinding wegens een toerekenbare tekortkoming van BatterijConcept."
+        ),
+      ];
+
   return emailLayout({
     title: "Bestelling geannuleerd — Batterijconcept",
-    preheader: hasBedragen
-      ? `Bestelling geannuleerd · annuleringskosten ${formatEuro(kosten)}.`
-      : "Je bestelling is geannuleerd.",
+    preheader: binnenBedenktijd
+      ? "Bestelling geannuleerd binnen bedenktijd — geen annuleringskosten."
+      : hasBedragen
+        ? `Bestelling geannuleerd · annuleringskosten ${formatEuro(kosten)}.`
+        : "Je bestelling is geannuleerd.",
     bodyHtml: [
       emailH1("Bestelling geannuleerd"),
       emailP(`Hoi ${first},`),
@@ -612,19 +650,7 @@ export function projectGeannuleerdKlantEmail(opts: {
         "Hierbij bevestigen we dat je bestelling bij Batterijconcept is geannuleerd."
       ),
       orderRegels ? emailBox(orderRegels) : "",
-      emailP(
-        `Op grond van <strong>artikel ${artikel}</strong> van onze algemene voorwaarden ben je bij annulering (na Definitieve Financieringsgoedkeuring) <strong>${pct}% annuleringskosten</strong> van het totale orderbedrag verschuldigd.`
-      ),
-      hasBedragen
-        ? emailP(
-            `Dat komt neer op <strong>${formatEuro(kosten)} inclusief btw</strong> (${pct}% van ${formatEuro(orderTotaal)}). Je ontvangt hiervoor een aparte factuur.`
-          )
-        : emailP(
-            "Je ontvangt hiervoor een aparte factuur met het berekende bedrag."
-          ),
-      emailP(
-        "Deze annuleringskosten gelden niet bij een rechtsgeldige herroeping binnen de wettelijke bedenktijd, bij afgewezen of ontoereikende financiering volgens artikel 4, of bij ontbinding wegens een toerekenbare tekortkoming van BatterijConcept."
-      ),
+      ...kostenParagrafen,
       emailP(
         "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
       ),

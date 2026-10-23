@@ -18,19 +18,49 @@ export type EmailAttachment = {
   content: Buffer | string;
 };
 
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 export async function sendEmail(opts: {
   to: string;
   subject: string;
   html: string;
+  /** Plain-text fallback (beter deliverability); anders auto uit HTML. */
+  text?: string | null;
   tag?: string;
   /** Reply-To — antwoorden gaan naar dit adres i.p.v. From */
   replyTo?: string | null;
+  /** Kopie (zichtbaar), bijv. info@ zodat we zeker weten dat de mail uitgaat. */
+  cc?: string | null;
+  /** Blinde kopie */
+  bcc?: string | null;
   attachments?: EmailAttachment[];
 }): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const pm = getClient();
   if (!pm) {
     console.warn("Postmark niet geconfigureerd — mail overgeslagen");
     return { ok: false, error: "Postmark niet geconfigureerd" };
+  }
+
+  const to = opts.to.trim();
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return { ok: false, error: "Ongeldig e-mailadres (aan)" };
   }
 
   try {
@@ -43,17 +73,27 @@ export async function sendEmail(opts: {
     });
 
     const replyTo = opts.replyTo?.trim() || undefined;
+    const cc = opts.cc?.trim() || undefined;
+    const bcc = opts.bcc?.trim() || undefined;
+    const text =
+      opts.text?.trim() || htmlToPlainText(opts.html) || opts.subject;
 
     const result = await pm.sendEmail({
       From: FROM,
-      To: opts.to,
+      To: to,
       Subject: opts.subject,
       HtmlBody: opts.html,
+      TextBody: text,
       MessageStream: "outbound",
       Tag: opts.tag,
       ...(replyTo ? { ReplyTo: replyTo } : {}),
+      ...(cc ? { Cc: cc } : {}),
+      ...(bcc ? { Bcc: bcc } : {}),
       Attachments,
     });
+    if (!result.MessageID) {
+      return { ok: false, error: "Postmark gaf geen message-id terug" };
+    }
     return { ok: true, messageId: result.MessageID };
   } catch (e) {
     const message = e instanceof Error ? e.message : "Mail versturen mislukt";

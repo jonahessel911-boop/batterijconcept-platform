@@ -132,6 +132,14 @@ export async function PATCH(
       patch.betaald_op = pickStr(body.betaald_op) || null;
     }
 
+    if (body.afgesproken_betaaldatum !== undefined) {
+      const raw = pickStr(body.afgesproken_betaaldatum);
+      if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return jsonErr("Ongeldige afgesproken_betaaldatum (JJJJ-MM-DD)");
+      }
+      patch.afgesproken_betaaldatum = raw || null;
+    }
+
     if (Object.keys(patch).length <= 1) {
       return jsonErr("Niets om bij te werken");
     }

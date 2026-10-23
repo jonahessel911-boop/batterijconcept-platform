@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { InstallatiePartner } from "@/types/database";
+import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 
 function portalBase(): string {
   if (typeof window !== "undefined") {
@@ -19,6 +20,10 @@ export function InstallatiePartnersPanel() {
   const [naam, setNaam] = useState("");
   const [email, setEmail] = useState("");
   const [telefoon, setTelefoon] = useState("");
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editStartAdres, setEditStartAdres] = useState("");
+  const [editBuffer, setEditBuffer] = useState(30);
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,6 +85,44 @@ export function InstallatiePartnersPanel() {
     }
   }
 
+  function openEdit(p: InstallatiePartner) {
+    setEditId(p.id);
+    setEditStartAdres(p.start_adres || "");
+    setEditBuffer(
+      typeof p.reistijd_buffer_min === "number" ? p.reistijd_buffer_min : 30
+    );
+    setOkMsg(null);
+    setError(null);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editId) return;
+    setEditSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/installatie-partners", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editId,
+          start_adres: editStartAdres.trim() || null,
+          reistijd_buffer_min: editBuffer,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      setOkMsg("Startadres opgeslagen.");
+      setEditId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
   function copyPortalLink(p: InstallatiePartner) {
     const url = `${portalBase()}/installatie/${p.portal_token}`;
     void navigator.clipboard.writeText(url).then(
@@ -98,6 +141,8 @@ export function InstallatiePartnersPanel() {
       () => setError("Kopiëren mislukt")
     );
   }
+
+  const editing = partners.find((p) => p.id === editId) || null;
 
   return (
     <div className="border-t border-line">
@@ -178,41 +223,108 @@ export function InstallatiePartnersPanel() {
               {partners.map((p) => (
                 <li
                   key={p.id}
-                  className="flex flex-wrap items-start justify-between gap-3 border border-line bg-white px-4 py-3"
+                  className="border border-line bg-white px-4 py-3"
                 >
-                  <div>
-                    <p className="font-medium text-ink">{p.naam}</p>
-                    <p className="text-sm text-muted">{p.email}</p>
-                    {p.telefoon && (
-                      <p className="text-sm text-muted">{p.telefoon}</p>
-                    )}
-                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      {p.actief ? "Actief" : "Uit"}
-                    </p>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-ink">{p.naam}</p>
+                      <p className="text-sm text-muted">{p.email}</p>
+                      {p.telefoon && (
+                        <p className="text-sm text-muted">{p.telefoon}</p>
+                      )}
+                      <p className="mt-1 text-xs text-muted">
+                        {p.start_adres
+                          ? `Start: ${p.start_adres}`
+                          : "Geen startadres"}
+                        {" · "}
+                        buffer{" "}
+                        {typeof p.reistijd_buffer_min === "number"
+                          ? p.reistijd_buffer_min
+                          : 30}{" "}
+                        min
+                      </p>
+                      <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                        {p.actief ? "Actief" : "Uit"}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-start gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(p)}
+                        className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        Startadres / buffer
+                      </button>
+                      <a
+                        href={`/?tab=agenda&partner_agenda=${encodeURIComponent(p.id)}`}
+                        className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        Agenda afblokken
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => copyPortalLink(p)}
+                        className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        Kopieer portaallink
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => copyCalendarLink(p)}
+                        className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        Kopieer Google Calendar-URL
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void toggleActief(p)}
+                        className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+                      >
+                        {p.actief ? "Deactiveren" : "Activeren"}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-col items-start gap-1">
-                    <button
-                      type="button"
-                      onClick={() => copyPortalLink(p)}
-                      className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
+
+                  {editing?.id === p.id && (
+                    <form
+                      onSubmit={saveEdit}
+                      className="mt-4 space-y-3 border-t border-line pt-4"
                     >
-                      Kopieer portaallink
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => copyCalendarLink(p)}
-                      className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
-                    >
-                      Kopieer Google Calendar-URL
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void toggleActief(p)}
-                      className="text-xs font-medium text-green-dark underline-offset-2 hover:underline"
-                    >
-                      {p.actief ? "Deactiveren" : "Activeren"}
-                    </button>
-                  </div>
+                      <StartAdresPostcodeField
+                        value={editStartAdres}
+                        onChange={setEditStartAdres}
+                      />
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                        Reistijd-buffer (min)
+                        <input
+                          type="number"
+                          min={0}
+                          max={180}
+                          value={editBuffer}
+                          onChange={(e) =>
+                            setEditBuffer(Number(e.target.value) || 0)
+                          }
+                          className="mt-1 w-full max-w-[120px] border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                        />
+                      </label>
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={editSaving}
+                          className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+                        >
+                          {editSaving ? "Opslaan…" : "Opslaan"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditId(null)}
+                          className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
+                        >
+                          Annuleren
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </li>
               ))}
             </ul>

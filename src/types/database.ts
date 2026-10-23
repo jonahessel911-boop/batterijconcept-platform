@@ -431,6 +431,10 @@ export interface InstallatiePartner {
   portal_token: string;
   created_at: string;
   updated_at: string;
+  /** Vertrekadres voor reistijd bij schouw/installatie */
+  start_adres?: string | null;
+  /** Fallback reistijd-buffer (minuten) als route onbekend */
+  reistijd_buffer_min?: number | null;
   /** Bedrijfs- / factuurgegevens */
   bedrijfsnaam?: string | null;
   kvk_nummer?: string | null;
@@ -454,6 +458,14 @@ export interface InstallatiePartner {
   /** Google Calendar OAuth gekoppeld (geen tokens in API) */
   google_connected_email?: string | null;
   google_connected_at?: string | null;
+}
+
+export interface PartnerAfblokkingen {
+  id: string;
+  partner_id: string;
+  dag: string;
+  venster: "ochtend" | "middag";
+  created_at: string;
 }
 
 export interface Offerte {
@@ -484,7 +496,7 @@ export interface Offerte {
   waarden_akkoord: boolean | null;
   signed_pdf_path: string | null;
   financiering_voorbehoud?: boolean | null;
-  aanbetaling_modus?: "restant" | "btw" | "handmatig" | null;
+  aanbetaling_modus?: "restant" | "btw" | "handmatig" | "helft" | null;
   aanbetaling_bedrag_inc?: number | null;
   actie_required?: boolean | null;
   backoffice_afgerond_at?: string | null;
@@ -913,6 +925,11 @@ export interface Factuur {
   factuurdatum: string;
   vervaldatum: string | null;
   betaald_op: string | null;
+  /**
+   * Afgesproken betaaldatum met de klant (bijv. “ik betaal op de 20ste”).
+   * Tot die dag telt de factuur niet als verlopen / geen nabellen-actie.
+   */
+  afgesproken_betaaldatum?: string | null;
   /** bunq Payment id bij auto-match */
   bunq_payment_id?: number | null;
   notities: string | null;

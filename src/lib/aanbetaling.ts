@@ -6,10 +6,13 @@ export const AANBETALING_BTW_PERCENTAGE = 21;
 /** Warmtefonds-plafond bij de aanvraag (max. wat WF dekt). */
 export const RESTANT_VAST_INC_BTW = 8500;
 
-export type AanbetalingModus = "restant" | "btw" | "handmatig";
+export type AanbetalingModus = "restant" | "btw" | "handmatig" | "helft";
 
 /** Standaard bij Warmtefonds: klant betaalt de BTW. */
 export const DEFAULT_AANBETALING_MODUS: AanbetalingModus = "btw";
+
+/** Eigen middelen: 50% vooraf, 50% na installatie. */
+export const EIGEN_MIDDELEN_AANBETALING_MODUS: AanbetalingModus = "helft";
 
 export const AANBETALING_MODUS_OPTIES: {
   value: AanbetalingModus;
@@ -239,15 +242,21 @@ export type Aanbetaling = {
 export function normalizeAanbetalingModus(
   value: string | null | undefined
 ): AanbetalingModus {
-  if (value === "btw" || value === "handmatig" || value === "restant") {
+  if (
+    value === "btw" ||
+    value === "handmatig" ||
+    value === "restant" ||
+    value === "helft"
+  ) {
     return value;
   }
   return DEFAULT_AANBETALING_MODUS;
 }
 
 /**
- * Aanbetaling = totaal bedrijfs incl. btw − Warmtefonds-deel.
- * Alleen bij Warmtefonds (`financieringVoorbehoud`). Over de aanbetaling 21% btw.
+ * Aanbetaling berekenen.
+ * Warmtefonds (`financieringVoorbehoud`): BTW / restant / handmatig.
+ * Eigen middelen: altijd 50% vooraf (helft), 50% na installatie.
  */
 export function aanbetalingVanOrder(opts: {
   subtotaalExBtw: number;
@@ -267,8 +276,10 @@ export function aanbetalingVanOrder(opts: {
       ? round2(Number(opts.totaalIncBtw))
       : round2(orderExBtw + orderBtw);
 
-  const modus = normalizeAanbetalingModus(opts.modus);
   const warmtefonds = Boolean(opts.financieringVoorbehoud);
+  const modus = warmtefonds
+    ? normalizeAanbetalingModus(opts.modus)
+    : EIGEN_MIDDELEN_AANBETALING_MODUS;
 
   let bedragIncBtw = 0;
   if (warmtefonds) {
@@ -277,10 +288,15 @@ export function aanbetalingVanOrder(opts: {
     } else if (modus === "handmatig") {
       const raw = round2(Number(opts.handmatigIncBtw) || 0);
       bedragIncBtw = round2(Math.min(Math.max(0, raw), orderIncBtw));
+    } else if (modus === "helft") {
+      bedragIncBtw = round2(orderIncBtw / 2);
     } else {
       const restant = warmtefondsRestantIncBtw(orderExBtw);
       bedragIncBtw = round2(Math.max(0, orderIncBtw - restant));
     }
+  } else {
+    // Eigen middelen: 50% vooraf, 50% na installatie
+    bedragIncBtw = round2(orderIncBtw / 2);
   }
 
   const split = splitIncToExBtw(bedragIncBtw);

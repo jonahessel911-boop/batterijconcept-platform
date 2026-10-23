@@ -164,6 +164,7 @@ export type DrilldownRaw = {
     rol: string | null;
     email?: string | null;
     startdatum?: string | null;
+    commissie_pct?: number | null;
   }[];
 };
 

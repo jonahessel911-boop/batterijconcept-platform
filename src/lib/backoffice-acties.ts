@@ -3,7 +3,11 @@ import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
-import { factuurIsOverdue, vervaldatumEndOfDay } from "@/lib/factuur-betaling";
+import {
+  factuurEffectieveDeadline,
+  factuurIsOverdue,
+  vervaldatumEndOfDay,
+} from "@/lib/factuur-betaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import {
   annuleringsDoorFromAfspraak,
@@ -27,7 +31,14 @@ import {
   INKOOP_DAGEN_VOOR_INSTALLATIE,
   materiaalNogTeBestellen,
 } from "@/lib/inkoop-sla";
-import { resolveFinancieringStatus } from "@/lib/financiering-status";
+import {
+  FINANCIERING_PIPELINE,
+  FINANCIERING_STATUS_LABEL,
+  FINANCIERING_STATUS_TAAK,
+  normalizeFinancieringStatus,
+  resolveFinancieringStatus,
+  type FinancieringStatus,
+} from "@/lib/financiering-status";
 
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
@@ -37,7 +48,8 @@ export type BackofficeActieSoort =
   | "volgende_stap"
   | "bestel_materiaal"
   | "aangetekende_brief"
-  | "schouw_inplannen";
+  | "schouw_inplannen"
+  | "wacht_warmtefonds";
 
 export type HerplanBron = "klant" | "adviseur" | "deur_niet_open";
 
@@ -58,6 +70,11 @@ export type BackofficeActie = {
   overdue: boolean;
   /** PRIO: deadline vandaag/morgen of overdue */
   prio?: boolean;
+  /**
+   * Vastgelopen: overdue langer dan 2 dagen, of niet-urgente “later”-stap
+   * die al de deadline voorbij is. UI toont VAST-badge.
+   */
+  vastgelopen?: boolean;
   leadId: string;
   leadNaam: string;
   telefoon?: string | null;
@@ -79,6 +96,8 @@ export type BackofficeActie = {
   annuleringsReden?: string | null;
   /** Wie de (CRM-)annulering deed / gekoppelde adviseur */
   geannuleerdDoorNaam?: string | null;
+  /** Originele afspraak start (herplan) */
+  afspraakStartAt?: string | null;
   /** Klant-annulering vs adviseur/CRM-herplan */
   herplanBron?: HerplanBron;
   /** Volgende-stap: waarom dit nu moet */
@@ -121,9 +140,12 @@ export function isWarmtefondsSale(opts: {
 }
 
 export function isWarmtefondsProject(project: Project): boolean {
+  // Lead-sale-status wint op stale project.betaalwijze (bijv. na omzetting EM↔WF)
+  const leadStatus = project.leads?.status ?? null;
+  if (leadStatus === "sale_eigen_middelen") return false;
+  if (leadStatus === "sale_financiering") return true;
   if (project.betaalwijze === "eigen_middelen") return false;
   if (project.betaalwijze === "warmtefonds") return true;
-  const leadStatus = project.leads?.status ?? null;
   return isWarmtefondsSale({
     leadStatus,
     financieringVoorbehoud: projectOfferte(project)?.financiering_voorbehoud,
@@ -459,11 +481,14 @@ export function openNabellenFactuurActies(
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
   for (const f of facturen) {
+    if (f.credit_van_factuur_id) continue;
     if (
       !factuurIsOverdue({
         status: f.status,
         vervaldatum: f.vervaldatum,
+        afgesproken_betaaldatum: f.afgesproken_betaaldatum,
         betaald_op: f.betaald_op,
+        credit_van_factuur_id: f.credit_van_factuur_id,
         now,
       })
     ) {
@@ -473,13 +498,18 @@ export function openNabellenFactuurActies(
     const offerteNummer =
       f.offertes?.offerte_nummer ||
       (f.omschrijving?.match(/OFF-[\w-]+/i)?.[0] ?? null);
+    const deadline =
+      factuurEffectieveDeadline({
+        vervaldatum: f.vervaldatum,
+        afgesproken_betaaldatum: f.afgesproken_betaaldatum,
+      }) || f.vervaldatum;
     items.push({
       id: `nabellen-factuur-${f.id}`,
       soort: "nabellen_factuur",
       titel: "Nabellen factuur",
       detail: `Factuur ${f.factuur_nummer} is verlopen en nog niet betaald.`,
-      deadlineAt: f.vervaldatum
-        ? vervaldatumEndOfDay(f.vervaldatum).toISOString()
+      deadlineAt: deadline
+        ? vervaldatumEndOfDay(deadline).toISOString()
         : now.toISOString(),
       overdue: true,
       leadId: f.lead_id,
@@ -661,6 +691,7 @@ export function openHerplanAfspraakActies(
       href: `/?tab=leads&lead=${lead.id}`,
       annuleringsReden: reden,
       geannuleerdDoorNaam: doorNaam,
+      afspraakStartAt: cancelled?.start_at ?? null,
       herplanBron: "klant",
     });
     seen.add(lead.id);
@@ -703,6 +734,7 @@ export function openHerplanAfspraakActies(
       href: `/?tab=leads&lead=${lead.id}`,
       annuleringsReden: "Deur niet open / klant niet bereikbaar",
       geannuleerdDoorNaam: doorNaam,
+      afspraakStartAt: latestVisit?.start_at ?? null,
       herplanBron: "deur_niet_open",
     });
     seen.add(lead.id);
@@ -737,6 +769,7 @@ export function openHerplanAfspraakActies(
       href: `/?tab=leads&lead=${leadId}`,
       annuleringsReden: reden,
       geannuleerdDoorNaam: doorNaam,
+      afspraakStartAt: cancelled.start_at,
       herplanBron: "adviseur",
     });
     seen.add(leadId);
@@ -812,6 +845,7 @@ export function openVolgendeStapActies(
         ? formatSchouwWeekLabel(project.schouw_jaar, project.schouw_week)
         : undefined;
 
+    const later = !stap.urgent && !stap.overdue;
     items.push({
       id: `volgende-stap-${project.id}`,
       soort: "volgende_stap",
@@ -821,6 +855,8 @@ export function openVolgendeStapActies(
       deadlineAt,
       saleAt: saleMomentVanProject(project).toISOString(),
       overdue: stap.overdue,
+      prio: stap.overdue || isPrioDeadline(new Date(deadlineAt), now),
+      vastgelopen: isVastgelopen(deadlineAt, stap.overdue, now),
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -836,10 +872,25 @@ export function openVolgendeStapActies(
       project,
       planSchouwdag,
       planSchouwweek,
-      later: !stap.urgent && !stap.overdue,
+      later,
     });
   }
   return items;
+}
+
+/** Overdue ≥ 2 kalenderdagen → vastgelopen. */
+export function isVastgelopen(
+  deadlineAt: string | Date,
+  overdue: boolean,
+  now = new Date()
+): boolean {
+  if (!overdue) return false;
+  const due =
+    typeof deadlineAt === "string" ? new Date(deadlineAt) : deadlineAt;
+  if (Number.isNaN(due.getTime())) return overdue;
+  const days =
+    (now.getTime() - due.getTime()) / (1000 * 60 * 60 * 24);
+  return days >= 2;
 }
 
 /** PRIO als deadline vandaag of morgen (≤ 1 kalenderdag) of overdue. */
@@ -866,14 +917,112 @@ function softDueOverWerkdagen(from: Date, workdays: number): Date {
   return fromZonedTime(cursor, AMSTERDAM_TZ);
 }
 
-/** Alleen echte Warmtefonds-kolom — niet legacy project.status. */
-function isWarmtefondsGoedgekeurd(project: Project): boolean {
-  return project.financiering_status === "aanvraag_goedgekeurd";
+/**
+ * Warmtefonds goedgekeurd (of verder): dan mag schouw worden gepland.
+ * Herkent legacy `aanvraag_goedgekeurd`, pipeline `aanbod_ondertekenen`+,
+ * én project.status `warmtefonds_goedgekeurd`.
+ */
+export function isWarmtefondsGoedgekeurd(project: Project): boolean {
+  if (project.status === "warmtefonds_goedgekeurd") return true;
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  if (!n || n === "afgewezen") return false;
+  // Legacy key blijft expliciet
+  if (raw === "aanvraag_goedgekeurd") return true;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
+  return idx >= 0 && from >= 0 && idx >= from;
+}
+
+/** Nog wachten op Warmtefonds (vóór goedkeuring) — hoort in “Wacht op extern”. */
+export function isWarmtefondsWachtOpExtern(project: Project): boolean {
+  if (!isWarmtefondsProject(project)) return false;
+  if (project.status === "annulering") return false;
+  if (isWarmtefondsGoedgekeurd(project)) return false;
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  if (!n || n === "afgewezen") return false;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
+  return idx >= 0 && from >= 0 && idx < from;
+}
+
+function warmtefondsWachtTitel(status: FinancieringStatus): string {
+  const n = normalizeFinancieringStatus(status) || status;
+  if (n === "in_behandeling" || status === "aanvraag_gedaan") {
+    return "Wachten goedkeuring Warmtefonds";
+  }
+  return (
+    FINANCIERING_STATUS_TAAK[status]?.titel ||
+    FINANCIERING_STATUS_TAAK[n]?.titel ||
+    FINANCIERING_STATUS_LABEL[n] ||
+    "Warmtefonds opvolgen"
+  );
+}
+
+/**
+ * Warmtefonds vóór goedkeuring: zichtbaar onder “Wacht op extern”.
+ * Na goedkeuring verdwijnt deze actie en verschijnt “Schouw inplannen”.
+ */
+export function openWarmtefondsWachtActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isWarmtefondsWachtOpExtern(project)) continue;
+    const raw = resolveFinancieringStatus(project);
+    if (!raw) continue;
+    const n = normalizeFinancieringStatus(raw) || raw;
+    const taak = FINANCIERING_STATUS_TAAK[raw] || FINANCIERING_STATUS_TAAK[n];
+    const dueDays = taak?.dueDays ?? 5;
+    const sale = saleMomentVanProject(project);
+    const deadlineAt = softDueOverWerkdagen(sale, dueDays);
+    // Soft: niet “te laat” forceren terwijl we echt op extern wachten —
+    // gebruik max(sale+due, now+2wd) zodat nieuwe dossiers niet meteen rood zijn
+    const softFromNow = softDueOverWerkdagen(now, Math.min(dueDays, 5));
+    const due =
+      deadlineAt.getTime() < now.getTime() ? softFromNow : deadlineAt;
+
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const titel = warmtefondsWachtTitel(raw);
+    const statusLabel =
+      FINANCIERING_STATUS_LABEL[n] || FINANCIERING_STATUS_LABEL[raw] || n;
+
+    items.push({
+      id: `wacht-wf-${project.id}`,
+      soort: "wacht_warmtefonds",
+      titel,
+      detail: `Status: ${statusLabel} — zodra goedgekeurd → schouw inplannen`,
+      reden:
+        n === "in_behandeling" || raw === "aanvraag_gedaan"
+          ? "Warmtefonds beoordeelt de aanvraag. Check portaal/Edwin; bij goedkeuring plan je de schouw."
+          : `Warmtefonds-fase “${statusLabel}” afronden vóór schouw.`,
+      deadlineAt: due.toISOString(),
+      saleAt: sale.toISOString(),
+      overdue: false,
+      prio: false,
+      vastgelopen: false,
+      later: true,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
 }
 
 /**
  * Batterij bestellen: schouw gepland + order volledig betaald + installatie gezet
- * + checklist nog open. Deadline = 3 werkdagen vóór installatie (17:00).
+ * + checklist nog open. Deadline = 5 werkdagen vóór installatie (17:00).
  * PRIO als deadline ≤ morgen of overdue.
  */
 export function openBestelMateriaalActies(
@@ -926,6 +1075,7 @@ export function openBestelMateriaalActies(
       saleAt: saleMomentVanProject(project).toISOString(),
       overdue,
       prio,
+      vastgelopen: isVastgelopen(deadlineAt, overdue, now),
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -1009,6 +1159,7 @@ export function openSchouwInplannenActies(
       saleAt: saleMomentVanProject(project).toISOString(),
       overdue,
       prio: isPrioDeadline(deadlineAt, now),
+      vastgelopen: isVastgelopen(deadlineAt, overdue, now),
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -1045,6 +1196,26 @@ export function openBackofficeActies(
   }
 ): BackofficeActie[] {
   // bel-schouw + nabellen-factuur: gedekt door status-gekoppelde auto-taken
+  const schouw = openSchouwInplannenActies(projecten, now);
+  const schouwProjectIds = new Set(
+    schouw.map((a) => a.projectId).filter(Boolean) as string[]
+  );
+  const volgende = openVolgendeStapActies(projecten, facturen, now).filter(
+    (a) => {
+      // Geen “later” (nog niet belweek) in de actieve lijst
+      if (a.later) return false;
+      // Geen dubbele schouwdag-actie naast schouw_inplannen
+      if (
+        a.projectId &&
+        schouwProjectIds.has(a.projectId) &&
+        /schouwdag/i.test(a.titel)
+      ) {
+        return false;
+      }
+      return true;
+    }
+  );
+
   return [
     ...openHerplanAfspraakActies(
       opts?.leads || [],
@@ -1052,13 +1223,17 @@ export function openBackofficeActies(
       now,
       opts?.adviseurs || []
     ),
-    ...openSchouwInplannenActies(projecten, now),
+    ...schouw,
+    ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, now),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, facturen, now),
-    ...openVolgendeStapActies(projecten, facturen, now),
+    ...volgende,
   ].sort(
     (a, b) =>
+      Number(b.vastgelopen) - Number(a.vastgelopen) ||
+      Number(b.overdue) - Number(a.overdue) ||
+      Number(b.prio) - Number(a.prio) ||
       new Date(a.deadlineAt).getTime() - new Date(b.deadlineAt).getTime()
   );
 }
@@ -1074,6 +1249,7 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "volgende_stap",
   "aangetekende_brief",
   "schakel_financiering",
+  "wacht_warmtefonds",
 ]);
 
 export type ActiesTabId =
@@ -1089,7 +1265,11 @@ export function actieTabVoorSoort(
 ): ActiesTabId {
   if (soort === "herplan_afspraak") return "afspraken";
   if (soort === "bestel_materiaal") return "purchasing";
-  if (soort === "aangetekende_brief" || soort === "schakel_financiering") {
+  if (
+    soort === "aangetekende_brief" ||
+    soort === "schakel_financiering" ||
+    soort === "wacht_warmtefonds"
+  ) {
     return "nazorg";
   }
   if (soort === "volgende_stap") {

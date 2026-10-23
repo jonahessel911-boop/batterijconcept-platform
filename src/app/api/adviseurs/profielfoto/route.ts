@@ -35,36 +35,49 @@ export async function GET() {
     const sb = getSupabaseAdmin();
     const { data, error } = await sb
       .from("adviseurs")
-      .select("id, naam, email, profielfoto_path")
+      .select("id, naam, email, profielfoto_path, commissie_pct")
       .eq("id", auth.session.adviseurId)
       .maybeSingle();
 
     if (error) {
       if (
         error.message?.includes("profielfoto_path") ||
+        error.message?.includes("commissie_pct") ||
         error.code === "42703"
       ) {
         const bare = await sb
           .from("adviseurs")
-          .select("id, naam, email")
+          .select("id, naam, email, commissie_pct")
           .eq("id", auth.session.adviseurId)
           .maybeSingle();
+        const barePct = (bare.data as { commissie_pct?: number | null } | null)
+          ?.commissie_pct;
         return NextResponse.json({
           id: bare.data?.id || auth.session.adviseurId,
           naam: bare.data?.naam || auth.session.naam,
           email: bare.data?.email || auth.session.email,
           profielfoto_url: null,
-          migration_needed: true,
+          commissie_pct:
+            barePct != null && Number.isFinite(Number(barePct))
+              ? Number(barePct)
+              : null,
+          migration_needed: Boolean(
+            error.message?.includes("profielfoto_path")
+          ),
         });
       }
       throw error;
     }
 
+    const pct = (data as { commissie_pct?: number | null } | null)
+      ?.commissie_pct;
     return NextResponse.json({
       id: data?.id || auth.session.adviseurId,
       naam: data?.naam || auth.session.naam,
       email: data?.email || auth.session.email,
       profielfoto_url: publicProfielfotoUrl(sb, data?.profielfoto_path),
+      commissie_pct:
+        pct != null && Number.isFinite(Number(pct)) ? Number(pct) : null,
     });
   } catch (e) {
     return NextResponse.json({ error: errMessage(e) }, { status: 500 });

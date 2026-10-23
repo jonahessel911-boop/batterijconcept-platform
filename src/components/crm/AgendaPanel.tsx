@@ -56,6 +56,7 @@ import {
 } from "@/lib/labels";
 import {
   aanbetalingVanOrder,
+  EIGEN_MIDDELEN_AANBETALING_MODUS,
   normalizeAanbetalingModus,
   parseEuroInput,
 } from "@/lib/aanbetaling";
@@ -1365,7 +1366,9 @@ export function AfspraakDetail({
           subtotaalExBtw: Number(saleOfferte.subtotaal_ex_btw) || 0,
           btwBedrag: Number(saleOfferte.btw_bedrag) || 0,
           totaalIncBtw: Number(saleOfferte.totaal_inc_btw) || 0,
-          modus: boValues.aanbetalingModus,
+          modus: warmtefonds
+            ? boValues.aanbetalingModus
+            : EIGEN_MIDDELEN_AANBETALING_MODUS,
           handmatigIncBtw: parseEuroInput(boValues.aanbetalingHandmatig),
           financieringVoorbehoud: warmtefonds,
         });
@@ -1375,7 +1378,9 @@ export function AfspraakDetail({
           body: JSON.stringify({
             actie_required: false,
             financiering_voorbehoud: warmtefonds,
-            aanbetaling_modus: warmtefonds ? boValues.aanbetalingModus : null,
+            aanbetaling_modus: warmtefonds
+              ? boValues.aanbetalingModus
+              : EIGEN_MIDDELEN_AANBETALING_MODUS,
             aanbetaling_bedrag_inc:
               warmtefonds && boValues.aanbetalingModus === "handmatig"
                 ? parseEuroInput(boValues.aanbetalingHandmatig)

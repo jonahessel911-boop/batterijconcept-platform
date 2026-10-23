@@ -20,6 +20,10 @@ import {
   type ProjectStatusFase,
   type ProjectStatusKey,
 } from "@/lib/project-status-config";
+import {
+  AnnuleringBedenktijdModal,
+  type AnnuleringKeuze,
+} from "./AnnuleringBedenktijdModal";
 
 type MenuPos = {
   top: number;
@@ -52,6 +56,7 @@ export function ProjectStatusSelect({
   const [localStatus, setLocalStatus] = useState(project.status);
   const [pos, setPos] = useState<MenuPos | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [annuleringModal, setAnnuleringModal] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -146,18 +151,86 @@ export function ProjectStatusSelect({
       ? normalizeProjectStatus(localStatus)
       : current;
 
+  async function applyStatus(
+    next: ProjectStatus,
+    opts?: {
+      holdNotitie?: string | null;
+      annulering?: AnnuleringKeuze;
+    }
+  ) {
+    setSaving(true);
+    setError(null);
+    const prev = localStatus;
+    setLocalStatus(next);
+    setOpen(false);
+    try {
+      const body: {
+        status: ProjectStatus;
+        backoffice_notitie?: string | null;
+      } = { status: next };
+      if (next === "hold_sales_actie") {
+        body.backoffice_notitie = opts?.holdNotitie ?? null;
+      }
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Status wijzigen mislukt"
+        );
+      }
+      let updated = (data as { project?: Project }).project;
+      if (!updated) {
+        updated = {
+          ...project,
+          status: next,
+          ...(next === "hold_sales_actie"
+            ? { backoffice_notitie: opts?.holdNotitie ?? null }
+            : {}),
+        };
+      }
+
+      if (next === "annulering" && opts?.annulering?.stuurMail) {
+        const mailRes = await fetch(
+          `/api/projecten/${project.id}/annuleringsmail`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              binnenBedenktijd: opts.annulering.binnenBedenktijd,
+            }),
+          }
+        );
+        const mailData = await mailRes.json().catch(() => ({}));
+        if (!mailRes.ok) {
+          setError(
+            (mailData as { error?: string }).error ||
+              "Status gezet, maar annuleringsmail mislukt"
+          );
+        }
+      }
+
+      onUpdated?.(updated);
+      setAnnuleringModal(false);
+    } catch (e) {
+      setLocalStatus(prev);
+      setError(e instanceof Error ? e.message : "Fout");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function selectStatus(next: ProjectStatus) {
     if (next === current || saving) {
       setOpen(false);
       return;
     }
-    if (
-      next === "annulering" &&
-      !window.confirm(
-        "Weet je zeker dat je deze order definitief wilt annuleren?\n\nDe klant krijgt niet automatisch een mail — open het project om desgewenst de annuleringsmail te versturen."
-      )
-    ) {
+    if (next === "annulering") {
       setOpen(false);
+      setAnnuleringModal(true);
       return;
     }
 
@@ -174,46 +247,7 @@ export function ProjectStatusSelect({
       holdNotitie = raw.trim();
     }
 
-    setSaving(true);
-    setError(null);
-    const prev = localStatus;
-    setLocalStatus(next);
-    setOpen(false);
-    try {
-      const body: {
-        status: ProjectStatus;
-        backoffice_notitie?: string | null;
-      } = { status: next };
-      if (next === "hold_sales_actie") {
-        body.backoffice_notitie = holdNotitie || null;
-      }
-      const res = await fetch(`/api/projecten/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Status wijzigen mislukt"
-        );
-      }
-      const updated = (data as { project?: Project }).project;
-      if (updated) onUpdated?.(updated);
-      else
-        onUpdated?.({
-          ...project,
-          status: next,
-          ...(next === "hold_sales_actie"
-            ? { backoffice_notitie: holdNotitie }
-            : {}),
-        });
-    } catch (e) {
-      setLocalStatus(prev);
-      setError(e instanceof Error ? e.message : "Fout");
-    } finally {
-      setSaving(false);
-    }
+    await applyStatus(next, { holdNotitie });
   }
 
   const grouped = (() => {
@@ -340,6 +374,20 @@ export function ProjectStatusSelect({
       ) : null}
 
       {menu}
+
+      {annuleringModal
+        ? createPortal(
+            <AnnuleringBedenktijdModal
+              project={project}
+              busy={saving}
+              onClose={() => {
+                if (!saving) setAnnuleringModal(false);
+              }}
+              onConfirm={(keuze) => applyStatus("annulering", { annulering: keuze })}
+            />,
+            document.body
+          )
+        : null}
     </div>
   );
 }

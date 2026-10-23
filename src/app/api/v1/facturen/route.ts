@@ -50,7 +50,9 @@ export async function GET(req: NextRequest) {
 
     let facturen = (data || []) as Factuur[];
     if (openstaandOnly) {
-      facturen = facturen.filter((f) => factuurIsOpenstaand(f.status));
+      facturen = facturen.filter(
+        (f) => !f.credit_van_factuur_id && factuurIsOpenstaand(f.status)
+      );
     }
 
     return jsonOk({

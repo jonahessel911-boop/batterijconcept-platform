@@ -63,12 +63,18 @@ export function isProjectKlaarVoorMateriaalInkopen(opts: {
     return true;
   }
 
+  const aanbetalingBetaald = paid.some((f) =>
+    isAanbetalingFactuurOmschrijving(f.omschrijving)
+  );
+
   if (opts.warmtefonds) {
     // Warmtefonds: klantfacturen (meestal BTW/aanbetaling) betaald, geen open posten
-    return paid.some((f) => isAanbetalingFactuurOmschrijving(f.omschrijving))
-      ? true
-      : paid.length > 0;
+    return aanbetalingBetaald || paid.length > 0;
   }
+
+  // Eigen middelen 50/50: aanbetaling (50%) betaald → materiaal/installatie;
+  // restantfactuur volgt ná installatie.
+  if (aanbetalingBetaald) return true;
 
   const orderInc = Number(opts.orderIncBtw) || 0;
   if (orderInc <= 0) return true;
