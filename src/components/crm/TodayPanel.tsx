@@ -16,7 +16,9 @@ const GEEN_AFBOEK_STATUS = new Set([
 ]);
 
 function isSaleStatus(status: string | null | undefined): boolean {
-  return isSaleUitkomst(status) || status === "deal";
+  return (
+    isSaleUitkomst(status as LeadStatus | null | undefined) || status === "deal"
+  );
 }
 
 function afboekRedenLabel(status: string | null | undefined): string | null {

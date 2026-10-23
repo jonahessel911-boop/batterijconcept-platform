@@ -226,7 +226,10 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let facturenRows = facturenRes.error ? null : facturenRes.data;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let facturenRows: any[] | null = facturenRes.error
+      ? null
+      : facturenRes.data;
     if (facturenRes.error) {
       const retry = await sb
         .from("facturen")

@@ -289,7 +289,15 @@ export function buildDashboardV2Vandaag(
     afspraakCountsByAdv.set(aid, cnt);
 
     const offerte = offerteByLead.get(a.lead_id) ?? null;
-    const isSale = isSaleUitkomst(leadStatus) || leadStatus === "deal";
+    const isSale =
+      isSaleUitkomst(
+        leadStatus as
+          | "sale_financiering"
+          | "sale_eigen_middelen"
+          | ""
+          | null
+          | undefined
+      ) || leadStatus === "deal";
     let sale_route: VandaagSaleRoute | null = null;
     let orderwaarde_ex_btw: number | null = null;
     if (isSale) {

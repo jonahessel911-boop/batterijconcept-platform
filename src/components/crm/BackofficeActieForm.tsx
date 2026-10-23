@@ -1,6 +1,7 @@
 "use client";
 
 import type { AanbetalingModus } from "@/lib/aanbetaling";
+import type { SaleOpbelMoment } from "@/lib/sale-opbel";
 import { AanbetalingInstelling } from "./AanbetalingInstelling";
 
 export type BackofficeActieFormValues = {
@@ -8,6 +9,8 @@ export type BackofficeActieFormValues = {
   aanbetalingHandmatig: string;
   backofficeNotitie: string;
   installateurNotitie: string;
+  /** Optioneel: plan belmoment na sale-checkout */
+  opbelMoment?: SaleOpbelMoment | null;
 };
 
 type Props = {
