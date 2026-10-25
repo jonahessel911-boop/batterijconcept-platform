@@ -75,7 +75,12 @@ function barSegments(b: BelConversieSeriesBucket): {
 }[] {
   const known = b.ingepland + b.geenInteresse + b.geenContact;
   const overig = Math.max(0, b.gebeld - known);
-  const parts = [
+  const parts: {
+    key: string;
+    label: string;
+    color: string;
+    value: number;
+  }[] = [
     {
       key: "ingepland",
       label: "Ingepland",

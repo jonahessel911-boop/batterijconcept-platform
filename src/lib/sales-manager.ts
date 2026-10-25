@@ -27,7 +27,7 @@ import {
   resolveMgmtPeriod,
   type MgmtPeriodPreset,
 } from "@/lib/management-dashboard/periods";
-import { normalizeProjectStatus } from "@/lib/labels";
+import { AFSPRAAK_UITKOMSTEN, normalizeProjectStatus } from "@/lib/labels";
 import type { Afspraak } from "@/types/database";
 
 export type SalesManagerPeriod =
@@ -339,7 +339,9 @@ async function loadDoorgezetteSaleLeadIds(
 
 /**
  * Echte afboek-uitkomst (agenda-checkout of BO-doorzetting).
- * Een gepland vervolg telt NIET als afgeboekt — anders wijken tabel en popup af.
+ * Inclusief vervolg_fysiek / vervolg_tel — dat ís afboeken in de agenda
+ * (daarna volgt een vervolg-afspraak). Alleen `afspraak` / `na_afspraak` /
+ * `nieuw` zonder checkout telt als niet-afgeboekt.
  */
 function hasSalesManagerUitkomst(
   leadId: string,
@@ -349,6 +351,10 @@ function hasSalesManagerUitkomst(
   if (doorgezetSaleLeadIds.has(leadId)) return true;
   if (!leadStatus) return false;
   if (isSaleUitkomst(leadStatus as LeadStatus)) return true;
+  // Agenda-checkout keuzes (incl. vervolg op locatie / telefonisch)
+  if ((AFSPRAAK_UITKOMSTEN as readonly string[]).includes(leadStatus)) {
+    return true;
+  }
   if (VERVOLG_PUNT_VRIJGESTELD.has(leadStatus as LeadStatus)) return true;
   // Getekende deal = uitkomst van het bezoek (sale-type volgt later)
   if (leadStatus === "deal") return true;
