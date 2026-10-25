@@ -415,15 +415,7 @@ export function afspraakAgendaAccent(
     };
   }
 
-  if (status === "verzet") {
-    return {
-      bar: "bg-[#C45A12]",
-      bg: "bg-[#FFF0E6]",
-      time: "text-[#C45A12]",
-    };
-  }
-
-  // Actief (gepland / bevestigd): kleur per soort
+  // Actief (gepland / bevestigd / historisch verzet): kleur per soort
   if (soort === "warme_bel") {
     return {
       bar: "bg-[#C9A227]",

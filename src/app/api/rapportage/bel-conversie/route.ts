@@ -8,6 +8,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import {
   buildBelConversie,
+  buildBelConversieSeries,
   buildBelConversieTargets,
   huisbezoekLeadIdsOpDag,
   inAmsterdamDayRange,
@@ -16,6 +17,7 @@ import {
   type BelConversieAfspraak,
   type BelConversieCpa,
   type BelConversieLead,
+  type BelConversieSeriesGranularity,
 } from "@/lib/bel-conversie";
 import {
   parseConversiePeriod,
@@ -301,6 +303,17 @@ export async function GET(req: NextRequest) {
       : periodDays <= 14
         ? 14
         : 30;
+  const granRaw = (req.nextUrl.searchParams.get("granularity") || "")
+    .trim()
+    .toLowerCase();
+  const seriesGranularity: BelConversieSeriesGranularity =
+    granRaw === "week" || granRaw === "maand" || granRaw === "month"
+      ? "week"
+      : granRaw === "day" || granRaw === "dag" || granRaw === "week_view"
+        ? "day"
+        : periodDays > 10
+          ? "week"
+          : "day";
 
   try {
     const jar = await cookies();
@@ -825,9 +838,20 @@ export async function GET(req: NextRequest) {
       geplandDezeWeekForTargets: geplandVoorWeekKaart,
     });
 
+    const series = buildBelConversieSeries({
+      rangeStartYmd,
+      rangeEndYmd: dateYmd,
+      granularity: seriesGranularity,
+      leads: leadsRows,
+      afspraken,
+      huisbezoekHistorie,
+    });
+
     return NextResponse.json({
       ok: true,
       ...result,
+      series,
+      seriesGranularity,
       cpa,
       meta: {
         sessionRol,
@@ -839,6 +863,7 @@ export async function GET(req: NextRequest) {
         rangeStartYmd,
         rangeEndYmd: dateYmd,
         customRange,
+        seriesGranularity,
       },
     });
   } catch (e) {

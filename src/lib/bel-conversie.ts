@@ -3,16 +3,18 @@
  */
 
 import { addDays } from "date-fns";
-import { fromZonedTime, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
+import { nl } from "date-fns/locale";
 import { isAdminEmail } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { isGeenInteresseStatus } from "@/lib/labels";
 import { round2, safeDiv } from "@/lib/management-dashboard/periods";
 import {
   PROVINCIE_ONBEKEND,
   provincieVanPostcode,
 } from "@/lib/postcode-provincie";
 import { normalizeRol } from "@/lib/rollen";
-import { schouwWeekToMondayIso } from "@/lib/schouw-week";
+import { schouwWeekFromDate, schouwWeekToMondayIso } from "@/lib/schouw-week";
 
 export type BelConversieLead = {
   id: string;
@@ -177,10 +179,41 @@ export type BelConversieResult = {
     ingepland: number;
     leadToAppt: number | null;
     redenen: BelConversieRedenen;
+    /**
+     * Alleen leads die niet meer status “nieuw” hebben (afgeboekt / in funnel).
+     * L→A = huisbezoeken ÷ die leads.
+     */
+    nonNieuwGebeld: number;
+    nonNieuwIngepland: number;
+    nonNieuwLeadToAppt: number | null;
   };
   targets: BelConversieTargets;
   byBeller: BelConversieBellerRow[];
   recenteAfspraken: BelConversieRecenteAfspraak[];
+  /** Tijdreeks voor staafgrafiek (dag of week) */
+  series?: BelConversieSeriesBucket[];
+  seriesGranularity?: BelConversieSeriesGranularity;
+};
+
+/** Granulariteit van de bel-tijdreeks. */
+export type BelConversieSeriesGranularity = "day" | "week";
+
+/** Eén staaf in de bel-conversie-grafiek. */
+export type BelConversieSeriesBucket = {
+  key: string;
+  label: string;
+  startYmd: string;
+  endYmd: string;
+  /** Nieuwe huisbezoeken ingepland in dit venster */
+  ingepland: number;
+  /** Totaal gebeld (ingepland + terugbel/uitkomsten) */
+  gebeld: number;
+  geenInteresse: number;
+  geenContact: number;
+  /** L→A alleen op leads met status ≠ nieuw */
+  nonNieuwGebeld: number;
+  nonNieuwIngepland: number;
+  leadToAppt: number | null;
 };
 
 /** Werkdagen per week voor bel-dagoelen. */
@@ -776,6 +809,19 @@ export function buildBelConversie(opts: {
   const leadToAppt = l2a != null ? round2(l2a * 100) : null;
   const redenen = redenenTotal;
 
+  // L→A voor leads die niet (meer) “nieuw” zijn — outcome/werk in de funnel
+  let nonNieuwGebeld = 0;
+  let nonNieuwIngepland = 0;
+  for (const l of byId.values()) {
+    const status = (l.status || "").trim().toLowerCase();
+    if (status === "nieuw" || status === "") continue;
+    nonNieuwGebeld += 1;
+    if (ingeplandIds.has(l.id)) nonNieuwIngepland += 1;
+  }
+  const nonNieuwL2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
+  const nonNieuwLeadToAppt =
+    nonNieuwL2a != null ? round2(nonNieuwL2a * 100) : null;
+
   const baseTargets =
     opts.targets ||
     buildBelConversieTargets({
@@ -869,9 +915,203 @@ export function buildBelConversie(opts: {
       ingepland: ingeplandTotal,
       leadToAppt,
       redenen,
+      nonNieuwGebeld,
+      nonNieuwIngepland,
+      nonNieuwLeadToAppt,
     },
     targets,
     byBeller,
     recenteAfspraken,
   };
 }
+
+function noonAmsterdamFromYmd(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return fromZonedTime(new Date(y, m - 1, d, 12, 0, 0, 0), AMSTERDAM_TZ);
+}
+
+function shiftAmsterdamYmdLocal(ymd: string, deltaDays: number): string {
+  return ymdFromAmsterdamDate(addDays(noonAmsterdamFromYmd(ymd), deltaDays));
+}
+
+function isGeenContactStatus(status: string | null | undefined): boolean {
+  const s = (status || "").trim().toLowerCase();
+  return s === "geen_contact" || s === "vervolg_geen_contact";
+}
+
+/** Metrics voor één Amsterdam-venster (zelfde tellingen als totals). */
+export function scoreBelConversieWindow(opts: {
+  startYmd: string;
+  endYmd: string;
+  leads: BelConversieLead[];
+  afspraken: BelConversieAfspraak[];
+  huisbezoekHistorie?: BelConversieAfspraak[];
+}): Omit<
+  BelConversieSeriesBucket,
+  "key" | "label" | "startYmd" | "endYmd"
+> {
+  const { start } = amsDayBounds(opts.startYmd);
+  const { end } = amsDayBounds(opts.endYmd);
+  const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const ingeplandIds = huisbezoekLeadIdsOpDag(
+    opts.afspraken,
+    start,
+    end,
+    historie
+  );
+
+  const byId = new Map<string, BelConversieLead>();
+  for (const l of opts.leads) {
+    const gebeldDag = inAmsterdamDayRange(l.laatst_gebeld_at, start, end);
+    const ingeplandDag = ingeplandIds.has(l.id);
+    if (!gebeldDag && !ingeplandDag) continue;
+    byId.set(l.id, l);
+  }
+
+  let ingepland = 0;
+  let geenInteresse = 0;
+  let geenContact = 0;
+  let nonNieuwGebeld = 0;
+  let nonNieuwIngepland = 0;
+
+  for (const l of byId.values()) {
+    const isIngepland = ingeplandIds.has(l.id);
+    if (isIngepland) {
+      ingepland += 1;
+    } else if (isGeenInteresseStatus(l.status)) {
+      geenInteresse += 1;
+    } else if (isGeenContactStatus(l.status)) {
+      geenContact += 1;
+    }
+
+    const status = (l.status || "").trim().toLowerCase();
+    if (status && status !== "nieuw") {
+      nonNieuwGebeld += 1;
+      if (isIngepland) nonNieuwIngepland += 1;
+    }
+  }
+
+  const gebeld = byId.size;
+  const l2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
+  return {
+    ingepland,
+    gebeld,
+    geenInteresse,
+    geenContact,
+    nonNieuwGebeld,
+    nonNieuwIngepland,
+    leadToAppt: l2a != null ? round2(l2a * 100) : null,
+  };
+}
+
+function dayBucketLabel(ymd: string): string {
+  const noon = noonAmsterdamFromYmd(ymd);
+  return formatInTimeZone(noon, AMSTERDAM_TZ, "EEE d MMM", { locale: nl });
+}
+
+function weekBucketLabel(
+  week: number,
+  startYmd: string,
+  endYmd: string
+): string {
+  const a = formatInTimeZone(
+    noonAmsterdamFromYmd(startYmd),
+    AMSTERDAM_TZ,
+    "d MMM",
+    { locale: nl }
+  );
+  const b = formatInTimeZone(
+    noonAmsterdamFromYmd(endYmd),
+    AMSTERDAM_TZ,
+    "d MMM",
+    { locale: nl }
+  );
+  return `W${week} · ${a}–${b}`;
+}
+
+/** Lege bucket-skeletten voor dag- of week-granulariteit. */
+export function listBelSeriesBucketFrames(
+  rangeStartYmd: string,
+  rangeEndYmd: string,
+  granularity: BelConversieSeriesGranularity
+): Pick<BelConversieSeriesBucket, "key" | "label" | "startYmd" | "endYmd">[] {
+  if (rangeStartYmd > rangeEndYmd) return [];
+
+  if (granularity === "day") {
+    const out: Pick<
+      BelConversieSeriesBucket,
+      "key" | "label" | "startYmd" | "endYmd"
+    >[] = [];
+    let cur = rangeStartYmd;
+    while (cur <= rangeEndYmd) {
+      out.push({
+        key: cur,
+        label: dayBucketLabel(cur),
+        startYmd: cur,
+        endYmd: cur,
+      });
+      cur = shiftAmsterdamYmdLocal(cur, 1);
+    }
+    return out;
+  }
+
+  // Week: ISO-weken die het bereik raken, geclipped tot range
+  const seen = new Set<string>();
+  const out: Pick<
+    BelConversieSeriesBucket,
+    "key" | "label" | "startYmd" | "endYmd"
+  >[] = [];
+  let cur = rangeStartYmd;
+  while (cur <= rangeEndYmd) {
+    const noon = noonAmsterdamFromYmd(cur);
+    const info = schouwWeekFromDate(noon);
+    const key = `${info.jaar}-W${String(info.week).padStart(2, "0")}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      const monday = String(
+        schouwWeekToMondayIso(info.jaar, info.week)
+      ).slice(0, 10);
+      const sunday = shiftAmsterdamYmdLocal(monday, 6);
+      const startYmd = monday < rangeStartYmd ? rangeStartYmd : monday;
+      const endYmd = sunday > rangeEndYmd ? rangeEndYmd : sunday;
+      out.push({
+        key,
+        label: weekBucketLabel(info.week, startYmd, endYmd),
+        startYmd,
+        endYmd,
+      });
+    }
+    cur = shiftAmsterdamYmdLocal(cur, 1);
+  }
+  return out;
+}
+
+/**
+ * Tijdreeks voor staafgrafiek.
+ * `day` = per kalenderdag; `week` = per ISO-week (binnen van–tot).
+ */
+export function buildBelConversieSeries(opts: {
+  rangeStartYmd: string;
+  rangeEndYmd: string;
+  granularity: BelConversieSeriesGranularity;
+  leads: BelConversieLead[];
+  afspraken: BelConversieAfspraak[];
+  huisbezoekHistorie?: BelConversieAfspraak[];
+}): BelConversieSeriesBucket[] {
+  const frames = listBelSeriesBucketFrames(
+    opts.rangeStartYmd,
+    opts.rangeEndYmd,
+    opts.granularity
+  );
+  return frames.map((f) => {
+    const scored = scoreBelConversieWindow({
+      startYmd: f.startYmd,
+      endYmd: f.endYmd,
+      leads: opts.leads,
+      afspraken: opts.afspraken,
+      huisbezoekHistorie: opts.huisbezoekHistorie,
+    });
+    return { ...f, ...scored };
+  });
+}
+

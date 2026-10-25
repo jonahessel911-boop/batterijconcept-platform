@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
       sb
         .from("facturen")
         .select(
-          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, afgesproken_betaaldatum, leads(adviseur_id)"
+          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, afgesproken_betaaldatum, omschrijving, leads(adviseur_id)"
         ),
       sb
         .from("rapportage_kosten")
@@ -234,7 +234,7 @@ export async function GET(req: NextRequest) {
       const retry = await sb
         .from("facturen")
         .select(
-          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, leads(adviseur_id)"
+          "id, lead_id, status, bedrag_ex_btw, btw_bedrag, betaald_op, factuurdatum, vervaldatum, omschrijving, leads(adviseur_id)"
         );
       if (retry.error) throw retry.error;
       facturenRows = retry.data;
@@ -254,6 +254,9 @@ export async function GET(req: NextRequest) {
         afgesproken_betaaldatum:
           ((f as { afgesproken_betaaldatum?: string | null })
             .afgesproken_betaaldatum as string) || null,
+        omschrijving:
+          ((f as { omschrijving?: string | null }).omschrijving as string) ||
+          null,
         adviseur_id: lead?.adviseur_id ?? null,
       };
     });

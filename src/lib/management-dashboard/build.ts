@@ -5,7 +5,10 @@
  */
 
 import { addDays, differenceInCalendarDays } from "date-fns";
-import { factuurIsBetaald } from "@/lib/aanbetaling";
+import {
+  factuurIsBetaald,
+  isAanbetalingFactuurOmschrijving,
+} from "@/lib/aanbetaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import {
@@ -110,6 +113,7 @@ export type MgmtFactuur = {
   afgesproken_betaaldatum?: string | null;
   adviseur_id: string | null;
   credit_van_factuur_id?: string | null;
+  omschrijving?: string | null;
 };
 
 export type MgmtKosten = {
@@ -256,7 +260,12 @@ type PeriodAgg = {
   offertesUitgebrachtIds: string[];
   deals: number;
   dealIds: string[];
+  /** Getekende deals met betaalde aanbetaling */
+  nettoDeals: number;
+  nettoDealIds: string[];
   omzetGetekend: number;
+  /** Omzet getekend van aanbetaalde deals */
+  omzetNettoGetekend: number;
   omzetGefactureerd: number;
   omzetBetaald: number;
   factuurIdsOpen: string[];
@@ -285,7 +294,10 @@ function emptyAgg(): PeriodAgg {
     offertesUitgebrachtIds: [],
     deals: 0,
     dealIds: [],
+    nettoDeals: 0,
+    nettoDealIds: [],
     omzetGetekend: 0,
+    omzetNettoGetekend: 0,
     omzetGefactureerd: 0,
     omzetBetaald: 0,
     factuurIdsOpen: [],
@@ -358,9 +370,7 @@ function computeAgg(
   });
   agg.afsprakenUitgevoerd = uitgevoerd.length;
   agg.afsprakenUitgevoerdIds = uitgevoerd.map((a) => a.id);
-  agg.noShows = afspraken.filter(
-    (a) => a.status === "geannuleerd" || a.status === "verzet"
-  ).length;
+  agg.noShows = afspraken.filter((a) => a.status === "geannuleerd").length;
 
   const allOff = raw.allOffertes || raw.offertes;
   const offertesPeriod = allOff.filter((o) => {
@@ -378,6 +388,16 @@ function computeAgg(
   const projectByOfferte = new Map(
     raw.projecten.filter((p) => p.offerte_id).map((p) => [p.offerte_id!, p])
   );
+
+  const aanbetaaldLeadIds = new Set<string>();
+  for (const f of raw.facturen) {
+    if (
+      isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+      factuurIsBetaald(f.status, f.betaald_op)
+    ) {
+      aanbetaaldLeadIds.add(f.lead_id);
+    }
+  }
 
   const deals = raw.offertes.filter((o) => {
     if (o.status !== "ondertekend") return false;
@@ -407,6 +427,11 @@ function computeAgg(
     agg.dealIds.push(o.id);
     agg.omzetGetekend += omzet;
     agg.dealOmzetten.push(omzet);
+    if (aanbetaaldLeadIds.has(o.lead_id)) {
+      agg.nettoDeals += 1;
+      agg.nettoDealIds.push(o.id);
+      agg.omzetNettoGetekend += omzet;
+    }
     agg.inkoop += hardwareKostenVoorRegels(o.regels || []).totaal;
     agg.projectkosten += projectKostenForDeal(
       o,
@@ -1664,7 +1689,9 @@ function buildFinance(
       leads: agg.leads,
       afsprakenNetto: agg.afsprakenNetto,
       deals: agg.deals,
+      nettoDeals: agg.nettoDeals,
       orderWorth: round2(agg.omzetGetekend),
+      nettoOrderWorth: round2(agg.omzetNettoGetekend),
       revenueInvoiced: round2(agg.omzetGefactureerd),
       revenuePaid: round2(agg.omzetBetaald),
       avgOrderWorth: avgOrder,

@@ -19,6 +19,7 @@ import {
 import { planAfspraak } from "@/lib/plan-afspraak";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
+import { appendVerzetNotitie } from "@/lib/format";
 
 export const runtime = "nodejs";
 
@@ -420,11 +421,18 @@ export async function PATCH(req: NextRequest) {
         }
       }
 
+      const notities = appendVerzetNotitie(
+        afspraak.notities as string | null,
+        afspraak.start_at
+      );
+      // Alleen op de nieuwe datum tonen (geen aparte "verzet"-status/strike).
+      // Vorige moment staat in de notitie.
       const updateRow = magMailen
         ? {
             start_at: start.toISOString(),
             end_at: end.toISOString(),
-            status: "verzet" as const,
+            status: "gepland" as const,
+            notities,
             herinnering_verstuurd: false,
             bevestiging_verstuurd: false,
             opwarm_verstuurd: false,
@@ -432,7 +440,8 @@ export async function PATCH(req: NextRequest) {
         : {
             start_at: start.toISOString(),
             end_at: end.toISOString(),
-            status: "verzet" as const,
+            status: "gepland" as const,
+            notities,
           };
 
       let { data: updated, error: upErr } = await sb

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   addDays,
   addWeeks,
@@ -58,7 +59,6 @@ type LegendItem = { color: string; label: string };
 
 const LEGEND: LegendItem[] = [
   { color: "#94A3B8", label: "Afspraak ingepland" },
-  { color: "#C45A12", label: "Afspraak verzet" },
   { color: "#16A34A", label: "Doorgegaan" },
   { color: "#B91C1C", label: "Afgezegd" },
   { color: "#1E3A8A", label: "Deur niet open" },
@@ -150,12 +150,7 @@ function stickerMeta(
   let tint = "#F8FAFC";
   let border = "#CBD5E1";
 
-  if (a.status === "verzet") {
-    statusLabel = "Afspraak verzet";
-    statusColor = "#C45A12";
-    tint = "#FFF7ED";
-    border = "#FDBA74";
-  } else if (a.status === "geannuleerd") {
+  if (a.status === "geannuleerd") {
     statusLabel = "Afgezegd";
     statusColor = "#B91C1C";
     tint = "#FEF2F2";
@@ -253,7 +248,7 @@ function StickerCard({
   onClick: () => void;
 }) {
   const meta = stickerMeta(a, leadStatus, vervolgIndex, needsCheckout);
-  const struck = a.status === "geannuleerd" || a.status === "verzet";
+  const struck = a.status === "geannuleerd";
   const naam = a.leads?.naam || "Onbekend";
   const plaats = a.leads?.plaats || a.leads?.postcode || "—";
   const tijd = formatTimeNl(a.start_at);
@@ -392,6 +387,11 @@ export function AgendaPanel({
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
   showAdminSlots?: boolean;
 }) {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const focusAfspraakId = searchParams.get("afspraak")?.trim() || null;
+  const focusHandled = useRef<string | null>(null);
+
   const [afspraken, setAfspraken] = useState<Afspraak[]>(afsprakenProp || []);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>(adviseursProp);
   const [loading, setLoading] = useState(!(afsprakenProp && afsprakenProp.length));
@@ -416,6 +416,26 @@ export function AgendaPanel({
   );
   const [selected, setSelected] = useState<Afspraak | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
+
+  // Deep-link: /?tab=agenda&afspraak=<id> → spring naar week + open detail
+  useEffect(() => {
+    if (!focusAfspraakId) {
+      focusHandled.current = null;
+      return;
+    }
+    if (focusHandled.current === focusAfspraakId) return;
+    const hit = afspraken.find((a) => a.id === focusAfspraakId);
+    if (!hit) return;
+    focusHandled.current = focusAfspraakId;
+    setWeekAnchor(new Date(hit.start_at));
+    setSelectedDayKey(dayKeyAmsterdam(hit.start_at));
+    setMainView("agenda");
+    setSelected(hit);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("afspraak");
+    if (!params.get("tab")) params.set("tab", "agenda");
+    router.replace(`/?${params.toString()}`, { scroll: false });
+  }, [focusAfspraakId, afspraken, searchParams, router]);
   const [planSlot, setPlanSlot] = useState<{
     adviseurId: string;
     startAt: string;

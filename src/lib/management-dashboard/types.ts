@@ -166,8 +166,14 @@ export type MgmtCeoRollup = {
   /** Netto fysieke huisbezoeken gezet in de periode */
   afsprakenNetto: number;
   deals: number;
+  /**
+   * Netto sales: getekende deals in periode waarvan aanbetaling betaald is.
+   */
+  nettoDeals: number;
   /** Getekende orderwaarde excl. btw */
   orderWorth: number;
+  /** Order worth van aanbetaalde deals (excl. btw) */
+  nettoOrderWorth: number;
   revenueInvoiced: number;
   revenuePaid: number;
   avgOrderWorth: number | null;

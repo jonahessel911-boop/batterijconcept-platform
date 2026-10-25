@@ -317,8 +317,7 @@ function AfspraakChip({
   onOpen: (a: Afspraak) => void;
 }) {
   const cancelled = afspraak.status === "geannuleerd";
-  const verzet = afspraak.status === "verzet";
-  const struck = cancelled || verzet;
+  const struck = cancelled;
   const done = afspraak.status === "voltooid";
   const needsAction = needsVervolgPunt(afspraak, allAfspraken);
   const afboek =
@@ -341,13 +340,11 @@ function AfspraakChip({
       : null;
   const statusNote = cancelled
     ? "Afgezegd"
-    : verzet
-      ? "Afspraak verzet"
-      : afboekLabel
-        ? afboekLabel
-        : done
-          ? "Voltooid"
-          : null;
+    : afboekLabel
+      ? afboekLabel
+      : done
+        ? "Voltooid"
+        : null;
 
   if (variant === "day") {
     return (

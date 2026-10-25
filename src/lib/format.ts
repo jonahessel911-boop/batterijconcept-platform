@@ -24,6 +24,16 @@ export function formatDateTimeNl(date: Date | string | null | undefined): string
   return formatInTimeZone(d, TZ, "dd-MM-yyyy HH:mm", { locale: nl });
 }
 
+/** Notitie bij verzetten: vorige datum/tijd bewaren in de afspraaknotities. */
+export function appendVerzetNotitie(
+  bestaande: string | null | undefined,
+  oudStartAt: Date | string
+): string {
+  const regel = `Deze afspraak stond eerder op ${formatDateTimeNl(oudStartAt)}.`;
+  const b = bestaande?.trim() || "";
+  return b ? `${b}\n\n${regel}` : regel;
+}
+
 /** Datum + tijd lang: donderdag 13 augustus 2026 om 14:30 */
 export function formatDateTimeLongNl(
   date: Date | string | null | undefined

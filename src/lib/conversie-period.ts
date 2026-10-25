@@ -5,6 +5,10 @@
 import { addDays, startOfQuarter, startOfYear } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import {
+  schouwWeekFromDate,
+  schouwWeekToMondayIso,
+} from "@/lib/schouw-week";
 
 export type ConversiePeriod =
   | "today"
@@ -151,4 +155,35 @@ export function resolveConversiePeriod(
     endYmd,
     days: daysInclusive(startYmd, endYmd),
   };
+}
+
+export function todayConversieYmd(now = new Date()): string {
+  return ymdAmsterdam(now);
+}
+
+/** ISO-week (ma–zo) die `ymd` bevat. */
+export function conversieWeekRangeContaining(ymd: string): {
+  startYmd: string;
+  endYmd: string;
+} {
+  const noon = noonAmsterdamFromYmd(ymd);
+  const info = schouwWeekFromDate(noon);
+  const startYmd = String(
+    schouwWeekToMondayIso(info.jaar, info.week)
+  ).slice(0, 10);
+  return { startYmd, endYmd: shiftYmd(startYmd, 6) };
+}
+
+/** Kalendermaand (1e–laatste dag) die `ymd` bevat. */
+export function conversieMonthRangeContaining(ymd: string): {
+  startYmd: string;
+  endYmd: string;
+} {
+  const z = toZonedTime(noonAmsterdamFromYmd(ymd), AMSTERDAM_TZ);
+  const y = z.getFullYear();
+  const m = z.getMonth();
+  const startYmd = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  const lastDay = new Date(y, m + 1, 0).getDate();
+  const endYmd = `${y}-${String(m + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { startYmd, endYmd };
 }

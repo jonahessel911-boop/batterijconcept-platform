@@ -1,74 +1,122 @@
 /**
- * Sales Manager dashboard: metrics + conversiedoelen per maand.
+ * Week-sales dashboard (Huub maandagmeeting):
+ * conversieketen per adviseur + aankomende-week huisbezoeken.
  */
 
-import { addDays } from "date-fns";
-import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import {
+  addDays,
+  getISOWeek,
+  getISOWeekYear,
+  startOfWeek,
+} from "date-fns";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
   afspraakBlokkeertAgenda,
-  needsVervolgPunt,
+  afspraakIsAfgelopen,
+  isSaleUitkomst,
+  normalizeAfspraakSoort,
+  VERVOLG_PUNT_VRIJGESTELD,
 } from "@/lib/afspraak-soort";
+import type { LeadStatus } from "@/types/database";
+import { weekKeyString } from "@/lib/adviseur-beschikbaarheid";
+import {
+  PERIOD_PRESET_LABELS,
+  resolveMgmtPeriod,
+  type MgmtPeriodPreset,
+} from "@/lib/management-dashboard/periods";
+import { normalizeProjectStatus } from "@/lib/labels";
 import type { Afspraak } from "@/types/database";
 
-export type SalesManagerGoalsStore = Record<
-  string,
-  Record<string, number>
->;
+export type SalesManagerPeriod =
+  | "last_week"
+  | "this_week"
+  | "last_7_days"
+  | "last_14_days"
+  | "last_30_days"
+  | "this_month"
+  | "last_month"
+  | "custom";
+
+export const SALES_MANAGER_PERIODS: SalesManagerPeriod[] = [
+  "last_week",
+  "this_week",
+  "last_7_days",
+  "last_14_days",
+  "last_30_days",
+  "this_month",
+  "last_month",
+  "custom",
+];
+
+export const SALES_MANAGER_PERIOD_LABELS: Record<SalesManagerPeriod, string> = {
+  last_week: PERIOD_PRESET_LABELS.last_week,
+  this_week: PERIOD_PRESET_LABELS.this_week,
+  last_7_days: PERIOD_PRESET_LABELS.last_7_days,
+  last_14_days: PERIOD_PRESET_LABELS.last_14_days,
+  last_30_days: PERIOD_PRESET_LABELS.last_30_days,
+  this_month: PERIOD_PRESET_LABELS.this_month,
+  last_month: PERIOD_PRESET_LABELS.last_month,
+  custom: PERIOD_PRESET_LABELS.custom,
+};
+
+export type SalesManagerPeriodInput = {
+  period: SalesManagerPeriod;
+  customStart?: string | null;
+  customEnd?: string | null;
+};
+
+export type SalesManagerResolvedPeriod = {
+  period: SalesManagerPeriod;
+  label: string;
+  /** Inclusief start (Amsterdam) */
+  startIso: string;
+  /** Inclusief eind (einde Amsterdam-dag) */
+  endIso: string;
+  startYmd: string;
+  endYmd: string;
+};
 
 export type SalesManagerRow = {
   adviseur_id: string;
   naam: string;
-  /** Fysieke afspraken vandaag (Amsterdam) */
-  afspraken_vandaag: number;
-  /** true als er vandaag ≥1 fysieke afspraak staat */
-  heeft_afspraak_vandaag: boolean;
-  /** Geplande fysieke afspraken in komende 14 dagen */
-  afspraken_2w: number;
-  /** Afgelopen fysieke afspraken nog niet afgeboekt */
+  /** Nieuwe huisbezoeken (soort nieuw) met start_at in periode — niet created_at */
+  ingepland: number;
+  /** Nieuwe huisbezoeken afgeboekt in periode (= gelopen) */
+  gelopen: number;
+  /** Nieuwe huisbezoeken zonder uitkomst in periode (apart zichtbaar) */
   niet_afgeboekt: number;
-  /** Gelopen huisbezoeken in geselecteerde maand */
-  gelopen: number;
-  /** Deals (ondertekend) uit die gelopen leads */
-  deals: number;
-  /** Conversie % (gelopen → deal) in maand = afspraak→sale */
-  conversie_pct: number | null;
-  /** Doel % voor deze maand (null = niet gezet) */
-  conversie_doel_pct: number | null;
-  /** Omzet ondertekende offertes in maand (inc. btw) */
-  omzet_inc: number;
-  /** Gem. orderwaarde inc. btw (omzet / # ondertekende offertes in maand) */
-  avg_order_value: number | null;
-};
-
-export type SalesManagerMonthConversie = {
-  monthKey: string;
-  label: string;
-  gelopen: number;
-  deals: number;
-  conversie_pct: number | null;
-  conversie_doel_pct: number | null;
-  omzet_inc: number;
+  /** gelopen (afgeboekt) / ingepland */
+  conversie_ingepland_gelopen_pct: number | null;
+  /** Bruto sales: getekende offertes in periode, zonder project-annuleringen */
+  sales: number;
+  /** Bruto sales-conversie: sales / gelopen (afgeboekt) */
+  conversie_gelopen_sale_pct: number | null;
+  /** Fysieke huisbezoeken in aankomende kalenderweek */
+  afspraken_aankomende_week: number;
 };
 
 export type SalesManagerTotals = {
   adviseurs: number;
-  met_afspraak_vandaag: number;
-  afspraken_2w: number;
-  niet_afgeboekt: number;
+  ingepland: number;
   gelopen: number;
-  deals: number;
-  omzet_inc: number;
-  conversie_pct: number | null;
+  niet_afgeboekt: number;
+  conversie_ingepland_gelopen_pct: number | null;
+  sales: number;
+  conversie_gelopen_sale_pct: number | null;
+  afspraken_aankomende_week: number;
 };
 
-export type SalesManagerActiepunt = {
-  adviseur_id: string;
-  naam: string;
-  reden: "niet_afgeboekt" | "onder_doel" | "lege_agenda";
-  detail: string;
+export type SalesManagerWeekPoint = {
+  weekKey: string;
+  label: string;
+  ingepland: number;
+  gelopen: number;
+  niet_afgeboekt: number;
+  sales: number;
+  conversie_gelopen_sale_pct: number | null;
 };
 
 export type SalesManagerTimelineKind =
@@ -83,7 +131,6 @@ export type SalesManagerTimelineEvent = {
   at: string;
   titel: string;
   detail: string | null;
-  /** Bij deal: lead/offerte refs */
   lead_id?: string | null;
   offerte_id?: string | null;
   bedrag_inc?: number | null;
@@ -95,7 +142,6 @@ export type SalesManagerMapPin = {
   lat: number;
   lng: number;
   label: string;
-  /** Hover / detail */
   subtitel: string | null;
   notitie: string | null;
   start_at: string | null;
@@ -115,265 +161,396 @@ export type SalesManagerDetail = {
   startdatum: string | null;
   contract_signed_at: string | null;
   contract_sign_status: string | null;
-  /** Maand-KPIs (zelfde als rij) */
   row: SalesManagerRow;
-  /** Afspraak → sale ratio (alias conversie_pct) */
-  afspraak_sale_ratio: number | null;
-  avg_order_value: number | null;
-  /** Conversie per maand (oud → nieuw), incl. doelen */
-  conversie_maanden: SalesManagerMonthConversie[];
-  /** Activiteiten + deals chronologisch */
+  week_trend: SalesManagerWeekPoint[];
   timeline: SalesManagerTimelineEvent[];
-  /** Kaart: huis + afspraken (±14d / maand) */
   map_pins: SalesManagerMapPin[];
 };
 
-export function monthKeyAmsterdam(d = new Date()): string {
-  return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM");
+export function parseSalesManagerPeriod(
+  raw: string | null | undefined
+): SalesManagerPeriod {
+  const v = (raw || "").trim();
+  if ((SALES_MANAGER_PERIODS as string[]).includes(v)) {
+    return v as SalesManagerPeriod;
+  }
+  return "last_week";
 }
 
-/** Maandgrenzen Amsterdam als ISO (start inclusief, end exclusief). */
-export function monthRangeAmsterdam(monthKey: string): {
-  startIso: string;
-  endIso: string;
-  label: string;
-} {
-  const m = monthKey.trim().match(/^(\d{4})-(\d{2})$/);
-  if (!m) {
-    const now = monthKeyAmsterdam();
-    return monthRangeAmsterdam(now);
+export function resolveSalesManagerPeriod(
+  input: SalesManagerPeriodInput,
+  now = new Date()
+): SalesManagerResolvedPeriod {
+  const resolved = resolveMgmtPeriod(
+    {
+      period: input.period as MgmtPeriodPreset,
+      customStart: input.customStart,
+      customEnd: input.customEnd,
+    },
+    now
+  );
+  let label = SALES_MANAGER_PERIOD_LABELS[input.period];
+  if (input.period === "custom" && input.customStart && input.customEnd) {
+    label = `${input.customStart} – ${input.customEnd}`;
+  } else if (input.period === "last_week" || input.period === "this_week") {
+    const a = formatInTimeZone(resolved.start, AMSTERDAM_TZ, "d MMM");
+    const b = formatInTimeZone(resolved.end, AMSTERDAM_TZ, "d MMM yyyy");
+    label = `${SALES_MANAGER_PERIOD_LABELS[input.period]} (${a} – ${b})`;
   }
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const startLocal = fromZonedTime(
-    new Date(y, mo - 1, 1, 0, 0, 0, 0),
-    AMSTERDAM_TZ
-  );
-  const endLocal = fromZonedTime(
-    new Date(y, mo, 1, 0, 0, 0, 0),
-    AMSTERDAM_TZ
-  );
-  const label = formatInTimeZone(startLocal, AMSTERDAM_TZ, "MMMM yyyy");
   return {
-    startIso: startLocal.toISOString(),
-    endIso: endLocal.toISOString(),
-    label: label.charAt(0).toUpperCase() + label.slice(1),
+    period: input.period,
+    label,
+    startIso: resolved.start.toISOString(),
+    endIso: resolved.end.toISOString(),
+    startYmd: formatInTimeZone(resolved.start, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    endYmd: formatInTimeZone(resolved.end, AMSTERDAM_TZ, "yyyy-MM-dd"),
   };
 }
 
-export function parseSalesManagerGoals(raw: unknown): SalesManagerGoalsStore {
-  if (!raw || typeof raw !== "object") return {};
-  const out: SalesManagerGoalsStore = {};
-  for (const [mk, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!/^\d{4}-\d{2}$/.test(mk) || !v || typeof v !== "object") continue;
-    const month: Record<string, number> = {};
-    for (const [aid, pct] of Object.entries(v as Record<string, unknown>)) {
-      const n = typeof pct === "number" ? pct : Number(pct);
-      if (!Number.isFinite(n) || n < 0 || n > 100) continue;
-      month[aid] = Math.round(n * 10) / 10;
+/**
+ * Eerstvolgende planbare kalenderweek (ma–zo, Amsterdam).
+ * Za/zo → volgende week (deze week heeft geen planbare dagen meer).
+ * Ma–vr → deze week.
+ */
+export function upcomingWeekRangeAmsterdam(now = new Date()): {
+  startIso: string;
+  endIso: string;
+  startYmd: string;
+  endYmd: string;
+  label: string;
+  weekKey: string;
+} {
+  const z = toZonedTime(now, AMSTERDAM_TZ);
+  const dow = z.getDay(); // 0=zo … 6=za
+  const thisMon = startOfWeek(z, { weekStartsOn: 1 });
+  const monLocal =
+    dow === 0 || dow === 6 ? addDays(thisMon, 7) : thisMon;
+  const start = fromZonedTime(
+    new Date(
+      monLocal.getFullYear(),
+      monLocal.getMonth(),
+      monLocal.getDate(),
+      0,
+      0,
+      0,
+      0
+    ),
+    AMSTERDAM_TZ
+  );
+  const end = fromZonedTime(
+    new Date(
+      monLocal.getFullYear(),
+      monLocal.getMonth(),
+      monLocal.getDate() + 6,
+      23,
+      59,
+      59,
+      999
+    ),
+    AMSTERDAM_TZ
+  );
+  const mid = toZonedTime(start, AMSTERDAM_TZ);
+  const jaar = getISOWeekYear(mid);
+  const week = getISOWeek(mid);
+  const a = formatInTimeZone(start, AMSTERDAM_TZ, "d MMM");
+  const b = formatInTimeZone(end, AMSTERDAM_TZ, "d MMM");
+  return {
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    startYmd: formatInTimeZone(start, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    endYmd: formatInTimeZone(end, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    label: `Week ${week} (${a} – ${b})`,
+    weekKey: weekKeyString(jaar, week),
+  };
+}
+
+function pct(num: number, den: number): number | null {
+  if (den <= 0) return null;
+  return Math.round((num / den) * 1000) / 10;
+}
+
+function inRange(iso: string, startIso: string, endIso: string): boolean {
+  return iso >= startIso && iso <= endIso;
+}
+
+/** Eerste/nieuwe huisbezoek — conversieketen telt alleen deze (op start_at). */
+function isNieuwHuisbezoek(soort: string | null | undefined): boolean {
+  return normalizeAfspraakSoort(soort) === "nieuw";
+}
+
+/** Offerte-ids waarvan het project op annulering staat — tellen niet mee als bruto sale. */
+async function loadGeannuleerdeOfferteIds(
+  sb: SupabaseClient,
+  offerteIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (offerteIds.length === 0) return out;
+  const { data, error } = await sb
+    .from("projecten")
+    .select("offerte_id, status")
+    .in("offerte_id", offerteIds);
+  if (error) throw error;
+  for (const p of data || []) {
+    if (!p.offerte_id) continue;
+    if (normalizeProjectStatus(p.status as string) === "annulering") {
+      out.add(p.offerte_id as string);
     }
-    if (Object.keys(month).length > 0) out[mk] = month;
   }
   return out;
 }
 
-export async function loadSalesManagerGoals(
-  sb: SupabaseClient
-): Promise<{ id: string | null; goals: SalesManagerGoalsStore }> {
-  const { data, error } = await sb
-    .from("dashboard_instellingen")
-    .select("id, sales_manager_doelen")
-    .eq("actief", true)
-    .limit(1)
-    .maybeSingle();
+/**
+ * Leads waarvan de getekende deal via offerte-actie is doorgezet naar backoffice
+ * (= afgeboekt, ook als leadstatus nog niet sale_* is).
+ */
+async function loadDoorgezetteSaleLeadIds(
+  sb: SupabaseClient,
+  leadIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (leadIds.length === 0) return out;
 
-  if (
-    error &&
-    (error.code === "42703" ||
-      error.message?.includes("sales_manager_doelen"))
-  ) {
-    return { id: null, goals: {} };
+  const unique = [...new Set(leadIds)];
+  const [{ data: offertes }, { data: projecten }] = await Promise.all([
+    sb
+      .from("offertes")
+      .select("lead_id, actie_required, status")
+      .in("lead_id", unique)
+      .eq("status", "ondertekend"),
+    sb
+      .from("projecten")
+      .select("lead_id, status")
+      .in("lead_id", unique),
+  ]);
+
+  for (const o of offertes || []) {
+    // actie_required === false → actie afgerond, doorgezet naar BO
+    if (o.actie_required === false && o.lead_id) {
+      out.add(o.lead_id as string);
+    }
   }
-  if (error) throw error;
-  return {
-    id: (data?.id as string) || null,
-    goals: parseSalesManagerGoals(data?.sales_manager_doelen),
-  };
+  for (const p of projecten || []) {
+    if (!p.lead_id) continue;
+    if (normalizeProjectStatus(p.status as string) === "annulering") continue;
+    out.add(p.lead_id as string);
+  }
+  return out;
 }
 
-export async function saveSalesManagerGoal(
-  sb: SupabaseClient,
-  opts: {
-    monthKey: string;
-    adviseurId: string;
-    doelPct: number | null;
-  }
-): Promise<SalesManagerGoalsStore> {
-  const { id, goals } = await loadSalesManagerGoals(sb);
-  const mk = opts.monthKey.trim();
-  if (!/^\d{4}-\d{2}$/.test(mk)) {
-    throw new Error("Ongeldige maand (verwacht yyyy-MM)");
-  }
-  const month = { ...(goals[mk] || {}) };
-  if (opts.doelPct == null || opts.doelPct < 0) {
-    delete month[opts.adviseurId];
-  } else {
-    month[opts.adviseurId] =
-      Math.round(Math.min(100, opts.doelPct) * 10) / 10;
-  }
-  const next: SalesManagerGoalsStore = { ...goals };
-  if (Object.keys(month).length === 0) delete next[mk];
-  else next[mk] = month;
-
-  if (id) {
-    const { error } = await sb
-      .from("dashboard_instellingen")
-      .update({ sales_manager_doelen: next })
-      .eq("id", id);
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("sales_manager_doelen"))
-    ) {
-      throw new Error(
-        "Kolom sales_manager_doelen ontbreekt — voer migrate-sales-manager-doelen.sql uit"
-      );
-    }
-    if (error) throw error;
-  } else {
-    const { error } = await sb.from("dashboard_instellingen").insert({
-      sales_manager_doelen: next,
-      actief: true,
-    });
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("sales_manager_doelen"))
-    ) {
-      throw new Error(
-        "Kolom sales_manager_doelen ontbreekt — voer migrate-sales-manager-doelen.sql uit"
-      );
-    }
-    if (error) throw error;
-  }
-  return next;
+/**
+ * Echte afboek-uitkomst (agenda-checkout of BO-doorzetting).
+ * Een gepland vervolg telt NIET als afgeboekt — anders wijken tabel en popup af.
+ */
+function hasSalesManagerUitkomst(
+  leadId: string,
+  leadStatus: string | null,
+  doorgezetSaleLeadIds: Set<string>
+): boolean {
+  if (doorgezetSaleLeadIds.has(leadId)) return true;
+  if (!leadStatus) return false;
+  if (isSaleUitkomst(leadStatus as LeadStatus)) return true;
+  if (VERVOLG_PUNT_VRIJGESTELD.has(leadStatus as LeadStatus)) return true;
+  // Getekende deal = uitkomst van het bezoek (sale-type volgt later)
+  if (leadStatus === "deal") return true;
+  return false;
 }
 
-export async function buildSalesManagerDashboard(
-  sb: SupabaseClient,
-  monthKey: string
-): Promise<{
-  monthKey: string;
-  monthLabel: string;
-  rows: SalesManagerRow[];
-  actiepunten: SalesManagerActiepunt[];
-  totals: SalesManagerTotals;
-}> {
-  const { startIso, endIso, label } = monthRangeAmsterdam(monthKey);
-  const now = new Date();
-  const twoWeeksEnd = addDays(now, 14).toISOString();
-  const { goals } = await loadSalesManagerGoals(sb);
-  const monthGoals = goals[monthKey] || {};
-
-  const { data: adviseursRaw, error: advErr } = await sb
-    .from("adviseurs")
-    .select("id, naam, email, actief, rol")
-    .eq("actief", true)
-    .order("naam");
-  if (advErr) throw advErr;
-
-  const adviseurs = ((adviseursRaw || []) as {
-    id: string;
-    naam: string;
-    email?: string | null;
-    actief?: boolean | null;
-    rol?: string | null;
-  }[]).filter((a) => isPlanbaarAdviseur(a));
-
-  const ids = adviseurs.map((a) => a.id);
-  if (ids.length === 0) {
-    return {
-      monthKey,
-      monthLabel: label,
-      rows: [],
-      actiepunten: [],
-      totals: {
-        adviseurs: 0,
-        met_afspraak_vandaag: 0,
-        afspraken_2w: 0,
-        niet_afgeboekt: 0,
-        gelopen: 0,
-        deals: 0,
-        omzet_inc: 0,
-        conversie_pct: null,
-      },
-    };
-  }
-
-  // Afspraken: ruim genoeg venster (verleden voor niet-afgeboekt + 2 wkn vooruit)
-  const pastFrom = addDays(now, -120).toISOString();
-  const todayYmd = formatInTimeZone(now, AMSTERDAM_TZ, "yyyy-MM-dd");
-  const { data: afsprakenRaw } = await sb
-    .from("afspraken")
-    .select(
-      "id, adviseur_id, lead_id, status, soort, start_at, end_at, leads(status)"
-    )
-    .in("adviseur_id", ids)
-    .gte("start_at", pastFrom)
-    .lte("start_at", twoWeeksEnd)
-    .neq("status", "geannuleerd")
-    .order("start_at");
-
-  type AfspraakRow = {
-    id: string;
-    adviseur_id: string | null;
+/** Gelopen = afgelopen huisbezoek mét uitkomst / doorgezette sale. */
+function isGelopenVoorSalesManager(
+  shape: {
     lead_id: string;
     status: string;
     soort: string | null;
     start_at: string;
-    end_at: string | null;
-    leads?:
-      | { status?: string | null }
-      | { status?: string | null }[]
-      | null;
-  };
+    end_at?: string | null;
+  },
+  leadStatus: string | null,
+  doorgezetSaleLeadIds: Set<string>,
+  now: Date
+): boolean {
+  if (!afspraakBlokkeertAgenda(shape.soort)) return false;
+  if (shape.status === "geannuleerd") return false;
+  if (!afspraakIsAfgelopen(shape as Afspraak, now)) return false;
+  return hasSalesManagerUitkomst(
+    shape.lead_id,
+    leadStatus,
+    doorgezetSaleLeadIds
+  );
+}
+
+/** Niet afgeboekt = afgelopen huisbezoek zónder uitkomst (ongeacht vervolg-afspraak). */
+function isNietAfgeboektVoorSalesManager(
+  shape: {
+    lead_id: string;
+    status: string;
+    soort: string | null;
+    start_at: string;
+    end_at?: string | null;
+  },
+  leadStatus: string | null,
+  doorgezetSaleLeadIds: Set<string>,
+  now: Date
+): boolean {
+  if (!afspraakBlokkeertAgenda(shape.soort)) return false;
+  if (shape.status === "geannuleerd") return false;
+  if (!afspraakIsAfgelopen(shape as Afspraak, now)) return false;
+  return !hasSalesManagerUitkomst(
+    shape.lead_id,
+    leadStatus,
+    doorgezetSaleLeadIds
+  );
+}
+
+type AfspraakRow = {
+  id: string;
+  adviseur_id: string | null;
+  lead_id: string;
+  status: string;
+  soort: string | null;
+  start_at: string;
+  end_at: string | null;
+  leads?:
+    | { status?: string | null }
+    | { status?: string | null }[]
+    | null;
+};
+
+function leadStatusOf(a: AfspraakRow): string | null {
+  const join = Array.isArray(a.leads) ? a.leads[0] : a.leads;
+  return join?.status ?? null;
+}
+
+export async function buildSalesManagerDashboard(
+  sb: SupabaseClient,
+  input: SalesManagerPeriodInput,
+  now = new Date()
+): Promise<{
+  period: SalesManagerResolvedPeriod;
+  upcomingWeekLabel: string;
+  rows: SalesManagerRow[];
+  totals: SalesManagerTotals;
+}> {
+  const period = resolveSalesManagerPeriod(input, now);
+  const upcoming = upcomingWeekRangeAmsterdam(now);
+
+  const { data: adviseursRaw, error: advErr } = await sb
+    .from("adviseurs")
+    .select("id, naam, email, actief, rol, startdatum")
+    .eq("actief", true)
+    .order("naam");
+  if (advErr) throw advErr;
+
+  const adviseurs = (
+    (adviseursRaw || []) as {
+      id: string;
+      naam: string;
+      email?: string | null;
+      actief?: boolean | null;
+      rol?: string | null;
+      startdatum?: string | null;
+    }[]
+  ).filter((a) => isPlanbaarAdviseur(a));
+
+  const ids = adviseurs.map((a) => a.id);
+  const emptyTotals = (): SalesManagerTotals => ({
+    adviseurs: 0,
+    ingepland: 0,
+    gelopen: 0,
+    niet_afgeboekt: 0,
+    conversie_ingepland_gelopen_pct: null,
+    sales: 0,
+    conversie_gelopen_sale_pct: null,
+    afspraken_aankomende_week: 0,
+  });
+
+  if (ids.length === 0) {
+    return {
+      period,
+      upcomingWeekLabel: upcoming.label,
+      rows: [],
+      totals: emptyTotals(),
+    };
+  }
+
+  // Ruim venster: periode + aankomende week + buffer voor needsVervolg
+  const fetchFrom = addDays(
+    new Date(
+      Math.min(
+        new Date(period.startIso).getTime(),
+        new Date(upcoming.startIso).getTime()
+      )
+    ),
+    -14
+  ).toISOString();
+  const fetchTo = addDays(
+    new Date(
+      Math.max(
+        new Date(period.endIso).getTime(),
+        new Date(upcoming.endIso).getTime()
+      )
+    ),
+    2
+  ).toISOString();
+
+  const [{ data: afsprakenRaw }, { data: offertesRaw }] = await Promise.all([
+    sb
+      .from("afspraken")
+      .select(
+        "id, adviseur_id, lead_id, status, soort, start_at, end_at, leads(status)"
+      )
+      .in("adviseur_id", ids)
+      .gte("start_at", fetchFrom)
+      .lte("start_at", fetchTo)
+      .neq("status", "geannuleerd")
+      .order("start_at"),
+    sb
+      .from("offertes")
+      .select(
+        "id, lead_id, status, ondertekend_op, leads(adviseur_id)"
+      )
+      .eq("status", "ondertekend")
+      .not("ondertekend_op", "is", null)
+      .gte("ondertekend_op", period.startIso)
+      .lte("ondertekend_op", period.endIso),
+  ]);
 
   const afspraken = (afsprakenRaw || []) as AfspraakRow[];
-  const allForNeeds = afspraken.map((a) => ({
-    id: a.id,
-    lead_id: a.lead_id,
-    status: a.status,
-    soort: a.soort,
-    start_at: a.start_at,
-    end_at: a.end_at,
-  })) as Afspraak[];
 
-  const afspraken2w = new Map<string, number>();
-  const afsprakenVandaag = new Map<string, number>();
+  const periodLeadIds = afspraken
+    .filter(
+      (a) =>
+        isNieuwHuisbezoek(a.soort) &&
+        inRange(a.start_at, period.startIso, period.endIso)
+    )
+    .map((a) => a.lead_id);
+  const doorgezetSaleLeadIds = await loadDoorgezetteSaleLeadIds(
+    sb,
+    periodLeadIds
+  );
+
+  const ingepland = new Map<string, number>();
+  const gelopen = new Map<string, number>();
   const nietAfgeboekt = new Map<string, number>();
-  const gelopenLeads = new Map<string, Set<string>>();
+  const aankomendeAfs = new Map<string, number>();
 
   for (const a of afspraken) {
-    if (!a.adviseur_id || !afspraakBlokkeertAgenda(a.soort)) continue;
-    const leadJoin = Array.isArray(a.leads) ? a.leads[0] : a.leads;
-    const leadStatus = leadJoin?.status ?? null;
+    if (!a.adviseur_id) continue;
 
-    const startMs = new Date(a.start_at).getTime();
-    const dayKey = formatInTimeZone(a.start_at, AMSTERDAM_TZ, "yyyy-MM-dd");
-    if (dayKey === todayYmd) {
-      afsprakenVandaag.set(
+    // Rechtskolom: fysieke huisbezoeken die die week op de agenda staan
+    if (
+      isNieuwHuisbezoek(a.soort) &&
+      inRange(a.start_at, upcoming.startIso, upcoming.endIso)
+    ) {
+      aankomendeAfs.set(
         a.adviseur_id,
-        (afsprakenVandaag.get(a.adviseur_id) || 0) + 1
+        (aankomendeAfs.get(a.adviseur_id) || 0) + 1
       );
     }
-    const inNext2w =
-      startMs >= now.getTime() && startMs <= new Date(twoWeeksEnd).getTime();
-    if (inNext2w && a.status !== "voltooid") {
-      afspraken2w.set(
-        a.adviseur_id,
-        (afspraken2w.get(a.adviseur_id) || 0) + 1
-      );
-    }
+
+    // Conversieketen: alleen nieuwe huisbezoeken die die periode óp de agenda stonden
+    // (start_at in periode — niet wanneer ze zijn ingepland/created)
+    if (!isNieuwHuisbezoek(a.soort)) continue;
+    if (!inRange(a.start_at, period.startIso, period.endIso)) continue;
 
     const shape = {
       id: a.id,
@@ -382,162 +559,232 @@ export async function buildSalesManagerDashboard(
       soort: a.soort,
       start_at: a.start_at,
       end_at: a.end_at,
-    } as Afspraak;
+    };
+    const ls = leadStatusOf(a);
 
-    if (needsVervolgPunt(shape, allForNeeds, now, leadStatus)) {
+    ingepland.set(a.adviseur_id, (ingepland.get(a.adviseur_id) || 0) + 1);
+
+    if (isGelopenVoorSalesManager(shape, ls, doorgezetSaleLeadIds, now)) {
+      gelopen.set(a.adviseur_id, (gelopen.get(a.adviseur_id) || 0) + 1);
+    } else if (
+      isNietAfgeboektVoorSalesManager(shape, ls, doorgezetSaleLeadIds, now)
+    ) {
       nietAfgeboekt.set(
         a.adviseur_id,
         (nietAfgeboekt.get(a.adviseur_id) || 0) + 1
       );
     }
-
-    // Conversie-venster: voltooid + in maand
-    if (
-      a.status === "voltooid" &&
-      a.start_at >= startIso &&
-      a.start_at < endIso
-    ) {
-      let set = gelopenLeads.get(a.adviseur_id);
-      if (!set) {
-        set = new Set();
-        gelopenLeads.set(a.adviseur_id, set);
-      }
-      set.add(a.lead_id);
-    }
   }
 
-  // Deals + omzet in maand via ondertekende offertes
-  const { data: offertesRaw } = await sb
-    .from("offertes")
-    .select(
-      "id, lead_id, status, totaal_inc_btw, ondertekend_op, leads(adviseur_id)"
-    )
-    .eq("status", "ondertekend")
-    .not("ondertekend_op", "is", null)
-    .gte("ondertekend_op", startIso)
-    .lt("ondertekend_op", endIso);
+  const offerteIds = (offertesRaw || [])
+    .map((o) => o.id as string)
+    .filter(Boolean);
+  const geannuleerdOfferteIds = await loadGeannuleerdeOfferteIds(
+    sb,
+    offerteIds
+  );
 
-  const dealLeadsByAdv = new Map<string, Set<string>>();
-  const omzetByAdv = new Map<string, number>();
-  const offerteCountByAdv = new Map<string, number>();
-
+  const salesByAdv = new Map<string, number>();
   for (const o of offertesRaw || []) {
+    if (geannuleerdOfferteIds.has(o.id as string)) continue;
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
     const aid = (leadJoin as { adviseur_id?: string | null } | null)
       ?.adviseur_id;
     if (!aid || !ids.includes(aid)) continue;
-    const leadId = o.lead_id as string;
-    let set = dealLeadsByAdv.get(aid);
-    if (!set) {
-      set = new Set();
-      dealLeadsByAdv.set(aid, set);
-    }
-    set.add(leadId);
-    omzetByAdv.set(
-      aid,
-      (omzetByAdv.get(aid) || 0) + (Number(o.totaal_inc_btw) || 0)
-    );
-    offerteCountByAdv.set(aid, (offerteCountByAdv.get(aid) || 0) + 1);
+    salesByAdv.set(aid, (salesByAdv.get(aid) || 0) + 1);
   }
 
   const rows: SalesManagerRow[] = adviseurs.map((a) => {
-    const visited = gelopenLeads.get(a.id) || new Set();
-    const gelopen = visited.size;
-    let deals = 0;
-    const dealSet = dealLeadsByAdv.get(a.id);
-    if (dealSet) {
-      for (const lid of visited) {
-        if (dealSet.has(lid)) deals += 1;
-      }
-    }
-    // Ook deals tellen die wel getekend zijn maar waarvan huisbezoek
-    // buiten venster viel? Nee — conversie = deals/gelopen in periode.
-    const conversie_pct =
-      gelopen > 0 ? Math.round((deals / gelopen) * 1000) / 10 : null;
-    const doel =
-      monthGoals[a.id] != null && Number.isFinite(monthGoals[a.id])
-        ? monthGoals[a.id]
-        : null;
-    const omzet = Math.round((omzetByAdv.get(a.id) || 0) * 100) / 100;
-    const nOffertes = offerteCountByAdv.get(a.id) || 0;
-    const avg_order_value =
-      nOffertes > 0
-        ? Math.round((omzet / nOffertes) * 100) / 100
-        : null;
-
-    const vandaag = afsprakenVandaag.get(a.id) || 0;
+    const ing = ingepland.get(a.id) || 0;
+    const gel = gelopen.get(a.id) || 0;
+    const niet = nietAfgeboekt.get(a.id) || 0;
+    const sales = salesByAdv.get(a.id) || 0;
     return {
       adviseur_id: a.id,
       naam: a.naam,
-      afspraken_vandaag: vandaag,
-      heeft_afspraak_vandaag: vandaag > 0,
-      afspraken_2w: afspraken2w.get(a.id) || 0,
-      niet_afgeboekt: nietAfgeboekt.get(a.id) || 0,
-      gelopen,
-      deals,
-      conversie_pct,
-      conversie_doel_pct: doel,
-      omzet_inc: omzet,
-      avg_order_value,
+      ingepland: ing,
+      gelopen: gel,
+      niet_afgeboekt: niet,
+      conversie_ingepland_gelopen_pct: pct(gel, ing),
+      sales,
+      conversie_gelopen_sale_pct: pct(sales, gel),
+      afspraken_aankomende_week: aankomendeAfs.get(a.id) || 0,
     };
   });
 
-  const actiepunten: SalesManagerActiepunt[] = [];
-  for (const r of rows) {
-    if (r.afspraken_2w === 0) {
-      actiepunten.push({
-        adviseur_id: r.adviseur_id,
-        naam: r.naam,
-        reden: "lege_agenda",
-        detail: "Geen afspraken komende 2 weken — bij bellen vooraanschrijven",
-      });
-    }
-    if (r.niet_afgeboekt > 0) {
-      actiepunten.push({
-        adviseur_id: r.adviseur_id,
-        naam: r.naam,
-        reden: "niet_afgeboekt",
-        detail: `${r.niet_afgeboekt} afspraak${r.niet_afgeboekt === 1 ? "" : "en"} niet afgeboekt`,
-      });
-    }
-    if (
-      r.conversie_doel_pct != null &&
-      r.conversie_pct != null &&
-      r.conversie_pct < r.conversie_doel_pct
-    ) {
-      actiepunten.push({
-        adviseur_id: r.adviseur_id,
-        naam: r.naam,
-        reden: "onder_doel",
-        detail: `${r.conversie_pct}% / ${r.conversie_doel_pct}% conversie`,
-      });
-    } else if (
-      r.conversie_doel_pct != null &&
-      r.conversie_pct == null &&
-      r.gelopen === 0
-    ) {
-      // Doel gezet maar nog geen gelopen — geen "onder doel" schreeuwen
-    }
-  }
-
-  const sumGelopen = rows.reduce((s, r) => s + r.gelopen, 0);
-  const sumDeals = rows.reduce((s, r) => s + r.deals, 0);
+  const sum = (fn: (r: SalesManagerRow) => number) =>
+    rows.reduce((s, r) => s + fn(r), 0);
+  const totIngepland = sum((r) => r.ingepland);
+  const totGelopen = sum((r) => r.gelopen);
+  const totNiet = sum((r) => r.niet_afgeboekt);
+  const totSales = sum((r) => r.sales);
   const totals: SalesManagerTotals = {
     adviseurs: rows.length,
-    met_afspraak_vandaag: rows.filter((r) => r.heeft_afspraak_vandaag).length,
-    afspraken_2w: rows.reduce((s, r) => s + r.afspraken_2w, 0),
-    niet_afgeboekt: rows.reduce((s, r) => s + r.niet_afgeboekt, 0),
-    gelopen: sumGelopen,
-    deals: sumDeals,
-    omzet_inc:
-      Math.round(rows.reduce((s, r) => s + r.omzet_inc, 0) * 100) / 100,
-    conversie_pct:
-      sumGelopen > 0
-        ? Math.round((sumDeals / sumGelopen) * 1000) / 10
-        : null,
+    ingepland: totIngepland,
+    gelopen: totGelopen,
+    niet_afgeboekt: totNiet,
+    conversie_ingepland_gelopen_pct: pct(totGelopen, totIngepland),
+    sales: totSales,
+    conversie_gelopen_sale_pct: pct(totSales, totGelopen),
+    afspraken_aankomende_week: sum((r) => r.afspraken_aankomende_week),
   };
 
-  return { monthKey, monthLabel: label, rows, actiepunten, totals };
+  return {
+    period,
+    upcomingWeekLabel: upcoming.label,
+    rows,
+    totals,
+  };
+}
+
+export type SalesManagerPopupSale = {
+  offerte_id: string;
+  lead_id: string;
+  lead_naam: string;
+  ondertekend_op: string;
+  bedrag_inc: number | null;
+};
+
+export type SalesManagerPopupAfspraak = {
+  afspraak_id: string;
+  lead_id: string;
+  lead_naam: string;
+  start_at: string;
+  status: string;
+};
+
+export type SalesManagerPopup = {
+  adviseur_id: string;
+  naam: string;
+  periodLabel: string;
+  sales: SalesManagerPopupSale[];
+  niet_afgeboekt: SalesManagerPopupAfspraak[];
+};
+
+/** Lichtgewicht popup: sales + niet-afgeboekte afspraken in de gekozen periode. */
+export async function buildSalesManagerPopup(
+  sb: SupabaseClient,
+  adviseurId: string,
+  input: SalesManagerPeriodInput,
+  now = new Date()
+): Promise<SalesManagerPopup | null> {
+  const period = resolveSalesManagerPeriod(input, now);
+
+  const { data: adv, error: advErr } = await sb
+    .from("adviseurs")
+    .select("id, naam")
+    .eq("id", adviseurId)
+    .maybeSingle();
+  if (advErr) throw advErr;
+  if (!adv) return null;
+
+  const [{ data: afsprakenRaw }, { data: offertesRaw }] = await Promise.all([
+    sb
+      .from("afspraken")
+      .select(
+        "id, adviseur_id, lead_id, status, soort, start_at, end_at, leads(id, naam, status)"
+      )
+      .eq("adviseur_id", adviseurId)
+      .gte("start_at", period.startIso)
+      .lte("start_at", period.endIso)
+      .neq("status", "geannuleerd")
+      .order("start_at", { ascending: false }),
+    sb
+      .from("offertes")
+      .select(
+        "id, lead_id, status, ondertekend_op, totaal_inc_btw, leads(id, naam, adviseur_id)"
+      )
+      .eq("status", "ondertekend")
+      .not("ondertekend_op", "is", null)
+      .gte("ondertekend_op", period.startIso)
+      .lte("ondertekend_op", period.endIso)
+      .order("ondertekend_op", { ascending: false }),
+  ]);
+
+  type PopupAfspraakRow = {
+    id: string;
+    adviseur_id: string | null;
+    lead_id: string;
+    status: string;
+    soort: string | null;
+    start_at: string;
+    end_at: string | null;
+    leads?:
+      | { id?: string; naam?: string | null; status?: string | null }
+      | { id?: string; naam?: string | null; status?: string | null }[]
+      | null;
+  };
+
+  const afspraken = (afsprakenRaw || []) as PopupAfspraakRow[];
+  const doorgezetSaleLeadIds = await loadDoorgezetteSaleLeadIds(
+    sb,
+    afspraken.map((a) => a.lead_id)
+  );
+
+  const niet_afgeboekt: SalesManagerPopupAfspraak[] = [];
+  for (const a of afspraken) {
+    if (!isNieuwHuisbezoek(a.soort)) continue;
+    const shape = {
+      id: a.id,
+      lead_id: a.lead_id,
+      status: a.status,
+      soort: a.soort,
+      start_at: a.start_at,
+      end_at: a.end_at,
+    };
+    const join = Array.isArray(a.leads) ? a.leads[0] : a.leads;
+    const ls = join?.status ?? null;
+    if (
+      !isNietAfgeboektVoorSalesManager(shape, ls, doorgezetSaleLeadIds, now)
+    ) {
+      continue;
+    }
+    niet_afgeboekt.push({
+      afspraak_id: a.id,
+      lead_id: a.lead_id,
+      lead_naam: (join?.naam || "").trim() || "Lead",
+      start_at: a.start_at,
+      status: a.status,
+    });
+  }
+
+  const offerteIds = (offertesRaw || [])
+    .map((o) => o.id as string)
+    .filter(Boolean);
+  const geannuleerdOfferteIds = await loadGeannuleerdeOfferteIds(
+    sb,
+    offerteIds
+  );
+
+  const sales: SalesManagerPopupSale[] = [];
+  for (const o of offertesRaw || []) {
+    if (geannuleerdOfferteIds.has(o.id as string)) continue;
+    const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
+    const lead = leadJoin as {
+      id?: string;
+      naam?: string | null;
+      adviseur_id?: string | null;
+    } | null;
+    if (!lead || lead.adviseur_id !== adviseurId) continue;
+    const at = o.ondertekend_op as string;
+    if (!at) continue;
+    const bedrag = Number(o.totaal_inc_btw);
+    sales.push({
+      offerte_id: o.id as string,
+      lead_id: (o.lead_id as string) || lead.id || "",
+      lead_naam: lead.naam?.trim() || "Lead",
+      ondertekend_op: at,
+      bedrag_inc: Number.isFinite(bedrag) && bedrag > 0 ? bedrag : null,
+    });
+  }
+
+  return {
+    adviseur_id: adviseurId,
+    naam: (adv.naam as string) || "Adviseur",
+    periodLabel: period.label,
+    sales,
+    niet_afgeboekt,
+  };
 }
 
 function composeLeadAdres(lead: {
@@ -588,30 +835,72 @@ async function geocodeMany(
   return out;
 }
 
+function weekBoundsFromOffset(weekOffset: number, now = new Date()) {
+  const z = toZonedTime(now, AMSTERDAM_TZ);
+  const thisMon = startOfWeek(z, { weekStartsOn: 1 });
+  const monLocal = addDays(thisMon, weekOffset * 7);
+  const start = fromZonedTime(
+    new Date(
+      monLocal.getFullYear(),
+      monLocal.getMonth(),
+      monLocal.getDate(),
+      0,
+      0,
+      0,
+      0
+    ),
+    AMSTERDAM_TZ
+  );
+  const end = fromZonedTime(
+    new Date(
+      monLocal.getFullYear(),
+      monLocal.getMonth(),
+      monLocal.getDate() + 6,
+      23,
+      59,
+      59,
+      999
+    ),
+    AMSTERDAM_TZ
+  );
+  const mid = toZonedTime(start, AMSTERDAM_TZ);
+  const jaar = getISOWeekYear(mid);
+  const week = getISOWeek(mid);
+  const a = formatInTimeZone(start, AMSTERDAM_TZ, "d MMM");
+  const b = formatInTimeZone(end, AMSTERDAM_TZ, "d MMM");
+  return {
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    label: `W${week} ${a}–${b}`,
+    weekKey: weekKeyString(jaar, week),
+  };
+}
+
 /**
- * Individueel Sales Manager-dashboard voor één adviseur:
- * tijdlijn, AOV, afspraak→sale, kaart met startadres + afspraken.
+ * Detail: trend over recente weken + tijdlijn + kaart.
  */
 export async function buildSalesManagerDetail(
   sb: SupabaseClient,
   adviseurId: string,
-  monthKey: string
+  input: SalesManagerPeriodInput,
+  now = new Date()
 ): Promise<SalesManagerDetail | null> {
-  const dash = await buildSalesManagerDashboard(sb, monthKey);
+  const dash = await buildSalesManagerDashboard(sb, input, now);
   const row = dash.rows.find((r) => r.adviseur_id === adviseurId);
   if (!row) return null;
 
   const { data: adv, error: advErr } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, email, start_adres, startdatum, contract_signed_at, contract_sign_status, created_at"
+      "id, naam, email, start_adres, startdatum, contract_signed_at, contract_sign_status"
     )
     .eq("id", adviseurId)
     .maybeSingle();
   if (advErr) throw advErr;
   if (!adv) return null;
 
-  const email = ((adv.email as string | null) || "").trim().toLowerCase() || null;
+  const email =
+    ((adv.email as string | null) || "").trim().toLowerCase() || null;
   const startAdres =
     ((adv.start_adres as string | null) || "").trim() || null;
   const startdatum =
@@ -621,12 +910,95 @@ export async function buildSalesManagerDetail(
   const contractStatus =
     ((adv.contract_sign_status as string | null) || "").trim() || null;
 
-  // Sollicitatie via e-mailmatch
+  // Weektrend: 6 weken eindigend op vorige week
+  const weekWindows = [];
+  for (let i = -6; i <= -1; i++) {
+    weekWindows.push(weekBoundsFromOffset(i, now));
+  }
+  const histFrom = weekWindows[0].startIso;
+  const histTo = weekWindows[weekWindows.length - 1].endIso;
+
+  const [{ data: histAfs }, { data: histOff }] = await Promise.all([
+    sb
+      .from("afspraken")
+      .select(
+        "id, lead_id, start_at, end_at, status, soort, leads(status)"
+      )
+      .eq("adviseur_id", adviseurId)
+      .gte("start_at", histFrom)
+      .lte("start_at", histTo)
+      .neq("status", "geannuleerd"),
+    sb
+      .from("offertes")
+      .select("id, lead_id, ondertekend_op, leads(adviseur_id)")
+      .eq("status", "ondertekend")
+      .not("ondertekend_op", "is", null)
+      .gte("ondertekend_op", histFrom)
+      .lte("ondertekend_op", histTo),
+  ]);
+
+  const histAfsRows = (histAfs || []) as AfspraakRow[];
+  const histGeannuleerd = await loadGeannuleerdeOfferteIds(
+    sb,
+    (histOff || []).map((o) => o.id as string).filter(Boolean)
+  );
+  const histDoorgezet = await loadDoorgezetteSaleLeadIds(
+    sb,
+    histAfsRows.map((a) => a.lead_id)
+  );
+
+  const week_trend: SalesManagerWeekPoint[] = weekWindows.map((w) => {
+    let ing = 0;
+    let gel = 0;
+    let niet = 0;
+    for (const a of histAfsRows) {
+      if (!isNieuwHuisbezoek(a.soort)) continue;
+      if (!inRange(a.start_at, w.startIso, w.endIso)) continue;
+      ing += 1;
+      const shape = {
+        id: a.id,
+        lead_id: a.lead_id,
+        status: a.status,
+        soort: a.soort,
+        start_at: a.start_at,
+        end_at: a.end_at,
+      };
+      const ls = leadStatusOf(a);
+      if (isGelopenVoorSalesManager(shape, ls, histDoorgezet, now)) {
+        gel += 1;
+      } else if (
+        isNietAfgeboektVoorSalesManager(shape, ls, histDoorgezet, now)
+      ) {
+        niet += 1;
+      }
+    }
+    let sales = 0;
+    for (const o of histOff || []) {
+      if (histGeannuleerd.has(o.id as string)) continue;
+      const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
+      const aid = (leadJoin as { adviseur_id?: string | null } | null)
+        ?.adviseur_id;
+      if (aid !== adviseurId) continue;
+      const at = o.ondertekend_op as string;
+      if (at && inRange(at, w.startIso, w.endIso)) sales += 1;
+    }
+    return {
+      weekKey: w.weekKey,
+      label: w.label,
+      ingepland: ing,
+      gelopen: gel,
+      niet_afgeboekt: niet,
+      sales,
+      conversie_gelopen_sale_pct: pct(sales, gel),
+    };
+  });
+
+  // Tijdlijn (beknopt)
   let sollicitatieAt: string | null = null;
   if (email) {
     const { data: sol } = await sb
       .from("sollicitaties")
-      .select("id, created_at, email, functie")
+      .select("created_at")
       .ilike("email", email)
       .order("created_at", { ascending: true })
       .limit(1)
@@ -634,24 +1006,6 @@ export async function buildSalesManagerDetail(
     if (sol?.created_at) sollicitatieAt = sol.created_at as string;
   }
 
-  // Eerste gelopen fysieke afspraak (all-time)
-  const { data: eersteAfs } = await sb
-    .from("afspraken")
-    .select("id, start_at, soort, status")
-    .eq("adviseur_id", adviseurId)
-    .eq("status", "voltooid")
-    .neq("status", "geannuleerd")
-    .order("start_at", { ascending: true })
-    .limit(80);
-
-  let eersteAfspraakAt: string | null = null;
-  for (const a of eersteAfs || []) {
-    if (!afspraakBlokkeertAgenda(a.soort as string | null)) continue;
-    eersteAfspraakAt = a.start_at as string;
-    break;
-  }
-
-  // Alle deals (ondertekend) voor tijdlijn — recent eerst, max 40
   const { data: dealsRaw } = await sb
     .from("offertes")
     .select(
@@ -661,30 +1015,6 @@ export async function buildSalesManagerDetail(
     .not("ondertekend_op", "is", null)
     .order("ondertekend_op", { ascending: false })
     .limit(200);
-
-  const dealEvents: SalesManagerTimelineEvent[] = [];
-  for (const o of dealsRaw || []) {
-    const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
-    const lead = leadJoin as {
-      id?: string;
-      naam?: string | null;
-      adviseur_id?: string | null;
-    } | null;
-    if (!lead || lead.adviseur_id !== adviseurId) continue;
-    const at = o.ondertekend_op as string;
-    if (!at) continue;
-    const bedrag = Number(o.totaal_inc_btw) || 0;
-    dealEvents.push({
-      kind: "deal",
-      at,
-      titel: `Deal · ${lead.naam?.trim() || "Lead"}`,
-      detail: bedrag > 0 ? `€ ${bedrag.toLocaleString("nl-NL", { maximumFractionDigits: 0 })}` : null,
-      lead_id: (o.lead_id as string) || lead.id || null,
-      offerte_id: o.id as string,
-      bedrag_inc: bedrag || null,
-    });
-    if (dealEvents.length >= 40) break;
-  }
 
   const timeline: SalesManagerTimelineEvent[] = [];
   if (sollicitatieAt) {
@@ -727,21 +1057,38 @@ export async function buildSalesManagerDetail(
           : contractStatus || null,
     });
   }
-  if (eersteAfspraakAt) {
+  let dealCount = 0;
+  for (const o of dealsRaw || []) {
+    const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
+    const lead = leadJoin as {
+      id?: string;
+      naam?: string | null;
+      adviseur_id?: string | null;
+    } | null;
+    if (!lead || lead.adviseur_id !== adviseurId) continue;
+    const at = o.ondertekend_op as string;
+    if (!at) continue;
+    const bedrag = Number(o.totaal_inc_btw) || 0;
     timeline.push({
-      kind: "eerste_afspraak",
-      at: eersteAfspraakAt,
-      titel: "Eerste afspraak gelopen",
-      detail: "Eerste voltooide huisbezoek",
+      kind: "deal",
+      at,
+      titel: `Deal · ${lead.naam?.trim() || "Lead"}`,
+      detail:
+        bedrag > 0
+          ? `€ ${bedrag.toLocaleString("nl-NL", { maximumFractionDigits: 0 })}`
+          : null,
+      lead_id: (o.lead_id as string) || lead.id || null,
+      offerte_id: o.id as string,
+      bedrag_inc: bedrag || null,
     });
+    dealCount += 1;
+    if (dealCount >= 40) break;
   }
-  timeline.push(...dealEvents);
   timeline.sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
   );
 
-  // Kaart: afspraken rondom nu (verleden 21d + vooruit 21d) + maand gelopen
-  const now = new Date();
+  // Kaart
   const mapFrom = addDays(now, -21).toISOString();
   const mapTo = addDays(now, 21).toISOString();
   const { data: mapAfs } = await sb
@@ -790,9 +1137,7 @@ export async function buildSalesManagerDetail(
   };
 
   const geoQueries: { key: string; q: string }[] = [];
-  if (startAdres) {
-    geoQueries.push({ key: "home", q: startAdres });
-  }
+  if (startAdres) geoQueries.push({ key: "home", q: startAdres });
 
   const afspraakMeta: {
     a: MapAfspraak;
@@ -812,7 +1157,6 @@ export async function buildSalesManagerDetail(
 
   const geo = await geocodeMany(geoQueries);
   const map_pins: SalesManagerMapPin[] = [];
-
   const homeLoc = geo.get("home");
   if (homeLoc && startAdres) {
     map_pins.push({
@@ -832,7 +1176,6 @@ export async function buildSalesManagerDetail(
       adres: startAdres,
     });
   }
-
   for (const { a, lead, adres } of afspraakMeta) {
     const loc = geo.get(`afs:${a.id}`);
     if (!loc) continue;
@@ -854,107 +1197,6 @@ export async function buildSalesManagerDetail(
     });
   }
 
-  // Conversie per maand (6 maanden, oud → nieuw)
-  const { goals } = await loadSalesManagerGoals(sb);
-  const monthKeys: string[] = [];
-  {
-    const [y0, m0] = monthKey.split("-").map(Number);
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(y0, m0 - 1 - i, 1);
-      monthKeys.push(
-        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
-      );
-    }
-  }
-  const histFrom = monthRangeAmsterdam(monthKeys[0]).startIso;
-  const histTo = monthRangeAmsterdam(monthKeys[monthKeys.length - 1]).endIso;
-
-  const [{ data: histAfs }, { data: histOff }] = await Promise.all([
-    sb
-      .from("afspraken")
-      .select("lead_id, start_at, status, soort")
-      .eq("adviseur_id", adviseurId)
-      .eq("status", "voltooid")
-      .gte("start_at", histFrom)
-      .lt("start_at", histTo),
-    sb
-      .from("offertes")
-      .select(
-        "lead_id, totaal_inc_btw, ondertekend_op, leads(adviseur_id)"
-      )
-      .eq("status", "ondertekend")
-      .not("ondertekend_op", "is", null)
-      .gte("ondertekend_op", histFrom)
-      .lt("ondertekend_op", histTo),
-  ]);
-
-  const gelopenByMonth = new Map<string, Set<string>>();
-  for (const a of histAfs || []) {
-    if (!afspraakBlokkeertAgenda(a.soort as string | null)) continue;
-    const mk = formatInTimeZone(
-      a.start_at as string,
-      AMSTERDAM_TZ,
-      "yyyy-MM"
-    );
-    let set = gelopenByMonth.get(mk);
-    if (!set) {
-      set = new Set();
-      gelopenByMonth.set(mk, set);
-    }
-    set.add(a.lead_id as string);
-  }
-
-  const dealsByMonth = new Map<string, Set<string>>();
-  const omzetByMonth = new Map<string, number>();
-  for (const o of histOff || []) {
-    const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
-    const aid = (leadJoin as { adviseur_id?: string | null } | null)
-      ?.adviseur_id;
-    if (aid !== adviseurId) continue;
-    const mk = formatInTimeZone(
-      o.ondertekend_op as string,
-      AMSTERDAM_TZ,
-      "yyyy-MM"
-    );
-    let set = dealsByMonth.get(mk);
-    if (!set) {
-      set = new Set();
-      dealsByMonth.set(mk, set);
-    }
-    set.add(o.lead_id as string);
-    omzetByMonth.set(
-      mk,
-      (omzetByMonth.get(mk) || 0) + (Number(o.totaal_inc_btw) || 0)
-    );
-  }
-
-  const conversie_maanden: SalesManagerMonthConversie[] = monthKeys.map(
-    (mk) => {
-      const visited = gelopenByMonth.get(mk) || new Set();
-      const gelopen = visited.size;
-      const dealSet = dealsByMonth.get(mk) || new Set();
-      let deals = 0;
-      for (const lid of visited) {
-        if (dealSet.has(lid)) deals += 1;
-      }
-      const conversie_pct =
-        gelopen > 0 ? Math.round((deals / gelopen) * 1000) / 10 : null;
-      const doelRaw = goals[mk]?.[adviseurId];
-      const conversie_doel_pct =
-        doelRaw != null && Number.isFinite(doelRaw) ? doelRaw : null;
-      const { label: mLabel } = monthRangeAmsterdam(mk);
-      return {
-        monthKey: mk,
-        label: mLabel,
-        gelopen,
-        deals,
-        conversie_pct,
-        conversie_doel_pct,
-        omzet_inc: Math.round((omzetByMonth.get(mk) || 0) * 100) / 100,
-      };
-    }
-  );
-
   return {
     adviseur_id: adviseurId,
     naam: (adv.naam as string) || row.naam,
@@ -964,9 +1206,7 @@ export async function buildSalesManagerDetail(
     contract_signed_at: contractSignedAt,
     contract_sign_status: contractStatus,
     row,
-    afspraak_sale_ratio: row.conversie_pct,
-    avg_order_value: row.avg_order_value,
-    conversie_maanden,
+    week_trend,
     timeline,
     map_pins,
   };

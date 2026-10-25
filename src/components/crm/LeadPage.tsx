@@ -177,6 +177,8 @@ export function LeadPage() {
   const { session, rol } = useCrmSession();
   const eigenLeadsOnly = rol ? alleenEigenLeads(rol) : false;
   const kanToewijzen = rol ? magBekijkAls(rol) || rol === "backoffice" : false;
+  /** Adviseurs boeken alleen af via de agenda — geen vrije status op leadpagina. */
+  const kanStatusWijzigen = Boolean(rol) && !eigenLeadsOnly;
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
@@ -307,6 +309,7 @@ export function LeadPage() {
 
   async function updateStatus(status: LeadStatus, extraNotitie?: string) {
     if (!lead) return;
+    if (!kanStatusWijzigen) return;
     if (status === "niet_gekwalificeerd" && !extraNotitie?.trim()) {
       setShowKwalForm(true);
       return;
@@ -863,20 +866,29 @@ export function LeadPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={lead.status}
-              onChange={(e) => {
-                const next = e.target.value as LeadStatus;
-                if (next === "niet_gekwalificeerd") {
-                  setShowKwalForm(true);
-                  return;
-                }
-                void updateStatus(next);
-              }}
-              className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
-            >
-              <LeadStatusSelectOptions />
-            </select>
+            {kanStatusWijzigen ? (
+              <select
+                value={lead.status}
+                onChange={(e) => {
+                  const next = e.target.value as LeadStatus;
+                  if (next === "niet_gekwalificeerd") {
+                    setShowKwalForm(true);
+                    return;
+                  }
+                  void updateStatus(next);
+                }}
+                className={`max-w-[14rem] cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+              >
+                <LeadStatusSelectOptions />
+              </select>
+            ) : (
+              <span
+                className={`inline-block max-w-[14rem] border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide ${statusTone("lead", lead.status)}`}
+                title="Status wijzigen alleen via afboeken in de agenda"
+              >
+                {leadStatusLabel[lead.status] || lead.status}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => setMaakOfferteOpen(true)}
@@ -1001,7 +1013,7 @@ export function LeadPage() {
           </div>
         )}
 
-        {showKwalForm && (
+        {showKwalForm && kanStatusWijzigen && (
           <div className="border-t border-line bg-wash px-4 py-4 sm:px-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Reden niet gekwalificeerd

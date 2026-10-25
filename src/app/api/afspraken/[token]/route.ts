@@ -31,7 +31,7 @@ import {
 } from "@/lib/adviseur-beschikbaarheid";
 import { addDays, getISOWeekYear } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
-import { AMSTERDAM_TZ } from "@/lib/format";
+import { AMSTERDAM_TZ, appendVerzetNotitie } from "@/lib/format";
 
 export const runtime = "nodejs";
 
@@ -338,12 +338,17 @@ export async function POST(
         }
       }
 
+      const notities = appendVerzetNotitie(
+        afspraak.notities as string | null,
+        afspraak.start_at
+      );
       const { data: updated, error: upErr } = await sb
         .from("afspraken")
         .update({
           start_at: start.toISOString(),
           end_at: end.toISOString(),
-          status: "verzet",
+          status: "gepland",
+          notities,
           herinnering_verstuurd: false,
           bevestiging_verstuurd: false,
           opwarm_verstuurd: false,
@@ -362,7 +367,8 @@ export async function POST(
             .update({
               start_at: start.toISOString(),
               end_at: end.toISOString(),
-              status: "verzet",
+              status: "gepland",
+              notities,
               herinnering_verstuurd: false,
               bevestiging_verstuurd: false,
             })

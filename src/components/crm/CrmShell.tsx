@@ -1572,7 +1572,11 @@ export function CrmShell() {
                       afspraken={afspraken}
                       statusFilter={statusFilter}
                       onStatusFilterChange={changeStatusFilter}
-                      onStatusChange={updateLeadStatus}
+                      onStatusChange={
+                        userRol && alleenEigenLeads(userRol)
+                          ? undefined
+                          : updateLeadStatus
+                      }
                       onAdviseurChange={
                         userRol && magBekijkAls(userRol)
                           ? updateLeadAdviseur

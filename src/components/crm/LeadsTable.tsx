@@ -469,19 +469,28 @@ export function LeadsTable({
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    <select
-                      value={lead.status}
-                      onChange={(e) =>
-                        onStatusChange?.(
-                          lead.id,
-                          e.target.value as LeadStatus
-                        )
-                      }
-                      className={`w-full cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
-                      aria-label="Lead status"
-                    >
-                      <LeadStatusSelectOptions />
-                    </select>
+                    {onStatusChange ? (
+                      <select
+                        value={lead.status}
+                        onChange={(e) =>
+                          onStatusChange(
+                            lead.id,
+                            e.target.value as LeadStatus
+                          )
+                        }
+                        className={`w-full cursor-pointer border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+                        aria-label="Lead status"
+                      >
+                        <LeadStatusSelectOptions />
+                      </select>
+                    ) : (
+                      <span
+                        className={`inline-block w-full border bg-white px-2.5 py-2 text-[11px] font-bold uppercase tracking-wide ${statusTone("lead", lead.status)}`}
+                        title="Status wijzigen alleen via afboeken in de agenda"
+                      >
+                        {leadStatusLabel[lead.status] || lead.status}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] tabular-nums text-muted">
                     {formatDateTimeNl(lead.created_at)}
@@ -663,19 +672,28 @@ export function LeadsTable({
                       </td>
                     )}
                     <td onClick={(e) => e.stopPropagation()}>
-                      <select
-                        value={lead.status}
-                        onChange={(e) =>
-                          onStatusChange?.(
-                            lead.id,
-                            e.target.value as LeadStatus
-                          )
-                        }
-                        className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
-                        aria-label="Lead status"
-                      >
-                        <LeadStatusSelectOptions />
-                      </select>
+                      {onStatusChange ? (
+                        <select
+                          value={lead.status}
+                          onChange={(e) =>
+                            onStatusChange(
+                              lead.id,
+                              e.target.value as LeadStatus
+                            )
+                          }
+                          className={`max-w-[14rem] cursor-pointer border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide outline-none focus:border-green ${statusTone("lead", lead.status)}`}
+                          aria-label="Lead status"
+                        >
+                          <LeadStatusSelectOptions />
+                        </select>
+                      ) : (
+                        <span
+                          className={`inline-block max-w-[14rem] border bg-white px-2 py-1 text-[11px] font-bold uppercase tracking-wide ${statusTone("lead", lead.status)}`}
+                          title="Status wijzigen alleen via afboeken in de agenda"
+                        >
+                          {leadStatusLabel[lead.status] || lead.status}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))

@@ -11,6 +11,7 @@ import {
 const CEO_PERIODS: MgmtPeriodPreset[] = [
   "today",
   "this_week",
+  "last_week",
   "last_7_days",
   "this_month",
   "last_30_days",
@@ -126,7 +127,7 @@ export function CeoTotaalPanel() {
       ) : null}
 
       {/* Volume */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard label="Leads" value={num(ceo.leads)} hint="Binnen in periode" />
         <StatCard
           label="Afspraken"
@@ -134,25 +135,36 @@ export function CeoTotaalPanel() {
           hint="Netto huisbezoeken gezet"
         />
         <StatCard
-          label="Deals"
+          label="Sales"
           value={num(ceo.deals)}
           hint="Getekende offertes"
+        />
+        <StatCard
+          label="Netto sales"
+          value={num(ceo.nettoDeals)}
+          hint="Getekend én aanbetaald"
         />
         <StatCard
           label="Gem. order"
           value={
             ceo.avgOrderWorth != null ? formatEuro(ceo.avgOrderWorth) : "—"
           }
-          hint="Order worth / deals"
+          hint="Order worth / sales"
         />
       </div>
 
       {/* Money heroes */}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <HeroCard
           label="Order worth"
           value={formatEuro(ceo.orderWorth)}
           sub="Getekende omzet excl. btw"
+          tone="ink"
+        />
+        <HeroCard
+          label="Netto order worth"
+          value={formatEuro(ceo.nettoOrderWorth)}
+          sub={`${num(ceo.nettoDeals)} aanbetaalde sales`}
           tone="ink"
         />
         <HeroCard
@@ -221,11 +233,12 @@ export function CeoTotaalPanel() {
 
       <p className="text-[11px] leading-relaxed text-muted">
         Definities: leads = binnenkomst in periode · afspraken = netto fysieke
-        huisbezoeken gezet · deals / order worth = ondertekende offertes op
-        ondertekendatum · paid = betaalde facturen op betaaldatum · profit =
-        getekende omzet − inkoop − standaard/project-installatie −
-        adviseurcommissie − Meta/ad spend. Geen cash-realized P&amp;L — verwachte
-        bruto op getekende deals.
+        huisbezoeken gezet · sales / order worth = ondertekende offertes op
+        ondertekendatum · netto sales = getekende sales waarvan de
+        aanbetalingsfactuur betaald is · paid = betaalde facturen op
+        betaaldatum · profit = getekende omzet − inkoop −
+        standaard/project-installatie − adviseurcommissie − Meta/ad spend. Geen
+        cash-realized P&amp;L — verwachte bruto op getekende sales.
       </p>
     </div>
   );

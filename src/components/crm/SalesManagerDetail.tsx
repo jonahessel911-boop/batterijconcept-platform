@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { formatEuro, formatTimeNl } from "@/lib/format";
+import { formatTimeNl } from "@/lib/format";
 import type {
   SalesManagerDetail as Detail,
   SalesManagerMapPin,
-  SalesManagerMonthConversie,
+  SalesManagerPeriod,
   SalesManagerTimelineEvent,
+  SalesManagerWeekPoint,
 } from "@/lib/sales-manager";
 import { SalesManagerMap } from "./SalesManagerMap";
 
@@ -66,231 +67,69 @@ function initials(naam: string): string {
     .join("");
 }
 
-/** Dunne conversiebalk met finish-icoon op 100% (= doel). */
-function ConversieFinishBar({
-  pct,
-  doel,
-  size = "md",
-}: {
-  pct: number | null;
-  doel: number | null;
-  size?: "sm" | "md";
-}) {
-  const progress =
-    pct != null && doel != null && doel > 0
-      ? Math.min(100, Math.round((pct / doel) * 100))
-      : pct != null
-        ? Math.min(100, Math.round(pct))
-        : 0;
-  const onTarget = pct != null && doel != null && pct >= doel;
-  const h = size === "sm" ? "h-1.5" : "h-2";
-
-  return (
-    <div className="w-full">
-      <div className="mb-1 flex items-baseline justify-between gap-2 text-xs tabular-nums">
-        <span
-          className={
-            pct == null
-              ? "text-muted"
-              : onTarget
-                ? "font-semibold text-green-dark"
-                : doel != null
-                  ? "font-semibold text-[#C62828]"
-                  : "font-semibold text-ink"
-          }
-        >
-          {pct == null ? "—" : `${pct.toLocaleString("nl-NL")}%`}
-          {doel != null ? (
-            <span className="ml-1 font-normal text-muted">
-              / {doel.toLocaleString("nl-NL")}% doel
-            </span>
-          ) : (
-            <span className="ml-1 font-normal text-muted">geen doel</span>
-          )}
-        </span>
-        {doel != null && pct != null ? (
-          <span className="text-[10px] text-muted">
-            {onTarget
-              ? "Doel gehaald"
-              : `${Math.max(0, Math.round((doel - pct) * 10) / 10)}% te gaan`}
-          </span>
-        ) : null}
-      </div>
-      <div className={`relative ${h} overflow-visible rounded-full bg-[#eef1ef]`}>
-        <div
-          className={[
-            "absolute inset-y-0 left-0 rounded-full transition-[width]",
-            onTarget ? "bg-green" : "bg-[#C45A12]",
-          ].join(" ")}
-          style={{ width: `${progress}%` }}
-        />
-        {/* Finish op einde van de baan (= 100% van doel) */}
-        <span
-          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 select-none text-sm leading-none drop-shadow-sm"
-          style={{ left: "100%" }}
-          title={doel != null ? `Finish · doel ${doel}%` : "Finish"}
-          aria-hidden
-        >
-          🏁
-        </span>
-      </div>
-    </div>
-  );
+function fmtPct(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return `${n.toLocaleString("nl-NL", { maximumFractionDigits: 1 })}%`;
 }
 
-function MonthConversieChart({
-  months,
-  activeMonth,
-  onSelectMonth,
-  draftDoel,
-  onDraftChange,
-  onSaveDoel,
-  saving,
-}: {
-  months: SalesManagerMonthConversie[];
-  activeMonth: string;
-  onSelectMonth: (mk: string) => void;
-  draftDoel: string;
-  onDraftChange: (v: string) => void;
-  onSaveDoel: () => void;
-  saving: boolean;
-}) {
-  const maxPct = Math.max(
-    40,
-    ...months.map((m) => m.conversie_pct ?? 0),
-    ...months.map((m) => m.conversie_doel_pct ?? 0)
-  );
+function WeekTrendChart({ weeks }: { weeks: SalesManagerWeekPoint[] }) {
+  const maxSales = Math.max(1, ...weeks.map((w) => w.sales));
+  const maxGel = Math.max(1, ...weeks.map((w) => w.gelopen));
 
   return (
     <div className="space-y-3">
       <div className="flex h-36 items-end gap-1.5 sm:gap-2">
-        {months.map((m) => {
-          const h =
-            m.conversie_pct != null
-              ? Math.max(4, Math.round((m.conversie_pct / maxPct) * 100))
-              : 4;
-          const doelH =
-            m.conversie_doel_pct != null
-              ? Math.round((m.conversie_doel_pct / maxPct) * 100)
-              : null;
-          const active = m.monthKey === activeMonth;
-          const short = m.label.split(" ")[0]?.slice(0, 3) || m.monthKey;
+        {weeks.map((w) => {
+          const hSales = Math.max(4, Math.round((w.sales / maxSales) * 100));
+          const hGel = Math.max(4, Math.round((w.gelopen / maxGel) * 100));
+          const short = w.label.split(" ")[0] || w.weekKey;
           return (
-            <button
-              key={m.monthKey}
-              type="button"
-              onClick={() => onSelectMonth(m.monthKey)}
+            <div
+              key={w.weekKey}
               className="group relative flex h-full min-w-0 flex-1 flex-col items-center justify-end"
-              title={`${m.label}: ${m.conversie_pct ?? "—"}% (${m.deals}/${m.gelopen})`}
+              title={`${w.label}: ${w.sales} sales · ${w.gelopen} gelopen · ${fmtPct(w.conversie_gelopen_sale_pct)}`}
             >
-              {doelH != null ? (
+              <div className="flex w-full max-w-[40px] items-end justify-center gap-0.5">
                 <span
-                  className="absolute left-0 right-0 border-t border-dashed border-green/50"
-                  style={{ bottom: `${doelH}%` }}
-                  aria-hidden
+                  className="w-1/2 rounded-t-sm bg-green/40"
+                  style={{ height: `${hGel}%` }}
                 />
-              ) : null}
-              <span
-                className={[
-                  "w-full max-w-[36px] rounded-t-md transition",
-                  active ? "bg-green" : "bg-green/35 group-hover:bg-green/55",
-                  m.conversie_pct == null ? "opacity-30" : "",
-                ].join(" ")}
-                style={{ height: `${h}%` }}
-              />
-              <span
-                className={[
-                  "mt-1.5 text-[9px] font-semibold uppercase tracking-wide",
-                  active ? "text-green-dark" : "text-muted",
-                ].join(" ")}
-              >
+                <span
+                  className="w-1/2 rounded-t-sm bg-green"
+                  style={{ height: `${hSales}%` }}
+                />
+              </div>
+              <span className="mt-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
                 {short}
               </span>
-            </button>
+            </div>
           );
         })}
       </div>
-
-      {(() => {
-        const cur =
-          months.find((m) => m.monthKey === activeMonth) ||
-          months[months.length - 1];
-        if (!cur) return null;
-        return (
-          <div className="rounded-xl border border-line bg-wash/50 px-3 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  {cur.label}
-                </p>
-                <p className="mt-0.5 text-sm text-ink">
-                  <span className="font-semibold tabular-nums">
-                    {cur.deals}/{cur.gelopen}
-                  </span>{" "}
-                  <span className="text-muted">deals / gelopen</span>
-                  {cur.omzet_inc > 0 ? (
-                    <span className="ml-2 text-muted">
-                      · {formatEuro(cur.omzet_inc)}
-                    </span>
-                  ) : null}
-                </p>
-              </div>
-              <label className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Doel %
-                <span className="mt-0.5 flex items-center gap-1">
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    inputMode="decimal"
-                    value={draftDoel}
-                    onChange={(e) => onDraftChange(e.target.value)}
-                    onBlur={onSaveDoel}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        (e.target as HTMLInputElement).blur();
-                      }
-                    }}
-                    disabled={saving}
-                    placeholder="—"
-                    className="w-16 rounded-lg border border-line bg-white px-2 py-1.5 text-sm font-semibold tabular-nums text-green-dark outline-none focus:border-green disabled:opacity-50"
-                  />
-                  <span className="text-green-dark">%</span>
-                </span>
-              </label>
-            </div>
-            <div className="mt-3">
-              <ConversieFinishBar
-                pct={cur.conversie_pct}
-                doel={cur.conversie_doel_pct}
-              />
-            </div>
-          </div>
-        );
-      })()}
+      <p className="text-[10px] text-muted">
+        Donkergroen = sales · licht = gelopen (afgeboekt)
+      </p>
     </div>
   );
 }
 
 export function SalesManagerDetailView({
   adviseurId,
-  month,
+  period,
+  customFrom,
+  customTo,
   onBack,
-  onDoelSaved,
 }: {
   adviseurId: string;
-  month: string;
+  period: SalesManagerPeriod;
+  customFrom?: string | null;
+  customTo?: string | null;
   onBack: () => void;
-  onDoelSaved?: () => void;
 }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SalesManagerMapPin | null>(null);
-  const [chartMonth, setChartMonth] = useState(month);
-  const [draftDoel, setDraftDoel] = useState("");
-  const [savingDoel, setSavingDoel] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -298,9 +137,13 @@ export function SalesManagerDetailView({
     setSelected(null);
     try {
       const qs = new URLSearchParams({
-        month,
+        period,
         adviseur_id: adviseurId,
       });
+      if (period === "custom" && customFrom && customTo) {
+        qs.set("from", customFrom);
+        qs.set("to", customTo);
+      }
       const res = await fetch(`/api/sales-manager?${qs}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -308,17 +151,8 @@ export function SalesManagerDetailView({
           (data as { error?: string }).error || "Laden mislukt"
         );
       }
-      const d = ((data as { detail?: Detail }).detail ||
-        null) as Detail | null;
-      setDetail(d);
-      setChartMonth(month);
-      const cur = d?.conversie_maanden?.find((m) => m.monthKey === month);
-      setDraftDoel(
-        cur?.conversie_doel_pct != null
-          ? String(cur.conversie_doel_pct)
-          : d?.row.conversie_doel_pct != null
-            ? String(d.row.conversie_doel_pct)
-            : ""
+      setDetail(
+        ((data as { detail?: Detail }).detail || null) as Detail | null
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
@@ -326,63 +160,11 @@ export function SalesManagerDetailView({
     } finally {
       setLoading(false);
     }
-  }, [adviseurId, month]);
+  }, [adviseurId, period, customFrom, customTo]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (!detail) return;
-    const cur = detail.conversie_maanden.find(
-      (m) => m.monthKey === chartMonth
-    );
-    setDraftDoel(
-      cur?.conversie_doel_pct != null ? String(cur.conversie_doel_pct) : ""
-    );
-  }, [chartMonth, detail]);
-
-  async function saveDoel() {
-    if (!detail) return;
-    const cur = detail.conversie_maanden.find(
-      (m) => m.monthKey === chartMonth
-    );
-    const raw = draftDoel.trim().replace(",", ".");
-    const doelPct = raw === "" ? null : Number(raw);
-    if (raw !== "" && (!Number.isFinite(doelPct) || (doelPct as number) < 0)) {
-      setError("Doel moet een percentage zijn (0–100)");
-      return;
-    }
-    const prev = cur?.conversie_doel_pct;
-    const prevStr = prev != null ? String(prev) : "";
-    if ((doelPct == null ? "" : String(doelPct)) === prevStr) return;
-
-    setSavingDoel(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/sales-manager", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          month: chartMonth,
-          adviseur_id: adviseurId,
-          conversie_doel_pct: doelPct,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Opslaan mislukt"
-        );
-      }
-      await load();
-      onDoelSaved?.();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Opslaan mislukt");
-    } finally {
-      setSavingDoel(false);
-    }
-  }
 
   if (loading && !detail) {
     return (
@@ -414,13 +196,9 @@ export function SalesManagerDetailView({
   const row = detail.row;
   const milestones = detail.timeline.filter((e) => e.kind !== "deal");
   const deals = detail.timeline.filter((e) => e.kind === "deal");
-  const chartCur =
-    detail.conversie_maanden.find((m) => m.monthKey === chartMonth) ||
-    detail.conversie_maanden[detail.conversie_maanden.length - 1];
 
   return (
     <div className="space-y-4">
-      {/* Hero */}
       <section className="relative overflow-hidden rounded-2xl border border-green/20 bg-[#0a4727] px-5 py-5 text-white sm:px-6">
         <div
           className="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-green/30 blur-3xl"
@@ -460,14 +238,20 @@ export function SalesManagerDetailView({
             {loading ? "Laden…" : "Vernieuwen"}
           </button>
         </div>
-        <div className="relative mt-4">
-          <ConversieFinishBar
-            pct={row.conversie_pct}
-            doel={row.conversie_doel_pct}
+        <div className="relative mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MiniStat
+            label="Ingepland→gelopen"
+            value={fmtPct(row.conversie_ingepland_gelopen_pct)}
           />
-          <p className="mt-2 text-[11px] text-white/55">
-            Conversie deze maand · balk tot finish (doel)
-          </p>
+          <MiniStat
+            label="Gelopen→sale"
+            value={fmtPct(row.conversie_gelopen_sale_pct)}
+          />
+          <MiniStat label="Sales" value={String(row.sales)} />
+          <MiniStat
+            label="Aankomende week"
+            value={String(row.afspraken_aankomende_week)}
+          />
         </div>
       </section>
 
@@ -477,87 +261,38 @@ export function SalesManagerDetailView({
         </p>
       ) : null}
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <Kpi label="Ingepland" value={String(row.ingepland)} />
+        <Kpi label="Gelopen" value={String(row.gelopen)} />
         <Kpi
-          label="Afspraak → sale"
-          value={
-            detail.afspraak_sale_ratio != null
-              ? `${detail.afspraak_sale_ratio.toLocaleString("nl-NL")}%`
-              : "—"
-          }
-          sub={
-            row.gelopen > 0
-              ? `${row.deals}/${row.gelopen} gelopen`
-              : "Nog geen gelopen"
-          }
-        />
-        <Kpi
-          label="Gelopen afspraken"
-          value={String(row.gelopen)}
-          sub={`${row.deals} deal${row.deals === 1 ? "" : "s"} deze maand`}
-        />
-        <Kpi
-          label="Avg order value"
-          value={
-            detail.avg_order_value != null
-              ? formatEuro(detail.avg_order_value)
-              : "—"
-          }
-          sub="Gem. ondertekende offerte"
-        />
-        <Kpi
-          label="Omzet maand"
-          value={row.omzet_inc > 0 ? formatEuro(row.omzet_inc) : "—"}
-          sub={
-            row.heeft_afspraak_vandaag
-              ? `${row.afspraken_vandaag} vandaag · ${row.afspraken_2w} in 2w`
-              : `${row.afspraken_2w} afspr. komende 2w`
-          }
+          label="Niet afgeboekt"
+          value={String(row.niet_afgeboekt)}
           tone={row.niet_afgeboekt > 0 ? "warn" : undefined}
         />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Conversie over tijd */}
         <section className="overflow-hidden rounded-2xl border border-line bg-white">
           <header className="border-b border-line px-4 py-3">
             <p className="font-display text-sm font-semibold text-ink">
-              Conversie per maand
+              Trend per week
             </p>
             <p className="text-[11px] text-muted">
-              Stippelijn = doel · klik maand om target te zetten
+              Laatste 6 volledig afgelopen weken
             </p>
           </header>
           <div className="px-4 py-3">
-            <MonthConversieChart
-              months={detail.conversie_maanden}
-              activeMonth={chartMonth}
-              onSelectMonth={setChartMonth}
-              draftDoel={draftDoel}
-              onDraftChange={setDraftDoel}
-              onSaveDoel={() => void saveDoel()}
-              saving={savingDoel}
-            />
-            {chartCur ? (
-              <p className="mt-2 text-[10px] text-muted">
-                Geselecteerd: {chartCur.label}
-                {chartCur.conversie_pct != null
-                  ? ` · ${chartCur.conversie_pct}%`
-                  : ""}
-              </p>
-            ) : null}
+            <WeekTrendChart weeks={detail.week_trend} />
           </div>
         </section>
 
-        {/* Tijdlijn */}
         <section className="overflow-hidden rounded-2xl border border-line bg-white">
           <header className="border-b border-line px-4 py-3">
             <p className="font-display text-sm font-semibold text-ink">
               Activiteiten-tijdlijn
             </p>
             <p className="text-[11px] text-muted">
-              Sollicitatie · contract · eerste afspraak · deals
+              Sollicitatie · contract · deals
             </p>
           </header>
           <div className="max-h-[380px] overflow-y-auto px-4 py-3">
@@ -611,14 +346,13 @@ export function SalesManagerDetailView({
         </section>
       </div>
 
-      {/* Kaart */}
       <section className="overflow-hidden rounded-2xl border border-line bg-white">
         <header className="border-b border-line px-4 py-3">
           <p className="font-display text-sm font-semibold text-ink">
             Kaart · startadres &amp; afspraken
           </p>
           <p className="text-[11px] text-muted">
-            Huis = startadres · blauw = afspraak · hover = notitie · klik = lead
+            Huis = startadres · blauw = afspraak · klik = lead
           </p>
         </header>
         <SalesManagerMap pins={detail.map_pins} onSelect={setSelected} />
@@ -640,13 +374,6 @@ export function SalesManagerDetailView({
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
-                {selected.lead_telefoon || selected.lead_email ? (
-                  <p className="mt-0.5 text-muted">
-                    {[selected.lead_telefoon, selected.lead_email]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                ) : null}
                 {selected.notitie ? (
                   <p className="mt-1.5 border-l-2 border-green pl-2 italic text-ink">
                     {selected.notitie}
@@ -676,10 +403,23 @@ export function SalesManagerDetailView({
           </div>
         ) : (
           <p className="border-t border-line px-4 py-2 text-[10px] text-muted">
-            Hover over een afspraak-pin voor de notitie. Klik voor leadgegevens.
+            Klik een afspraak-pin voor leadgegevens.
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-white/55">
+        {label}
+      </p>
+      <p className="mt-0.5 font-display text-lg font-semibold tabular-nums">
+        {value}
+      </p>
     </div>
   );
 }
