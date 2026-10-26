@@ -197,9 +197,12 @@ export function factuurIsOverdue(opts: {
   afgesproken_betaaldatum?: string | null;
   betaald_op?: string | null;
   credit_van_factuur_id?: string | null;
+  /** Origineel met creditnota: geen verlopen/nabellen (CREDIT-status). */
+  heeftCredit?: boolean;
   now?: Date;
 }): boolean {
   if (opts.credit_van_factuur_id) return false;
+  if (opts.heeftCredit) return false;
   if (opts.status === "betaald" || opts.betaald_op) return false;
   if (!factuurIsOpenstaand(opts.status)) return false;
   const deadline = factuurEffectieveDeadline(opts);

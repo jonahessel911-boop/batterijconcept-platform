@@ -36,7 +36,8 @@ export const teamRolUitleg: Record<TeamRol, string> = {
   sales_manager:
     "Sales sturen: Today, weekmeeting, leads, offertes, netto, rapportage",
   adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen, instellingen",
-  beller: "Callcenter: leads + bellen (gedeelde bellijst met claim)",
+  beller:
+    "Callcenter: leads, bellen, agenda alle adviseurs, eigen bel-rapportage",
   backoffice:
     "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing, adviseurs-contact",
 };
@@ -66,7 +67,7 @@ export function tabsVoorRol(
       tabs = ["leads", "agenda", "offertes", "netto", "facturen", "instellingen"];
       break;
     case "beller":
-      tabs = ["leads", "bellen"];
+      tabs = ["leads", "bellen", "agenda", "rapportage"];
       break;
     case "backoffice":
       tabs = [

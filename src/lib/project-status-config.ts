@@ -217,7 +217,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     inPipeline: true,
     /**
      * Als installatie nog niet gezet is (legacy), plan die nu.
-     * Anders volgt bevestigen via status installatie_ingepland.
+     * Met installatie_at is er geen aparte bevestig-actie meer.
      */
     taak: {
       autoKeySuffix: "installatie",
@@ -232,12 +232,8 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "uitvoering",
     scope: "beide",
     inPipeline: true,
-    taak: {
-      autoKeySuffix: "bevestigen",
-      titel: "Bevestigen met klant + monteur inplannen",
-      afdeling: "Planning",
-      due: { kind: "installatie_minus_days", days: 3 },
-    },
+    /** Geen actie: datum staat; monteur/klant-bevestiging is geen backoffice-stap. */
+    taak: null,
   },
   {
     key: "installatie_voltooid",

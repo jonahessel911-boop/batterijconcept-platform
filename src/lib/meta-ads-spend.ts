@@ -68,12 +68,12 @@ function ymdInAmsterdam(d: Date): string {
   return formatInTimeZone(d, TZ, "yyyy-MM-dd");
 }
 
-/** Default: laatste 30 dagen t/m gisteren (Amsterdam). */
+/** Default: laatste 30 dagen t/m vandaag (Amsterdam). */
 export function defaultSpendRange(daysBack = 30): {
   since: string;
   until: string;
 } {
-  const untilDate = subDays(new Date(), 1);
+  const untilDate = new Date();
   const sinceDate = subDays(untilDate, daysBack - 1);
   return {
     since: ymdInAmsterdam(sinceDate),
@@ -315,23 +315,27 @@ export async function syncMetaAdSpend(options?: {
   return { ...fetched, upserted };
 }
 
-/** Schrijf campaign-level spend naar meta_ad_spend (lead-campagne only). */
+/**
+ * Schrijf campaign-level spend naar meta_ad_spend voor heel ad-account
+ * (alle campagnes, dagelijks, Europe/Amsterdam via Insights time_range).
+ */
 export async function syncMetaAdSpendCampaignDetail(options?: {
   since?: string;
   until?: string;
 }): Promise<{ upserted: number; error?: string }> {
+  // campaignId=null → account Insights level=campaign (alle campagnes)
   const fetched = await fetchMetaAdSpend({
     since: options?.since,
     until: options?.until,
     level: "campaign",
     timeIncrement: "1",
-    campaignId: META_LEAD_CAMPAIGN_ID,
+    campaignId: null,
   });
   if (!fetched.ok) return { upserted: 0, error: fetched.error };
 
   const sb = getSupabaseAdmin();
 
-  // Oude rijen (andere campagnes / foute campaign_id=naam) wissen in periode.
+  // Oude campaign-rijen in periode vervangen (voorkomt dubbels na sync)
   await sb
     .from("meta_ad_spend")
     .delete()
@@ -341,7 +345,7 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
 
   let upserted = 0;
   for (const day of fetched.days) {
-    const campaignId = day.campaign_id || META_LEAD_CAMPAIGN_ID;
+    const campaignId = (day.campaign_id || "").trim() || "unknown";
     const row = {
       datum: day.date,
       level: "campaign" as const,

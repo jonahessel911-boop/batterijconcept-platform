@@ -755,6 +755,38 @@ export function factuurVerzondenEmail(opts: {
   });
 }
 
+/** Klant: factuur is als betaald gemarkeerd */
+export function factuurBetaaldEmail(opts: {
+  naam: string;
+  factuurNummer: string;
+  bedrag: string;
+  trackUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: `Betaling ontvangen — ${opts.factuurNummer}`,
+    preheader: `Bedankt voor je betaling van factuur ${opts.factuurNummer}.`,
+    bodyHtml: [
+      emailH1("Bedankt voor je betaling"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "We hebben je betaling ontvangen — dankjewel. Hieronder zie je de bevestiging."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
+         <p style="margin:0;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>`
+      ),
+      opts.trackUrl
+        ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
+        : "",
+      emailP(
+        "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 /** Klant: schouw is ingepland (week en/of exacte dag) */
 export function schouwKlantEmail(opts: {
   naam: string;

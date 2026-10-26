@@ -26,6 +26,7 @@ import {
   buildGeenContactOutcomePatch,
   geenContactPogingLabel,
   inBelQueue,
+  isHerplanBelLead,
   isTerugbelDue,
   leadInProvincie,
   sortBelQueue,
@@ -1317,7 +1318,11 @@ export function BelPanel({
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {current.status === "geen_contact" || pogingen > 0 ? (
+          {isHerplanBelLead(current) ? (
+            <span className="rounded-full border border-[#1565C0]/30 bg-[#E3F2FD] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#0D47A1]">
+              Herplannen · {leadStatusLabel(current.status)}
+            </span>
+          ) : current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
               {geenContactPogingLabel(pogingen)}
             </span>

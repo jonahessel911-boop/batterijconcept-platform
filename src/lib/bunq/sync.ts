@@ -177,6 +177,15 @@ async function markFactuurPaid(
     /* best-effort */
   }
 
+  try {
+    const { notifyKlantFactuurBetaald } = await import(
+      "@/lib/factuur-betaald-mail"
+    );
+    await notifyKlantFactuurBetaald(sb, factuur.id);
+  } catch {
+    /* best-effort */
+  }
+
   if (fac?.project_id) {
     try {
       const { maybeAdvanceProjectNaSchouw } = await import(

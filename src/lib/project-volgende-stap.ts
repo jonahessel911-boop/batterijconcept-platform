@@ -117,8 +117,6 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
       return "Alles betaald — plan eerst de installatiedatum. Purchasing verschijnt daarna automatisch (5 werkdagen vóór installatie).";
     case "materiaal_besteld":
       return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in.";
-    case "installatie_ingepland":
-      return "Bevestig tijdig zodat klant en monteur niet voor verrassingen staan.";
     case "installatie_voltooid":
       return "Afronden: BTW terugvragen, overstap dynamische leverancier, daarna review.";
     case "review_gevraagd":
@@ -337,7 +335,8 @@ export function resolveProjectVolgendeStap(
   project: Project,
   now: Date = new Date()
 ): ProjectVolgendeStapInfo | null {
-  if (project.status === "annulering") return null;
+  const st = (project.status || "").toLowerCase();
+  if (st === "annulering" || st === "geannuleerd") return null;
 
   const status = effectiveOperationalStatus(project);
   const betaalwijze = betaalwijzeVanProject(project);

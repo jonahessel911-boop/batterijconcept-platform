@@ -543,13 +543,13 @@ export function FactuurPage() {
 
   const isDraft = factuur.status === "concept";
   const isPaid = factuur.status === "betaald";
-  const overdue = factuurIsOverdue(factuur);
   const creditVanRaw = factuur.credit_van;
   const creditVan = Array.isArray(creditVanRaw)
     ? creditVanRaw[0]
     : creditVanRaw;
   const isCredit = Boolean(factuur.credit_van_factuur_id);
   const heeftCredit = credits.length > 0;
+  const overdue = factuurIsOverdue({ ...factuur, heeftCredit });
   const displayStatus = factuurDisplayStatus(factuur, { heeftCredit });
   const creditSign = isCredit ? -1 : 1;
   const displayEx = creditSign * Math.abs(Number(factuur.bedrag_ex_btw) || 0);
@@ -602,7 +602,7 @@ export function FactuurPage() {
             Was: {factuur.status.replace("_", " ")}
           </span>
         ) : null}
-        {overdue && !heeftCredit ? (
+        {overdue ? (
           <span className="text-[11px] font-semibold text-[#C45A12]">
             Verlopen
           </span>

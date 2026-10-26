@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
 import {
@@ -12,10 +12,12 @@ import { DashboardV2 } from "./DashboardV2";
 import { BelConversiePanel } from "./BelConversiePanel";
 import { LeadConversiePanel } from "./LeadConversiePanel";
 import { SalesManagerPanel } from "./SalesManagerPanel";
+import { MarketingPanel } from "./MarketingPanel";
 import { FinancialPanel } from "./FinancialPanel";
 import { OperationeelRapportagePanel } from "./OperationeelRapportagePanel";
 import { LiveRapportagePanel } from "./LiveRapportagePanel";
 import { CeoTotaalPanel } from "./CeoTotaalPanel";
+import { useCrmSession } from "@/hooks/useCrmSession";
 
 type ViewMode =
   | "ceo"
@@ -25,12 +27,42 @@ type ViewMode =
   | "bel_conversie"
   | "lead_conversie"
   | "sales"
+  | "marketing"
   | "financial"
   | "map";
 
+const ALL_VIEWS: { id: ViewMode; label: string }[] = [
+  { id: "ceo", label: "Totaal" },
+  { id: "dashboard_v2", label: "Dashboard" },
+  { id: "live", label: "Live" },
+  { id: "operationeel", label: "Operationeel" },
+  { id: "bel_conversie", label: "Bellen" },
+  { id: "lead_conversie", label: "Leads" },
+  { id: "sales", label: "Sales" },
+  { id: "marketing", label: "Marketing" },
+  { id: "financial", label: "Financieel" },
+  { id: "map", label: "Kaart" },
+];
+
 export function RapportagePanel() {
   const router = useRouter();
-  const [view, setView] = useState<ViewMode>("ceo");
+  const { rol } = useCrmSession();
+  const views = useMemo(
+    () =>
+      rol === "beller"
+        ? ALL_VIEWS.filter((v) => v.id === "bel_conversie")
+        : ALL_VIEWS,
+    [rol]
+  );
+  const [view, setView] = useState<ViewMode>(
+    rol === "beller" ? "bel_conversie" : "ceo"
+  );
+
+  useEffect(() => {
+    if (rol === "beller" && view !== "bel_conversie") {
+      setView("bel_conversie");
+    }
+  }, [rol, view]);
   const [geo, setGeo] = useState<GeoRegionMetrics[]>([]);
   const [geoPeriod, setGeoPeriod] = useState<ConversiePeriod>("all_time");
   const [geoPeriodLabel, setGeoPeriodLabel] = useState(
@@ -79,9 +111,11 @@ export function RapportagePanel() {
                 ? "Leads"
                 : view === "sales"
                   ? "Sales"
-                  : view === "financial"
-                    ? "Financieel"
-                    : "Kaart";
+                  : view === "marketing"
+                    ? "Marketing"
+                    : view === "financial"
+                      ? "Financieel"
+                      : "Kaart";
   const subtitle =
     view === "ceo"
       ? "CEO-overzicht · leads · afspraken · order worth · paid · kosten · profit."
@@ -97,9 +131,11 @@ export function RapportagePanel() {
                 ? "Lead-conversie · periodefilter · bi-weekly leads nodig · CPL per kanaal."
                 : view === "sales"
                   ? "Sales Manager · conversie vs doel · tijdlijn · kaart per adviseur."
-                  : view === "financial"
-                    ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
-                    : "Leads per provincie · filter op binnenkomstdatum.";
+                  : view === "marketing"
+                    ? "Meta spend (Amsterdam) · leads uit DB · CAC · ROAS · ROI per campagne."
+                    : view === "financial"
+                      ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
+                      : "Leads per provincie · filter op binnenkomstdatum.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -112,19 +148,7 @@ export function RapportagePanel() {
             <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-1 border border-line p-0.5">
-            {(
-              [
-                ["ceo", "Totaal"],
-                ["dashboard_v2", "Dashboard"],
-                ["live", "Live"],
-                ["operationeel", "Operationeel"],
-                ["bel_conversie", "Bellen"],
-                ["lead_conversie", "Leads"],
-                ["sales", "Sales"],
-                ["financial", "Financieel"],
-                ["map", "Kaart"],
-              ] as const
-            ).map(([id, label]) => (
+            {views.map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
@@ -139,14 +163,16 @@ export function RapportagePanel() {
                 {label}
               </button>
             ))}
-            <button
-              type="button"
-              onClick={() => router.push("/?tab=weekmeeting")}
-              className="px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-wash"
-              title="Naar Weekmeeting"
-            >
-              Weekmeeting
-            </button>
+            {rol !== "beller" ? (
+              <button
+                type="button"
+                onClick={() => router.push("/?tab=weekmeeting")}
+                className="px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-wash"
+                title="Naar Weekmeeting"
+              >
+                Weekmeeting
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -183,6 +209,10 @@ export function RapportagePanel() {
         ) : view === "sales" ? (
           <div className="bg-wash/30">
             <SalesManagerPanel />
+          </div>
+        ) : view === "marketing" ? (
+          <div className="bg-wash/40 px-4 py-5 sm:px-5">
+            <MarketingPanel />
           </div>
         ) : view === "financial" ? (
           <div className="bg-wash/40">

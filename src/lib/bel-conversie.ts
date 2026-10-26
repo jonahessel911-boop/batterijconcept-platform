@@ -214,6 +214,8 @@ export type BelConversieSeriesBucket = {
   nonNieuwGebeld: number;
   nonNieuwIngepland: number;
   leadToAppt: number | null;
+  /** Ingepland-doel voor dit venster (0 in weekend bij dagreeks) */
+  doel: number;
 };
 
 /** Werkdagen per week voor bel-dagoelen. */
@@ -246,6 +248,18 @@ export function dailyDoelFromVrijeSlots(
   const marge = Math.max(0, uitvalMarge);
   const doel = Math.ceil(doelBasis * (1 + marge));
   return { doel, werkdagen, doelBasis };
+}
+
+/** Ma–vr op Amsterdam-kalender. */
+export function isAmsterdamWeekday(ymd: string): boolean {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const [y, m, d] = ymd.split("-").map(Number);
+  const z = toZonedTime(
+    fromZonedTime(new Date(y, m - 1, d, 12, 0, 0, 0), AMSTERDAM_TZ),
+    AMSTERDAM_TZ
+  );
+  const dow = z.getDay();
+  return dow >= 1 && dow <= 5;
 }
 
 /** Aantal ma–vr tussen fromYmd en toYmd (inclusief), Amsterdam-kalender. */
@@ -664,6 +678,8 @@ export function buildBelConversie(opts: {
   }[];
   /** Als laatst_gebeld_door ontbreekt: credit aan deze medewerker. */
   fallbackBellerId?: string | null;
+  /** Alleen leads toegeschreven aan deze beller (totals + byBeller + recente). */
+  bellerId?: string | null;
   targets?: BelConversieTargets;
   /**
    * Voortgang dagoel/weekdoel (operationeel vanaf vandaag).
@@ -740,6 +756,8 @@ export function buildBelConversie(opts: {
     return a;
   };
 
+  const filterBeller = opts.bellerId?.trim() || null;
+
   let ingeplandTotal = 0;
   const redenenTotal = emptyRedenen();
   for (const l of byId.values()) {
@@ -747,11 +765,14 @@ export function buildBelConversie(opts: {
     // Ingepland → planner; anders lead-stamps / claim / solo-beller.
     // Nooit stilzwijgend "Onbekend" als we wél één actieve beller hebben.
     const id =
-      (isIngepland
-        ? ingeplandDoorByLead.get(l.id)?.trim() ||
-          resolveBellerId(l, orphanFallback, skipAdminIds, null)
-        : resolveBellerId(l, orphanFallback, skipAdminIds, null)) ||
-      "__onbekend__";
+      attributedBellerIdForLead({
+        lead: l,
+        isIngepland,
+        ingeplandDoorId: ingeplandDoorByLead.get(l.id),
+        fallbackBellerId: orphanFallback,
+        skipAdminIds,
+      }) || "__onbekend__";
+    if (filterBeller && id !== filterBeller) continue;
     const acc = touch(id);
     acc.gebeld += 1;
     if (isIngepland) {
@@ -765,19 +786,38 @@ export function buildBelConversie(opts: {
     }
   }
 
+  // Filter byId na attribution — nonNieuw-tellers / size moeten matchen
+  if (filterBeller) {
+    for (const [leadId, l] of [...byId.entries()]) {
+      const isIngepland = ingeplandIds.has(leadId);
+      const id =
+        attributedBellerIdForLead({
+          lead: l,
+          isIngepland,
+          ingeplandDoorId: ingeplandDoorByLead.get(leadId),
+          fallbackBellerId: orphanFallback,
+          skipAdminIds,
+        }) || "__onbekend__";
+      if (id !== filterBeller) byId.delete(leadId);
+    }
+  }
+
   const naamById = new Map(
     opts.adviseurs.map((a) => [a.id, a.naam] as const)
   );
 
   // Ranking-rijen: beller/backoffice + adviseurs die zelf gebeld/ingepland hebben
-  for (const a of opts.adviseurs) {
-    if (!a.actief) continue;
-    if (skipAdminIds.has(a.id)) continue;
-    const rol = normalizeRol(a.rol);
-    const isCaller = rol === "beller" || rol === "backoffice";
-    if (!isCaller && !by.has(a.id)) continue;
-    if (!by.has(a.id)) {
-      by.set(a.id, { gebeld: 0, ingepland: 0, redenen: emptyRedenen() });
+  // (niet bij single-beller filter — dan alleen die rij)
+  if (!filterBeller) {
+    for (const a of opts.adviseurs) {
+      if (!a.actief) continue;
+      if (skipAdminIds.has(a.id)) continue;
+      const rol = normalizeRol(a.rol);
+      const isCaller = rol === "beller" || rol === "backoffice";
+      if (!isCaller && !by.has(a.id)) continue;
+      if (!by.has(a.id)) {
+        by.set(a.id, { gebeld: 0, ingepland: 0, redenen: emptyRedenen() });
+      }
     }
   }
 
@@ -796,7 +836,10 @@ export function buildBelConversie(opts: {
         redenen: acc.redenen,
       };
     })
-    .filter((r) => r.gebeld > 0 || r.bellerId != null)
+    .filter((r) => {
+      if (filterBeller) return r.bellerId === filterBeller;
+      return r.gebeld > 0 || r.bellerId != null;
+    })
     .sort(
       (a, b) =>
         b.gebeld - a.gebeld ||
@@ -874,6 +917,7 @@ export function buildBelConversie(opts: {
       ingeplandDoorByLead.get(a.lead_id) ||
       "";
     const bellerId = doorRaw || null;
+    if (filterBeller && bellerId !== filterBeller) continue;
     const adviseurId = (a.adviseur_id || "").trim() || null;
     const provincieRaw = provincieVanPostcode(lead?.postcode);
     recenteAfspraken.push({
@@ -939,6 +983,35 @@ function isGeenContactStatus(status: string | null | undefined): boolean {
   return s === "geen_contact" || s === "vervolg_geen_contact";
 }
 
+/**
+ * Credit-beller voor een lead in een venster (zelfde regels als ranking).
+ */
+export function attributedBellerIdForLead(opts: {
+  lead: BelConversieLead;
+  isIngepland: boolean;
+  ingeplandDoorId?: string | null;
+  fallbackBellerId?: string | null;
+  skipAdminIds?: ReadonlySet<string> | null;
+}): string | null {
+  if (opts.isIngepland) {
+    return (
+      opts.ingeplandDoorId?.trim() ||
+      resolveBellerId(
+        opts.lead,
+        opts.fallbackBellerId,
+        opts.skipAdminIds,
+        null
+      )
+    );
+  }
+  return resolveBellerId(
+    opts.lead,
+    opts.fallbackBellerId,
+    opts.skipAdminIds,
+    null
+  );
+}
+
 /** Metrics voor één Amsterdam-venster (zelfde tellingen als totals). */
 export function scoreBelConversieWindow(opts: {
   startYmd: string;
@@ -946,6 +1019,10 @@ export function scoreBelConversieWindow(opts: {
   leads: BelConversieLead[];
   afspraken: BelConversieAfspraak[];
   huisbezoekHistorie?: BelConversieAfspraak[];
+  /** Alleen leads toegeschreven aan deze beller */
+  bellerId?: string | null;
+  fallbackBellerId?: string | null;
+  skipAdminIds?: ReadonlySet<string> | null;
 }): Omit<
   BelConversieSeriesBucket,
   "key" | "label" | "startYmd" | "endYmd"
@@ -953,6 +1030,7 @@ export function scoreBelConversieWindow(opts: {
   const { start } = amsDayBounds(opts.startYmd);
   const { end } = amsDayBounds(opts.endYmd);
   const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const eersteIds = eersteNieuweHuisbezoekIdPerLead(historie);
   const ingeplandIds = huisbezoekLeadIdsOpDag(
     opts.afspraken,
     start,
@@ -960,11 +1038,35 @@ export function scoreBelConversieWindow(opts: {
     historie
   );
 
+  const ingeplandDoorByLead = new Map<string, string>();
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekAfspraak(a)) continue;
+    if (eersteIds.get(a.lead_id) !== a.id) continue;
+    const door = (a.ingepland_door_id || "").trim();
+    if (!door || !a.created_at) continue;
+    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    if (!ingeplandDoorByLead.has(a.lead_id)) {
+      ingeplandDoorByLead.set(a.lead_id, door);
+    }
+  }
+
+  const filterBeller = opts.bellerId?.trim() || null;
+
   const byId = new Map<string, BelConversieLead>();
   for (const l of opts.leads) {
     const gebeldDag = inAmsterdamDayRange(l.laatst_gebeld_at, start, end);
     const ingeplandDag = ingeplandIds.has(l.id);
     if (!gebeldDag && !ingeplandDag) continue;
+    if (filterBeller) {
+      const attributed = attributedBellerIdForLead({
+        lead: l,
+        isIngepland: ingeplandDag,
+        ingeplandDoorId: ingeplandDoorByLead.get(l.id),
+        fallbackBellerId: opts.fallbackBellerId,
+        skipAdminIds: opts.skipAdminIds,
+      });
+      if (attributed !== filterBeller) continue;
+    }
     byId.set(l.id, l);
   }
 
@@ -1097,7 +1199,19 @@ export function buildBelConversieSeries(opts: {
   leads: BelConversieLead[];
   afspraken: BelConversieAfspraak[];
   huisbezoekHistorie?: BelConversieAfspraak[];
+  bellerId?: string | null;
+  fallbackBellerId?: string | null;
+  skipAdminIds?: ReadonlySet<string> | null;
+  /** Ingepland-doel per bel-werkdag (grafiek-lijn). */
+  doelPerDag?: number | null;
+  /** Ingepland-doel per weekbucket (maand-view). */
+  doelPerWeek?: number | null;
 }): BelConversieSeriesBucket[] {
+  const doelDag = Math.max(0, Math.round(opts.doelPerDag ?? 0));
+  const doelWeek = Math.max(
+    0,
+    Math.round(opts.doelPerWeek ?? doelDag * BEL_WORKDAYS_PER_WEEK)
+  );
   const frames = listBelSeriesBucketFrames(
     opts.rangeStartYmd,
     opts.rangeEndYmd,
@@ -1110,8 +1224,23 @@ export function buildBelConversieSeries(opts: {
       leads: opts.leads,
       afspraken: opts.afspraken,
       huisbezoekHistorie: opts.huisbezoekHistorie,
+      bellerId: opts.bellerId,
+      fallbackBellerId: opts.fallbackBellerId,
+      skipAdminIds: opts.skipAdminIds,
     });
-    return { ...f, ...scored };
+    let doel = 0;
+    if (opts.granularity === "day") {
+      doel = isAmsterdamWeekday(f.startYmd) ? doelDag : 0;
+    } else {
+      const workdays = countWeekdaysInclusive(f.startYmd, f.endYmd);
+      doel =
+        doelDag > 0
+          ? doelDag * workdays
+          : workdays > 0
+            ? Math.round((doelWeek * workdays) / BEL_WORKDAYS_PER_WEEK)
+            : 0;
+    }
+    return { ...f, ...scored, doel };
   });
 }
 

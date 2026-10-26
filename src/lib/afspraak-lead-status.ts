@@ -20,8 +20,8 @@ const AFSPRAAK_STATUS = new Set([
 /**
  * Leadstatus volgt de agenda:
  * - nog een toekomstige actieve afspraak → status bij het soort
- * - geannuleerde/afgeronde afspraak (geen nieuwe meer) → `na_afspraak` (niet in bellijst)
- * - voltooid bezoek wordt elders op `na_afspraak` gezet (cron)
+ * - geannuleerde afspraak (geen nieuwe meer) → `afspraak_afgezegd_klant` (herplannen via Bel)
+ * - voltooid bezoek zet elders de uitkomststatus (deal / deur_niet_open / …)
  */
 export async function syncLeadNaAfspraak(
   sb: SupabaseClient,
@@ -77,8 +77,9 @@ export async function syncLeadNaAfspraak(
     return;
   }
 
-  // Geen actieve toekomstige afspraak meer → uit bellijst
-  // Ook "nieuw" als die door een eerdere annulering terug in de bellijst stond
+  // Geen actieve toekomstige afspraak meer → herplannen via appointment setter
+  // (Bel). Afgeboekte bezoeken zetten zelf al een uitkomststatus (deal /
+  // deur_niet_open / …) vóór sync; die blijven hier onaangeroerd.
   if (AFSPRAAK_STATUS.has(lead.status) || lead.status === "nieuw") {
     const { count } = await sb
       .from("afspraken")
@@ -87,7 +88,7 @@ export async function syncLeadNaAfspraak(
     if ((count ?? 0) === 0) {
       // Echte nieuwe lead zonder afspraakgeschiedenis — status laten
     } else {
-      const nextStatus = "na_afspraak";
+      const nextStatus = "afspraak_afgezegd_klant";
       let upd = await sb
         .from("leads")
         .update({

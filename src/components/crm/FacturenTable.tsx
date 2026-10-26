@@ -77,19 +77,35 @@ export function FacturenTable({
     router.push(`/facturen/${id}`);
   }
 
+  const creditsByParent = useMemo(() => {
+    const map = new Map<string, Factuur[]>();
+    for (const f of facturen) {
+      if (!f.credit_van_factuur_id) continue;
+      const list = map.get(f.credit_van_factuur_id) || [];
+      list.push(f);
+      map.set(f.credit_van_factuur_id, list);
+    }
+    return map;
+  }, [facturen]);
+
   const filtered = useMemo(() => {
     // Creditfacturen staan onder de oorspronkelijke factuur — niet als aparte rij
     let base = facturen.filter((f) => !isCreditFactuur(f));
     switch (filter) {
       case "actief":
-        base = base.filter((f) => f.status !== "concept");
+        // Standaard: geen concepten, geen gecrediteerde facturen
+        base = base.filter(
+          (f) => f.status !== "concept" && !creditsByParent.has(f.id)
+        );
         break;
       case "betaald":
         base = base.filter((f) => f.status === "betaald");
         break;
       case "open":
         base = base.filter(
-          (f) => f.status === "verzonden" || f.status === "deels_betaald"
+          (f) =>
+            (f.status === "verzonden" || f.status === "deels_betaald") &&
+            !creditsByParent.has(f.id)
         );
         break;
       case "concept":
@@ -116,18 +132,7 @@ export function FacturenTable({
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [facturen, filter, search]);
-
-  const creditsByParent = useMemo(() => {
-    const map = new Map<string, Factuur[]>();
-    for (const f of facturen) {
-      if (!f.credit_van_factuur_id) continue;
-      const list = map.get(f.credit_van_factuur_id) || [];
-      list.push(f);
-      map.set(f.credit_van_factuur_id, list);
-    }
-    return map;
-  }, [facturen]);
+  }, [facturen, filter, search, creditsByParent]);
 
   const overview = useMemo(() => {
     let ontvangenBtw = 0;
@@ -369,8 +374,8 @@ export function FacturenTable({
         <>
           <div className="crm-card-list flex md:hidden">
             {filtered.map((f) => {
-              const overdue = factuurIsOverdue(f);
               const heeftCredit = (creditsByParent.get(f.id) || []).length > 0;
+              const overdue = factuurIsOverdue({ ...f, heeftCredit });
               const displayStatus = factuurDisplayStatus(f, {
                 heeftCredit,
               });
@@ -453,9 +458,9 @@ export function FacturenTable({
               </thead>
               <tbody>
                 {filtered.map((f) => {
-                  const overdue = factuurIsOverdue(f);
                   const heeftCredit =
                     (creditsByParent.get(f.id) || []).length > 0;
+                  const overdue = factuurIsOverdue({ ...f, heeftCredit });
                   const displayStatus = factuurDisplayStatus(f, {
                     heeftCredit,
                   });

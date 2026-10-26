@@ -5,6 +5,7 @@ import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { isAdminEmail } from "@/lib/admin-adviseur";
 import { normalizeRol } from "@/lib/rollen";
 import {
   buildBelConversie,
@@ -218,34 +219,67 @@ async function loadUnavailableByAdviseur(
   return map;
 }
 
-/** Som weekdoelen afspraken + L2A% voor actieve bellers (backoffice telt als beller). */
-function belTeamWeeklyTargets(
+/**
+ * Weekdoel afspraken uit admin-targets (persoon / fallback team).
+ * - Één beller: diens afsprakenGepland.
+ * - Team-fallback: som actieve beller + backoffice.
+ */
+function belWeekDoelAfspraken(
   goalsRaw: unknown,
-  adviseurs: { id: string; rol?: string | null; actief?: boolean }[]
-): { weeklyAfspraken: number; leadToAppt: number } {
+  adviseurs: { id: string; rol?: string | null; actief?: boolean }[],
+  bellerId?: string | null
+): { weeklyAfspraken: number; leadToAppt: number; dailyAfspraken: number } {
   const store = parseAdminTargetsStore(goalsRaw);
+  const base = store.defaults.beller || DEFAULT_TARGETS.beller;
+
+  if (bellerId) {
+    const { effective } = resolvePersonTargets(store, "beller", bellerId);
+    const weekly = Math.max(0, Math.round(effective.afsprakenGepland || 0));
+    return {
+      weeklyAfspraken: weekly,
+      leadToAppt: effective.leadToAppt,
+      dailyAfspraken: weekly > 0 ? Math.ceil(weekly / 5) : 0,
+    };
+  }
+
+  // Team-fallback: actieve bellers + backoffice (iedereen die belt)
   const callers = adviseurs.filter((a) => {
     if (a.actief === false) return false;
     const r = normalizeRol(a.rol);
     return r === "beller" || r === "backoffice";
   });
-  const base = store.defaults.beller || DEFAULT_TARGETS.beller;
   if (callers.length === 0) {
+    const weekly = Math.max(0, Math.round(base.afsprakenGepland || 0));
     return {
-      weeklyAfspraken: base.afsprakenGepland,
+      weeklyAfspraken: weekly,
       leadToAppt: base.leadToAppt,
+      dailyAfspraken: weekly > 0 ? Math.ceil(weekly / 5) : 0,
     };
   }
   let weeklyAfspraken = 0;
   let l2aSum = 0;
   for (const c of callers) {
     const { effective } = resolvePersonTargets(store, "beller", c.id);
-    weeklyAfspraken += effective.afsprakenGepland;
+    weeklyAfspraken += Math.max(0, Math.round(effective.afsprakenGepland || 0));
     l2aSum += effective.leadToAppt;
   }
   return {
     weeklyAfspraken,
     leadToAppt: Math.round((l2aSum / callers.length) * 10) / 10,
+    dailyAfspraken:
+      weeklyAfspraken > 0 ? Math.ceil(weeklyAfspraken / 5) : 0,
+  };
+}
+
+/** @deprecated alias — L2A-team gemiddelde + weekvolume bellers */
+function belTeamWeeklyTargets(
+  goalsRaw: unknown,
+  adviseurs: { id: string; rol?: string | null; actief?: boolean }[]
+): { weeklyAfspraken: number; leadToAppt: number } {
+  const t = belWeekDoelAfspraken(goalsRaw, adviseurs, null);
+  return {
+    weeklyAfspraken: t.weeklyAfspraken,
+    leadToAppt: t.leadToAppt,
   };
 }
 
@@ -314,6 +348,8 @@ export async function GET(req: NextRequest) {
         : periodDays > 10
           ? "week"
           : "day";
+  const bellerIdFilter =
+    req.nextUrl.searchParams.get("beller_id")?.trim() || null;
 
   try {
     const jar = await cookies();
@@ -822,7 +858,36 @@ export async function GET(req: NextRequest) {
     }
 
     const cpa = await loadBelConversieCpa(sb, dateYmd, cpaDays);
-    const result = buildBelConversie({
+
+    const skipAdminIds = new Set<string>();
+    for (const a of adviseurRows) {
+      if (normalizeRol(a.rol) === "admin" || isAdminEmail(a.email)) {
+        skipAdminIds.add(a.id);
+      }
+    }
+
+    // Alleen beller- + backoffice-accounts in de filter (geen adviseurs e.d.)
+    const callerIds = new Set(
+      adviseurRows
+        .filter((a) => {
+          const r = normalizeRol(a.rol);
+          return r === "beller" || r === "backoffice";
+        })
+        .map((a) => a.id)
+    );
+    // Bel-account: altijd alleen eigen gebelde leads (backoffice/admin mag alles)
+    const lockToSelf =
+      sessionRol === "beller" &&
+      sessionId &&
+      callerIds.has(sessionId);
+    const effectiveBellerId = lockToSelf
+      ? sessionId
+      : bellerIdFilter && callerIds.has(bellerIdFilter)
+        ? bellerIdFilter
+        : null;
+
+    // Opties voor filter: altijd unfiltered (alle bellers met activiteit + actieve)
+    const allResult = buildBelConversie({
       dateYmd,
       rangeStartYmd,
       period: customRange ? "last_7_days" : resolved.period,
@@ -838,6 +903,78 @@ export async function GET(req: NextRequest) {
       geplandDezeWeekForTargets: geplandVoorWeekKaart,
     });
 
+    const bellerOptions = allResult.byBeller
+      .filter((r) => r.bellerId && callerIds.has(r.bellerId))
+      .map((r) => ({
+        id: r.bellerId as string,
+        naam: r.bellerNaam,
+        gebeld: r.gebeld,
+      }));
+
+    const result = effectiveBellerId
+      ? buildBelConversie({
+          dateYmd,
+          rangeStartYmd,
+          period: customRange ? "last_7_days" : resolved.period,
+          periodLabel,
+          periodDays,
+          leads: leadsRows,
+          afspraken,
+          huisbezoekHistorie,
+          adviseurs: adviseurRows,
+          fallbackBellerId,
+          bellerId: effectiveBellerId,
+          targets,
+          geplandVandaagForTargets: geplandVandaag,
+          geplandDezeWeekForTargets: geplandVoorWeekKaart,
+        })
+      : allResult;
+
+    // Weekdoel:
+    // - Team (alle): capaciteit-tempo = open slots → dagoel × werkdagen
+    // - Één beller: admin-target afsprakenGepland / week
+    const { countWeekdaysInclusive } = await import("@/lib/bel-conversie");
+    const workdaysInRange = countWeekdaysInclusive(rangeStartYmd, dateYmd);
+    let chartDoelPerDag: number;
+    let chartDoelPerWeek: number;
+    let periodDoel: number;
+
+    if (effectiveBellerId) {
+      const person = belWeekDoelAfspraken(
+        goalsRaw,
+        adviseurRows,
+        effectiveBellerId
+      );
+      chartDoelPerDag = person.dailyAfspraken;
+      chartDoelPerWeek = person.weeklyAfspraken;
+      periodDoel =
+        seriesGranularity === "day"
+          ? workdaysInRange >= 5
+            ? person.weeklyAfspraken
+            : person.weeklyAfspraken > 0 && workdaysInRange > 0
+              ? Math.round((person.weeklyAfspraken * workdaysInRange) / 5)
+              : 0
+          : 0; // maand: som per weekbucket hieronder
+    } else {
+      // Team: open agenda-slots → tempo (doelVandaag / doelDezeWeek)
+      chartDoelPerDag = Math.max(0, Math.round(targets.doelVandaag || 0));
+      chartDoelPerWeek =
+        chartDoelPerDag > 0 ? chartDoelPerDag * 5 : 0;
+      periodDoel = Math.max(0, Math.round(targets.doelDezeWeek || 0));
+      // Geen capaciteit? val terug op som admin-targets bellers+backoffice
+      if (periodDoel <= 0 && chartDoelPerDag <= 0) {
+        const team = belWeekDoelAfspraken(goalsRaw, adviseurRows, null);
+        chartDoelPerDag = team.dailyAfspraken;
+        chartDoelPerWeek = team.weeklyAfspraken;
+        periodDoel =
+          workdaysInRange >= 5
+            ? team.weeklyAfspraken
+            : team.weeklyAfspraken > 0 && workdaysInRange > 0
+              ? Math.round((team.weeklyAfspraken * workdaysInRange) / 5)
+              : 0;
+      }
+    }
+
     const series = buildBelConversieSeries({
       rangeStartYmd,
       rangeEndYmd: dateYmd,
@@ -845,18 +982,53 @@ export async function GET(req: NextRequest) {
       leads: leadsRows,
       afspraken,
       huisbezoekHistorie,
+      bellerId: effectiveBellerId,
+      fallbackBellerId,
+      skipAdminIds,
+      doelPerDag: chartDoelPerDag,
+      doelPerWeek: chartDoelPerWeek,
     });
+
+    if (seriesGranularity === "week") {
+      periodDoel = series.reduce((s, b) => s + (b.doel || 0), 0);
+    }
+
+    const seriesIngepland = series.reduce((s, b) => s + b.ingepland, 0);
+    const periodGepland = seriesIngepland;
+    const periodPct =
+      periodDoel > 0
+        ? Math.min(100, Math.round((periodGepland / periodDoel) * 100))
+        : periodGepland > 0
+          ? 100
+          : 0;
+    const targetsForUi = {
+      ...result.targets,
+      doelVandaag: chartDoelPerDag,
+      doelDezeWeek: periodDoel,
+      geplandDezeWeek: periodGepland,
+      nogDezeWeek: Math.max(0, periodDoel - periodGepland),
+      pctDezeWeek: periodPct,
+      finishDezeWeek: periodDoel > 0 ? periodGepland >= periodDoel : false,
+    };
 
     return NextResponse.json({
       ok: true,
       ...result,
+      targets: targetsForUi,
       series,
       seriesGranularity,
+      bellerOptions: lockToSelf
+        ? bellerOptions.filter((b) => b.id === sessionId)
+        : bellerOptions,
+      bellerId: effectiveBellerId,
+      lockBeller: Boolean(lockToSelf),
       cpa,
       meta: {
         sessionRol,
         fallbackBellerId,
-        weeklyAfsprakenDoel: teamTargets.weeklyAfspraken,
+        weeklyAfsprakenDoel: chartDoelPerWeek,
+        dailyAfsprakenDoel: chartDoelPerDag,
+        weekDoelBron: effectiveBellerId ? "admin_beller" : "capaciteit",
         period: customRange ? "custom" : resolved.period,
         periodLabel,
         periodDays,
@@ -864,6 +1036,7 @@ export async function GET(req: NextRequest) {
         rangeEndYmd: dateYmd,
         customRange,
         seriesGranularity,
+        bellerId: effectiveBellerId,
       },
     });
   } catch (e) {

@@ -11,6 +11,7 @@ import { formatEuro } from "@/lib/format";
 import { logLeadEvent } from "@/lib/lead-events";
 import { ensureNettoAanbetalingCreditfactuur } from "@/lib/netto-creditfactuur";
 import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
+import { notifyKlantFactuurBetaald } from "@/lib/factuur-betaald-mail";
 import type { FactuurStatus } from "@/types/database";
 
 export const runtime = "nodejs";
@@ -231,6 +232,13 @@ export async function PATCH(
         await ensureNettoAanbetalingCreditfactuur(sb, id);
       } catch {
         // niet blokkeren — factuur blijft betaald
+      }
+
+      // Bedankmail klant (best-effort)
+      try {
+        await notifyKlantFactuurBetaald(sb, id);
+      } catch {
+        /* niet blokkeren */
       }
 
       // Schouwformulier al binnen + alles betaald → materiaal inkopen

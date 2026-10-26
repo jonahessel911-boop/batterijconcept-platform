@@ -155,46 +155,48 @@ export async function syncAutoTakenVoorProject(
     installatie_at: null,
   };
 
-  const betaalwijze = betaalwijzeOf(project);
-  const operational = effectiveOperationalStatus(project);
-  const defs: (AutoTaakDef & { dueAt?: string | null })[] = autoTakenVoorStatus(
-    operational,
-    betaalwijze,
-    {
-      schouwAt: project.schouw_at,
-      installatieAt: project.installatie_at,
-    }
-  ).map((d) => ({ ...d }));
-
-  const finStatus =
-    financieringStatusOverride !== undefined
-      ? financieringStatusOverride
-      : resolveFinancieringStatus({
-          financiering_status: project.financiering_status,
-          status: project.status,
-        });
-
-  if (betaalwijze === "warmtefonds") {
-    for (const d of autoTakenVoorFinanciering(finStatus)) {
-      defs.push({ ...d });
-    }
-  }
-
-  const week = schouwWeekOf(project);
-  if (week && !isSchouwdagDefinitief(project)) {
-    defs.push({
-      autoKey: SCHOUWDAG_INPLAN_KEY,
-      titel: `Schouwdag inplannen met de klant (week ${week.week}) — want de week erop is de schouwweek`,
-      afdeling: "Planning",
-      dueInDays: 0,
-      dueAt: dueAtVoorSchouwdagInplan(week.jaar, week.week),
-    });
-  }
-
   const statusKey = remapLegacyProjectStatus(status);
+  const defs: (AutoTaakDef & { dueAt?: string | null })[] = [];
+
+  // Annulering: workflow-taken (schouw, installatie, WF, …) zijn niet meer
+  // relevant — alleen eventueel creditfactuur. Overige open auto-taken → done.
   if (statusKey === "annulering") {
     const creditTaak = await creditfactuurTaakBijAnnulering(sb, projectId);
     if (creditTaak) defs.push(creditTaak);
+  } else {
+    const betaalwijze = betaalwijzeOf(project);
+    const operational = effectiveOperationalStatus(project);
+    for (const d of autoTakenVoorStatus(operational, betaalwijze, {
+      schouwAt: project.schouw_at,
+      installatieAt: project.installatie_at,
+    })) {
+      defs.push({ ...d });
+    }
+
+    const finStatus =
+      financieringStatusOverride !== undefined
+        ? financieringStatusOverride
+        : resolveFinancieringStatus({
+            financiering_status: project.financiering_status,
+            status: project.status,
+          });
+
+    if (betaalwijze === "warmtefonds") {
+      for (const d of autoTakenVoorFinanciering(finStatus)) {
+        defs.push({ ...d });
+      }
+    }
+
+    const week = schouwWeekOf(project);
+    if (week && !isSchouwdagDefinitief(project)) {
+      defs.push({
+        autoKey: SCHOUWDAG_INPLAN_KEY,
+        titel: `Schouwdag inplannen met de klant (week ${week.week}) — want de week erop is de schouwweek`,
+        afdeling: "Planning",
+        dueInDays: 0,
+        dueAt: dueAtVoorSchouwdagInplan(week.jaar, week.week),
+      });
+    }
   }
 
   const wantedKeys = new Set(defs.map((d) => d.autoKey));

@@ -6,15 +6,19 @@ import {
   bedenktijdVanOndertekening,
   ondertekendOpVanProject,
 } from "@/lib/bedenktijd";
+import { isWarmtefondsProject } from "@/lib/backoffice-acties";
 
 export type AnnuleringKeuze = {
   binnenBedenktijd: boolean;
   stuurMail: boolean;
 };
 
+type WarmtefondsVervolg = "meewerken" | "annuleren_kosten";
+
 /**
  * Popup vóór order-annulering: bedenktijd-check bepaalt of
  * annuleringskosten in de klantmail komen.
+ * Warmtefonds + na bedenktijd: eerst kiezen meewerken vs. kosten.
  */
 export function AnnuleringBedenktijdModal({
   project,
@@ -30,11 +34,17 @@ export function AnnuleringBedenktijdModal({
   busy?: boolean;
   mailOnly?: boolean;
 }) {
+  const warmtefonds = isWarmtefondsProject(project);
   const [ondertekendOp, setOndertekendOp] = useState<string | null>(() =>
     ondertekendOpVanProject(project)
   );
-  const [loadingDatum, setLoadingDatum] = useState(!ondertekendOpVanProject(project));
-  const [binnenBedenktijd, setBinnenBedenktijd] = useState<boolean | null>(null);
+  const [loadingDatum, setLoadingDatum] = useState(
+    !ondertekendOpVanProject(project)
+  );
+  const [binnenBedenktijd, setBinnenBedenktijd] = useState<boolean | null>(
+    null
+  );
+  const [wfVervolg, setWfVervolg] = useState<WarmtefondsVervolg | null>(null);
   const [stuurMail, setStuurMail] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,10 +83,26 @@ export function AnnuleringBedenktijdModal({
   }, [project]);
 
   const info = bedenktijdVanOndertekening(ondertekendOp);
+  const toontWfFork =
+    !mailOnly && warmtefonds && binnenBedenktijd === false;
+  const wilMeewerken = toontWfFork && wfVervolg === "meewerken";
+  const wilAnnulerenMetKosten =
+    !toontWfFork || wfVervolg === "annuleren_kosten";
 
   async function submit() {
     if (binnenBedenktijd == null) {
-      setError("Kies of de klant binnen of na de bedenktijd heeft geannuleerd.");
+      setError(
+        "Kies of de klant binnen of na de bedenktijd heeft geannuleerd."
+      );
+      return;
+    }
+    if (toontWfFork && wfVervolg == null) {
+      setError("Kies of de klant meewerkt met Warmtefonds of annuleert.");
+      return;
+    }
+    if (wilMeewerken) {
+      setError(null);
+      onClose();
       return;
     }
     setError(null);
@@ -85,6 +111,10 @@ export function AnnuleringBedenktijdModal({
       stuurMail: mailOnly ? true : stuurMail,
     });
   }
+
+  const canSubmit =
+    binnenBedenktijd != null &&
+    (!toontWfFork || wfVervolg != null);
 
   return (
     <div
@@ -107,6 +137,7 @@ export function AnnuleringBedenktijdModal({
           <p className="mt-0.5 text-xs text-muted">
             {project.project_nummer || "Project"} ·{" "}
             {project.leads?.naam || "klant"}
+            {warmtefonds ? " · Warmtefonds" : ""}
           </p>
         </div>
 
@@ -146,6 +177,7 @@ export function AnnuleringBedenktijdModal({
               disabled={busy}
               onClick={() => {
                 setBinnenBedenktijd(true);
+                setWfVervolg(null);
                 setError(null);
               }}
               className={[
@@ -167,6 +199,7 @@ export function AnnuleringBedenktijdModal({
               disabled={busy}
               onClick={() => {
                 setBinnenBedenktijd(false);
+                setWfVervolg(null);
                 setError(null);
               }}
               className={[
@@ -180,39 +213,106 @@ export function AnnuleringBedenktijdModal({
                 Nee — na de bedenktijd
               </span>
               <span className="mt-0.5 block text-[11px] text-muted">
-                Annuleringskosten (20%) wel in de mail
+                {warmtefonds && !mailOnly
+                  ? "Kies hieronder: meewerken of annuleringskosten"
+                  : "Annuleringskosten (20%) wel in de mail"}
               </span>
             </button>
           </div>
 
-          {mailOnly ? (
-            <p className="text-xs text-muted">
-              De mail gaat naar de klant
-              {binnenBedenktijd === true
-                ? " zonder annuleringskosten."
-                : binnenBedenktijd === false
-                  ? " met annuleringskosten."
-                  : "."}
-            </p>
-          ) : (
-            <label className="flex items-start gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={stuurMail}
-                disabled={busy}
-                onChange={(e) => setStuurMail(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Direct annuleringsmail naar de klant sturen
+          {toontWfFork ? (
+            <div className="space-y-2 border-t border-line pt-4">
+              <p className="text-sm font-semibold text-ink">
+                Warmtefonds — wat wil de klant?
+              </p>
+              <p className="text-xs text-muted">
+                Na de bedenktijd: meewerken met de Warmtefonds-aanvraag en
+                verder inregelen, of annuleren met de kosten uit de AV.
+              </p>
+              <div className="grid gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setWfVervolg("meewerken");
+                    setError(null);
+                  }}
+                  className={[
+                    "border px-3 py-2.5 text-left text-sm transition",
+                    wfVervolg === "meewerken"
+                      ? "border-green bg-green-soft/60 font-semibold text-green-deeper"
+                      : "border-line bg-white text-ink hover:bg-wash",
+                  ].join(" ")}
+                >
+                  <span className="block font-semibold">
+                    Meewerken met Warmtefonds
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-muted">
+                    Order blijft staan — verder inregelen (aanvraag / schouw)
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setWfVervolg("annuleren_kosten");
+                    setError(null);
+                  }}
+                  className={[
+                    "border px-3 py-2.5 text-left text-sm transition",
+                    wfVervolg === "annuleren_kosten"
+                      ? "border-[#C45A12] bg-[#FFF0E6] font-semibold text-[#9A3B1A]"
+                      : "border-line bg-white text-ink hover:bg-wash",
+                  ].join(" ")}
+                >
+                  <span className="block font-semibold">
+                    Annuleren met annuleringskosten
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-muted">
+                    20% van het orderbedrag in de annuleringsmail (art. 4A AV)
+                  </span>
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {wilAnnulerenMetKosten && !wilMeewerken ? (
+            mailOnly ? (
+              <p className="text-xs text-muted">
+                De mail gaat naar de klant
                 {binnenBedenktijd === true
-                  ? " (zonder kosten)"
+                  ? " zonder annuleringskosten."
                   : binnenBedenktijd === false
-                    ? " (met annuleringskosten)"
-                    : ""}
-              </span>
-            </label>
-          )}
+                    ? " met annuleringskosten."
+                    : "."}
+              </p>
+            ) : (
+              <label className="flex items-start gap-2 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={stuurMail}
+                  disabled={busy}
+                  onChange={(e) => setStuurMail(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  Direct annuleringsmail naar de klant sturen
+                  {binnenBedenktijd === true
+                    ? " (zonder kosten)"
+                    : binnenBedenktijd === false
+                      ? " (met annuleringskosten)"
+                      : ""}
+                </span>
+              </label>
+            )
+          ) : null}
+
+          {wilMeewerken ? (
+            <p className="text-xs text-muted">
+              De order wordt niet geannuleerd. Sluit deze popup en regel de
+              Warmtefonds-aanvraag verder.
+            </p>
+          ) : null}
 
           {error ? (
             <p className="text-sm text-[#C45A12]">{error}</p>
@@ -230,15 +330,22 @@ export function AnnuleringBedenktijdModal({
           </button>
           <button
             type="button"
-            disabled={busy || binnenBedenktijd == null}
+            disabled={busy || !canSubmit}
             onClick={() => void submit()}
-            className="bg-[#C45A12] px-3 py-2 text-sm font-semibold text-white hover:bg-[#a84c0f] disabled:opacity-50"
+            className={[
+              "px-3 py-2 text-sm font-semibold text-white disabled:opacity-50",
+              wilMeewerken
+                ? "bg-green hover:bg-green-deeper"
+                : "bg-[#C45A12] hover:bg-[#a84c0f]",
+            ].join(" ")}
           >
             {busy
               ? "Bezig…"
-              : mailOnly
-                ? "Mail versturen"
-                : "Order annuleren"}
+              : wilMeewerken
+                ? "Verder met Warmtefonds"
+                : mailOnly
+                  ? "Mail versturen"
+                  : "Order annuleren"}
           </button>
         </div>
       </div>

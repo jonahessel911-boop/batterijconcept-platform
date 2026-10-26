@@ -21,9 +21,18 @@ const QUEUE_STATUSES: LeadStatus[] = [
   "nieuw",
   "geen_contact",
   "vervolg_geen_contact",
+  /** Herplannen: appointment setter (beller), niet backoffice-Acties */
+  "afspraak_afgezegd_klant",
+  "deur_niet_open",
 ];
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
+
+/** Leadstatussen die herplannen nodig hebben → voorrang in de bellijst. */
+export const HERPLAN_BEL_STATUSES = new Set<LeadStatus>([
+  "afspraak_afgezegd_klant",
+  "deur_niet_open",
+]);
 
 const BEL_BLOKKEER_STATUS = new Set<LeadStatus>([
   "deal",
@@ -38,8 +47,6 @@ const BEL_BLOKKEER_STATUS = new Set<LeadStatus>([
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
-  "deur_niet_open",
-  "afspraak_afgezegd_klant",
 ]);
 
 /** Sollicitaties horen in Instroom, niet in de bel-queue. */
@@ -263,9 +270,9 @@ export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>,
   /**
-   * @deprecated Genegeerd. Annuleringen horen via leadstatus
-   * (`afspraak_afgezegd_klant` / `deur_niet_open` → backoffice herplannen), niet via deze filter —
-   * die haalde belbare nieuw/geen_contact-leads ten onrechte uit de queue.
+   * @deprecated Genegeerd. Herplan-statussen (`afspraak_afgezegd_klant` /
+   * `deur_niet_open`) zitten in de bellijst (appointment setter), niet meer
+   * als backoffice-Actie.
    */
   _cancelledAppointmentLeadIds?: Set<string>
 ): boolean {
@@ -286,8 +293,17 @@ export function inBelQueue(
   return true;
 }
 
+export function isHerplanBelLead(lead: Pick<Lead, "status">): boolean {
+  return HERPLAN_BEL_STATUSES.has(lead.status as LeadStatus);
+}
+
 export function sortBelQueue(leads: Lead[]): Lead[] {
   return [...leads].sort((a, b) => {
+    // Herplannen eerst — beller moet die opnieuw inplannen
+    const aHerplan = isHerplanBelLead(a) ? 1 : 0;
+    const bHerplan = isHerplanBelLead(b) ? 1 : 0;
+    if (aHerplan !== bHerplan) return bHerplan - aHerplan;
+
     const aToday = belpogingenVandaagOf(a);
     const bToday = belpogingenVandaagOf(b);
     if (aToday !== bToday) return aToday - bToday;

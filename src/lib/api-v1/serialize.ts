@@ -106,6 +106,11 @@ export function serializeProject(
 }
 
 export function openstaandFromFacturen(facturen: Factuur[]) {
+  const metCredit = new Set(
+    facturen
+      .map((f) => f.credit_van_factuur_id)
+      .filter((id): id is string => Boolean(id))
+  );
   const open = facturen.filter(
     (f) => !f.credit_van_factuur_id && factuurIsOpenstaand(f.status)
   );
@@ -116,6 +121,7 @@ export function openstaandFromFacturen(facturen: Factuur[]) {
       afgesproken_betaaldatum: f.afgesproken_betaaldatum,
       betaald_op: f.betaald_op,
       credit_van_factuur_id: f.credit_van_factuur_id,
+      heeftCredit: metCredit.has(f.id),
     })
   );
   return {

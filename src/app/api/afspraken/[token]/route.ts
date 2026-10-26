@@ -203,7 +203,7 @@ export async function POST(
 
       await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
-      // Klant-annulering fysieke afspraak → status + backoffice-actie herplannen
+      // Klant-annulering fysieke afspraak → status voor appointment setter (Bel)
       if (
         afspraak.lead_id &&
         afspraakBlokkeertAgenda(afspraak.soort)

@@ -21,7 +21,21 @@ import {
   VERVOLG_PUNT_VRIJGESTELD,
 } from "@/lib/afspraak-soort";
 import type { LeadStatus } from "@/types/database";
-import { weekKeyString } from "@/lib/adviseur-beschikbaarheid";
+import {
+  dayKeyAmsterdam,
+  isBeforeStartdatum,
+  isSlotGeblokkeerd,
+  loadAfblokkingen,
+  loadSlotVrijgaven,
+  nearestSlotHour,
+  weekKeyFromDate,
+  weekKeyString,
+} from "@/lib/adviseur-beschikbaarheid";
+import {
+  AFSPRAAK_DUUR_MINUTEN,
+  generateDayBlocks,
+  type BusySlot,
+} from "@/lib/slots";
 import {
   PERIOD_PRESET_LABELS,
   resolveMgmtPeriod,
@@ -84,18 +98,20 @@ export type SalesManagerRow = {
   naam: string;
   /** Nieuwe huisbezoeken (soort nieuw) met start_at in periode — niet created_at */
   ingepland: number;
-  /** Nieuwe huisbezoeken afgeboekt in periode (= gelopen) */
+  /** Afgelopen nieuwe huisbezoeken in periode (mét én zonder afboeking) */
   gelopen: number;
-  /** Nieuwe huisbezoeken zonder uitkomst in periode (apart zichtbaar) */
+  /** Subset van gelopen: nog zonder uitkomst (apart zichtbaar) */
   niet_afgeboekt: number;
-  /** gelopen (afgeboekt) / ingepland */
+  /** gelopen / ingepland */
   conversie_ingepland_gelopen_pct: number | null;
   /** Bruto sales: getekende offertes in periode, zonder project-annuleringen */
   sales: number;
-  /** Bruto sales-conversie: sales / gelopen (afgeboekt) */
-  conversie_gelopen_sale_pct: number | null;
+  /** Bruto sales-conversie: sales / ingepland */
+  conversie_ingepland_sale_pct: number | null;
   /** Fysieke huisbezoeken in aankomende kalenderweek */
   afspraken_aankomende_week: number;
+  /** Nog vrije tijdblokken in aankomende kalenderweek */
+  blokken_aankomende_week: number;
 };
 
 export type SalesManagerTotals = {
@@ -105,8 +121,9 @@ export type SalesManagerTotals = {
   niet_afgeboekt: number;
   conversie_ingepland_gelopen_pct: number | null;
   sales: number;
-  conversie_gelopen_sale_pct: number | null;
+  conversie_ingepland_sale_pct: number | null;
   afspraken_aankomende_week: number;
+  blokken_aankomende_week: number;
 };
 
 export type SalesManagerWeekPoint = {
@@ -116,7 +133,7 @@ export type SalesManagerWeekPoint = {
   gelopen: number;
   niet_afgeboekt: number;
   sales: number;
-  conversie_gelopen_sale_pct: number | null;
+  conversie_ingepland_sale_pct: number | null;
 };
 
 export type SalesManagerTimelineKind =
@@ -269,6 +286,149 @@ function pct(num: number, den: number): number | null {
   return Math.round((num / den) * 1000) / 10;
 }
 
+async function loadUnavailableByAdviseur(
+  sb: SupabaseClient,
+  adviseurIds: string[],
+  jaren: number[]
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (adviseurIds.length === 0 || jaren.length === 0) return map;
+  const { data, error } = await sb
+    .from("adviseur_beschikbaarheid")
+    .select("adviseur_id, jaar, week, beschikbaar")
+    .in("adviseur_id", adviseurIds)
+    .in("jaar", jaren)
+    .eq("beschikbaar", false);
+  if (error) {
+    if (
+      error.code === "42703" ||
+      error.code === "42P01" ||
+      error.message?.includes("adviseur_beschikbaarheid") ||
+      error.message?.includes("schema cache")
+    ) {
+      return map;
+    }
+    throw error;
+  }
+  for (const row of data || []) {
+    const id = row.adviseur_id as string;
+    const set = map.get(id) || new Set<string>();
+    set.add(weekKeyString(Number(row.jaar), Number(row.week)));
+    map.set(id, set);
+  }
+  return map;
+}
+
+/**
+ * Nog vrije tijdblokken per adviseur in exact hetzelfde venster als
+ * afspraken_aankomende_week (ma–zo van de eerstvolgende planbare week).
+ *
+ * “Vrij” = open slot dat nog niet bezet is. Al geplande huisbezoeken tellen
+ * dus níet mee — meer afspraken dan vrije blokken is normaal als de week
+ * al (bijna) vol zit.
+ */
+async function loadBlokkenAankomendeWeek(
+  sb: SupabaseClient,
+  adviseurs: {
+    id: string;
+    naam: string;
+    actief?: boolean | null;
+    rol?: string | null;
+    email?: string | null;
+    startdatum?: string | null;
+  }[],
+  upcoming: { startIso: string; endIso: string; weekKey: string },
+  now: Date
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  const ids = adviseurs.map((a) => a.id);
+  if (ids.length === 0) return result;
+
+  const z = toZonedTime(now, AMSTERDAM_TZ);
+  const y = getISOWeekYear(z);
+  const van = dayKeyAmsterdam(new Date(upcoming.startIso));
+  const tot = dayKeyAmsterdam(new Date(upcoming.endIso));
+  const rangeStart = new Date(upcoming.startIso).getTime();
+  const rangeEnd = new Date(upcoming.endIso).getTime();
+
+  const [unavailableByAdviseur, afblokkingen, vrijgaven, afsprakenCapRes] =
+    await Promise.all([
+      loadUnavailableByAdviseur(sb, ids, [y - 1, y, y + 1]),
+      loadAfblokkingen(sb, { adviseurIds: ids, van, tot }),
+      loadSlotVrijgaven(sb, { adviseurIds: ids, van, tot }),
+      sb
+        .from("afspraken")
+        .select("adviseur_id, start_at, end_at, status, soort")
+        .in("adviseur_id", ids)
+        .gte("start_at", upcoming.startIso)
+        .lte("start_at", upcoming.endIso)
+        .neq("status", "geannuleerd"),
+    ]);
+
+  // Slot-cutoff = max(nu, weekstart): verleden telt niet als “vrij”,
+  // maar op za/zo starten we wel bij maandag van de aankomende week.
+  const weekStart = new Date(upcoming.startIso);
+  const fromDate =
+    weekStart.getTime() < now.getTime() ? now : weekStart;
+
+  for (const adv of adviseurs) {
+    const busy: BusySlot[] = (afsprakenCapRes.data || [])
+      .filter(
+        (a) =>
+          a.adviseur_id === adv.id &&
+          a.status !== "geannuleerd" &&
+          a.status !== "voltooid" &&
+          afspraakBlokkeertAgenda((a.soort as string | null) ?? null)
+      )
+      .map((a) => {
+        const start = a.start_at as string;
+        const end =
+          a.end_at && a.end_at !== a.start_at
+            ? (a.end_at as string)
+            : new Date(
+                new Date(start).getTime() + AFSPRAAK_DUUR_MINUTEN * 60_000
+              ).toISOString();
+        return { start_at: start, end_at: end };
+      });
+
+    const unavailable = unavailableByAdviseur.get(adv.id) || new Set();
+    const blocks = generateDayBlocks({
+      daysAhead: 8,
+      busy,
+      fromDate,
+      weekdaysOnly: false,
+    });
+
+    let vrij = 0;
+    for (const block of blocks) {
+      const t = block.start.getTime();
+      if (t < rangeStart || t > rangeEnd) continue;
+      if (isBeforeStartdatum(block.start, adv.startdatum)) continue;
+
+      const wk = weekKeyFromDate(block.start);
+      if (unavailable.has(weekKeyString(wk.jaar, wk.week))) continue;
+
+      const dag = dayKeyAmsterdam(block.start);
+      const hour = nearestSlotHour(block.start);
+      if (
+        isSlotGeblokkeerd(
+          adv.id,
+          dag,
+          hour,
+          afblokkingen,
+          vrijgaven
+        )
+      ) {
+        continue;
+      }
+
+      if (!block.busy) vrij += 1;
+    }
+    result.set(adv.id, vrij);
+  }
+  return result;
+}
+
 function inRange(iso: string, startIso: string, endIso: string): boolean {
   return iso >= startIso && iso <= endIso;
 }
@@ -361,7 +521,10 @@ function hasSalesManagerUitkomst(
   return false;
 }
 
-/** Gelopen = afgelopen huisbezoek mét uitkomst / doorgezette sale. */
+/**
+ * Gelopen = afgelopen huisbezoek (wel of niet afgeboekt).
+ * Niet-afgeboekt blijft apart zichtbaar als subset van gelopen.
+ */
 function isGelopenVoorSalesManager(
   shape: {
     lead_id: string;
@@ -370,18 +533,13 @@ function isGelopenVoorSalesManager(
     start_at: string;
     end_at?: string | null;
   },
-  leadStatus: string | null,
-  doorgezetSaleLeadIds: Set<string>,
+  _leadStatus: string | null,
+  _doorgezetSaleLeadIds: Set<string>,
   now: Date
 ): boolean {
   if (!afspraakBlokkeertAgenda(shape.soort)) return false;
   if (shape.status === "geannuleerd") return false;
-  if (!afspraakIsAfgelopen(shape as Afspraak, now)) return false;
-  return hasSalesManagerUitkomst(
-    shape.lead_id,
-    leadStatus,
-    doorgezetSaleLeadIds
-  );
+  return afspraakIsAfgelopen(shape as Afspraak, now);
 }
 
 /** Niet afgeboekt = afgelopen huisbezoek zónder uitkomst (ongeacht vervolg-afspraak). */
@@ -465,8 +623,9 @@ export async function buildSalesManagerDashboard(
     niet_afgeboekt: 0,
     conversie_ingepland_gelopen_pct: null,
     sales: 0,
-    conversie_gelopen_sale_pct: null,
+    conversie_ingepland_sale_pct: null,
     afspraken_aankomende_week: 0,
+    blokken_aankomende_week: 0,
   });
 
   if (ids.length === 0) {
@@ -498,27 +657,29 @@ export async function buildSalesManagerDashboard(
     2
   ).toISOString();
 
-  const [{ data: afsprakenRaw }, { data: offertesRaw }] = await Promise.all([
-    sb
-      .from("afspraken")
-      .select(
-        "id, adviseur_id, lead_id, status, soort, start_at, end_at, leads(status)"
-      )
-      .in("adviseur_id", ids)
-      .gte("start_at", fetchFrom)
-      .lte("start_at", fetchTo)
-      .neq("status", "geannuleerd")
-      .order("start_at"),
-    sb
-      .from("offertes")
-      .select(
-        "id, lead_id, status, ondertekend_op, leads(adviseur_id)"
-      )
-      .eq("status", "ondertekend")
-      .not("ondertekend_op", "is", null)
-      .gte("ondertekend_op", period.startIso)
-      .lte("ondertekend_op", period.endIso),
-  ]);
+  const [{ data: afsprakenRaw }, { data: offertesRaw }, blokkenAankomend] =
+    await Promise.all([
+      sb
+        .from("afspraken")
+        .select(
+          "id, adviseur_id, lead_id, status, soort, start_at, end_at, leads(status)"
+        )
+        .in("adviseur_id", ids)
+        .gte("start_at", fetchFrom)
+        .lte("start_at", fetchTo)
+        .neq("status", "geannuleerd")
+        .order("start_at"),
+      sb
+        .from("offertes")
+        .select(
+          "id, lead_id, status, ondertekend_op, leads(adviseur_id)"
+        )
+        .eq("status", "ondertekend")
+        .not("ondertekend_op", "is", null)
+        .gte("ondertekend_op", period.startIso)
+        .lte("ondertekend_op", period.endIso),
+      loadBlokkenAankomendeWeek(sb, adviseurs, upcoming, now),
+    ]);
 
   const afspraken = (afsprakenRaw || []) as AfspraakRow[];
 
@@ -572,7 +733,8 @@ export async function buildSalesManagerDashboard(
 
     if (isGelopenVoorSalesManager(shape, ls, doorgezetSaleLeadIds, now)) {
       gelopen.set(a.adviseur_id, (gelopen.get(a.adviseur_id) || 0) + 1);
-    } else if (
+    }
+    if (
       isNietAfgeboektVoorSalesManager(shape, ls, doorgezetSaleLeadIds, now)
     ) {
       nietAfgeboekt.set(
@@ -613,8 +775,9 @@ export async function buildSalesManagerDashboard(
       niet_afgeboekt: niet,
       conversie_ingepland_gelopen_pct: pct(gel, ing),
       sales,
-      conversie_gelopen_sale_pct: pct(sales, gel),
+      conversie_ingepland_sale_pct: pct(sales, ing),
       afspraken_aankomende_week: aankomendeAfs.get(a.id) || 0,
+      blokken_aankomende_week: blokkenAankomend.get(a.id) || 0,
     };
   });
 
@@ -631,8 +794,9 @@ export async function buildSalesManagerDashboard(
     niet_afgeboekt: totNiet,
     conversie_ingepland_gelopen_pct: pct(totGelopen, totIngepland),
     sales: totSales,
-    conversie_gelopen_sale_pct: pct(totSales, totGelopen),
+    conversie_ingepland_sale_pct: pct(totSales, totIngepland),
     afspraken_aankomende_week: sum((r) => r.afspraken_aankomende_week),
+    blokken_aankomende_week: sum((r) => r.blokken_aankomende_week),
   };
 
   return {
@@ -916,13 +1080,10 @@ export async function buildSalesManagerDetail(
   const contractStatus =
     ((adv.contract_sign_status as string | null) || "").trim() || null;
 
-  // Weektrend: 6 weken eindigend op vorige week
-  const weekWindows = [];
-  for (let i = -6; i <= -1; i++) {
-    weekWindows.push(weekBoundsFromOffset(i, now));
-  }
-  const histFrom = weekWindows[0].startIso;
-  const histTo = weekWindows[weekWindows.length - 1].endIso;
+  // Weektrend: vanaf de week van het eerste ingeplande huisbezoek t/m nu
+  // (max. 52 weken; lege weken vóór eerste ingepland worden weggelaten)
+  const histFromMax = weekBoundsFromOffset(-51, now).startIso;
+  const histTo = weekBoundsFromOffset(0, now).endIso;
 
   const [{ data: histAfs }, { data: histOff }] = await Promise.all([
     sb
@@ -931,7 +1092,7 @@ export async function buildSalesManagerDetail(
         "id, lead_id, start_at, end_at, status, soort, leads(status)"
       )
       .eq("adviseur_id", adviseurId)
-      .gte("start_at", histFrom)
+      .gte("start_at", histFromMax)
       .lte("start_at", histTo)
       .neq("status", "geannuleerd"),
     sb
@@ -939,11 +1100,41 @@ export async function buildSalesManagerDetail(
       .select("id, lead_id, ondertekend_op, leads(adviseur_id)")
       .eq("status", "ondertekend")
       .not("ondertekend_op", "is", null)
-      .gte("ondertekend_op", histFrom)
+      .gte("ondertekend_op", histFromMax)
       .lte("ondertekend_op", histTo),
   ]);
 
   const histAfsRows = (histAfs || []) as AfspraakRow[];
+
+  // Eerste week = kalenderweek van het vroegste nieuwe huisbezoek op de agenda
+  let firstAfspraakAt: string | null = null;
+  for (const a of histAfsRows) {
+    if (!isNieuwHuisbezoek(a.soort)) continue;
+    if (!firstAfspraakAt || a.start_at < firstAfspraakAt) {
+      firstAfspraakAt = a.start_at;
+    }
+  }
+
+  const thisMon = startOfWeek(toZonedTime(now, AMSTERDAM_TZ), {
+    weekStartsOn: 1,
+  });
+  let startOffset = 0;
+  if (firstAfspraakAt) {
+    const firstMon = startOfWeek(
+      toZonedTime(new Date(firstAfspraakAt), AMSTERDAM_TZ),
+      { weekStartsOn: 1 }
+    );
+    const diffWeeks = Math.round(
+      (thisMon.getTime() - firstMon.getTime()) / (7 * 86_400_000)
+    );
+    startOffset = -Math.min(Math.max(0, diffWeeks), 51);
+  }
+
+  const weekWindows = [];
+  for (let i = startOffset; i <= 0; i++) {
+    weekWindows.push(weekBoundsFromOffset(i, now));
+  }
+
   const histGeannuleerd = await loadGeannuleerdeOfferteIds(
     sb,
     (histOff || []).map((o) => o.id as string).filter(Boolean)
@@ -953,7 +1144,7 @@ export async function buildSalesManagerDetail(
     histAfsRows.map((a) => a.lead_id)
   );
 
-  const week_trend: SalesManagerWeekPoint[] = weekWindows.map((w) => {
+  const week_trend_raw: SalesManagerWeekPoint[] = weekWindows.map((w) => {
     let ing = 0;
     let gel = 0;
     let niet = 0;
@@ -972,9 +1163,8 @@ export async function buildSalesManagerDetail(
       const ls = leadStatusOf(a);
       if (isGelopenVoorSalesManager(shape, ls, histDoorgezet, now)) {
         gel += 1;
-      } else if (
-        isNietAfgeboektVoorSalesManager(shape, ls, histDoorgezet, now)
-      ) {
+      }
+      if (isNietAfgeboektVoorSalesManager(shape, ls, histDoorgezet, now)) {
         niet += 1;
       }
     }
@@ -995,9 +1185,16 @@ export async function buildSalesManagerDetail(
       gelopen: gel,
       niet_afgeboekt: niet,
       sales,
-      conversie_gelopen_sale_pct: pct(sales, gel),
+      conversie_ingepland_sale_pct: pct(sales, ing),
     };
   });
+
+  // Geen lege weken vóór de week met het eerste ingeplande huisbezoek
+  const firstActiveIdx = week_trend_raw.findIndex((w) => w.ingepland > 0);
+  const week_trend =
+    firstActiveIdx < 0
+      ? week_trend_raw.slice(-1)
+      : week_trend_raw.slice(firstActiveIdx);
 
   // Tijdlijn (beknopt)
   let sollicitatieAt: string | null = null;
@@ -1050,6 +1247,14 @@ export async function buildSalesManagerDetail(
       at: atIso,
       titel: "Startdatum",
       detail: "Eerste werkdag",
+    });
+  }
+  if (firstAfspraakAt) {
+    timeline.push({
+      kind: "eerste_afspraak",
+      at: firstAfspraakAt,
+      titel: "Eerste huisbezoek",
+      detail: "Start van de weektrend",
     });
   }
   if (contractSignedAt) {

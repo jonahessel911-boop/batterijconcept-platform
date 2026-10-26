@@ -896,6 +896,20 @@ export function BackofficeActiesList({
     () =>
       projectTaken.filter((t) => {
         if (t.status === "done") return false;
+        // Geannuleerde orders: geen workflow/nazorg-taken meer in Acties
+        const projectStatus = (
+          t.projecten?.status ||
+          (t.project_id
+            ? projecten.find((p) => p.id === t.project_id)?.status
+            : null) ||
+          ""
+        ).toLowerCase();
+        if (
+          projectStatus === "annulering" ||
+          projectStatus === "geannuleerd"
+        ) {
+          return false;
+        }
         const key = (t.auto_key || "").toLowerCase();
         const titel = (t.titel || "").toLowerCase();
         return (
@@ -906,7 +920,7 @@ export function BackofficeActiesList({
           titel.includes("dynamische")
         );
       }),
-    [projectTaken]
+    [projectTaken, projecten]
   );
 
   const bucketCounts = useMemo(() => {

@@ -13,6 +13,7 @@ import type {
   BelConversieRecenteAfspraak,
   BelConversieSeriesBucket,
   BelConversieSeriesGranularity,
+  BelConversieTargets,
 } from "@/lib/bel-conversie";
 import {
   conversieMonthRangeContaining,
@@ -21,6 +22,21 @@ import {
 } from "@/lib/conversie-period";
 import { formatDateTimeNl } from "@/lib/format";
 import { normalizeLeadSource } from "@/lib/lead-conversie";
+import {
+  agendaWeekJumpOptions,
+  formatSchouwWeekLabel,
+  parseSchouwWeekValue,
+  schouwWeekFromDate,
+  schouwWeekToMondayIso,
+  schouwWeekValue,
+} from "@/lib/schouw-week";
+import { useCrmSession } from "@/hooks/useCrmSession";
+
+type BelConversieBellerOption = {
+  id: string;
+  naam: string;
+  gebeld: number;
+};
 
 type BelConversieData = {
   date: string;
@@ -34,9 +50,13 @@ type BelConversieData = {
     nonNieuwIngepland?: number;
     nonNieuwLeadToAppt?: number | null;
   };
+  lockBeller?: boolean;
+  targets?: BelConversieTargets;
   recenteAfspraken?: BelConversieRecenteAfspraak[];
   series?: BelConversieSeriesBucket[];
   seriesGranularity?: BelConversieSeriesGranularity;
+  bellerOptions?: BelConversieBellerOption[];
+  bellerId?: string | null;
 };
 
 type ViewMode = "week" | "month";
@@ -124,8 +144,18 @@ function BelSeriesChart({
 
   const maxTotaal = useMemo(() => {
     let m = 0;
-    for (const b of series) m = Math.max(m, b.gebeld);
+    for (const b of series) {
+      m = Math.max(m, b.gebeld, b.doel || 0, b.ingepland);
+    }
     return Math.max(1, m);
+  }, [series]);
+
+  /** Eén horizontale doellijn als alle buckets hetzelfde doel hebben. */
+  const sharedDoel = useMemo(() => {
+    const doelen = series.map((b) => b.doel || 0).filter((d) => d > 0);
+    if (doelen.length === 0) return null;
+    const first = doelen[0];
+    return doelen.every((d) => d === first) ? first : null;
   }, [series]);
 
   const tip = hoverBi != null ? series[hoverBi] ?? null : null;
@@ -169,66 +199,114 @@ function BelSeriesChart({
         })()
       : null;
 
+  const doelLinePct =
+    sharedDoel != null && sharedDoel > 0
+      ? (sharedDoel / maxTotaal) * 100
+      : null;
+
   return (
     <div>
-      <div
-        ref={wrapRef}
-        className="relative flex h-72 items-end justify-around gap-3 overflow-visible px-1 pb-1 sm:gap-4"
-        onMouseLeave={clearTip}
-      >
-        {series.map((b, bi) => {
-          const totaal = b.gebeld;
-          const barH = Math.max(
-            totaal > 0 ? 12 : 0,
-            (totaal / maxTotaal) * 100
-          );
-          const segments = barSegments(b);
-          return (
+      <div ref={wrapRef} className="relative" onMouseLeave={clearTip}>
+        {/* L→A % boven de plot */}
+        <div className="mb-1 flex justify-around gap-3 px-1 sm:gap-4">
+          {series.map((b) => (
             <div
-              key={b.key}
-              className="flex h-full min-w-[3.75rem] flex-1 flex-col items-center justify-end sm:min-w-[4.5rem]"
-              onMouseEnter={(e) => {
-                setHoverBi(bi);
-                updateTipPos(e);
-              }}
-              onMouseMove={(e) => {
-                setHoverBi(bi);
-                updateTipPos(e);
-              }}
+              key={`l2a-${b.key}`}
+              className="min-w-[3.75rem] flex-1 text-center sm:min-w-[4.5rem]"
             >
               <p
-                className="mb-1.5 text-[11px] font-semibold tabular-nums text-green-dark"
+                className="text-[11px] font-semibold tabular-nums text-green-dark"
                 title="Lead to appointment %"
               >
                 {b.leadToAppt != null ? `${num(b.leadToAppt, 1)}%` : "—"}
               </p>
+            </div>
+          ))}
+        </div>
+
+        {/* Plot: staven + doellijn delen dezelfde hoogte-schaal */}
+        <div className="relative flex h-56 items-end justify-around gap-3 px-1 sm:h-64 sm:gap-4">
+          {doelLinePct != null ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-20"
+              style={{ bottom: `${doelLinePct}%` }}
+            >
+              <div className="border-t-2 border-dashed border-[#C45A12]" />
+              <span className="absolute -top-5 right-0 rounded bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#C45A12] shadow-sm">
+                Doel {num(sharedDoel)}
+              </span>
+            </div>
+          ) : null}
+
+          {series.map((b, bi) => {
+            const totaal = b.gebeld;
+            const barH = Math.max(
+              totaal > 0 ? 8 : 0,
+              (totaal / maxTotaal) * 100
+            );
+            const segments = barSegments(b);
+            const tickPct =
+              sharedDoel == null && (b.doel || 0) > 0
+                ? (b.doel / maxTotaal) * 100
+                : null;
+            return (
               <div
-                className="flex w-full max-w-[4.5rem] cursor-pointer flex-col-reverse overflow-hidden rounded-t-lg shadow-sm sm:max-w-[5.5rem]"
-                style={{
-                  height: `${barH}%`,
-                  minHeight: totaal > 0 ? 12 : 0,
+                key={b.key}
+                className="relative flex h-full min-w-[3.75rem] flex-1 flex-col items-center justify-end sm:min-w-[4.5rem]"
+                onMouseEnter={(e) => {
+                  setHoverBi(bi);
+                  updateTipPos(e);
+                }}
+                onMouseMove={(e) => {
+                  setHoverBi(bi);
+                  updateTipPos(e);
                 }}
               >
-                {segments.map((seg) => {
-                  if (seg.value <= 0 || totaal <= 0) return null;
-                  return (
-                    <div
-                      key={seg.key}
-                      className="w-full"
-                      style={{
-                        height: `${(seg.value / totaal) * 100}%`,
-                        minHeight: seg.value > 0 ? 4 : 0,
-                        background: seg.color,
-                      }}
-                    />
-                  );
-                })}
+                {tickPct != null ? (
+                  <div
+                    className="pointer-events-none absolute left-0 right-0 z-10 border-t-2 border-dashed border-[#C45A12]"
+                    style={{ bottom: `${tickPct}%` }}
+                  />
+                ) : null}
+                <div
+                  className="relative z-[1] flex w-full max-w-[4.5rem] cursor-pointer flex-col-reverse overflow-hidden rounded-t-lg shadow-sm sm:max-w-[5.5rem]"
+                  style={{
+                    height: `${barH}%`,
+                    minHeight: totaal > 0 ? 8 : 0,
+                  }}
+                >
+                  {segments.map((seg) => {
+                    if (seg.value <= 0 || totaal <= 0) return null;
+                    return (
+                      <div
+                        key={seg.key}
+                        className="w-full"
+                        style={{
+                          height: `${(seg.value / totaal) * 100}%`,
+                          minHeight: seg.value > 0 ? 4 : 0,
+                          background: seg.color,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
               </div>
-              <p className="mt-1.5 text-[11px] font-semibold tabular-nums text-ink">
-                {totaal > 0 ? num(totaal) : ""}
+            );
+          })}
+        </div>
+
+        {/* Totalen + daglabels onder de plot */}
+        <div className="mt-1.5 flex justify-around gap-3 px-1 sm:gap-4">
+          {series.map((b) => (
+            <div
+              key={`lbl-${b.key}`}
+              className="min-w-[3.75rem] flex-1 text-center sm:min-w-[4.5rem]"
+            >
+              <p className="text-[11px] font-semibold tabular-nums text-ink">
+                {b.gebeld > 0 ? num(b.gebeld) : ""}
               </p>
               <p
-                className="mt-0.5 w-full truncate text-center text-[10px] font-medium text-muted"
+                className="mt-0.5 w-full truncate text-[10px] font-medium text-muted"
                 title={b.label}
               >
                 {granularity === "day"
@@ -236,8 +314,9 @@ function BelSeriesChart({
                   : b.label.split(" · ")[0] || b.label}
               </p>
             </div>
-          );
-        })}
+          ))}
+        </div>
+
         {tip && tipStyle ? (
           <div
             className="pointer-events-none absolute z-30 w-max max-w-[14rem] rounded-xl border border-line bg-white px-3 py-2.5 text-xs shadow-lg"
@@ -257,6 +336,14 @@ function BelSeriesChart({
                 Ingepland{" "}
                 <span className="font-semibold">{num(tip.ingepland)}</span>
               </li>
+              {(tip.doel || 0) > 0 ? (
+                <li>
+                  <span className="text-muted">Doel</span>{" "}
+                  <span className="font-semibold text-[#C45A12]">
+                    {num(tip.doel)}
+                  </span>
+                </li>
+              ) : null}
               <li>
                 Lead to appointment{" "}
                 <span className="font-semibold text-green-dark">
@@ -300,18 +387,52 @@ function BelSeriesChart({
           />
           Overig gebeld
         </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-[#C45A12]" />
+          Doel (ingepland)
+        </span>
       </div>
     </div>
   );
 }
 
 export function BelConversiePanel() {
+  const { session, rol } = useCrmSession();
   const today = todayConversieYmd();
   const [mode, setMode] = useState<ViewMode>("week");
   const [anchorYmd, setAnchorYmd] = useState(today);
+  /** Leeg = alle bellers */
+  const [bellerId, setBellerId] = useState("");
+  const [bellerOptions, setBellerOptions] = useState<
+    BelConversieBellerOption[]
+  >([]);
   const [data, setData] = useState<BelConversieData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const lockBeller = Boolean(data?.lockBeller) || rol === "beller";
+
+  const weekOptions = useMemo(() => {
+    const base = agendaWeekJumpOptions(26, 4);
+    const cur = schouwWeekFromDate(`${anchorYmd}T12:00:00`);
+    const key = schouwWeekValue(cur.jaar, cur.week);
+    if (key && !base.some((o) => o.value === key)) {
+      return [
+        {
+          value: key,
+          label: formatSchouwWeekLabel(cur.jaar, cur.week),
+          jaar: cur.jaar,
+          week: cur.week,
+        },
+        ...base,
+      ];
+    }
+    return base;
+  }, [anchorYmd]);
+
+  const selectedWeekKey = useMemo(() => {
+    const cur = schouwWeekFromDate(`${anchorYmd}T12:00:00`);
+    return schouwWeekValue(cur.jaar, cur.week);
+  }, [anchorYmd]);
 
   const range = useMemo(() => {
     return mode === "week"
@@ -323,7 +444,12 @@ export function BelConversiePanel() {
     mode === "week" ? "day" : "week";
 
   const load = useCallback(
-    async (from: string, to: string, gran: BelConversieSeriesGranularity) => {
+    async (
+      from: string,
+      to: string,
+      gran: BelConversieSeriesGranularity,
+      filterBellerId: string
+    ) => {
       setLoading(true);
       setError(null);
       try {
@@ -332,6 +458,7 @@ export function BelConversiePanel() {
           to,
           granularity: gran,
         });
+        if (filterBellerId) qs.set("beller_id", filterBellerId);
         const res = await fetch(`/api/rapportage/bel-conversie?${qs}`);
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -339,7 +466,22 @@ export function BelConversiePanel() {
             (json as { error?: string }).error || "Laden mislukt"
           );
         }
-        setData(json as BelConversieData);
+        const payload = json as BelConversieData;
+        setData(payload);
+        if (payload.lockBeller && payload.bellerId) {
+          setBellerId(payload.bellerId);
+        }
+        if (payload.bellerOptions) {
+          setBellerOptions(payload.bellerOptions);
+          // Alleen beller/backoffice in de lijst — reset filter als selectie wegvalt
+          if (
+            !payload.lockBeller &&
+            filterBellerId &&
+            !payload.bellerOptions.some((b) => b.id === filterBellerId)
+          ) {
+            setBellerId("");
+          }
+        }
       } catch (e) {
         setData(null);
         setError(e instanceof Error ? e.message : "Fout");
@@ -351,8 +493,20 @@ export function BelConversiePanel() {
   );
 
   useEffect(() => {
-    void load(range.startYmd, range.endYmd, granularity);
-  }, [range.startYmd, range.endYmd, granularity, load]);
+    if (rol === "beller" && session?.id && !bellerId) {
+      setBellerId(session.id);
+      return;
+    }
+    void load(range.startYmd, range.endYmd, granularity, bellerId);
+  }, [
+    range.startYmd,
+    range.endYmd,
+    granularity,
+    bellerId,
+    load,
+    rol,
+    session?.id,
+  ]);
 
   const totals = data?.totals;
   const series = data?.series || [];
@@ -366,12 +520,44 @@ export function BelConversiePanel() {
   const seriesSums = useMemo(() => {
     let geenInteresse = 0;
     let geenContact = 0;
+    let ingepland = 0;
+    let doel = 0;
     for (const b of series) {
       geenInteresse += b.geenInteresse;
       geenContact += b.geenContact;
+      ingepland += b.ingepland;
+      doel += b.doel || 0;
     }
-    return { geenInteresse, geenContact };
+    return { geenInteresse, geenContact, ingepland, doel };
   }, [series]);
+
+  /**
+   * Weekdoel = admin-target afspraken/week (team of gekozen beller).
+   * Gehaald = ingepland in de gekozen periode. Bron: API targets (gesynct met grafiek).
+   */
+  const weekTarget = useMemo(() => {
+    const t = data?.targets;
+    const doel = Math.round(t?.doelDezeWeek ?? 0);
+    const gepland = Math.round(
+      t?.geplandDezeWeek ?? seriesSums.ingepland ?? totals?.ingepland ?? 0
+    );
+    if (doel <= 0 && gepland <= 0) return null;
+    const pct =
+      t?.pctDezeWeek != null
+        ? t.pctDezeWeek
+        : doel > 0
+          ? Math.min(100, Math.round((gepland / doel) * 100))
+          : gepland > 0
+            ? 100
+            : 0;
+    const gehaald =
+      t?.finishDezeWeek != null
+        ? t.finishDezeWeek
+        : doel > 0
+          ? gepland >= doel
+          : false;
+    return { doel, gepland, pct, gehaald };
+  }, [data?.targets, seriesSums.ingepland, totals?.ingepland]);
 
   return (
     <div className="space-y-4">
@@ -381,8 +567,12 @@ export function BelConversiePanel() {
             Bel conversie
           </p>
           <p className="mt-0.5 text-xs text-muted">
-            Één staaf per {mode === "week" ? "dag" : "week"} · hover voor
-            details
+            Één staaf per {mode === "week" ? "dag" : "week"}
+            {lockBeller
+              ? ` · ${session?.naam || "jouw belpogingen"}`
+              : bellerId
+                ? ` · ${bellerOptions.find((b) => b.id === bellerId)?.naam || "beller"}`
+                : " · alle bellers"}
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -411,29 +601,61 @@ export function BelConversiePanel() {
               );
             })}
           </div>
-          {mode === "week" ? (
-            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Week van
-              <input
-                type="date"
-                value={anchorYmd}
-                onChange={(e) => setAnchorYmd(e.target.value || today)}
-                className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
-              />
-            </label>
-          ) : (
-            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Maand
-              <input
-                type="month"
-                value={monthInputValue(anchorYmd)}
-                onChange={(e) =>
-                  setAnchorYmd(ymdFromMonthInput(e.target.value))
-                }
-                className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
-              />
-            </label>
-          )}
+          <div className="flex flex-wrap items-end justify-end gap-2">
+            {!lockBeller ? (
+              <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Beller
+                <select
+                  value={bellerId}
+                  onChange={(e) => setBellerId(e.target.value)}
+                  className="min-w-[10rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                >
+                  <option value="">Alle</option>
+                  {bellerOptions.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.naam}
+                      {b.gebeld > 0 ? ` (${b.gebeld})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {mode === "week" ? (
+              <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Week
+                <select
+                  value={selectedWeekKey}
+                  onChange={(e) => {
+                    const parsed = parseSchouwWeekValue(e.target.value);
+                    if (!parsed) return;
+                    const monday = String(
+                      schouwWeekToMondayIso(parsed.jaar, parsed.week)
+                    ).slice(0, 10);
+                    setAnchorYmd(monday || today);
+                  }}
+                  className="min-w-[14rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                >
+                  {weekOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Maand
+                <input
+                  type="month"
+                  value={monthInputValue(anchorYmd)}
+                  onChange={(e) =>
+                    setAnchorYmd(ymdFromMonthInput(e.target.value))
+                  }
+                  className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                />
+              </label>
+            )}
+          </div>
         </div>
       </div>
 
@@ -442,7 +664,9 @@ export function BelConversiePanel() {
           {error}{" "}
           <button
             type="button"
-            onClick={() => void load(range.startYmd, range.endYmd, granularity)}
+            onClick={() =>
+              void load(range.startYmd, range.endYmd, granularity, bellerId)
+            }
             className="font-semibold underline"
           >
             Opnieuw
@@ -454,7 +678,7 @@ export function BelConversiePanel() {
         <p className="text-sm text-muted">Laden…</p>
       ) : data ? (
         <>
-          <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -469,6 +693,44 @@ export function BelConversiePanel() {
               </p>
               <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
                 {num(totals?.ingepland)}
+              </p>
+            </div>
+            <div
+              className={[
+                "rounded-2xl border bg-white p-4",
+                weekTarget?.gehaald
+                  ? "border-green/40"
+                  : "border-line",
+              ].join(" ")}
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                {mode === "week" ? "Weekdoel" : "Periodedoel"}
+              </p>
+              <p
+                className={[
+                  "mt-1 font-display text-3xl font-semibold tabular-nums",
+                  weekTarget?.gehaald ? "text-green-dark" : "text-ink",
+                ].join(" ")}
+              >
+                {weekTarget
+                  ? `${num(weekTarget.gepland)}/${num(weekTarget.doel)}`
+                  : "—"}
+              </p>
+              <p
+                className={[
+                  "mt-1 text-xs font-semibold",
+                  weekTarget == null
+                    ? "text-muted"
+                    : weekTarget.gehaald
+                      ? "text-green-dark"
+                      : "text-[#C45A12]",
+                ].join(" ")}
+              >
+                {weekTarget == null
+                  ? "—"
+                  : weekTarget.gehaald
+                    ? `Gehaald · ${num(weekTarget.pct)}%`
+                    : `Nog niet · ${num(weekTarget.pct)}%`}
               </p>
             </div>
             <div className="rounded-2xl border border-green/30 bg-white p-4">
@@ -505,10 +767,6 @@ export function BelConversiePanel() {
                 <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                   {mode === "week" ? "Per dag" : "Per week"}
                 </p>
-                <p className="mt-1 text-sm text-muted">
-                  Balkhoogte = totaal gebeld · kleuren = ingepland / geen
-                  interesse / geen contact · hover voor cijfers
-                </p>
               </div>
               {loading ? (
                 <span className="text-xs text-muted">Vernieuwen…</span>
@@ -534,6 +792,9 @@ export function BelConversiePanel() {
                     Ingepland
                   </th>
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
+                    Doel
+                  </th>
+                  <th className="px-3 py-2.5 font-semibold tabular-nums">
                     L→A %
                   </th>
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
@@ -548,7 +809,7 @@ export function BelConversiePanel() {
                 {series.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Geen data in deze periode.
@@ -568,6 +829,9 @@ export function BelConversiePanel() {
                       </td>
                       <td className="px-3 py-2.5 tabular-nums text-ink">
                         {num(b.ingepland)}
+                      </td>
+                      <td className="px-3 py-2.5 tabular-nums text-[#C45A12]">
+                        {(b.doel || 0) > 0 ? num(b.doel) : "—"}
                       </td>
                       <td className="px-3 py-2.5 font-semibold tabular-nums text-green-dark">
                         {b.leadToAppt != null

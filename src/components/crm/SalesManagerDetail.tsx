@@ -73,42 +73,141 @@ function fmtPct(n: number | null | undefined): string {
 }
 
 function WeekTrendChart({ weeks }: { weeks: SalesManagerWeekPoint[] }) {
-  const maxSales = Math.max(1, ...weeks.map((w) => w.sales));
-  const maxGel = Math.max(1, ...weeks.map((w) => w.gelopen));
+  const maxVol = Math.max(
+    1,
+    ...weeks.map((w) => Math.max(w.ingepland, w.sales))
+  );
+  const w = 560;
+  const h = 180;
+  const padL = 28;
+  const padR = 12;
+  const padT = 16;
+  const padB = 28;
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  const n = Math.max(1, weeks.length);
+  const step = innerW / n;
+
+  const convPts = weeks.map((wk, i) => {
+    const pct = wk.conversie_ingepland_sale_pct;
+    const x = padL + step * (i + 0.5);
+    const y =
+      pct == null
+        ? null
+        : padT + innerH * (1 - Math.min(100, Math.max(0, pct)) / 100);
+    return { x, y, pct };
+  });
+  const lineD = convPts
+    .filter((p): p is { x: number; y: number; pct: number } => p.y != null)
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+    .join(" ");
 
   return (
     <div className="space-y-3">
-      <div className="flex h-36 items-end gap-1.5 sm:gap-2">
-        {weeks.map((w) => {
-          const hSales = Math.max(4, Math.round((w.sales / maxSales) * 100));
-          const hGel = Math.max(4, Math.round((w.gelopen / maxGel) * 100));
-          const short = w.label.split(" ")[0] || w.weekKey;
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="h-48 w-full"
+        role="img"
+        aria-label="Trend per week"
+      >
+        {[0, 25, 50, 75, 100].map((tick) => {
+          const y = padT + innerH * (1 - tick / 100);
           return (
-            <div
-              key={w.weekKey}
-              className="group relative flex h-full min-w-0 flex-1 flex-col items-center justify-end"
-              title={`${w.label}: ${w.sales} sales · ${w.gelopen} gelopen · ${fmtPct(w.conversie_gelopen_sale_pct)}`}
-            >
-              <div className="flex w-full max-w-[40px] items-end justify-center gap-0.5">
-                <span
-                  className="w-1/2 rounded-t-sm bg-green/40"
-                  style={{ height: `${hGel}%` }}
-                />
-                <span
-                  className="w-1/2 rounded-t-sm bg-green"
-                  style={{ height: `${hSales}%` }}
-                />
-              </div>
-              <span className="mt-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
-                {short}
-              </span>
-            </div>
+            <g key={tick}>
+              <line
+                x1={padL}
+                x2={w - padR}
+                y1={y}
+                y2={y}
+                stroke="#E6EBE8"
+                strokeWidth={1}
+              />
+              <text
+                x={padL - 6}
+                y={y + 3}
+                textAnchor="end"
+                className="fill-muted"
+                fontSize={9}
+              >
+                {tick}%
+              </text>
+            </g>
           );
         })}
+        {weeks.map((wk, i) => {
+          const cx = padL + step * (i + 0.5);
+          const barW = Math.max(4, step * 0.22);
+          const hIng = (wk.ingepland / maxVol) * (innerH * 0.85);
+          const hSales = (wk.sales / maxVol) * (innerH * 0.85);
+          const base = padT + innerH;
+          const short = wk.label.split(" ")[0] || wk.weekKey;
+          return (
+            <g key={wk.weekKey}>
+              <title>
+                {`${wk.label}: ${wk.ingepland} ingepland · ${wk.niet_afgeboekt} niet afgeboekt · ${wk.sales} sales · ${fmtPct(wk.conversie_ingepland_sale_pct)} ingepland→sale`}
+              </title>
+              <rect
+                x={cx - barW}
+                y={base - hIng}
+                width={barW}
+                height={Math.max(1, hIng)}
+                fill="#A8D5B5"
+              />
+              <rect
+                x={cx}
+                y={base - hSales}
+                width={barW}
+                height={Math.max(1, hSales)}
+                fill="#0a4727"
+              />
+              <text
+                x={cx}
+                y={h - 8}
+                textAnchor="middle"
+                className="fill-muted"
+                fontSize={9}
+                fontWeight={600}
+              >
+                {short}
+              </text>
+            </g>
+          );
+        })}
+        {lineD ? (
+          <path
+            d={lineD}
+            fill="none"
+            stroke="#C45A12"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ) : null}
+        {convPts.map((p, i) =>
+          p.y == null ? null : (
+            <circle
+              key={`c-${weeks[i].weekKey}`}
+              cx={p.x}
+              cy={p.y}
+              r={3}
+              fill="#C45A12"
+            />
+          )
+        )}
+      </svg>
+      <div className="flex flex-wrap gap-3 text-[10px] text-muted">
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-[#A8D5B5]" />{" "}
+          Ingepland
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-[#0a4727]" /> Sales
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-0.5 w-3 bg-[#C45A12]" /> Ingepland→sale
+          %
+        </span>
       </div>
-      <p className="text-[10px] text-muted">
-        Donkergroen = sales · licht = gelopen (afgeboekt)
-      </p>
     </div>
   );
 }
@@ -244,13 +343,13 @@ export function SalesManagerDetailView({
             value={fmtPct(row.conversie_ingepland_gelopen_pct)}
           />
           <MiniStat
-            label="Gelopen→sale"
-            value={fmtPct(row.conversie_gelopen_sale_pct)}
+            label="Ingepland→sale"
+            value={fmtPct(row.conversie_ingepland_sale_pct)}
           />
           <MiniStat label="Sales" value={String(row.sales)} />
           <MiniStat
-            label="Aankomende week"
-            value={String(row.afspraken_aankomende_week)}
+            label="Aank. week"
+            value={`${row.afspraken_aankomende_week} hb · ${row.blokken_aankomende_week ?? 0} vrij`}
           />
         </div>
       </section>
@@ -261,9 +360,8 @@ export function SalesManagerDetailView({
         </p>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2">
         <Kpi label="Ingepland" value={String(row.ingepland)} />
-        <Kpi label="Gelopen" value={String(row.gelopen)} />
         <Kpi
           label="Niet afgeboekt"
           value={String(row.niet_afgeboekt)}
@@ -271,21 +369,68 @@ export function SalesManagerDetailView({
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="overflow-hidden rounded-2xl border border-line bg-white">
-          <header className="border-b border-line px-4 py-3">
-            <p className="font-display text-sm font-semibold text-ink">
-              Trend per week
-            </p>
-            <p className="text-[11px] text-muted">
-              Laatste 6 volledig afgelopen weken
-            </p>
-          </header>
-          <div className="px-4 py-3">
-            <WeekTrendChart weeks={detail.week_trend} />
-          </div>
-        </section>
+      <section className="overflow-hidden rounded-2xl border border-line bg-white">
+        <header className="border-b border-line px-4 py-3">
+          <p className="font-display text-sm font-semibold text-ink">
+            Trend &amp; rapportage
+          </p>
+          <p className="text-[11px] text-muted">
+            Vanaf week van eerste ingeplande huisbezoek t/m nu · staven =
+            volume · lijn = ingepland→sale %
+          </p>
+        </header>
+        <div className="px-4 py-3">
+          <WeekTrendChart weeks={detail.week_trend} />
+        </div>
+        <div className="overflow-x-auto border-t border-line">
+          <table className="w-full min-w-[520px] text-left text-xs">
+            <thead>
+              <tr className="border-b border-line text-[10px] uppercase tracking-wide text-muted">
+                <th className="px-4 py-2 font-semibold">Week</th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Ingepland
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">
+                  Niet afgeboekt
+                </th>
+                <th className="px-3 py-2 font-semibold tabular-nums">Sales</th>
+                <th className="px-4 py-2 font-semibold tabular-nums">
+                  Ingepland→sale
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...detail.week_trend].reverse().map((wk) => (
+                <tr
+                  key={wk.weekKey}
+                  className="border-b border-line/70 last:border-0"
+                >
+                  <td className="px-4 py-1.5 font-medium text-ink">
+                    {wk.label}
+                  </td>
+                  <td className="px-3 py-1.5 tabular-nums">{wk.ingepland}</td>
+                  <td
+                    className={[
+                      "px-3 py-1.5 tabular-nums",
+                      wk.niet_afgeboekt > 0 ? "text-[#C45A12]" : "",
+                    ].join(" ")}
+                  >
+                    {wk.niet_afgeboekt}
+                  </td>
+                  <td className="px-3 py-1.5 font-semibold tabular-nums">
+                    {wk.sales}
+                  </td>
+                  <td className="px-4 py-1.5 font-semibold tabular-nums text-green-dark">
+                    {fmtPct(wk.conversie_ingepland_sale_pct)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
+      <div className="grid gap-4 lg:grid-cols-2">
         <section className="overflow-hidden rounded-2xl border border-line bg-white">
           <header className="border-b border-line px-4 py-3">
             <p className="font-display text-sm font-semibold text-ink">
