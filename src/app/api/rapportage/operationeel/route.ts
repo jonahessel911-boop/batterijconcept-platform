@@ -12,6 +12,7 @@ export const runtime = "nodejs";
 /** Operationele pipeline-volgorde voor de staafgrafiek. */
 const PIPELINE_ORDER: ProjectStatusKey[] = [
   "schouwweek_inplannen",
+  "opstarten_voltooid_afwachten_wf",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -27,6 +28,7 @@ const PIPELINE_ORDER: ProjectStatusKey[] = [
 
 const SHORT_LABEL: Partial<Record<ProjectStatusKey, string>> = {
   schouwweek_inplannen: "Opstarten",
+  opstarten_voltooid_afwachten_wf: "Afwachten WF",
   schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",

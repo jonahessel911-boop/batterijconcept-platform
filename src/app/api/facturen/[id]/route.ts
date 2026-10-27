@@ -249,6 +249,65 @@ export async function PATCH(
         } catch {
           /* best-effort */
         }
+
+        // EM: na 50% betaling opent schouwweek-taak (gestaffelde kickoff)
+        try {
+          const { data: projectRow } = await sb
+            .from("projecten")
+            .select(
+              "id, status, betaalwijze, leads(status), offertes(financiering_voorbehoud)"
+            )
+            .eq("id", projectId)
+            .maybeSingle();
+          const { isAanbetalingFactuurOmschrijving: isAanb } = await import(
+            "@/lib/aanbetaling"
+          );
+          const { resolveBetaalwijze } = await import(
+            "@/lib/project-status-config"
+          );
+          const omschrijving =
+            (typeof data.omschrijving === "string" && data.omschrijving) ||
+            current.omschrijving ||
+            "";
+          const leadRaw = Array.isArray(
+            (projectRow as { leads?: unknown } | null)?.leads
+          )
+            ? (projectRow as { leads: { status?: string | null }[] }).leads[0]
+            : (projectRow as { leads?: { status?: string | null } } | null)
+                ?.leads;
+          const offRaw = Array.isArray(
+            (projectRow as { offertes?: unknown } | null)?.offertes
+          )
+            ? (
+                projectRow as {
+                  offertes: { financiering_voorbehoud?: boolean | null }[];
+                }
+              ).offertes[0]
+            : (
+                projectRow as {
+                  offertes?: { financiering_voorbehoud?: boolean | null };
+                } | null
+              )?.offertes;
+          const betaalwijze = projectRow
+            ? resolveBetaalwijze({
+                betaalwijze: projectRow.betaalwijze,
+                leadStatus: leadRaw?.status,
+                financieringVoorbehoud: offRaw?.financiering_voorbehoud,
+              })
+            : null;
+          if (projectRow && betaalwijze === "eigen_middelen" && isAanb(omschrijving)) {
+            const { syncAutoTakenVoorProject } = await import(
+              "@/lib/sync-auto-taken"
+            );
+            await syncAutoTakenVoorProject(
+              sb,
+              projectId,
+              projectRow.status || "schouwweek_inplannen"
+            );
+          }
+        } catch {
+          /* best-effort */
+        }
       }
     }
 

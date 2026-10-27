@@ -47,6 +47,8 @@ export type ProjectStatus =
   | "warmtefonds_in_behandeling"
   | "warmtefonds_afgewezen"
   | "warmtefonds_goedgekeurd"
+  /** WF: kickoff klaar, schouwweek staat — wacht op Warmtefonds (nog geen echte schouwdag) */
+  | "opstarten_voltooid_afwachten_wf"
   | "schouwdag_ingepland"
   | "schouw_voltooid"
   | "restfactuur_verstuurd"
@@ -173,6 +175,8 @@ export interface Adviseur {
   kvk_uitreksel_storage_path?: string | null;
   kvk_uitreksel_bestandsnaam?: string | null;
   kvk_uitreksel_uploaded_at?: string | null;
+  /** Interne team/HR-notities (CRM Team) */
+  interne_notities?: string | null;
 }
 
 export type AdviseurCreditFactuurStatus =
@@ -458,6 +462,8 @@ export interface InstallatiePartner {
   /** Google Calendar OAuth gekoppeld (geen tokens in API) */
   google_connected_email?: string | null;
   google_connected_at?: string | null;
+  /** Interne team-notities (CRM Team) */
+  interne_notities?: string | null;
 }
 
 export interface PartnerAfblokkingen {
@@ -466,6 +472,18 @@ export interface PartnerAfblokkingen {
   dag: string;
   venster: "ochtend" | "middag";
   created_at: string;
+}
+
+/** Monteur / teamgenoot onder één installatiepartner */
+export interface InstallatiePartnerTeamgenoot {
+  id: string;
+  partner_id: string;
+  naam: string;
+  email: string | null;
+  telefoon: string | null;
+  actief: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Offerte {

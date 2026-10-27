@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
   const leadId = pickStr(sp.get("lead_id"), sp.get("leadId"));
   const adviseurId = pickStr(sp.get("adviseur_id"), sp.get("adviseurId"));
   const daysAhead = Math.min(
-    Math.max(parseNum(sp.get("days")) || 21, 1),
+    Math.max(parseNum(sp.get("days")) || 14, 1),
     60
   );
   const limit = Math.min(

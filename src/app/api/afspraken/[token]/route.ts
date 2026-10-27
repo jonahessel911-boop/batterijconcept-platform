@@ -14,6 +14,7 @@ import { syncLeadNaAfspraak } from "@/lib/afspraak-lead-status";
 import {
   afspraakBlokkeertAgenda,
   afspraakDuurMinuten,
+  afspraakMagOverBezetSlot,
   afspraakStuurtMail,
 } from "@/lib/afspraak-soort";
 import {
@@ -306,7 +307,11 @@ export async function POST(
         );
       }
 
-      if (await isSlotAfgeblokt(sb, afspraak.adviseur_id, start)) {
+      const softSlot = afspraakMagOverBezetSlot(afspraak.soort);
+      if (
+        !softSlot &&
+        (await isSlotAfgeblokt(sb, afspraak.adviseur_id, start))
+      ) {
         return NextResponse.json(
           { error: "Dit tijdsblok is afgeblokt" },
           { status: 409 }
@@ -323,7 +328,7 @@ export async function POST(
           : afspraakDuurMinuten(afspraak.soort);
       const end = addMinutes(start, duurMin);
 
-      if (afspraakBlokkeertAgenda(afspraak.soort)) {
+      if (!softSlot && afspraakBlokkeertAgenda(afspraak.soort)) {
         const overlap = await hasBlockingOverlap(sb, {
           adviseurId: afspraak.adviseur_id,
           start,

@@ -427,7 +427,7 @@ export async function loadBestSlotsForLead(
     }
   | { ok: false; status: number; error: string; detail?: string }
 > {
-  const daysAhead = Math.min(Math.max(opts.daysAhead ?? 21, 1), 60);
+  const daysAhead = Math.min(Math.max(opts.daysAhead ?? 14, 1), 60);
   const limit = Math.min(Math.max(opts.limit ?? 5, 1), 20);
   const diversifyHours = Boolean(opts.diversifyHours);
   const poolSize = Math.min(

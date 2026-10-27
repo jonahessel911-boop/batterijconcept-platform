@@ -85,6 +85,8 @@ export type BelConversieBellerRow = {
   bellerNaam: string;
   gebeld: number;
   ingepland: number;
+  geannuleerd: number;
+  annuleringsPct: number | null;
   leadToAppt: number | null;
   redenen: BelConversieRedenen;
 };
@@ -177,6 +179,8 @@ export type BelConversieResult = {
   totals: {
     gebeld: number;
     ingepland: number;
+    geannuleerd: number;
+    annuleringsPct: number | null;
     leadToAppt: number | null;
     redenen: BelConversieRedenen;
     /**
@@ -210,6 +214,10 @@ export type BelConversieSeriesBucket = {
   gebeld: number;
   geenInteresse: number;
   geenContact: number;
+  /** Geannuleerde nieuw-huisbezoeken gezet in dit venster */
+  geannuleerd: number;
+  /** Uitval % = geannuleerd ÷ (ingepland + geannuleerd) */
+  annuleringsPct: number | null;
   /** L→A alleen op leads met status ≠ nieuw */
   nonNieuwGebeld: number;
   nonNieuwIngepland: number;
@@ -700,17 +708,23 @@ export function buildBelConversie(opts: {
     historie
   );
 
-  // Admin krijgt geen bel-credit (sessie-stamp tijdens meekijken/inplannen).
-  const skipAdminIds = new Set<string>();
+  // Alleen beller/backoffice krijgen bel-credit; adviseurs/admin niet.
+  const allowedCallerIds = new Set<string>();
+  const skipNonCallerIds = new Set<string>();
   const activeBellerIds: string[] = [];
   for (const a of opts.adviseurs) {
     const rol = normalizeRol(a.rol);
     if (rol === "admin" || isAdminEmail(a.email)) {
-      skipAdminIds.add(a.id);
+      skipNonCallerIds.add(a.id);
       continue;
     }
-    if (a.actief !== false && rol === "beller") {
-      activeBellerIds.push(a.id);
+    if (rol === "beller" || rol === "backoffice") {
+      allowedCallerIds.add(a.id);
+      if (a.actief !== false && rol === "beller") {
+        activeBellerIds.push(a.id);
+      }
+    } else {
+      skipNonCallerIds.add(a.id);
     }
   }
   // Alleen als er precies één actieve beller is: orphans → die persoon.
@@ -744,13 +758,14 @@ export function buildBelConversie(opts: {
   type Acc = {
     gebeld: number;
     ingepland: number;
+    geannuleerd: number;
     redenen: BelConversieRedenen;
   };
   const by = new Map<string, Acc>();
   const touch = (key: string): Acc => {
     let a = by.get(key);
     if (!a) {
-      a = { gebeld: 0, ingepland: 0, redenen: emptyRedenen() };
+      a = { gebeld: 0, ingepland: 0, geannuleerd: 0, redenen: emptyRedenen() };
       by.set(key, a);
     }
     return a;
@@ -759,6 +774,7 @@ export function buildBelConversie(opts: {
   const filterBeller = opts.bellerId?.trim() || null;
 
   let ingeplandTotal = 0;
+  let geannuleerdTotal = 0;
   const redenenTotal = emptyRedenen();
   for (const l of byId.values()) {
     const isIngepland = ingeplandIds.has(l.id);
@@ -770,7 +786,7 @@ export function buildBelConversie(opts: {
         isIngepland,
         ingeplandDoorId: ingeplandDoorByLead.get(l.id),
         fallbackBellerId: orphanFallback,
-        skipAdminIds,
+        skipAdminIds: skipNonCallerIds,
       }) || "__onbekend__";
     if (filterBeller && id !== filterBeller) continue;
     const acc = touch(id);
@@ -786,6 +802,28 @@ export function buildBelConversie(opts: {
     }
   }
 
+  // Uitval per beller: geannuleerde nieuw-afspraken die zij inzette
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (a.status !== "geannuleerd") continue;
+    if (!a.created_at) continue;
+    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    const door = (a.ingepland_door_id || "").trim();
+    let id = door || "";
+    if (!id || skipNonCallerIds.has(id)) {
+      id = orphanFallback || "__onbekend__";
+    }
+    if (!allowedCallerIds.has(id) && id !== "__onbekend__") {
+      id = orphanFallback || "__onbekend__";
+    }
+    if (filterBeller && id !== filterBeller) continue;
+    const acc = touch(id);
+    acc.geannuleerd += 1;
+    geannuleerdTotal += 1;
+    bumpReden(acc.redenen, "geannuleerd");
+    bumpReden(redenenTotal, "geannuleerd");
+  }
+
   // Filter byId na attribution — nonNieuw-tellers / size moeten matchen
   if (filterBeller) {
     for (const [leadId, l] of [...byId.entries()]) {
@@ -796,7 +834,7 @@ export function buildBelConversie(opts: {
           isIngepland,
           ingeplandDoorId: ingeplandDoorByLead.get(leadId),
           fallbackBellerId: orphanFallback,
-          skipAdminIds,
+          skipAdminIds: skipNonCallerIds,
         }) || "__onbekend__";
       if (id !== filterBeller) byId.delete(leadId);
     }
@@ -806,24 +844,29 @@ export function buildBelConversie(opts: {
     opts.adviseurs.map((a) => [a.id, a.naam] as const)
   );
 
-  // Ranking-rijen: beller/backoffice + adviseurs die zelf gebeld/ingepland hebben
-  // (niet bij single-beller filter — dan alleen die rij)
+  // Ranking-rijen: alleen beller/backoffice (+ Onbekend via activity)
   if (!filterBeller) {
-    for (const a of opts.adviseurs) {
-      if (!a.actief) continue;
-      if (skipAdminIds.has(a.id)) continue;
-      const rol = normalizeRol(a.rol);
-      const isCaller = rol === "beller" || rol === "backoffice";
-      if (!isCaller && !by.has(a.id)) continue;
-      if (!by.has(a.id)) {
-        by.set(a.id, { gebeld: 0, ingepland: 0, redenen: emptyRedenen() });
+    for (const id of allowedCallerIds) {
+      const a = opts.adviseurs.find((x) => x.id === id);
+      if (!a || a.actief === false) continue;
+      if (!by.has(id)) {
+        by.set(id, {
+          gebeld: 0,
+          ingepland: 0,
+          geannuleerd: 0,
+          redenen: emptyRedenen(),
+        });
       }
     }
   }
 
   const byBeller: BelConversieBellerRow[] = [...by.entries()]
+    .filter(
+      ([id]) => id === "__onbekend__" || allowedCallerIds.has(id)
+    )
     .map(([id, acc]) => {
       const l2a = safeDiv(acc.ingepland, acc.gebeld);
+      const uitval = safeDiv(acc.geannuleerd, acc.ingepland + acc.geannuleerd);
       return {
         bellerId: id === "__onbekend__" ? null : id,
         bellerNaam:
@@ -832,13 +875,15 @@ export function buildBelConversie(opts: {
             : naamById.get(id) || "Onbekende medewerker",
         gebeld: acc.gebeld,
         ingepland: acc.ingepland,
+        geannuleerd: acc.geannuleerd,
+        annuleringsPct: uitval != null ? round2(uitval * 100) : null,
         leadToAppt: l2a != null ? round2(l2a * 100) : null,
         redenen: acc.redenen,
       };
     })
     .filter((r) => {
       if (filterBeller) return r.bellerId === filterBeller;
-      return r.gebeld > 0 || r.bellerId != null;
+      return r.gebeld > 0 || r.geannuleerd > 0 || r.bellerId != null;
     })
     .sort(
       (a, b) =>
@@ -957,6 +1002,11 @@ export function buildBelConversie(opts: {
     totals: {
       gebeld,
       ingepland: ingeplandTotal,
+      geannuleerd: geannuleerdTotal,
+      annuleringsPct: (() => {
+        const u = safeDiv(geannuleerdTotal, ingeplandTotal + geannuleerdTotal);
+        return u != null ? round2(u * 100) : null;
+      })(),
       leadToAppt,
       redenen,
       nonNieuwGebeld,
@@ -1093,13 +1143,34 @@ export function scoreBelConversieWindow(opts: {
     }
   }
 
+  // Uitval: nieuw-huisbezoeken gezet in venster die geannuleerd zijn
+  let geannuleerd = 0;
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (a.status !== "geannuleerd") continue;
+    if (!a.created_at) continue;
+    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    if (filterBeller) {
+      const door = (a.ingepland_door_id || "").trim();
+      const attributed =
+        door && !(opts.skipAdminIds && opts.skipAdminIds.has(door))
+          ? door
+          : opts.fallbackBellerId || null;
+      if (attributed !== filterBeller) continue;
+    }
+    geannuleerd += 1;
+  }
+
   const gebeld = byId.size;
   const l2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
+  const uitval = safeDiv(geannuleerd, ingepland + geannuleerd);
   return {
     ingepland,
     gebeld,
     geenInteresse,
     geenContact,
+    geannuleerd,
+    annuleringsPct: uitval != null ? round2(uitval * 100) : null,
     nonNieuwGebeld,
     nonNieuwIngepland,
     leadToAppt: l2a != null ? round2(l2a * 100) : null,

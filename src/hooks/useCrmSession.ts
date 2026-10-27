@@ -62,10 +62,11 @@ export function useCrmSession() {
 
   const visibleTabs = useMemo(() => {
     if (!rol) return [] as { id: CrmTab; label: string }[];
-    const allowed = new Set(
-      tabsVoorRol(rol, { email: session?.email })
-    );
-    return CRM_TABS.filter((t) => allowed.has(t.id));
+    const ordered = tabsVoorRol(rol, { email: session?.email });
+    const byId = new Map(CRM_TABS.map((t) => [t.id, t]));
+    return ordered
+      .map((id) => byId.get(id))
+      .filter((t): t is { id: CrmTab; label: string } => Boolean(t));
   }, [rol, session?.email]);
 
   return { session, ready, rol, visibleTabs };

@@ -4,7 +4,7 @@ import { fromZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { AMSTERDAM_TZ, adresRegel } from "@/lib/format";
 import {
-  INSTALLATIE_DUUR_MINUTEN,
+  installatieDuurVoorVenster,
   SCHOUW_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
 import {
@@ -14,6 +14,7 @@ import {
   fitsWithTravelGap,
   generatePartnerDaySlots,
   isPartnerVenster,
+  vensterForStart,
   type BusySlot,
   type PartnerSlotSoort,
   type PartnerVenster,
@@ -153,9 +154,10 @@ export async function GET(req: NextRequest) {
       if (row.installatie_at) {
         const start = new Date(row.installatie_at);
         if (!Number.isNaN(start.getTime())) {
+          const duur = installatieDuurVoorVenster(vensterForStart(start));
           busy.push({
             start_at: start.toISOString(),
-            end_at: addMinutes(start, INSTALLATIE_DUUR_MINUTEN).toISOString(),
+            end_at: addMinutes(start, duur).toISOString(),
             address: usableAddress,
           });
         }

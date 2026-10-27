@@ -104,6 +104,8 @@ export type DashboardV2Raw = {
     rol: string | null;
     /** Adviseur.commissie_pct (bijv. 12 of 0.12) */
     commissie_pct?: number | null;
+    /** Eerste werkdag yyyy-MM-dd */
+    startdatum?: string | null;
   }[];
 };
 
@@ -873,7 +875,21 @@ export function buildDashboardV2(
             id: a.id,
             rol: a.rol,
             actief: a.actief,
-          }))
+            startdatum: a.startdatum ?? null,
+          })),
+          {
+            periodStartYmd: formatInTimeZone(range.start, TZ, "yyyy-MM-dd"),
+            periodEndYmd: formatInTimeZone(
+              range.end > now ? now : range.end,
+              TZ,
+              "yyyy-MM-dd"
+            ),
+            asOfYmd: formatInTimeZone(
+              range.end > now ? now : range.end,
+              TZ,
+              "yyyy-MM-dd"
+            ),
+          }
         );
   const goals = scaleWeeklyGoalsByDays(weeklyGoals, dayCount);
 

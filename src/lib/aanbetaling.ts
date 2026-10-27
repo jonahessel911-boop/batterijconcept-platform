@@ -36,6 +36,29 @@ export const AANBETALING_MODUS_OPTIES: {
   },
 ];
 
+/** Eigen middelen: saler kiest 50%, 100% of custom eerste aanbetaling. */
+export const EIGEN_MIDDELEN_AANBETALING_OPTIES: {
+  value: "helft" | "volledig" | "handmatig";
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "helft",
+    label: "50% vooraf / 50% na installatie",
+    hint: "Standaard eigen middelen.",
+  },
+  {
+    value: "volledig",
+    label: "100% vooraf",
+    hint: "Hele orderbedrag als aanbetaling; geen restant na installatie.",
+  },
+  {
+    value: "handmatig",
+    label: "Ander bedrag / percentage",
+    hint: "Bijv. 25% voor schouw. Meerfasenplan noteer je bij backoffice-notitie.",
+  },
+];
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -250,13 +273,29 @@ export function normalizeAanbetalingModus(
   ) {
     return value;
   }
+  // Legacy / UI-alias: 100% vooraf → handmatig (bedrag = order)
+  if (value === "volledig") return "handmatig";
   return DEFAULT_AANBETALING_MODUS;
+}
+
+/** UI-keuze eigen middelen (volledig = 100% via handmatig + orderbedrag). */
+export function eigenMiddelenUiKeuze(
+  modus: AanbetalingModus,
+  handmatigIncBtw: number,
+  orderIncBtw: number
+): "helft" | "volledig" | "handmatig" {
+  if (modus === "helft") return "helft";
+  if (modus !== "handmatig") return "helft";
+  const order = round2(orderIncBtw);
+  const hand = round2(handmatigIncBtw);
+  if (order > 0 && Math.abs(hand - order) < 0.02) return "volledig";
+  return "handmatig";
 }
 
 /**
  * Aanbetaling berekenen.
- * Warmtefonds (`financieringVoorbehoud`): BTW / restant / handmatig.
- * Eigen middelen: altijd 50% vooraf (helft), 50% na installatie.
+ * Warmtefonds: BTW / restant / handmatig (/ helft).
+ * Eigen middelen: helft (50%), handmatig (custom / 100% via bedrag = order).
  */
 export function aanbetalingVanOrder(opts: {
   subtotaalExBtw: number;
@@ -277,25 +316,26 @@ export function aanbetalingVanOrder(opts: {
       : round2(orderExBtw + orderBtw);
 
   const warmtefonds = Boolean(opts.financieringVoorbehoud);
+  const rawModus = normalizeAanbetalingModus(opts.modus);
+  // Eigen middelen: alleen helft of handmatig (btw/restant → helft)
   const modus = warmtefonds
-    ? normalizeAanbetalingModus(opts.modus)
-    : EIGEN_MIDDELEN_AANBETALING_MODUS;
+    ? rawModus
+    : rawModus === "handmatig"
+      ? "handmatig"
+      : EIGEN_MIDDELEN_AANBETALING_MODUS;
 
   let bedragIncBtw = 0;
-  if (warmtefonds) {
-    if (modus === "btw") {
-      bedragIncBtw = round2(Math.min(orderBtw, orderIncBtw));
-    } else if (modus === "handmatig") {
-      const raw = round2(Number(opts.handmatigIncBtw) || 0);
-      bedragIncBtw = round2(Math.min(Math.max(0, raw), orderIncBtw));
-    } else if (modus === "helft") {
-      bedragIncBtw = round2(orderIncBtw / 2);
-    } else {
-      const restant = warmtefondsRestantIncBtw(orderExBtw);
-      bedragIncBtw = round2(Math.max(0, orderIncBtw - restant));
-    }
+  if (modus === "handmatig") {
+    const raw = round2(Number(opts.handmatigIncBtw) || 0);
+    bedragIncBtw = round2(Math.min(Math.max(0, raw), orderIncBtw));
+  } else if (modus === "helft") {
+    bedragIncBtw = round2(orderIncBtw / 2);
+  } else if (modus === "btw" && warmtefonds) {
+    bedragIncBtw = round2(Math.min(orderBtw, orderIncBtw));
+  } else if (warmtefonds) {
+    const restant = warmtefondsRestantIncBtw(orderExBtw);
+    bedragIncBtw = round2(Math.max(0, orderIncBtw - restant));
   } else {
-    // Eigen middelen: 50% vooraf, 50% na installatie
     bedragIncBtw = round2(orderIncBtw / 2);
   }
 

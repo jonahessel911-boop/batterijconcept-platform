@@ -1,6 +1,6 @@
 "use client";
 
-import type { Project, ProjectStatus } from "@/types/database";
+import type { Factuur, Project, ProjectStatus } from "@/types/database";
 import {
   resolveProjectVolgendeStap,
   type ProjectVolgendeStapInfo,
@@ -8,16 +8,18 @@ import {
 
 export function ProjectVolgendeStap({
   project,
+  facturen = [],
   disabled,
   onStatusChange,
   onPlanSchouwdag,
 }: {
   project: Project;
+  facturen?: Factuur[];
   disabled?: boolean;
   onStatusChange?: (status: ProjectStatus) => void;
   onPlanSchouwdag?: () => void;
 }) {
-  const stap = resolveProjectVolgendeStap(project);
+  const stap = resolveProjectVolgendeStap(project, new Date(), facturen);
   if (!stap) return null;
 
   return <VolgendeStapBanner stap={stap} disabled={disabled} onStatusChange={onStatusChange} onPlanSchouwdag={onPlanSchouwdag} />;

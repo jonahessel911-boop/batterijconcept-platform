@@ -21,6 +21,7 @@ export function isProjectAfdeling(
 export function defaultAfdelingVoorStatus(status: string): ProjectAfdeling {
   switch (status) {
     case "schouwweek_inplannen":
+    case "opstarten_voltooid_afwachten_wf":
     case "schouwdag_ingepland":
     case "warmtefonds_goedgekeurd":
     case "materiaal_besteld":

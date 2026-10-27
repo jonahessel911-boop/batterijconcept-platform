@@ -7,7 +7,7 @@ import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 export const runtime = "nodejs";
 
 const PUBLIC_FIELDS =
-  "id, naam, email, telefoon, actief, portal_token, start_adres, reistijd_buffer_min, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, portal_token, start_adres, reistijd_buffer_min, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, interne_notities, created_at, updated_at";
 const PUBLIC_FIELDS_FALLBACK =
   "id, naam, email, telefoon, actief, portal_token, created_at, updated_at";
 const PUBLIC_FIELDS_NO_AGENDA =
@@ -207,6 +207,7 @@ export async function PATCH(req: NextRequest) {
     factuur_postcode?: string | null;
     factuur_plaats?: string | null;
     iban?: string | null;
+    interne_notities?: string | null;
   };
   try {
     body = await req.json();
@@ -268,6 +269,12 @@ export async function PATCH(req: NextRequest) {
           patch[key] = null;
         }
       }
+    }
+    if (body.interne_notities !== undefined) {
+      patch.interne_notities =
+        typeof body.interne_notities === "string"
+          ? body.interne_notities.trim() || null
+          : null;
     }
 
     if (Object.keys(patch).length === 0) {

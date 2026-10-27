@@ -8,6 +8,7 @@ import type {
   ServiceVerzoekStatus,
 } from "@/types/database";
 import { remapLegacyProjectStatus } from "@/lib/project-status-config";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
@@ -147,6 +148,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   warmtefonds_in_behandeling: "Warmtefonds in behandeling",
   warmtefonds_afgewezen: "Warmtefonds afgewezen",
   warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
+  opstarten_voltooid_afwachten_wf: "Opstarten voltooid — afwachten WF",
   schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
@@ -169,6 +171,7 @@ export const PROJECT_PIPELINE: ProjectStatus[] = [
   "warmtefonds_aangevraagd",
   "warmtefonds_in_behandeling",
   "warmtefonds_goedgekeurd",
+  "opstarten_voltooid_afwachten_wf",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -192,6 +195,42 @@ export function normalizeProjectStatus(
   status: string | null | undefined
 ): ProjectStatus {
   return remapLegacyProjectStatus(status);
+}
+
+/**
+ * Weergavestatus: week-placeholder mag niet als "Schouw gepland" tonen
+ * (ook vóór DB-backfill).
+ */
+export function resolveDisplayProjectStatus(project: {
+  status?: string | null;
+  schouw_at?: string | null;
+  schouw_jaar?: number | null;
+  schouw_week?: number | null;
+  betaalwijze?: string | null;
+  leads?: { status?: string | null } | null;
+  offertes?:
+    | { financiering_voorbehoud?: boolean | null }
+    | { financiering_voorbehoud?: boolean | null }[]
+    | null;
+}): ProjectStatus {
+  const st = normalizeProjectStatus(project.status);
+  if (st !== "schouwdag_ingepland") return st;
+  if (isSchouwdagDefinitief(project)) return st;
+  const leadStatus = project.leads?.status ?? null;
+  if (leadStatus === "sale_eigen_middelen") return "schouwweek_inplannen";
+  if (leadStatus === "sale_financiering") {
+    return "opstarten_voltooid_afwachten_wf";
+  }
+  if (project.betaalwijze === "eigen_middelen") return "schouwweek_inplannen";
+  if (project.betaalwijze === "warmtefonds") {
+    return "opstarten_voltooid_afwachten_wf";
+  }
+  const offerte = Array.isArray(project.offertes)
+    ? project.offertes[0]
+    : project.offertes;
+  return offerte?.financiering_voorbehoud
+    ? "opstarten_voltooid_afwachten_wf"
+    : "schouwweek_inplannen";
 }
 
 export const serviceVerzoekStatusLabel: Record<ServiceVerzoekStatus, string> = {
@@ -319,6 +358,8 @@ export function statusTone(
         "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]",
       warmtefonds_goedgekeurd:
         "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
+      opstarten_voltooid_afwachten_wf:
+        "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
       schouwdag_ingepland:
         "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
       schouw_voltooid:

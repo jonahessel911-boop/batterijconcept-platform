@@ -72,6 +72,7 @@ import { CRM_TABS } from "./TabNav";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import { NettoBoord } from "./NettoBoord";
 import { SalesLeaderboardPanel } from "./SalesLeaderboardPanel";
+import { MaandLeaderboardPanel } from "./MaandLeaderboardPanel";
 import { AdminTakenPanel } from "./AdminTakenPanel";
 import { TodayPanel } from "./TodayPanel";
 import { WeekmeetingPanel } from "./WeekmeetingPanel";
@@ -440,6 +441,17 @@ export function CrmShell() {
     );
     router.replace(`/?${params.toString()}`, { scroll: false });
   }, [sessionReady, userRol, sessionUser?.email, searchParams, router]);
+
+  // Adviseur: start op maandleaderboard
+  useEffect(() => {
+    if (!sessionReady || userRol !== "adviseur") return;
+    if (searchParams.get("tab")) return;
+    if (searchParams.get("status")) return;
+    if (searchParams.get("bo")) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "leaderboard");
+    router.replace(`/?${params.toString()}`, { scroll: false });
+  }, [sessionReady, userRol, searchParams, router]);
 
   function changeStatusFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -1027,27 +1039,28 @@ export function CrmShell() {
         );
         let teInnen: number | null = null;
         for (const o of signed) {
+          const eigenModus =
+            !warmtefonds && o.aanbetaling_modus === "handmatig"
+              ? "handmatig"
+              : EIGEN_MIDDELEN_AANBETALING_MODUS;
+          const saveModus = warmtefonds
+            ? o.aanbetaling_modus || "btw"
+            : eigenModus;
           const preview = aanbetalingVanOrder({
             subtotaalExBtw: Number(o.subtotaal_ex_btw) || 0,
             btwBedrag: Number(o.btw_bedrag) || 0,
             totaalIncBtw: Number(o.totaal_inc_btw) || 0,
-            modus: warmtefonds
-              ? o.aanbetaling_modus || "btw"
-              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+            modus: saveModus,
             handmatigIncBtw: o.aanbetaling_bedrag_inc,
             financieringVoorbehoud: warmtefonds,
           });
           teInnen = preview.bedragIncBtw;
           const patchBody: Record<string, unknown> = {
             financiering_voorbehoud: warmtefonds,
-            aanbetaling_modus: warmtefonds
-              ? o.aanbetaling_modus || "btw"
-              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+            aanbetaling_modus: saveModus,
             aanbetaling_te_innen_inc: preview.bedragIncBtw,
             aanbetaling_bedrag_inc:
-              warmtefonds && o.aanbetaling_modus === "handmatig"
-                ? o.aanbetaling_bedrag_inc
-                : null,
+              saveModus === "handmatig" ? o.aanbetaling_bedrag_inc : null,
           };
           const res = await fetch(`/api/offertes/${o.id}`, {
             method: "PATCH",
@@ -1073,7 +1086,9 @@ export function CrmShell() {
                   financiering_voorbehoud: warmtefonds,
                   aanbetaling_modus: warmtefonds
                     ? o.aanbetaling_modus || "btw"
-                    : EIGEN_MIDDELEN_AANBETALING_MODUS,
+                    : o.aanbetaling_modus === "handmatig"
+                      ? "handmatig"
+                      : EIGEN_MIDDELEN_AANBETALING_MODUS,
                   aanbetaling_te_innen_inc:
                     teInnen ?? o.aanbetaling_te_innen_inc,
                 }
@@ -1240,8 +1255,12 @@ export function CrmShell() {
         : "Sales, fases, commissie en creditfacturen",
     },
     leaderboard: {
-      title: "Sales Leaderboard",
-      sub: "Live sale-momenten bij ondertekende offertes",
+      title:
+        userRol === "adviseur" ? "Maandleaderboard" : "Sales Leaderboard",
+      sub:
+        userRol === "adviseur"
+          ? "Ranking deze kalendermaand · sales, aanbetalingen, gelopen, conversie"
+          : "Live sale-momenten bij ondertekende offertes",
     },
     weekmeeting: {
       title: "Weekmeeting",
@@ -1727,7 +1746,12 @@ export function CrmShell() {
                     }}
                   />
                 )}
-                {tab === "leaderboard" && <SalesLeaderboardPanel />}
+                {tab === "leaderboard" &&
+                  (userRol === "adviseur" ? (
+                    <MaandLeaderboardPanel />
+                  ) : (
+                    <SalesLeaderboardPanel />
+                  ))}
                 {tab === "instroom" && <RecruitmentPanel />}
                 {tab === "projecten" && (
                   <BackofficePanel

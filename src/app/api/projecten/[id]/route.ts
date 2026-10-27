@@ -412,10 +412,56 @@ export async function PATCH(
     const { data: before } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
+
+    // Eigen middelen: schouwweek via PATCH pas ná 50% betaling
+    const settingSchouwWeek =
+      typeof patch.schouw_jaar === "number" &&
+      typeof patch.schouw_week === "number";
+    if (settingSchouwWeek && before) {
+      const leadRaw = Array.isArray(
+        (before as { leads?: unknown }).leads
+      )
+        ? (before as { leads: { status?: string | null }[] }).leads[0]
+        : (before as { leads?: { status?: string | null } }).leads;
+      const offRaw = Array.isArray(
+        (before as { offertes?: unknown }).offertes
+      )
+        ? (
+            before as {
+              offertes: { financiering_voorbehoud?: boolean | null }[];
+            }
+          ).offertes[0]
+        : (
+            before as {
+              offertes?: { financiering_voorbehoud?: boolean | null };
+            }
+          ).offertes;
+      const betaalwijze = resolveBetaalwijze({
+        betaalwijze: (before as { betaalwijze?: string | null }).betaalwijze,
+        leadStatus: leadRaw?.status,
+        financieringVoorbehoud: offRaw?.financiering_voorbehoud,
+      });
+      if (betaalwijze === "eigen_middelen") {
+        const { data: facturenRows } = await sb
+          .from("facturen")
+          .select("status, omschrijving, credit_van_factuur_id")
+          .eq("project_id", id);
+        const { isAanbetalingBetaald } = await import("@/lib/project-kickoff");
+        if (!isAanbetalingBetaald(facturenRows || [])) {
+          return NextResponse.json(
+            {
+              error:
+                "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
 
     // Review-checkbox → status Review gevraagd (sales-actie referrals)
     const reviewAtComing =

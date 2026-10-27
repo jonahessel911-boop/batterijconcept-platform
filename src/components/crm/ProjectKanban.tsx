@@ -15,7 +15,12 @@ import type {
   Project,
   ProjectStatus,
 } from "@/types/database";
-import { PROJECT_STATUSES, projectStatusLabel, normalizeProjectStatus } from "@/lib/labels";
+import {
+  PROJECT_STATUSES,
+  projectStatusLabel,
+  normalizeProjectStatus,
+  resolveDisplayProjectStatus,
+} from "@/lib/labels";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
   formatProjectSchouwWeek,
@@ -43,6 +48,7 @@ const COLUMN_ACCENT: Partial<Record<ProjectStatus, string>> = {
   warmtefonds_in_behandeling: "#CA8A04",
   warmtefonds_afgewezen: "#C62828",
   warmtefonds_goedgekeurd: "#0D5C32",
+  opstarten_voltooid_afwachten_wf: "#CA8A04",
   schouwdag_ingepland: "#1565C0",
   schouw_voltooid: "#1565C0",
   restfactuur_verstuurd: "#C45A12",
@@ -102,7 +108,7 @@ export function ProjectKanban({
     const map = new Map<ProjectStatus, Project[]>();
     for (const s of PROJECT_STATUSES) map.set(s, []);
     for (const p of projecten) {
-      const key = normalizeProjectStatus(p.status);
+      const key = resolveDisplayProjectStatus(p);
       const list = map.get(key) || map.get("schouwweek_inplannen")!;
       list.push(p);
     }

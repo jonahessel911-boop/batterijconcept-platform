@@ -86,6 +86,16 @@ export function afspraakBlokkeertAgenda(
 }
 
 /**
+ * Mag over een bezet/afgeblokt fysiek tijdblok heen (telefonisch / intern).
+ * Huisbezoeken mogen dat niet.
+ */
+export function afspraakMagOverBezetSlot(
+  soort: string | null | undefined
+): boolean {
+  return !afspraakBlokkeertAgenda(soort);
+}
+
+/**
  * Agenda-sticker: Tel vs Fysiek.
  * `vervolg_punt` is legacy/generiek — leadstatus bepaalt of het bel of fysiek is.
  */

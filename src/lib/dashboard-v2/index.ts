@@ -48,6 +48,7 @@ export type {
 } from "./capacity";
 export {
   buildDashboardV2Capacity,
+  countOpenSlotsInYmdRange,
   emptyDashboardV2Capacity,
   capacitySteeringGoals,
   CAPACITY_TARGET_L2A,

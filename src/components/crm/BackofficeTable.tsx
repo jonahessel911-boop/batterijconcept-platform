@@ -17,6 +17,7 @@ import {
   normalizeProjectStatus,
   PROJECT_STATUSES,
   projectStatusLabel,
+  resolveDisplayProjectStatus,
 } from "@/lib/labels";
 import { openBackofficeActies } from "@/lib/backoffice-acties";
 import {
@@ -252,7 +253,7 @@ export function BackofficeTable({
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let list = projecten.filter((p) => {
-      const st = normalizeProjectStatus(p.status);
+      const st = resolveDisplayProjectStatus(p);
       if (actief === "annuleringen") {
         if (st !== "annulering") return false;
       } else if (actief === "hold_sales") {

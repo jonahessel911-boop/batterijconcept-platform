@@ -243,29 +243,23 @@ export function BelPanel({
     return list;
   }, [adviseurs, lockAdviseur, defaultAdviseurId]);
 
-  /** Terugbel/warme terugbel: adviseur, callcenter én backoffice. */
+  /** Terugbel/warme terugbel: adviseur, callcenter én backoffice (ook bij lockAdviseur). */
   const terugbelMedewerkers = useMemo(() => {
-    const list = adviseurs.filter(
-      (a) => a.actief && !isAdminAdviseur(a) && isTerugbelPlanbaar(a)
-    );
-    if (lockAdviseur && defaultAdviseurId) {
-      const self = list.find((a) => a.id === defaultAdviseurId);
-      if (self) return [self];
-      const raw = adviseurs.find((a) => a.id === defaultAdviseurId);
-      return raw ? [raw] : [];
-    }
-    return list.sort((a, b) => {
-      const order = (rol: string | null | undefined) => {
-        const r = normalizeRol(rol);
-        if (r === "beller") return 0;
-        if (r === "backoffice") return 1;
-        return 2;
-      };
-      const d = order(a.rol) - order(b.rol);
-      if (d !== 0) return d;
-      return a.naam.localeCompare(b.naam, "nl");
-    });
-  }, [adviseurs, lockAdviseur, defaultAdviseurId]);
+    const list = adviseurs
+      .filter((a) => a.actief && !isAdminAdviseur(a) && isTerugbelPlanbaar(a))
+      .sort((a, b) => {
+        const order = (rol: string | null | undefined) => {
+          const r = normalizeRol(rol);
+          if (r === "beller") return 0;
+          if (r === "backoffice") return 1;
+          return 2;
+        };
+        const d = order(a.rol) - order(b.rol);
+        if (d !== 0) return d;
+        return a.naam.localeCompare(b.naam, "nl");
+      });
+    return list;
+  }, [adviseurs]);
 
   const terugbelGroepen = useMemo(() => {
     const groups: { rol: GebruikerRol; label: string; items: Adviseur[] }[] = [
@@ -1656,39 +1650,29 @@ export function BelPanel({
                   ? "Prioriteit in de bellijst — bijv. klant pakt agenda erbij maar wil al een afspraak. Intern, geen mail."
                   : "Alleen intern — de klant krijgt geen mail. De lead verdwijnt uit de belwachtrij; vanaf de geplande dag staat er bovenaan een chip (klik → lead) tot je afvinkt."}
               </p>
-              {lockAdviseur ? (
-                <p className="text-xs text-muted">
-                  Agenda:{" "}
-                  <span className="font-semibold text-ink">
-                    {terugbelMedewerkers.find((a) => a.id === adviseurId)
-                      ?.naam || "Jij"}
-                  </span>
-                </p>
-              ) : (
-                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
-                  Toewijzen aan
-                  <select
-                    required
-                    value={adviseurId}
-                    onChange={(e) => setAdviseurId(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
-                  >
-                    <option value="">Kies medewerker…</option>
-                    {terugbelGroepen.map((g) => (
-                      <optgroup key={g.rol} label={g.label}>
-                        {g.items.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.naam}
-                            {g.rol !== "adviseur"
-                              ? ` (${gebruikerRolLabel[g.rol]})`
-                              : ""}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-              )}
+              <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                Toewijzen aan
+                <select
+                  required
+                  value={adviseurId}
+                  onChange={(e) => setAdviseurId(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                >
+                  <option value="">Kies medewerker…</option>
+                  {terugbelGroepen.map((g) => (
+                    <optgroup key={g.rol} label={g.label}>
+                      {g.items.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.naam}
+                          {g.rol !== "adviseur"
+                            ? ` (${gebruikerRolLabel[g.rol]})`
+                            : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
               <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                 Datum &amp; tijd
                 <input

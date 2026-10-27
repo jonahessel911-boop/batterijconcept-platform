@@ -190,6 +190,13 @@ export async function maybeAdvanceProjectNaOplevering(
 
   await ensureOpleveringAfrondTaken(sb, projectId, to);
 
+  // Klantmail: gefeliciteerd, batterij staat er + aankondiging overstap/BTW
+  try {
+    await sendInstallatieVoltooidKlantMail(sb, projectId, updated);
+  } catch (e) {
+    console.error("sendInstallatieVoltooidKlantMail:", e);
+  }
+
   return {
     advanced: true,
     from: current,
@@ -197,6 +204,63 @@ export async function maybeAdvanceProjectNaOplevering(
     project: (updated as Record<string, unknown>) || null,
     creditfactuur_id,
   };
+}
+
+async function sendInstallatieVoltooidKlantMail(
+  sb: SupabaseClient,
+  projectId: string,
+  updated: Record<string, unknown> | null | undefined
+): Promise<void> {
+  const { sendEmail } = await import("@/lib/email/postmark");
+  const { installatieVoltooidKlantEmail } = await import(
+    "@/lib/email/templates"
+  );
+
+  let lead = updated?.leads as
+    | { naam?: string | null; email?: string | null }
+    | { naam?: string | null; email?: string | null }[]
+    | null
+    | undefined;
+  if (Array.isArray(lead)) lead = lead[0] ?? null;
+
+  let email = lead?.email?.trim() || "";
+  let naam = lead?.naam?.trim() || "daar";
+  const projectNummer =
+    (updated?.project_nummer as string | null | undefined) || null;
+
+  if (!email) {
+    const { data: row } = await sb
+      .from("projecten")
+      .select("project_nummer, leads(naam, email)")
+      .eq("id", projectId)
+      .maybeSingle();
+    const l = Array.isArray(row?.leads) ? row?.leads[0] : row?.leads;
+    email = (l as { email?: string | null } | null)?.email?.trim() || "";
+    naam =
+      (l as { naam?: string | null } | null)?.naam?.trim() || naam;
+  }
+
+  if (!email) {
+    console.warn(
+      "installatieVoltooidKlantMail: geen klant-email voor project",
+      projectId
+    );
+    return;
+  }
+
+  const html = installatieVoltooidKlantEmail({
+    naam,
+    projectNummer,
+  });
+  const sent = await sendEmail({
+    to: email,
+    subject: "Gefeliciteerd — je installatie is voltooid!",
+    html,
+    tag: "installatie-voltooid",
+  });
+  if (!sent.ok) {
+    console.error("installatieVoltooidKlantMail failed:", sent.error);
+  }
 }
 
 /** Controle of er al een opleveringsrapport staat (voor status-gate). */

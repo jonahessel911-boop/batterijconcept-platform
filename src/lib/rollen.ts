@@ -35,7 +35,8 @@ export const teamRolUitleg: Record<TeamRol, string> = {
   admin: "Alles: leads, bellen, agenda, backoffice, rapportage, team",
   sales_manager:
     "Sales sturen: Today, weekmeeting, leads, offertes, netto, rapportage",
-  adviseur: "Sales: eigen leads, agenda, offertes, netto, facturen, instellingen",
+  adviseur:
+    "Sales: leaderboard, eigen leads, agenda, offertes, netto, facturen, instellingen",
   beller:
     "Callcenter: leads, bellen, agenda alle adviseurs, eigen bel-rapportage",
   backoffice:
@@ -64,7 +65,15 @@ export function tabsVoorRol(
   let tabs: CrmTab[];
   switch (rol) {
     case "adviseur":
-      tabs = ["leads", "agenda", "offertes", "netto", "facturen", "instellingen"];
+      tabs = [
+        "leaderboard",
+        "leads",
+        "agenda",
+        "offertes",
+        "netto",
+        "facturen",
+        "instellingen",
+      ];
       break;
     case "beller":
       tabs = ["leads", "bellen", "agenda", "rapportage"];
@@ -202,6 +211,15 @@ export function isAgendaAdviseur(a: {
 }
 
 /**
+ * Tijdelijk uit bel-opties (blijven actief voor login/offertes/agenda).
+ * Sync met TIJDELIJK_NIET_PLANBAAR_EMAILS in admin-adviseur.ts.
+ */
+const TIJDELIJK_NIET_IN_BEL_EMAILS = new Set([
+  "harald@batterijconcept.nl",
+  "stijn@batterijconcept.nl",
+]);
+
+/**
  * Planbaar via bel-systeem / beste slots (fysieke afspraken).
  * Inactief (`actief === false`) → niet automatisch inplannen.
  */
@@ -211,7 +229,10 @@ export function isBelPlanAdviseur(a: {
   naam: string;
   email?: string | null;
 }): boolean {
-  return isPlanbareAdviseur(a);
+  if (!isPlanbareAdviseur(a)) return false;
+  const email = a.email?.trim().toLowerCase();
+  if (email && TIJDELIJK_NIET_IN_BEL_EMAILS.has(email)) return false;
+  return true;
 }
 
 /**

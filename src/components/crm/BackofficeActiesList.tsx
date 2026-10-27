@@ -26,7 +26,7 @@ import {
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
-import { formatEuro } from "@/lib/format";
+import { formatDateShort, formatEuro } from "@/lib/format";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import { leadStatusLabel } from "@/lib/labels";
 import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
@@ -43,17 +43,36 @@ import {
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 import {
-  isKickoffComplete,
   kickoffWarmtefondsBedragen,
   projectKickoffItems,
 } from "@/lib/project-kickoff";
+import {
+  resolveFinancieringStatus,
+  type FinancieringStatus,
+} from "@/lib/financiering-status";
+import {
+  isAanbetalingFactuurOmschrijving,
+  isRestantFactuurOmschrijving,
+} from "@/lib/aanbetaling";
 import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
 import { PartnerSlotPicker } from "./PartnerSlotPicker";
+import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
+import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
 import { apexProductUrl } from "@/lib/apex-product-url";
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ } from "@/lib/format";
+
+function isOverstapNazorgTaak(taak: ProjectTaak): boolean {
+  const key = (taak.auto_key || "").toLowerCase();
+  const titel = (taak.titel || "").toLowerCase();
+  return (
+    key.includes("overstap") ||
+    titel.includes("overstap") ||
+    titel.includes("dynamische")
+  );
+}
 
 type SectionId =
   | "herplan"
@@ -79,6 +98,7 @@ type TaskRow = {
     | "wacht_warmtefonds"
     | "factuur_versturen"
     | "schouw_week"
+    | "edwin_doorsturen"
     | "nabellen"
     | "aangetekende_brief";
   titel: string;
@@ -165,6 +185,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     schouw_week: {
       label: "Opstarten",
       className: "bg-green-soft text-green-dark",
+    },
+    edwin_doorsturen: {
+      label: "Warmtefonds",
+      className: "bg-[#E8F0F6] text-[#1A4A6E]",
     },
     nabellen: {
       label: "Factuur",
@@ -457,6 +481,17 @@ function draftFacturenVoorActie(actie: BackofficeActie, facturen: Factuur[]) {
   });
 }
 
+function aanbetalingDraftsVoorActie(
+  actie: BackofficeActie,
+  facturen: Factuur[]
+): Factuur[] {
+  const drafts = draftFacturenVoorActie(actie, facturen);
+  const aanb = drafts.filter((f) =>
+    isAanbetalingFactuurOmschrijving(f.omschrijving)
+  );
+  return aanb.length > 0 ? aanb : drafts;
+}
+
 function verzondenFacturenVoorActie(
   actie: BackofficeActie,
   facturen: Factuur[]
@@ -665,43 +700,63 @@ function buildTaskRows(
       continue;
     }
     if (actie.soort === "bel_schouw_aanbetaling") {
-      const drafts = draftFacturenVoorActie(actie, facturen);
-      const sent = verzondenFacturenVoorActie(actie, facturen);
-      const needsFactuur =
-        Number(actie.project?.aanbetaling_te_innen_inc) > 0 ||
-        drafts.length > 0 ||
-        sent.length > 0;
-      const factuurDone = !needsFactuur || sent.length > 0;
-      const schouwDone = Boolean(
-        actie.project?.schouw_week || actie.project?.schouw_at
+      const project = actie.project;
+      if (!project) continue;
+      const related = facturen.filter(
+        (f) =>
+          f.project_id === project.id ||
+          (!f.project_id && f.lead_id === actie.leadId) ||
+          (actie.offerteId != null && f.offerte_id === actie.offerteId)
       );
-
-      if (needsFactuur) {
-        rows.push({
-          key: `${actie.id}-factuur`,
-          section: "stap1",
-          actie,
-          kind: "factuur_versturen",
-          titel: "Aanbetalingsfactuur versturen",
-          klant: actie.leadNaam,
-          meta: actie.projectNummer || undefined,
-          dueAt: actie.deadlineAt,
-          overdue: actie.overdue && !factuurDone,
-          done: factuurDone,
-        });
+      const items = projectKickoffItems(project, related);
+      for (const item of items) {
+        if (item.done) continue;
+        if (item.id === "aanbetaling") {
+          rows.push({
+            key: `${actie.id}-factuur`,
+            section: "stap1",
+            actie,
+            kind: "factuur_versturen",
+            titel: "Aanbetalingsfactuur versturen",
+            klant: actie.leadNaam,
+            meta: actie.projectNummer || undefined,
+            dueAt: actie.deadlineAt,
+            overdue: actie.overdue,
+            prio: actie.prio || actie.overdue,
+            done: false,
+          });
+        } else if (item.id === "wf_afspraak") {
+          rows.push({
+            key: `${actie.id}-edwin`,
+            section: "stap1",
+            actie,
+            kind: "edwin_doorsturen",
+            titel: "Gegevens doorsturen naar Edwin",
+            klant: actie.leadNaam,
+            meta: actie.projectNummer || undefined,
+            dueAt: actie.deadlineAt,
+            overdue: actie.overdue,
+            prio: actie.prio || actie.overdue,
+            done: false,
+          });
+        } else if (item.id === "schouwweek") {
+          // Eigen middelen: schouwweek pas ná 50% betaling
+          if (item.blocked) continue;
+          rows.push({
+            key: `${actie.id}-schouwweek`,
+            section: "stap1",
+            actie: { ...actie, planSchouwweek: true },
+            kind: "schouw_week",
+            titel: "Schouwweek inplannen",
+            klant: actie.leadNaam,
+            meta: actie.projectNummer || undefined,
+            dueAt: actie.deadlineAt,
+            overdue: actie.overdue,
+            prio: actie.prio || actie.overdue,
+            done: false,
+          });
+        }
       }
-      rows.push({
-        key: `${actie.id}-schouw`,
-        section: "stap1",
-        actie,
-        kind: "schouw_week",
-        titel: "Schouwweek plannen",
-        klant: actie.leadNaam,
-        meta: actie.projectNummer || undefined,
-        dueAt: actie.deadlineAt,
-        overdue: actie.overdue && !schouwDone,
-        done: schouwDone,
-      });
     }
   }
   return rows;
@@ -809,6 +864,12 @@ export function BackofficeActiesList({
     null
   );
   const [inkoopActie, setInkoopActie] = useState<BackofficeActie | null>(null);
+  const [overstapMail, setOverstapMail] = useState<{
+    projectId: string;
+    taakId: string;
+    klantNaam: string;
+    projectNummer: string | null;
+  } | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -906,7 +967,9 @@ export function BackofficeActiesList({
         ).toLowerCase();
         if (
           projectStatus === "annulering" ||
-          projectStatus === "geannuleerd"
+          projectStatus === "geannuleerd" ||
+          projectStatus === "hold_sales_actie" ||
+          projectStatus === "hold_sales"
         ) {
           return false;
         }
@@ -1169,24 +1232,16 @@ export function BackofficeActiesList({
     [visibleRows, selectedKey]
   );
 
-  const selectedIsKickoff =
-    selectedRow?.actie.soort === "bel_schouw_aanbetaling" ||
-    selectedRow?.kind === "factuur_versturen" ||
-    selectedRow?.kind === "schouw_week";
-
   const selectedProjectFacturen = useMemo(() => {
     const pid = selectedRow?.actie.projectId;
     if (!pid) return [] as Factuur[];
-    return facturen.filter((f) => f.project_id === pid || f.offerte_id === selectedRow?.actie.offerteId);
+    return facturen.filter(
+      (f) =>
+        f.project_id === pid || f.offerte_id === selectedRow?.actie.offerteId
+    );
   }, [facturen, selectedRow]);
 
-  const selectedKickoffItems = useMemo(() => {
-    const project = selectedRow?.actie.project;
-    if (!project || !selectedIsKickoff) return [];
-    return projectKickoffItems(project, selectedProjectFacturen);
-  }, [selectedRow, selectedIsKickoff, selectedProjectFacturen]);
-
-  // Bij selectie: gekoppelde stappen openklappen (open items + focus op gekozen soort)
+  // Bij selectie: focus op gekozen actiesoort
   useEffect(() => {
     const row = visibleRows.find((r) => r.key === selectedKey) || null;
     if (!row) {
@@ -1194,26 +1249,7 @@ export function BackofficeActiesList({
       setEdwinGestuurd(false);
       return;
     }
-    const isKickoff =
-      row.actie.soort === "bel_schouw_aanbetaling" ||
-      row.kind === "factuur_versturen" ||
-      row.kind === "schouw_week";
-    if (isKickoff && row.actie.project) {
-      const pid = row.actie.projectId;
-      const related = facturen.filter(
-        (f) =>
-          f.project_id === pid ||
-          (row.actie.offerteId && f.offerte_id === row.actie.offerteId)
-      );
-      const items = projectKickoffItems(row.actie.project, related);
-      const next: Record<string, boolean> = {};
-      for (const item of items) next[item.id] = !item.done;
-      if (row.kind === "factuur_versturen") next.aanbetaling = true;
-      if (row.kind === "schouw_week") next.schouwweek = true;
-      setGesprekOpen(next);
-    } else {
-      setGesprekOpen({ [row.kind]: true });
-    }
+    setGesprekOpen({ [row.kind]: true });
     setEdwinGestuurd(false);
     setLaatsteContactAt(null);
     // Alleen bij wissel van geselecteerde rij
@@ -1552,37 +1588,97 @@ export function BackofficeActiesList({
     }
   }
 
+  async function updateFinancieringStatusFromActie(
+    actie: BackofficeActie,
+    status: FinancieringStatus | null,
+    extra?: { warmtefonds_afspraak_at?: string | null }
+  ) {
+    if (!actie.projectId) return;
+    setBusyId(`${actie.id}-wf`);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/projecten/${actie.projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          financiering_status: status,
+          ...(extra?.warmtefonds_afspraak_at !== undefined
+            ? { warmtefonds_afspraak_at: extra.warmtefonds_afspraak_at }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Financieringsfase bijwerken mislukt"
+        );
+      }
+      const project = (data as { project?: Project }).project;
+      if (project) onProjectUpdated?.(project);
+      void loadProjectTaken();
+      if (
+        status === "aanvraag_goedgekeurd" ||
+        status === "aanbod_ondertekenen"
+      ) {
+        setMsg(
+          "Warmtefonds goedgekeurd — actie verdwijnt; daarna schouw plannen."
+        );
+      } else {
+        setMsg("Warmtefonds-status bijgewerkt.");
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Financieringsfase bijwerken mislukt"
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function maybeCompleteStap1(
     actie: BackofficeActie,
     opts: {
       factuurDone?: boolean;
       schouwDone?: boolean;
+      edwinDone?: boolean;
       project?: Project;
     }
   ) {
     const project = opts.project || actie.project;
-    const schouwDone =
-      opts.schouwDone || Boolean(project?.schouw_week || project?.schouw_at);
-    const drafts = draftFacturenVoorActie(actie, facturen);
-    const sent = verzondenFacturenVoorActie(actie, facturen);
-    const needsFactuur =
-      Number(project?.aanbetaling_te_innen_inc) > 0 || drafts.length > 0;
-    const factuurDone =
-      opts.factuurDone || !needsFactuur || sent.length > 0 || drafts.length === 0;
-    if (schouwDone && factuurDone && actie.projectId) {
-      const completedAt = new Date().toISOString();
-      await patchProject(actie, {
-        bel_schouw_aanbetaling_at: completedAt,
-      });
-      void logBackofficeActieEvent({
-        soort: "bel_schouw_aanbetaling",
-        leadId: actie.leadId,
-        projectId: actie.projectId,
-        adviseurId,
-        deadlineAt: actie.deadlineAt,
-        completedAt,
-      });
-    }
+    if (!project || !actie.projectId) return;
+    const related = facturen.filter(
+      (f) =>
+        f.project_id === project.id ||
+        (!f.project_id && f.lead_id === actie.leadId) ||
+        (actie.offerteId != null && f.offerte_id === actie.offerteId)
+    );
+    // Override flags voor net afgeronde stap (project state kan nog stale zijn)
+    const items = projectKickoffItems(project, related).map((item) => {
+      if (item.id === "aanbetaling" && opts.factuurDone) {
+        return { ...item, done: true };
+      }
+      if (item.id === "schouwweek" && opts.schouwDone) {
+        return { ...item, done: true };
+      }
+      if (item.id === "wf_afspraak" && opts.edwinDone) {
+        return { ...item, done: true };
+      }
+      return item;
+    });
+    if (!items.every((i) => i.done)) return;
+    const completedAt = new Date().toISOString();
+    await patchProject(actie, {
+      bel_schouw_aanbetaling_at: completedAt,
+    });
+    void logBackofficeActieEvent({
+      soort: "bel_schouw_aanbetaling",
+      leadId: actie.leadId,
+      projectId: actie.projectId,
+      adviseurId,
+      deadlineAt: actie.deadlineAt,
+      completedAt,
+    });
   }
 
   async function markFinancieringGeschakeld(actie: BackofficeActie) {
@@ -1711,7 +1807,7 @@ export function BackofficeActiesList({
   /** Kickoff: maak aanbetalingsconcept indien nodig, verstuur daarna. */
   async function verstuurAanbetalingsFactuur(actie: BackofficeActie) {
     const offerteId = actie.offerteId || actie.project?.offerte_id || null;
-    const drafts = draftFacturenVoorActie(actie, facturen);
+    const drafts = aanbetalingDraftsVoorActie(actie, facturen);
     let chosen =
       factuurKeuze[actie.id] || (drafts.length === 1 ? drafts[0].id : "");
     let label =
@@ -1850,17 +1946,25 @@ export function BackofficeActiesList({
     setBusyId(`${actie.id}-afronden`);
     setError(null);
     try {
-      if (
-        selectedIsKickoff &&
-        actie.project &&
-        isKickoffComplete(actie.project, selectedProjectFacturen)
-      ) {
+      if (row.kind === "factuur_versturen") {
+        await verstuurAanbetalingsFactuur(actie);
+        setMsg("Aanbetalingsfactuur verwerkt.");
+      } else if (row.kind === "edwin_doorsturen") {
+        if (!edwinGestuurd) {
+          throw new Error("Stuur eerst de WhatsApp naar Edwin, daarna afronden.");
+        }
+        await updateFinancieringStatusFromActie(
+          actie,
+          "doorgestuurd_naar_edwin"
+        );
         await maybeCompleteStap1(actie, {
-          factuurDone: true,
-          schouwDone: true,
+          edwinDone: true,
           project: actie.project,
         });
-        setMsg("Kickoff afgerond.");
+        setMsg("Gegevens doorgestuurd naar Edwin.");
+      } else if (row.kind === "schouw_week") {
+        await planSchouwWeek(actie);
+        setMsg("Schouwweek gezet.");
       } else if (row.kind === "herplan") {
         await voltooiHerplan(actie);
       } else if (row.kind === "nabellen") {
@@ -2072,6 +2176,41 @@ export function BackofficeActiesList({
           ) : null}
         </div>
 
+        {row.kind === "wacht_warmtefonds" && actie.project
+          ? (() => {
+              const projectFacturen = facturen.filter(
+                (f) =>
+                  f.project_id === actie.projectId ||
+                  f.lead_id === actie.leadId
+              );
+              const bedragen = kickoffWarmtefondsBedragen(
+                actie.project!,
+                projectFacturen
+              );
+              return (
+                <div className="rounded-sm border border-line bg-white px-3.5 py-3">
+                  <ProjectFinancieringPath
+                    status={resolveFinancieringStatus(actie.project)}
+                    afspraakAt={actie.project.warmtefonds_afspraak_at}
+                    disabled={busyId === `${actie.id}-wf`}
+                    onChange={(s, extra) =>
+                      void updateFinancieringStatusFromActie(actie, s, extra)
+                    }
+                    aanbetalingInc={bedragen.aanbetalingInc}
+                    warmtefondsInc={bedragen.warmtefondsInc}
+                    restantFactuurStatus={
+                      projectFacturen.find(
+                        (f) =>
+                          !f.credit_van_factuur_id &&
+                          isRestantFactuurOmschrijving(f.omschrijving)
+                      )?.status ?? null
+                    }
+                  />
+                </div>
+              );
+            })()
+          : null}
+
         {/* Restfactuur */}
         {(row.kind === "volgende_stap" || row.kind === "factuur_versturen") &&
         restfactuur ? (
@@ -2138,7 +2277,8 @@ export function BackofficeActiesList({
           row.kind === "schouw_week") &&
         (actie.planSchouwdag ||
           actie.planSchouwweek ||
-          row.kind === "schouw_inplannen") ? (
+          row.kind === "schouw_inplannen" ||
+          row.kind === "schouw_week") ? (
           <div className="space-y-3 border border-line bg-white px-4 py-4">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wash text-[11px] font-bold text-muted">
@@ -2252,46 +2392,301 @@ export function BackofficeActiesList({
                     ? "Bezig…"
                     : actie.planSchouwdag || row.kind === "schouw_inplannen"
                       ? "Schouwdag vastleggen"
-                      : "Schouwweek zetten"}
+                      : "Schouwweek inplannen"}
                 </button>
               </div>
             </div>
           </div>
         ) : null}
 
-        {/* Kickoff aanbetaling (compact) */}
-        {row.kind === "factuur_versturen" && !restfactuur ? (
+        {/* Kickoff aanbetaling — conceptfactuur zoals op factuurpagina */}
+        {row.kind === "factuur_versturen" && !restfactuur
+          ? (() => {
+              const pool = aanbetalingDraftsVoorActie(actie, facturen);
+              const chosenId =
+                selectedFactuur || (pool.length === 1 ? pool[0].id : "");
+              const fac =
+                pool.find((f) => f.id === chosenId) || pool[0] || null;
+              const lead =
+                leads.find((l) => l.id === actie.leadId) || null;
+              const bedragen = actie.project
+                ? kickoffWarmtefondsBedragen(actie.project, facturen)
+                : { aanbetalingInc: null, warmtefondsInc: null };
+              const straat = [
+                lead?.straat,
+                lead?.huisnummer,
+                lead?.toevoeging,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              const plaats = [lead?.postcode, lead?.plaats]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              const ex = fac ? Number(fac.bedrag_ex_btw) || 0 : null;
+              const btw = fac ? Number(fac.btw_bedrag) || 0 : null;
+              const inc = fac
+                ? Number(fac.bedrag_inc_btw) || 0
+                : bedragen.aanbetalingInc;
+
+              return (
+                <div className="space-y-3">
+                  {pool.length > 1 ? (
+                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Concept kiezen
+                      <select
+                        value={chosenId}
+                        onChange={(e) =>
+                          setFactuurKeuze((p) => ({
+                            ...p,
+                            [actie.id]: e.target.value,
+                          }))
+                        }
+                        className="mt-1 block h-9 w-full max-w-md border border-line bg-white px-2 text-xs"
+                      >
+                        {pool.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.factuur_nummer} ·{" "}
+                            {formatEuro(Number(f.bedrag_inc_btw) || 0)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  <article className="border border-line bg-white shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+                    <div className="border-b border-line px-4 py-5 sm:px-6">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="font-display text-lg font-semibold tracking-tight text-green-deeper">
+                            BatterijConcept
+                          </p>
+                          <p className="mt-1 text-[12px] leading-relaxed text-muted">
+                            Daltonlaan 500
+                            <br />
+                            3584 BK Utrecht
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-display text-xl font-semibold text-ink">
+                            Factuur
+                          </p>
+                          <p className="mt-0.5 font-mono text-sm font-semibold text-green-dark">
+                            {fac?.factuur_nummer || "Concept (nog aanmaken)"}
+                          </p>
+                          <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            Concept — nog niet verzonden
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-6 grid gap-5 sm:grid-cols-2">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+                            Factuur aan
+                          </p>
+                          <p className="mt-1.5 text-sm font-semibold text-ink">
+                            {lead?.naam || actie.leadNaam}
+                          </p>
+                          {straat ? (
+                            <p className="text-[13px] text-muted">{straat}</p>
+                          ) : null}
+                          {plaats ? (
+                            <p className="text-[13px] text-muted">{plaats}</p>
+                          ) : null}
+                          {lead?.email || actie.telefoon ? (
+                            <p className="mt-1 text-[13px] text-muted">
+                              {[lead?.email, actie.telefoon || lead?.telefoon]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="sm:text-right">
+                          <dl className="inline-grid grid-cols-[auto_auto] gap-x-4 gap-y-1 text-[13px]">
+                            <dt className="text-muted">Factuurdatum</dt>
+                            <dd className="font-medium text-ink">
+                              {fac?.factuurdatum
+                                ? formatDateShort(fac.factuurdatum)
+                                : "—"}
+                            </dd>
+                            <dt className="text-muted">Vervaldatum</dt>
+                            <dd className="font-medium text-ink">
+                              {fac?.vervaldatum
+                                ? formatDateShort(fac.vervaldatum)
+                                : "—"}
+                            </dd>
+                            {actie.offerteNummer ? (
+                              <>
+                                <dt className="text-muted">Offerte</dt>
+                                <dd className="font-medium text-ink">
+                                  {actie.offerteNummer}
+                                </dd>
+                              </>
+                            ) : null}
+                          </dl>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto px-4 py-2 sm:px-6">
+                      <table className="w-full min-w-[22rem] text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                            <th className="py-3 pr-3 font-semibold">
+                              Omschrijving
+                            </th>
+                            <th className="py-3 pr-3 text-right font-semibold">
+                              Excl. btw
+                            </th>
+                            <th className="py-3 pr-3 text-right font-semibold">
+                              Btw
+                            </th>
+                            <th className="py-3 text-right font-semibold">
+                              Incl. btw
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b border-line">
+                            <td className="py-3.5 pr-3 align-top">
+                              <p className="font-medium text-ink">
+                                {fac?.omschrijving ||
+                                  "Aanbetalingsfactuur / BTW-factuur"}
+                              </p>
+                            </td>
+                            <td className="py-3.5 pr-3 text-right tabular-nums text-muted">
+                              {ex != null ? formatEuro(ex) : "—"}
+                            </td>
+                            <td className="py-3.5 pr-3 text-right tabular-nums text-muted">
+                              {btw != null ? formatEuro(btw) : "—"}
+                            </td>
+                            <td className="py-3.5 text-right tabular-nums font-semibold text-ink">
+                              {inc != null ? formatEuro(inc) : "—"}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex flex-wrap items-end justify-between gap-3 border-t border-line px-4 py-4 sm:px-6">
+                      <div className="text-[12px] text-muted">
+                        {lead?.email ? (
+                          <>Wordt gemaild naar <span className="font-medium text-ink">{lead.email}</span></>
+                        ) : (
+                          <span className="text-[#C45A12]">
+                            Let op: geen e-mail op de lead
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          Totaal incl. btw
+                        </p>
+                        <p className="font-display text-2xl font-semibold tabular-nums text-ink">
+                          {inc != null ? formatEuro(inc) : "—"}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {fac ? (
+                      <Link
+                        href={`/facturen/${fac.id}`}
+                        className="inline-flex h-10 items-center border border-line px-3.5 text-sm font-semibold text-ink hover:bg-wash"
+                      >
+                        Factuur openen
+                      </Link>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={busyId === `${actie.id}-factuur`}
+                      onClick={() => void verstuurAanbetalingsFactuur(actie)}
+                      className="inline-flex h-10 items-center bg-green px-4 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                    >
+                      {busyId === `${actie.id}-factuur`
+                        ? "Bezig…"
+                        : pool.length === 0
+                          ? "Aanmaken & versturen"
+                          : "Versturen naar klant"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
+
+        {row.kind === "edwin_doorsturen" && actie.project ? (
           <div className="rounded-sm border border-line bg-white px-3.5 py-3">
-            <p className="text-sm font-semibold text-ink">Factuur versturen</p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {drafts.length > 1 ? (
-                <select
-                  value={selectedFactuur}
-                  onChange={(e) =>
-                    setFactuurKeuze((p) => ({
-                      ...p,
-                      [actie.id]: e.target.value,
-                    }))
-                  }
-                  className="h-9 border border-line bg-white px-2 text-xs"
-                >
-                  <option value="">Concept…</option>
-                  {drafts.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.factuur_nummer}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
+            <p className="text-sm font-semibold text-ink">
+              Gegevens doorsturen naar Edwin
+            </p>
+            <p className="mt-0.5 text-[12px] text-muted">
+              Stuur klantgegevens via WhatsApp zodat Edwin de
+              Warmtefonds-afspraak kan inplannen.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                disabled={busyId === `${actie.id}-factuur`}
-                onClick={() => void verstuurAanbetalingsFactuur(actie)}
-                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white disabled:opacity-50"
+                disabled={busyId === `${actie.id}-edwin`}
+                onClick={() => {
+                  const bedragen = kickoffWarmtefondsBedragen(
+                    actie.project!,
+                    facturen.filter(
+                      (f) =>
+                        f.project_id === actie.projectId ||
+                        f.lead_id === actie.leadId
+                    )
+                  );
+                  const lead =
+                    leads.find((l) => l.id === actie.leadId) || null;
+                  const bericht = edwinWarmtefondsWhatsappBericht({
+                    leadNaam: actie.leadNaam,
+                    telefoon: actie.telefoon || lead?.telefoon || null,
+                    straat: lead?.straat || null,
+                    postcode: lead?.postcode || null,
+                    huisnummer: lead?.huisnummer || null,
+                    toevoeging: lead?.toevoeging || null,
+                    plaats: actie.plaats || lead?.plaats || null,
+                    offerteNummer: actie.offerteNummer || null,
+                    projectNummer: actie.projectNummer || null,
+                    aanbetalingInc: bedragen.aanbetalingInc,
+                    warmtefondsInc: bedragen.warmtefondsInc,
+                  });
+                  window.open(edwinWhatsappUrl(bericht), "_blank");
+                  setEdwinGestuurd(true);
+                }}
+                className="inline-flex h-9 items-center bg-[#25D366] px-3.5 text-xs font-semibold text-white disabled:opacity-50"
               >
-                {drafts.length === 0 ? "Aanmaken & versturen" : "Versturen"}
+                WhatsApp {FINANCIERINGSMAN_NAAM}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  busyId === `${actie.id}-edwin-done` || !edwinGestuurd
+                }
+                onClick={async () => {
+                  await updateFinancieringStatusFromActie(
+                    actie,
+                    "doorgestuurd_naar_edwin"
+                  );
+                  await maybeCompleteStap1(actie, {
+                    edwinDone: true,
+                    project: actie.project,
+                  });
+                }}
+                className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-40"
+              >
+                Doorgestuurd — afvinken
               </button>
             </div>
+            {!edwinGestuurd ? (
+              <p className="mt-2 text-[11px] text-muted">
+                Eerst WhatsApp openen, daarna afvinken.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -2841,7 +3236,23 @@ export function BackofficeActiesList({
                         </td>
                         <td className="px-3 py-3 align-middle text-right">
                           <div className="flex justify-end gap-1.5">
-                            {taak.project_id ? (
+                            {taak.project_id && isOverstapNazorgTaak(taak) ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOverstapMail({
+                                    projectId: taak.project_id,
+                                    taakId: taak.id,
+                                    klantNaam: leadNaam,
+                                    projectNummer:
+                                      taak.projecten?.project_nummer || null,
+                                  })
+                                }
+                                className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
+                              >
+                                Open →
+                              </button>
+                            ) : taak.project_id ? (
                               <Link
                                 href={`/projecten/${taak.project_id}`}
                                 className="inline-flex h-8 items-center border border-line px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
@@ -3006,34 +3417,32 @@ export function BackofficeActiesList({
         const lead = leads.find((l) => l.id === actie.leadId) || null;
         const tel = actie.telefoon || lead?.telefoon || null;
         const eigenaar = selectedEigenaar;
-        const canFinish = selectedIsKickoff
-          ? Boolean(
-              project &&
-                isKickoffComplete(project, selectedProjectFacturen)
-            )
-          : true;
+        const canFinish = true;
 
-        const doel = selectedIsKickoff
-          ? warmtefonds
-            ? "Schouwweek afspreken, BTW-factuur versturen en Warmtefonds-overdracht vastleggen."
-            : "Schouwweek afspreken en aanbetalingsfactuur versturen."
-          : selectedRow.kind === "schouw_inplannen"
-            ? "Exacte schouwdag en tijd met de klant afspreken."
-            : selectedRow.kind === "herplan"
-              ? "Nieuwe afspraak inplannen."
-              : selectedRow.kind === "bestel_materiaal"
-                ? "Materiaalbestelling vastleggen."
-                : selectedRow.kind === "financiering"
-                  ? "Warmtefonds / financiering oppakken."
-                  : selectedRow.kind === "wacht_warmtefonds"
-                    ? "Wachten tot Warmtefonds goedgekeurd is — daarna schouw plannen."
-                    : selectedRow.kind === "nabellen"
-                      ? "Openstaande betaling afronden."
-                      : isRestfactuurActie(actie)
-                        ? "Restfactuur opstellen en versturen."
-                        : isInstallatieActie(actie)
-                          ? "Installatie inplannen."
-                          : actie.reden || null;
+        const doel =
+          selectedRow.kind === "factuur_versturen"
+            ? "Maak of verstuur de aanbetalingsfactuur naar de klant."
+            : selectedRow.kind === "edwin_doorsturen"
+              ? "Stuur de klantgegevens naar Edwin zodat hij de Warmtefonds-afspraak kan inplannen."
+              : selectedRow.kind === "schouw_week"
+                ? "Zet de schouwweek (incl. track & trace naar de klant)."
+                : selectedRow.kind === "schouw_inplannen"
+                  ? "Exacte schouwdag en tijd met de klant afspreken."
+                  : selectedRow.kind === "herplan"
+                    ? "Nieuwe afspraak inplannen."
+                    : selectedRow.kind === "bestel_materiaal"
+                      ? "Materiaalbestelling vastleggen."
+                      : selectedRow.kind === "financiering"
+                        ? "Warmtefonds / financiering oppakken."
+                        : selectedRow.kind === "wacht_warmtefonds"
+                          ? "Zet hier de Warmtefonds-status. Bij goedkeuring verdwijnt deze actie — daarna schouw plannen."
+                          : selectedRow.kind === "nabellen"
+                            ? "Openstaande betaling afronden."
+                            : isRestfactuurActie(actie)
+                              ? "Restfactuur opstellen en versturen."
+                              : isInstallatieActie(actie)
+                                ? "Installatie inplannen."
+                                : actie.reden || null;
 
         return (
           <div className="flex min-h-[min(78vh,44rem)] flex-col border border-line bg-white">
@@ -3195,252 +3604,7 @@ export function BackofficeActiesList({
                   ) : null}
                 </div>
 
-                {selectedIsKickoff && selectedKickoffItems.length > 0 ? (
-                  <ol className="space-y-2">
-                    {selectedKickoffItems.map((item, idx) => (
-                      <li
-                        key={item.id}
-                        className={[
-                          "border px-4 py-3.5",
-                          item.done
-                            ? "border-green/20 bg-green-soft/20"
-                            : "border-line bg-white",
-                        ].join(" ")}
-                      >
-                        <div className="flex items-start gap-3">
-                          <span
-                            className={[
-                              "mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center text-[11px] font-bold",
-                              item.done
-                                ? "bg-green text-white"
-                                : "bg-wash text-muted",
-                            ].join(" ")}
-                          >
-                            {item.done ? "✓" : idx + 1}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-semibold text-ink">
-                              {item.label}
-                            </p>
-                            {item.detail ? (
-                              <p className="mt-0.5 text-[11px] text-muted">
-                                {item.detail}
-                                {item.id === "aanbetaling" &&
-                                bedragen.aanbetalingInc != null
-                                  ? ` · ${formatEuro(bedragen.aanbetalingInc)}`
-                                  : ""}
-                              </p>
-                            ) : null}
-
-                            {!item.done && item.id === "aanbetaling" ? (
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                {drafts.length > 1 ? (
-                                  <select
-                                    value={selectedFactuur}
-                                    onChange={(e) =>
-                                      setFactuurKeuze((p) => ({
-                                        ...p,
-                                        [actie.id]: e.target.value,
-                                      }))
-                                    }
-                                    className="h-9 border border-line bg-white px-2 text-xs outline-none focus:border-green"
-                                  >
-                                    <option value="">Draft…</option>
-                                    {drafts.map((f) => (
-                                      <option key={f.id} value={f.id}>
-                                        {f.factuur_nummer}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  disabled={busyId === `${actie.id}-factuur`}
-                                  onClick={() =>
-                                    void verstuurAanbetalingsFactuur(actie)
-                                  }
-                                  className="h-9 bg-green px-3.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                                >
-                                  {busyId === `${actie.id}-factuur`
-                                    ? "Bezig…"
-                                    : drafts.length === 0
-                                      ? "Aanmaken & versturen"
-                                      : "Factuur versturen"}
-                                </button>
-                              </div>
-                            ) : null}
-
-                            {!item.done && item.id === "wf_afspraak" ? (
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  disabled={busyId === `${actie.id}-edwin`}
-                                  onClick={async () => {
-                                    setBusyId(`${actie.id}-edwin`);
-                                    try {
-                                      const bericht =
-                                        edwinWarmtefondsWhatsappBericht({
-                                          leadNaam: actie.leadNaam,
-                                          telefoon:
-                                            actie.telefoon ||
-                                            lead?.telefoon ||
-                                            null,
-                                          straat: lead?.straat || null,
-                                          postcode: lead?.postcode || null,
-                                          huisnummer:
-                                            lead?.huisnummer || null,
-                                          toevoeging:
-                                            lead?.toevoeging || null,
-                                          plaats:
-                                            actie.plaats ||
-                                            lead?.plaats ||
-                                            null,
-                                          offerteNummer:
-                                            actie.offerteNummer || null,
-                                          projectNummer:
-                                            actie.projectNummer || null,
-                                          aanbetalingInc:
-                                            bedragen.aanbetalingInc,
-                                          warmtefondsInc:
-                                            bedragen.warmtefondsInc,
-                                        });
-                                      window.open(
-                                        edwinWhatsappUrl(bericht),
-                                        "_blank"
-                                      );
-                                      setEdwinGestuurd(true);
-                                    } finally {
-                                      setBusyId(null);
-                                    }
-                                  }}
-                                  className="h-9 bg-[#25D366] px-3.5 text-xs font-semibold text-white disabled:opacity-50"
-                                >
-                                  WhatsApp {FINANCIERINGSMAN_NAAM}
-                                </button>
-                                {edwinGestuurd ? (
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      busyId === `${actie.id}-edwin-done`
-                                    }
-                                    onClick={async () => {
-                                      if (!actie.projectId) return;
-                                      setBusyId(`${actie.id}-edwin-done`);
-                                      try {
-                                        const res = await fetch(
-                                          `/api/projecten/${actie.projectId}`,
-                                          {
-                                            method: "PATCH",
-                                            headers: {
-                                              "Content-Type":
-                                                "application/json",
-                                            },
-                                            body: JSON.stringify({
-                                              financiering_status:
-                                                "doorgestuurd_naar_edwin",
-                                            }),
-                                          }
-                                        );
-                                        const data = await res
-                                          .json()
-                                          .catch(() => ({}));
-                                        if (!res.ok) {
-                                          throw new Error(
-                                            (data as { error?: string })
-                                              .error || "Mislukt"
-                                          );
-                                        }
-                                        if (data.project) {
-                                          onProjectUpdated?.(
-                                            data.project as Project
-                                          );
-                                        }
-                                        setMsg(
-                                          "Warmtefonds-overdracht vastgelegd."
-                                        );
-                                      } catch (e) {
-                                        setError(
-                                          e instanceof Error
-                                            ? e.message
-                                            : "Mislukt"
-                                        );
-                                      } finally {
-                                        setBusyId(null);
-                                      }
-                                    }}
-                                    className="h-9 border border-line px-3 text-xs font-semibold text-ink hover:bg-wash"
-                                  >
-                                    Afvinken
-                                  </button>
-                                ) : null}
-                              </div>
-                            ) : null}
-
-                            {!item.done && item.id === "schouwweek" ? (
-                              <div className="mt-3 flex flex-wrap items-end gap-2">
-                                <label className="min-w-[12rem] flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                                  Schouwweek
-                                  <select
-                                    value={selectedWeek}
-                                    onChange={(e) =>
-                                      setWeekKeuze((p) => ({
-                                        ...p,
-                                        [actie.id]: e.target.value,
-                                      }))
-                                    }
-                                    className="mt-1 block h-9 w-full border border-line bg-white px-2.5 text-xs outline-none focus:border-green"
-                                  >
-                                    {weekOptions.map((o) => (
-                                      <option key={o.value} value={o.value}>
-                                        {o.label}
-                                        {o.value === recommendedValue
-                                          ? " · aanbevolen"
-                                          : ""}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                                  Partner
-                                  <select
-                                    value={selectedPartner}
-                                    onChange={(e) =>
-                                      setPartnerKeuze((p) => ({
-                                        ...p,
-                                        [actie.id]: e.target.value,
-                                      }))
-                                    }
-                                    className="mt-1 block h-9 min-w-[10rem] border border-line bg-white px-2.5 text-xs outline-none focus:border-green"
-                                  >
-                                    <option value="">Kies…</option>
-                                    {partners.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.naam}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    busyId === `${actie.id}-schouw` ||
-                                    !selectedPartner
-                                  }
-                                  onClick={() => void planSchouwWeek(actie)}
-                                  className="h-9 bg-orange px-3.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
-                                >
-                                  Schouwweek zetten
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  actieWerkPanel(selectedRow, { hideContact: true })
-                )}
+                {actieWerkPanel(selectedRow, { hideContact: true })}
               </div>
             </div>
 
@@ -3508,6 +3672,21 @@ export function BackofficeActiesList({
         <InkoopPopup
           actie={inkoopActie}
           onClose={() => setInkoopActie(null)}
+        />
+      ) : null}
+
+      {overstapMail ? (
+        <VerstuurDatumOptieModal
+          projectId={overstapMail.projectId}
+          klantNaam={overstapMail.klantNaam}
+          projectNummer={overstapMail.projectNummer}
+          initialSoort="overstap"
+          lockSoort
+          onClose={() => setOverstapMail(null)}
+          onSent={() => {
+            setMsg("Overstap-mail verstuurd naar de klant.");
+            void loadProjectTaken();
+          }}
         />
       ) : null}
     </div>

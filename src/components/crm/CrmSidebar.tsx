@@ -147,12 +147,12 @@ const GROUPS: SidebarGroup[] = [
     id: "sales",
     label: "Sales",
     items: [
+      { id: "leaderboard", label: "Leaderboard", icon: ICONS.offertes },
       { id: "leads", label: "Leads", icon: ICONS.leads },
       { id: "bellen", label: "Bellen", icon: ICONS.bellen },
       { id: "agenda", label: "Agenda", icon: ICONS.agenda },
       { id: "offertes", label: "Offertes", icon: ICONS.offertes },
       { id: "netto", label: "Netto", icon: ICONS.netto },
-      { id: "leaderboard", label: "Leaderboard", icon: ICONS.offertes },
     ],
   },
   {

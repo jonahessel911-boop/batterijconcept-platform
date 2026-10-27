@@ -118,7 +118,7 @@ export function PartnerSlotPicker({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">
           {soort === "installatie"
-            ? "Beschikbare installatie-slots (4u, middag)"
+            ? "Beschikbare installatie-slots (ochtend 09–12 · middag 13–17)"
             : "Beschikbare schouw-slots (30 min)"}
         </p>
         <button

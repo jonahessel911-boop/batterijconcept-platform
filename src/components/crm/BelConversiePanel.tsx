@@ -45,6 +45,8 @@ type BelConversieData = {
   totals: {
     gebeld: number;
     ingepland: number;
+    geannuleerd?: number;
+    annuleringsPct?: number | null;
     leadToAppt: number | null;
     nonNieuwGebeld?: number;
     nonNieuwIngepland?: number;
@@ -59,13 +61,20 @@ type BelConversieData = {
   bellerId?: string | null;
 };
 
+const ANNULERING_COLOR = "#C45A12";
+
 type ViewMode = "week" | "month";
 
-/** Kleuren in de dikke gestapelde balk (hoogte = totaal gebeld). */
+/** Kleuren in de dikke gestapelde balk (hoogte = gebeld + uitval). */
 const STACK_SEGMENTS = [
   { key: "ingepland" as const, label: "Ingepland", color: "#1a8a3e" },
   { key: "geenInteresse" as const, label: "Geen interesse", color: "#C62828" },
   { key: "geenContact" as const, label: "Geen contact", color: "#64748b" },
+  {
+    key: "geannuleerd" as const,
+    label: "Annuleringen (uitval)",
+    color: ANNULERING_COLOR,
+  },
 ] as const;
 
 const OVERIG_COLOR = "#D5DDD7";
@@ -93,6 +102,7 @@ function barSegments(b: BelConversieSeriesBucket): {
   color: string;
   value: number;
 }[] {
+  const geannuleerd = b.geannuleerd || 0;
   const known = b.ingepland + b.geenInteresse + b.geenContact;
   const overig = Math.max(0, b.gebeld - known);
   const parts: {
@@ -128,7 +138,20 @@ function barSegments(b: BelConversieSeriesBucket): {
       value: overig,
     });
   }
+  if (geannuleerd > 0) {
+    parts.push({
+      key: "geannuleerd",
+      label: "Annuleringen",
+      color: STACK_SEGMENTS[3].color,
+      value: geannuleerd,
+    });
+  }
   return parts;
+}
+
+/** Staafhoogte = gebeld + uitval (annuleringen zijn extra bovenop bel-uitkomsten). */
+function barTotal(b: BelConversieSeriesBucket): number {
+  return Math.max(0, b.gebeld + (b.geannuleerd || 0));
 }
 
 function BelSeriesChart({
@@ -145,7 +168,7 @@ function BelSeriesChart({
   const maxTotaal = useMemo(() => {
     let m = 0;
     for (const b of series) {
-      m = Math.max(m, b.gebeld, b.doel || 0, b.ingepland);
+      m = Math.max(m, barTotal(b), b.doel || 0, b.ingepland);
     }
     return Math.max(1, m);
   }, [series]);
@@ -239,7 +262,7 @@ function BelSeriesChart({
           ) : null}
 
           {series.map((b, bi) => {
-            const totaal = b.gebeld;
+            const totaal = barTotal(b);
             const barH = Math.max(
               totaal > 0 ? 8 : 0,
               (totaal / maxTotaal) * 100
@@ -303,7 +326,7 @@ function BelSeriesChart({
               className="min-w-[3.75rem] flex-1 text-center sm:min-w-[4.5rem]"
             >
               <p className="text-[11px] font-semibold tabular-nums text-ink">
-                {b.gebeld > 0 ? num(b.gebeld) : ""}
+                {barTotal(b) > 0 ? num(barTotal(b)) : ""}
               </p>
               <p
                 className="mt-0.5 w-full truncate text-[10px] font-medium text-muted"
@@ -325,7 +348,7 @@ function BelSeriesChart({
             <p className="font-semibold text-ink">{tip.label}</p>
             <ul className="mt-1.5 space-y-1 tabular-nums text-ink">
               <li>
-                <span className="text-muted">Totaal</span>{" "}
+                <span className="text-muted">Gebeld</span>{" "}
                 <span className="font-semibold">{num(tip.gebeld)}</span>
               </li>
               <li>
@@ -365,6 +388,19 @@ function BelSeriesChart({
                 />{" "}
                 Geen contact{" "}
                 <span className="font-semibold">{num(tip.geenContact)}</span>
+              </li>
+              <li>
+                <span
+                  className="inline-block h-2 w-2 rounded-sm align-middle"
+                  style={{ background: ANNULERING_COLOR }}
+                />{" "}
+                Annuleringen{" "}
+                <span className="font-semibold text-[#C45A12]">
+                  {num(tip.geannuleerd)}
+                  {tip.annuleringsPct != null
+                    ? ` (${num(tip.annuleringsPct, 1)}%)`
+                    : ""}
+                </span>
               </li>
             </ul>
           </div>
@@ -521,14 +557,20 @@ export function BelConversiePanel() {
     let geenInteresse = 0;
     let geenContact = 0;
     let ingepland = 0;
+    let geannuleerd = 0;
     let doel = 0;
     for (const b of series) {
       geenInteresse += b.geenInteresse;
       geenContact += b.geenContact;
       ingepland += b.ingepland;
+      geannuleerd += b.geannuleerd || 0;
       doel += b.doel || 0;
     }
-    return { geenInteresse, geenContact, ingepland, doel };
+    const uitval =
+      geannuleerd + ingepland > 0
+        ? Math.round((geannuleerd / (geannuleerd + ingepland)) * 1000) / 10
+        : null;
+    return { geenInteresse, geenContact, ingepland, geannuleerd, annuleringsPct: uitval, doel };
   }, [series]);
 
   /**
@@ -678,7 +720,7 @@ export function BelConversiePanel() {
         <p className="text-sm text-muted">Laden…</p>
       ) : data ? (
         <>
-          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -743,6 +785,24 @@ export function BelConversiePanel() {
                   : "—"}
               </p>
             </div>
+            <div className="rounded-2xl border border-[#C45A12]/25 bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Uitval
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-[#C45A12]">
+                {(totals?.geannuleerd ?? seriesSums.geannuleerd) > 0
+                  ? num(totals?.geannuleerd ?? seriesSums.geannuleerd)
+                  : "—"}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-muted">
+                {(totals?.annuleringsPct ?? seriesSums.annuleringsPct) != null
+                  ? `${num(
+                      totals?.annuleringsPct ?? seriesSums.annuleringsPct,
+                      1
+                    )}% van geplaatst`
+                  : "Geen annuleringen"}
+              </p>
+            </div>
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Geen interesse
@@ -797,6 +857,12 @@ export function BelConversiePanel() {
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     L→A %
                   </th>
+                  <th
+                    className="px-3 py-2.5 font-semibold tabular-nums"
+                    title="Geannuleerde huisbezoeken / uitval %"
+                  >
+                    Uitval
+                  </th>
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     Geen interesse
                   </th>
@@ -809,7 +875,7 @@ export function BelConversiePanel() {
                 {series.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={8}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Geen data in deze periode.
@@ -837,6 +903,28 @@ export function BelConversiePanel() {
                         {b.leadToAppt != null
                           ? `${num(b.leadToAppt, 1)}%`
                           : "—"}
+                      </td>
+                      <td
+                        className={`px-3 py-2.5 tabular-nums ${
+                          (b.geannuleerd || 0) > 0
+                            ? "font-semibold text-[#C45A12]"
+                            : "text-ink"
+                        }`}
+                      >
+                        {(b.geannuleerd || 0) > 0 ? (
+                          <>
+                            {num(b.geannuleerd)}
+                            <span className="ml-1 text-[11px] font-normal text-muted">
+                              (
+                              {b.annuleringsPct != null
+                                ? `${num(b.annuleringsPct, 1)}%`
+                                : "—"}
+                              )
+                            </span>
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="px-3 py-2.5 tabular-nums text-ink">
                         {num(b.geenInteresse)}

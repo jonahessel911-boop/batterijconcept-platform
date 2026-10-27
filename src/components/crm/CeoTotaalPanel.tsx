@@ -1,345 +1,173 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { formatEuro } from "@/lib/format";
+import { useMemo, useState } from "react";
+import { AandachtspuntenStrip } from "./AandachtspuntenStrip";
+import { MarketingPanel } from "./MarketingPanel";
+import { SalesDashboardPanel } from "./SalesDashboardPanel";
+import { BelDashboardPanel } from "./BelDashboardPanel";
+import { ProjectedPnlPanel } from "./ProjectedPnlPanel";
+import { CurrentPnlPanel } from "./CurrentPnlPanel";
 import {
-  PERIOD_PRESET_LABELS,
-  type ManagementDashboardData,
-  type MgmtPeriodPreset,
-} from "@/lib/management-dashboard";
+  agendaWeekJumpOptions,
+  formatSchouwWeekLabel,
+  parseSchouwWeekValue,
+  schouwWeekFromDate,
+  schouwWeekValue,
+} from "@/lib/schouw-week";
+import { todayConversieYmd } from "@/lib/conversie-period";
 
-const CEO_PERIODS: MgmtPeriodPreset[] = [
-  "today",
-  "this_week",
-  "last_week",
-  "last_7_days",
-  "this_month",
-  "last_30_days",
-  "this_quarter",
-  "this_year",
-];
+export type CeoRangeMode = "weeks" | "month";
 
-function num(n: number | null | undefined, digits = 0): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return n.toLocaleString("nl-NL", {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: 0,
-  });
-}
-
-function pct(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${num(n, 1)}%`;
-}
-
+/**
+ * CEO / Totaal: Marketing · Sales · Callcenter · Projected/Current P&L.
+ * Één gedeelde Week/Maand-kiezer past alle grafieken tegelijk aan.
+ */
 export function CeoTotaalPanel() {
-  const [period, setPeriod] = useState<MgmtPeriodPreset>("this_month");
-  const [data, setData] = useState<ManagementDashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const today = todayConversieYmd();
+  const [mode, setMode] = useState<CeoRangeMode>("weeks");
+  const [weekKey, setWeekKey] = useState(() => {
+    const w = schouwWeekFromDate(new Date(`${today}T12:00:00`));
+    return schouwWeekValue(w.jaar, w.week);
+  });
+  const [monthYm, setMonthYm] = useState(today.slice(0, 7));
 
-  const load = useCallback(async (p: MgmtPeriodPreset) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/management-dashboard?period=${encodeURIComponent(p)}`
-      );
-      const json = (await res.json()) as {
-        dashboard?: ManagementDashboardData;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(json.error || "Laden mislukt");
-      const dashboard = json.dashboard;
-      if (!dashboard?.finance?.ceo) {
-        throw new Error("CEO-data ontbreekt in response");
+  const weekOptions = useMemo(() => {
+    const base = agendaWeekJumpOptions(26, 2);
+    if (weekKey && !base.some((o) => o.value === weekKey)) {
+      const p = parseSchouwWeekValue(weekKey);
+      if (p) {
+        return [
+          {
+            value: weekKey,
+            label: formatSchouwWeekLabel(p.jaar, p.week),
+            jaar: p.jaar,
+            week: p.week,
+          },
+          ...base,
+        ];
       }
-      setData(dashboard);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fout");
-      setData(null);
-    } finally {
-      setLoading(false);
     }
-  }, []);
+    return base;
+  }, [weekKey]);
 
-  useEffect(() => {
-    void load(period);
-  }, [period, load]);
-
-  if (loading && !data) {
-    return <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>;
-  }
-
-  if (error && !data) {
-    return (
-      <p className="m-4 rounded-xl border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
-        {error}{" "}
-        <button
-          type="button"
-          onClick={() => void load(period)}
-          className="font-semibold underline"
-        >
-          Opnieuw
-        </button>
-      </p>
-    );
-  }
-
-  if (!data?.finance?.ceo) return null;
-  const ceo = data.finance.ceo;
-  const periodLabel = data.period?.label || PERIOD_PRESET_LABELS[period];
+  const range = { mode, weekKey, monthYm };
 
   return (
-    <div className="space-y-5 px-4 py-5 sm:px-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="bg-wash/40">
+      <div className="sticky top-0 z-30 flex flex-wrap items-end justify-between gap-3 border-b border-line bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-5">
         <div>
-          <p className="font-display text-lg font-semibold text-ink">
-            Totaal · CEO
-          </p>
-          <p className="mt-0.5 max-w-2xl text-xs text-muted">
-            Eén overzicht: volume, omzet, kosten en winst · {periodLabel}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1 border border-line p-0.5">
-          {CEO_PERIODS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setPeriod(p)}
-              className={[
-                "px-2.5 py-1.5 text-xs font-semibold transition",
-                period === p
-                  ? "bg-green text-white"
-                  : "bg-white text-muted hover:bg-wash",
-              ].join(" ")}
-            >
-              {PERIOD_PRESET_LABELS[p]}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {error ? (
-        <p className="rounded-xl border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
-          {error}
-        </p>
-      ) : null}
-
-      {/* Volume */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard label="Leads" value={num(ceo.leads)} hint="Binnen in periode" />
-        <StatCard
-          label="Afspraken"
-          value={num(ceo.afsprakenNetto)}
-          hint="Netto huisbezoeken gezet"
-        />
-        <StatCard
-          label="Sales"
-          value={num(ceo.deals)}
-          hint="Getekende offertes"
-        />
-        <StatCard
-          label="Netto sales"
-          value={num(ceo.nettoDeals)}
-          hint="Getekend én aanbetaald"
-        />
-        <StatCard
-          label="Gem. order"
-          value={
-            ceo.avgOrderWorth != null ? formatEuro(ceo.avgOrderWorth) : "—"
-          }
-          hint="Order worth / sales"
-        />
-      </div>
-
-      {/* Money heroes */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <HeroCard
-          label="Order worth"
-          value={formatEuro(ceo.orderWorth)}
-          sub="Getekende omzet excl. btw"
-          tone="ink"
-        />
-        <HeroCard
-          label="Netto order worth"
-          value={formatEuro(ceo.nettoOrderWorth)}
-          sub={`${num(ceo.nettoDeals)} aanbetaalde sales`}
-          tone="ink"
-        />
-        <HeroCard
-          label="Revenue paid"
-          value={formatEuro(ceo.revenuePaid)}
-          sub={`Gefactureerd ${formatEuro(ceo.revenueInvoiced)}`}
-          tone="ink"
-        />
-        <HeroCard
-          label="Profit"
-          value={formatEuro(ceo.profit)}
-          sub={`Marge ${pct(ceo.profitMarginPct)}`}
-          tone={ceo.profit >= 0 ? "green" : "red"}
-        />
-      </div>
-
-      {/* P&L */}
-      <div className="overflow-hidden rounded-2xl border border-line bg-white">
-        <div className="border-b border-line px-4 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-            Winstberekening · excl. btw
-          </p>
+          <p className="font-display text-base font-semibold text-ink">Totaal</p>
           <p className="mt-0.5 text-xs text-muted">
-            Order worth − product − installatie − sales commissie − lead cost
-            (ads)
+            Kies hieronder de periode — alle blokken (Marketing · Sales ·
+            Callcenter · Projected/Current P&L) tonen data t/m die week of
+            maand.
           </p>
         </div>
-        <div className="divide-y divide-line">
-          <PnlRow
-            label="Order worth (getekend)"
-            value={formatEuro(ceo.orderWorth)}
-            strong
-          />
-          <PnlRow
-            label="− Product / inkoop"
-            value={formatEuro(ceo.costs.product)}
-            muted
-          />
-          <PnlRow
-            label="− Installatie"
-            value={formatEuro(ceo.costs.installation)}
-            muted
-          />
-          <PnlRow
-            label="− Sales commissie"
-            value={formatEuro(ceo.costs.salesCommission)}
-            muted
-          />
-          <PnlRow
-            label="− Lead cost (ads)"
-            value={formatEuro(ceo.costs.leadAds)}
-            muted
-          />
-          <PnlRow
-            label="= Totale kosten"
-            value={formatEuro(ceo.costs.total)}
-          />
-          <PnlRow
-            label="Profit"
-            value={formatEuro(ceo.profit)}
-            strong
-            emphasize={ceo.profit >= 0 ? "green" : "red"}
-          />
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="flex gap-1 border border-line p-0.5">
+            {(
+              [
+                ["weeks", "Per week"],
+                ["month", "Per maand"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMode(id)}
+                className={[
+                  "px-2.5 py-1.5 text-xs font-semibold transition",
+                  mode === id
+                    ? "bg-[#0a4727] text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {mode === "month" ? (
+            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Eindmaand
+              <input
+                type="month"
+                value={monthYm}
+                onChange={(e) =>
+                  setMonthYm(e.target.value || today.slice(0, 7))
+                }
+                className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+              />
+            </label>
+          ) : (
+            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Eindweek
+              <select
+                value={weekKey}
+                onChange={(e) => setWeekKey(e.target.value)}
+                className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+              >
+                {weekOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
       </div>
 
-      <p className="text-[11px] leading-relaxed text-muted">
-        Definities: leads = binnenkomst in periode · afspraken = netto fysieke
-        huisbezoeken gezet · sales / order worth = ondertekende offertes op
-        ondertekendatum · netto sales = getekende sales waarvan de
-        aanbetalingsfactuur betaald is · paid = betaalde facturen op
-        betaaldatum · profit = getekende omzet − inkoop −
-        standaard/project-installatie − adviseurcommissie − Meta/ad spend. Geen
-        cash-realized P&amp;L — verwachte bruto op getekende sales.
-      </p>
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="rounded-xl border border-line bg-white px-3 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {label}
-      </p>
-      <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
-        {value}
-      </p>
-      <p className="mt-0.5 text-[10px] text-muted">{hint}</p>
-    </div>
-  );
-}
-
-function HeroCard({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  tone: "ink" | "green" | "red";
-}) {
-  const valueClass =
-    tone === "green"
-      ? "text-green-dark"
-      : tone === "red"
-        ? "text-[#C62828]"
-        : "text-ink";
-  return (
-    <div className="rounded-2xl border border-line bg-white p-5">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-        {label}
-      </p>
-      <p
-        className={`mt-2 font-display text-3xl font-semibold tabular-nums sm:text-4xl ${valueClass}`}
-      >
-        {value}
-      </p>
-      <p className="mt-1.5 text-xs text-muted">{sub}</p>
-    </div>
-  );
-}
-
-function PnlRow({
-  label,
-  value,
-  strong,
-  muted,
-  emphasize,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-  muted?: boolean;
-  emphasize?: "green" | "red";
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-      <span
-        className={[
-          strong ? "font-semibold text-ink" : "text-ink",
-          muted ? "text-muted" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {label}
-      </span>
-      <span
-        className={[
-          "tabular-nums",
-          strong ? "font-semibold" : "",
-          emphasize === "green"
-            ? "text-green-dark"
-            : emphasize === "red"
-              ? "text-[#C62828]"
-              : muted
-                ? "text-muted"
-                : "text-ink",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {value}
-      </span>
+      <div className="space-y-10 px-4 py-5 sm:px-5 sm:py-6">
+        <AandachtspuntenStrip
+          rangeMode={range.mode}
+          rangeWeekKey={range.weekKey}
+          rangeMonthYm={range.monthYm}
+        />
+        <section className="space-y-3">
+          <MarketingPanel
+            rangeMode={range.mode}
+            rangeWeekKey={range.weekKey}
+            rangeMonthYm={range.monthYm}
+            hideRangeControls
+          />
+        </section>
+        <hr className="border-line" />
+        <section className="space-y-3">
+          <SalesDashboardPanel
+            rangeMode={range.mode}
+            rangeWeekKey={range.weekKey}
+            rangeMonthYm={range.monthYm}
+            hideRangeControls
+          />
+        </section>
+        <hr className="border-line" />
+        <section className="space-y-3">
+          <BelDashboardPanel
+            rangeMode={range.mode}
+            rangeWeekKey={range.weekKey}
+            rangeMonthYm={range.monthYm}
+            hideRangeControls
+          />
+        </section>
+        <hr className="border-line" />
+        <section className="space-y-3">
+          <ProjectedPnlPanel
+            rangeMode={range.mode}
+            rangeWeekKey={range.weekKey}
+            rangeMonthYm={range.monthYm}
+            hideRangeControls
+          />
+        </section>
+        <hr className="border-line" />
+        <section className="space-y-3">
+          <CurrentPnlPanel
+            rangeMode={range.mode}
+            rangeWeekKey={range.weekKey}
+            rangeMonthYm={range.monthYm}
+            hideRangeControls
+          />
+        </section>
+      </div>
     </div>
   );
 }

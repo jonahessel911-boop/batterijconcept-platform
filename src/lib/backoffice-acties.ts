@@ -27,7 +27,11 @@ import {
   schouwWeekOffsetVoorSale,
   type SchouwWeek,
 } from "@/lib/schouw-week";
-import { isKickoffComplete } from "@/lib/project-kickoff";
+import {
+  isKickoffComplete,
+  isSchouwweekKickoffActionable,
+  showProjectKickoff,
+} from "@/lib/project-kickoff";
 import { resolveProjectVolgendeStap } from "@/lib/project-volgende-stap";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import {
@@ -215,23 +219,34 @@ export function isProjectGeannuleerd(
   return s === "annulering" || s === "geannuleerd";
 }
 
-export function isBelSchouwActieOpen(project: Project): boolean {
-  if (isProjectGeannuleerd(project)) return false;
-  // Pas dicht na volledige stap 1 (factuur + schouwweek)
+/** HOLD SALES: geen Acties tot sales HOLD opheft. */
+export function isProjectHoldSales(
+  project: Pick<Project, "status"> | { status?: string | null }
+): boolean {
+  const s = (project.status || "").toLowerCase();
+  return s === "hold_sales_actie" || s === "hold_sales";
+}
+
+/** Geen Acties-tab rijen (annulering of HOLD). */
+export function isProjectBuitenActies(
+  project: Pick<Project, "status"> | { status?: string | null }
+): boolean {
+  return isProjectGeannuleerd(project) || isProjectHoldSales(project);
+}
+
+/** Opstart open: aanbetalingsfactuur / Edwin / schouwweek nog niet af. */
+export function isBelSchouwActieOpen(
+  project: Project,
+  facturen: Factuur[] = []
+): boolean {
+  if (isProjectBuitenActies(project)) return false;
+  // Handmatig afgerond (legacy)
   if (project.bel_schouw_aanbetaling_at) return false;
-  const s = project.status as string;
-  return (
-    s === "schouw_aanbetaling" ||
-    s === "aanbetaling_betaald" ||
-    s === "schouw_in_afwachting" ||
-    // legacy
-    s === "schouw_inplannen" ||
-    s === "schouw_gepland"
-  );
+  return showProjectKickoff(project, facturen);
 }
 
 export function isSchakelFinancieringActieOpen(project: Project): boolean {
-  if (isProjectGeannuleerd(project)) return false;
+  if (isProjectBuitenActies(project)) return false;
   // Alleen bij Warmtefonds-afwijzing — tot betaalwijze is omgezet of actie is afgerond
   const afgewezen =
     project.financiering_status === "afgewezen" ||
@@ -269,7 +284,7 @@ export function isAangetekendeBriefActieOpen(
   facturen: Factuur[] = [],
   now = new Date()
 ): boolean {
-  if (isProjectGeannuleerd(project)) return false;
+  if (isProjectBuitenActies(project)) return false;
   if (project.aangetekende_brief_verstuurd_at) return false;
 
   const bedenktijd = bedenktijdVanOndertekening(
@@ -369,11 +384,18 @@ function leadFromFactuur(factuur: Factuur) {
 
 export function openBelSchouwActies(
   projecten: Project[],
+  facturen: Factuur[] = [],
   now = new Date()
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
   for (const project of projecten) {
-    if (!isBelSchouwActieOpen(project)) continue;
+    const projectFacturen = facturen.filter(
+      (f) =>
+        f.project_id === project.id ||
+        (!f.project_id && f.lead_id === project.lead_id) ||
+        (project.offerte_id != null && f.offerte_id === project.offerte_id)
+    );
+    if (!isBelSchouwActieOpen(project, projectFacturen)) continue;
     const saleAt = saleMomentVanProject(project);
     const instroomAt = backofficeInstroomMoment(project);
     const deadlineAt = belSchouwDeadline(instroomAt);
@@ -382,16 +404,23 @@ export function openBelSchouwActies(
     const schouw = recommendedSchouwWeekForProject(project, saleAt);
     const schouwWeekLabel = formatSchouwWeekLabel(schouw.jaar, schouw.week);
     const offerte = projectOfferte(project);
+    const schouwActionable = isSchouwweekKickoffActionable(
+      project,
+      projectFacturen
+    );
     items.push({
       id: `bel-schouw-${project.id}`,
       soort: "bel_schouw_aanbetaling",
       titel: belSchouwActieTitel(project),
       detail: warmtefonds
-        ? `Bel de klant: schouw ±5 wkn vooruit (${schouwWeekLabel}) én aanbetaling regelen.`
-        : `Bel de klant: schouw z.s.m. inplannen (${schouwWeekLabel}).`,
+        ? `Opstarten: aanbetalingsfactuur, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
+        : schouwActionable
+          ? `Opstarten: 50% betaald — schouwweek inplannen (${schouwWeekLabel}).`
+          : `Opstarten: eerst 50%-factuur; schouwweek (${schouwWeekLabel}) volgt na betaling.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
+      prio: isPrioDeadline(deadlineAt, now),
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -404,6 +433,7 @@ export function openBelSchouwActies(
       schouwJaar: schouw.jaar,
       schouwWeek: schouw.week,
       schouwWeekLabel,
+      planSchouwweek: schouwActionable,
       project,
     });
   }
@@ -499,6 +529,9 @@ export function openNabellenFactuurActies(
   for (const f of facturen) {
     if (f.credit_van_factuur_id) continue;
     if (metCredit.has(f.id)) continue;
+    // Alleen aanbetalingsfacturen nábellen na verlopen (3 d).
+    // Warmtefonds-restant heeft langere termijn en geen korte opvolg-actie.
+    if (!isAanbetalingFactuurOmschrijving(f.omschrijving)) continue;
     if (
       !factuurIsOverdue({
         status: f.status,
@@ -809,7 +842,7 @@ export function openVolgendeStapActies(
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
   for (const project of projecten) {
-    if (isProjectGeannuleerd(project)) continue;
+    if (isProjectBuitenActies(project)) continue;
 
     const related = facturen.filter(
       (f) =>
@@ -824,7 +857,7 @@ export function openVolgendeStapActies(
       continue;
     }
 
-    const stap = resolveProjectVolgendeStap(project, now);
+    const stap = resolveProjectVolgendeStap(project, now, related);
     if (!stap) continue;
 
     // Feiten winnen: geen “inplannen”-actie als de datum al staat.
@@ -957,7 +990,7 @@ export function isWarmtefondsGoedgekeurd(project: Project): boolean {
 /** Nog wachten op Warmtefonds (vóór goedkeuring) — hoort in “Wacht op extern”. */
 export function isWarmtefondsWachtOpExtern(project: Project): boolean {
   if (!isWarmtefondsProject(project)) return false;
-  if (isProjectGeannuleerd(project)) return false;
+  if (isProjectBuitenActies(project)) return false;
   if (isWarmtefondsGoedgekeurd(project)) return false;
   const raw = resolveFinancieringStatus(project);
   const n = normalizeFinancieringStatus(raw);
@@ -1061,7 +1094,7 @@ export function openBestelMateriaalActies(
   }
 
   for (const project of projecten) {
-    if (isProjectGeannuleerd(project)) continue;
+    if (isProjectBuitenActies(project)) continue;
     if (!project.installatie_at) continue;
     if (!materiaalNogTeBestellen(project)) continue;
     if (!isSchouwweekGepland(project)) continue;
@@ -1117,8 +1150,9 @@ export function openBestelMateriaalActies(
 }
 
 /**
- * Schouwdag inplannen: 1 week vóór schouwweek (window/overdue), of Warmtefonds
- * goedgekeurd zonder definitieve schouwdag.
+ * Schouwdag inplannen:
+ * - Warmtefonds: pas ná goedkeuring (niet eerder op schouwweek-window).
+ * - Eigen middelen: 1 week vóór schouwweek (window/overdue).
  */
 export function openSchouwInplannenActies(
   projecten: Project[],
@@ -1128,12 +1162,16 @@ export function openSchouwInplannenActies(
   const nowMs = now.getTime();
 
   for (const project of projecten) {
-    if (isProjectGeannuleerd(project)) continue;
+    if (isProjectBuitenActies(project)) continue;
     if (isSchouwdagDefinitief(project)) continue;
 
     const jaar = project.schouw_jaar ?? null;
     const week = project.schouw_week ?? null;
+    const warmtefonds = isWarmtefondsProject(project);
     const wfGoedgekeurd = isWarmtefondsGoedgekeurd(project);
+
+    // WF: geen schouwdag-actie tot financiering goedgekeurd is
+    if (warmtefonds && !wfGoedgekeurd) continue;
 
     let deadlineAt: Date | null = null;
     let detail = "";
@@ -1144,13 +1182,17 @@ export function openSchouwInplannenActies(
       const due = new Date(dueIso);
       const overdue = due.getTime() < nowMs;
       const inWindow = isInSchouwdagPlannenWindow(jaar, week, now);
-      if (inWindow || overdue) {
+      if (warmtefonds || inWindow || overdue) {
         deadlineAt = due;
         const weekLabel = formatSchouwWeekLabel(jaar, week);
-        detail = `Schouwweek ${weekLabel} — plan de exacte schouwdag`;
-        reden = overdue
-          ? `Schouwdag had uiterlijk 1 week vóór schouwweek ${weekLabel} gepland moeten zijn.`
-          : `Plan de schouwdag in (window: 1 week vóór schouwweek ${weekLabel}).`;
+        detail = warmtefonds
+          ? `Warmtefonds goedgekeurd · schouwweek ${weekLabel} — plan de exacte schouwdag`
+          : `Schouwweek ${weekLabel} — plan de exacte schouwdag`;
+        reden = warmtefonds
+          ? "Warmtefonds is goedgekeurd; plan nu de schouwdag."
+          : overdue
+            ? `Schouwdag had uiterlijk 1 week vóór schouwweek ${weekLabel} gepland moeten zijn.`
+            : `Plan de schouwdag in (window: 1 week vóór schouwweek ${weekLabel}).`;
       }
     }
 
@@ -1172,7 +1214,7 @@ export function openSchouwInplannenActies(
     items.push({
       id: `schouw-inplannen-${project.id}`,
       soort: "schouw_inplannen",
-      titel: "Schouw inplannen",
+      titel: "Schouwdag inplannen",
       detail,
       reden,
       deadlineAt: deadlineAt.toISOString(),
@@ -1215,7 +1257,7 @@ export function openBackofficeActies(
     adviseurs?: Pick<{ id: string; naam: string }, "id" | "naam">[];
   }
 ): BackofficeActie[] {
-  // bel-schouw + nabellen-factuur: gedekt door status-gekoppelde auto-taken
+  const opstart = openBelSchouwActies(projecten, facturen, now);
   const schouw = openSchouwInplannenActies(projecten, now);
   const schouwProjectIds = new Set(
     schouw.map((a) => a.projectId).filter(Boolean) as string[]
@@ -1239,6 +1281,7 @@ export function openBackofficeActies(
   // Herplan (klant afgezegd / deur niet open) → appointment setter (Bel),
   // niet meer als backoffice-Actie.
   return [
+    ...opstart,
     ...schouw,
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
@@ -1259,6 +1302,7 @@ export function openBackofficeActies(
  * Badge en lijst moeten dezelfde set gebruiken.
  */
 export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
+  "bel_schouw_aanbetaling",
   "bestel_materiaal",
   "schouw_inplannen",
   "volgende_stap",
@@ -1311,6 +1355,7 @@ export function openActiesVoorProject(
   facturen: Factuur[] = [],
   now = new Date()
 ): BackofficeActie[] {
+  if (isProjectBuitenActies(project)) return [];
   const relatedFacturen = facturen.filter((f) => f.lead_id === project.lead_id);
   return openBackofficeActies([project], relatedFacturen, now).filter(
     (a) => a.projectId === project.id || a.leadId === project.lead_id

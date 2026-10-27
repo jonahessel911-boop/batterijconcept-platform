@@ -150,16 +150,26 @@ const sheetHead =
   "border border-line bg-[#F3F5F4] px-2.5 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-ink";
 const sheetTotal =
   "border border-line bg-[#EEF3F0] px-2.5 py-2.5 text-[12px] font-semibold tabular-nums text-ink";
+const sheetSelected =
+  "border border-line bg-[#E8F0EB] px-2.5 py-2 text-[12px] font-semibold tabular-nums text-ink";
+const sheetSelectedLabel =
+  "border border-line bg-[#E8F0EB] px-2.5 py-2 pl-5 text-left font-semibold text-ink shadow-[inset_4px_0_0_0_#0a4727]";
 
 function MetricsCells({
   m,
   tone = "cell",
 }: {
   m: MarketingMetrics;
-  tone?: "cell" | "total" | "week";
+  tone?: "cell" | "total" | "week" | "selected";
 }) {
   const base =
-    tone === "total" ? sheetTotal : tone === "week" ? `${sheetCell} bg-[#FAFBFA]` : sheetCell;
+    tone === "total"
+      ? sheetTotal
+      : tone === "selected"
+        ? sheetSelected
+        : tone === "week"
+          ? `${sheetCell} bg-[#FAFBFA]`
+          : sheetCell;
   return (
     <>
       <td className={`${base} whitespace-nowrap text-right`}>
@@ -227,12 +237,12 @@ function TrendChart({
     1,
     ...buckets.map((b) => (b.roas != null && b.roas > 0 ? b.roas : 0))
   );
-  const w = 640;
-  const h = 320;
-  const padL = 36;
-  const padR = 12;
-  const padT = 16;
-  const padB = 40;
+  const w = 1200;
+  const h = 480;
+  const padL = 28;
+  const padR = 20;
+  const padT = 24;
+  const padB = 56;
   const innerW = w - padL - padR;
   const innerH = h - padT - padB;
   const n = Math.max(1, buckets.length);
@@ -358,13 +368,14 @@ function TrendChart({
       >
         <svg
           viewBox={`0 0 ${w} ${h}`}
-          className="h-72 w-full sm:h-80"
+          preserveAspectRatio="none"
+          className="block h-52 w-full sm:h-64 lg:h-72"
           role="img"
           aria-label={`Marketing trend — vergelijking met ${compareLabel}`}
         >
           {buckets.map((bk, i) => {
             const cx = padL + step * (i + 0.5);
-            const barW = Math.max(5, step * 0.3);
+            const barW = Math.max(8, step * 0.34);
             const hSpend = (bk.spend / maxSpend) * (innerH * barScale);
             const hLeads = (bk.leads / maxLeads) * (innerH * barScale);
             const base = padT + innerH;
@@ -409,23 +420,23 @@ function TrendChart({
                 />
                 <text
                   x={cx}
-                  y={h - 18}
+                  y={h - 28}
                   textAnchor="middle"
                   className="fill-muted"
-                  fontSize={9}
-                  fontWeight={600}
+                  fontSize={13}
+                  fontWeight={700}
                 >
                   {bk.shortLabel}
                 </text>
                 {dRoas != null ? (
                   <text
                     x={cx}
-                    y={h - 6}
+                    y={h - 10}
                     textAnchor="middle"
                     fill={
                       dRoas > 0 ? "#0a4727" : dRoas < 0 ? "#C45A12" : "#6b7280"
                     }
-                    fontSize={8}
+                    fontSize={12}
                     fontWeight={700}
                   >
                     {fmtPctDelta(dRoas)}
@@ -439,7 +450,7 @@ function TrendChart({
               d={lineD}
               fill="none"
               stroke="#C45A12"
-              strokeWidth={2.5}
+              strokeWidth={3.5}
               strokeLinejoin="round"
               strokeLinecap="round"
               pointerEvents="none"
@@ -489,14 +500,32 @@ function TrendChart({
   );
 }
 
-export function MarketingPanel() {
+export type MarketingPanelRangeProps = {
+  rangeMode?: RangeMode;
+  rangeWeekKey?: string;
+  rangeMonthYm?: string;
+  hideRangeControls?: boolean;
+};
+
+export function MarketingPanel({
+  rangeMode,
+  rangeWeekKey,
+  rangeMonthYm,
+  hideRangeControls = false,
+}: MarketingPanelRangeProps = {}) {
   const today = todayConversieYmd();
-  const [mode, setMode] = useState<RangeMode>("weeks");
-  const [weekKey, setWeekKey] = useState(() => {
+  const [localMode, setLocalMode] = useState<RangeMode>("weeks");
+  const [localWeekKey, setLocalWeekKey] = useState(() => {
     const w = schouwWeekFromDate(new Date(`${today}T12:00:00`));
     return schouwWeekValue(w.jaar, w.week);
   });
-  const [monthYm, setMonthYm] = useState(today.slice(0, 7));
+  const [localMonthYm, setLocalMonthYm] = useState(today.slice(0, 7));
+  const mode = rangeMode ?? localMode;
+  const weekKey = rangeWeekKey ?? localWeekKey;
+  const monthYm = rangeMonthYm ?? localMonthYm;
+  const setMode = setLocalMode;
+  const setWeekKey = setLocalWeekKey;
+  const setMonthYm = setLocalMonthYm;
   const [data, setData] = useState<MarketingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -575,15 +604,26 @@ export function MarketingPanel() {
       }
       const payload = json as MarketingData;
       setData(payload);
-      const focusMonth =
-        mode === "month"
-          ? payload.months.find((m) => m.monthKey === monthYm) ||
-            payload.months[0]
-          : payload.months[0];
-      if (focusMonth?.monthKey) {
-        setOpenMonths(new Set([focusMonth.monthKey]));
-        const firstWeek = focusMonth.weeks?.[0]?.weekKey;
-        if (firstWeek) setOpenWeeks(new Set([firstWeek]));
+      if (mode === "month") {
+        const focusMonth =
+          payload.months.find((m) => m.monthKey === monthYm) ||
+          payload.months[0];
+        if (focusMonth?.monthKey) {
+          setOpenMonths(new Set([focusMonth.monthKey]));
+          setOpenWeeks(new Set());
+        }
+      } else {
+        const focusMonth =
+          payload.months.find((m) =>
+            m.weeks.some((w) => w.weekKey === weekKey)
+          ) || payload.months[payload.months.length - 1];
+        if (focusMonth?.monthKey) {
+          setOpenMonths(new Set([focusMonth.monthKey]));
+          const openKey =
+            focusMonth.weeks.find((w) => w.weekKey === weekKey)?.weekKey ||
+            focusMonth.weeks[focusMonth.weeks.length - 1]?.weekKey;
+          setOpenWeeks(openKey ? new Set([openKey]) : new Set());
+        }
       }
     } catch (e) {
       setData(null);
@@ -637,7 +677,7 @@ export function MarketingPanel() {
   const chartBuckets: ChartBucket[] = useMemo(() => {
     if (!data) return [];
     if (mode === "month") {
-      return [...data.months]
+      const months = [...data.months]
         .sort((a, b) => a.monthKey.localeCompare(b.monthKey))
         .map((m) => ({
           key: m.monthKey,
@@ -673,8 +713,13 @@ export function MarketingPanel() {
           roas: m.roas,
           roi: m.roi,
         }));
+      const first = months.findIndex(
+        (m) => m.spend > 0 || m.leads > 0 || m.afspraken > 0 || m.deals > 0
+      );
+      return first > 0 ? months.slice(first) : months;
     }
-    return data.series.map((w) => ({
+    // Weekview: afgelopen 12 weken, start bij eerste week mét data
+    const weeks = data.series.map((w) => ({
       key: w.weekKey,
       label: w.label,
       shortLabel: w.weekKey.replace(/^\d{4}-/, "") || w.weekKey,
@@ -690,6 +735,10 @@ export function MarketingPanel() {
       roas: w.roas,
       roi: w.roi,
     }));
+    const first = weeks.findIndex(
+      (w) => w.spend > 0 || w.leads > 0 || w.afspraken > 0 || w.deals > 0
+    );
+    return first > 0 ? weeks.slice(first) : weeks;
   }, [data, mode]);
 
   const compareLabel = mode === "month" ? "vorige maand" : "vorige week";
@@ -708,54 +757,60 @@ export function MarketingPanel() {
           ) : null}
         </div>
         <div className="flex flex-wrap items-end gap-2">
-          <div className="flex gap-1 border border-line p-0.5">
-            {(
-              [
-                ["weeks", "12 weken"],
-                ["month", "Maand"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setMode(id)}
-                className={[
-                  "px-2.5 py-1.5 text-xs font-semibold transition",
-                  mode === id
-                    ? "bg-[#0a4727] text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {mode === "month" ? (
-            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Maand
-              <input
-                type="month"
-                value={monthYm}
-                onChange={(e) => setMonthYm(e.target.value || today.slice(0, 7))}
-                className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
-              />
-            </label>
-          ) : (
-            <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Focus week
-              <select
-                value={weekKey}
-                onChange={(e) => setWeekKey(e.target.value)}
-                className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
-              >
-                {weekOptions.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
+          {!hideRangeControls ? (
+            <>
+              <div className="flex gap-1 border border-line p-0.5">
+                {(
+                  [
+                    ["weeks", "Week"],
+                    ["month", "Maand"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setMode(id)}
+                    className={[
+                      "px-2.5 py-1.5 text-xs font-semibold transition",
+                      mode === id
+                        ? "bg-[#0a4727] text-white"
+                        : "bg-white text-muted hover:bg-wash",
+                    ].join(" ")}
+                  >
+                    {label}
+                  </button>
                 ))}
-              </select>
-            </label>
-          )}
+              </div>
+              {mode === "month" ? (
+                <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Maand
+                  <input
+                    type="month"
+                    value={monthYm}
+                    onChange={(e) =>
+                      setMonthYm(e.target.value || today.slice(0, 7))
+                    }
+                    className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                  />
+                </label>
+              ) : (
+                <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Eindweek
+                  <select
+                    value={weekKey}
+                    onChange={(e) => setWeekKey(e.target.value)}
+                    className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                  >
+                    {weekOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </>
+          ) : null}
           <button
             type="button"
             disabled={loading || syncing}
@@ -830,7 +885,7 @@ export function MarketingPanel() {
                 {chartTitle}
               </p>
             </header>
-            <div className="px-4 py-3">
+            <div className="px-1 py-3 sm:px-2">
               <TrendChart buckets={chartBuckets} compareLabel={compareLabel} />
             </div>
           </section>
@@ -862,6 +917,8 @@ export function MarketingPanel() {
                   <tbody>
                     {data.months.map((month) => {
                       const mOpen = openMonths.has(month.monthKey);
+                      const monthSelected =
+                        mode === "month" && month.monthKey === monthYm;
                       return (
                         <Fragment key={month.monthKey}>
                           <tr
@@ -869,7 +926,11 @@ export function MarketingPanel() {
                             onClick={() => toggleMonth(month.monthKey)}
                           >
                             <td
-                              className={`${sheetTotal} sticky left-0 z-[1] text-left capitalize`}
+                              className={`${
+                                monthSelected
+                                  ? sheetSelectedLabel.replace("pl-5", "pl-2.5")
+                                  : sheetTotal
+                              } sticky left-0 z-[1] text-left capitalize`}
                             >
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="w-3 text-muted">
@@ -878,11 +939,16 @@ export function MarketingPanel() {
                                 {month.label}
                               </span>
                             </td>
-                            <MetricsCells m={month} tone="total" />
+                            <MetricsCells
+                              m={month}
+                              tone={monthSelected ? "selected" : "total"}
+                            />
                           </tr>
                           {mOpen
                             ? month.weeks.map((wk) => {
                                 const wOpen = openWeeks.has(wk.weekKey);
+                                const weekSelected =
+                                  mode === "weeks" && wk.weekKey === weekKey;
                                 return (
                                   <Fragment key={wk.weekKey}>
                                     <tr
@@ -890,7 +956,11 @@ export function MarketingPanel() {
                                       onClick={() => toggleWeek(wk.weekKey)}
                                     >
                                       <td
-                                        className={`${sheetCell} sticky left-0 z-[1] bg-[#FAFBFA] pl-6 text-left font-medium`}
+                                        className={`${
+                                          weekSelected
+                                            ? sheetSelectedLabel
+                                            : `${sheetCell} bg-[#FAFBFA] pl-6 text-left font-medium`
+                                        } sticky left-0 z-[1]`}
                                       >
                                         <span className="inline-flex items-center gap-1.5">
                                           <span className="w-3 text-muted">
@@ -899,7 +969,12 @@ export function MarketingPanel() {
                                           {wk.label}
                                         </span>
                                       </td>
-                                      <MetricsCells m={wk} tone="week" />
+                                      <MetricsCells
+                                        m={wk}
+                                        tone={
+                                          weekSelected ? "selected" : "week"
+                                        }
+                                      />
                                     </tr>
                                     {wOpen
                                       ? wk.campaigns.length === 0

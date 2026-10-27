@@ -912,6 +912,50 @@ export function schouwPartnerEmail(opts: {
   });
 }
 
+/**
+ * Klant: opleverformulier afgerond — installatie voltooid.
+ * Volgende stap: overstap dynamische leverancier + BTW-terugvrage.
+ */
+const TRUSTPILOT_EVALUATE_URL =
+  "https://www.trustpilot.com/evaluate/batterijconcept.nl";
+
+export function installatieVoltooidKlantEmail(opts: {
+  naam: string;
+  projectNummer?: string | null;
+  trustpilotUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const trustpilotUrl = opts.trustpilotUrl || TRUSTPILOT_EVALUATE_URL;
+  return emailLayout({
+    title: "Gefeliciteerd — je installatie is voltooid!",
+    preheader:
+      "Je batterij staat er. Beoordeel ons op Trustpilot — en we bellen over overstap & BTW-terugvrage.",
+    bodyHtml: [
+      emailH1("Gefeliciteerd — je installatie is voltooid!"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Goed nieuws: de installatie van je thuisbatterij is <strong>voltooid</strong>. Vanaf nu staat je batterij er en kan het besparen beginnen!"
+      ),
+      opts.projectNummer
+        ? emailBox(
+            `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>`
+          )
+        : "",
+      emailP(
+        "Was je tevreden over de installatie? <strong>Beoordeel ons op Trustpilot</strong> — dat zou super fijn zijn."
+      ),
+      emailButton("Beoordeel ons op Trustpilot", trustpilotUrl),
+      emailP(
+        "We nemen de <strong>eerstvolgende werkdag</strong> contact met je op om de overstap naar de dynamische energieleverancier en de BTW-terugvrage te starten."
+      ),
+      emailP(
+        "Heb je tussentijds vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 /** Klant: installatie is ingepland */
 export function installatieKlantEmail(opts: {
   naam: string;

@@ -25,6 +25,7 @@ type Medewerker = {
   email: string | null;
   rol: string;
   actief: boolean;
+  startdatum?: string | null;
 };
 
 type Partner = {
@@ -173,7 +174,11 @@ export function AdminTargetsPanel() {
     if (!store) return;
     if (section === "defaults") {
       if (defaultRole === "team") {
-        const team = computeTeamDashboardTargets(store, adviseurs);
+        const today = new Date();
+        const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const team = computeTeamDashboardTargets(store, adviseurs, {
+          asOfYmd: asOf,
+        });
         setDraft(fieldsToDraft(team, FIELDS_BY_ROLE.team));
       } else {
         setDraft(
@@ -196,10 +201,11 @@ export function AdminTargetsPanel() {
     }
   }, [store, section, defaultRole, selectedPersonId, selectedPartnerId, selectedPerson, selectedPartner, adviseurs]);
 
-  const salesCount = useMemo(
-    () => salesPeopleForTeam(adviseurs).length,
-    [adviseurs]
-  );
+  const salesCount = useMemo(() => {
+    const today = new Date();
+    const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    return salesPeopleForTeam(adviseurs, asOf).length;
+  }, [adviseurs]);
   async function patch(body: Record<string, unknown>) {
     setSaving(true);
     setError(null);
@@ -246,7 +252,7 @@ export function AdminTargetsPanel() {
       if (
         key === "afsprakenGepland" ||
         key === "leadToAppt" ||
-        key === "orders" ||
+        key === "afspraakToSale" ||
         key === "gemOrderwaarde"
       ) {
         const derived = deriveFunnelFromInputs({
@@ -254,12 +260,13 @@ export function AdminTargetsPanel() {
             Number(String(next.afsprakenGepland || "0").replace(",", ".")) || 0,
           leadToAppt:
             Number(String(next.leadToAppt || "0").replace(",", ".")) || 0,
-          orders: Number(String(next.orders || "0").replace(",", ".")) || 0,
+          afspraakToSale:
+            Number(String(next.afspraakToSale || "0").replace(",", ".")) || 0,
           gemOrderwaarde:
             Number(String(next.gemOrderwaarde || "0").replace(",", ".")) || 0,
         });
         next.leads = String(derived.leads);
-        next.afspraakToSale = String(derived.afspraakToSale);
+        next.orders = String(derived.orders);
         next.omzet = String(derived.omzet);
       }
       return next;
@@ -275,10 +282,11 @@ export function AdminTargetsPanel() {
       const derived = deriveFunnelFromInputs({
         afsprakenGepland: partial.afsprakenGepland ?? 0,
         leadToAppt: partial.leadToAppt ?? 0,
-        orders: partial.orders ?? 0,
+        afspraakToSale: partial.afspraakToSale ?? 0,
         gemOrderwaarde: partial.gemOrderwaarde ?? 0,
       });
       partial.leads = derived.leads;
+      partial.orders = derived.orders;
       partial.afspraakToSale = derived.afspraakToSale;
       partial.omzet = derived.omzet;
     }
@@ -522,7 +530,7 @@ export function AdminTargetsPanel() {
                 {defaultRole === "team"
                   ? `Automatisch berekend voor Dashboard v2: ${salesCount} actieve adviseur${salesCount === 1 ? "" : "s"} × hun targets (volume). Percentages komen uit de Adviseurs-standaard.`
                   : defaultRole === "adviseur"
-                    ? "Vul afspraken (bijv. 4/dag × 5 dagen), L2A% en orders in. Leads en closing % worden automatisch berekend. Team = som × actieve adviseurs."
+                    ? "Vul afspraken, L2A% en afspraak→sale % in (standaard 30%). Leads, orders en omzet worden automatisch berekend. Team = som × actieve adviseurs."
                     : defaultRole === "beller"
                       ? "Vul afspraken + L2A% in; leads nodig wordt berekend."
                       : "Geldt automatisch voor iedereen met deze rol zonder eigen override."}

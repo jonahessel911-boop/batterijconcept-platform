@@ -223,11 +223,16 @@ export function OffertePage() {
     setActieMsg(null);
     try {
       const isWarmtefonds = Boolean(offerte.financiering_voorbehoud);
+      const eigenModus =
+        aanbetalingModus === "handmatig"
+          ? "handmatig"
+          : EIGEN_MIDDELEN_AANBETALING_MODUS;
+      const saveModus = isWarmtefonds ? aanbetalingModus : eigenModus;
       const preview = aanbetalingVanOrder({
         subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
         btwBedrag: Number(offerte.btw_bedrag) || 0,
         totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        modus: aanbetalingModus,
+        modus: saveModus,
         handmatigIncBtw: parseEuroInput(aanbetalingHandmatig),
         financieringVoorbehoud: isWarmtefonds,
       });
@@ -237,11 +242,9 @@ export function OffertePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actie_required: !markComplete,
-          aanbetaling_modus: isWarmtefonds
-            ? aanbetalingModus
-            : EIGEN_MIDDELEN_AANBETALING_MODUS,
+          aanbetaling_modus: saveModus,
           aanbetaling_bedrag_inc:
-            isWarmtefonds && aanbetalingModus === "handmatig"
+            saveModus === "handmatig"
               ? parseEuroInput(aanbetalingHandmatig)
               : null,
           aanbetaling_te_innen_inc: preview.bedragIncBtw,
@@ -799,7 +802,7 @@ export function OffertePage() {
                     <span className="font-mono text-xs font-semibold text-green-dark">
                       {p.project_nummer}
                     </span>
-                    <StatusBadge kind="project" value={p.status} />
+                    <StatusBadge kind="project" value={p.status} project={p} />
                   </Link>
                 </li>
               ))}

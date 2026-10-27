@@ -1,8 +1,8 @@
 /**
- * Kickoff na getekende order: 2–3 dingen tegelijk, geen lineaire statussen.
+ * Kickoff na getekende order.
  *
- * Warmtefonds: BTW-factuur + WF-afspraak + schouwweek (incl. track & trace-mail)
- * Eigen middelen: BTW-factuur + schouwweek (incl. track & trace-mail)
+ * Warmtefonds: BTW-factuur + WF-afspraak + schouwweek parallel (incl. track & trace-mail)
+ * Eigen middelen: sequentieel — eerst 50%-factuur, schouwweek pas ná betaling
  *
  * Track & trace is géén aparte taak — zit in de schouwweek-klantmail.
  */
@@ -13,7 +13,35 @@ import {
 } from "@/lib/aanbetaling";
 import { isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { resolveFinancieringStatus } from "@/lib/financiering-status";
+import {
+  toOperationalStatus,
+  type ProjectStatusKey,
+} from "@/lib/project-status-config";
 import { formatProjectSchouwWeek } from "@/lib/schouw-week";
+
+/** Vanaf deze orderstatus is opstarten voorbij — geen kickoff-acties meer. */
+const PAST_KICKOFF_STATUS: ReadonlySet<ProjectStatusKey> = new Set([
+  "opstarten_voltooid_afwachten_wf",
+  "schouwdag_ingepland",
+  "schouw_voltooid",
+  "restfactuur_verstuurd",
+  "restfactuur_betaald",
+  "materiaal_besteld",
+  "installatie_ingepland",
+  "installatie_voltooid",
+  "review_gevraagd",
+  "service",
+]);
+
+/** Feiten die bewijzen dat opstarten achterhaald is (ook bij stale status). */
+export function isProjectPastKickoff(project: Project): boolean {
+  if (project.status === "annulering") return true;
+  if (project.status === "hold_sales_actie") return true;
+  if (project.bel_schouw_aanbetaling_at) return true;
+  if (project.installatie_at || project.installatie_voltooid_at) return true;
+  if (project.schouw_at) return true;
+  return PAST_KICKOFF_STATUS.has(toOperationalStatus(project.status));
+}
 
 export type KickoffItemId = "aanbetaling" | "wf_afspraak" | "schouwweek";
 
@@ -22,6 +50,9 @@ export type KickoffItem = {
   label: string;
   done: boolean;
   detail: string;
+  /** Niet actionable (bv. EM schouwweek vóór 50% betaling). */
+  blocked?: boolean;
+  blockedReason?: string;
 };
 
 function aanbetalingFacturen(facturen: Factuur[]): Factuur[] {
@@ -49,6 +80,18 @@ export function isSchouwweekKickoffDone(project: Project): boolean {
   return Boolean(project.schouw_jaar && project.schouw_week);
 }
 
+/**
+ * Schouwweek mag als open actie: nog geen week, én (Warmtefonds óf EM 50% betaald).
+ */
+export function isSchouwweekKickoffActionable(
+  project: Project,
+  facturen: Factuur[] = []
+): boolean {
+  if (isSchouwweekKickoffDone(project)) return false;
+  if (isWarmtefondsProject(project)) return true;
+  return isAanbetalingBetaald(facturen);
+}
+
 /** Intake klaar zodra Edwin is aangeschreven (financiering gestart). */
 export function isWfAfspraakKickoffDone(project: Project): boolean {
   return resolveFinancieringStatus(project) != null;
@@ -63,6 +106,7 @@ export function projectKickoffItems(
   const aanbetalingBetaald = isAanbetalingBetaald(facturen);
   const schouwDone = isSchouwweekKickoffDone(project);
   const wfDone = isWfAfspraakKickoffDone(project);
+  const schouwBlocked = !wf && !schouwDone && !aanbetalingBetaald;
 
   const items: KickoffItem[] = [
     {
@@ -81,22 +125,28 @@ export function projectKickoffItems(
       id: "schouwweek",
       label: "Schouwweek inplannen",
       done: schouwDone,
+      blocked: schouwBlocked || undefined,
+      blockedReason: schouwBlocked
+        ? "Eerst 50% betaling afwachten"
+        : undefined,
       detail: schouwDone
         ? formatProjectSchouwWeek(project) || "Ingepland"
-        : wf
-          ? "Incl. track & trace-mail · meestal ±5 weken vooruit"
-          : "Incl. track & trace-mail naar de klant",
+        : schouwBlocked
+          ? "Eerst 50% betaling afwachten"
+          : wf
+            ? "Incl. track & trace-mail · meestal ±5 weken vooruit"
+            : "Incl. track & trace-mail naar de klant",
     },
   ];
 
   if (wf) {
     items.splice(1, 0, {
       id: "wf_afspraak",
-      label: "Edwin inschakelen (Warmtefonds)",
+      label: "Gegevens doorsturen naar Edwin",
       done: wfDone,
       detail: wfDone
         ? "Doorgestuurd naar Edwin"
-        : "Eerst WhatsApp sturen, daarna afvinken",
+        : "WhatsApp met klantgegevens + afspraak laten inplannen",
     });
   }
 
@@ -174,15 +224,18 @@ export function isKickoffComplete(
   project: Project,
   facturen: Factuur[] = []
 ): boolean {
-  if (project.status === "annulering") return true;
+  if (isProjectPastKickoff(project)) return true;
   return projectKickoffItems(project, facturen).every((i) => i.done);
 }
 
-/** Alleen tonen zolang er nog kickoff-werk open staat. */
+/**
+ * Alleen tonen zolang het project nog in opstarten zit én er open stappen zijn.
+ * Geïnstalleerd / schouw gedaan / verder in de keten → nooit meer kickoff-acties.
+ */
 export function showProjectKickoff(
   project: Project,
   facturen: Factuur[] = []
 ): boolean {
-  if (project.status === "annulering") return false;
+  if (isProjectPastKickoff(project)) return false;
   return !isKickoffComplete(project, facturen);
 }

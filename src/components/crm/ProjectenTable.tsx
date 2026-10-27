@@ -40,7 +40,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
                     {p.project_nummer}
                   </p>
                 </div>
-                <StatusBadge kind="project" value={p.status} />
+                <StatusBadge kind="project" value={p.status} project={p} />
               </div>
               <p className="mt-2 text-sm text-ink">{p.titel || "Geen titel"}</p>
               <p className="mt-1 text-xs text-muted">
@@ -97,7 +97,7 @@ export function ProjectenTable({ projecten }: { projecten: Project[] }) {
                 </td>
                 <td className="whitespace-nowrap">{p.titel || "—"}</td>
                 <td>
-                  <StatusBadge kind="project" value={p.status} />
+                  <StatusBadge kind="project" value={p.status} project={p} />
                 </td>
                 <td className="text-muted whitespace-nowrap">
                   {formatDateShort(p.startdatum)}

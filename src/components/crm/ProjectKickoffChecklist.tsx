@@ -50,7 +50,7 @@ function aanbetalingConcept(facturen: Factuur[]): Factuur | null {
 }
 
 /**
- * Enige focus tijdens opstart: wat moet er nú gebeuren (parallel).
+ * Focus tijdens opstart: WF parallel; EM sequentieel (factuur → betaling → schouw).
  */
 export function ProjectKickoffChecklist({
   project,
@@ -310,7 +310,10 @@ export function ProjectKickoffChecklist({
   const bedragen = kickoffWarmtefondsBedragen(project, facturen);
 
   return (
-    <section className="border border-line bg-white px-4 py-5 sm:px-5">
+    <section
+      id="project-kickoff"
+      className="border border-line bg-white px-4 py-5 sm:px-5"
+    >
       <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
         Direct na tekenen
       </p>
@@ -334,10 +337,20 @@ export function ProjectKickoffChecklist({
           {open.map((item, idx) => (
             <li
               key={item.id}
-              className="flex flex-col gap-3 border border-[#FDBA74]/60 bg-[#FFF7ED] px-3.5 py-3 sm:flex-row sm:items-start"
+              className={
+                item.blocked
+                  ? "flex flex-col gap-3 border border-line bg-[#F8FAFC] px-3.5 py-3 sm:flex-row sm:items-start"
+                  : "flex flex-col gap-3 border border-[#FDBA74]/60 bg-[#FFF7ED] px-3.5 py-3 sm:flex-row sm:items-start"
+              }
             >
               <div className="flex min-w-0 flex-1 items-start gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold text-white">
+                <span
+                  className={
+                    item.blocked
+                      ? "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#94A3B8] text-[11px] font-bold text-white"
+                      : "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#C45A12] text-[11px] font-bold text-white"
+                  }
+                >
                   {idx + 1}
                 </span>
                 <span className="min-w-0">
@@ -345,8 +358,11 @@ export function ProjectKickoffChecklist({
                     {item.label}
                   </span>
                   <span className="mt-0.5 block text-[12px] text-muted">
-                    {item.detail}
-                    {item.id === "aanbetaling" &&
+                    {item.blocked && item.blockedReason
+                      ? item.blockedReason
+                      : item.detail}
+                    {!item.blocked &&
+                    item.id === "aanbetaling" &&
                     bedragen.aanbetalingInc != null
                       ? ` · ${formatEuro(bedragen.aanbetalingInc)}`
                       : ""}
@@ -421,38 +437,45 @@ export function ProjectKickoffChecklist({
               ) : null}
 
               {item.id === "schouwweek" ? (
-                <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
-                  <select
-                    value={schouwWeek}
-                    onChange={(e) => setSchouwWeek(e.target.value)}
-                    className="border border-line bg-white px-3 py-2 text-[12px] font-medium text-ink outline-none focus:border-green"
-                  >
-                    {weekOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                        {o.value ===
-                        schouwWeekValue(recommended.jaar, recommended.week)
-                          ? wf
-                            ? " · voorstel +5w"
-                            : " · voorstel +1w"
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={weekBusy || !schouwWeek}
-                    onClick={() => void planSchouwweek()}
-                    className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-                  >
-                    {weekBusy ? "Bezig…" : "Zet schouwweek + mail"}
-                  </button>
-                  {!lead?.email ? (
-                    <p className="max-w-[16rem] text-[11px] text-[#C45A12]">
-                      Let op: geen e-mail op de lead — track & trace-mail kan niet
-                    </p>
-                  ) : null}
-                </div>
+                item.blocked ? (
+                  <p className="shrink-0 text-[12px] font-medium text-muted sm:max-w-[14rem] sm:text-right">
+                    Beschikbaar na 50% betaling
+                  </p>
+                ) : (
+                  <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
+                    <select
+                      value={schouwWeek}
+                      onChange={(e) => setSchouwWeek(e.target.value)}
+                      className="border border-line bg-white px-3 py-2 text-[12px] font-medium text-ink outline-none focus:border-green"
+                    >
+                      {weekOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                          {o.value ===
+                          schouwWeekValue(recommended.jaar, recommended.week)
+                            ? wf
+                              ? " · voorstel +5w"
+                              : " · voorstel +1w"
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={weekBusy || !schouwWeek}
+                      onClick={() => void planSchouwweek()}
+                      className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
+                    >
+                      {weekBusy ? "Bezig…" : "Zet schouwweek + mail"}
+                    </button>
+                    {!lead?.email ? (
+                      <p className="max-w-[16rem] text-[11px] text-[#C45A12]">
+                        Let op: geen e-mail op de lead — track & trace-mail kan
+                        niet
+                      </p>
+                    ) : null}
+                  </div>
+                )
               ) : null}
             </li>
           ))}

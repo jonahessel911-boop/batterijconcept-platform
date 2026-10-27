@@ -18,13 +18,40 @@ import {
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import {
+  FINANCIERING_PIPELINE,
+  normalizeFinancieringStatus,
+  resolveFinancieringStatus,
+} from "@/lib/financiering-status";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
   resolveBetaalwijze,
   resolveStatusTaak,
   toOperationalStatus,
   type Betaalwijze,
   type ProjectStatusKey,
 } from "@/lib/project-status-config";
-import type { Project } from "@/types/database";
+import type { Factuur, Project } from "@/types/database";
+
+function aanbetalingFacturenVan(facturen: Factuur[]): Factuur[] {
+  return facturen.filter(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      isAanbetalingFactuurOmschrijving(f.omschrijving)
+  );
+}
+
+function isAanbetalingVerstuurd(facturen: Factuur[]): boolean {
+  return aanbetalingFacturenVan(facturen).some(
+    (f) =>
+      f.status === "verzonden" ||
+      f.status === "deels_betaald" ||
+      f.status === "betaald"
+  );
+}
+
+function isAanbetalingBetaald(facturen: Factuur[]): boolean {
+  return aanbetalingFacturenVan(facturen).some((f) => f.status === "betaald");
+}
 
 function betaalwijzeVanProject(project: Project): Betaalwijze {
   const lead = Array.isArray(project.leads) ? project.leads[0] : project.leads;
@@ -40,6 +67,18 @@ function betaalwijzeVanProject(project: Project): Betaalwijze {
 
 function isWarmtefonds(project: Project): boolean {
   return betaalwijzeVanProject(project) === "warmtefonds";
+}
+
+/** Warmtefonds goedgekeurd (pipeline vanaf aanbod_ondertekenen / legacy). */
+function isWarmtefondsGoedgekeurdVoorSchouw(project: Project): boolean {
+  if (project.status === "warmtefonds_goedgekeurd") return true;
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  if (!n || n === "afgewezen") return false;
+  if (raw === "aanvraag_goedgekeurd") return true;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
+  return idx >= 0 && from >= 0 && idx >= from;
 }
 
 export type VolgendeStapActie =
@@ -107,6 +146,8 @@ function dueEndOfDayInDays(days: number, now: Date): string {
 
 function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
   switch (status) {
+    case "opstarten_voltooid_afwachten_wf":
+      return "Opstarten klaar — wacht op Warmtefonds. Schouwdag pas plannen na goedkeuring (of in het schouwvenster).";
     case "schouwdag_ingepland":
       return "De schouwdag staat; zorg dat klant en installateur scherp staan.";
     case "schouw_voltooid":
@@ -130,19 +171,72 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
 
 function volgendeStapNaOpstarten(
   project: Project,
-  now: Date
+  now: Date,
+  facturen: Factuur[] = []
 ): ProjectVolgendeStapInfo {
   const week = schouwWeekOf(project);
   const wf = isWarmtefonds(project);
 
   if (!week) {
     const due = dueEndOfDayInDays(1, now);
+
+    // Eigen middelen: sequentieel — factuur → betaling → schouwweek
+    if (!wf) {
+      const betaald = isAanbetalingBetaald(facturen);
+      const factuurVerstuurd = isAanbetalingVerstuurd(facturen);
+
+      if (!factuurVerstuurd) {
+        return {
+          eyebrow: "Volgende stap",
+          titel: "50% aanbetaling versturen",
+          reden: "Eigen middelen: eerst de 50%-factuur; schouwweek volgt na betaling.",
+          uiterlijkLabel: formatUiterlijkAt(due),
+          uiterlijkAt: due,
+          urgent: true,
+          overdue: false,
+          actie: {
+            kind: "anchor",
+            label: "Naar opstarten",
+            href: "#project-kickoff",
+          },
+        };
+      }
+
+      if (!betaald) {
+        return {
+          eyebrow: "Volgende stap",
+          titel: "Wacht op 50% betaling",
+          reden:
+            "Factuur is verstuurd. Schouwweek plant je in zodra de 50% binnen is.",
+          uiterlijkLabel: "Na betaling",
+          uiterlijkAt: null,
+          urgent: false,
+          overdue: false,
+          actie: null,
+        };
+      }
+
+      return {
+        eyebrow: "Volgende stap",
+        titel: "Schouwweek inplannen",
+        reden: "50% is betaald — plan nu de schouwweek (incl. track & trace).",
+        uiterlijkLabel: formatUiterlijkAt(due),
+        uiterlijkAt: due,
+        urgent: true,
+        overdue: false,
+        actie: {
+          kind: "anchor",
+          label: "Plan schouwweek",
+          href: "#project-afspraken",
+        },
+      };
+    }
+
     return {
       eyebrow: "Volgende stap",
       titel: "Schouwweek inplannen",
-      reden: wf
-        ? "Warmtefonds duurt ±5 weken — daarom plannen we de schouwweek ongeveer 5 weken vooruit."
-        : "Eigen middelen: schouw zo snel mogelijk inplannen.",
+      reden:
+        "Warmtefonds duurt ±5 weken — daarom plannen we de schouwweek ongeveer 5 weken vooruit.",
       uiterlijkLabel: formatUiterlijkAt(due),
       uiterlijkAt: due,
       urgent: true,
@@ -172,6 +266,11 @@ function volgendeStapNaOpstarten(
     };
   }
 
+  // Warmtefonds: schouwdag pas ná goedkeuring (wacht-actie dekt de tussentijd)
+  if (wf && !isWarmtefondsGoedgekeurdVoorSchouw(project)) {
+    return null;
+  }
+
   const belweek = schouwWeekEerder(week.jaar, week.week);
   const dueAt = dueAtVoorSchouwdagInplan(week.jaar, week.week);
   const inWindow = isInSchouwdagPlannenWindow(week.jaar, week.week, now);
@@ -179,13 +278,29 @@ function volgendeStapNaOpstarten(
   const schouwLabel =
     formatSchouwWeekLabel(week.jaar, week.week) || `Week ${week.week}`;
 
+  if (wf) {
+    return {
+      eyebrow: overdue ? "Volgende stap — te laat" : "Volgende stap",
+      titel: "Schouwdag inplannen met de klant",
+      reden: `Warmtefonds goedgekeurd · schouwweek ${schouwLabel} — plan nu de exacte schouwdag.`,
+      uiterlijkLabel: formatUiterlijkAt(dueAt),
+      uiterlijkAt: dueAt,
+      urgent: true,
+      overdue,
+      actie: {
+        kind: "anchor",
+        label: "Actie afronden — plan schouwdag",
+        href: "#project-afspraken",
+        openSoort: "schouwdag",
+      },
+    };
+  }
+
   if (!inWindow && !overdue) {
     return {
       eyebrow: "Volgende stap (later)",
       titel: `Schouwdag inplannen vanaf ${formatMaandagWeek(belweek.jaar, belweek.week)}`,
-      reden: wf
-        ? `Warmtefonds duurt ±5 weken. Schouwweek staat op ${schouwLabel}. Eén week van tevoren bel je de klant voor de exacte schouwdag.`
-        : `Schouwweek staat op ${schouwLabel}. Eén week van tevoren bel je voor de exacte schouwdag.`,
+      reden: `Schouwweek staat op ${schouwLabel}. Eén week van tevoren bel je voor de exacte schouwdag.`,
       uiterlijkLabel: `${formatMaandagWeek(belweek.jaar, belweek.week)} (uiterlijk 17:00)`,
       uiterlijkAt: dueAt,
       urgent: false,
@@ -271,6 +386,7 @@ function volgendeStapVanTaak(
 /** Pipeline-rang zodat feiten (installatie_at) achtergebleven status inhalen. */
 const OP_RANK: ProjectStatusKey[] = [
   "schouwweek_inplannen",
+  "opstarten_voltooid_afwachten_wf",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -319,7 +435,11 @@ export function effectiveOperationalStatus(
     if (opRank(status) < opRank(min)) status = min;
   } else if (isSchouwdagDefinitief(project)) {
     const min: ProjectStatusKey = "schouwdag_ingepland";
-    if (opRank(status) < opRank(min) && status === "schouwweek_inplannen") {
+    if (
+      opRank(status) < opRank(min) &&
+      (status === "schouwweek_inplannen" ||
+        status === "opstarten_voltooid_afwachten_wf")
+    ) {
       // Alleen bump binnen opstart — verdere pipeline blijft via expliciete status
       status = min;
     }
@@ -333,16 +453,24 @@ export function effectiveOperationalStatus(
  */
 export function resolveProjectVolgendeStap(
   project: Project,
-  now: Date = new Date()
+  now: Date = new Date(),
+  facturen: Factuur[] = []
 ): ProjectVolgendeStapInfo | null {
   const st = (project.status || "").toLowerCase();
-  if (st === "annulering" || st === "geannuleerd") return null;
+  if (
+    st === "annulering" ||
+    st === "geannuleerd" ||
+    st === "hold_sales_actie" ||
+    st === "hold_sales"
+  ) {
+    return null;
+  }
 
   const status = effectiveOperationalStatus(project);
   const betaalwijze = betaalwijzeVanProject(project);
 
   if (status === "schouwweek_inplannen") {
-    return volgendeStapNaOpstarten(project, now);
+    return volgendeStapNaOpstarten(project, now, facturen);
   }
 
   return volgendeStapVanTaak(status, betaalwijze, project, now);

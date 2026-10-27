@@ -70,7 +70,7 @@ export function inferResumeStatusAfterHold(
   }
 
   if (project.schouw_jaar && project.schouw_week) {
-    return "aanbetaling_verstuurd";
+    return wf ? "opstarten_voltooid_afwachten_wf" : "schouwweek_inplannen";
   }
 
   return "schouwweek_inplannen";

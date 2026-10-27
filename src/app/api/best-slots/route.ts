@@ -24,9 +24,10 @@ export async function GET(req: NextRequest) {
 
   const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "5");
   const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 5, 1), 10);
-  const daysRaw = Number(req.nextUrl.searchParams.get("days") || "21");
+  // Horizon: komende 2 weken vullen heeft prio (niet verder vooruit aanbieden)
+  const daysRaw = Number(req.nextUrl.searchParams.get("days") || "14");
   const daysAhead = Math.min(
-    Math.max(Number.isFinite(daysRaw) ? daysRaw : 21, 1),
+    Math.max(Number.isFinite(daysRaw) ? daysRaw : 14, 1),
     60
   );
 

@@ -36,6 +36,7 @@ export type ProjectStatusKey =
   | "warmtefonds_in_behandeling"
   | "warmtefonds_afgewezen"
   | "warmtefonds_goedgekeurd"
+  | "opstarten_voltooid_afwachten_wf"
   | "schouwdag_ingepland"
   | "schouw_voltooid"
   | "restfactuur_verstuurd"
@@ -74,8 +75,11 @@ export type ProjectStatusDef = {
   inPipeline: boolean;
   /** Vaste auto-taak; kan per betaalwijze verschillen */
   taak: StatusTaakConfig | null;
-  /** Override taak per betaalwijze (bv. aanbetaling_betaald) */
-  taakPerBetaalwijze?: Partial<Record<Betaalwijze, StatusTaakConfig>>;
+  /**
+   * Override taak per betaalwijze. `null` = geen auto-taak voor die betaalwijze
+   * (bv. restfactuur-opvolgen alleen bij eigen middelen).
+   */
+  taakPerBetaalwijze?: Partial<Record<Betaalwijze, StatusTaakConfig | null>>;
 };
 
 /**
@@ -85,12 +89,12 @@ export type ProjectStatusDef = {
 export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   {
     key: "schouwweek_inplannen",
-    /** Eén opstartfase: aanbetaling + schouwweek (+ WF-afspraak) parallel */
+    /** Opstarten: WF parallel; EM sequentieel (factuur → betaling → schouwweek) */
     label: "Opstarten",
     fase: "voorbereiding",
     scope: "beide",
     inPipeline: true,
-    /** Taken via kickoffTaken() — meerdere parallel, niet één status-taak */
+    /** Taken via kickoffAutoTaken() — WF parallel, EM gestaffeld */
     taak: null,
   },
   {
@@ -153,8 +157,17 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     taak: null,
   },
   {
+    key: "opstarten_voltooid_afwachten_wf",
+    /** WF na kickoff: schouwweek staat, nog geen echte schouwdag — wachten op WF */
+    label: "Opstarten voltooid — afwachten WF",
+    fase: "voorbereiding",
+    scope: "warmtefonds",
+    inPipeline: true,
+    taak: null,
+  },
+  {
     key: "schouwdag_ingepland",
-    /** Week of exacte dag — na Opstarten, vóór Schouw voltooid */
+    /** Alleen exacte schouwdag (niet week-placeholder) */
     label: "Schouw gepland",
     fase: "schouw",
     scope: "beide",
@@ -185,11 +198,19 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "eindafrekening",
     scope: "beide",
     inPipeline: true,
+    /**
+     * Warmtefonds-restant: lange betaaltermijn (WF), geen korte opvolg-actie.
+     * Alleen aanbetalingsfacturen krijgen na verlopen (3 d) nabellen/opvolging.
+     * Eigen middelen: wel restfactuur-opvolgen.
+     */
     taak: {
       autoKeySuffix: "opvolgen",
       titel: "Betaling restfactuur opvolgen",
       afdeling: "Facturatie",
       due: { kind: "days", days: 5 },
+    },
+    taakPerBetaalwijze: {
+      warmtefonds: null,
     },
   },
   {
@@ -365,7 +386,13 @@ export function resolveStatusTaak(
 ): StatusTaakConfig | null {
   const def = PROJECT_STATUS_BY_KEY[status];
   if (!def) return null;
-  return def.taakPerBetaalwijze?.[betaalwijze] ?? def.taak;
+  if (
+    def.taakPerBetaalwijze &&
+    Object.prototype.hasOwnProperty.call(def.taakPerBetaalwijze, betaalwijze)
+  ) {
+    return def.taakPerBetaalwijze[betaalwijze] ?? null;
+  }
+  return def.taak;
 }
 
 export function resolveBetaalwijze(opts: {
@@ -397,6 +424,7 @@ export function remapLegacyProjectStatus(
     case "warmtefonds_in_behandeling":
     case "warmtefonds_afgewezen":
     case "warmtefonds_goedgekeurd":
+    case "opstarten_voltooid_afwachten_wf":
     case "schouwdag_ingepland":
     case "schouw_voltooid":
     case "restfactuur_verstuurd":
@@ -439,3 +467,16 @@ export const BETAALWIJZE_LABEL: Record<Betaalwijze, string> = {
   warmtefonds: "Warmtefonds",
   eigen_middelen: "Eigen middelen",
 };
+
+/**
+ * Status na schouwweek/-dag inplannen.
+ * "Schouw gepland" alleen bij exacte schouwdag; week-placeholder → WF wachtstatus of Opstarten (EM).
+ */
+export function statusNaSchouwInplannen(opts: {
+  exacteDag: boolean;
+  warmtefonds: boolean;
+}): ProjectStatusKey {
+  if (opts.exacteDag) return "schouwdag_ingepland";
+  if (opts.warmtefonds) return "opstarten_voltooid_afwachten_wf";
+  return "schouwweek_inplannen";
+}

@@ -2130,8 +2130,20 @@ export function RecruitmentPanel() {
     setDragId(null);
     setOverStatus(null);
     if (!item || normalizeSollicitatieStatus(item.status) === status) return;
-    // Kanban-schuiven = alleen status, geen mail/popup (training/beoordeling
-    // koppel je bewust via de kandidaatkaart).
+    if (
+      status === SOLLICITATIE_STATUS_MET_VERVOLG &&
+      normalizeSollicitatieStatus(item.status) !== SOLLICITATIE_STATUS_MET_VERVOLG
+    ) {
+      setBeoordelingId(item.id);
+      return;
+    }
+    if (
+      status === SOLLICITATIE_STATUS_MET_TRAINING &&
+      normalizeSollicitatieStatus(item.status) !== SOLLICITATIE_STATUS_MET_TRAINING
+    ) {
+      setTrainingAssignId(item.id);
+      return;
+    }
     void patchKandidaat(item.id, { status }).catch(() => {
       /* error state is al gezet */
     });

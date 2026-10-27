@@ -1,5 +1,8 @@
 /**
- * Partner-planvensters: ochtend 09–12 (schouw) + middag 13–17 (installatie 4u / schouws).
+ * Partner-planvensters:
+ * - Ochtend 09–12: schouw (30m) of installatie 1 (4u)
+ * - 12–13: pauze / reistijd (geen slots)
+ * - Middag 13–17: schouw (30m) of installatie 2 (4u)
  */
 import {
   addDays,
@@ -12,7 +15,7 @@ import {
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
-  INSTALLATIE_DUUR_MINUTEN,
+  installatieDuurVoorVenster,
   SCHOUW_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
 
@@ -30,14 +33,14 @@ export const PARTNER_VENSTER_BOUNDS: Record<
     startMin: 0,
     endHour: 12,
     endMin: 0,
-    label: "Ochtend 09:00–12:00",
+    label: "Ochtend 09:00–12:00 (installatie 1 / schouw)",
   },
   middag: {
     startHour: 13,
     startMin: 0,
     endHour: 17,
     endMin: 0,
-    label: "Middag 13:00–17:00",
+    label: "Middag 13:00–17:00 (installatie 2 / schouw)",
   },
 };
 
@@ -131,12 +134,14 @@ export function schouwSlotStartsForDay(dayKey: string): Date[] {
   return starts;
 }
 
-/** Installatie: alleen middag 13:00–17:00 (één start). */
+/**
+ * Installatie: max 2 per dag — ochtend 09:00–12:00 (3u) + middag 13:00–17:00 (4u).
+ * 12:00–13:00 is pauze/reistijd (geen slot).
+ */
 export function installatieSlotStartsForDay(dayKey: string): Date[] {
-  const { start, end } = vensterBoundsUtc(dayKey, "middag");
-  const slotEnd = addMinutes(start, INSTALLATIE_DUUR_MINUTEN);
-  if (slotEnd.getTime() > end.getTime()) return [];
-  return [start];
+  return PARTNER_VENSTERS.map(
+    (venster) => vensterBoundsUtc(dayKey, venster).start
+  );
 }
 
 function afblokBusyForDay(
@@ -165,10 +170,6 @@ export function generatePartnerDaySlots(opts: {
 }): PartnerDaySlot[] {
   const daysAhead = opts.daysAhead ?? 28;
   const from = opts.fromDate ?? new Date();
-  const duur =
-    opts.soort === "installatie"
-      ? INSTALLATIE_DUUR_MINUTEN
-      : SCHOUW_DUUR_MINUTEN;
   const slots: PartnerDaySlot[] = [];
 
   for (let d = 0; d <= daysAhead; d++) {
@@ -193,9 +194,20 @@ export function generatePartnerDaySlots(opts: {
 
     for (const startUtc of starts) {
       if (startUtc <= from) continue;
-      const endUtc = addMinutes(startUtc, duur);
       const venster = vensterForStart(startUtc);
       if (!venster) continue;
+      const endUtc =
+        opts.soort === "installatie"
+          ? vensterBoundsUtc(dayKey, venster).end
+          : addMinutes(startUtc, SCHOUW_DUUR_MINUTEN);
+      // Guard: installatie-duur moet in venster passen
+      if (
+        opts.soort === "installatie" &&
+        addMinutes(startUtc, installatieDuurVoorVenster(venster)).getTime() >
+          endUtc.getTime()
+      ) {
+        continue;
+      }
       slots.push({
         start: startUtc,
         end: endUtc,

@@ -41,7 +41,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, created_at, updated_at";
+  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_MID =
@@ -245,13 +245,11 @@ export async function GET(req: NextRequest) {
       ),
       startdatum
     );
+    // Blocks: alle dagblokken houden (ook fysiek bezet / afgeblokt), gemarkeerd
+    // met busy — nodig voor telefonisch vervolg over een bezet slot.
+    // slots blijft alleen vrije (huisbezoek) opties.
     const blocks = filterSlotsByStartdatum(
-      filterSlotsByAfblokkingen(
-        filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
-        adviseurId,
-        afgeblokt,
-        vrijgaven
-      ),
+      filterSlotsByBeschikbaarheid(rawBlocks, unavailable),
       startdatum
     ).map((b) => {
       const blocked = isSlotGeblokkeerd(
@@ -324,9 +322,15 @@ export async function POST(req: NextRequest) {
   }
 
   const startdatum = parseStartdatum(body.startdatum);
-  if (body.startdatum !== undefined && startdatum === undefined) {
+  if (body.startdatum !== undefined && body.startdatum !== null && body.startdatum !== "" && startdatum === undefined) {
     return NextResponse.json(
       { error: "Startdatum moet yyyy-MM-dd zijn" },
+      { status: 400 }
+    );
+  }
+  if (rol === "adviseur" && !startdatum) {
+    return NextResponse.json(
+      { error: "Startdatum is verplicht voor adviseurs" },
       { status: 400 }
     );
   }
@@ -517,6 +521,7 @@ export async function PATCH(req: NextRequest) {
     factuur_plaats?: string | null;
     iban?: string | null;
     max_factuur_bedrag?: number | null;
+    interne_notities?: string | null;
     resend_invite?: boolean;
     password?: string;
   };
@@ -694,6 +699,12 @@ export async function PATCH(req: NextRequest) {
         patch.max_factuur_bedrag = Math.round(max * 100) / 100;
       }
     }
+    if (body.interne_notities !== undefined) {
+      patch.interne_notities =
+        typeof body.interne_notities === "string"
+          ? body.interne_notities.trim() || null
+          : null;
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -761,6 +772,20 @@ export async function PATCH(req: NextRequest) {
           {
             error:
               "Voer eerst supabase/migrate-adviseur-beschikbaarheid.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (
+        patch.interne_notities !== undefined &&
+        isMissingColumn(error, "interne_notities")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-team-interne-notities.sql uit in Supabase.",
             detail: error.message,
           },
           { status: 503 }

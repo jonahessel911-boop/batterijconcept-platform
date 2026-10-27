@@ -22,6 +22,7 @@ import { isAdminAdviseur } from "@/lib/admin-adviseur";
 import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
+  afspraakMagOverBezetSlot,
   afspraakTypeLabel,
   afspraakZichtbaarInAgenda,
   needsVervolgPunt,
@@ -439,9 +440,14 @@ export function AgendaPanel({
   const [planSlot, setPlanSlot] = useState<{
     adviseurId: string;
     startAt: string;
+    /** Slot heeft al een fysieke afspraak — alleen telefonisch/soft plannen */
+    overBezet?: boolean;
   } | null>(null);
   const [pickedLead, setPickedLead] = useState<Lead | null>(null);
   const [planSoort, setPlanSoort] = useState<AfspraakSoort>("nieuw");
+  /** Handmatig tijdstip (Amsterdam) — vooral voor terugbel */
+  const [planStartLocal, setPlanStartLocal] = useState("");
+  const [planNotitie, setPlanNotitie] = useState("");
   const [saving, setSaving] = useState(false);
   const [blockBusy, setBlockBusy] = useState(false);
   /** Klik op Afblokken → modus aan; daarna tijdslots aan/uit blokkeren. */
@@ -931,6 +937,21 @@ export function AgendaPanel({
   async function planAfspraak(e: React.FormEvent) {
     e.preventDefault();
     if (!planSlot || !pickedLead) return;
+    if (planSlot.overBezet && !afspraakMagOverBezetSlot(planSoort)) {
+      setError(
+        "Op een bezet tijdblok kun je alleen een telefonisch/terugbel plannen"
+      );
+      return;
+    }
+    const isTerugbel = planSoort === "bel" || planSoort === "warme_bel";
+    if (isTerugbel && !planNotitie.trim()) {
+      setError("Vul een notitie in voor de terugbelafspraak");
+      return;
+    }
+    const startAt =
+      isTerugbel && planStartLocal.trim()
+        ? planStartLocal.trim()
+        : planSlot.startAt;
     setSaving(true);
     setError(null);
     try {
@@ -940,8 +961,9 @@ export function AgendaPanel({
         body: JSON.stringify({
           lead_id: pickedLead.id,
           adviseur_id: planSlot.adviseurId,
-          start_at: planSlot.startAt,
+          start_at: startAt,
           soort: planSoort,
+          ...(planNotitie.trim() ? { notities: planNotitie.trim() } : {}),
           ...(planSoort === "nieuw"
             ? { partner_aanwezig: true, andere_offertes_gehad: false }
             : {}),
@@ -949,10 +971,18 @@ export function AgendaPanel({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Plannen mislukt");
-      setOkMsg("Afspraak gepland");
+      setOkMsg(
+        isTerugbel
+          ? "Terugbelafspraak gepland (zichtbaar onder Bellen)"
+          : planSoort === "vervolg_tel"
+            ? "Telefonisch vervolg gepland"
+            : "Afspraak gepland"
+      );
       setPlanOpen(false);
       setPlanSlot(null);
       setPickedLead(null);
+      setPlanNotitie("");
+      setPlanStartLocal("");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -961,13 +991,21 @@ export function AgendaPanel({
     }
   }
 
-  function openPlan(adviseurId: string, dayKey: string, slotIdx: number) {
-    if (isWeekBlocked(adviseurId)) {
+  function openPlan(
+    adviseurId: string,
+    dayKey: string,
+    slotIdx: number,
+    opts?: { overBezet?: boolean }
+  ) {
+    const overBezet = Boolean(opts?.overBezet);
+    // Soft (tel/terugbel): mag ook in geblokkeerde week
+    if (!overBezet && isWeekBlocked(adviseurId)) {
       setError("Deze week is geblokkeerd voor deze adviseur");
       return;
     }
     const row = SLOT_ROWS[slotIdx];
-    if (isSlotBlocked(adviseurId, dayKey, row.hour)) {
+    // Over bezet slot: afblokkingen negeren — telefonisch/terugbel mag altijd
+    if (!overBezet && isSlotBlocked(adviseurId, dayKey, row.hour)) {
       setError(
         magStandaardSlotOntblokken(dayKey, row.hour, adviseurId)
           ? `${standaardBlokkadeLabel(dayKey, row.hour, adviseurId) || "Standaard geblokkeerd"} — open eerst via Afblokken`
@@ -975,11 +1013,17 @@ export function AgendaPanel({
       );
       return;
     }
+    const startAt = isoForDaySlot(dayKey, row.hour, row.minute);
     setPlanSlot({
       adviseurId,
-      startAt: isoForDaySlot(dayKey, row.hour, row.minute),
+      startAt,
+      overBezet,
     });
-    setPlanSoort("nieuw");
+    setPlanSoort(overBezet ? "bel" : "nieuw");
+    setPlanStartLocal(
+      formatInTimeZone(new Date(startAt), AMSTERDAM_TZ, "yyyy-MM-dd'T'HH:mm")
+    );
+    setPlanNotitie("");
     setPickedLead(null);
     setPlanOpen(true);
     setSelected(null);
@@ -1405,60 +1449,77 @@ export function AgendaPanel({
                           ].join(" ")}
                         >
                           {blocked && items.length === 0 ? (
-                            <GeblokkeerdCell
-                              onClick={
-                                afblokMode && !blockBusy && !weekBlocked
-                                  ? () =>
-                                      void toggleSlotAfblok(
-                                        adv.id,
-                                        day.key,
-                                        row.hour
-                                      )
-                                  : afblokMode && weekBlocked
+                            <div className="space-y-1">
+                              <GeblokkeerdCell
+                                onClick={
+                                  afblokMode && !blockBusy && !weekBlocked
                                     ? () =>
-                                        setError(
-                                          "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                        void toggleSlotAfblok(
+                                          adv.id,
+                                          day.key,
+                                          row.hour
                                         )
+                                    : afblokMode && weekBlocked
+                                      ? () =>
+                                          setError(
+                                            "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                          )
+                                      : magStandaardSlotOntblokken(
+                                            day.key,
+                                            row.hour,
+                                            adv.id
+                                          ) && !afblokMode
+                                        ? () =>
+                                            setError(
+                                              standaardBlokkadeLabel(
+                                                day.key,
+                                                row.hour,
+                                                adv.id
+                                              ) ||
+                                                "Standaard dicht — zet Afblokken aan om te openen"
+                                            )
+                                        : undefined
+                                }
+                                hint={
+                                  afblokMode
+                                    ? slotBlocked
+                                      ? magStandaardSlotOntblokken(
+                                          day.key,
+                                          row.hour,
+                                          adv.id
+                                        )
+                                        ? "Klik om standaard-blok te openen"
+                                        : "Klik om dit slot weer te openen"
+                                      : "Week geblokkeerd"
                                     : magStandaardSlotOntblokken(
                                           day.key,
                                           row.hour,
                                           adv.id
-                                        ) && !afblokMode
-                                      ? () =>
-                                          setError(
-                                            standaardBlokkadeLabel(
-                                              day.key,
-                                              row.hour,
-                                              adv.id
-                                            ) ||
-                                              "Standaard dicht — zet Afblokken aan om te openen"
-                                          )
+                                        )
+                                      ? standaardBlokkadeLabel(
+                                          day.key,
+                                          row.hour,
+                                          adv.id
+                                        ) || "Standaard dicht"
                                       : undefined
-                              }
-                              hint={
-                                afblokMode
-                                  ? slotBlocked
-                                    ? magStandaardSlotOntblokken(
-                                        day.key,
-                                        row.hour,
-                                        adv.id
-                                      )
-                                      ? "Klik om standaard-blok te openen"
-                                      : "Klik om dit slot weer te openen"
-                                    : "Week geblokkeerd"
-                                  : magStandaardSlotOntblokken(
-                                        day.key,
-                                        row.hour,
-                                        adv.id
-                                      )
-                                    ? standaardBlokkadeLabel(
-                                        day.key,
-                                        row.hour,
-                                        adv.id
-                                      ) || "Standaard dicht"
-                                    : undefined
-                              }
-                            />
+                                }
+                              />
+                              {!afblokMode && !weekBlocked ? (
+                                <button
+                                  type="button"
+                                  disabled={blockBusy}
+                                  onClick={() =>
+                                    openPlan(adv.id, day.key, slotIdx, {
+                                      overBezet: true,
+                                    })
+                                  }
+                                  className="flex w-full items-center justify-center rounded border border-dashed border-[#2F6B9A]/40 px-1 py-0.5 text-[10px] font-semibold text-[#1F5078] hover:bg-[#E7F2FA] disabled:opacity-50"
+                                  title="Telefonisch vervolg plannen op dit afgeblokte blok"
+                                >
+                                  + Tel
+                                </button>
+                              ) : null}
+                            </div>
                           ) : items.length > 0 ? (
                             <div className="space-y-1">
                               {items.map((a) => {
@@ -1494,6 +1555,21 @@ export function AgendaPanel({
                                   />
                                 );
                               })}
+                              {!afblokMode ? (
+                                <button
+                                  type="button"
+                                  disabled={blockBusy}
+                                  onClick={() =>
+                                    openPlan(adv.id, day.key, slotIdx, {
+                                      overBezet: true,
+                                    })
+                                  }
+                                  className="flex w-full items-center justify-center rounded border border-dashed border-[#2F6B9A]/40 px-1 py-0.5 text-[10px] font-semibold text-[#1F5078] hover:bg-[#E7F2FA] disabled:opacity-50"
+                                  title="Telefonisch vervolg plannen op dit bezette blok"
+                                >
+                                  + Tel
+                                </button>
+                              ) : null}
                             </div>
                           ) : (
                             <button
@@ -1596,13 +1672,10 @@ export function AgendaPanel({
               </button>
             </div>
             <p className="text-xs text-muted">
-              {adviseurNaam.get(planSlot.adviseurId)} ·{" "}
-              {formatInTimeZone(
-                new Date(planSlot.startAt),
-                AMSTERDAM_TZ,
-                "EEE d MMM HH:mm",
-                { locale: nl }
-              )}
+              {adviseurNaam.get(planSlot.adviseurId)}
+              {planSlot.overBezet
+                ? " · bezet blok — alleen tel / terugbel"
+                : ""}
             </p>
             <LeadZoekVeld
               value={pickedLead}
@@ -1618,30 +1691,90 @@ export function AgendaPanel({
                 }
                 className="mt-1 w-full border border-line px-3 py-2 text-sm"
               >
-                <option value="nieuw">Nieuw (huisbezoek)</option>
-                <option value="vervolg_fysiek">Vervolg op locatie</option>
+                {planSlot.overBezet ? (
+                  <>
+                    <option value="bel">Terugbelafspraak</option>
+                    <option value="vervolg_tel">Vervolg telefonisch</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="nieuw">Nieuw (huisbezoek)</option>
+                    <option value="bel">Terugbelafspraak</option>
+                    <option value="vervolg_fysiek">Vervolg op locatie</option>
+                    <option value="vervolg_tel">Vervolg telefonisch</option>
+                  </>
+                )}
               </select>
             </label>
-            <ReistijdHint
-              adviseurId={planSlot.adviseurId}
-              startAt={planSlot.startAt}
-              lead={pickedLead}
-              afspraken={afspraken}
-              allLeads={leads}
-              startAdres={
-                adviseurs.find((a) => a.id === planSlot.adviseurId)
-                  ?.start_adres || null
-              }
-              startAdresLabel={
-                adviseurNaam.get(planSlot.adviseurId) || "Startadres"
-              }
-            />
+            {planSoort === "bel" || planSoort === "warme_bel" ? (
+              <>
+                <label className="block text-xs font-semibold uppercase text-muted">
+                  Datum &amp; tijd (handmatig)
+                  <input
+                    type="datetime-local"
+                    required
+                    value={planStartLocal}
+                    onChange={(e) => setPlanStartLocal(e.target.value)}
+                    className="mt-1 w-full border border-line px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block text-xs font-semibold uppercase text-muted">
+                  Notitie
+                  <textarea
+                    required
+                    rows={3}
+                    value={planNotitie}
+                    onChange={(e) => setPlanNotitie(e.target.value)}
+                    placeholder="Bijv. bel terug over offerte, bereikbaar na 17:00…"
+                    className="mt-1 w-full border border-line px-3 py-2 text-sm"
+                  />
+                </label>
+                <p className="text-[11px] text-muted">
+                  Geen klantmail. Terugbel verschijnt in Bellen vanaf de
+                  geplande dag (niet als huisbezoek-sticker).
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted">
+                  {formatInTimeZone(
+                    new Date(planSlot.startAt),
+                    AMSTERDAM_TZ,
+                    "EEE d MMM HH:mm",
+                    { locale: nl }
+                  )}
+                </p>
+                <ReistijdHint
+                  adviseurId={planSlot.adviseurId}
+                  startAt={planSlot.startAt}
+                  lead={pickedLead}
+                  afspraken={afspraken}
+                  allLeads={leads}
+                  startAdres={
+                    adviseurs.find((a) => a.id === planSlot.adviseurId)
+                      ?.start_adres || null
+                  }
+                  startAdresLabel={
+                    adviseurNaam.get(planSlot.adviseurId) || "Startadres"
+                  }
+                />
+              </>
+            )}
             <button
               type="submit"
-              disabled={saving || !pickedLead}
+              disabled={
+                saving ||
+                !pickedLead ||
+                ((planSoort === "bel" || planSoort === "warme_bel") &&
+                  (!planStartLocal || !planNotitie.trim()))
+              }
               className="w-full bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
             >
-              {saving ? "Bezig…" : "Plannen"}
+              {saving
+                ? "Bezig…"
+                : planSoort === "bel" || planSoort === "warme_bel"
+                  ? "Terugbel opslaan"
+                  : "Plannen"}
             </button>
           </form>
         </div>

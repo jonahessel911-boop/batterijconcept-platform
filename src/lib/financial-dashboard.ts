@@ -36,9 +36,9 @@ const INSTALL_PAY_AFTER_DAYS = 7;
 /** Vooruitblik: huidige week + 7 weken (~2 maanden). */
 const CASHFLOW_WEEK_COUNT = 8;
 
-/** Tarik loon: vast + variabel per ingepland huisbezoek. */
-export const TARIK_FIXED_PER_MONTH = 3000;
-export const TARIK_PER_INGEPLANDE_AFSPRAAK = 15;
+/** Tarik loon: vast + variabel per ingepland huisbezoek (sync met ops-commissie). */
+export const TARIK_FIXED_PER_MONTH = 3750;
+export const TARIK_PER_INGEPLANDE_AFSPRAAK = 2.5;
 /** Weekfactuur ≈ maandsalaris / (52/12) weken. */
 export const TARIK_FIXED_PER_WEEK =
   Math.round(((TARIK_FIXED_PER_MONTH * 12) / 52) * 100) / 100;

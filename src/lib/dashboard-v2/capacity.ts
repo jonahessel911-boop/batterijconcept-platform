@@ -8,7 +8,7 @@
  */
 
 import { addDays, getISOWeek, getISOWeekYear } from "date-fns";
-import { toZonedTime } from "date-fns-tz";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import {
   dayKeyAmsterdam,
@@ -22,6 +22,7 @@ import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
 import {
+  ADVISEUR_SLOT_HOURS,
   AFSPRAAK_DUUR_MINUTEN,
   generateDayBlocks,
   type BusySlot,
@@ -411,6 +412,57 @@ export function capacitySteeringGoals(
       leadToAppt: l2aPct,
     },
   };
+}
+
+/**
+ * Tel open (niet-afgeblokte) planbare slots in een vaste Amsterdam-ymd-range.
+ * Onafhankelijk van of er al een afspraak in het blok staat — alleen
+ * week-uit, standaardblokkades en afblokkingen tellen mee.
+ */
+export function countOpenSlotsInYmdRange(opts: {
+  startYmd: string;
+  endYmd: string;
+  adviseurs: AdviseurIn[];
+  unavailableByAdviseur: Map<string, Set<string>>;
+  afblokkingen: Set<string>;
+  vrijgaven?: Set<string>;
+}): number {
+  if (opts.startYmd > opts.endYmd) return 0;
+  const adviseurs = opts.adviseurs.filter((a) => isPlanbaarAdviseur(a));
+  const vrijgaven = opts.vrijgaven ?? new Set<string>();
+  let open = 0;
+
+  const [sy, sm, sd] = opts.startYmd.split("-").map(Number);
+  const [ey, em, ed] = opts.endYmd.split("-").map(Number);
+  let cur = fromZonedTime(new Date(sy, sm - 1, sd, 12, 0, 0), AMSTERDAM_TZ);
+  const end = fromZonedTime(new Date(ey, em - 1, ed, 12, 0, 0), AMSTERDAM_TZ);
+
+  while (cur.getTime() <= end.getTime()) {
+    const dag = dayKeyAmsterdam(cur);
+    const dow = toZonedTime(cur, AMSTERDAM_TZ).getDay();
+    // Zondag nooit planbaar
+    if (dow !== 0) {
+      const wk = weekKeyFromDate(cur);
+      const wkKey = weekKeyString(wk.jaar, wk.week);
+      for (const adv of adviseurs) {
+        if (isBeforeStartdatum(cur, adv.startdatum)) continue;
+        if ((opts.unavailableByAdviseur.get(adv.id) || new Set()).has(wkKey)) {
+          continue;
+        }
+        for (const hour of ADVISEUR_SLOT_HOURS) {
+          if (
+            isSlotGeblokkeerd(adv.id, dag, hour, opts.afblokkingen, vrijgaven)
+          ) {
+            continue;
+          }
+          open += 1;
+        }
+      }
+    }
+    cur = addDays(cur, 1);
+  }
+
+  return open;
 }
 
 /** Lege capaciteit (geen adviseurs / fout bij laden). */

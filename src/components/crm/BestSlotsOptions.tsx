@@ -104,6 +104,7 @@ export function useBestSlots(opts: {
         const qs = new URLSearchParams({
           lead_id: lead.id,
           limit: "5",
+          days: "14",
         });
         if (lockAdviseur && defaultAdviseurId) {
           qs.set("adviseur_id", defaultAdviseurId);
@@ -161,6 +162,7 @@ export function useBestSlots(opts: {
       const qs = new URLSearchParams({
         lead_id: lead.id,
         limit: "10",
+        days: "14",
       });
       if (lockAdviseur && defaultAdviseurId) {
         qs.set("adviseur_id", defaultAdviseurId);

@@ -4,6 +4,8 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isWarmtefondsSale } from "@/lib/backoffice-acties";
+import { statusNaSchouwInplannen } from "@/lib/project-status-config";
 import {
   isValidSchouwWeek,
   schouwWeekFromDate,
@@ -36,7 +38,7 @@ async function loadProject(sb: SupabaseClient, id: string) {
   const { data, error } = await sb
     .from("projecten")
     .select(
-      "id, project_nummer, status, lead_id, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_partner_id, schouw_notities, installatie_notities"
+      "id, project_nummer, status, lead_id, betaalwijze, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_partner_id, schouw_notities, installatie_notities, offertes(financiering_voorbehoud), leads(status)"
     )
     .eq("id", id)
     .maybeSingle();
@@ -119,11 +121,45 @@ export async function planProjectAgenda(
       project.installatie_partner_id
     );
 
+    const offRaw = Array.isArray(
+      (project as { offertes?: unknown }).offertes
+    )
+      ? (
+          project as {
+            offertes: { financiering_voorbehoud?: boolean | null }[];
+          }
+        ).offertes[0]
+      : (
+          project as {
+            offertes?: { financiering_voorbehoud?: boolean | null };
+          }
+        ).offertes;
+    const leadRaw = Array.isArray((project as { leads?: unknown }).leads)
+      ? (project as { leads: { status?: string | null }[] }).leads[0]
+      : (project as { leads?: { status?: string | null } }).leads;
+    const betaalwijze = (project as { betaalwijze?: string | null })
+      .betaalwijze;
+    const warmtefonds =
+      leadRaw?.status === "sale_eigen_middelen"
+        ? false
+        : leadRaw?.status === "sale_financiering"
+          ? true
+          : betaalwijze === "eigen_middelen"
+            ? false
+            : betaalwijze === "warmtefonds"
+              ? true
+              : isWarmtefondsSale({
+                  leadStatus: leadRaw?.status,
+                  financieringVoorbehoud: offRaw?.financiering_voorbehoud,
+                });
+    const exacteDag = input.type === 2;
+    const nextStatus = statusNaSchouwInplannen({ exacteDag, warmtefonds });
+
     const patch: Record<string, unknown> = {
       schouw_jaar: schouwJaar,
       schouw_week: schouwWeek,
       schouw_at: exactAt,
-      status: "schouwdag_ingepland",
+      status: nextStatus,
       updated_at: new Date().toISOString(),
     };
     if (input.notities !== undefined) {

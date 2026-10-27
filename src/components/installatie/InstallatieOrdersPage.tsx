@@ -5,12 +5,15 @@ import { useParams } from "next/navigation";
 import type { PartnerCreditFactuur, Project } from "@/types/database";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { Planbord } from "@/components/crm/Planbord";
+import { PartnerAgendaPanel } from "@/components/crm/PartnerAgendaPanel";
+import { PartnerTeamgenotenPanel } from "@/components/installatie/PartnerTeamgenotenPanel";
 
 type OrderRow = Project & {
   leads?: Project["leads"];
 };
 
-type PortalTab = "agenda" | "facturen";
+type PortalTab = "agenda" | "facturen" | "team";
+type AgendaView = "planbord" | "afblokken";
 
 type FactuurRow = Pick<
   PartnerCreditFactuur,
@@ -35,6 +38,8 @@ export function InstallatieOrdersPage() {
   const { token } = useParams<{ token: string }>();
 
   const [tab, setTab] = useState<PortalTab>("agenda");
+  const [agendaView, setAgendaView] = useState<AgendaView>("planbord");
+  const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerNaam, setPartnerNaam] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [facturen, setFacturen] = useState<FactuurRow[]>([]);
@@ -63,6 +68,7 @@ export function InstallatieOrdersPage() {
       const res = await fetch(`/api/installatie/${token}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Niet gevonden");
+      setPartnerId(data.partner?.id || null);
       setPartnerNaam(data.partner?.naam || "");
       setOrders(data.orders || []);
     } catch (e) {
@@ -159,52 +165,84 @@ export function InstallatieOrdersPage() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mb-5 flex border border-line bg-white p-0.5">
-          <button
-            type="button"
-            onClick={() => setTab("agenda")}
-            className={[
-              "flex-1 px-4 py-2.5 text-sm font-semibold",
-              tab === "agenda"
-                ? "bg-green text-white"
-                : "bg-white text-muted hover:bg-wash",
-            ].join(" ")}
-          >
-            Agenda
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("facturen")}
-            className={[
-              "flex-1 px-4 py-2.5 text-sm font-semibold",
-              tab === "facturen"
-                ? "bg-green text-white"
-                : "bg-white text-muted hover:bg-wash",
-            ].join(" ")}
-          >
-            Facturen
-          </button>
+        <div className="mb-5 flex flex-wrap border border-line bg-white p-0.5">
+          {(
+            [
+              ["agenda", "Agenda"],
+              ["team", "Teamgenoten"],
+              ["facturen", "Facturen"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={[
+                "flex-1 px-4 py-2.5 text-sm font-semibold",
+                tab === id
+                  ? "bg-green text-white"
+                  : "bg-white text-muted hover:bg-wash",
+              ].join(" ")}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {tab === "agenda" && (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink">
-                Google Calendar (backup-feed)
-              </p>
-              <p className="mt-0.5 text-xs text-muted">
-                Voor directe sync koppelt Batterijconcept je Google-account via
-                Partners in het CRM. Deze URL is een backup (kan vertraagd
-                vernieuwen).
-              </p>
+          <div className="mb-4 space-y-3">
+            <div className="flex border border-line bg-white p-0.5">
+              <button
+                type="button"
+                onClick={() => setAgendaView("planbord")}
+                className={[
+                  "flex-1 px-3 py-2 text-sm font-semibold",
+                  agendaView === "planbord"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Planbord
+              </button>
+              <button
+                type="button"
+                onClick={() => setAgendaView("afblokken")}
+                className={[
+                  "flex-1 px-3 py-2 text-sm font-semibold",
+                  agendaView === "afblokken"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash",
+                ].join(" ")}
+              >
+                Afblokken
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={copyCalendarUrl}
-              className="shrink-0 border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
-            >
-              {calCopied ? "Gekopieerd" : "Kopieer agenda-URL"}
-            </button>
+            {agendaView === "planbord" ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">
+                    Google Calendar (backup-feed)
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    Voor directe sync koppelt Batterijconcept je Google-account
+                    via Partners in het CRM. Deze URL is een backup (kan
+                    vertraagd vernieuwen).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyCalendarUrl}
+                  className="shrink-0 border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
+                >
+                  {calCopied ? "Gekopieerd" : "Kopieer agenda-URL"}
+                </button>
+              </div>
+            ) : (
+              <p className="border border-line bg-white px-4 py-3 text-sm text-muted">
+                Blokkeer ochtend (09–12) of middag (13–17) als je niet kunt.
+                Tussen 12–13 is altijd pauze/reistijd. Schouw = 30 minuten.
+              </p>
+            )}
           </div>
         )}
 
@@ -214,11 +252,29 @@ export function InstallatieOrdersPage() {
           </p>
         )}
 
-        {tab === "agenda" ? (
+        {tab === "team" ? (
+          <PartnerTeamgenotenPanel portalToken={token} />
+        ) : tab === "agenda" ? (
           loading ? (
             <p className="py-16 text-center text-sm text-muted">
               Agenda laden…
             </p>
+          ) : agendaView === "afblokken" ? (
+            partnerId ? (
+              <div className="border border-line bg-white">
+                <PartnerAgendaPanel
+                  mode="portal"
+                  portalToken={token}
+                  initialPartnerId={partnerId}
+                  partnerNaam={partnerNaam}
+                  projects={orders}
+                />
+              </div>
+            ) : (
+              <p className="py-16 text-center text-sm text-muted">
+                Partner niet geladen.
+              </p>
+            )
           ) : (
             <Planbord
               projecten={orders}

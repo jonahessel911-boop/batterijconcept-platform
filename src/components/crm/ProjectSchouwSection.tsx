@@ -486,7 +486,7 @@ export function ProjectSchouwSection({
             <p className="text-sm text-muted">
               {isWarmtefondsProject(project)
                 ? "Sale met financiering: eerst een week (±5 wkn vooruit). Exacte dag ±1 week van tevoren. Bij inplannen krijgt de klant een bevestigingsmail."
-                : "Eigen middelen: schouw zo snel mogelijk. Je kunt meteen een exacte schouwdag zetten. Bij inplannen krijgt de klant een bevestigingsmail."}
+                : "Eigen middelen: schouwweek pas ná 50% betaling. Daarna kun je meteen een exacte schouwdag zetten. Bij inplannen krijgt de klant een bevestigingsmail."}
             </p>
             {isWarmtefondsProject(project) ? (
               <p className="text-sm text-muted">

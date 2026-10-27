@@ -42,26 +42,40 @@ function normalizeFields(
   return withDerivedFunnelTargets(merged);
 }
 
+/** Sales-doel = closing-% × geplande afspraken (standaard 30%). */
+export const DEFAULT_AFSPRAAK_TO_SALE_PCT = 30;
+
 /**
  * Leads = afspraken ÷ (L2A/100)
- * Closing % = orders ÷ afspraken × 100
+ * Orders = afspraken × (afspraak→sale %/100)
  * Omzet = orders × gem. orderwaarde
  */
+
 export function deriveFunnelFromInputs(input: {
   afsprakenGepland: number;
   leadToAppt: number;
-  orders: number;
+  /** Closing % — bepaalt orders */
+  afspraakToSale?: number;
+  /** @deprecated Alleen fallback als afspraakToSale ontbreekt */
+  orders?: number;
   gemOrderwaarde?: number;
-}): { leads: number; afspraakToSale: number; omzet: number } {
+}): { leads: number; orders: number; afspraakToSale: number; omzet: number } {
   const appt = Math.max(0, Number(input.afsprakenGepland) || 0);
   const l2a = Math.max(0, Math.min(100, Number(input.leadToAppt) || 0));
-  const orders = Math.max(0, Number(input.orders) || 0);
   const aov = Math.max(0, Number(input.gemOrderwaarde) || 0);
+  let a2s = Number(input.afspraakToSale);
+  if (!Number.isFinite(a2s) || a2s < 0) {
+    const ord = Math.max(0, Number(input.orders) || 0);
+    a2s =
+      appt > 0
+        ? Math.min(100, Math.round((ord / appt) * 1000) / 10)
+        : DEFAULT_AFSPRAAK_TO_SALE_PCT;
+  }
+  a2s = Math.max(0, Math.min(100, a2s));
   const leads = l2a > 0 ? Math.ceil((appt * 100) / l2a) : 0;
-  const afspraakToSale =
-    appt > 0 ? Math.min(100, Math.round((orders / appt) * 1000) / 10) : 0;
+  const orders = Math.round((appt * a2s) / 100);
   const omzet = Math.round(orders * aov * 100) / 100;
-  return { leads, afspraakToSale, omzet };
+  return { leads, orders, afspraakToSale: a2s, omzet };
 }
 
 export function withDerivedFunnelTargets(fields: TargetFields): TargetFields {
@@ -69,6 +83,7 @@ export function withDerivedFunnelTargets(fields: TargetFields): TargetFields {
   return {
     ...fields,
     leads: derived.leads,
+    orders: derived.orders,
     afspraakToSale: derived.afspraakToSale,
     omzet: derived.omzet,
   };
@@ -263,15 +278,62 @@ export type TargetPersonRef = {
   id: string;
   rol?: string | null;
   actief?: boolean;
+  /** Eerste werkdag yyyy-MM-dd — telt mee voor team-targets vanaf die dag */
+  startdatum?: string | null;
 };
+
+export type TeamSnapshotOpts = {
+  /** Alleen adviseurs die op/vóór deze dag gestart zijn (of geen startdatum) */
+  asOfYmd?: string;
+  /** Voor pro-rata: startdatum midden in periode → deel van weekdoel */
+  periodStartYmd?: string;
+  periodEndYmd?: string;
+};
+
+function ymdDaysInclusive(startYmd: string, endYmd: string): number {
+  const a = Date.parse(`${startYmd}T12:00:00Z`);
+  const b = Date.parse(`${endYmd}T12:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 0;
+  return Math.round((b - a) / 86_400_000) + 1;
+}
+
+/**
+ * 0–1: welk deel van de periode (of full 1) telt deze adviseur mee.
+ * Geen startdatum = volledig. Start na periodEnd/asOf = 0.
+ * Start midden in periode = resterende dagen / periodeduur.
+ */
+export function personTargetWeight(
+  startdatum: string | null | undefined,
+  opts?: TeamSnapshotOpts
+): number {
+  const start = (startdatum || "").trim().slice(0, 10);
+  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) return 1;
+
+  const periodStart = opts?.periodStartYmd?.slice(0, 10);
+  const periodEnd = opts?.periodEndYmd?.slice(0, 10);
+  if (periodStart && periodEnd) {
+    if (start > periodEnd) return 0;
+    if (start <= periodStart) return 1;
+    const total = ymdDaysInclusive(periodStart, periodEnd);
+    const active = ymdDaysInclusive(start, periodEnd);
+    if (total <= 0) return 0;
+    return Math.max(0, Math.min(1, active / total));
+  }
+
+  const asOf = opts?.asOfYmd?.slice(0, 10);
+  if (asOf && start > asOf) return 0;
+  return 1;
+}
 
 /** Actieve sales-adviseurs voor team-vermenigvuldiging (orders/leads/omzet). */
 export function salesPeopleForTeam(
-  people: TargetPersonRef[]
+  people: TargetPersonRef[],
+  asOfYmd?: string
 ): TargetPersonRef[] {
   return people.filter((p) => {
     if (p.actief === false) return false;
-    return isSalesAdviseurRol(p.rol);
+    if (!isSalesAdviseurRol(p.rol)) return false;
+    return personTargetWeight(p.startdatum, { asOfYmd }) > 0;
   });
 }
 
@@ -279,10 +341,12 @@ export function salesPeopleForTeam(
  * Team-doelen voor Dashboard v2 =
  * som van effectieve targets per actieve adviseur (volume),
  * percentages uit adviseur-standaard (niet × headcount).
+ * Startdatum: toekomstige starters tellen niet mee; mid-periode pro-rata.
  */
 export function teamWeeklySnapshot(
   store: AdminTargetsStore,
-  people: TargetPersonRef[] = []
+  people: TargetPersonRef[] = [],
+  opts?: TeamSnapshotOpts
 ): {
   leads: number;
   afsprakenGepland: number;
@@ -293,7 +357,9 @@ export function teamWeeklySnapshot(
   omzetPerAdviseur: Record<string, number>;
   adviseurCount: number;
 } {
-  const sales = salesPeopleForTeam(people);
+  const asOf =
+    opts?.asOfYmd || opts?.periodEndYmd || undefined;
+  const sales = salesPeopleForTeam(people, asOf);
   const rateBase = store.defaults.adviseur;
   const omzetPerAdviseur: Record<string, number> = {};
 
@@ -301,6 +367,7 @@ export function teamWeeklySnapshot(
   let afsprakenGepland = 0;
   let orders = 0;
   let omzet = 0;
+  let weightSum = 0;
 
   if (sales.length === 0) {
     const t = store.defaults.team;
@@ -318,32 +385,38 @@ export function teamWeeklySnapshot(
   }
 
   for (const p of sales) {
+    const w = personTargetWeight(p.startdatum, opts);
+    if (w <= 0) continue;
+    weightSum += w;
     const { effective } = resolvePersonTargets(store, "adviseur", p.id);
-    leads += effective.leads;
-    afsprakenGepland += effective.afsprakenGepland;
-    orders += effective.orders;
-    omzet += effective.omzet;
-    if (effective.omzet > 0) omzetPerAdviseur[p.id] = effective.omzet;
+    leads += effective.leads * w;
+    afsprakenGepland += effective.afsprakenGepland * w;
+    orders += effective.orders * w;
+    omzet += effective.omzet * w;
+    if (effective.omzet > 0) {
+      omzetPerAdviseur[p.id] = Math.round(effective.omzet * w);
+    }
   }
 
   return {
-    leads,
-    afsprakenGepland,
+    leads: Math.round(leads),
+    afsprakenGepland: Math.round(afsprakenGepland),
     leadToAppt: rateBase.leadToAppt,
     afspraakToSale: rateBase.afspraakToSale,
-    orders,
-    omzet,
+    orders: Math.round(orders),
+    omzet: Math.round(omzet),
     omzetPerAdviseur,
-    adviseurCount: sales.length,
+    adviseurCount: Math.round(weightSum * 10) / 10,
   };
 }
 
 /** Volledige team TargetFields (incl. rates) voor Admin-preview. */
 export function computeTeamDashboardTargets(
   store: AdminTargetsStore,
-  people: TargetPersonRef[]
+  people: TargetPersonRef[],
+  opts?: TeamSnapshotOpts
 ): TargetFields {
-  const snap = teamWeeklySnapshot(store, people);
+  const snap = teamWeeklySnapshot(store, people, opts);
   const rates = store.defaults.adviseur;
   return {
     leads: snap.leads,
@@ -361,10 +434,11 @@ export function computeTeamDashboardTargets(
 /** Schrijf Admin-store; team-defaults + per_7_days = berekende team-snapshot. */
 export function serializeAdminTargetsStore(
   store: AdminTargetsStore,
-  people: TargetPersonRef[] = []
+  people: TargetPersonRef[] = [],
+  opts?: TeamSnapshotOpts
 ): Record<string, unknown> {
-  const weekly = teamWeeklySnapshot(store, people);
-  const teamComputed = computeTeamDashboardTargets(store, people);
+  const weekly = teamWeeklySnapshot(store, people, opts);
+  const teamComputed = computeTeamDashboardTargets(store, people, opts);
   return {
     version: 1,
     defaults: {

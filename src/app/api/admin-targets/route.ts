@@ -8,10 +8,23 @@ import {
   type AdminTargetsStore,
   type PersonOverride,
   type TargetFields,
+  type TargetPersonRef,
   type TargetRole,
 } from "@/lib/admin-targets";
+import { todayConversieYmd } from "@/lib/conversie-period";
 
 export const runtime = "nodejs";
+
+function mapPeopleRefs(
+  rows: { id: string; rol?: string | null; actief?: boolean | null; startdatum?: string | null }[]
+): TargetPersonRef[] {
+  return rows.map((a) => ({
+    id: a.id,
+    rol: a.rol || "adviseur",
+    actief: Boolean(a.actief),
+    startdatum: a.startdatum ? String(a.startdatum).slice(0, 10) : null,
+  }));
+}
 
 async function loadStore(
   sb: ReturnType<typeof getSupabaseAdmin>
@@ -43,13 +56,17 @@ async function saveStore(
 ) {
   const { data: people } = await sb
     .from("adviseurs")
-    .select("id, rol, actief");
-  const refs = (people || []).map((a) => ({
-    id: a.id as string,
-    rol: ((a as { rol?: string }).rol as string) || "adviseur",
-    actief: Boolean(a.actief),
-  }));
-  const payload = serializeAdminTargetsStore(store, refs);
+    .select("id, rol, actief, startdatum");
+  const refs = mapPeopleRefs(
+    (people || []).map((a) => ({
+      id: a.id as string,
+      rol: (a as { rol?: string }).rol,
+      actief: a.actief as boolean | null,
+      startdatum: (a as { startdatum?: string | null }).startdatum,
+    }))
+  );
+  const asOf = todayConversieYmd();
+  const payload = serializeAdminTargetsStore(store, refs, { asOfYmd: asOf });
   if (id) {
     const { error } = await sb
       .from("dashboard_instellingen")
@@ -73,7 +90,7 @@ export async function GET() {
       loadStore(sb),
       sb
         .from("adviseurs")
-        .select("id, naam, email, rol, actief")
+        .select("id, naam, email, rol, actief, startdatum")
         .order("naam"),
       sb
         .from("installatie_partners")
@@ -81,6 +98,7 @@ export async function GET() {
         .order("naam"),
     ]);
 
+    const asOf = todayConversieYmd();
     const adviseurs = (adviseursRes.error ? [] : adviseursRes.data || []).map(
       (a) => ({
         id: a.id as string,
@@ -88,6 +106,9 @@ export async function GET() {
         email: (a.email as string) || null,
         rol: ((a as { rol?: string }).rol as string) || "adviseur",
         actief: Boolean(a.actief),
+        startdatum: (a as { startdatum?: string | null }).startdatum
+          ? String((a as { startdatum?: string | null }).startdatum).slice(0, 10)
+          : null,
       })
     );
     const partners = (partnersRes.error ? [] : partnersRes.data || []).map(
@@ -99,7 +120,9 @@ export async function GET() {
       })
     );
 
-    store.defaults.team = computeTeamDashboardTargets(store, adviseurs);
+    store.defaults.team = computeTeamDashboardTargets(store, adviseurs, {
+      asOfYmd: asOf,
+    });
 
     return NextResponse.json({ store, adviseurs, partners });  } catch (e) {
     return NextResponse.json(
@@ -167,14 +190,19 @@ export async function PATCH(req: NextRequest) {
 
     const { data: people } = await sb
       .from("adviseurs")
-      .select("id, rol, actief");
+      .select("id, rol, actief, startdatum");
+    const asOf = todayConversieYmd();
     store.defaults.team = computeTeamDashboardTargets(
       store,
-      (people || []).map((a) => ({
-        id: a.id as string,
-        rol: ((a as { rol?: string }).rol as string) || "adviseur",
-        actief: Boolean(a.actief),
-      }))
+      mapPeopleRefs(
+        (people || []).map((a) => ({
+          id: a.id as string,
+          rol: (a as { rol?: string }).rol,
+          actief: a.actief as boolean | null,
+          startdatum: (a as { startdatum?: string | null }).startdatum,
+        }))
+      ),
+      { asOfYmd: asOf }
     );
 
     return NextResponse.json({ ok: true, store });  } catch (e) {

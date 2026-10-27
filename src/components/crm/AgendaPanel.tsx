@@ -1359,13 +1359,16 @@ export function AfspraakDetail({
           );
         }
         const warmtefonds = uitkomst === "sale_financiering";
+        const eigenModus =
+          boValues.aanbetalingModus === "handmatig"
+            ? "handmatig"
+            : EIGEN_MIDDELEN_AANBETALING_MODUS;
+        const saveModus = warmtefonds ? boValues.aanbetalingModus : eigenModus;
         const preview = aanbetalingVanOrder({
           subtotaalExBtw: Number(saleOfferte.subtotaal_ex_btw) || 0,
           btwBedrag: Number(saleOfferte.btw_bedrag) || 0,
           totaalIncBtw: Number(saleOfferte.totaal_inc_btw) || 0,
-          modus: warmtefonds
-            ? boValues.aanbetalingModus
-            : EIGEN_MIDDELEN_AANBETALING_MODUS,
+          modus: saveModus,
           handmatigIncBtw: parseEuroInput(boValues.aanbetalingHandmatig),
           financieringVoorbehoud: warmtefonds,
         });
@@ -1375,11 +1378,9 @@ export function AfspraakDetail({
           body: JSON.stringify({
             actie_required: false,
             financiering_voorbehoud: warmtefonds,
-            aanbetaling_modus: warmtefonds
-              ? boValues.aanbetalingModus
-              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+            aanbetaling_modus: saveModus,
             aanbetaling_bedrag_inc:
-              warmtefonds && boValues.aanbetalingModus === "handmatig"
+              saveModus === "handmatig"
                 ? parseEuroInput(boValues.aanbetalingHandmatig)
                 : null,
             aanbetaling_te_innen_inc: preview.bedragIncBtw,
@@ -1673,6 +1674,15 @@ export function AfspraakDetail({
                     onChange={(e) => {
                       const next = (e.target.value as LeadStatus) || "";
                       setUitkomst(next);
+                      if (next === "sale_eigen_middelen") {
+                        setBoValues((prev) => ({
+                          ...prev,
+                          aanbetalingModus:
+                            prev.aanbetalingModus === "handmatig"
+                              ? "handmatig"
+                              : EIGEN_MIDDELEN_AANBETALING_MODUS,
+                        }));
+                      }
                       if (isSaleUitkomst(next)) {
                         window.requestAnimationFrame(() => {
                           saleFormRef.current?.scrollIntoView({
@@ -1692,7 +1702,7 @@ export function AfspraakDetail({
                     <option value="">Kies uitkomst…</option>
                     {(dealNogAfboeken
                       ? AFSPRAAK_UITKOMSTEN.filter((s) => isSaleUitkomst(s))
-                      : AFSPRAAK_UITKOMSTEN
+                      : AFSPRAAK_UITKOMSTEN.filter((s) => !isSaleUitkomst(s))
                     ).map((s) => (
                       <option key={s} value={s}>
                         {leadStatusLabel[s]}
@@ -2766,9 +2776,12 @@ export function AgendaPanel({
   const planSoort: AfspraakSoort | null =
     planKeuze && planKeuze !== "vervolg" ? planKeuze : null;
   const isHuisbezoek = planSoort === "nieuw";
+  // Telefonisch / soft: alle blokken tonen (ook fysiek bezet). Huisbezoek: alleen vrij.
   const timeOptions =
-    planSoort && !afspraakBlokkeertAgenda(planSoort) && blocks.length > 0
-      ? blocks
+    planSoort && !afspraakBlokkeertAgenda(planSoort)
+      ? blocks.length > 0
+        ? blocks
+        : slots
       : slots;
 
   function resetPlanFields() {
@@ -2798,7 +2811,8 @@ export function AgendaPanel({
       }
       if (!resolvedStart) throw new Error("Kies een tijdslot");
       if (!pickedLead?.id) throw new Error("Kies een lead");
-      {
+      // Terugbel / telefonisch: mag ook in geblokkeerde weken (soft slot)
+      if (afspraakBlokkeertAgenda(planSoort)) {
         const slotWeek = schouwWeekFromDate(resolvedStart);
         const key = beschikbaarKey(slotWeek.jaar, slotWeek.week);
         const open = beschikbaarMap.get(key);

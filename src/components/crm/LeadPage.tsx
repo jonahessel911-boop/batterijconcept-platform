@@ -1152,14 +1152,13 @@ export function LeadPage() {
                     lead={lead}
                     adviseurs={adviseurs}
                     warm={planMode === "warme_bel"}
-                    lockAdviseur={rol === "adviseur"}
+                    lockAdviseur={false}
                     defaultAdviseurId={
-                      rol === "adviseur"
-                        ? session?.id
-                        : lead.beller_id ||
-                          lead.adviseur_id ||
-                          session?.id ||
-                          undefined
+                      lead.beller_id ||
+                      (rol === "adviseur" ? session?.id : null) ||
+                      lead.adviseur_id ||
+                      session?.id ||
+                      undefined
                     }
                     onCancel={() => {
                       setPlanOpen(false);

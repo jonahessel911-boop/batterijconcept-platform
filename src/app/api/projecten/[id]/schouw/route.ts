@@ -11,6 +11,7 @@ import {
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
+import { statusNaSchouwInplannen } from "@/lib/project-status-config";
 import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
@@ -80,7 +81,9 @@ export async function POST(
 
     const { data: project, error: projErr } = await sb
       .from("projecten")
-      .select("id, installatie_partner_id")
+      .select(
+        "id, installatie_partner_id, betaalwijze, lead_id, offertes(financiering_voorbehoud), leads(status)"
+      )
       .eq("id", id)
       .single();
 
@@ -90,6 +93,56 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    const offRaw = Array.isArray(
+      (project as { offertes?: unknown }).offertes
+    )
+      ? (project as { offertes: { financiering_voorbehoud?: boolean | null }[] })
+          .offertes[0]
+      : (project as { offertes?: { financiering_voorbehoud?: boolean | null } })
+          .offertes;
+    const leadRawPre = Array.isArray((project as { leads?: unknown }).leads)
+      ? (project as { leads: { status?: string | null }[] }).leads[0]
+      : (project as { leads?: { status?: string | null } }).leads;
+    const betaalwijze = (project as { betaalwijze?: string | null })
+      .betaalwijze;
+    const warmtefondsForStatus =
+      leadRawPre?.status === "sale_eigen_middelen"
+        ? false
+        : leadRawPre?.status === "sale_financiering"
+          ? true
+          : betaalwijze === "eigen_middelen"
+            ? false
+            : betaalwijze === "warmtefonds"
+              ? true
+              : isWarmtefondsSale({
+                  leadStatus: leadRawPre?.status,
+                  financieringVoorbehoud: offRaw?.financiering_voorbehoud,
+                });
+
+    // Eigen middelen: schouwweek pas ná 50% betaling
+    if (!warmtefondsForStatus) {
+      const { data: facturenRows } = await sb
+        .from("facturen")
+        .select("status, omschrijving, credit_van_factuur_id")
+        .eq("project_id", id);
+      const { isAanbetalingBetaald } = await import("@/lib/project-kickoff");
+      if (!isAanbetalingBetaald(facturenRows || [])) {
+        return NextResponse.json(
+          {
+            error:
+              "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const exacteDag = Boolean(exactSchouwAt);
+    const nextStatus = statusNaSchouwInplannen({
+      exacteDag,
+      warmtefonds: warmtefondsForStatus,
+    });
 
     let partnerId =
       body.installatie_partner_id || project.installatie_partner_id || null;
@@ -146,7 +199,7 @@ export async function POST(
       schouw_mail_partner_verstuurd: false,
       installatie_partner_id: partnerId,
       monteur: partnerNaam,
-        status: "schouwdag_ingepland",
+      status: nextStatus,
     };
 
     const { data: updated, error: updateErr } = await sb
@@ -423,6 +476,7 @@ const SCHOUW_PLAN_STATUS = new Set([
   "warmtefonds_aangevraagd",
   "warmtefonds_in_behandeling",
   "warmtefonds_goedgekeurd",
+  "opstarten_voltooid_afwachten_wf",
   "schouwdag_ingepland",
   "schouw_voltooid",
   // legacy

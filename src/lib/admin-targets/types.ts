@@ -59,7 +59,7 @@ export const TARGET_FIELD_META: FieldMeta[] = [
     key: "afspraakToSale",
     label: "Afspraak → sale",
     kind: "percent",
-    hint: "Berekend: orders ÷ afspraken (doel); dashboard telt t.o.v. afgeboekte afspraken",
+    hint: "Closing % — sales-doel = dit × geplande afspraken (standaard 30%)",
     isRate: true,
   },
   {
@@ -73,7 +73,7 @@ export const TARGET_FIELD_META: FieldMeta[] = [
     key: "orders",
     label: "Orders",
     kind: "number",
-    hint: "Getekende deals per persoon / 7 dagen",
+    hint: "Berekend: afspraken × (afspraak→sale %)",
   },
   {
     key: "gemOrderwaarde",
@@ -101,7 +101,7 @@ export const EDITABLE_FIELDS_BY_ROLE: Record<TargetRole, TargetFieldKey[]> = {
   adviseur: [
     "afsprakenGepland",
     "leadToAppt",
-    "orders",
+    "afspraakToSale",
     "gemOrderwaarde",
     "showRate",
   ],
@@ -139,23 +139,23 @@ export const DEFAULT_TARGETS: Record<TargetRole, TargetFields> = {
     leads: 80,
     afsprakenGepland: 20,
     leadToAppt: 25,
-    afspraakToSale: 25,
+    afspraakToSale: 30,
     showRate: 80,
-    orders: 5,
+    orders: 6,
     gemOrderwaarde: 8000,
-    omzet: 40000,
+    omzet: 48000,
     installaties: 0,
   },
-  /** 4 afspraken/dag × 5 werkdagen, 25% L2A → 80 leads; 5 orders × €8k = €40k */
+  /** 20 afspraken/week, 25% L2A → 80 leads; 30% closing → 6 orders × €8k */
   adviseur: {
     leads: 80,
     afsprakenGepland: 20,
     leadToAppt: 25,
-    afspraakToSale: 25,
+    afspraakToSale: 30,
     showRate: 80,
-    orders: 5,
+    orders: 6,
     gemOrderwaarde: 8000,
-    omzet: 40000,
+    omzet: 48000,
     installaties: 0,
   },
   beller: {

@@ -326,8 +326,8 @@ export const API_V1_DOCS: EndpointDoc[] = [
         name: "days",
         in: "query",
         type: "number",
-        description: "Horizon in dagen (1–60, default 21)",
-        example: 21,
+        description: "Horizon in dagen (1–60, default 14)",
+        example: 14,
       },
       {
         name: "limit",

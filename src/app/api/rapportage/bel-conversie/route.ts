@@ -859,22 +859,21 @@ export async function GET(req: NextRequest) {
 
     const cpa = await loadBelConversieCpa(sb, dateYmd, cpaDays);
 
+    // Alleen beller/backoffice krijgen bel-credit; adviseurs/admin niet.
+    const callerIds = new Set<string>();
     const skipAdminIds = new Set<string>();
     for (const a of adviseurRows) {
-      if (normalizeRol(a.rol) === "admin" || isAdminEmail(a.email)) {
+      const r = normalizeRol(a.rol);
+      if (r === "admin" || isAdminEmail(a.email)) {
+        skipAdminIds.add(a.id);
+        continue;
+      }
+      if (r === "beller" || r === "backoffice") {
+        callerIds.add(a.id);
+      } else {
         skipAdminIds.add(a.id);
       }
     }
-
-    // Alleen beller- + backoffice-accounts in de filter (geen adviseurs e.d.)
-    const callerIds = new Set(
-      adviseurRows
-        .filter((a) => {
-          const r = normalizeRol(a.rol);
-          return r === "beller" || r === "backoffice";
-        })
-        .map((a) => a.id)
-    );
     // Bel-account: altijd alleen eigen gebelde leads (backoffice/admin mag alles)
     const lockToSelf =
       sessionRol === "beller" &&

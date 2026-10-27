@@ -6,6 +6,7 @@ import type { Project, ProjectStatus } from "@/types/database";
 import {
   normalizeProjectStatus,
   projectStatusLabel,
+  resolveDisplayProjectStatus,
   statusTone,
 } from "@/lib/labels";
 import {
@@ -149,7 +150,10 @@ export function ProjectStatusSelect({
     localStatus === "annulering" ||
     localStatus === "hold_sales_actie"
       ? normalizeProjectStatus(localStatus)
-      : current;
+      : resolveDisplayProjectStatus({
+          ...project,
+          status: current,
+        });
 
   async function applyStatus(
     next: ProjectStatus,

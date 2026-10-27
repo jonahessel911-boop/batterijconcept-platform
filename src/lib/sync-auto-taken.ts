@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import {
   autoTakenVoorFinanciering,
   autoTakenVoorStatus,
@@ -166,9 +167,26 @@ export async function syncAutoTakenVoorProject(
   } else {
     const betaalwijze = betaalwijzeOf(project);
     const operational = effectiveOperationalStatus(project);
+    let aanbetalingBetaald = false;
+    if (
+      betaalwijze === "eigen_middelen" &&
+      operational === "schouwweek_inplannen"
+    ) {
+      const { data: facturen } = await sb
+        .from("facturen")
+        .select("status, omschrijving, credit_van_factuur_id")
+        .eq("project_id", projectId);
+      aanbetalingBetaald = (facturen || []).some(
+        (f) =>
+          !f.credit_van_factuur_id &&
+          isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+          f.status === "betaald"
+      );
+    }
     for (const d of autoTakenVoorStatus(operational, betaalwijze, {
       schouwAt: project.schouw_at,
       installatieAt: project.installatie_at,
+      aanbetalingBetaald,
     })) {
       defs.push({ ...d });
     }

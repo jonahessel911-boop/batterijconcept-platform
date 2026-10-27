@@ -2522,6 +2522,7 @@ export function ProjectPage() {
                 <div className="space-y-3">
                   <ProjectVolgendeStap
                     project={project}
+                    facturen={facturen}
                     disabled={statusSaving}
                     onStatusChange={(s) => void updateStatus(s)}
                     onPlanSchouwdag={() => {

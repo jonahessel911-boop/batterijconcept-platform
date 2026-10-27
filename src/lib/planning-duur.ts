@@ -1,8 +1,20 @@
 /** Vaste duur op het planbord / installateursagenda. */
 export const SCHOUW_DUUR_MINUTEN = 30;
-export const INSTALLATIE_DUUR_MINUTEN = 240; // 4 uur (middagvenster 13–17)
+/** Middag-installatie 13–17 (fallback als venster onbekend). */
+export const INSTALLATIE_DUUR_MINUTEN = 240;
+/** Ochtend-installatie 09–12 */
+export const INSTALLATIE_OCHTEND_DUUR_MINUTEN = 180;
+/** Middag-installatie 13–17 */
+export const INSTALLATIE_MIDDAG_DUUR_MINUTEN = 240;
 export const SERVICE_DUUR_MINUTEN = 60; // 1 uur
 export const LEVERING_DUUR_MINUTEN = 60; // 1 uur (ochtend-slot)
+
+export function installatieDuurVoorVenster(
+  venster: "ochtend" | "middag" | null | undefined
+): number {
+  if (venster === "ochtend") return INSTALLATIE_OCHTEND_DUUR_MINUTEN;
+  return INSTALLATIE_MIDDAG_DUUR_MINUTEN;
+}
 
 export function duurMinutenVoorKind(
   kind: "schouw" | "schouwweek" | "installatie" | "service" | "levering"

@@ -12,7 +12,7 @@ import { nl } from "date-fns/locale";
 import type { InstallatiePartner, Project } from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import {
-  INSTALLATIE_DUUR_MINUTEN,
+  installatieDuurVoorVenster,
   SCHOUW_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
 import {
@@ -63,19 +63,27 @@ function vensterForLocalHour(hour: number, minute: number): PartnerVenster | nul
 export function PartnerAgendaPanel({
   initialPartnerId,
   projects = [],
+  /** portal = installatiepartner zelf (token-API, geen partnerkiezer) */
+  mode = "crm",
+  portalToken,
+  partnerNaam,
 }: {
   initialPartnerId?: string | null;
   projects?: Project[];
+  mode?: "crm" | "portal";
+  portalToken?: string;
+  partnerNaam?: string;
 }) {
+  const isPortal = mode === "portal";
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [partnerId, setPartnerId] = useState(initialPartnerId || "");
   const [weekAnchor, setWeekAnchor] = useState(() => new Date());
-  const [afblokMode, setAfblokMode] = useState(false);
+  const [afblokMode, setAfblokMode] = useState(isPortal);
   const [afblokkingen, setAfblokkingen] = useState<Set<string>>(new Set());
   const [blockBusy, setBlockBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!isPortal);
 
   const days = useMemo(() => weekDaysFrom(weekAnchor), [weekAnchor]);
   const van = days[0]?.key || "";
@@ -86,6 +94,10 @@ export function PartnerAgendaPanel({
   }, [initialPartnerId]);
 
   useEffect(() => {
+    if (isPortal) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
@@ -107,21 +119,23 @@ export function PartnerAgendaPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen mount
-  }, []);
+  }, [isPortal]);
 
   const loadAfblokkingen = useCallback(async () => {
     if (!partnerId || !van || !tot) return;
     try {
-      const res = await fetch(
-        `/api/installatie-partners/afblokkingen?partner_id=${encodeURIComponent(partnerId)}&van=${van}&tot=${tot}`
-      );
+      const url =
+        isPortal && portalToken
+          ? `/api/installatie/${encodeURIComponent(portalToken)}/afblokkingen?van=${van}&tot=${tot}`
+          : `/api/installatie-partners/afblokkingen?partner_id=${encodeURIComponent(partnerId)}&van=${van}&tot=${tot}`;
+      const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Afblokkingen laden mislukt");
       const next = new Set<string>();
       for (const item of data.items || []) {
         next.add(
           partnerAfblokKey(
-            item.partner_id,
+            item.partner_id || partnerId,
             item.dag,
             item.venster as PartnerVenster
           )
@@ -131,7 +145,7 @@ export function PartnerAgendaPanel({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Afblokkingen laden mislukt");
     }
-  }, [partnerId, van, tot]);
+  }, [partnerId, van, tot, isPortal, portalToken]);
 
   useEffect(() => {
     void loadAfblokkingen();
@@ -188,7 +202,8 @@ export function PartnerAgendaPanel({
               kind: "installatie",
               start_at: start.toISOString(),
               end_at: new Date(
-                start.getTime() + INSTALLATIE_DUUR_MINUTEN * 60_000
+                start.getTime() +
+                  installatieDuurVoorVenster(venster) * 60_000
               ).toISOString(),
               label: `Installatie · ${leadNaam}`,
               project_nummer: p.project_nummer,
@@ -221,15 +236,23 @@ export function PartnerAgendaPanel({
       return copy;
     });
     try {
-      const res = await fetch("/api/installatie-partners/afblokkingen", {
+      const url =
+        isPortal && portalToken
+          ? `/api/installatie/${encodeURIComponent(portalToken)}/afblokkingen`
+          : "/api/installatie-partners/afblokkingen";
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          partner_id: partnerId,
-          dag: dayKey,
-          venster,
-          geblokkeerd: nextBlocked,
-        }),
+        body: JSON.stringify(
+          isPortal
+            ? { dag: dayKey, venster, geblokkeerd: nextBlocked }
+            : {
+                partner_id: partnerId,
+                dag: dayKey,
+                venster,
+                geblokkeerd: nextBlocked,
+              }
+        ),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Blokkeren mislukt");
@@ -259,35 +282,40 @@ export function PartnerAgendaPanel({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold text-ink">
-            Partner-agenda
+            {isPortal ? "Jouw beschikbaarheid" : "Partner-agenda"}
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            Ochtend 09–12 (schouw) · Middag 13–17 (installatie 4u of schouws)
+            2 installaties/dag: 09–12 · pauze 12–13 · 13–17 · schouw 30 min
+            {partnerNaam ? ` · ${partnerNaam}` : ""}
           </p>
-          <a
-            href="/?tab=agenda"
-            className="mt-1 inline-block text-xs font-medium text-green-dark hover:underline"
-          >
-            ← Terug naar adviseur-agenda
-          </a>
+          {!isPortal ? (
+            <a
+              href="/?tab=agenda"
+              className="mt-1 inline-block text-xs font-medium text-green-dark hover:underline"
+            >
+              ← Terug naar adviseur-agenda
+            </a>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-muted">
-            Partner
-            <select
-              value={partnerId}
-              onChange={(e) => setPartnerId(e.target.value)}
-              className="ml-2 border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
-            >
-              <option value="">Kies…</option>
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.naam}
-                  {!p.actief ? " (uit)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isPortal ? (
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Partner
+              <select
+                value={partnerId}
+                onChange={(e) => setPartnerId(e.target.value)}
+                className="ml-2 border border-line bg-white px-2 py-1.5 text-sm text-ink outline-none focus:border-green"
+              >
+                <option value="">Kies…</option>
+                {partners.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.naam}
+                    {!p.actief ? " (uit)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button
             type="button"
             onClick={() => setWeekAnchor((d) => addWeeks(d, -1))}

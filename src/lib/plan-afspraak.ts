@@ -16,6 +16,7 @@ import { hasBlockingOverlap } from "@/lib/afspraak-busy";
 import {
   afspraakBlokkeertAgenda,
   afspraakDuurMinuten,
+  afspraakMagOverBezetSlot,
   afspraakSoortLabel,
   afspraakStuurtMail,
   isInterneAfspraakSoort,
@@ -169,7 +170,10 @@ export async function planAfspraak(
     insertRow.ingepland_door_id = ingeplandDoor;
   }
 
-  // Terugbel staat niet in de agenda — geen week/slot-checks.
+  // Terugbel / telefonisch: mag over bezette of afgeblokte fysieke blokken.
+  // Huisbezoeken blijven strikte agenda-regels volgen.
+  const softSlot = isTerugbelSoort(soort) || afspraakMagOverBezetSlot(soort);
+
   if (!isTerugbelSoort(soort)) {
     const { data: adviseurMeta } = await sb
       .from("adviseurs")
@@ -199,7 +203,10 @@ export async function planAfspraak(
       };
     }
 
-    if (await isSlotAfgeblokt(sb, input.adviseur_id, start)) {
+    if (
+      !softSlot &&
+      (await isSlotAfgeblokt(sb, input.adviseur_id, start))
+    ) {
       return {
         ok: false,
         status: 409,
@@ -210,7 +217,7 @@ export async function planAfspraak(
     }
   }
 
-  if (afspraakBlokkeertAgenda(soort)) {
+  if (!softSlot && afspraakBlokkeertAgenda(soort)) {
     const overlap = await hasBlockingOverlap(sb, {
       adviseurId: input.adviseur_id,
       start,

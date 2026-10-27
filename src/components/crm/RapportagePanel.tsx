@@ -17,10 +17,12 @@ import { FinancialPanel } from "./FinancialPanel";
 import { OperationeelRapportagePanel } from "./OperationeelRapportagePanel";
 import { LiveRapportagePanel } from "./LiveRapportagePanel";
 import { CeoTotaalPanel } from "./CeoTotaalPanel";
+import { ManagerInsightsPanel } from "./ManagerInsightsPanel";
 import { useCrmSession } from "@/hooks/useCrmSession";
 
 type ViewMode =
   | "ceo"
+  | "manager_insights"
   | "dashboard_v2"
   | "live"
   | "operationeel"
@@ -33,6 +35,7 @@ type ViewMode =
 
 const ALL_VIEWS: { id: ViewMode; label: string }[] = [
   { id: "ceo", label: "Totaal" },
+  { id: "manager_insights", label: "Manager Insights" },
   { id: "dashboard_v2", label: "Dashboard" },
   { id: "live", label: "Live" },
   { id: "operationeel", label: "Operationeel" },
@@ -99,43 +102,47 @@ export function RapportagePanel() {
   const title =
     view === "ceo"
       ? "Totaal"
-      : view === "dashboard_v2"
-        ? "Dashboard"
-        : view === "live"
-          ? "Live"
-          : view === "operationeel"
-            ? "Operationeel"
-            : view === "bel_conversie"
-              ? "Bellen"
-              : view === "lead_conversie"
-                ? "Leads"
-                : view === "sales"
-                  ? "Sales"
-                  : view === "marketing"
-                    ? "Marketing"
-                    : view === "financial"
-                      ? "Financieel"
-                      : "Kaart";
+      : view === "manager_insights"
+        ? "Manager Insights"
+        : view === "dashboard_v2"
+          ? "Dashboard"
+          : view === "live"
+            ? "Live"
+            : view === "operationeel"
+              ? "Operationeel"
+              : view === "bel_conversie"
+                ? "Bellen"
+                : view === "lead_conversie"
+                  ? "Leads"
+                  : view === "sales"
+                    ? "Sales"
+                    : view === "marketing"
+                      ? "Marketing"
+                      : view === "financial"
+                        ? "Financieel"
+                        : "Kaart";
   const subtitle =
     view === "ceo"
-      ? "CEO-overzicht · leads · afspraken · order worth · paid · kosten · profit."
-      : view === "dashboard_v2"
-        ? "Stand vs doel: waar staan we, en wat moet er nog bij."
-        : view === "live"
-          ? "Recente leads · L→A op cohort binnenkomst · wanneer ingepland."
-          : view === "operationeel"
-            ? "Orders per status · waar staan projecten in de pipeline."
-            : view === "bel_conversie"
-              ? "Dagoel (vandaag) · periodefilter · team · €10 per netto."
-              : view === "lead_conversie"
-                ? "Lead-conversie · periodefilter · bi-weekly leads nodig · CPL per kanaal."
-                : view === "sales"
-                  ? "Sales Manager · conversie vs doel · tijdlijn · kaart per adviseur."
-                  : view === "marketing"
-                    ? "Meta spend (Amsterdam) · leads uit DB · CAC · ROAS · ROI per campagne."
-                    : view === "financial"
-                      ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
-                      : "Leads per provincie · filter op binnenkomstdatum.";
+      ? "Marketing · Sales · Callcenter · Projected P&L — één filter voor alles."
+      : view === "manager_insights"
+        ? "Actiepunten per unit t.o.v. targets — inclusief diagnose regio vs planning."
+        : view === "dashboard_v2"
+          ? "Stand vs doel: waar staan we, en wat moet er nog bij."
+          : view === "live"
+            ? "Recente leads · L→A op cohort binnenkomst · wanneer ingepland."
+            : view === "operationeel"
+              ? "Orders per status · waar staan projecten in de pipeline."
+              : view === "bel_conversie"
+                ? "Dagoel (vandaag) · periodefilter · team · €10 per netto."
+                : view === "lead_conversie"
+                  ? "Lead-conversie · periodefilter · bi-weekly leads nodig · CPL per kanaal."
+                  : view === "sales"
+                    ? "Sales Manager · conversieketen · tijdlijn · kaart per adviseur."
+                    : view === "marketing"
+                      ? "Meta spend (Amsterdam) · leads uit DB · CAC · ROAS · ROI per campagne."
+                      : view === "financial"
+                        ? "Cashstand · purchasing · installatie · loon · ads · BTW · commissie."
+                        : "Leads per provincie · filter op binnenkomstdatum.";
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -185,6 +192,10 @@ export function RapportagePanel() {
         {view === "ceo" ? (
           <div className="bg-wash/40">
             <CeoTotaalPanel />
+          </div>
+        ) : view === "manager_insights" ? (
+          <div className="bg-wash/40 px-4 py-5 sm:px-5">
+            <ManagerInsightsPanel />
           </div>
         ) : view === "dashboard_v2" ? (
           <div className="bg-wash/40 px-4 py-5 sm:px-5">

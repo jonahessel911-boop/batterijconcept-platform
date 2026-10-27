@@ -57,7 +57,16 @@ export function isAdminAdviseur(a: {
 }
 
 /**
- * Mag in klantgerichte slot-planning (Fonio / v1 slots).
+ * Tijdelijk: niet als bel/best-slot-optie (blijven actief: login, offertes, agenda).
+ * Harald + Stijn — verwijder uit deze set om weer mee te plannen.
+ */
+const TIJDELIJK_NIET_PLANBAAR_EMAILS = new Set([
+  "harald@batterijconcept.nl",
+  "stijn@batterijconcept.nl",
+]);
+
+/**
+ * Mag in klantgerichte slot-planning (Bel best-slots / capaciteit).
  * Alleen actieve sales-adviseurs. Inactief = niet automatisch inplannen.
  * Systeem-Admin én CRM-admins (o.a. jona@) uit — die hebben lege agenda's
  * waardoor "vrije" slots ontstaan die in de echte adviseur-agenda bezet zijn.
@@ -71,6 +80,8 @@ export function isPlanbaarAdviseur(a: {
   if (a.actief === false) return false;
   if (isAdminAdviseur(a)) return false;
   if (isAdminEmail(a.email)) return false;
+  const email = a.email?.trim().toLowerCase();
+  if (email && TIJDELIJK_NIET_PLANBAAR_EMAILS.has(email)) return false;
   if (a.rol != null && a.rol !== "" && normalizeRol(a.rol) !== "adviseur") {
     return false;
   }

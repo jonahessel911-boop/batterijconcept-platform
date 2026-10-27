@@ -604,18 +604,26 @@ export async function POST(req: NextRequest) {
   try {
     const jar = await cookies();
     const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-    // Adviseur mag alleen in eigen agenda plannen — nooit voor een collega.
+    // Adviseur: huisbezoek/vervolg alleen eigen agenda.
+    // Terugbel (bel/warme_bel) mag wél aan callcenter/backoffice/zichzelf.
     if (session && normalizeRol(session.rol) === "adviseur") {
-      if (
-        body.adviseur_id &&
-        body.adviseur_id !== session.adviseurId
-      ) {
-        return NextResponse.json(
-          { error: "Je kunt alleen in je eigen agenda plannen" },
-          { status: 403 }
-        );
+      const soortNorm = (body.soort || "nieuw").trim();
+      const isTerugbel =
+        soortNorm === "bel" || soortNorm === "warme_bel";
+      if (!isTerugbel) {
+        if (
+          body.adviseur_id &&
+          body.adviseur_id !== session.adviseurId
+        ) {
+          return NextResponse.json(
+            { error: "Je kunt alleen in je eigen agenda plannen" },
+            { status: 403 }
+          );
+        }
+        body.adviseur_id = session.adviseurId;
+      } else if (!body.adviseur_id) {
+        body.adviseur_id = session.adviseurId;
       }
-      body.adviseur_id = session.adviseurId;
     }
 
     const sb = getSupabaseAdmin();

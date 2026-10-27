@@ -33,29 +33,40 @@ type DueContext = {
   now?: Date;
 };
 
-/** Parallelle auto-taken bij status Opstarten. */
-function kickoffAutoTaken(warmtefonds: boolean): AutoTaakDef[] {
+type KickoffDueContext = DueContext & {
+  /** Eigen middelen: schouwweek-taak pas ná 50% betaling. */
+  aanbetalingBetaald?: boolean;
+};
+
+/** Auto-taken bij status Opstarten. WF parallel; EM gestaffeld. */
+function kickoffAutoTaken(
+  warmtefonds: boolean,
+  opts: { aanbetalingBetaald?: boolean } = {}
+): AutoTaakDef[] {
   const taken: AutoTaakDef[] = [
     {
       autoKey: "kickoff:aanbetaling",
-      titel: "BTW-factuur versturen",
+      titel: warmtefonds ? "BTW-factuur versturen" : "50% aanbetaling versturen",
       afdeling: "Facturatie",
       dueInDays: 1,
     },
-    {
+  ];
+  if (warmtefonds) {
+    taken.push({
+      autoKey: "kickoff:wf_afspraak",
+      titel: "Warmtefonds-aanvraagafspraak inplannen",
+      afdeling: "Backoffice",
+      dueInDays: 1,
+    });
+  }
+  // WF: schouwweek parallel. EM: pas ná 50% betaling.
+  if (warmtefonds || opts.aanbetalingBetaald) {
+    taken.push({
       autoKey: "kickoff:schouwweek",
       titel: warmtefonds
         ? "Schouwweek inplannen + track & trace (±5 weken)"
         : "Schouwweek inplannen + track & trace",
       afdeling: "Planning",
-      dueInDays: 1,
-    },
-  ];
-  if (warmtefonds) {
-    taken.splice(1, 0, {
-      autoKey: "kickoff:wf_afspraak",
-      titel: "Warmtefonds-aanvraagafspraak inplannen",
-      afdeling: "Backoffice",
       dueInDays: 1,
     });
   }
@@ -66,13 +77,15 @@ function kickoffAutoTaken(warmtefonds: boolean): AutoTaakDef[] {
 export function autoTakenVoorStatus(
   status: string,
   betaalwijze: Betaalwijze = "warmtefonds",
-  ctx: DueContext = {}
+  ctx: KickoffDueContext = {}
 ): AutoTaakDef[] {
   const key = toOperationalStatus(status) as ProjectStatusKey;
 
-  // Opstarten: 2–3 parallelle kickoff-taken (geen lineaire aanbetaling-status)
+  // Opstarten: WF parallel; EM eerst factuur, schouwweek na betaling
   if (key === "schouwweek_inplannen") {
-    return kickoffAutoTaken(betaalwijze === "warmtefonds");
+    return kickoffAutoTaken(betaalwijze === "warmtefonds", {
+      aanbetalingBetaald: ctx.aanbetalingBetaald,
+    });
   }
 
   // Na opleveringformulier: 2 backoffice-acties, deadline binnen 2 dagen

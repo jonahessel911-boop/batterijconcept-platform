@@ -62,10 +62,20 @@ function scaleOmzetMap(
  */
 export function parseWeeklyGoals(
   raw: unknown,
-  people: { id: string; rol?: string | null; actief?: boolean }[] = []
+  people: {
+    id: string;
+    rol?: string | null;
+    actief?: boolean;
+    startdatum?: string | null;
+  }[] = [],
+  opts?: {
+    asOfYmd?: string;
+    periodStartYmd?: string;
+    periodEndYmd?: string;
+  }
 ): DashboardV2Goals {
   const store = parseAdminTargetsStore(raw);
-  const snap = teamWeeklySnapshot(store, people);
+  const snap = teamWeeklySnapshot(store, people, opts);
   return {
     leads: snap.leads,
     afsprakenGepland: snap.afsprakenGepland,

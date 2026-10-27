@@ -13,9 +13,15 @@ import {
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
+import { TeamNotitiesSection } from "./TeamNotitiesSection";
 import { isUsableStartAdres } from "@/lib/start-adres";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
+import { useCrmSession } from "@/hooks/useCrmSession";
+import {
+  isOpsManagerAdviseur,
+  opsCommissieLabelVoorRol,
+} from "@/lib/ops-commissie";
 
 type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
@@ -87,6 +93,7 @@ export function InstellingenPanel({
   forcedTeamRol?: "all" | TeamRol;
   monteurLabel?: boolean;
 }) {
+  const { session } = useCrmSession();
   const [filter, setFilter] = useState<ListFilter>(
     listFilter ?? "medewerkers"
   );
@@ -201,7 +208,6 @@ export function InstellingenPanel({
     setNaam("");
     setEmail("");
     setTelefoon("");
-    setStartdatum("");
     const next =
       prefRol &&
       (TEAM_ROLLEN as readonly string[]).includes(prefRol)
@@ -210,6 +216,15 @@ export function InstellingenPanel({
           ? teamRolFilter
           : "beller";
     setRol(next);
+    if (next === "adviseur") {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, "0");
+      const d = String(today.getDate()).padStart(2, "0");
+      setStartdatum(`${y}-${m}-${d}`);
+    } else {
+      setStartdatum("");
+    }
   }
 
   async function deleteMedewerker(a: Adviseur) {
@@ -276,6 +291,7 @@ export function InstellingenPanel({
       kvk_uitreksel_storage_path: a.kvk_uitreksel_storage_path ?? null,
       kvk_uitreksel_bestandsnaam: a.kvk_uitreksel_bestandsnaam ?? null,
       kvk_uitreksel_uploaded_at: a.kvk_uitreksel_uploaded_at ?? null,
+      interne_notities: a.interne_notities ?? null,
     });
     setNewPassword("");
     setConfirmPassword("");
@@ -309,9 +325,70 @@ export function InstellingenPanel({
       certificaten_storage_path: p.certificaten_storage_path ?? null,
       certificaten_bestandsnaam: p.certificaten_bestandsnaam ?? null,
       certificaten_uploaded_at: p.certificaten_uploaded_at ?? null,
+      interne_notities: p.interne_notities ?? null,
     });
     setError(null);
     setOkMsg(null);
+  }
+
+  async function saveMedewerkerNotities(next: string) {
+    if (!selectedAdviseur) throw new Error("Geen medewerker geselecteerd");
+    const res = await fetch("/api/adviseurs", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: selectedAdviseur.id,
+        interne_notities: next,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        (data as { error?: string }).error || "Notitie opslaan mislukt"
+      );
+    }
+    const updated = (data as { adviseur?: Adviseur }).adviseur;
+    if (updated) {
+      setAdviseurs((prev) =>
+        prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a))
+      );
+      setDraft((d) =>
+        d ? { ...d, interne_notities: updated.interne_notities ?? next } : d
+      );
+    } else {
+      setDraft((d) => (d ? { ...d, interne_notities: next } : d));
+    }
+    setOkMsg("Notitie opgeslagen.");
+  }
+
+  async function savePartnerNotities(next: string) {
+    if (!selectedPartner) throw new Error("Geen monteur geselecteerd");
+    const res = await fetch("/api/installatie-partners", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: selectedPartner.id,
+        interne_notities: next,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        (data as { error?: string }).error || "Notitie opslaan mislukt"
+      );
+    }
+    const updated = (data as { partner?: InstallatiePartner }).partner;
+    if (updated) {
+      setPartners((prev) =>
+        prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
+      );
+      setPartnerDraft((d) =>
+        d ? { ...d, interne_notities: updated.interne_notities ?? next } : d
+      );
+    } else {
+      setPartnerDraft((d) => (d ? { ...d, interne_notities: next } : d));
+    }
+    setOkMsg("Notitie opgeslagen.");
   }
 
   function openWarmtefonds(o: WarmtefondsOperator) {
@@ -347,6 +424,9 @@ export function InstellingenPanel({
     setOkMsg(null);
     try {
       if (activeFilter === "medewerkers") {
+        if (rol === "adviseur" && !startdatum.trim()) {
+          throw new Error("Vul een startdatum in voor de adviseur");
+        }
         const res = await fetch("/api/adviseurs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -356,9 +436,7 @@ export function InstellingenPanel({
             telefoon,
             rol,
             ...(rol === "adviseur" ? { commissie_pct: 10 } : {}),
-            ...(rol === "adviseur" && startdatum
-              ? { startdatum }
-              : {}),
+            ...(rol === "adviseur" ? { startdatum } : {}),
           }),
         });
         const data = await res.json();
@@ -757,6 +835,15 @@ export function InstellingenPanel({
     const rol = normalizeRol(draft.rol) as TeamRol;
     const sales = isSalesRol(draft.rol);
     const actief = draft.actief !== false;
+    const opsCommissieLabel = opsCommissieLabelVoorRol({
+      rol: draft.rol,
+      isOpsManager: isOpsManagerAdviseur({
+        id: draft.id || selectedAdviseur.id,
+        naam: draft.naam ?? selectedAdviseur.naam,
+        email: draft.email ?? selectedAdviseur.email,
+        rol: draft.rol ?? selectedAdviseur.rol,
+      }),
+    });
 
     return (
       <div className="relative w-full pb-24">
@@ -792,6 +879,10 @@ export function InstellingenPanel({
                   {sales ? (
                     <span className="text-xs text-muted">
                       Commissie {Number(draft.commissie_pct) || 0}%
+                    </span>
+                  ) : opsCommissieLabel ? (
+                    <span className="text-xs text-muted">
+                      {opsCommissieLabel}
                     </span>
                   ) : null}
                 </div>
@@ -912,7 +1003,7 @@ export function InstellingenPanel({
               <>
                 <FormSection
                   title="Planning & commissie"
-                  hint="Eerste werkdag blokkeert agenda tot die datum"
+                  hint="Eerste werkdag: agenda + lead-targets vanaf die dag"
                 >
                   <Field label="Startdatum">
                     <input
@@ -1124,6 +1215,17 @@ export function InstellingenPanel({
                       setOkMsg(msg);
                     }
                   }}
+                />
+              </div>
+            </FormSection>
+
+            <FormSection title="Notities" className="lg:col-span-2">
+              <div className="sm:col-span-2">
+                <TeamNotitiesSection
+                  value={draft.interne_notities}
+                  authorNaam={session?.naam}
+                  disabled={detailSaving || deleting}
+                  onSave={saveMedewerkerNotities}
                 />
               </div>
             </FormSection>
@@ -1522,6 +1624,13 @@ export function InstellingenPanel({
               }}
             />
           </div>
+
+          <TeamNotitiesSection
+            value={partnerDraft.interne_notities}
+            authorNaam={session?.naam}
+            disabled={detailSaving || deleting}
+            onSave={savePartnerNotities}
+          />
 
           <div className="border border-line bg-wash px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -1947,6 +2056,10 @@ export function InstellingenPanel({
                   Number.isFinite(Number(a.commissie_pct))
                     ? Number(a.commissie_pct)
                     : 10;
+                const opsCommissieLabel = opsCommissieLabelVoorRol({
+                  rol: a.rol,
+                  isOpsManager: isOpsManagerAdviseur(a),
+                });
                 return (
                   <tr
                     key={a.id}
@@ -1988,6 +2101,10 @@ export function InstellingenPanel({
                             maximumFractionDigits: 1,
                           })}
                           %
+                        </span>
+                      ) : opsCommissieLabel ? (
+                        <span className="text-[11px] font-semibold text-ink">
+                          {opsCommissieLabel}
                         </span>
                       ) : (
                         "—"
@@ -2255,7 +2372,17 @@ export function InstellingenPanel({
                 <Field label="Rol">
                   <select
                     value={rol}
-                    onChange={(e) => setRol(normalizeRol(e.target.value))}
+                    onChange={(e) => {
+                      const next = normalizeRol(e.target.value);
+                      setRol(next);
+                      if (next === "adviseur" && !startdatum) {
+                        const today = new Date();
+                        const y = today.getFullYear();
+                        const m = String(today.getMonth() + 1).padStart(2, "0");
+                        const d = String(today.getDate()).padStart(2, "0");
+                        setStartdatum(`${y}-${m}-${d}`);
+                      }
+                    }}
                     className={inputCls}
                   >
                     {TEAM_ROLLEN.map((r) => (
@@ -2276,9 +2403,10 @@ export function InstellingenPanel({
                 </p>
                 {rol === "adviseur" ? (
                   <>
-                    <Field label="Startdatum">
+                    <Field label="Startdatum (verplicht)">
                       <input
                         type="date"
+                        required
                         value={startdatum}
                         onChange={(e) => setStartdatum(e.target.value)}
                         className={inputCls}
@@ -2286,8 +2414,9 @@ export function InstellingenPanel({
                     </Field>
                     <p className="border border-green/30 bg-green-soft/50 px-3 py-2 text-[11px] text-green-dark">
                       Start als <strong>Actief</strong> met{" "}
-                      <strong>10% commissie</strong>. Met startdatum wordt de
-                      agenda tot die dag volledig afgeblokt.
+                      <strong>10% commissie</strong>. Agenda is geblokkeerd tot
+                      de startdatum. Lead-/afspraak-targets tellen pas mee vanaf
+                      die dag (pro-rata in de lopende week/maand).
                     </p>
                   </>
                 ) : null}
