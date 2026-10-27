@@ -234,6 +234,8 @@ export function CrmShell() {
     naam: string;
     email: string;
     rol: GebruikerRol;
+    actief?: boolean;
+    geblokkeerd?: boolean;
   } | null>(() => readCrmSessionCache());
   const [sessionReady, setSessionReady] = useState(
     () => readCrmSessionCache() !== null
@@ -242,6 +244,7 @@ export function CrmShell() {
     id: string;
     naam: string;
   } | null>(null);
+  const [geblokkeerd, setGeblokkeerd] = useState(false);
   const [impersonateBusy, setImpersonateBusy] = useState(false);
   const orphanBackfillDone = useRef(false);
 
@@ -265,14 +268,18 @@ export function CrmShell() {
         }
         const data = await res.json();
         if (!cancelled && data.adviseur) {
+          const blocked = data.adviseur.geblokkeerd === true;
           const next = {
             id: data.adviseur.id,
             naam: data.adviseur.naam,
             email: (data.adviseur.email || "").trim(),
             rol: normalizeRol(data.adviseur.rol),
+            actief: data.adviseur.actief !== false,
+            geblokkeerd: blocked,
           };
           setSessionUser(next);
           writeCrmSessionCache(next);
+          setGeblokkeerd(blocked);
           setImpersonator(
             data.impersonating
               ? {
@@ -442,16 +449,19 @@ export function CrmShell() {
     router.replace(`/?${params.toString()}`, { scroll: false });
   }, [sessionReady, userRol, sessionUser?.email, searchParams, router]);
 
-  // Adviseur: start op maandleaderboard
+  // Adviseur: start op maandleaderboard; inactief → agenda (afblokken)
   useEffect(() => {
     if (!sessionReady || userRol !== "adviseur") return;
     if (searchParams.get("tab")) return;
     if (searchParams.get("status")) return;
     if (searchParams.get("bo")) return;
     const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", "leaderboard");
+    params.set(
+      "tab",
+      sessionUser?.actief === false ? "agenda" : "leaderboard"
+    );
     router.replace(`/?${params.toString()}`, { scroll: false });
-  }, [sessionReady, userRol, searchParams, router]);
+  }, [sessionReady, userRol, sessionUser?.actief, searchParams, router]);
 
   function changeStatusFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -1362,6 +1372,56 @@ export function CrmShell() {
       sub: "Profielfoto en persoonlijke voorkeuren",
     },
   };
+
+  if (sessionReady && geblokkeerd) {
+    return (
+      <div className="crm-bg flex min-h-screen items-center justify-center px-4">
+        <div className="w-full max-w-md border border-line bg-white p-6 text-center shadow-sm sm:p-8">
+          <p className="font-display text-2xl font-semibold text-ink">
+            Gebruiker geblokkeerd
+          </p>
+          <p className="mt-2 text-sm text-muted">
+            Je account is geblokkeerd. Neem contact op met de beheerder als je
+            denkt dat dit een vergissing is.
+          </p>
+          {sessionUser?.naam ? (
+            <p className="mt-3 text-xs text-muted">{sessionUser.naam}</p>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              clearCrmShellCache();
+              void fetch("/api/auth/login", { method: "DELETE" }).then(() => {
+                router.replace("/login");
+                router.refresh();
+              });
+            }}
+            className="mt-6 w-full bg-[#0a4727] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#08381f]"
+          >
+            Uitloggen
+          </button>
+          {impersonator ? (
+            <button
+              type="button"
+              disabled={impersonateBusy}
+              onClick={() => {
+                setImpersonateBusy(true);
+                void fetch("/api/auth/impersonate", { method: "DELETE" })
+                  .then(() => {
+                    clearCrmShellCache();
+                    window.location.href = "/";
+                  })
+                  .finally(() => setImpersonateBusy(false));
+              }}
+              className="mt-2 w-full border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash"
+            >
+              Terug naar admin
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

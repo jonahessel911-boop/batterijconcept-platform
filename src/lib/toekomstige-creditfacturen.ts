@@ -125,6 +125,26 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     ),
   ];
 
+  type LeadRow = {
+    id: string;
+    naam: string | null;
+    adviseur_id: string | null;
+  };
+  type OfferteRow = {
+    id: string;
+    offerte_nummer: string | null;
+    subtotaal_ex_btw: number | null;
+    totaal_inc_btw: number | null;
+  };
+  type AlreadyRow = {
+    factuur_id: string;
+    creditfactuur_id: string;
+    adviseur_creditfacturen?:
+      | { id: string; factuur_nummer?: string; status?: string }
+      | { id: string; factuur_nummer?: string; status?: string }[]
+      | null;
+  };
+
   const [{ data: already }, { data: leads }, { data: offertes }] =
     await Promise.all([
       facIds.length
@@ -134,58 +154,36 @@ export async function buildToekomstigeVerkoperCreditfacturen(
               "factuur_id, creditfactuur_id, adviseur_creditfacturen(id, factuur_nummer, status)"
             )
             .in("factuur_id", facIds)
-        : Promise.resolve({ data: [] as unknown[] }),
+        : Promise.resolve({ data: [] as AlreadyRow[] }),
       leadIds.length
-        ? sb
-            .from("leads")
-            .select("id, naam, adviseur_id")
-            .in("id", leadIds)
-        : Promise.resolve({ data: [] as unknown[] }),
+        ? sb.from("leads").select("id, naam, adviseur_id").in("id", leadIds)
+        : Promise.resolve({ data: [] as LeadRow[] }),
       offIds.length
         ? sb
             .from("offertes")
             .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw")
             .in("id", offIds)
-        : Promise.resolve({ data: [] as unknown[] }),
+        : Promise.resolve({ data: [] as OfferteRow[] }),
     ]);
 
   const alreadyByFac = new Map<
     string,
     { cfId: string; cfNummer: string | null }
   >();
-  for (const r of already || []) {
-    const row = r as {
-      factuur_id: string;
-      creditfactuur_id: string;
-      adviseur_creditfacturen?:
-        | { id: string; factuur_nummer?: string; status?: string }
-        | { id: string; factuur_nummer?: string; status?: string }[]
-        | null;
-    };
-    const cfRaw = row.adviseur_creditfacturen;
+  for (const r of (already || []) as AlreadyRow[]) {
+    const cfRaw = r.adviseur_creditfacturen;
     const cf = Array.isArray(cfRaw) ? cfRaw[0] : cfRaw;
-    alreadyByFac.set(row.factuur_id, {
-      cfId: row.creditfactuur_id,
+    alreadyByFac.set(r.factuur_id, {
+      cfId: r.creditfactuur_id,
       cfNummer: cf?.factuur_nummer ?? null,
     });
   }
 
   const leadById = new Map(
-    (leads || []).map((l) => [
-      l.id as string,
-      l as { id: string; naam: string | null; adviseur_id: string | null },
-    ])
+    ((leads || []) as LeadRow[]).map((l) => [l.id, l])
   );
   const offById = new Map(
-    (offertes || []).map((o) => [
-      o.id as string,
-      o as {
-        id: string;
-        offerte_nummer: string | null;
-        subtotaal_ex_btw: number | null;
-        totaal_inc_btw: number | null;
-      },
-    ])
+    ((offertes || []) as OfferteRow[]).map((o) => [o.id, o])
   );
 
   const advIds = [

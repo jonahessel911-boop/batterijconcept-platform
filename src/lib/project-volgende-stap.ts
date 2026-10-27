@@ -173,7 +173,7 @@ function volgendeStapNaOpstarten(
   project: Project,
   now: Date,
   facturen: Factuur[] = []
-): ProjectVolgendeStapInfo {
+): ProjectVolgendeStapInfo | null {
   const week = schouwWeekOf(project);
   const wf = isWarmtefonds(project);
 

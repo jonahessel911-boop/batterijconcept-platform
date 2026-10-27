@@ -276,6 +276,7 @@ export function InstellingenPanel({
           ? Number(a.commissie_pct)
           : 10,
       actief: a.actief !== false,
+      geblokkeerd: a.geblokkeerd === true,
       bedrijfsnaam: a.bedrijfsnaam ?? "",
       kvk_nummer: a.kvk_nummer ?? "",
       btw_nummer: a.btw_nummer ?? "",
@@ -512,6 +513,7 @@ export function InstellingenPanel({
         rol: normalizeRol(draft.rol),
         start_adres: draft.start_adres?.toString().trim() || null,
         actief: draft.actief !== false,
+        geblokkeerd: draft.geblokkeerd === true,
       };
       if (isSalesRol(draft.rol)) {
         const pct = Number(draft.commissie_pct) || 0;
@@ -836,6 +838,7 @@ export function InstellingenPanel({
     const rol = normalizeRol(draft.rol) as TeamRol;
     const sales = isSalesRol(draft.rol);
     const actief = draft.actief !== false;
+    const geblokkeerd = draft.geblokkeerd === true;
     const opsCommissieLabel = opsCommissieLabelVoorRol({
       rol: draft.rol,
       isOpsManager: isOpsManagerAdviseur({
@@ -877,6 +880,11 @@ export function InstellingenPanel({
                   >
                     {gebruikerRolLabel[rol]}
                   </span>
+                  {geblokkeerd ? (
+                    <span className="inline-block bg-[#FDECEA] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#C62828]">
+                      Geblokkeerd
+                    </span>
+                  ) : null}
                   {sales ? (
                     <span className="text-xs text-muted">
                       Commissie {Number(draft.commissie_pct) || 0}%
@@ -888,35 +896,68 @@ export function InstellingenPanel({
                   ) : null}
                 </div>
               </div>
-              <div className="flex w-full border border-line p-0.5 sm:w-auto">
+              <div className="flex w-full flex-col gap-2 sm:w-auto">
+                <div className="flex w-full border border-line p-0.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDraft((d) => ({
+                        ...d,
+                        actief: true,
+                        geblokkeerd: false,
+                      }))
+                    }
+                    className={[
+                      "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
+                      actief && !geblokkeerd
+                        ? "bg-green text-white"
+                        : "bg-white text-muted hover:bg-wash",
+                    ].join(" ")}
+                  >
+                    Actief
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDraft((d) => ({
+                        ...d,
+                        actief: false,
+                        geblokkeerd: false,
+                      }))
+                    }
+                    className={[
+                      "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
+                      !actief && !geblokkeerd
+                        ? "bg-[#C45A12] text-white"
+                        : "bg-white text-muted hover:bg-wash",
+                    ].join(" ")}
+                  >
+                    Inactief
+                  </button>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setDraft((d) => ({ ...d, actief: true }))}
+                  onClick={() =>
+                    setDraft((d) =>
+                      geblokkeerd
+                        ? { ...d, geblokkeerd: false }
+                        : { ...d, geblokkeerd: true, actief: false }
+                    )
+                  }
                   className={[
-                    "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
-                    actief
-                      ? "bg-green text-white"
-                      : "bg-white text-muted hover:bg-wash",
+                    "w-full border px-3 py-1.5 text-xs font-semibold",
+                    geblokkeerd
+                      ? "border-[#C62828] bg-[#C62828] text-white"
+                      : "border-[#C62828]/40 bg-white text-[#C62828] hover:bg-[#FDECEA]",
                   ].join(" ")}
                 >
-                  Actief
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDraft((d) => ({ ...d, actief: false }))}
-                  className={[
-                    "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
-                    !actief
-                      ? "bg-[#C45A12] text-white"
-                      : "bg-white text-muted hover:bg-wash",
-                  ].join(" ")}
-                >
-                  Inactief
+                  {geblokkeerd ? "Deblokkeer gebruiker" : "Blokkeer adviseur"}
                 </button>
               </div>
             </div>
             <p className="mt-2 text-[11px] text-muted">
-              Actief = in planning · Inactief = kan inloggen, niet inplannen
+              Actief = in planning · Inactief = agenda wél, niet inplannen ·
+              Geblokkeerd = ziet niks (popup)
             </p>
           </div>
 
@@ -2162,12 +2203,18 @@ export function InstellingenPanel({
                       <span
                         className={[
                           "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          actief
-                            ? "bg-green-soft text-green-dark"
-                            : "bg-[#FFF0E6] text-[#C45A12]",
+                          a.geblokkeerd === true
+                            ? "bg-[#FDECEA] text-[#C62828]"
+                            : actief
+                              ? "bg-green-soft text-green-dark"
+                              : "bg-[#FFF0E6] text-[#C45A12]",
                         ].join(" ")}
                       >
-                        {actief ? "Actief" : "Inactief"}
+                        {a.geblokkeerd === true
+                          ? "Geblokkeerd"
+                          : actief
+                            ? "Actief"
+                            : "Inactief"}
                       </span>
                     </td>
                     <td

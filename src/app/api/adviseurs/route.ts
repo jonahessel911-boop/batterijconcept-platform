@@ -41,7 +41,8 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
+  "id, naam, email, telefoon, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
+/** Zonder geblokkeerd — tot migrate-adviseur-geblokkeerd.sql is gedraaid. */
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
 const ADVISEUR_PUBLIC_MID =
@@ -116,8 +117,10 @@ export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
     const adviseurId = req.nextUrl.searchParams.get("adviseur_id");
+    // Eigen agenda (adviseur_id) altijd ophalen, ook als inactief.
     const includeInactive =
-      req.nextUrl.searchParams.get("include_inactive") === "1";
+      req.nextUrl.searchParams.get("include_inactive") === "1" ||
+      Boolean(adviseurId);
 
     let query = sb
       .from("adviseurs")
@@ -135,6 +138,7 @@ export async function GET(req: NextRequest) {
         error.message?.includes("start_adres") ||
         error.message?.includes("startdatum") ||
         error.message?.includes("bel_planning") ||
+        error.message?.includes("geblokkeerd") ||
         error.message?.includes("rol") ||
         error.message?.includes("commissie_pct") ||
         error.message?.includes("bedrijfsnaam") ||
@@ -508,6 +512,7 @@ export async function PATCH(req: NextRequest) {
     email?: string | null;
     telefoon?: string | null;
     actief?: boolean;
+    geblokkeerd?: boolean;
     start_adres?: string | null;
     startdatum?: string | null;
     bel_planning?: boolean;
@@ -635,6 +640,9 @@ export async function PATCH(req: NextRequest) {
     }
     if (typeof body.actief === "boolean") {
       patch.actief = body.actief;
+    }
+    if (typeof body.geblokkeerd === "boolean") {
+      patch.geblokkeerd = body.geblokkeerd;
     }
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;
@@ -793,6 +801,20 @@ export async function PATCH(req: NextRequest) {
       }
 
       if (
+        patch.geblokkeerd !== undefined &&
+        isMissingColumn(error, "geblokkeerd")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-geblokkeerd.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (
         patch.start_adres !== undefined &&
         isMissingColumn(error, "start_adres")
       ) {
@@ -852,6 +874,9 @@ export async function PATCH(req: NextRequest) {
       }
       if (isMissingColumn(error, "rol")) {
         delete slimPatch.rol;
+      }
+      if (isMissingColumn(error, "geblokkeerd")) {
+        delete slimPatch.geblokkeerd;
       }
 
       const retry = await sb

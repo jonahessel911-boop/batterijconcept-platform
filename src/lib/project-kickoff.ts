@@ -55,7 +55,16 @@ export type KickoffItem = {
   blockedReason?: string;
 };
 
-function aanbetalingFacturen(facturen: Factuur[]): Factuur[] {
+/** Minimale factuurvelden voor aanbetalingschecks (API-selects zijn vaak partiëel). */
+export type AanbetalingFactuurLike = {
+  status?: string | null;
+  omschrijving?: string | null;
+  credit_van_factuur_id?: string | null;
+};
+
+function aanbetalingFacturen(
+  facturen: AanbetalingFactuurLike[]
+): AanbetalingFactuurLike[] {
   return facturen.filter(
     (f) =>
       !f.credit_van_factuur_id &&
@@ -63,7 +72,9 @@ function aanbetalingFacturen(facturen: Factuur[]): Factuur[] {
   );
 }
 
-export function isAanbetalingKickoffDone(facturen: Factuur[]): boolean {
+export function isAanbetalingKickoffDone(
+  facturen: AanbetalingFactuurLike[]
+): boolean {
   return aanbetalingFacturen(facturen).some(
     (f) =>
       f.status === "verzonden" ||
@@ -72,7 +83,9 @@ export function isAanbetalingKickoffDone(facturen: Factuur[]): boolean {
   );
 }
 
-export function isAanbetalingBetaald(facturen: Factuur[]): boolean {
+export function isAanbetalingBetaald(
+  facturen: AanbetalingFactuurLike[]
+): boolean {
   return aanbetalingFacturen(facturen).some((f) => f.status === "betaald");
 }
 

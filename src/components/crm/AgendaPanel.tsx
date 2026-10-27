@@ -2481,7 +2481,8 @@ export function AgendaPanel({
     try {
       const [a, adv] = await Promise.all([
         fetch("/api/afspraken").then((r) => r.json()),
-        fetch("/api/adviseurs").then((r) => r.json()),
+        // Incl. inactief: eigen agenda / afblokken blijft werken
+        fetch("/api/adviseurs?include_inactive=1").then((r) => r.json()),
       ]);
       // Afspraken: API of parent-prop; adviseurs-fout mag agenda niet leegmaken
       if (!a.error) {

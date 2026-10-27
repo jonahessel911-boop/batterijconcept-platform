@@ -1241,6 +1241,7 @@ export function scoreBelConversieWindow(opts: {
     nonNieuwGebeld,
     nonNieuwIngepland,
     leadToAppt: l2a != null ? round2(l2a * 100) : null,
+    doel: 0,
   };
 }
 

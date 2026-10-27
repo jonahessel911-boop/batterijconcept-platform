@@ -256,25 +256,34 @@ export async function GET(req: NextRequest) {
   // Rol + e-mail live uit DB (wijzigingen in Instellingen meteen actief).
   // DB-rol wint altijd — anders ziet een beller-account alles als admin.
   let rol = normalizeRol(session.rol);
-  let data: { rol?: string | null; naam?: string; email?: string | null } | null =
-    null;
+  let data: {
+    rol?: string | null;
+    naam?: string;
+    email?: string | null;
+    actief?: boolean | null;
+    geblokkeerd?: boolean | null;
+  } | null = null;
   try {
     const sb = getSupabaseAdmin();
     const withRol = await sb
       .from("adviseurs")
-      .select("rol, naam, email")
+      .select("rol, naam, email, actief, geblokkeerd")
       .eq("id", session.adviseurId)
       .maybeSingle();
     if (
       withRol.error &&
-      (withRol.error.message?.includes("rol") || withRol.error.code === "42703")
+      (withRol.error.message?.includes("rol") ||
+        withRol.error.message?.includes("geblokkeerd") ||
+        withRol.error.code === "42703")
     ) {
       const bare = await sb
         .from("adviseurs")
-        .select("naam, email")
+        .select("naam, email, actief")
         .eq("id", session.adviseurId)
         .maybeSingle();
-      data = bare.data;
+      data = bare.data
+        ? { ...bare.data, geblokkeerd: false }
+        : null;
     } else if (!withRol.error) {
       data = withRol.data;
     }
@@ -308,6 +317,9 @@ export async function GET(req: NextRequest) {
   ).trim();
   const liveNaam = (data?.naam || session.naam || "").trim() || session.naam;
 
+  const geblokkeerd = data?.geblokkeerd === true;
+  const actief = data?.actief !== false;
+
   const res = NextResponse.json({
     authenticated: true,
     adviseur: {
@@ -315,6 +327,8 @@ export async function GET(req: NextRequest) {
       naam: liveNaam,
       email: liveEmail,
       rol,
+      actief,
+      geblokkeerd,
     },
     impersonating: session.impersonatorId
       ? {

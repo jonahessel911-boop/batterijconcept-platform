@@ -130,6 +130,11 @@ export interface Adviseur {
   email: string | null;
   telefoon: string | null;
   actief: boolean;
+  /**
+   * Volledige CRM-blokkade. Apart van `actief` (niet inplannen).
+   * true → popup "Gebruiker geblokkeerd", geen CRM-inhoud.
+   */
+  geblokkeerd?: boolean | null;
   werktijd_start: string;
   werktijd_eind: string;
   /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
