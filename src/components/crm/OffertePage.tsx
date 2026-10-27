@@ -106,11 +106,12 @@ export function OffertePage() {
         const data = o.data as Offerte;
         const me = sessionRes?.adviseur?.id as string | undefined;
         const rol = sessionRes?.adviseur?.rol as string | undefined;
+        // Zelfde regel als offertes-lijst / bootstrap:
+        // zelf gemaakt ÓF lead van jou (collega mag offerte schrijven op jouw lead).
         if (rol === "adviseur" && me) {
           const maker = data.aangemaakt_door_id;
           const leadAdv = data.leads?.adviseur_id ?? null;
-          const mag =
-            maker != null ? maker === me : leadAdv === me;
+          const mag = maker === me || leadAdv === me;
           if (!mag) {
             setNotFound(true);
             setLoading(false);

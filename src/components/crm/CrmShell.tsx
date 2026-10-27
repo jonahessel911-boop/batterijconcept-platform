@@ -418,9 +418,9 @@ export function CrmShell() {
     }
     setTab(next);
     const params = new URLSearchParams(searchParams.toString());
-    // Admin-home is Today (jona) of Taken; leads altijd expliciet in de URL
-    if (next === "leads" && userRol !== "admin") params.delete("tab");
-    else params.set("tab", next);
+    // Altijd expliciet tab zetten. Voor adviseurs is home = leaderboard;
+    // tab wissen bij "leads" stuurde ze meteen weer terug naar de leaderboard.
+    params.set("tab", next);
     if (next !== "projecten") params.delete("bo");
     const qs = params.toString();
     router.push(qs ? `/?${qs}` : "/", { scroll: false });
@@ -457,8 +457,8 @@ export function CrmShell() {
     const params = new URLSearchParams(searchParams.toString());
     if (!next) params.delete("status");
     else params.set("status", next);
-    // Filter hoort bij leads-tab
-    params.delete("tab");
+    // Filter hoort bij leads — tab expliciet houden (adviseur-home ≠ leads)
+    params.set("tab", "leads");
     const qs = params.toString();
     router.replace(qs ? `/?${qs}` : "/", { scroll: false });
   }
@@ -1300,7 +1300,7 @@ export function CrmShell() {
               : boView === "service"
                 ? "Service-desk · tickets inplannen op het planbord"
                 : boView === "bel_rapportage"
-                  ? "Bel-conversie · periodefilter · dagoel uit open slots (+20% uitval)"
+                  ? "Bel-conversie · periodefilter · dagoel = 2 weken vol plannen (+20% uitval)"
                   : filterLabel
                     ? `Backoffice van ${filterLabel}`
                     : "Backoffice in planning en uitvoering",

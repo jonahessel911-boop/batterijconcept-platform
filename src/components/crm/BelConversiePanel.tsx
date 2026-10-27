@@ -31,6 +31,7 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import { useCrmSession } from "@/hooks/useCrmSession";
+import { BelSlotsCompactView } from "./BelSlotsCompactView";
 
 type BelConversieBellerOption = {
   id: string;
@@ -574,8 +575,8 @@ export function BelConversiePanel() {
   }, [series]);
 
   /**
-   * Weekdoel = admin-target afspraken/week (team of gekozen beller).
-   * Gehaald = ingepland in de gekozen periode. Bron: API targets (gesynct met grafiek).
+   * Weekdoel = dagoel × 5 (tempo om 2 weken vol te plannen).
+   * Dagoel = vrije slots over horizon ÷ werkdagen (+20% uitval), evt. hoger bij inhaal.
    */
   const weekTarget = useMemo(() => {
     const t = data?.targets;
@@ -600,6 +601,22 @@ export function BelConversiePanel() {
           : false;
     return { doel, gepland, pct, gehaald };
   }, [data?.targets, seriesSums.ingepland, totals?.ingepland]);
+
+  const dayTarget = useMemo(() => {
+    const t = data?.targets;
+    if (!t) return null;
+    const doel = Math.round(t.doelVandaag ?? 0);
+    const gepland = Math.round(t.geplandVandaag ?? 0);
+    if (doel <= 0 && gepland <= 0) return null;
+    return {
+      doel,
+      gepland,
+      pct: t.pctVandaag ?? 0,
+      gehaald: Boolean(t.finishVandaag),
+      resterendeDagen: t.resterendeWerkdagenWeek ?? 0,
+      nogDezeWeek: t.nogDezeWeek ?? 0,
+    };
+  }, [data?.targets]);
 
   return (
     <div className="space-y-4">
@@ -720,7 +737,7 @@ export function BelConversiePanel() {
         <p className="text-sm text-muted">Laden…</p>
       ) : data ? (
         <>
-          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
+          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-8">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -774,6 +791,52 @@ export function BelConversiePanel() {
                     ? `Gehaald · ${num(weekTarget.pct)}%`
                     : `Nog niet · ${num(weekTarget.pct)}%`}
               </p>
+              <p className="mt-0.5 text-[10px] text-muted">
+                Tempo 2 weken vol · dagoel × 5
+              </p>
+            </div>
+            <div
+              className={[
+                "rounded-2xl border bg-white p-4",
+                dayTarget?.gehaald ? "border-green/40" : "border-line",
+              ].join(" ")}
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Dagoel
+              </p>
+              <p
+                className={[
+                  "mt-1 font-display text-3xl font-semibold tabular-nums",
+                  dayTarget?.gehaald ? "text-green-dark" : "text-ink",
+                ].join(" ")}
+              >
+                {dayTarget
+                  ? `${num(dayTarget.gepland)}/${num(dayTarget.doel)}`
+                  : "—"}
+              </p>
+              <p
+                className={[
+                  "mt-1 text-xs font-semibold",
+                  dayTarget == null
+                    ? "text-muted"
+                    : dayTarget.gehaald
+                      ? "text-green-dark"
+                      : "text-[#C45A12]",
+                ].join(" ")}
+              >
+                {dayTarget == null
+                  ? "—"
+                  : dayTarget.gehaald
+                    ? `Gehaald · ${num(dayTarget.pct)}%`
+                    : `Nog niet · ${num(dayTarget.pct)}%`}
+              </p>
+              <p className="mt-0.5 text-[10px] text-muted">
+                {data?.targets?.horizonNog != null && data.targets.horizonNog > 0
+                  ? `${num(data.targets.horizonNog)} vrij t/m +2 wkn · +20% uitval`
+                  : dayTarget && dayTarget.resterendeDagen > 0
+                    ? `Restant week ÷ ${dayTarget.resterendeDagen} dag${dayTarget.resterendeDagen === 1 ? "" : "en"}`
+                    : "Tempo om horizon vol te plannen"}
+              </p>
             </div>
             <div className="rounded-2xl border border-green/30 bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
@@ -820,6 +883,8 @@ export function BelConversiePanel() {
               </p>
             </div>
           </div>
+
+          <BelSlotsCompactView days={14} />
 
           <div className="rounded-2xl border border-line bg-white p-5 sm:p-6">
             <div className="mb-3 flex flex-wrap items-end justify-between gap-2">

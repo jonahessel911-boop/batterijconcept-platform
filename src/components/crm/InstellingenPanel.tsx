@@ -14,6 +14,7 @@ import {
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
 import { TeamNotitiesSection } from "./TeamNotitiesSection";
+import { BellerCommissieWeeks } from "./BellerCommissieWeeks";
 import { isUsableStartAdres } from "@/lib/start-adres";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
@@ -1229,6 +1230,17 @@ export function InstellingenPanel({
                 />
               </div>
             </FormSection>
+
+            {rol === "beller" ? (
+              <FormSection title="Belcommissie" className="lg:col-span-2">
+                <div className="sm:col-span-2">
+                  <BellerCommissieWeeks
+                    bellerId={selectedAdviseur.id}
+                    bellerNaam={draft.naam || selectedAdviseur.naam}
+                  />
+                </div>
+              </FormSection>
+            ) : null}
 
             <FormSection title="Toegang" className="lg:col-span-2">
               <div className="flex flex-wrap gap-2 sm:col-span-2">

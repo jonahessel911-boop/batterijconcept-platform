@@ -711,7 +711,7 @@ export async function GET(req: NextRequest) {
       geplandDezeWeek = 0;
     }
 
-    // Capaciteit: deze week + 2 weken vooruit → dagoel met 20% marge
+    // Capaciteit: deze week + 2 weken vooruit → tempo om vrije slots vol te plannen (+20%)
     let horizon: {
       weeksAhead: number;
       slotsVrij: number;
@@ -929,9 +929,8 @@ export async function GET(req: NextRequest) {
         })
       : allResult;
 
-    // Weekdoel:
-    // - Team (alle): capaciteit-tempo = open slots → dagoel × werkdagen
-    // - Één beller: admin-target afsprakenGepland / week
+    // Weekdoel team: dagoel×5 (tempo 2 weken vol); dagoel = fill-ahead + evt. inhaal.
+    // Één beller: admin-target afsprakenGepland / week.
     const { countWeekdaysInclusive } = await import("@/lib/bel-conversie");
     const workdaysInRange = countWeekdaysInclusive(rangeStartYmd, dateYmd);
     let chartDoelPerDag: number;
@@ -955,12 +954,10 @@ export async function GET(req: NextRequest) {
               : 0
           : 0; // maand: som per weekbucket hieronder
     } else {
-      // Team: open agenda-slots → tempo (doelVandaag / doelDezeWeek)
+      // Team: weekdoel open slots+uitval; grafiek-dagoel = live inhaal-dagoel
       chartDoelPerDag = Math.max(0, Math.round(targets.doelVandaag || 0));
-      chartDoelPerWeek =
-        chartDoelPerDag > 0 ? chartDoelPerDag * 5 : 0;
-      periodDoel = Math.max(0, Math.round(targets.doelDezeWeek || 0));
-      // Geen capaciteit? val terug op som admin-targets bellers+backoffice
+      chartDoelPerWeek = Math.max(0, Math.round(targets.doelDezeWeek || 0));
+      periodDoel = chartDoelPerWeek;
       if (periodDoel <= 0 && chartDoelPerDag <= 0) {
         const team = belWeekDoelAfspraken(goalsRaw, adviseurRows, null);
         chartDoelPerDag = team.dailyAfspraken;
