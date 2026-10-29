@@ -136,7 +136,7 @@ export async function POST(
         projectHeeftGeenAanbetalingNodig,
       } = await import("@/lib/project-kickoff");
       const geenAanbetaling = projectHeeftGeenAanbetalingNodig(
-        (projectFull || project) as Parameters<
+        (projectFull || project) as unknown as Parameters<
           typeof projectHeeftGeenAanbetalingNodig
         >[0]
       );

@@ -1181,7 +1181,10 @@ export function buildBelConversie(opts: {
           ? provincieRaw
           : null,
       adviseurNaam: adviseurId ? naamById.get(adviseurId) || null : null,
-      ingeplandAt: a.created_at,
+      ingeplandAt:
+        a.created_at ||
+        (geannuleerd ? annuleringsMomentIso(a) : null) ||
+        a.start_at,
       afspraakAt: a.start_at,
       geannuleerd,
       bron: lead?.bron ?? null,

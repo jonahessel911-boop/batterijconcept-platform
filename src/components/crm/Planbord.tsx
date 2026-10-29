@@ -1352,13 +1352,13 @@ function EventCard({
               ))}
           </div>
         ) : null}
-        {!compact && (partner?.naam || project.monteur) ? (
+        {!compact && (partner?.naam || bar.project.monteur) ? (
           <p className={`mt-1 truncate text-sm ${mutedCls}`}>
             {partner?.naam &&
-            project.monteur &&
-            project.monteur !== partner.naam
-              ? `${partner.naam} · ${project.monteur}`
-              : partner?.naam || project.monteur}
+            bar.project.monteur &&
+            bar.project.monteur !== partner.naam
+              ? `${partner.naam} · ${bar.project.monteur}`
+              : partner?.naam || bar.project.monteur}
           </p>
         ) : null}
       </div>

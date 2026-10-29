@@ -173,7 +173,10 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
 
 type ProjectStatusLabelContext = {
   betaalwijze?: string | null;
-  leads?: { status?: string | null } | null;
+  leads?:
+    | { status?: string | null }
+    | { status?: string | null }[]
+    | null;
   offertes?:
     | { financiering_voorbehoud?: boolean | null }
     | { financiering_voorbehoud?: boolean | null }[]
@@ -198,9 +201,12 @@ export function resolveProjectStatusLabel(
     const off = Array.isArray(project.offertes)
       ? project.offertes[0]
       : project.offertes;
+    const lead = Array.isArray(project.leads)
+      ? project.leads[0]
+      : project.leads;
     bw = resolveBetaalwijze({
       betaalwijze: project.betaalwijze,
-      leadStatus: project.leads?.status ?? null,
+      leadStatus: lead?.status ?? null,
       financieringVoorbehoud: off?.financiering_voorbehoud,
     });
   }

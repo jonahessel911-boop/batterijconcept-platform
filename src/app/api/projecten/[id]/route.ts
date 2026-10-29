@@ -569,6 +569,10 @@ export async function PATCH(
       patch.review_gevraagd_at !== undefined
         ? patch.review_gevraagd_at
         : beforeRow?.review_gevraagd_at;
+    /** Eerste keer review afgevinkt → mail + Trustpilot. */
+    const reviewAtComing = Boolean(
+      mergedReview && !beforeRow?.review_gevraagd_at
+    );
     const allAfterSaleDone = Boolean(
       mergedBtw && mergedOverstap && mergedReview
     );
