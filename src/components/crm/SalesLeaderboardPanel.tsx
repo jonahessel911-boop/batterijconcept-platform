@@ -26,7 +26,13 @@ type Celebration = {
 const POLL_MS = 4000;
 const CELEBRATION_MS = 14000;
 const BG = "/sales/leaderboard-bg.png";
-const MONEY_SOUND = "/sales/money.mp3";
+/** Sale-sounds: bij elke celebration één random clip. */
+const MONEY_SOUNDS = [
+  "/sales/money.mp3",
+  "/sales/money-2.mp3",
+  "/sales/money-3.mp3",
+  "/sales/money-4.mp3",
+] as const;
 
 function celebrationLabel(kind: Celebration["kind"]): string {
   if (kind === "netto") return "Netto sale";
@@ -87,7 +93,13 @@ export function SalesLeaderboardPanel() {
   const playMoneySound = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    const next =
+      MONEY_SOUNDS[Math.floor(Math.random() * MONEY_SOUNDS.length)] ??
+      MONEY_SOUNDS[0];
     audio.pause();
+    if (audio.getAttribute("src") !== next) {
+      audio.src = next;
+    }
     audio.currentTime = 0;
     audio.volume = 1;
     void audio.play().catch(() => {
@@ -287,7 +299,11 @@ export function SalesLeaderboardPanel() {
         ].join(" ")}
       />
       <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/25 to-black/70" />
-      <audio ref={audioRef} src={MONEY_SOUND} preload="auto" />
+      <audio ref={audioRef} src={MONEY_SOUNDS[0]} preload="auto" />
+      {/* Prefetch overige clips zodat random play niet hikt */}
+      {MONEY_SOUNDS.slice(1).map((src) => (
+        <audio key={src} src={src} preload="auto" aria-hidden className="hidden" />
+      ))}
 
       <div className="relative z-10 flex h-full min-h-[inherit] flex-col">
         <div className="flex flex-wrap items-start justify-end gap-2 px-4 pt-4 sm:px-6 sm:pt-5">
