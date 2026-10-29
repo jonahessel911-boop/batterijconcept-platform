@@ -106,7 +106,8 @@ type TaskRow = {
     | "edwin_doorsturen"
     | "nabellen"
     | "wf_aanbetaling_herinnering"
-    | "aangetekende_brief";
+    | "aangetekende_brief"
+    | "annulering_keuze_controle";
   titel: string;
   klant: string;
   meta?: string;
@@ -213,6 +214,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       className: "bg-[#E8F0F6] text-[#1A4A6E]",
     },
     aangetekende_brief: {
+      label: "Bedenktijd",
+      className: "bg-[#FFF0E6] text-[#9A3B1A]",
+    },
+    annulering_keuze_controle: {
       label: "Bedenktijd",
       className: "bg-[#FFF0E6] text-[#9A3B1A]",
     },
@@ -538,10 +543,62 @@ function SaleNotitiesAside({
 
   const backoffice = project.backoffice_notitie?.trim() || "";
   const installateur = project.installateur_notitie?.trim() || "";
-  if (!backoffice && !installateur && !forceShow) return null;
+  const hasEnergie =
+    project.elektra_verbruik_kwh != null ||
+    project.teruglevering_kwh != null ||
+    project.energie_contract_type != null;
+  if (!backoffice && !installateur && !hasEnergie && !forceShow) return null;
 
   return (
-    <aside className="w-full shrink-0 lg:sticky lg:top-0 lg:w-[16.5rem] xl:w-[18rem]">
+    <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-0 lg:w-[16.5rem] xl:w-[18rem]">
+      {hasEnergie || forceShow ? (
+        <div className="overflow-hidden rounded-2xl border border-[#0a4727]/20 bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
+          <div className="border-b border-line bg-white px-3.5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#0a4727]">
+              Frank overstap
+            </p>
+            <p className="mt-0.5 font-display text-sm font-semibold text-ink">
+              Energieverbruik
+            </p>
+          </div>
+          <div className="space-y-2 px-3.5 py-3 text-[12px]">
+            <p>
+              <span className="text-muted">Elektra · </span>
+              <span className="font-semibold tabular-nums text-ink">
+                {project.elektra_verbruik_kwh != null
+                  ? `${Number(project.elektra_verbruik_kwh).toLocaleString("nl-NL")} kWh`
+                  : "—"}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Gas · </span>
+              <span className="font-semibold tabular-nums text-ink">
+                {project.gas_verbruik_m3 != null
+                  ? `${Number(project.gas_verbruik_m3).toLocaleString("nl-NL")} m³`
+                  : "geen / —"}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Teruglever · </span>
+              <span className="font-semibold tabular-nums text-ink">
+                {project.teruglevering_kwh != null
+                  ? `${Number(project.teruglevering_kwh).toLocaleString("nl-NL")} kWh`
+                  : "—"}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Contract · </span>
+              <span className="font-semibold text-ink">
+                {project.energie_contract_type || "—"}
+                {project.energie_contract_type === "vast" &&
+                project.energie_contract_einddatum
+                  ? ` · eind ${project.energie_contract_einddatum}`
+                  : ""}
+              </span>
+            </p>
+          </div>
+        </div>
+      ) : null}
       <div className="overflow-hidden rounded-2xl border border-line bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
         <div className="border-b border-line bg-white px-3.5 py-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
@@ -679,6 +736,22 @@ function buildTaskRows(
         meta: actie.offerteNummer || actie.projectNummer || undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
+    if (actie.soort === "annulering_keuze_controle") {
+      rows.push({
+        key: `${actie.id}-keuze`,
+        section: "aangetekend",
+        actie,
+        kind: "annulering_keuze_controle",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.offerteNummer || actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
         done: false,
       });
       continue;
@@ -1508,6 +1581,23 @@ export function BackofficeActiesList({
       }
       return;
     }
+    if (actie.soort === "annulering_keuze_controle") {
+      const project = await patchProject(actie, {
+        annulering_keuze_gecontroleerd_at: completedAt,
+      });
+      if (project) {
+        void logBackofficeActieEvent({
+          soort: "annulering_keuze_controle",
+          leadId: actie.leadId,
+          projectId: actie.projectId,
+          adviseurId,
+          deadlineAt: actie.deadlineAt,
+          completedAt,
+        });
+        setMsg("Actie verwijderd.");
+      }
+      return;
+    }
     if (actie.soort === "schakel_financiering") {
       const project = await patchProject(actie, {
         financiering_geschakeld_at: completedAt,
@@ -1526,8 +1616,12 @@ export function BackofficeActiesList({
       return;
     }
     if (actie.soort === "bel_schouw_aanbetaling") {
+      const proj = actie.project;
       const project = await patchProject(actie, {
         bel_schouw_aanbetaling_at: completedAt,
+        ...(proj && isWarmtefondsProject(proj)
+          ? { status: "opstarten_voltooid_afwachten_wf" as const }
+          : {}),
       });
       if (project) {
         void logBackofficeActieEvent({
@@ -1755,10 +1849,9 @@ export function BackofficeActiesList({
     });
     if (!items.every((i) => i.done)) return;
     const completedAt = new Date().toISOString();
-    const warmtefonds = isWarmtefondsProject(project);
     await patchProject(actie, {
       bel_schouw_aanbetaling_at: completedAt,
-      ...(warmtefonds
+      ...(isWarmtefondsProject(project)
         ? { status: "opstarten_voltooid_afwachten_wf" as const }
         : {}),
     });
@@ -1792,7 +1885,7 @@ export function BackofficeActiesList({
   async function markAangetekendeBriefAfgerond(actie: BackofficeActie) {
     if (
       !confirm(
-        "Aangetekende brief markeren als verstuurd/afgerond? De actie verdwijnt dan uit de lijst."
+        "Keuze-mail markeren als verstuurd? Op dag 6 verschijnt de controle-actie (annuleringsfactuur indien geen reactie)."
       )
     ) {
       return;
@@ -1810,7 +1903,98 @@ export function BackofficeActiesList({
         deadlineAt: actie.deadlineAt,
         completedAt,
       });
-      setMsg("Aangetekende brief gemarkeerd als afgerond.");
+      setMsg(
+        "Keuze-mail gemarkeerd. Over 5 dagen volgt de controle-actie."
+      );
+    }
+  }
+
+  async function markAnnuleringKeuzeInstallatie(actie: BackofficeActie) {
+    if (
+      !confirm(
+        "Klant werkt mee / installatie doorzetten? De controle-actie verdwijnt."
+      )
+    ) {
+      return;
+    }
+    const completedAt = new Date().toISOString();
+    const project = await patchProject(actie, {
+      annulering_keuze_gecontroleerd_at: completedAt,
+    });
+    if (project) {
+      void logBackofficeActieEvent({
+        soort: "annulering_keuze_controle",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt,
+        meta: { uitkomst: "installatie" },
+      });
+      setMsg("Installatie doorzetten — controle afgerond.");
+    }
+  }
+
+  async function verstuurAnnuleringsfactuurVanActie(actie: BackofficeActie) {
+    if (!actie.projectId) return;
+    if (
+      !confirm(
+        "Geen reactie → annuleringsfactuur maken én mailen, en project op Annulering zetten?"
+      )
+    ) {
+      return;
+    }
+    setBusyId(`${actie.id}-annul-factuur`);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${actie.projectId}/annuleringsfactuur?send=1`,
+        { method: "POST" }
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        factuur?: { factuur_nummer?: string };
+        sent?: boolean;
+        sendError?: string | null;
+      };
+      if (!res.ok) throw new Error(data.error || "Annuleringsfactuur mislukt");
+      void logBackofficeActieEvent({
+        soort: "annulering_keuze_controle",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt: new Date().toISOString(),
+        meta: { uitkomst: "annuleringsfactuur", sent: data.sent },
+      });
+      if (data.sendError) {
+        setError(
+          `Factuur ${data.factuur?.factuur_nummer || ""} aangemaakt, maar mail mislukt: ${data.sendError}`
+        );
+        setMsg("Project op Annulering — factuur staat als concept klaar.");
+      } else {
+        setMsg(
+          `Annuleringsfactuur ${data.factuur?.factuur_nummer || ""} verstuurd. Project op Annulering.`
+        );
+      }
+      if (actie.project) {
+        onProjectUpdated?.({
+          ...actie.project,
+          status: "annulering",
+          annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+          schouw_at: null,
+          schouw_jaar: null,
+          schouw_week: null,
+          installatie_at: null,
+        });
+      }
+      void loadProjectTaken();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Annuleringsfactuur mislukt"
+      );
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -2172,6 +2356,8 @@ export function BackofficeActiesList({
         await markFinancieringGeschakeld(actie);
       } else if (row.kind === "aangetekende_brief") {
         await markAangetekendeBriefAfgerond(actie);
+      } else if (row.kind === "annulering_keuze_controle") {
+        await markAnnuleringKeuzeInstallatie(actie);
       } else if (
         row.kind === "volgende_stap" ||
         row.kind === "schouw_inplannen" ||
@@ -2416,7 +2602,30 @@ export function BackofficeActiesList({
                 onClick={() => void markAangetekendeBriefAfgerond(actie)}
                 className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold hover:bg-wash disabled:opacity-50"
               >
-                Afgerond
+                Mail verstuurd
+              </button>
+            </>
+          ) : null}
+
+          {row.kind === "annulering_keuze_controle" ? (
+            <>
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-keuze-install`}
+                onClick={() => void markAnnuleringKeuzeInstallatie(actie)}
+                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                Installatie doorzetten
+              </button>
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-annul-factuur`}
+                onClick={() => void verstuurAnnuleringsfactuurVanActie(actie)}
+                className="inline-flex h-9 items-center bg-[#9A3B1A] px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {busyId === `${actie.id}-annul-factuur`
+                  ? "Bezig…"
+                  : "Annuleringsfactuur versturen"}
               </button>
             </>
           ) : null}
@@ -4033,9 +4242,38 @@ export function BackofficeActiesList({
           initialTemplate="annulering_of_installatie"
           onClose={() => setContactMailProject(null)}
           onSent={() => {
+            const p = contactMailProject;
+            const completedAt = new Date().toISOString();
+            void (async () => {
+              try {
+                const res = await fetch(`/api/projecten/${p.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    aangetekende_brief_verstuurd_at: completedAt,
+                  }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && (data as { project?: Project }).project) {
+                  onProjectUpdated?.(
+                    (data as { project: Project }).project
+                  );
+                  void logBackofficeActieEvent({
+                    soort: "aangetekende_brief",
+                    leadId: p.lead_id,
+                    projectId: p.id,
+                    adviseurId,
+                    completedAt,
+                  });
+                }
+              } catch {
+                /* best-effort */
+              }
+            })();
             setMsg(
-              "Mail «Annulering of installatie» verstuurd — markeer de actie Afgerond als klaar."
+              "Mail verstuurd — over 5 dagen volgt de controle-actie (dag 6: factuur indien geen reactie)."
             );
+            setContactMailProject(null);
           }}
         />
       ) : null}

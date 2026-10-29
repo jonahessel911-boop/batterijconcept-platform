@@ -24,7 +24,10 @@ import { nl } from "date-fns/locale";
 import { appendStampedNotitie, parseProjectNotitieEntries } from "@/lib/lead-notitie";
 import { openActiesVoorProject, isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
-import { resolveBetaalwijze } from "@/lib/project-status-config";
+import {
+  resolveBetaalwijze,
+  toOperationalStatus,
+} from "@/lib/project-status-config";
 import { projectStatusLabel } from "@/lib/labels";
 import {
   afspraakSoortLabel,
@@ -42,6 +45,7 @@ import { backofficeHref, parseBoView } from "@/lib/bo-view";
 import { ProjectStatusPath } from "./ProjectStatusPath";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { ProjectKickoffChecklist } from "./ProjectKickoffChecklist";
+import { EnergieFrankCard } from "./EnergieFrankCard";
 import { ProjectAfrondingChecklist } from "./ProjectAfrondingChecklist";
 import { ProjectVolgendeStap } from "./ProjectVolgendeStap";
 import { ProjectStatusSelect } from "./ProjectStatusSelect";
@@ -63,6 +67,7 @@ import {
 } from "@/lib/financiering-status";
 import {
   isKickoffComplete,
+  kickoffCompletionPatch,
   kickoffWarmtefondsBedragen,
 } from "@/lib/project-kickoff";
 import {
@@ -580,6 +585,160 @@ export function ProjectPage() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [project?.id, project?.notities, facturen.length]);
+
+  // Kickoff klaar + WF → status automatisch naar afwachten WF (niet op Opstarten blijven)
+  const kickoffAdvanceAttempted = useRef<string | null>(null);
+  useEffect(() => {
+    if (!project) return;
+    if (toOperationalStatus(project.status) !== "schouwweek_inplannen") return;
+    if (!isKickoffComplete(project, facturen)) return;
+    if (!isWarmtefondsProject(project)) {
+      // EM: alleen bel_schouw zetten indien stappen klaar
+      const patch = kickoffCompletionPatch(project, facturen);
+      if (!patch?.bel_schouw_aanbetaling_at) return;
+      const attemptKey = `${project.id}:em:${project.bel_schouw_aanbetaling_at ?? "0"}`;
+      if (kickoffAdvanceAttempted.current === attemptKey) return;
+      kickoffAdvanceAttempted.current = attemptKey;
+      let cancelled = false;
+      void (async () => {
+        const res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const updated = (data as { project?: Project }).project;
+        if (updated) setProject((prev) => (prev ? { ...prev, ...updated } : updated));
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const attemptKey = `${project.id}:wf:${project.status}`;
+    if (kickoffAdvanceAttempted.current === attemptKey) return;
+    kickoffAdvanceAttempted.current = attemptKey;
+
+    // Alleen status — bel_schouw_aanbetaling_at is optioneel (kolom kan ontbreken)
+    const body: Record<string, string> = {
+      status: "opstarten_voltooid_afwachten_wf",
+    };
+    const withBel = kickoffCompletionPatch(project, facturen);
+    if (withBel?.bel_schouw_aanbetaling_at) {
+      body.bel_schouw_aanbetaling_at = withBel.bel_schouw_aanbetaling_at;
+    }
+
+    // Optimistisch: UI meteen goed, daarna server
+    setProject((prev) =>
+      prev
+        ? { ...prev, status: "opstarten_voltooid_afwachten_wf" }
+        : prev
+    );
+    setOkMsg("Opstarten voltooid — afwachten WF");
+
+    let cancelled = false;
+    void (async () => {
+      let res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      let data = await res.json().catch(() => ({}));
+      // Fallback: alleen status als bel_schouw-kolom ontbreekt
+      if (
+        !res.ok &&
+        body.bel_schouw_aanbetaling_at &&
+        /bel_schouw|42703|migrate/i.test(
+          String((data as { error?: string; detail?: string }).detail || "") +
+            String((data as { error?: string }).error || "")
+        )
+      ) {
+        res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "opstarten_voltooid_afwachten_wf" }),
+        });
+        data = await res.json().catch(() => ({}));
+      }
+      if (cancelled) return;
+      if (!res.ok) {
+        kickoffAdvanceAttempted.current = null;
+        setProject((prev) =>
+          prev ? { ...prev, status: project.status } : prev
+        );
+        return;
+      }
+      const updated = (data as { project?: Project }).project;
+      if (updated) {
+        setProject((prev) => (prev ? { ...prev, ...updated } : updated));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project, facturen]);
+
+  async function verstuurAnnuleringsfactuurVanProject() {
+    if (!project) return;
+    if (
+      !confirm(
+        "Geen reactie → annuleringsfactuur maken én mailen, en project op Annulering zetten?"
+      )
+    ) {
+      return;
+    }
+    setCompletingId(`annul-factuur-${project.id}`);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/annuleringsfactuur?send=1`,
+        { method: "POST" }
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        factuur?: { factuur_nummer?: string };
+        sent?: boolean;
+        sendError?: string | null;
+      };
+      if (!res.ok) throw new Error(data.error || "Annuleringsfactuur mislukt");
+      setProject((p) =>
+        p
+          ? {
+              ...p,
+              status: "annulering",
+              annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+              schouw_at: null,
+              schouw_jaar: null,
+              schouw_week: null,
+              installatie_at: null,
+            }
+          : p
+      );
+      if (data.sendError) {
+        setError(
+          `Factuur ${data.factuur?.factuur_nummer || ""} aangemaakt, mail mislukt: ${data.sendError}`
+        );
+        setOkMsg("Project op Annulering — factuur als concept klaar.");
+      } else {
+        setOkMsg(
+          `Annuleringsfactuur ${data.factuur?.factuur_nummer || ""} verstuurd.`
+        );
+      }
+      void refreshLeadEvents(project.lead_id);
+      const takenRes = await fetch(
+        `/api/taken?project_id=${project.id}&open=0`
+      );
+      const takenData = await takenRes.json().catch(() => ({}));
+      if (takenRes.ok) setTaken((takenData.taken as ProjectTaak[]) || []);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Annuleringsfactuur mislukt"
+      );
+    } finally {
+      setCompletingId(null);
+    }
+  }
 
   async function verstuurAnnuleringsmail(keuze: AnnuleringKeuze) {
     if (!project || project.status !== "annulering") return;
@@ -1365,11 +1524,17 @@ export function ProjectPage() {
     setError(null);
     try {
       if (soort === "bel_schouw_aanbetaling") {
+        const { isWarmtefondsProject } = await import(
+          "@/lib/backoffice-acties"
+        );
         const res = await fetch(`/api/projecten/${project.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             bel_schouw_aanbetaling_at: new Date().toISOString(),
+            ...(isWarmtefondsProject(project)
+              ? { status: "opstarten_voltooid_afwachten_wf" }
+              : {}),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -1402,6 +1567,22 @@ export function ProjectPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             aangetekende_brief_verstuurd_at: new Date().toISOString(),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Voltooien mislukt"
+          );
+        }
+        const updated = (data as { project?: Project }).project;
+        if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      } else if (soort === "annulering_keuze_controle") {
+        const res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            annulering_keuze_gecontroleerd_at: new Date().toISOString(),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -2749,6 +2930,8 @@ export function ProjectPage() {
                 </div>
               </div>
 
+              <EnergieFrankCard project={project} />
+
               <ProjectKickoffChecklist
                 project={project}
                 facturen={facturen}
@@ -2760,7 +2943,11 @@ export function ProjectPage() {
                 onProjectUpdated={(p) => {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
-                  setOkMsg("Schouwweek gezet.");
+                  setOkMsg(
+                    p.status === "opstarten_voltooid_afwachten_wf"
+                      ? "Opstarten voltooid — afwachten WF"
+                      : "Schouwweek gezet."
+                  );
                 }}
                 onFacturenChanged={() => {
                   void (async () => {
@@ -2768,8 +2955,39 @@ export function ProjectPage() {
                       `/api/projecten/${project.id}/facturen`
                     );
                     const fData = await fRes.json().catch(() => ({}));
+                    let nextFac = facturen;
                     if (fRes.ok) {
-                      setFacturen((fData.facturen as Factuur[]) || []);
+                      nextFac = (fData.facturen as Factuur[]) || [];
+                      setFacturen(nextFac);
+                    }
+                    // Kickoff kan net compleet zijn → WF-status zetten
+                    const { kickoffCompletionPatch } = await import(
+                      "@/lib/project-kickoff"
+                    );
+                    const patch = kickoffCompletionPatch(project, nextFac);
+                    if (patch) {
+                      const pRes = await fetch(
+                        `/api/projecten/${project.id}`,
+                        {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(patch),
+                        }
+                      );
+                      const pData = await pRes.json().catch(() => ({}));
+                      const updated = (pData as { project?: Project }).project;
+                      if (pRes.ok && updated) {
+                        setProject((prev) =>
+                          prev ? { ...prev, ...updated } : updated
+                        );
+                        setOkMsg(
+                          updated.status === "opstarten_voltooid_afwachten_wf"
+                            ? "Opstarten voltooid — afwachten WF"
+                            : "Aanbetalingsfactuur verstuurd."
+                        );
+                        void refreshLeadEvents(project.lead_id);
+                        return;
+                      }
                     }
                     void refreshLeadEvents(project.lead_id);
                     setOkMsg("Aanbetalingsfactuur verstuurd.");
@@ -3232,6 +3450,31 @@ export function ProjectPage() {
                               </a>
                             </>
                           ) : null}
+                          {a.soort === "annulering_keuze_controle" ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={completingId === a.id}
+                                onClick={() =>
+                                  void completeBoActie(a.id, a.titel, a.soort)
+                                }
+                                className="border border-green/30 bg-green px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                              >
+                                Installatie doorzetten
+                              </button>
+                              <button
+                                type="button"
+                                disabled={completingId === a.id}
+                                onClick={() =>
+                                  void verstuurAnnuleringsfactuurVanProject()
+                                }
+                                className="border border-[#9A3B1A]/40 bg-[#9A3B1A] px-2.5 py-1.5 text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                              >
+                                Annuleringsfactuur
+                              </button>
+                            </>
+                          ) : null}
+                          {a.soort !== "annulering_keuze_controle" ? (
                           <button
                             type="button"
                             disabled={completingId === a.id}
@@ -3244,6 +3487,7 @@ export function ProjectPage() {
                           >
                             {completingId === a.id ? "…" : "✅"}
                           </button>
+                          ) : null}
                         </div>
                       </li>
                     ))}
@@ -3874,7 +4118,33 @@ export function ProjectPage() {
             setContactOpen(false);
             setContactInitialTemplate(null);
           }}
-          onSent={() => void refreshLeadEvents(project.lead_id)}
+          onSent={() => {
+            void refreshLeadEvents(project.lead_id);
+            if (contactInitialTemplate === "annulering_of_installatie") {
+              const completedAt = new Date().toISOString();
+              void (async () => {
+                try {
+                  const res = await fetch(`/api/projecten/${project.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      aangetekende_brief_verstuurd_at: completedAt,
+                    }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  const updated = (data as { project?: Project }).project;
+                  if (res.ok && updated) {
+                    setProject((p) => (p ? { ...p, ...updated } : p));
+                    setOkMsg(
+                      "Keuze-mail verstuurd — over 5 dagen volgt de controle-actie."
+                    );
+                  }
+                } catch {
+                  /* best-effort */
+                }
+              })();
+            }
+          }}
         />
       ) : null}
       {annuleringModal && project ? (

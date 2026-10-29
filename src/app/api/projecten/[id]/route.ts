@@ -52,6 +52,57 @@ function isTeamgenootSelectError(error: {
   );
 }
 
+/** WF kickoff klaar maar status nog Opstarten → DB repareren vóór response. */
+async function applyKickoffStatusRepair(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  project: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  try {
+    const { kickoffCompletionPatch } = await import("@/lib/project-kickoff");
+    const projectId = String(project.id || "");
+    if (!projectId) return project;
+    const { data: facRows } = await sb
+      .from("facturen")
+      .select("status, omschrijving, credit_van_factuur_id")
+      .eq("project_id", projectId);
+    const patch = kickoffCompletionPatch(
+      project as unknown as Project,
+      (facRows || []) as import("@/types/database").Factuur[]
+    );
+    if (!patch) return project;
+    const tryUpdate = async (body: Record<string, unknown>) => {
+      const full = await sb
+        .from("projecten")
+        .update(body)
+        .eq("id", projectId)
+        .select(PROJECT_SELECT)
+        .maybeSingle();
+      if (!full.error && full.data) return full.data as Record<string, unknown>;
+      const soft = await sb
+        .from("projecten")
+        .update(body)
+        .eq("id", projectId)
+        .select(PROJECT_SELECT_NO_TG)
+        .maybeSingle();
+      if (!soft.error && soft.data) return soft.data as Record<string, unknown>;
+      return null;
+    };
+
+    let updated = await tryUpdate(patch as Record<string, unknown>);
+    // Kolom bel_schouw ontbreekt → alleen status zetten
+    if (
+      !updated &&
+      patch.status &&
+      patch.bel_schouw_aanbetaling_at
+    ) {
+      updated = await tryUpdate({ status: patch.status });
+    }
+    return updated || project;
+  } catch {
+    return project;
+  }
+}
+
 /** GET /api/projecten/[id] — projectdetail (ook via lead_id als fallback). */
 export async function GET(
   _req: NextRequest,
@@ -85,7 +136,11 @@ export async function GET(
       );
     }
     if (byId.data) {
-      return NextResponse.json({ project: byId.data });
+      const repaired = await applyKickoffStatusRepair(
+        sb,
+        byId.data as Record<string, unknown>
+      );
+      return NextResponse.json({ project: repaired });
     }
 
     // Soms wordt per ongeluk een lead-id gebruikt — stuur door naar het project.
@@ -114,9 +169,13 @@ export async function GET(
       );
     }
     if (byLead.data) {
+      const repaired = await applyKickoffStatusRepair(
+        sb,
+        byLead.data as Record<string, unknown>
+      );
       return NextResponse.json({
-        project: byLead.data,
-        redirectTo: (byLead.data as { id: string }).id,
+        project: repaired,
+        redirectTo: (repaired as { id: string }).id,
       });
     }
 
@@ -174,6 +233,7 @@ export async function PATCH(
     overstap_dynamische_leverancier_at?: string | null;
     review_gevraagd_at?: string | null;
     aangetekende_brief_verstuurd_at?: string | null;
+    annulering_keuze_gecontroleerd_at?: string | null;
   };
   try {
     body = await req.json();
@@ -274,6 +334,7 @@ export async function PATCH(
     "overstap_dynamische_leverancier_at",
     "review_gevraagd_at",
     "aangetekende_brief_verstuurd_at",
+    "annulering_keuze_gecontroleerd_at",
   ] as const) {
     const val = body[key];
     if (val === undefined) continue;
@@ -456,13 +517,27 @@ export async function PATCH(
   try {
     const sb = getSupabaseAdmin();
 
-    const { data: before } = await sb
+    let beforeQuery = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
+    if (
+      beforeQuery.error &&
+      (beforeQuery.error.message?.includes("bel_schouw_aanbetaling_at") ||
+        beforeQuery.error.code === "42703")
+    ) {
+      beforeQuery = await sb
+        .from("projecten")
+        .select(
+          "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+    }
+    const before = beforeQuery.data;
 
     // Medewerker koppelen: moet bij de (nieuwe) partner horen + sync monteur-tekst
     if (body.installatie_teamgenoot_id !== undefined) {
@@ -601,6 +676,66 @@ export async function PATCH(
         ?.warmtefonds_aangevraagd_at
     ) {
       patch.warmtefonds_aangevraagd_at = new Date().toISOString();
+    }
+
+    // Kickoff afronden: bel_schouw gezet of Edwin-afvink → WF niet op Opstarten laten hangen
+    if (
+      patch.status === undefined &&
+      before &&
+      (patch.bel_schouw_aanbetaling_at ||
+        body.financiering_status !== undefined)
+    ) {
+      const { isWarmtefondsProject } = await import("@/lib/backoffice-acties");
+      const { toOperationalStatus } = await import(
+        "@/lib/project-status-config"
+      );
+      const mergedForKickoff = {
+        ...before,
+        ...patch,
+        bel_schouw_aanbetaling_at:
+          patch.bel_schouw_aanbetaling_at ??
+          (before as { bel_schouw_aanbetaling_at?: string | null })
+            .bel_schouw_aanbetaling_at,
+        financiering_status:
+          patch.financiering_status !== undefined
+            ? patch.financiering_status
+            : (before as { financiering_status?: string | null })
+                .financiering_status,
+      } as unknown as import("@/types/database").Project;
+      if (
+        isWarmtefondsProject(mergedForKickoff) &&
+        toOperationalStatus(
+          (mergedForKickoff.status as string) || before.status
+        ) === "schouwweek_inplannen"
+      ) {
+        // bel_schouw expliciet → altijd afwachten WF
+        if (patch.bel_schouw_aanbetaling_at) {
+          patch.status = "opstarten_voltooid_afwachten_wf";
+        } else if (body.financiering_status !== undefined) {
+          // Edwin-afvink: alleen als overige kickoff-stappen ook klaar zijn
+          const { kickoffCompletionPatch } = await import(
+            "@/lib/project-kickoff"
+          );
+          const { data: facRows } = await sb
+            .from("facturen")
+            .select("status, omschrijving, credit_van_factuur_id")
+            .eq("project_id", id);
+          const kp = kickoffCompletionPatch(
+            {
+              ...mergedForKickoff,
+              schouw_jaar:
+                (before as { schouw_jaar?: number | null }).schouw_jaar ?? null,
+              schouw_week:
+                (before as { schouw_week?: number | null }).schouw_week ?? null,
+            } as import("@/types/database").Project,
+            (facRows || []) as import("@/types/database").Factuur[]
+          );
+          if (kp?.status) patch.status = kp.status;
+          if (kp?.bel_schouw_aanbetaling_at) {
+            patch.bel_schouw_aanbetaling_at = kp.bel_schouw_aanbetaling_at;
+          }
+        }
+      }
     }
 
     // Bewaar schouw/inkoop-meta (__…) als client alleen regelstatussen stuurt.
@@ -752,6 +887,7 @@ export async function PATCH(
       }
     }
 
+    // Ontbrekende optionele kolommen: retry zonder die velden (status-update mag niet falen)
     if (
       error &&
       (error.message?.includes("bel_schouw_aanbetaling_at") ||
@@ -766,14 +902,64 @@ export async function PATCH(
         error.message?.includes("installatie_voltooid_at") ||
         error.code === "42703")
     ) {
-      return NextResponse.json(
-        {
-          error:
-            "Voer supabase/migrate-installatie-voltooid-at.sql (en eventueel migrate-project-afronding.sql) uit in Supabase.",
-          detail: error.message,
-        },
-        { status: 500 }
-      );
+      const softPatch = { ...patch };
+      const dropKeys = [
+        "bel_schouw_aanbetaling_at",
+        "financiering_geschakeld_at",
+        "warmtefonds_aangevraagd_at",
+        "warmtefonds_afspraak_at",
+        "btw_terugvragen_aangevraagd_at",
+        "overstap_dynamische_leverancier_at",
+        "review_gevraagd_at",
+        "installatie_voltooid_at",
+        "financiering_status",
+      ] as const;
+      for (const k of dropKeys) {
+        if (error.message?.includes(k) || error.code === "42703") {
+          delete softPatch[k];
+        }
+      }
+      // Als alleen optionele timestamp-velden faalden: opnieuw met status e.d.
+      if (Object.keys(softPatch).length > 0) {
+        const retrySoft = await sb
+          .from("projecten")
+          .update(softPatch)
+          .eq("id", id)
+          .select(PROJECT_PATCH_SELECT_NO_TG)
+          .single();
+        if (!retrySoft.error && retrySoft.data) {
+          data = retrySoft.data;
+          error = null;
+        } else if (!softPatch.status && patch.status) {
+          // Laatste redmiddel: alleen status zetten
+          const retryStatus = await sb
+            .from("projecten")
+            .update({ status: patch.status })
+            .eq("id", id)
+            .select(PROJECT_PATCH_SELECT_NO_TG)
+            .single();
+          data = retryStatus.data;
+          error = retryStatus.error;
+        } else {
+          return NextResponse.json(
+            {
+              error:
+                "Voer supabase/migrate-bel-schouw-actie.sql (en evt. migrate-installatie-voltooid-at.sql) uit in Supabase.",
+              detail: error.message,
+            },
+            { status: 500 }
+          );
+        }
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-bel-schouw-actie.sql (en evt. migrate-installatie-voltooid-at.sql) uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 500 }
+        );
+      }
     }
 
     if (

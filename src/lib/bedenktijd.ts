@@ -77,6 +77,30 @@ export function annuleringsActieVanaf(
 }
 
 /**
+ * Reactietermijn na mail «Keuze: annulering of installatie» (kalenderdagen).
+ * Mail belooft: reageer binnen 5 dagen; op dag 6 volgt de annuleringsfactuur.
+ */
+export const ANNULERING_KEUZE_REACTIE_DAGEN = 5;
+
+/** Dagnummer (dag 1 = verzenddag) waarop BO de keuze controleert / factuur stuurt. */
+export const ANNULERING_KEUZE_CONTROLE_DAG =
+  ANNULERING_KEUZE_REACTIE_DAGEN + 1;
+
+/**
+ * Vanaf wanneer de actie «controleer keuze / annuleringsfactuur» open mag:
+ * start van dag 6 na verzending van de keuze-mail (Amsterdam 00:00).
+ */
+export function annuleringKeuzeControleVanaf(
+  mailVerstuurdAt: string | null | undefined
+): Date | null {
+  if (!mailVerstuurdAt) return null;
+  return dagNaOndertekeningAmsterdam(
+    mailVerstuurdAt,
+    ANNULERING_KEUZE_CONTROLE_DAG
+  );
+}
+
+/**
  * Bedenktijd vanaf ondertekening.
  * Eind = start van dag 15 (00:00 Amsterdam) = bedenktijd voorbij, actie mag open.
  */

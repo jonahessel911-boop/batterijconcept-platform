@@ -17,7 +17,7 @@ export async function ensureProjectForOfferte(
   const { data: offerteMeta } = await sb
     .from("offertes")
     .select(
-      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, financiering_voorbehoud, leads(status)"
+      "installatie_partner_id, installatie_partners(naam), aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, financiering_voorbehoud, leads(status)"
     )
     .eq("id", opts.offerteId)
     .maybeSingle();
@@ -45,6 +45,13 @@ export async function ensureProjectForOfferte(
     (
       offerteMeta as { installateur_notitie_door?: string | null } | null
     )?.installateur_notitie_door ?? null;
+  const energieMeta = offerteMeta as {
+    elektra_verbruik_kwh?: number | null;
+    gas_verbruik_m3?: number | null;
+    teruglevering_kwh?: number | null;
+    energie_contract_type?: string | null;
+    energie_contract_einddatum?: string | null;
+  } | null;
   const partnerJoin = (
     offerteMeta as {
       installatie_partners?:
@@ -99,6 +106,14 @@ export async function ensureProjectForOfferte(
     if (aanbetalingTeInnen != null) {
       patch.aanbetaling_te_innen_inc = aanbetalingTeInnen;
     }
+    if (energieMeta?.elektra_verbruik_kwh != null) {
+      patch.elektra_verbruik_kwh = energieMeta.elektra_verbruik_kwh;
+      patch.gas_verbruik_m3 = energieMeta.gas_verbruik_m3 ?? null;
+      patch.teruglevering_kwh = energieMeta.teruglevering_kwh ?? null;
+      patch.energie_contract_type = energieMeta.energie_contract_type ?? null;
+      patch.energie_contract_einddatum =
+        energieMeta.energie_contract_einddatum ?? null;
+    }
     if (Object.keys(patch).length > 0) {
       await sb.from("projecten").update(patch).eq("id", existing.id);
     }
@@ -136,6 +151,11 @@ export async function ensureProjectForOfferte(
     installateur_notitie: installateurNotitie,
     backoffice_notitie_door: backofficeNotitieDoor,
     installateur_notitie_door: installateurNotitieDoor,
+    elektra_verbruik_kwh: energieMeta?.elektra_verbruik_kwh ?? null,
+    gas_verbruik_m3: energieMeta?.gas_verbruik_m3 ?? null,
+    teruglevering_kwh: energieMeta?.teruglevering_kwh ?? null,
+    energie_contract_type: energieMeta?.energie_contract_type ?? null,
+    energie_contract_einddatum: energieMeta?.energie_contract_einddatum ?? null,
     backoffice_afgerond_at: new Date().toISOString(),
     betaalwijze,
   };
@@ -171,6 +191,11 @@ export async function ensureProjectForOfferte(
     delete insertRow.installateur_notitie;
     delete insertRow.backoffice_notitie_door;
     delete insertRow.installateur_notitie_door;
+    delete insertRow.elektra_verbruik_kwh;
+    delete insertRow.gas_verbruik_m3;
+    delete insertRow.teruglevering_kwh;
+    delete insertRow.energie_contract_type;
+    delete insertRow.energie_contract_einddatum;
     delete insertRow.backoffice_afgerond_at;
     delete insertRow.betaalwijze;
     delete insertRow.verantwoordelijke_id;

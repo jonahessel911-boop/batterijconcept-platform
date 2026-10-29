@@ -63,6 +63,11 @@ export async function PATCH(
     installateur_notitie?: string | null;
     backoffice_notitie_door?: string | null;
     installateur_notitie_door?: string | null;
+    elektra_verbruik_kwh?: number | string | null;
+    gas_verbruik_m3?: number | string | null;
+    teruglevering_kwh?: number | string | null;
+    energie_contract_type?: string | null;
+    energie_contract_einddatum?: string | null;
   };
   try {
     body = await req.json();
@@ -71,6 +76,19 @@ export async function PATCH(
   }
 
   const patch: Record<string, unknown> = {};
+
+  // Bij afronden sale → BO: energievelden optioneel meenemen
+  if (body.actie_required === false) {
+    const { parseEnergieVerbruikBody } = await import(
+      "@/lib/energie-contract"
+    );
+    const energie = parseEnergieVerbruikBody(body);
+    if (!energie.ok) {
+      return NextResponse.json({ error: energie.error }, { status: 400 });
+    }
+    Object.assign(patch, energie.data);
+  }
+
   if (body.aanbetaling_modus != null) {
     patch.aanbetaling_modus = normalizeAanbetalingModus(body.aanbetaling_modus);
   }
@@ -133,9 +151,30 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, leads(naam)"
+        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, leads(naam)"
       )
       .single();
+
+    if (
+      update.error &&
+      (update.error.message?.includes("elektra_verbruik") ||
+        update.error.message?.includes("gas_verbruik") ||
+        update.error.message?.includes("teruglevering") ||
+        update.error.message?.includes("energie_contract") ||
+        (update.error.code === "42703" &&
+          /elektra|gas_verbruik|teruglever|energie_contract/i.test(
+            update.error.message || ""
+          )))
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Run migrate-energie-verbruik-contract.sql in Supabase (energievelden).",
+          detail: update.error.message,
+        },
+        { status: 400 }
+      );
+    }
 
     if (
       update.error &&
@@ -149,7 +188,7 @@ export async function PATCH(
         .update(patch)
         .eq("id", id)
         .select(
-          "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, leads(naam)"
+          "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, leads(naam)"
         )
         .single();
     }
@@ -192,6 +231,15 @@ export async function PATCH(
       const projectId = ensured?.id || null;
 
       if (projectId) {
+        const o = offerte as {
+          backoffice_notitie_door?: string | null;
+          installateur_notitie_door?: string | null;
+          elektra_verbruik_kwh?: number | null;
+          gas_verbruik_m3?: number | null;
+          teruglevering_kwh?: number | null;
+          energie_contract_type?: string | null;
+          energie_contract_einddatum?: string | null;
+        };
         const projectPatch: Record<string, unknown> = {
           betaalwijze: Boolean(offerte.financiering_voorbehoud)
             ? "warmtefonds"
@@ -202,10 +250,11 @@ export async function PATCH(
               : null,
           backoffice_notitie: offerte.backoffice_notitie || null,
           installateur_notitie: offerte.installateur_notitie || null,
-        };
-        const o = offerte as {
-          backoffice_notitie_door?: string | null;
-          installateur_notitie_door?: string | null;
+          elektra_verbruik_kwh: o.elektra_verbruik_kwh ?? null,
+          gas_verbruik_m3: o.gas_verbruik_m3 ?? null,
+          teruglevering_kwh: o.teruglevering_kwh ?? null,
+          energie_contract_type: o.energie_contract_type ?? null,
+          energie_contract_einddatum: o.energie_contract_einddatum ?? null,
         };
         if (o.backoffice_notitie_door !== undefined) {
           projectPatch.backoffice_notitie_door =

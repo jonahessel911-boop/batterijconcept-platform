@@ -531,6 +531,16 @@ export interface Offerte {
   installateur_notitie?: string | null;
   backoffice_notitie_door?: string | null;
   installateur_notitie_door?: string | null;
+  /** Jaarverbruik elektra (kWh) — sale → BO / Frank overstap */
+  elektra_verbruik_kwh?: number | null;
+  /** Jaarverbruik gas (m³), optioneel */
+  gas_verbruik_m3?: number | null;
+  /** Jaarlijkse teruglevering (kWh) */
+  teruglevering_kwh?: number | null;
+  /** vast | variabel | dynamisch */
+  energie_contract_type?: "vast" | "variabel" | "dynamisch" | null;
+  /** Einddatum vast contract (YYYY-MM-DD) */
+  energie_contract_einddatum?: string | null;
   installatie_partner_id?: string | null;
   /** Adviseur die de offerte heeft aangemaakt */
   aangemaakt_door_id?: string | null;
@@ -612,6 +622,14 @@ export interface Project {
   installateur_notitie?: string | null;
   backoffice_notitie_door?: string | null;
   installateur_notitie_door?: string | null;
+  /** Jaarverbruik elektra (kWh) — voor Frank Energie-overstap */
+  elektra_verbruik_kwh?: number | null;
+  /** Jaarverbruik gas (m³), optioneel */
+  gas_verbruik_m3?: number | null;
+  /** Jaarlijkse teruglevering (kWh) */
+  teruglevering_kwh?: number | null;
+  energie_contract_type?: "vast" | "variabel" | "dynamisch" | null;
+  energie_contract_einddatum?: string | null;
   backoffice_afgerond_at?: string | null;
   /** Afdeling verantwoordelijk (Backoffice, Planning, Installatie, …). */
   afdeling?: string | null;
@@ -666,6 +684,11 @@ export interface Project {
   review_gevraagd_at?: string | null;
   /** Aangetekende brief (WF-medewerking / annuleringskosten) afgehandeld. */
   aangetekende_brief_verstuurd_at?: string | null;
+  /**
+   * Opvolging na keuze-mail (dag 6): installatie doorzetten of
+   * annuleringsfactuur verstuurd / gecontroleerd.
+   */
+  annulering_keuze_gecontroleerd_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -889,7 +912,8 @@ export type BackofficeActieEventSoort =
   | "schakel_financiering"
   | "nabellen_factuur"
   | "herplan_afspraak"
-  | "aangetekende_brief";
+  | "aangetekende_brief"
+  | "annulering_keuze_controle";
 
 export interface BackofficeActieEvent {
   id: string;

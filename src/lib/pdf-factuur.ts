@@ -2,6 +2,7 @@ import { jsPDF } from "jspdf";
 import type { Factuur, Lead, Offerte } from "@/types/database";
 import { formatDateShort } from "@/lib/format";
 import {
+  FACTUUR_ADRES_OP_PDF_MARKER,
   FACTUUR_BEDRIJFSADRES_OP_PDF,
   factuurBetaaltermijnDagen,
   factuurHeeftAdresGegevensOpPdf,
@@ -12,6 +13,70 @@ import {
   formatEuroPdf,
   loadLogoDataUrl,
 } from "@/lib/pdf-brand";
+import {
+  parseFactuurRegels,
+  stripFactuurRegelsBlock,
+  type FactuurPdfRegel,
+} from "@/lib/factuur-regels";
+
+export type { FactuurPdfRegel } from "@/lib/factuur-regels";
+export {
+  encodeFactuurRegels,
+  parseFactuurRegels,
+} from "@/lib/factuur-regels";
+
+/** Helvetica-veilige tekst: fancy dashes/quotes → ASCII (wrap-breedte klopt dan). */
+function sanitizePdfText(text: string): string {
+  return text
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Wrap met behoud van harde regeleinden. */
+function wrapPdfLines(
+  doc: jsPDF,
+  text: string,
+  maxWidth: number
+): string[] {
+  const paragraphs = text
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const lines: string[] = [];
+  for (const p of paragraphs) {
+    const wrapped = doc.splitTextToSize(p, maxWidth) as string[];
+    lines.push(...wrapped);
+  }
+  return lines.length > 0 ? lines : [""];
+}
+
+/**
+ * Klantgerichte notities voor op de PDF.
+ * Standaard "Betreft offerte… Betaal op…" weglaten — dat staat al in Betalen.
+ */
+function customerFacingFactuurNotities(notities?: string | null): string {
+  if (!notities?.trim()) return "";
+  const cleaned = stripFactuurRegelsBlock(notities)
+    .replaceAll(FACTUUR_ADRES_OP_PDF_MARKER, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const lines = cleaned
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => {
+      if (/^betreft offerte\b/i.test(l)) return false;
+      if (/^betaal op\b/i.test(l)) return false;
+      if (/betreft offerte.+\bbetaal op\b/i.test(l)) return false;
+      return true;
+    });
+  return lines.join("\n").trim();
+}
 
 type PdfInput = {
   factuur: Factuur;
@@ -181,16 +246,19 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   y += 8;
 
   // —— Tabel header ——
+  // Numerieke kolommen vast vanaf rechts, zodat AANTAL/PRIJS/BTW/BEDRAG
+  // niet overlappen bij lange bedragen of omschrijvingen.
+  const contentRight = pageW - margin;
   const col = {
     oms: margin,
-    aantal: margin + 92,
-    prijs: margin + 112,
-    btw: margin + 138,
-    bedrag: pageW - margin,
+    aantal: contentRight - 88,
+    prijs: contentRight - 58,
+    btw: contentRight - 34,
+    bedrag: contentRight - 2,
   };
   const tableW = pageW - margin * 2;
   /** Ruimte voor omschrijving vóór AANTAL (padding meegerekend). */
-  const omsMaxW = col.aantal - col.oms - 8;
+  const omsMaxW = col.aantal - col.oms - 10;
 
   doc.setDrawColor(...LINE);
   doc.setLineWidth(0.3);
@@ -202,17 +270,10 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   doc.text("AANTAL", col.aantal, y + 5.5, { align: "right" });
   doc.text("PRIJS", col.prijs, y + 5.5, { align: "right" });
   doc.text("BTW", col.btw, y + 5.5, { align: "right" });
-  doc.text("BEDRAG", col.bedrag - 2, y + 5.5, { align: "right" });
+  doc.text("BEDRAG", col.bedrag, y + 5.5, { align: "right" });
   y += 8;
 
   // —— Regel(s) ——
-  const oms =
-    factuur.omschrijving ||
-    (isCredit && creditVan
-      ? `Creditfactuur bij ${creditVan}`
-      : offerte
-        ? `Aanbetaling bij ${offerte.offerte_nummer}`
-        : "Aanbetaling");
   const bedragExAbs = Math.abs(Number(factuur.bedrag_ex_btw) || 0);
   const bedragBtwAbs = Math.abs(Number(factuur.btw_bedrag) || 0);
   const bedragIncAbs = Math.abs(Number(factuur.bedrag_inc_btw) || 0);
@@ -221,34 +282,73 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const bedragBtw = sign * bedragBtwAbs;
   const bedragInc = sign * bedragIncAbs;
 
-  // Font vóór split zetten — anders wrapt jsPDF te breed (overlap met PRIJS)
+  const parsedRegels = parseFactuurRegels(factuur.notities);
+  const regels: FactuurPdfRegel[] =
+    parsedRegels.length > 0
+      ? parsedRegels
+      : [
+          {
+            omschrijving:
+              factuur.omschrijving ||
+              (isCredit && creditVan
+                ? `Creditfactuur bij ${creditVan}`
+                : offerte
+                  ? `Aanbetaling bij ${offerte.offerte_nummer}`
+                  : "Aanbetaling"),
+            bedrag_ex_btw: bedragEx,
+            btw_percentage: 21,
+          },
+        ];
+
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
-  const omsLines = doc.splitTextToSize(oms, omsMaxW) as string[];
-  const rowH = Math.max(10, omsLines.length * 4.2 + 6);
+  for (const regel of regels) {
+    const oms = sanitizePdfText(regel.omschrijving);
+    const omsLines = wrapPdfLines(doc, oms, omsMaxW);
+    const rowH = Math.max(10, omsLines.length * 4.2 + 6);
+    const ex = Math.round(Number(regel.bedrag_ex_btw) * 100) / 100;
+    const pct = regel.btw_percentage ?? 21;
 
-  doc.setDrawColor(...LINE);
-  doc.rect(margin, y, tableW, rowH);
-  doc.setTextColor(...CHARCOAL);
-  doc.text(omsLines, col.oms + 2, y + 6);
-  doc.text("1", col.aantal, y + 6.5, { align: "right" });
-  doc.text(formatEuroPdf(bedragEx), col.prijs, y + 6.5, { align: "right" });
-  doc.text("21%", col.btw, y + 6.5, { align: "right" });
-  doc.text(formatEuroPdf(bedragEx), col.bedrag - 2, y + 6.5, {
-    align: "right",
-  });
-  y += Math.max(14, rowH + 4);
+    doc.setDrawColor(...LINE);
+    doc.rect(margin, y, tableW, rowH);
+    doc.setTextColor(...CHARCOAL);
+    doc.text(omsLines, col.oms + 2, y + 6);
+    doc.text("1", col.aantal, y + 6.5, { align: "right" });
+    doc.text(formatEuroPdf(ex), col.prijs, y + 6.5, { align: "right" });
+    doc.text(`${pct}%`, col.btw, y + 6.5, { align: "right" });
+    doc.text(formatEuroPdf(ex), col.bedrag, y + 6.5, {
+      align: "right",
+    });
+    y += Math.max(12, rowH + 2);
+  }
+  y += 2;
 
   if (offerte?.offerte_nummer) {
     doc.setFontSize(8);
     doc.setTextColor(...MUTED);
     doc.text(`Betreft offerte ${offerte.offerte_nummer}`, margin, y);
-    y += 10;
+    y += 6;
+  }
+
+  const notitieTekst = customerFacingFactuurNotities(factuur.notities);
+  if (notitieTekst) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    const noteLines = wrapPdfLines(doc, sanitizePdfText(notitieTekst), tableW);
+    for (const line of noteLines) {
+      if (y > pageH - 56) break;
+      doc.text(line, margin, y);
+      y += 3.6;
+    }
+    y += 6;
+  } else if (offerte?.offerte_nummer) {
+    y += 4;
   }
 
   // —— Betaling links + totalen rechts ——
-  const totalsX = pageW - margin - 72;
-  const totalsW = 72;
+  const totalsW = 78;
+  const totalsX = pageW - margin - totalsW;
 
   if (isCredit) {
     doc.setFont("helvetica", "bold");

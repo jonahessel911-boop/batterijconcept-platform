@@ -8,6 +8,7 @@ import {
   type ConversiePeriod,
 } from "@/lib/conversie-period";
 import { formatEuro } from "@/lib/format";
+import { SourceBrandMark } from "./SourceBrandMark";
 
 function num(n: number | null | undefined, digits = 0): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -488,7 +489,13 @@ export function LeadConversiePanel() {
                         className="border-b border-line/50 last:border-0"
                       >
                         <td className="px-4 py-2.5 font-medium text-ink">
-                          {row.source}
+                          <span className="inline-flex items-center gap-2">
+                            <SourceBrandMark
+                              source={row.source}
+                              className="h-4 w-4 shrink-0"
+                            />
+                            {row.source}
+                          </span>
                         </td>
                         <td className="px-3 py-2.5 tabular-nums text-ink">
                           {num(row.leads)}

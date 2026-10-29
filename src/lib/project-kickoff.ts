@@ -295,6 +295,46 @@ export function isKickoffComplete(
 }
 
 /**
+ * Patch wanneer kickoff klaar is (alle stappen) óf al afgevinkt.
+ * WF → status `opstarten_voltooid_afwachten_wf` (niet blijven hangen op Opstarten).
+ * EM → alleen bel_schouw_aanbetaling_at (blijft Opstarten tot schouwdag).
+ *
+ * Repareert ook stuck state: bel_schouw gezet / kickoff compleet maar status
+ * nog Opstarten bij WF.
+ */
+export function kickoffCompletionPatch(
+  project: Project,
+  facturen: Factuur[] = [],
+  now = new Date()
+): {
+  bel_schouw_aanbetaling_at?: string;
+  status?: "opstarten_voltooid_afwachten_wf";
+} | null {
+  if (isSchouwdagDefinitief(project)) return null;
+  if (project.status === "annulering" || project.status === "hold_sales_actie") {
+    return null;
+  }
+
+  const itemsDone = projectKickoffItems(project, facturen).every((i) => i.done);
+  const belSet = Boolean(project.bel_schouw_aanbetaling_at);
+  const kickoffDone = itemsDone || belSet || isKickoffComplete(project, facturen);
+  if (!kickoffDone) return null;
+
+  const wf = isWarmtefondsProject(project);
+  const op = toOperationalStatus(project.status);
+  const needBel = !belSet && itemsDone;
+  // WF + nog op Opstarten → altijd door naar afwachten WF (ook bij repair)
+  const needWfStatus = wf && op === "schouwweek_inplannen";
+
+  if (!needBel && !needWfStatus) return null;
+
+  return {
+    ...(needBel ? { bel_schouw_aanbetaling_at: now.toISOString() } : {}),
+    ...(needWfStatus ? { status: "opstarten_voltooid_afwachten_wf" as const } : {}),
+  };
+}
+
+/**
  * Toon opstarten zolang er nog open stappen zijn (aanbetaling / Edwin /
  * schouwweek). Alleen schouwweek zetten mag de rest niet wegpoetsen.
  */

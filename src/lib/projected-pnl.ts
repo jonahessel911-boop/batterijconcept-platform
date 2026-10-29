@@ -207,19 +207,14 @@ function opsChildrenFromDetail(
 ): PnlLineChild[] {
   if (!detail) return [];
   const kids: PnlLineChild[] = [];
-  if (detail.bellersBedrag > 0 || detail.bellersAfspraken > 0) {
+  // Alleen per beller — geen aparte "Bellers totaal"-regel (die dubbelde het bedrag).
+  for (const b of detail.perBeller) {
+    if (b.afspraken <= 0 && b.bedrag <= 0) continue;
     kids.push({
-      key: "bellers",
-      label: `Bellers (€10 × ${detail.bellersAfspraken})`,
-      bedrag: -detail.bellersBedrag,
+      key: `beller-${b.id}`,
+      label: `${b.naam} (€10 × ${b.afspraken})`,
+      bedrag: -b.bedrag,
     });
-    for (const b of detail.perBeller) {
-      kids.push({
-        key: `beller-${b.id}`,
-        label: `  ${b.naam} (${b.afspraken}×)`,
-        bedrag: -b.bedrag,
-      });
-    }
   }
   if (detail.tarikVast > 0) {
     kids.push({

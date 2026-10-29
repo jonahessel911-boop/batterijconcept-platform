@@ -155,7 +155,9 @@ export async function GET(req: NextRequest) {
         fetchAllRows<MarketingLead>((fromIdx, toIdx) =>
           sb
             .from("leads")
-            .select("id, created_at, campaign_name, utm_campaign")
+            .select(
+              "id, created_at, campaign_name, utm_campaign, ad_name, bron, utm_source, lander"
+            )
             .gte("created_at", fromIso)
             .lte("created_at", toIso)
             .order("created_at", { ascending: true })
@@ -185,8 +187,10 @@ export async function GET(req: NextRequest) {
         fetchAllRows<MarketingMetaRow>((fromIdx, toIdx) =>
           sb
             .from("meta_ad_spend")
-            .select("datum, level, campaign_id, campaign_name, spend")
-            .eq("level", "campaign")
+            .select(
+              "datum, level, campaign_id, campaign_name, ad_id, ad_name, spend"
+            )
+            .in("level", ["campaign", "ad"])
             .gte("datum", from)
             .lte("datum", to)
             .order("datum", { ascending: true })
@@ -218,7 +222,9 @@ export async function GET(req: NextRequest) {
         const chunk = missingLeadIds.slice(i, i + 200);
         const { data: extra } = await sb
           .from("leads")
-          .select("id, created_at, campaign_name, utm_campaign")
+          .select(
+            "id, created_at, campaign_name, utm_campaign, ad_name, bron, utm_source, lander"
+          )
           .in("id", chunk);
         if (extra?.length) {
           extraLeads = extraLeads.concat(extra as MarketingLead[]);
@@ -236,6 +242,9 @@ export async function GET(req: NextRequest) {
       afspraken,
       metaSpend,
       metaConfigured: cfg.ok,
+      // TikTok Ads reporting UX klaar; spend-sync volgt tot API-keys live zijn
+      tiktokConfigured: false,
+      tiktokSpend: 0,
       lastSyncAt:
         (syncRes.data as { meta_laatste_sync_at?: string | null } | null)
           ?.meta_laatste_sync_at || null,
@@ -321,6 +330,26 @@ export async function GET(req: NextRequest) {
           unavailableByAdviseur,
         });
         m.leadsNodig = need.targetLeads;
+      }
+
+      // Zelfde capaciteitslijn op per-source series/months
+      for (const slice of result.bySource || []) {
+        for (let i = 0; i < slice.series.length; i++) {
+          const overall = result.series[i];
+          if (!overall) continue;
+          slice.series[i]!.leadsNodig = overall.leadsNodig ?? null;
+          const days = slice.series[i]!.days || [];
+          const overallDays = overall.days || [];
+          for (let d = 0; d < days.length; d++) {
+            days[d]!.leadsNodig = overallDays[d]?.leadsNodig ?? null;
+          }
+        }
+        for (const m of slice.months) {
+          const overall = result.months.find(
+            (x) => x.monthKey === m.monthKey
+          );
+          m.leadsNodig = overall?.leadsNodig ?? null;
+        }
       }
     } catch {
       // Capaciteit optioneel — grafiek blijft werken zonder lijn

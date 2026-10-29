@@ -76,13 +76,17 @@ export type BelRapportage = {
   months: BelMonthBucket[];
 };
 
-/** Vooruitblik: actieve huisbezoeken met start_at in de komende N dagen, per ISO-week. */
+/** Vooruitblik: huisbezoeken met start_at in de komende N dagen, per ISO-week. */
 export type BelPipelineWeek = {
   weekKey: string;
   label: string;
-  /** Dagen van deze week die in het 14-dagenvenster vallen */
+  /** Dagen van deze week die in het agenda-venster vallen */
   startYmd: string;
   endYmd: string;
+  /**
+   * Aantal huisbezoeken in deze bezoek-week die in het boekingsvenster
+   * (afgelopen `bookedDays`) zijn ingepland.
+   */
   count: number;
 };
 
@@ -90,34 +94,41 @@ export type BelIngeplandPipeline = {
   fromYmd: string;
   toYmd: string;
   days: number;
+  /** Totaal actief in agenda (komende `days`), ongeacht wanneer geboekt. */
   total: number;
   /**
-   * Van die komende bezoeken: hoeveel zijn in de afgelopen `days` dagen
-   * geboekt (created_at).
+   * Van die komende bezoeken: hoeveel zijn in de afgelopen `bookedDays`
+   * geboekt (created_at) — som van weeks[].count.
    */
   geboektLaatsteDagen: number;
+  /** Breedte van het boekingsvenster (created_at). */
+  bookedDays: number;
   /** Startdatum (ymd) van het “afgelopen N dagen” boekingsvenster. */
   geboektVanYmd: string;
   weeks: BelPipelineWeek[];
 };
 
 /**
- * Hoeveel huisbezoeken staan er ingepland in de komende `days` dagen,
- * gesplitst per week (van/voor welke week het bezoek valt).
- * Plus: hoeveel daarvan zijn in diezelfde N dagen terug geboekt.
+ * Agenda-vooruitblik: huisbezoeken met start in de komende `days` dagen.
+ * Weekkaarten + `geboektLaatsteDagen` = alleen wat in de afgelopen
+ * `bookedDays` is ingepland (created_at), gesplitst per bezoek-week.
  */
 export function buildBelIngeplandPipeline(opts: {
   afspraken: BelConversieAfspraak[];
+  /** Agenda-venster vooruit (start_at), default 14. */
   days?: number;
+  /** Boekingsvenster terug (created_at), default 7. */
+  bookedDays?: number;
   now?: Date;
   /** Optioneel: alleen afspraken van deze beller (ingepland_door of adviseur). */
   bellerId?: string | null;
 }): BelIngeplandPipeline {
   const days = Math.max(1, opts.days ?? 14);
+  const bookedDays = Math.max(1, opts.bookedDays ?? 7);
   const now = opts.now ?? new Date();
   const fromYmd = ymdAmsterdam(toZonedTime(now, AMSTERDAM_TZ));
   const toYmd = shiftYmd(fromYmd, days - 1);
-  const geboektVanYmd = shiftYmd(fromYmd, -(days - 1));
+  const geboektVanYmd = shiftYmd(fromYmd, -(bookedDays - 1));
   const filter = opts.bellerId?.trim() || null;
   const { start: rangeStart, end: rangeEnd } = (() => {
     const [fy, fm, fd] = fromYmd.split("-").map(Number);
@@ -136,7 +147,8 @@ export function buildBelIngeplandPipeline(opts: {
     };
   })();
 
-  const counts = new Map<string, number>();
+  const agendaCounts = new Map<string, number>();
+  const geboektCounts = new Map<string, number>();
   let geboektLaatsteDagen = 0;
   for (const a of opts.afspraken) {
     if (!isHuisbezoekAfspraak(a)) continue;
@@ -148,12 +160,13 @@ export function buildBelIngeplandPipeline(opts: {
     }
     const w = schouwWeekFromDate(a.start_at);
     const key = schouwWeekValue(w.jaar, w.week);
-    counts.set(key, (counts.get(key) || 0) + 1);
+    agendaCounts.set(key, (agendaCounts.get(key) || 0) + 1);
     if (
       a.created_at &&
       inAmsterdamDayRange(a.created_at, bookStart, bookEnd)
     ) {
       geboektLaatsteDagen += 1;
+      geboektCounts.set(key, (geboektCounts.get(key) || 0) + 1);
     }
   }
 
@@ -176,19 +189,20 @@ export function buildBelIngeplandPipeline(opts: {
         label: formatSchouwWeekLabel(info.jaar, info.week),
         startYmd: winStart,
         endYmd: winEnd,
-        count: counts.get(key) || 0,
+        count: geboektCounts.get(key) || 0,
       });
     }
     cursor = shiftYmd(cursor, 1);
   }
 
-  const total = weeks.reduce((s, w) => s + w.count, 0);
+  const total = [...agendaCounts.values()].reduce((s, n) => s + n, 0);
   return {
     fromYmd,
     toYmd,
     days,
     total,
     geboektLaatsteDagen,
+    bookedDays,
     geboektVanYmd,
     weeks,
   };

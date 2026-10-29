@@ -394,7 +394,10 @@ export async function GET(req: NextRequest) {
     const bySource = buildSourceRows(
       channelLeadRows,
       channelAfspraakLeadIds,
-      { Meta: metaSpend },
+      {
+        Meta: metaSpend,
+        TikTok: 0,
+      },
       new Set(),
       {},
       dealsBySource

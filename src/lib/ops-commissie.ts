@@ -5,6 +5,8 @@
  *   ingeplande afspraak over alle bellers
  */
 
+import { formatInTimeZone } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 import { normalizeRol } from "@/lib/rollen";
 
 /** € per nieuw huisbezoek dat een beller inplant. */
@@ -120,7 +122,12 @@ export function computeOpsCommissieForWindow(opts: {
   for (const a of opts.afspraken) {
     if (!isNieuwHuisbezoek(a) || !a.created_at) continue;
     if (eersteIds.get(a.lead_id) !== a.id) continue;
-    const ymd = a.created_at.slice(0, 10);
+    // Amsterdam-dag (niet UTC-slice) — avondboekingen vallen in de juiste week
+    const ymd = formatInTimeZone(
+      new Date(a.created_at),
+      AMSTERDAM_TZ,
+      "yyyy-MM-dd"
+    );
     if (ymd < opts.startYmd || ymd > opts.endYmd) continue;
 
     const door = (a.ingepland_door_id || "").trim();

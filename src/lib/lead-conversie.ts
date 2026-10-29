@@ -250,10 +250,14 @@ export function periodProgress(
   };
 }
 
+/** Paid kanalen die we altijd tonen in marketing / per kanaal (ook bij 0). */
+export const KNOWN_MARKETING_SOURCES = ["Meta", "TikTok"] as const;
+export type KnownMarketingSource = (typeof KNOWN_MARKETING_SOURCES)[number];
+
 /**
  * Normaliseer traffic-bron voor “Per kanaal”.
  * Alleen `bron` / `utm_source` — geen landers (an, g, d, a, h, …).
- * facebook / Instagram / fb / ig → Meta.
+ * facebook / Instagram / fb / ig → Meta · tiktok / tt → TikTok · native → Native.
  */
 export function normalizeLeadSource(opts: {
   bron?: string | null;
@@ -281,6 +285,14 @@ export function normalizeLeadSource(opts: {
     key.includes("igads")
   ) {
     return "Meta";
+  }
+  if (
+    key.includes("tiktok") ||
+    key === "tt" ||
+    key === "ttads" ||
+    key.includes("bytedance")
+  ) {
+    return "TikTok";
   }
   if (key.includes("google") || key === "gads" || key === "adwords") {
     return "Google";
@@ -353,6 +365,15 @@ export function buildSourceRows(
   for (const source of Object.keys(spendBySource)) {
     if (!by.has(source)) by.set(source, { leads: 0, afspraken: 0, deals: 0 });
   }
+  // Meta / TikTok / Native altijd tonen (ook bij 0)
+  for (const source of KNOWN_MARKETING_SOURCES) {
+    if (!by.has(source)) by.set(source, { leads: 0, afspraken: 0, deals: 0 });
+  }
+
+  const knownRank = (source: string): number => {
+    const i = (KNOWN_MARKETING_SOURCES as readonly string[]).indexOf(source);
+    return i >= 0 ? i : 100;
+  };
 
   return [...by.entries()]
     .map(([source, acc]) => {
@@ -375,13 +396,17 @@ export function buildSourceRows(
         cpa: cpaRaw != null ? round2(cpaRaw) : null,
       };
     })
-    .sort(
-      (a, b) =>
+    .sort((a, b) => {
+      const ra = knownRank(a.source);
+      const rb = knownRank(b.source);
+      if (ra !== rb) return ra - rb;
+      return (
         b.leads - a.leads ||
         b.afspraken - a.afspraken ||
         b.deals - a.deals ||
         a.source.localeCompare(b.source, "nl")
-    );
+      );
+    });
 }
 
 export function buildLeadConversie(opts: {

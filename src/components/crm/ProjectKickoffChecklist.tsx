@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Factuur, Project } from "@/types/database";
 import {
+  kickoffCompletionPatch,
   kickoffWarmtefondsBedragen,
   projectKickoffItems,
   showProjectKickoff,
@@ -171,15 +172,43 @@ export function ProjectKickoffChecklist({
         return;
       }
       const updated = (data as { project?: Project }).project;
-      if (updated) onFinancieringUpdated?.(updated);
-      else
-        onFinancieringUpdated?.({
-          ...project,
-          financiering_status: "doorgestuurd_naar_edwin",
-        });
+      const base = updated || {
+        ...project,
+        financiering_status: "doorgestuurd_naar_edwin" as const,
+      };
+      const finalized = await finalizeKickoffIfReady(base, facturen);
+      if (finalized) {
+        /* onProjectUpdated al via finalize */
+      } else if (updated) {
+        onFinancieringUpdated?.(updated);
+      } else {
+        onFinancieringUpdated?.(base);
+      }
     } finally {
       setAfvinkBusy(false);
     }
+  }
+
+  /** Alle stappen klaar → bel_schouw + bij WF status afwachten_wf. */
+  async function finalizeKickoffIfReady(
+    nextProject: Project,
+    nextFacturen: Factuur[]
+  ): Promise<Project | null> {
+    const patch = kickoffCompletionPatch(nextProject, nextFacturen);
+    if (!patch) return null;
+    const res = await fetch(`/api/projecten/${nextProject.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return null;
+    const updated = (data as { project?: Project }).project;
+    if (updated) {
+      onProjectUpdated?.(updated);
+      return updated;
+    }
+    return null;
   }
 
   async function verstuurAanbetaling() {
@@ -245,8 +274,20 @@ export function ProjectKickoffChecklist({
           (data as { error?: string }).error || "Versturen mislukt"
         );
       }
+      const sentFac = (data as { factuur?: Factuur }).factuur;
+      const nextFac = sentFac
+        ? [
+            ...facturen.filter((f) => f.id !== sentFac.id),
+            sentFac,
+          ]
+        : facturen.map((f) =>
+            f.id === factuurId ? { ...f, status: "verzonden" as const } : f
+          );
+      const finalized = await finalizeKickoffIfReady(project, nextFac);
       setActionHint(
-        `${facLabel}${nummer ? ` ${nummer}` : ""} verstuurd.`
+        finalized?.status === "opstarten_voltooid_afwachten_wf"
+          ? `${facLabel}${nummer ? ` ${nummer}` : ""} verstuurd · status → Opstarten voltooid — afwachten WF`
+          : `${facLabel}${nummer ? ` ${nummer}` : ""} verstuurd.`
       );
       onFacturenChanged?.();
     } catch (e) {
@@ -290,13 +331,19 @@ export function ProjectKickoffChecklist({
         );
       }
       const updated = (data as { project?: Project }).project;
-      if (updated) onProjectUpdated?.(updated);
+      const base = updated || project;
+      const finalized = await finalizeKickoffIfReady(base, facturen);
+      const result = finalized || updated;
+      if (result && !finalized) onProjectUpdated?.(result);
       const mailOk = (data as { mails?: { klant?: { ok?: boolean } } }).mails
         ?.klant?.ok;
+      const weekLabel = formatSchouwWeekLabel(opt.jaar, opt.week);
       setActionHint(
-        mailOk
-          ? `Schouwweek gezet · ${formatSchouwWeekLabel(opt.jaar, opt.week)} — klantmail met track & trace verstuurd`
-          : `Schouwweek gezet · ${formatSchouwWeekLabel(opt.jaar, opt.week)}`
+        finalized?.status === "opstarten_voltooid_afwachten_wf"
+          ? `Schouwweek gezet · ${weekLabel} — status → Opstarten voltooid — afwachten WF`
+          : mailOk
+            ? `Schouwweek gezet · ${weekLabel} — klantmail met track & trace verstuurd`
+            : `Schouwweek gezet · ${weekLabel}`
       );
     } catch (e) {
       setActionError(

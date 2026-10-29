@@ -93,11 +93,22 @@ function adviseurKortLabel(naam: string, allNames: string[]): string {
   return initials ? `${first} ${initials}.` : first;
 }
 
-function agendaGridCols(adviseurCount: number): string {
-  // Altijd volle breedte verdelen — geen vaste px-minima → geen horizontaal scrollen
+function agendaGridLayout(
+  adviseurCount: number,
+  narrow = false
+): { cols: string; minWidthPx: number } {
   const n = Math.max(adviseurCount, 1);
-  const timeCol = n >= 8 ? "48px" : "56px";
-  return `${timeCol} repeat(${n}, minmax(0, 1fr))`;
+  // Mobiel: 1 kolom = volle breedte (we tonen 1 adviseur tegelijk)
+  if (narrow) {
+    return { cols: "52px minmax(0, 1fr)", minWidthPx: 0 };
+  }
+  // Desktop: groeit mee, maar niet platter dan colMin (dan H-scroll)
+  const timePx = n >= 8 ? 48 : 56;
+  const colMin = n >= 10 ? 76 : n >= 7 ? 84 : 92;
+  return {
+    cols: `${timePx}px repeat(${n}, minmax(${colMin}px, 1fr))`,
+    minWidthPx: timePx + n * colMin,
+  };
 }
 
 function weekDaysFrom(anchor: Date) {
@@ -438,6 +449,10 @@ export function AgendaPanel({
   const [mainView, setMainView] = useState<"agenda" | "leads">("agenda");
   const slideRef = useRef<HTMLDivElement>(null);
   const ignoreScrollSync = useRef(false);
+  const mobileViewInited = useRef(false);
+  /** Telefoon: smalle viewport → 1 adviseur tegelijk (anders onleesbaar). */
+  const [isNarrow, setIsNarrow] = useState(false);
+  const [mobileAdviseurId, setMobileAdviseurId] = useState<string | null>(null);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [adviseurMenuOpen, setAdviseurMenuOpen] = useState(false);
   const [beschikbaarMap, setBeschikbaarMap] = useState<Map<string, boolean>>(
@@ -520,6 +535,51 @@ export function AgendaPanel({
     }
     return list.filter((a) => !hiddenIds.has(a.id));
   }, [planAdviseurs, defaultAdviseurId, hiddenIds]);
+
+  // Mobiel: één adviseur in het grid (swipe Agenda↔Leads uit; chips om te wisselen)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsNarrow(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!isNarrow) {
+      mobileViewInited.current = false;
+      return;
+    }
+    if (!mobileViewInited.current) {
+      mobileViewInited.current = true;
+      setCalendarView("dag");
+    }
+  }, [isNarrow]);
+
+  useEffect(() => {
+    if (!isNarrow || visibleAdviseurs.length === 0) return;
+    if (
+      mobileAdviseurId &&
+      visibleAdviseurs.some((a) => a.id === mobileAdviseurId)
+    ) {
+      return;
+    }
+    setMobileAdviseurId(visibleAdviseurs[0]!.id);
+  }, [isNarrow, visibleAdviseurs, mobileAdviseurId]);
+
+  const displayAdviseurs = useMemo(() => {
+    if (!isNarrow || defaultAdviseurId || visibleAdviseurs.length <= 1) {
+      return visibleAdviseurs;
+    }
+    const id = mobileAdviseurId;
+    const one = visibleAdviseurs.find((a) => a.id === id);
+    return one ? [one] : visibleAdviseurs.slice(0, 1);
+  }, [
+    isNarrow,
+    defaultAdviseurId,
+    visibleAdviseurs,
+    mobileAdviseurId,
+  ]);
 
   /**
    * Per adviseur deze week: geplande blokken / totaal beschikbare blokken.
@@ -670,6 +730,7 @@ export function AgendaPanel({
   }, [adviseurs]);
 
   function scrollToView(view: "agenda" | "leads") {
+    if (isNarrow) return; // Mobiel: tabs wisselen zonder swipe-container
     const el = slideRef.current;
     if (!el) return;
     ignoreScrollSync.current = true;
@@ -687,7 +748,7 @@ export function AgendaPanel({
 
   useEffect(() => {
     const el = slideRef.current;
-    if (!el) return;
+    if (!el || isNarrow) return;
     const onScroll = () => {
       if (ignoreScrollSync.current) return;
       const w = el.clientWidth || 1;
@@ -696,7 +757,7 @@ export function AgendaPanel({
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [isNarrow]);
 
   useEffect(() => {
     if (adviseursProp.length) setAdviseurs(adviseursProp);
@@ -1117,9 +1178,14 @@ export function AgendaPanel({
   const leadsTitle = leadsIsToday
     ? `Leads vandaag · ${leadsDayLabel}`
     : `Leads · ${leadsDayLabel}`;
-  const gridCols = agendaGridCols(visibleAdviseurs.length);
-  const adviseurNamen = visibleAdviseurs.map((a) => a.naam);
+  const { cols: gridCols, minWidthPx: gridMinWidth } = agendaGridLayout(
+    displayAdviseurs.length,
+    isNarrow
+  );
+  const adviseurNamen = displayAdviseurs.map((a) => a.naam);
   const hiddenCount = planAdviseurs.length - visibleAdviseurs.length;
+  const showMobileAdviseurPicker =
+    isNarrow && !defaultAdviseurId && visibleAdviseurs.length > 1;
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col bg-white">
@@ -1471,12 +1537,23 @@ export function AgendaPanel({
         )}
       </div>
 
-      {/* Swipebaar: Agenda | Leads vandaag */}
+      {/* Desktop: swipe Agenda | Leads. Mobiel: tabs wisselen, geen swipe (voorkomt bugs). */}
       <div
         ref={slideRef}
-        className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth"
+        className={[
+          "flex min-h-0 flex-1",
+          isNarrow
+            ? "overflow-hidden"
+            : "snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth",
+        ].join(" ")}
       >
-        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-y-auto overflow-x-hidden">
+        {(!isNarrow || mainView === "agenda") && (
+        <div
+          className={[
+            "min-h-0 shrink-0 overflow-y-auto overflow-x-auto",
+            isNarrow ? "w-full" : "w-full min-w-full snap-start",
+          ].join(" ")}
+        >
         {loading ? (
           <p className="p-8 text-center text-sm text-muted">Laden…</p>
         ) : visibleAdviseurs.length === 0 ? (
@@ -1496,53 +1573,93 @@ export function AgendaPanel({
             ) : null}
           </p>
         ) : (
-          <div className="w-full">
-            {/* Sticky kolomheaders — één rij namen, volle breedte */}
-            <div className="sticky top-0 z-30 border-b border-line bg-white">
-              <div
-                className="grid bg-white"
-                style={{ gridTemplateColumns: gridCols }}
-              >
-                <div className="border-r border-line bg-[#FAFBFA]" />
+          <div
+            className="w-full"
+            style={gridMinWidth > 0 ? { minWidth: gridMinWidth } : undefined}
+          >
+            {showMobileAdviseurPicker ? (
+              <div className="sticky top-0 z-40 flex gap-1.5 overflow-x-auto border-b border-line bg-white px-2 py-2">
                 {visibleAdviseurs.map((a) => {
+                  const active = displayAdviseurs[0]?.id === a.id;
                   const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
                   const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
-                  const cr = showConversie
-                    ? conversieByAdviseur.get(a.id)
-                    : undefined;
-                  const label = adviseurKortLabel(a.naam, adviseurNamen);
                   return (
-                    <div
+                    <button
                       key={a.id}
-                      className="min-w-0 border-r border-line px-0.5 py-1.5 text-center"
-                      title={
-                        cr != null
-                          ? `${a.naam} · ${gepland}/${totaal} · ${cr}% cr (maand)`
-                          : `${a.naam} · ${gepland}/${totaal}`
-                      }
+                      type="button"
+                      onClick={() => setMobileAdviseurId(a.id)}
+                      className={[
+                        "shrink-0 rounded-lg border px-2.5 py-1.5 text-left text-[12px] font-semibold",
+                        active
+                          ? "border-green bg-green text-white"
+                          : "border-line bg-[#FAFBFA] text-ink",
+                      ].join(" ")}
                     >
-                      <p className="truncate text-[11px] font-semibold leading-tight text-ink">
-                        {label}
-                        {cr != null ? (
-                          <span className="font-medium text-muted">
-                            {" "}
-                            ({cr}% cr)
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="mt-0.5 text-[10px] font-medium tabular-nums text-muted">
-                        {gepland}/{totaal}
-                      </p>
-                      {isWeekBlocked(a.id) && (
-                        <p className="mt-0.5 text-[9px] font-semibold text-[#B91C1C]">
-                          Blok
-                        </p>
+                      {adviseurKortLabel(
+                        a.naam,
+                        visibleAdviseurs.map((x) => x.naam)
                       )}
-                    </div>
+                      <span
+                        className={[
+                          "ml-1 tabular-nums",
+                          active ? "text-white/80" : "text-muted",
+                        ].join(" ")}
+                      >
+                        {gepland}/{totaal}
+                      </span>
+                    </button>
                   );
                 })}
               </div>
-            </div>
+            ) : null}
+            {/* Sticky kolomheaders — desktop (mobiel: chips hierboven) */}
+            {!showMobileAdviseurPicker ? (
+              <div className="sticky top-0 z-30 border-b border-line bg-white">
+                <div
+                  className="grid bg-white"
+                  style={{ gridTemplateColumns: gridCols }}
+                >
+                  <div className="border-r border-line bg-[#FAFBFA]" />
+                  {displayAdviseurs.map((a) => {
+                    const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
+                    const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
+                    const cr = showConversie
+                      ? conversieByAdviseur.get(a.id)
+                      : undefined;
+                    const label = adviseurKortLabel(a.naam, adviseurNamen);
+                    return (
+                      <div
+                        key={a.id}
+                        className="min-w-0 border-r border-line px-0.5 py-1.5 text-center"
+                        title={
+                          cr != null
+                            ? `${a.naam} · ${gepland}/${totaal} · ${cr}% cr (maand)`
+                            : `${a.naam} · ${gepland}/${totaal}`
+                        }
+                      >
+                        <p className="truncate text-[11px] font-semibold leading-tight text-ink">
+                          {label}
+                          {cr != null ? (
+                            <span className="font-medium text-muted">
+                              {" "}
+                              ({cr}% cr)
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-0.5 text-[10px] font-medium tabular-nums text-muted">
+                          {gepland}/{totaal}
+                        </p>
+                        {isWeekBlocked(a.id) && (
+                          <p className="mt-0.5 text-[9px] font-semibold text-[#B91C1C]">
+                            Blok
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             {visibleDays.map((day) => (
               <div key={day.key}>
@@ -1574,7 +1691,7 @@ export function AgendaPanel({
                     <div className="flex items-start justify-end border-r border-line bg-[#FAFBFA] px-1 py-1.5 text-[12px] font-bold tabular-nums leading-none text-ink">
                       {row.label}
                     </div>
-                    {visibleAdviseurs.map((adv) => {
+                    {displayAdviseurs.map((adv) => {
                       const weekBlocked = isWeekBlocked(adv.id);
                       const slotBlocked = isSlotBlocked(
                         adv.id,
@@ -1722,8 +1839,15 @@ export function AgendaPanel({
           </div>
         )}
         </div>
+        )}
 
-        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-auto">
+        {(!isNarrow || mainView === "leads") && (
+        <div
+          className={[
+            "min-h-0 shrink-0 overflow-auto",
+            isNarrow ? "w-full" : "w-full min-w-full snap-start",
+          ].join(" ")}
+        >
           {leadsVoorDag.length === 0 ? (
             <div className="px-5 py-14 text-center">
               <p className="font-display text-base font-semibold text-ink">
@@ -1749,6 +1873,7 @@ export function AgendaPanel({
             />
           )}
         </div>
+        )}
       </div>
 
       {/* Detail drawer — zelfde als oude agenda */}

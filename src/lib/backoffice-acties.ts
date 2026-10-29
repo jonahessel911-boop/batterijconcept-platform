@@ -8,9 +8,16 @@ import {
 } from "@/lib/aanbetaling";
 import {
   ANNULERING_ACTIE_DAG,
+  ANNULERING_KEUZE_CONTROLE_DAG,
+  ANNULERING_KEUZE_REACTIE_DAGEN,
+  annuleringKeuzeControleVanaf,
   annuleringsActieVanaf,
   bedenktijdVanOndertekening,
 } from "@/lib/bedenktijd";
+import {
+  AV_ANNULERING_PCT,
+  annuleringskostenIncBtw,
+} from "@/lib/av-annulering";
 import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
 import {
   factuurEffectieveDeadline,
@@ -63,6 +70,7 @@ export type BackofficeActieSoort =
   | "volgende_stap"
   | "bestel_materiaal"
   | "aangetekende_brief"
+  | "annulering_keuze_controle"
   | "schouw_inplannen"
   | "wacht_warmtefonds";
 
@@ -137,7 +145,19 @@ type ProjectOfferteJoin = {
 };
 
 function projectOfferte(project: Project) {
-  return (project as Project & ProjectOfferteJoin).offertes ?? null;
+  const raw = (project as Project & ProjectOfferteJoin).offertes ?? null;
+  if (Array.isArray(raw)) return raw[0] ?? null;
+  return raw;
+}
+
+function projectLeadStatus(project: Project): string | null {
+  const raw = project.leads as
+    | { status?: string | null }
+    | { status?: string | null }[]
+    | null
+    | undefined;
+  if (Array.isArray(raw)) return raw[0]?.status ?? null;
+  return raw?.status ?? null;
 }
 
 /**
@@ -156,7 +176,8 @@ export function isWarmtefondsSale(opts: {
 
 export function isWarmtefondsProject(project: Project): boolean {
   // Lead-sale-status wint op stale project.betaalwijze (bijv. na omzetting EM↔WF)
-  const leadStatus = project.leads?.status ?? null;
+  // Supabase-join kan lead/offerte als object óf array teruggeven.
+  const leadStatus = projectLeadStatus(project);
   if (leadStatus === "sale_eigen_middelen") return false;
   if (leadStatus === "sale_financiering") return true;
   if (project.betaalwijze === "eigen_middelen") return false;
@@ -355,6 +376,51 @@ export function isAangetekendeBriefActieOpen(
   if (!vanaf || now.getTime() < vanaf.getTime()) return false;
 
   if (heeftGecrediteerdeAanbetaling(project, facturen)) return false;
+  if (heeftMinimaalEenBetaaldeFactuur(project, facturen)) return false;
+
+  return true;
+}
+
+/** Factuur met annuleringskosten (20% AV) herkennen. */
+export function isAnnuleringskostenFactuur(f: {
+  omschrijving?: string | null;
+}): boolean {
+  return /annuleringskosten/i.test(f.omschrijving || "");
+}
+
+export function heeftAnnuleringskostenFactuur(
+  project: Project,
+  facturen: Factuur[]
+): boolean {
+  return facturen.some(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      f.status !== "vervallen" &&
+      factuurHoortBijProject(project, f) &&
+      isAnnuleringskostenFactuur(f)
+  );
+}
+
+/**
+ * Dag 6 na mail «Keuze: annulering of installatie»:
+ * controleer reactie; zonder antwoord → annuleringsfactuur.
+ */
+export function isAnnuleringKeuzeControleOpen(
+  project: Project,
+  facturen: Factuur[] = [],
+  now = new Date()
+): boolean {
+  if (project.annulering_keuze_gecontroleerd_at) return false;
+  const st = String(project.status || "").trim().toLowerCase();
+  if (st === "hold_sales_actie") return false;
+  const verstuurd = project.aangetekende_brief_verstuurd_at;
+  if (!verstuurd) return false;
+
+  const vanaf = annuleringKeuzeControleVanaf(verstuurd);
+  if (!vanaf || now.getTime() < vanaf.getTime()) return false;
+
+  if (heeftAnnuleringskostenFactuur(project, facturen)) return false;
+  // Betaalde aanbetaling = traject loopt → geen annuleringsfactuur-actie
   if (heeftMinimaalEenBetaaldeFactuur(project, facturen)) return false;
 
   return true;
@@ -574,10 +640,64 @@ export function openAangetekendeBriefActies(
       soort: "aangetekende_brief",
       titel:
         "Annuleringskosten of installatie doorzetten",
-      detail: `${bedenktijdDetail} Aanbetaling niet betaald. Stuur de mail «Annulering of installatie» (template Contact). Markeer afgerond na verzending; PDF-brief optioneel.`,
+      detail: `${bedenktijdDetail} Aanbetaling niet betaald. Stuur de mail «Annulering of installatie» (template Contact). Na verzending start de ${ANNULERING_KEUZE_REACTIE_DAGEN}-dagen reactietermijn; op dag ${ANNULERING_KEUZE_CONTROLE_DAG} volgt de controle-actie.`,
       reden: bedenktijd
         ? `Dag ${ANNULERING_ACTIE_DAG}+ na ondertekenen (${bedenktijd.startLabel}): geen betaalde factuur — formeel opvolgen met mailtemplate.`
         : `Dag ${ANNULERING_ACTIE_DAG}+ na ondertekenen: geen betaalde factuur en niet geannuleerd — formeel opvolgen met mailtemplate.`,
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleAt.toISOString(),
+      overdue: now.getTime() > deadlineAt.getTime(),
+      prio: true,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
+export function openAnnuleringKeuzeControleActies(
+  projecten: Project[],
+  facturen: Factuur[] = [],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  const pct = Math.round(AV_ANNULERING_PCT * 100);
+  for (const project of projecten) {
+    if (!isAnnuleringKeuzeControleOpen(project, facturen, now)) continue;
+    const verstuurd = project.aangetekende_brief_verstuurd_at!;
+    const vanaf = annuleringKeuzeControleVanaf(verstuurd)!;
+    const deadlineAt = new Date(vanaf);
+    deadlineAt.setHours(17, 0, 0, 0);
+    const saleAt = saleMomentVanProject(project);
+    const lead = leadFromProject(project);
+    const offerteRaw = projectOfferte(project);
+    const offerte = Array.isArray(offerteRaw) ? offerteRaw[0] : offerteRaw;
+    const orderInc = Number(offerte?.totaal_inc_btw);
+    const kosten =
+      Number.isFinite(orderInc) && orderInc > 0
+        ? annuleringskostenIncBtw(orderInc)
+        : null;
+    const kostenLabel =
+      kosten != null
+        ? new Intl.NumberFormat("nl-NL", {
+            style: "currency",
+            currency: "EUR",
+          }).format(kosten)
+        : `${pct}%`;
+    items.push({
+      id: `annulering-keuze-controle-${project.id}`,
+      soort: "annulering_keuze_controle",
+      titel: "Controleer keuze — annuleringsfactuur indien geen reactie",
+      detail: `Keuze-mail is verstuurd. Reactietermijn (${ANNULERING_KEUZE_REACTIE_DAGEN} dagen) voorbij. Check of de klant installatie doorzet of annuleert. Geen antwoord → stuur annuleringsfactuur (${kostenLabel}).`,
+      reden: `Dag ${ANNULERING_KEUZE_CONTROLE_DAG} na keuze-mail — controle + eventueel ${pct}% annuleringskosten.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: now.getTime() > deadlineAt.getTime(),
@@ -1596,6 +1716,7 @@ export function openBackofficeActies(
     ...herplanAdviseur,
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
+    ...openAnnuleringKeuzeControleActies(projecten, facturen, now),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, facturen, now),
     ...openNabellenFactuurActies(facturen, now, projecten),
@@ -1620,6 +1741,7 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "schouw_inplannen",
   "volgende_stap",
   "aangetekende_brief",
+  "annulering_keuze_controle",
   "schakel_financiering",
   "wacht_warmtefonds",
   "nabellen_factuur",
@@ -1641,6 +1763,7 @@ export function actieTabVoorSoort(
   if (soort === "bestel_materiaal") return "purchasing";
   if (
     soort === "aangetekende_brief" ||
+    soort === "annulering_keuze_controle" ||
     soort === "schakel_financiering" ||
     soort === "wacht_warmtefonds"
   ) {

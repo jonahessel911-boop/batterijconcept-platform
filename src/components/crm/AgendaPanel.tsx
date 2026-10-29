@@ -624,6 +624,11 @@ export function AfspraakDetail({
     backofficeNotitie: "",
     installateurNotitie: "",
     opbelMoment: null,
+    elektraVerbruikKwh: "",
+    gasVerbruikM3: "",
+    terugleveringKwh: "",
+    energieContractType: "",
+    energieContractEinddatum: "",
   });
   const [wfProjectId, setWfProjectId] = useState<string | null>(null);
   const [wfAangevraagdAt, setWfAangevraagdAt] = useState<string | null>(null);
@@ -714,6 +719,11 @@ export function AfspraakDetail({
       aanbetalingHandmatig: "",
       backofficeNotitie: "",
       installateurNotitie: "",
+      elektraVerbruikKwh: "",
+      gasVerbruikM3: "",
+      terugleveringKwh: "",
+      energieContractType: "",
+      energieContractEinddatum: "",
     });
   }, [afspraak]);
 
@@ -830,6 +840,21 @@ export function AfspraakDetail({
               : "",
           backofficeNotitie: o.backoffice_notitie || "",
           installateurNotitie: o.installateur_notitie || "",
+          elektraVerbruikKwh:
+            o.elektra_verbruik_kwh != null ? String(o.elektra_verbruik_kwh) : "",
+          gasVerbruikM3:
+            o.gas_verbruik_m3 != null ? String(o.gas_verbruik_m3) : "",
+          terugleveringKwh:
+            o.teruglevering_kwh != null ? String(o.teruglevering_kwh) : "",
+          energieContractType:
+            o.energie_contract_type === "vast" ||
+            o.energie_contract_type === "variabel" ||
+            o.energie_contract_type === "dynamisch"
+              ? o.energie_contract_type
+              : "",
+          energieContractEinddatum: o.energie_contract_einddatum
+            ? String(o.energie_contract_einddatum).slice(0, 10)
+            : "",
         });
         window.requestAnimationFrame(() => {
           saleFormRef.current?.scrollIntoView({
@@ -1366,6 +1391,13 @@ export function AfspraakDetail({
             "Geen ondertekende offerte gevonden voor deze lead — rond eerst de offerte af."
           );
         }
+        const { validateBackofficeDoorzettenForm } = await import(
+          "@/lib/energie-contract"
+        );
+        const energie = validateBackofficeDoorzettenForm(boValues);
+        if (!energie.ok) {
+          throw new Error(energie.error);
+        }
         const warmtefonds = uitkomst === "sale_financiering";
         const eigenModus =
           boValues.aanbetalingModus === "handmatig"
@@ -1400,6 +1432,7 @@ export function AfspraakDetail({
             installateur_notitie_door: boValues.installateurNotitie.trim()
               ? sessionNaam || saleOfferte.installateur_notitie_door || null
               : null,
+            ...energie.data,
           }),
         });
         const data = await res.json().catch(() => ({}));

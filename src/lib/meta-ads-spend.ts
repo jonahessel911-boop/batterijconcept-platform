@@ -17,6 +17,7 @@ export type MetaAdSpendDay = {
   clicks?: number;
   campaign_id?: string | null;
   campaign_name?: string | null;
+  ad_id?: string | null;
   ad_name?: string | null;
 };
 
@@ -89,6 +90,7 @@ type GraphInsightRow = {
   clicks?: string;
   campaign_id?: string;
   campaign_name?: string;
+  ad_id?: string;
   ad_name?: string;
 };
 
@@ -153,7 +155,7 @@ export async function fetchMetaAdSpend(options?: {
   const objectId = campaignId || cfg.accountId;
   const fields =
     breakdown === "ad"
-      ? "spend,impressions,clicks,campaign_id,campaign_name,ad_name"
+      ? "spend,impressions,clicks,campaign_id,campaign_name,ad_id,ad_name"
       : campaignId
         ? "spend,impressions,clicks,campaign_id,campaign_name"
         : breakdown === "campaign"
@@ -194,6 +196,7 @@ export async function fetchMetaAdSpend(options?: {
           clicks: row.clicks ? Number(row.clicks) : undefined,
           campaign_id: row.campaign_id || campaignId || null,
           campaign_name: row.campaign_name || null,
+          ad_id: row.ad_id || null,
           ad_name: row.ad_name || null,
         });
       }
@@ -361,6 +364,69 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
 
     const { error } = await sb.from("meta_ad_spend").insert(row);
 
+    if (error) {
+      return { upserted, error: error.message };
+    }
+    upserted += 1;
+  }
+
+  // Ad-level (campagne → ad uitklappen) — best-effort
+  await syncMetaAdSpendAdDetail({
+    since: fetched.since,
+    until: fetched.until,
+  }).catch(() => null);
+
+  return { upserted };
+}
+
+/**
+ * Schrijf ad-level spend naar meta_ad_spend (heel ad-account).
+ * Voor campagne → ad drill-down in marketing.
+ */
+export async function syncMetaAdSpendAdDetail(options?: {
+  since?: string;
+  until?: string;
+}): Promise<{ upserted: number; error?: string }> {
+  const fetched = await fetchMetaAdSpend({
+    since: options?.since,
+    until: options?.until,
+    level: "ad",
+    timeIncrement: "1",
+    campaignId: null,
+  });
+  if (!fetched.ok) return { upserted: 0, error: fetched.error };
+
+  const sb = getSupabaseAdmin();
+
+  await sb
+    .from("meta_ad_spend")
+    .delete()
+    .eq("level", "ad")
+    .gte("datum", fetched.since)
+    .lte("datum", fetched.until);
+
+  let upserted = 0;
+  for (const day of fetched.days) {
+    const campaignId = (day.campaign_id || "").trim() || "unknown";
+    const adId =
+      (day.ad_id || "").trim() ||
+      (day.ad_name || "").trim() ||
+      "unknown";
+    const row = {
+      datum: day.date,
+      level: "ad" as const,
+      campaign_id: campaignId,
+      campaign_name: day.campaign_name || null,
+      adset_id: "",
+      ad_id: adId,
+      ad_name: day.ad_name || null,
+      spend: day.spend,
+      impressions: day.impressions ?? null,
+      clicks: day.clicks ?? null,
+      synced_at: new Date().toISOString(),
+    };
+
+    const { error } = await sb.from("meta_ad_spend").insert(row);
     if (error) {
       return { upserted, error: error.message };
     }

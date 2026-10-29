@@ -956,24 +956,28 @@ export function BelDashboardPanel({
               <header className="flex flex-wrap items-end justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
                 <div>
                   <p className="font-display text-base font-semibold text-ink">
-                    Ingepland komende 14 dagen
+                    Ingepland afgelopen{" "}
+                    {data.pipeline14d.bookedDays ?? 7} dagen
                   </p>
                   <p className="mt-0.5 text-xs text-muted">
-                    Actieve huisbezoeken met startdatum van{" "}
-                    {data.pipeline14d.fromYmd} t/m {data.pipeline14d.toYmd} —
-                    per week waarvoor ze gepland staan.
+                    Huisbezoeken geboekt{" "}
+                    {data.pipeline14d.geboektVanYmd} t/m{" "}
+                    {data.pipeline14d.fromYmd}, met bezoekdatum in de komende{" "}
+                    {data.pipeline14d.days} dagen (
+                    {data.pipeline14d.fromYmd} t/m {data.pipeline14d.toYmd}) —
+                    per kalenderweek van het bezoek.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-end gap-4 sm:gap-6">
                   <div className="text-right">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Geboekt laatste 14d
+                      Geboekt laatste {data.pipeline14d.bookedDays ?? 7}d
                     </p>
                     <p className="font-display text-2xl font-semibold tabular-nums text-ink">
                       {num(data.pipeline14d.geboektLaatsteDagen ?? 0)}
                     </p>
                     <p className="text-[11px] text-muted">
-                      voor komende 14d
+                      voor komende {data.pipeline14d.days}d
                     </p>
                   </div>
                   <div className="text-right">
@@ -983,7 +987,9 @@ export function BelDashboardPanel({
                     <p className="font-display text-2xl font-semibold tabular-nums text-ink">
                       {num(data.pipeline14d.total)}
                     </p>
-                    <p className="text-[11px] text-muted">komende 14d</p>
+                    <p className="text-[11px] text-muted">
+                      komende {data.pipeline14d.days}d
+                    </p>
                   </div>
                 </div>
               </header>
@@ -1003,7 +1009,8 @@ export function BelDashboardPanel({
                       {num(w.count)}
                     </p>
                     <p className="mt-0.5 text-[11px] text-muted">
-                      huisbezoeken · {w.startYmd} – {w.endYmd}
+                      geboekt laatste {data.pipeline14d?.bookedDays ?? 7}d ·{" "}
+                      {w.startYmd} – {w.endYmd}
                     </p>
                   </div>
                 ))}

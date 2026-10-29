@@ -14,9 +14,12 @@ import { AMSTERDAM_TZ, formatEuro } from "@/lib/format";
 import type {
   MarketingMetrics,
   MarketingMonthBucket,
+  MarketingSourceRow,
+  MarketingSourceSlice,
   MarketingWeekBucket,
 } from "@/lib/marketing-rapportage";
-import { normalizeCampaignKey } from "@/lib/marketing-rapportage";
+import { buildChannelsFromCampaigns } from "@/lib/marketing-rapportage";
+import { SourceBrandMark } from "./SourceBrandMark";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,
@@ -39,13 +42,17 @@ type MarketingData = {
   totals: MarketingMetrics;
   series: MarketingWeekBucket[];
   months: MarketingMonthBucket[];
+  sources?: MarketingSourceRow[];
+  bySource?: MarketingSourceSlice[];
   metaConfigured: boolean;
+  tiktokConfigured?: boolean;
   lastSyncAt: string | null;
   metaMissing?: string[];
   metaCampaigns?: string[];
 };
 
 type RangeMode = "weeks" | "month";
+type SourceFilter = "all" | string;
 
 function fmtRoas(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -114,16 +121,13 @@ function MetaMark({ className = "h-3.5 w-5" }: { className?: string }) {
   );
 }
 
-function isMetaCampaign(
-  label: string,
-  metaNormKeys: Set<string>
-): boolean {
-  if (!label || label === "Onbekend") return false;
-  if (metaNormKeys.size === 0) {
-    // Fallback: typische Meta-naam of spend-campagne zonder lijst
-    return /batterij|meta|facebook|campaign/i.test(label);
-  }
-  return metaNormKeys.has(normalizeCampaignKey(label));
+function ChannelLogos({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <SourceBrandMark source="Meta" className={className} />
+      <SourceBrandMark source="TikTok" className={className} />
+    </span>
+  );
 }
 
 function Kpi({
@@ -655,6 +659,16 @@ export function MarketingPanel({
   const [openWeeks, setOpenWeeks] = useState<Set<string>>(new Set());
   /** Week-key waarnaar is ingezoomd (dag-breakdown); null = weekoverzicht */
   const [drillWeekKey, setDrillWeekKey] = useState<string | null>(null);
+  /** Alles = totalen; anders filter op bron (zelfde KPI’s + grafiek). */
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  /** KPI-focus binnen geladen maandreeks (klik op staaf). */
+  const [focusMonthYm, setFocusMonthYm] = useState(today.slice(0, 7));
+  /** Uitgeklapte campagnes: `${weekKey}::${source}::${campaignKey}` */
+  const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(new Set());
+  /** Uitgeklapte channel-groepen: `${weekKey}::social|native|search` */
+  const [openChannels, setOpenChannels] = useState<Set<string>>(new Set());
+  /** Uitgeklapte platforms: `${weekKey}::${source}` */
+  const [openPlatforms, setOpenPlatforms] = useState<Set<string>>(new Set());
 
   const weekOptions = useMemo(() => {
     const base = agendaWeekJumpOptions(26, 2);
@@ -734,6 +748,7 @@ export function MarketingPanel({
         if (focusMonth?.monthKey) {
           setOpenMonths(new Set([focusMonth.monthKey]));
           setOpenWeeks(new Set());
+          setFocusMonthYm(focusMonth.monthKey);
         }
       } else {
         const focusMonth =
@@ -774,38 +789,94 @@ export function MarketingPanel({
     setOpenWeeks((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
+      else {
+        next.add(key);
+        // Bij openen week: Social/Native/Search + platforms direct uitklappen
+        const week =
+          data?.months
+            .flatMap((m) => m.weeks)
+            .find((w) => w.weekKey === key) ||
+          data?.series.find((w) => w.weekKey === key);
+        const channels =
+          week?.channels?.length
+            ? week.channels
+            : buildChannelsFromCampaigns(week?.campaigns || []);
+        setOpenChannels((chs) => {
+          const n = new Set(chs);
+          for (const ch of channels) {
+            n.add(channelRowKey(key, ch.key));
+          }
+          return n;
+        });
+        setOpenPlatforms((pls) => {
+          const n = new Set(pls);
+          for (const ch of channels) {
+            for (const pl of ch.platforms) {
+              n.add(platformRowKey(key, pl.key));
+            }
+          }
+          return n;
+        });
+      }
+      return next;
+    });
+  }
+
+  function toggleKey(setter: typeof setOpenCampaigns, key: string) {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
   }
 
-  const metaNormKeys = useMemo(() => {
-    const set = new Set<string>();
-    for (const name of data?.metaCampaigns || []) {
-      if (name.trim()) set.add(normalizeCampaignKey(name));
-    }
-    return set;
-  }, [data?.metaCampaigns]);
+  function channelRowKey(weekKey: string, channelKey: string): string {
+    return `${weekKey}::ch::${channelKey}`;
+  }
+  function platformRowKey(weekKey: string, source: string): string {
+    return `${weekKey}::pl::${source}`;
+  }
+  function campaignRowKey(
+    weekKey: string,
+    source: string,
+    campKey: string
+  ): string {
+    return `${weekKey}::camp::${source}::${campKey}`;
+  }
 
-  /** KPI’s: geselecteerde maand of totale weekreeks. */
+  const activeSlice = useMemo(() => {
+    if (!data || sourceFilter === "all") return null;
+    return (
+      data.bySource?.find((s) => s.source === sourceFilter) ?? null
+    );
+  }, [data, sourceFilter]);
+
+  const viewSeries = activeSlice?.series ?? data?.series ?? [];
+  const viewMonths = activeSlice?.months ?? data?.months ?? [];
+  const viewTotals = activeSlice?.totals ?? data?.totals ?? null;
+
+  /** KPI’s: geselecteerde maand of totale weekreeks (van actieve bron). */
   const t = useMemo(() => {
-    if (!data) return null;
+    if (!viewTotals) return null;
     if (mode === "month") {
-      const m = data.months.find((x) => x.monthKey === monthYm);
-      return m ?? data.totals;
+      const m =
+        viewMonths.find((x) => x.monthKey === focusMonthYm) ||
+        viewMonths.find((x) => x.monthKey === monthYm);
+      return m ?? viewTotals;
     }
-    return data.totals;
-  }, [data, mode, monthYm]);
+    return viewTotals;
+  }, [viewTotals, viewMonths, mode, monthYm, focusMonthYm]);
 
   const drillWeek = useMemo(() => {
-    if (!data || !drillWeekKey || mode !== "weeks") return null;
-    return data.series.find((w) => w.weekKey === drillWeekKey) ?? null;
-  }, [data, drillWeekKey, mode]);
+    if (!drillWeekKey || mode !== "weeks") return null;
+    return viewSeries.find((w) => w.weekKey === drillWeekKey) ?? null;
+  }, [viewSeries, drillWeekKey, mode]);
 
   const chartBuckets: ChartBucket[] = useMemo(() => {
     if (!data) return [];
     if (mode === "month") {
-      const months = [...data.months]
+      const months = [...viewMonths]
         .sort((a, b) => a.monthKey.localeCompare(b.monthKey))
         .map((m) => ({
           key: m.monthKey,
@@ -887,7 +958,7 @@ export function MarketingPanel({
     }
 
     // Weekview: afgelopen 12 weken, start bij eerste week mét data
-    const weeks = data.series.map((w) => ({
+    const weeks = viewSeries.map((w) => ({
       key: w.weekKey,
       label: w.label,
       shortLabel: w.weekKey.replace(/^\d{4}-/, "") || w.weekKey,
@@ -908,25 +979,37 @@ export function MarketingPanel({
       (w) => w.spend > 0 || w.leads > 0 || w.afspraken > 0 || w.deals > 0
     );
     return first > 0 ? weeks.slice(first) : weeks;
-  }, [data, mode, drillWeek]);
+  }, [data, mode, drillWeek, viewMonths, viewSeries]);
 
   const compareLabel = drillWeek
     ? "vorige dag"
     : mode === "month"
       ? "vorige maand"
       : "vorige week";
-  const chartTitle = drillWeek
-    ? drillWeek.label
-    : mode === "month"
-      ? "Per maand"
-      : "Per week";
+  const sourceTitle =
+    sourceFilter === "all" ? null : sourceFilter;
+  const chartTitle = [
+    drillWeek
+      ? drillWeek.label
+      : mode === "month"
+        ? "Per maand"
+        : "Per week",
+    sourceTitle,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const sourceTabs = useMemo(() => {
+    const rows = (data?.sources || []).filter((s) => s.source !== "Native");
+    return rows;
+  }, [data?.sources]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="flex items-center gap-2 font-display text-lg font-semibold text-ink">
-            <MetaMark className="h-4 w-6" />
+            <ChannelLogos className="h-4 w-4" />
             Marketing
           </p>
           {data?.periodLabel ? (
@@ -949,6 +1032,7 @@ export function MarketingPanel({
                     onClick={() => {
                       setMode(id);
                       setDrillWeekKey(null);
+                      if (id === "month") setFocusMonthYm(monthYm);
                     }}
                     className={[
                       "px-2.5 py-1.5 text-xs font-semibold transition",
@@ -967,9 +1051,12 @@ export function MarketingPanel({
                   <input
                     type="month"
                     value={monthYm}
-                    onChange={(e) =>
-                      setMonthYm(e.target.value || today.slice(0, 7))
-                    }
+                    onChange={(e) => {
+                      const next = e.target.value || today.slice(0, 7);
+                      setMonthYm(next);
+                      setFocusMonthYm(next);
+                      setDrillWeekKey(null);
+                    }}
                     className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
                   />
                 </label>
@@ -1024,6 +1111,9 @@ export function MarketingPanel({
 
       {!data?.metaConfigured ? (
         <p className="rounded-xl border border-line bg-wash px-4 py-3 text-xs text-muted">
+          <span className="mr-1.5 inline-flex align-middle">
+            <SourceBrandMark source="Meta" className="h-3.5 w-5" />
+          </span>
           Meta Ads niet geconfigureerd
           {data?.metaMissing?.length
             ? ` (${data.metaMissing.join(", ")})`
@@ -1036,6 +1126,67 @@ export function MarketingPanel({
         <p className="text-sm text-muted">Laden…</p>
       ) : data ? (
         <>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setSourceFilter("all");
+                setDrillWeekKey(null);
+              }}
+              className={[
+                "inline-flex min-h-9 items-center gap-1.5 border px-3 py-1.5 text-sm font-semibold transition",
+                sourceFilter === "all"
+                  ? "border-[#0a4727] bg-[#0a4727] text-white"
+                  : "border-line bg-white text-ink hover:bg-wash",
+              ].join(" ")}
+            >
+              Alles
+            </button>
+            {sourceTabs.map((row) => {
+              const active = sourceFilter === row.source;
+              return (
+                <button
+                  key={row.source}
+                  type="button"
+                  onClick={() => {
+                    setSourceFilter(row.source);
+                    setDrillWeekKey(null);
+                  }}
+                  className={[
+                    "inline-flex min-h-9 items-center gap-1.5 border px-3 py-1.5 text-sm font-semibold transition",
+                    active
+                      ? "border-[#0a4727] bg-[#0a4727] text-white"
+                      : "border-line bg-white text-ink hover:bg-wash",
+                  ].join(" ")}
+                >
+                  <SourceBrandMark
+                    source={row.source}
+                    className={
+                      active
+                        ? "h-3.5 w-3.5 brightness-0 invert"
+                        : "h-3.5 w-3.5"
+                    }
+                  />
+                  {row.source}
+                  <span
+                    className={[
+                      "tabular-nums text-[11px] font-medium",
+                      active ? "text-white/80" : "text-muted",
+                    ].join(" ")}
+                  >
+                    {num(row.leads)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {sourceFilter === "TikTok" && !data.tiktokConfigured ? (
+            <p className="text-xs text-muted">
+              TikTok-leads tellen al mee; spend-sync volgt zodra de API live
+              is.
+            </p>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-10">
             <Kpi label="Spend" value={formatEuro(t?.spend ?? 0)} />
             <Kpi label="Leads" value={num(t?.leads)} />
@@ -1074,7 +1225,14 @@ export function MarketingPanel({
                   </button>
                 ) : null}
                 <p className="flex items-center gap-2 font-display text-sm font-semibold text-ink">
-                  <MetaMark className="h-3.5 w-5" />
+                  {sourceFilter !== "all" ? (
+                    <SourceBrandMark
+                      source={sourceFilter}
+                      className="h-3.5 w-3.5"
+                    />
+                  ) : (
+                    <ChannelLogos className="h-3.5 w-3.5" />
+                  )}
                   {chartTitle}
                 </p>
               </div>
@@ -1114,12 +1272,24 @@ export function MarketingPanel({
                 onBucketClick={
                   mode === "weeks" && !drillWeek
                     ? (bk) => setDrillWeekKey(bk.key)
-                    : undefined
+                    : mode === "month"
+                      ? (bk) => {
+                          setFocusMonthYm(bk.key);
+                          setDrillWeekKey(null);
+                        }
+                      : undefined
                 }
               />
               {mode === "weeks" && !drillWeek ? (
                 <p className="px-3 pb-1 text-center text-[10px] text-muted">
                   Klik op een week voor de dagen
+                </p>
+              ) : mode === "month" ? (
+                <p className="px-3 pb-1 text-center text-[10px] text-muted">
+                  Klik op een maand voor de KPI&apos;s van die maand
+                  {focusMonthYm
+                    ? ` · nu ${focusMonthYm}`
+                    : ""}
                 </p>
               ) : null}
             </div>
@@ -1128,8 +1298,12 @@ export function MarketingPanel({
           <section className="overflow-hidden rounded-2xl border border-line bg-white">
             <header className="border-b border-line px-4 py-3.5 sm:px-5">
               <p className="flex items-center gap-1.5 font-display text-base font-semibold text-ink">
-                <MetaMark className="h-3.5 w-5" />
+                <ChannelLogos className="h-3.5 w-3.5" />
                 Campagnes
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Maand → week → Social / Native / Search → platform → campagne →
+                ad
               </p>
             </header>
             <div className="overflow-x-auto p-3 sm:p-4">
@@ -1184,6 +1358,12 @@ export function MarketingPanel({
                                 const wOpen = openWeeks.has(wk.weekKey);
                                 const weekSelected =
                                   mode === "weeks" && wk.weekKey === weekKey;
+                                const channels =
+                                  wk.channels?.length
+                                    ? wk.channels
+                                    : buildChannelsFromCampaigns(
+                                        wk.campaigns || []
+                                      );
                                 return (
                                   <Fragment key={wk.weekKey}>
                                     <tr
@@ -1212,47 +1392,227 @@ export function MarketingPanel({
                                       />
                                     </tr>
                                     {wOpen
-                                      ? wk.campaigns.length === 0
-                                        ? (
-                                            <tr>
-                                              <td
-                                                className={`${sheetCell} pl-10 text-left text-muted`}
-                                                colSpan={11}
-                                              >
-                                                Geen campagnes
-                                              </td>
-                                            </tr>
-                                          )
-                                        : wk.campaigns.map((c) => {
-                                            const meta =
-                                              isMetaCampaign(
-                                                c.label,
-                                                metaNormKeys
-                                              ) || c.spend > 0;
-                                            return (
+                                      ? channels.map((ch) => {
+                                          const chKey = channelRowKey(
+                                            wk.weekKey,
+                                            ch.key
+                                          );
+                                          const chOpen = openChannels.has(chKey);
+                                          const hasPlatforms =
+                                            ch.platforms.length > 0;
+                                          return (
+                                            <Fragment
+                                              key={`${wk.weekKey}-${ch.key}`}
+                                            >
                                               <tr
-                                                key={`${wk.weekKey}-${c.key}`}
-                                                className="hover:bg-[#FAFBFA]"
+                                                className={
+                                                  hasPlatforms
+                                                    ? "cursor-pointer hover:bg-[#FAFBFA]"
+                                                    : ""
+                                                }
+                                                onClick={
+                                                  hasPlatforms
+                                                    ? () =>
+                                                        toggleKey(
+                                                          setOpenChannels,
+                                                          chKey
+                                                        )
+                                                    : undefined
+                                                }
                                               >
                                                 <td
-                                                  className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-10 text-left font-medium`}
+                                                  className={`${sheetCell} sticky left-0 z-[1] bg-[#F7F9F8] pl-9 text-left font-semibold`}
                                                 >
-                                                  <span className="flex items-center gap-1.5">
-                                                    {meta ? (
-                                                      <MetaMark className="h-3 w-[18px] shrink-0" />
-                                                    ) : null}
-                                                    <span
-                                                      className="truncate"
-                                                      title={c.label}
-                                                    >
-                                                      {c.label}
+                                                  <span className="inline-flex items-center gap-1.5">
+                                                    <span className="w-3 text-muted">
+                                                      {hasPlatforms
+                                                        ? chOpen
+                                                          ? "▾"
+                                                          : "▸"
+                                                        : "·"}
                                                     </span>
+                                                    {ch.label}
                                                   </span>
                                                 </td>
-                                                <MetricsCells m={c} />
+                                                <MetricsCells m={ch} />
                                               </tr>
-                                            );
-                                          })
+                                              {chOpen
+                                                ? ch.platforms.map((pl) => {
+                                                    const plKey =
+                                                      platformRowKey(
+                                                        wk.weekKey,
+                                                        pl.key
+                                                      );
+                                                    const plOpen =
+                                                      openPlatforms.has(plKey);
+                                                    const hasCamps =
+                                                      pl.campaigns.length > 0;
+                                                    return (
+                                                      <Fragment
+                                                        key={`${wk.weekKey}-${pl.key}`}
+                                                      >
+                                                        <tr
+                                                          className={
+                                                            hasCamps
+                                                              ? "cursor-pointer hover:bg-[#FAFBFA]"
+                                                              : ""
+                                                          }
+                                                          onClick={
+                                                            hasCamps
+                                                              ? () =>
+                                                                  toggleKey(
+                                                                    setOpenPlatforms,
+                                                                    plKey
+                                                                  )
+                                                              : undefined
+                                                          }
+                                                        >
+                                                          <td
+                                                            className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-12 text-left font-medium`}
+                                                          >
+                                                            <span className="flex items-center gap-1.5">
+                                                              <span className="w-3 shrink-0 text-muted">
+                                                                {hasCamps
+                                                                  ? plOpen
+                                                                    ? "▾"
+                                                                    : "▸"
+                                                                  : "·"}
+                                                              </span>
+                                                              <SourceBrandMark
+                                                                source={pl.key}
+                                                                className="h-3.5 w-3.5 shrink-0"
+                                                              />
+                                                              <span className="truncate">
+                                                                {pl.label}
+                                                              </span>
+                                                            </span>
+                                                          </td>
+                                                          <MetricsCells m={pl} />
+                                                        </tr>
+                                                        {plOpen
+                                                          ? [...pl.campaigns]
+                                                              .sort(
+                                                                (a, b) =>
+                                                                  b.spend -
+                                                                    a.spend ||
+                                                                  b.leads -
+                                                                    a.leads
+                                                              )
+                                                              .map((c) => {
+                                                                const ads = [
+                                                                  ...(c.ads ||
+                                                                    []),
+                                                                ].sort(
+                                                                  (a, b) =>
+                                                                    b.spend -
+                                                                      a.spend ||
+                                                                    b.leads -
+                                                                      a.leads
+                                                                );
+                                                                const hasAds =
+                                                                  ads.length >
+                                                                  0;
+                                                                const cKey =
+                                                                  campaignRowKey(
+                                                                    wk.weekKey,
+                                                                    c.source ||
+                                                                      pl.key,
+                                                                    c.key
+                                                                  );
+                                                                const cOpen =
+                                                                  openCampaigns.has(
+                                                                    cKey
+                                                                  );
+                                                                return (
+                                                                  <Fragment
+                                                                    key={cKey}
+                                                                  >
+                                                                    <tr
+                                                                      className={
+                                                                        hasAds
+                                                                          ? "cursor-pointer hover:bg-[#FAFBFA]"
+                                                                          : "hover:bg-[#FAFBFA]"
+                                                                      }
+                                                                      onClick={
+                                                                        hasAds
+                                                                          ? () =>
+                                                                              toggleKey(
+                                                                                setOpenCampaigns,
+                                                                                cKey
+                                                                              )
+                                                                          : undefined
+                                                                      }
+                                                                    >
+                                                                      <td
+                                                                        className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-16 text-left font-medium`}
+                                                                      >
+                                                                        <span className="flex items-center gap-1.5">
+                                                                          <span className="w-3 shrink-0 text-muted">
+                                                                            {hasAds
+                                                                              ? cOpen
+                                                                                ? "▾"
+                                                                                : "▸"
+                                                                              : ""}
+                                                                          </span>
+                                                                          <span
+                                                                            className="truncate"
+                                                                            title={
+                                                                              c.label
+                                                                            }
+                                                                          >
+                                                                            {
+                                                                              c.label
+                                                                            }
+                                                                          </span>
+                                                                        </span>
+                                                                      </td>
+                                                                      <MetricsCells
+                                                                        m={c}
+                                                                      />
+                                                                    </tr>
+                                                                    {cOpen
+                                                                      ? ads.map(
+                                                                          (
+                                                                            ad
+                                                                          ) => (
+                                                                            <tr
+                                                                              key={`${cKey}-${ad.key}`}
+                                                                              className="hover:bg-[#FAFBFA]"
+                                                                            >
+                                                                              <td
+                                                                                className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-20 text-left font-normal text-ink`}
+                                                                              >
+                                                                                <span
+                                                                                  className="truncate"
+                                                                                  title={
+                                                                                    ad.label
+                                                                                  }
+                                                                                >
+                                                                                  {
+                                                                                    ad.label
+                                                                                  }
+                                                                                </span>
+                                                                              </td>
+                                                                              <MetricsCells
+                                                                                m={
+                                                                                  ad
+                                                                                }
+                                                                              />
+                                                                            </tr>
+                                                                          )
+                                                                        )
+                                                                      : null}
+                                                                  </Fragment>
+                                                                );
+                                                              })
+                                                          : null}
+                                                      </Fragment>
+                                                    );
+                                                  })
+                                                : null}
+                                            </Fragment>
+                                          );
+                                        })
                                       : null}
                                   </Fragment>
                                 );
@@ -1267,12 +1627,15 @@ export function MarketingPanel({
             </div>
           </section>
 
-          {data.lastSyncAt ? (
-            <p className="text-[11px] text-muted">
-              Laatste Meta-sync:{" "}
-              {new Date(data.lastSyncAt).toLocaleString("nl-NL")}
-            </p>
-          ) : null}
+          <p className="text-[11px] text-muted">
+            {data.lastSyncAt
+              ? `Laatste Meta-sync: ${new Date(data.lastSyncAt).toLocaleString("nl-NL")}`
+              : "Meta-spend sync actief"}
+            {" · "}
+            {data.tiktokConfigured
+              ? "TikTok-spend gekoppeld"
+              : "TikTok: leads tellen mee · spend-API volgt"}
+          </p>
         </>
       ) : null}
     </div>

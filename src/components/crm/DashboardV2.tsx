@@ -30,6 +30,7 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import { KpiDetailOverlay } from "./DashboardV2KpiDetail";
+import { SourceBrandMark } from "./SourceBrandMark";
 
 const PERIODS: DashboardV2Period[] = [
   "last_7_days",
@@ -985,7 +986,15 @@ function BySourceSection({
                 key={r.key}
                 className="border-b border-line/70 last:border-0 hover:bg-wash/50"
               >
-                <td className="px-4 py-2.5 font-medium text-ink">{r.label}</td>
+                <td className="px-4 py-2.5 font-medium text-ink">
+                  <span className="inline-flex items-center gap-2">
+                    <SourceBrandMark
+                      source={r.label}
+                      className="h-4 w-4 shrink-0"
+                    />
+                    {r.label}
+                  </span>
+                </td>
                 <td className="px-3 py-2.5 tabular-nums text-ink">
                   {num(r.leads)}
                 </td>

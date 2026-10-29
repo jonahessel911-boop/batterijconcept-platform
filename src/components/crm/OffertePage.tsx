@@ -8,7 +8,6 @@ import type {
   Offerte,
   OfferteRegel,
   Project,
-  ProjectFoto,
 } from "@/types/database";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import {
@@ -29,6 +28,10 @@ import {
   BackofficeActieForm,
   type BackofficeActieFormValues,
 } from "./BackofficeActieForm";
+import {
+  EMPTY_ENERGIE_FORM,
+  validateBackofficeDoorzettenForm,
+} from "@/lib/energie-contract";
 import { StatusBadge } from "./StatusBadge";
 import {
   Breadcrumb,
@@ -61,12 +64,10 @@ export function OffertePage() {
   const [aanbetalingHandmatig, setAanbetalingHandmatig] = useState("");
   const [backofficeNotitie, setBackofficeNotitie] = useState("");
   const [installateurNotitie, setInstallateurNotitie] = useState("");
+  const [energieForm, setEnergieForm] = useState(EMPTY_ENERGIE_FORM);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
   const [actieSaving, setActieSaving] = useState(false);
   const [actieMsg, setActieMsg] = useState<string | null>(null);
-  const [projectFotos, setProjectFotos] = useState<ProjectFoto[]>([]);
-  const [uploadingFoto, setUploadingFoto] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const openBackofficeFromUrl = searchParams.get("backoffice") === "1";
 
   const load = useCallback(async () => {
@@ -196,33 +197,28 @@ export function OffertePage() {
     };
   }, [offerte, facturen.length, loading, load]);
 
-  useEffect(() => {
-    const projectId = projecten[0]?.id;
-    if (!projectId) {
-      setProjectFotos([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/projecten/${projectId}/fotos`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        setProjectFotos(data.fotos || []);
-      } catch {
-        if (!cancelled) setProjectFotos([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projecten]);
-
   async function saveBackofficeActie(markComplete: boolean) {
     if (!offerte) return;
     setActieSaving(true);
     setActieMsg(null);
     try {
+      let energiePayload: Record<string, unknown> = {};
+      if (markComplete) {
+        const energie = validateBackofficeDoorzettenForm({
+          ...energieForm,
+          backofficeNotitie,
+          installateurNotitie,
+          aanbetalingModus,
+          aanbetalingHandmatig,
+        });
+        if (!energie.ok) {
+          setActieMsg(energie.error);
+          setActieSaving(false);
+          return;
+        }
+        energiePayload = energie.data;
+      }
+
       const isWarmtefonds = Boolean(offerte.financiering_voorbehoud);
       const eigenModus =
         aanbetalingModus === "handmatig"
@@ -257,6 +253,7 @@ export function OffertePage() {
           installateur_notitie_door: installateurNotitie.trim()
             ? sessionNaam || offerte.installateur_notitie_door || null
             : null,
+          ...energiePayload,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -268,43 +265,6 @@ export function OffertePage() {
       setActieMsg(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
       setActieSaving(false);
-    }
-  }
-
-  async function uploadInstallateurFotos(files: FileList | File[]) {
-    const projectId = projecten[0]?.id;
-    const list = Array.from(files);
-    if (!projectId || list.length === 0) return;
-    setUploadingFoto(true);
-    setActieMsg(null);
-    setUploadProgress(null);
-    try {
-      const uploaded: ProjectFoto[] = [];
-      for (let i = 0; i < list.length; i++) {
-        const file = list[i];
-        setUploadProgress(`Uploaden ${i + 1}/${list.length}: ${file.name}`);
-        const form = new FormData();
-        form.append("file", file);
-        form.append("omschrijving", "Installateur-notitie");
-        const res = await fetch(`/api/projecten/${projectId}/fotos`, {
-          method: "POST",
-          body: form,
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Foto upload mislukt");
-        uploaded.push(data.foto as ProjectFoto);
-      }
-      setProjectFotos((prev) => [...prev, ...uploaded]);
-      setActieMsg(
-        uploaded.length === 1
-          ? "1 foto geüpload."
-          : `${uploaded.length} foto's geüpload.`
-      );
-    } catch (e) {
-      setActieMsg(e instanceof Error ? e.message : "Upload mislukt");
-    } finally {
-      setUploadingFoto(false);
-      setUploadProgress(null);
     }
   }
 
@@ -599,7 +559,6 @@ export function OffertePage() {
             <div className="mt-4">
               <BackofficeActieForm
                 compact
-                showFotoHint={projecten.length === 0}
                 subtotaalExBtw={Number(offerte.subtotaal_ex_btw) || 0}
                 btwBedrag={Number(offerte.btw_bedrag) || 0}
                 totaalIncBtw={Number(offerte.totaal_inc_btw) || 0}
@@ -620,6 +579,7 @@ export function OffertePage() {
                   aanbetalingHandmatig,
                   backofficeNotitie,
                   installateurNotitie,
+                  ...energieForm,
                 }}
                 onChange={(patch: Partial<BackofficeActieFormValues>) => {
                   if (patch.aanbetalingModus != null) {
@@ -634,64 +594,31 @@ export function OffertePage() {
                   if (patch.installateurNotitie != null) {
                     setInstallateurNotitie(patch.installateurNotitie);
                   }
+                  setEnergieForm((prev) => ({
+                    ...prev,
+                    ...(patch.elektraVerbruikKwh != null
+                      ? { elektraVerbruikKwh: patch.elektraVerbruikKwh }
+                      : {}),
+                    ...(patch.gasVerbruikM3 != null
+                      ? { gasVerbruikM3: patch.gasVerbruikM3 }
+                      : {}),
+                    ...(patch.terugleveringKwh != null
+                      ? { terugleveringKwh: patch.terugleveringKwh }
+                      : {}),
+                    ...(patch.energieContractType != null
+                      ? { energieContractType: patch.energieContractType }
+                      : {}),
+                    ...(patch.energieContractEinddatum != null
+                      ? {
+                          energieContractEinddatum:
+                            patch.energieContractEinddatum,
+                        }
+                      : {}),
+                  }));
                 }}
                 disabled={actieSaving}
               />
             </div>
-            {projecten.length > 0 && (
-              <div className="mt-3">
-                <label className="inline-flex cursor-pointer items-center border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash">
-                  {uploadingFoto ? "Uploaden…" : "Foto's uploaden"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    disabled={uploadingFoto}
-                    onChange={(e) => {
-                      const files = e.target.files;
-                      if (files && files.length > 0)
-                        void uploadInstallateurFotos(files);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                {uploadProgress && (
-                  <p className="mt-1 text-xs text-muted">{uploadProgress}</p>
-                )}
-                {projectFotos.length > 0 && (
-                  <>
-                    <p className="mt-2 text-xs text-muted">
-                      {projectFotos.length} foto&apos;s gekoppeld aan project.
-                    </p>
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {projectFotos.map((foto) => (
-                        <a
-                          key={foto.id}
-                          href={foto.url || "#"}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="group relative block overflow-hidden border border-line bg-wash"
-                        >
-                          {foto.url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={foto.url}
-                              alt={foto.bestandsnaam || "Project foto"}
-                              className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
-                            />
-                          ) : (
-                            <div className="flex h-24 items-center justify-center text-xs text-muted">
-                              Geen preview
-                            </div>
-                          )}
-                        </a>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
             {actieMsg && <p className="mt-3 text-sm text-muted">{actieMsg}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
               <button

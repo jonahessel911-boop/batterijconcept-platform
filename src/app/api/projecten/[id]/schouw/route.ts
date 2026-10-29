@@ -288,6 +288,30 @@ export async function POST(
       );
     }
 
+    // Kickoff compleet (WF) → in één response naar afwachten WF, geen UI-flash op Opstarten
+    if (!exacteDag) {
+      const { kickoffCompletionPatch } = await import("@/lib/project-kickoff");
+      const { data: facRows } = await sb
+        .from("facturen")
+        .select("status, omschrijving, credit_van_factuur_id")
+        .eq("project_id", id);
+      const kp = kickoffCompletionPatch(
+        updated as import("@/types/database").Project,
+        (facRows || []) as import("@/types/database").Factuur[]
+      );
+      if (kp) {
+        const { data: finalized } = await sb
+          .from("projecten")
+          .update(kp)
+          .eq("id", id)
+          .select(
+            "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
+          )
+          .single();
+        if (finalized) updated = finalized;
+      }
+    }
+
     const leadRaw = Array.isArray(updated.leads)
       ? updated.leads[0]
       : updated.leads;

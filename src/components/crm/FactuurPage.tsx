@@ -21,6 +21,10 @@ import {
   isFactuurWfLaterBetaald,
   resolveFactuurSoort,
 } from "@/lib/factuur-soort";
+import {
+  parseFactuurRegels,
+  stripFactuurRegelsBlock,
+} from "@/lib/factuur-regels";
 import { StatusBadge } from "./StatusBadge";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 
@@ -638,13 +642,37 @@ export function FactuurPage() {
   const klantNaam = lead?.naam || factuur.leads?.naam || "Klant";
   const klantEmail = lead?.email || factuur.leads?.email || null;
   const adresLines = klantAdres(lead);
-  const regelOmschrijving =
-    factuur.omschrijving ||
-    (isCredit
-      ? `Creditfactuur${
-          creditVan?.factuur_nummer ? ` bij ${creditVan.factuur_nummer}` : ""
-        }`
-      : "Factuur");
+  const parsedRegels = parseFactuurRegels(factuur.notities);
+  const factuurRegels =
+    parsedRegels.length > 0
+      ? parsedRegels.map((r) => {
+          const ex = r.bedrag_ex_btw;
+          const pct = r.btw_percentage ?? 21;
+          const btw = Math.round(ex * (pct / 100) * 100) / 100;
+          return {
+            omschrijving: r.omschrijving,
+            ex,
+            btw,
+            inc: Math.round((ex + btw) * 100) / 100,
+          };
+        })
+      : [
+          {
+            omschrijving:
+              factuur.omschrijving ||
+              (isCredit
+                ? `Creditfactuur${
+                    creditVan?.factuur_nummer
+                      ? ` bij ${creditVan.factuur_nummer}`
+                      : ""
+                  }`
+                : "Factuur"),
+            ex: displayEx,
+            btw: displayBtw,
+            inc: displayInc,
+          },
+        ];
+  const notitiesKlant = stripFactuurRegelsBlock(factuur.notities);
   const isAanbetaling = isAanbetalingFactuurOmschrijving(factuur.omschrijving);
   const canSendWfHerinnering =
     !isCredit &&
@@ -878,31 +906,35 @@ export function FactuurPage() {
                 </tr>
               </thead>
               <tbody>
-                <tr className="border-b border-line">
-                  <td className="py-4 pr-4 align-top">
-                    <p className="font-medium text-ink">{regelOmschrijving}</p>
-                    {isCredit && creditVan?.factuur_nummer ? (
-                      <p className="mt-1 text-xs text-muted">
-                        Bij factuur{" "}
-                        <Link
-                          href={`/facturen/${creditVan.id}`}
-                          className="text-green-deeper hover:underline"
-                        >
-                          {creditVan.factuur_nummer}
-                        </Link>
+                {factuurRegels.map((regel, idx) => (
+                  <tr key={`${regel.omschrijving}-${idx}`} className="border-b border-line">
+                    <td className="max-w-0 py-4 pr-4 align-top">
+                      <p className="break-words font-medium text-ink whitespace-pre-wrap">
+                        {regel.omschrijving}
                       </p>
-                    ) : null}
-                  </td>
-                  <td className="py-4 pr-4 text-right tabular-nums text-ink">
-                    {formatEuro(displayEx)}
-                  </td>
-                  <td className="py-4 pr-4 text-right tabular-nums text-ink">
-                    {formatEuro(displayBtw)}
-                  </td>
-                  <td className="py-4 text-right tabular-nums font-medium text-ink">
-                    {formatEuro(displayInc)}
-                  </td>
-                </tr>
+                      {idx === 0 && isCredit && creditVan?.factuur_nummer ? (
+                        <p className="mt-1 text-xs text-muted">
+                          Bij factuur{" "}
+                          <Link
+                            href={`/facturen/${creditVan.id}`}
+                            className="text-green-deeper hover:underline"
+                          >
+                            {creditVan.factuur_nummer}
+                          </Link>
+                        </p>
+                      ) : null}
+                    </td>
+                    <td className="py-4 pr-4 text-right tabular-nums text-ink">
+                      {formatEuro(regel.ex)}
+                    </td>
+                    <td className="py-4 pr-4 text-right tabular-nums text-ink">
+                      {formatEuro(regel.btw)}
+                    </td>
+                    <td className="py-4 text-right tabular-nums font-medium text-ink">
+                      {formatEuro(regel.inc)}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -943,9 +975,9 @@ export function FactuurPage() {
               </span>
               .
             </p>
-            {factuur.notities ? (
+            {notitiesKlant ? (
               <p className="mt-3 whitespace-pre-wrap text-sm text-muted">
-                {factuur.notities}
+                {notitiesKlant}
               </p>
             ) : null}
             <p className="mt-4 text-xs text-muted">

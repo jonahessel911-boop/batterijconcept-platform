@@ -15,6 +15,10 @@ import {
 } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { afspraakBlokkeertAgenda, isAfgeboekteFysiekeAfspraak, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
+import {
+  KNOWN_MARKETING_SOURCES,
+  normalizeLeadSource,
+} from "@/lib/lead-conversie";
 import { deltaPct, inIsoRange, round2, safeDiv } from "@/lib/management-dashboard/periods";
 import { commissiePctToFraction } from "@/lib/netto-boord";
 import {
@@ -427,16 +431,18 @@ function leadStatusMap(
 
 /**
  * Traffic source voor rapportage.
- * Native/Meta/etc.: expliciete bron ≠ website, anders utm_source, anders lander.
+ * Native/Meta/TikTok: via normalizeLeadSource (bron → utm_source).
+ * Lander alleen als er geen bron/utm is (legacy).
  */
 export function leadSourceLabel(l: DashboardV2LeadRow): string {
-  const bron = (l.bron || "").trim();
-  const utm = (l.utm_source || "").trim();
+  const fromUtm = normalizeLeadSource({
+    bron: l.bron,
+    utm_source: l.utm_source,
+    lander: l.lander,
+  });
+  if (fromUtm !== "Onbekend") return fromUtm;
   const lander = (l.lander || "").trim();
-  if (bron && bron.toLowerCase() !== "website") return bron;
-  if (utm) return utm;
   if (lander) return lander;
-  if (bron) return bron;
   return "Onbekend";
 }
 
@@ -573,6 +579,13 @@ export function buildBySource(
     acc.omzet += Number(o.subtotaal_ex_btw) || 0;
   }
 
+  for (const s of KNOWN_MARKETING_SOURCES) touch(s);
+
+  const knownRank = (source: string): number => {
+    const i = (KNOWN_MARKETING_SOURCES as readonly string[]).indexOf(source);
+    return i >= 0 ? i : 100;
+  };
+
   const rows: DashboardV2SourceRow[] = [...by.entries()].map(([key, a]) => {
     const l2a = safeDiv(a.afsprakenL2a, a.leads);
     const a2s = safeDiv(a.orders, a.afsprakenVoltooid);
@@ -590,7 +603,12 @@ export function buildBySource(
     };
   });
 
-  rows.sort((a, b) => b.leads - a.leads || a.label.localeCompare(b.label, "nl"));
+  rows.sort((a, b) => {
+    const ra = knownRank(a.key);
+    const rb = knownRank(b.key);
+    if (ra !== rb) return ra - rb;
+    return b.leads - a.leads || a.label.localeCompare(b.label, "nl");
+  });
   return rows;
 }
 

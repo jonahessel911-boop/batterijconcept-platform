@@ -315,6 +315,7 @@ export async function GET(req: NextRequest) {
     const pipeline14d = buildBelIngeplandPipeline({
       afspraken: afsprakenPipeline,
       days: 14,
+      bookedDays: 7,
       bellerId: bellerFilter,
     });
 
