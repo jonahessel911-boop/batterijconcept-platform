@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import type { PartnerCreditFactuur, Project } from "@/types/database";
-import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import { formatDateShort, formatEuro } from "@/lib/format";
 import { Planbord } from "@/components/crm/Planbord";
-import { PartnerAgendaPanel } from "@/components/crm/PartnerAgendaPanel";
 import { PartnerTeamgenotenPanel } from "@/components/installatie/PartnerTeamgenotenPanel";
 
 type OrderRow = Project & {
@@ -13,7 +12,6 @@ type OrderRow = Project & {
 };
 
 type PortalTab = "agenda" | "facturen" | "team";
-type AgendaView = "planbord" | "afblokken";
 
 type FactuurRow = Pick<
   PartnerCreditFactuur,
@@ -34,11 +32,31 @@ type FactuurRow = Pick<
   | "goedgekeurd_op"
 >;
 
+const NAV: { id: PortalTab; label: string }[] = [
+  { id: "agenda", label: "Agenda" },
+  { id: "team", label: "Team" },
+  { id: "facturen", label: "Facturen" },
+];
+
+function factuurStatusLabel(f: FactuurRow): {
+  label: string;
+  tone: "ok" | "wait" | "muted";
+} {
+  if (f.status === "betaald") return { label: "Betaald", tone: "ok" };
+  if (f.status === "goedgekeurd") return { label: "Goedgekeurd", tone: "ok" };
+  if (f.status === "verzonden") return { label: "Te goedkeuren", tone: "wait" };
+  if (f.status === "concept") return { label: "Concept", tone: "muted" };
+  return { label: f.status, tone: "muted" };
+}
+
 export function InstallatieOrdersPage() {
   const { token } = useParams<{ token: string }>();
 
-  const [tab, setTab] = useState<PortalTab>("agenda");
-  const [agendaView, setAgendaView] = useState<AgendaView>("planbord");
+  const [tab, setTab] = useState<PortalTab>(() => {
+    if (typeof window === "undefined") return "agenda";
+    const q = new URLSearchParams(window.location.search).get("tab");
+    return q === "team" || q === "facturen" || q === "agenda" ? q : "agenda";
+  });
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [partnerNaam, setPartnerNaam] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -48,18 +66,6 @@ export function InstallatieOrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
   const [approveBusy, setApproveBusy] = useState<string | null>(null);
-  const [calCopied, setCalCopied] = useState(false);
-
-  function copyCalendarUrl() {
-    const url = `${window.location.origin}/api/installatie/${token}/calendar`;
-    void navigator.clipboard.writeText(url).then(
-      () => {
-        setCalCopied(true);
-        window.setTimeout(() => setCalCopied(false), 2500);
-      },
-      () => setError("Kopiëren mislukt")
-    );
-  }
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -107,9 +113,7 @@ export function InstallatieOrdersPage() {
     setPdfBusy(id);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/installatie/${token}/facturen/${id}/pdf`
-      );
+      const res = await fetch(`/api/installatie/${token}/facturen/${id}/pdf`);
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(
@@ -149,265 +153,174 @@ export function InstallatieOrdersPage() {
   }
 
   return (
-    <div className="min-h-screen bg-wash">
-      <header className="border-b border-line bg-green-dark px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-6xl">
-          <p className="font-display text-lg font-bold text-white">
-            Batterij<span className="text-orange">concept</span>
-          </p>
-          <h1 className="mt-2 font-display text-xl font-semibold text-white sm:text-2xl">
-            Installatieportaal
-          </h1>
-          {partnerNaam && (
-            <p className="mt-1 text-sm text-white/70">{partnerNaam}</p>
-          )}
+    <div className="min-h-screen bg-[#F7F9F7]">
+      <header className="border-b border-line bg-white">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-end justify-between gap-4 px-4 pt-5 sm:px-6 sm:pt-6">
+          <div className="min-w-0 pb-4">
+            <p className="font-display text-[13px] font-semibold tracking-[0.04em] text-green-deeper">
+              Batterij<span className="text-orange">concept</span>
+            </p>
+            <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-[1.75rem]">
+              {partnerNaam || "Installatieportaal"}
+            </h1>
+          </div>
+          <nav
+            className="flex w-full gap-1 sm:w-auto sm:gap-0"
+            aria-label="Hoofdnavigatie"
+          >
+            {NAV.map((item) => {
+              const active = tab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={[
+                    "relative flex-1 px-4 pb-3.5 pt-1 text-sm font-semibold transition sm:flex-none sm:px-5",
+                    active
+                      ? "text-green-deeper"
+                      : "text-muted hover:text-ink",
+                  ].join(" ")}
+                >
+                  {item.label}
+                  <span
+                    className={[
+                      "absolute inset-x-3 bottom-0 h-[2px] transition",
+                      active ? "bg-green-deeper" : "bg-transparent",
+                    ].join(" ")}
+                    aria-hidden
+                  />
+                </button>
+              );
+            })}
+          </nav>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mb-5 flex flex-wrap border border-line bg-white p-0.5">
-          {(
-            [
-              ["agenda", "Agenda"],
-              ["team", "Teamgenoten"],
-              ["facturen", "Facturen"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setTab(id)}
-              className={[
-                "flex-1 px-4 py-2.5 text-sm font-semibold",
-                tab === id
-                  ? "bg-green text-white"
-                  : "bg-white text-muted hover:bg-wash",
-              ].join(" ")}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {tab === "agenda" && (
-          <div className="mb-4 space-y-3">
-            <div className="flex border border-line bg-white p-0.5">
-              <button
-                type="button"
-                onClick={() => setAgendaView("planbord")}
-                className={[
-                  "flex-1 px-3 py-2 text-sm font-semibold",
-                  agendaView === "planbord"
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                Planbord
-              </button>
-              <button
-                type="button"
-                onClick={() => setAgendaView("afblokken")}
-                className={[
-                  "flex-1 px-3 py-2 text-sm font-semibold",
-                  agendaView === "afblokken"
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                Afblokken
-              </button>
-            </div>
-            {agendaView === "planbord" ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink">
-                    Google Calendar (backup-feed)
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted">
-                    Voor directe sync koppelt Batterijconcept je Google-account
-                    via Partners in het CRM. Deze URL is een backup (kan
-                    vertraagd vernieuwen).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={copyCalendarUrl}
-                  className="shrink-0 border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
-                >
-                  {calCopied ? "Gekopieerd" : "Kopieer agenda-URL"}
-                </button>
-              </div>
-            ) : (
-              <p className="border border-line bg-white px-4 py-3 text-sm text-muted">
-                Blokkeer ochtend (09–12) of middag (13–17) als je niet kunt.
-                Tussen 12–13 is altijd pauze/reistijd. Schouw = 30 minuten.
-              </p>
-            )}
-          </div>
-        )}
-
-        {error && (
-          <p className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
+        {error ? (
+          <p className="mb-5 border border-[#C45A12]/25 bg-[#FFF7F0] px-4 py-3 text-sm text-[#9A3412]">
             {error}
           </p>
-        )}
+        ) : null}
 
         {tab === "team" ? (
           <PartnerTeamgenotenPanel portalToken={token} />
         ) : tab === "agenda" ? (
           loading ? (
-            <p className="py-16 text-center text-sm text-muted">
+            <p className="py-20 text-center text-sm text-muted">
               Agenda laden…
             </p>
-          ) : agendaView === "afblokken" ? (
-            partnerId ? (
-              <div className="border border-line bg-white">
-                <PartnerAgendaPanel
-                  mode="portal"
-                  portalToken={token}
-                  initialPartnerId={partnerId}
-                  partnerNaam={partnerNaam}
-                  projects={orders}
-                />
-              </div>
-            ) : (
-              <p className="py-16 text-center text-sm text-muted">
-                Partner niet geladen.
-              </p>
-            )
           ) : (
             <Planbord
               projecten={orders}
               variant="portal"
               portalToken={token}
-              title="Jouw agenda"
+              title="Agenda"
+              afblokPartnerId={partnerId}
               projectHref={(id) => `/installatie/${token}/orders/${id}`}
             />
           )
         ) : facturenLoading ? (
-          <p className="py-16 text-center text-sm text-muted">
+          <p className="py-20 text-center text-sm text-muted">
             Facturen laden…
           </p>
         ) : facturen.length === 0 ? (
-          <div className="border border-line bg-white px-5 py-14 text-center">
-            <p className="font-display text-base font-semibold text-ink">
+          <div className="border border-line bg-white px-6 py-16 text-center">
+            <p className="font-display text-lg font-semibold text-ink">
               Nog geen facturen
             </p>
-            <p className="mt-1 text-sm text-muted">
-              Creditfacturen die Batterijconcept voor je aanmaakt verschijnen
-              hier.
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">
+              Selfbilling-facturen die Batterijconcept voor je aanmaakt
+              verschijnen hier ter goedkeuring.
             </p>
           </div>
         ) : (
-          <div className="border border-line bg-white">
-            <div className="border-b border-line px-4 py-3 sm:px-5">
-              <h2 className="font-display text-lg font-semibold text-ink">
-                Creditfacturen
-              </h2>
-              <p className="mt-0.5 text-sm text-muted">
-                Selfbilling · controleer en keur goed · {facturen.length}{" "}
-                factuur{facturen.length === 1 ? "" : "en"}
-              </p>
+          <section className="border border-line bg-white">
+            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-ink">
+                  Facturen
+                </h2>
+                <p className="mt-0.5 text-sm text-muted">
+                  Selfbilling · {facturen.length} factuur
+                  {facturen.length === 1 ? "" : "en"}
+                </p>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="crm-table w-full">
-                <thead>
-                  <tr>
-                    <th>Nummer</th>
-                    <th>Datum</th>
-                    <th>Omschrijving</th>
-                    <th className="text-right">Bedrag</th>
-                    <th>Status</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {facturen.map((f) => (
-                    <tr key={f.id}>
-                      <td className="font-medium text-ink">
-                        {f.factuur_nummer}
-                      </td>
-                      <td className="text-muted">
-                        {formatDateShort(f.factuurdatum)}
-                      </td>
-                      <td className="max-w-[220px] truncate text-muted">
-                        {[
-                          f.omschrijving ||
-                            (f.week_nummer != null
-                              ? `Week ${f.week_nummer}`
-                              : null),
-                          f.offerte_nummer
-                            ? `Offerte ${f.offerte_nummer}`
-                            : null,
-                          f.project_nummer
-                            ? `Project ${f.project_nummer}`
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "—"}
-                      </td>
-                      <td className="text-right tabular-nums font-medium">
+            <ul className="divide-y divide-line">
+              {facturen.map((f) => {
+                const st = factuurStatusLabel(f);
+                const omschrijving =
+                  [
+                    f.omschrijving ||
+                      (f.week_nummer != null
+                        ? `Week ${f.week_nummer}`
+                        : null),
+                    f.project_nummer ? f.project_nummer : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "—";
+                return (
+                  <li
+                    key={f.id}
+                    className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <p className="font-semibold tabular-nums text-ink">
+                          {f.factuur_nummer}
+                        </p>
+                        <span
+                          className={[
+                            "text-xs font-semibold",
+                            st.tone === "ok"
+                              ? "text-green-dark"
+                              : st.tone === "wait"
+                                ? "text-[#C45A12]"
+                                : "text-muted",
+                          ].join(" ")}
+                        >
+                          {st.label}
+                          {f.goedgekeurd_op
+                            ? ` · ${formatDateShort(f.goedgekeurd_op)}`
+                            : ""}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-sm text-muted">
+                        {formatDateShort(f.factuurdatum)} · {omschrijving}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                      <p className="text-base font-semibold tabular-nums text-ink">
                         {formatEuro(f.bedrag_inc_btw)}
-                      </td>
-                      <td>
-                        {(f.status === "goedgekeurd" ||
-                          f.status === "betaald") &&
-                        f.goedgekeurd_op ? (
-                          <span className="inline-flex items-center gap-1 text-sm text-green-dark">
-                            <span aria-hidden className="text-xs">
-                              ✓
-                            </span>
-                            {f.status === "betaald"
-                              ? "Betaald"
-                              : "Goedgekeurd"}
-                            <span className="text-xs text-muted">
-                              {formatDateShort(f.goedgekeurd_op)}
-                            </span>
-                          </span>
-                        ) : (
-                          <span className="text-sm text-muted">
-                            {f.status === "verzonden"
-                              ? "Te goedkeuren"
-                              : f.status}
-                          </span>
-                        )}
-                      </td>
-                      <td className="text-right">
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <button
-                            type="button"
-                            disabled={pdfBusy === f.id}
-                            onClick={() =>
-                              void downloadPdf(f.id, f.factuur_nummer)
-                            }
-                            className="text-xs font-semibold text-green-dark hover:underline disabled:opacity-60"
-                          >
-                            {pdfBusy === f.id ? "…" : "PDF"}
-                          </button>
-                          {f.status === "verzonden" && (
-                            <button
-                              type="button"
-                              disabled={approveBusy === f.id}
-                              onClick={() => void goedkeuren(f.id)}
-                              className="bg-green px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-                            >
-                              {approveBusy === f.id ? "…" : "Goedkeuren"}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                      </p>
+                      <button
+                        type="button"
+                        disabled={pdfBusy === f.id}
+                        onClick={() => void downloadPdf(f.id, f.factuur_nummer)}
+                        className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                      >
+                        {pdfBusy === f.id ? "…" : "PDF"}
+                      </button>
+                      {f.status === "verzonden" ? (
+                        <button
+                          type="button"
+                          disabled={approveBusy === f.id}
+                          onClick={() => void goedkeuren(f.id)}
+                          className="bg-green-deeper px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+                        >
+                          {approveBusy === f.id ? "…" : "Goedkeuren"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         )}
       </main>
-
-      <footer className="mx-auto w-full max-w-6xl px-4 pb-8 text-center text-xs text-muted sm:px-6">
-        Batterijconcept · {formatDateTimeNl(new Date())}
-      </footer>
     </div>
   );
 }

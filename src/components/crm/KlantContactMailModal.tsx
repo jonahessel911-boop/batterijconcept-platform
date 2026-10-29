@@ -10,6 +10,10 @@ import {
   type ContactMailTemplateId,
 } from "@/lib/contact-mail-templates";
 import { annuleringskostenIncBtw } from "@/lib/av-annulering";
+import {
+  bedenktijdVanOndertekening,
+  ondertekendOpVanProject,
+} from "@/lib/bedenktijd";
 
 function firstName(naam: string | null | undefined): string {
   const t = naam?.trim() || "";
@@ -38,11 +42,14 @@ export function KlantContactMailModal({
   project,
   onClose,
   onSent,
+  initialTemplate = null,
 }: {
   project: Project;
   onClose: () => void;
   /** Na succesvol versturen (tijdlijn verversen). */
   onSent?: () => void;
+  /** Direct dit sjabloon laden (bv. vanuit bedenktijd-actie). */
+  initialTemplate?: ContactMailTemplateId | null;
 }) {
   const { session } = useCrmSession();
   const lead = project.leads || null;
@@ -56,14 +63,37 @@ export function KlantContactMailModal({
   const [offerteNummer, setOfferteNummer] = useState<string | null>(
     offFromProject.offerteNummer
   );
+  const [ondertekendOp, setOndertekendOp] = useState<string | null>(
+    ondertekendOpVanProject(project)
+  );
+  const bedenktijd = useMemo(
+    () => bedenktijdVanOndertekening(ondertekendOp),
+    [ondertekendOp]
+  );
   const [activeTemplate, setActiveTemplate] =
-    useState<ContactMailTemplateId | null>(null);
+    useState<ContactMailTemplateId | null>(initialTemplate ?? null);
+
+  const initialBuilt =
+    initialTemplate === "annulering_of_installatie"
+      ? contactMailAnnuleringOfInstallatie({
+          orderTotaalIncBtw: offFromProject.totaalIncBtw,
+          projectNummer: project.project_nummer,
+          offerteNummer: offFromProject.offerteNummer,
+          bedenktijdEindLabel: bedenktijdVanOndertekening(
+            ondertekendOpVanProject(project)
+          )?.eindLabel,
+          bedenktijdStartLabel: bedenktijdVanOndertekening(
+            ondertekendOpVanProject(project)
+          )?.startLabel,
+        })
+      : null;
 
   const [to, setTo] = useState(lead?.email?.trim() || "");
   const [subject, setSubject] = useState(
-    `Bericht over jouw project ${project.project_nummer || ""}`.trim()
+    initialBuilt?.subject ||
+      `Bericht over jouw project ${project.project_nummer || ""}`.trim()
   );
-  const [bericht, setBericht] = useState("");
+  const [bericht, setBericht] = useState(initialBuilt?.bericht || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -75,10 +105,13 @@ export function KlantContactMailModal({
   useEffect(() => {
     setOrderTotaal(offFromProject.totaalIncBtw);
     setOfferteNummer(offFromProject.offerteNummer);
-  }, [offFromProject]);
+    setOndertekendOp(ondertekendOpVanProject(project));
+  }, [offFromProject, project]);
 
   useEffect(() => {
-    if (offFromProject.totaalIncBtw != null) return;
+    const needsOrder = offFromProject.totaalIncBtw == null;
+    const needsSign = !ondertekendOpVanProject(project);
+    if (!needsOrder && !needsSign) return;
     if (!project.offerte_id && !project.id) return;
     let cancelled = false;
     void (async () => {
@@ -92,6 +125,8 @@ export function KlantContactMailModal({
           setOrderTotaal(off.totaalIncBtw);
           setOfferteNummer(off.offerteNummer);
         }
+        const signed = ondertekendOpVanProject(p);
+        if (signed) setOndertekendOp(signed);
       } catch {
         /* ignore */
       }
@@ -99,7 +134,7 @@ export function KlantContactMailModal({
     return () => {
       cancelled = true;
     };
-  }, [project.id, project.offerte_id, offFromProject.totaalIncBtw]);
+  }, [project.id, project.offerte_id, offFromProject.totaalIncBtw, project]);
 
   function applyTemplate(id: ContactMailTemplateId) {
     setActiveTemplate(id);
@@ -108,20 +143,23 @@ export function KlantContactMailModal({
         orderTotaalIncBtw: orderTotaal,
         projectNummer: project.project_nummer,
         offerteNummer,
+        bedenktijdEindLabel: bedenktijd?.eindLabel,
+        bedenktijdStartLabel: bedenktijd?.startLabel,
       });
       setSubject(built.subject);
       setBericht(built.bericht);
     }
   }
 
-  // Herbouw als orderbedrag later binnenkomt en template actief is
+  // Herbouw als orderbedrag / bedenktijd later binnenkomt en template actief is
   useEffect(() => {
     if (activeTemplate !== "annulering_of_installatie") return;
-    if (orderTotaal == null) return;
     const built = contactMailAnnuleringOfInstallatie({
       orderTotaalIncBtw: orderTotaal,
       projectNummer: project.project_nummer,
       offerteNummer,
+      bedenktijdEindLabel: bedenktijd?.eindLabel,
+      bedenktijdStartLabel: bedenktijd?.startLabel,
     });
     setSubject(built.subject);
     setBericht(built.bericht);
@@ -130,6 +168,8 @@ export function KlantContactMailModal({
     orderTotaal,
     offerteNummer,
     project.project_nummer,
+    bedenktijd?.eindLabel,
+    bedenktijd?.startLabel,
   ]);
 
   async function verstuur() {

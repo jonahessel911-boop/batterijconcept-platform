@@ -11,9 +11,11 @@ import {
   type BelConversieLead,
 } from "@/lib/bel-conversie";
 import {
+  buildBelIngeplandPipeline,
   buildBelRapportage,
   defaultBelRange,
 } from "@/lib/bel-rapportage";
+import { addDays } from "date-fns";
 import {
   conversieMonthRangeContaining,
   conversieWeekRangeContaining,
@@ -95,69 +97,150 @@ export async function GET(req: NextRequest) {
     const padStart = new Date(start.getTime() - 12 * 3600 * 1000).toISOString();
     const padEnd = new Date(end.getTime() + 12 * 3600 * 1000).toISOString();
 
-    const [leadsRows, afsprakenDag, adviseursRes] = await Promise.all([
-      fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
-        sb
-          .from("leads")
-          .select(
-            "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
-          )
-          .gte("laatst_gebeld_at", padStart)
-          .lte("laatst_gebeld_at", padEnd)
-          .order("laatst_gebeld_at", { ascending: true })
-          .range(fromIdx, toIdx)
-      ).catch(async () => {
-        // Fallback zonder optionele kolommen
-        return fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
+    // Komende 14 dagen (vandaag t/m +13) voor pipeline per week
+    const [ty, tm, td] = today.split("-").map(Number);
+    const pipelineToDate = addDays(new Date(ty, tm - 1, td, 12, 0, 0), 13);
+    const pipelineTo = [
+      pipelineToDate.getFullYear(),
+      String(pipelineToDate.getMonth() + 1).padStart(2, "0"),
+      String(pipelineToDate.getDate()).padStart(2, "0"),
+    ].join("-");
+    const { start: pipelineStart } = amsDayBounds(today);
+    const { end: pipelineEnd } = amsDayBounds(pipelineTo);
+    const pipelinePadStart = new Date(
+      pipelineStart.getTime() - 12 * 3600 * 1000
+    ).toISOString();
+    const pipelinePadEnd = new Date(
+      pipelineEnd.getTime() + 12 * 3600 * 1000
+    ).toISOString();
+
+    const leadsSelectFull =
+      "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id";
+    const leadsSelectBasic =
+      "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id";
+
+    async function loadGebeldLeads(): Promise<BelConversieLead[]> {
+      try {
+        return await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
           sb
             .from("leads")
-            .select(
-              "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id"
-            )
+            .select(leadsSelectFull)
             .gte("laatst_gebeld_at", padStart)
             .lte("laatst_gebeld_at", padEnd)
-            .order("laatst_gebeld_at", { ascending: true })
+            .order("id", { ascending: true })
             .range(fromIdx, toIdx)
-        ).then((rows) =>
-          rows.map((l) => ({
-            ...l,
-            laatst_gebeld_door: null,
-            utm_source: null,
-            lander: null,
-            campaign_name: null,
-            ad_name: null,
-          }))
         );
-      }),
-      fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
-        sb
-          .from("afspraken")
-          .select(
-            "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
-          )
-          .gte("created_at", padStart)
-          .lte("created_at", padEnd)
-          .order("created_at", { ascending: true })
-          .range(fromIdx, toIdx)
-      ).catch(async () =>
-        fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = (e as { code?: string })?.code;
+        const missingCol =
+          msg.includes("laatst_gebeld_door") ||
+          msg.includes("lander") ||
+          msg.includes("campaign_name") ||
+          msg.includes("ad_name") ||
+          msg.includes("utm_source") ||
+          code === "42703";
+        if (!missingCol) throw e;
+        const rows = await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
+          sb
+            .from("leads")
+            .select(leadsSelectBasic)
+            .gte("laatst_gebeld_at", padStart)
+            .lte("laatst_gebeld_at", padEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+        return rows.map((l) => ({
+          ...l,
+          laatst_gebeld_door: null,
+          utm_source: null,
+          lander: null,
+          campaign_name: null,
+          ad_name: null,
+        }));
+      }
+    }
+
+    async function loadAfsprakenCreated(
+      rangeStart: string,
+      rangeEnd: string
+    ): Promise<BelConversieAfspraak[]> {
+      try {
+        return await fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select(
+              "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+            )
+            .gte("created_at", rangeStart)
+            .lte("created_at", rangeEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = (e as { code?: string })?.code;
+        if (!msg.includes("ingepland_door_id") && code !== "42703") throw e;
+        return fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
           sb
             .from("afspraken")
             .select(
               "id, lead_id, created_at, start_at, status, soort, adviseur_id"
             )
-            .gte("created_at", padStart)
-            .lte("created_at", padEnd)
-            .order("created_at", { ascending: true })
+            .gte("created_at", rangeStart)
+            .lte("created_at", rangeEnd)
+            .order("id", { ascending: true })
             .range(fromIdx, toIdx)
-        )
-      ),
-      sb
-        .from("adviseurs")
-        .select("id, naam, rol, actief, email")
-        .eq("actief", true)
-        .order("naam"),
-    ]);
+        );
+      }
+    }
+
+    async function loadPipelineAfspraken(): Promise<BelConversieAfspraak[]> {
+      try {
+        return await fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select(
+              "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+            )
+            .eq("soort", "nieuw")
+            .neq("status", "geannuleerd")
+            .gte("start_at", pipelinePadStart)
+            .lte("start_at", pipelinePadEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = (e as { code?: string })?.code;
+        if (!msg.includes("ingepland_door_id") && code !== "42703") throw e;
+        return fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select(
+              "id, lead_id, created_at, start_at, status, soort, adviseur_id"
+            )
+            .eq("soort", "nieuw")
+            .neq("status", "geannuleerd")
+            .gte("start_at", pipelinePadStart)
+            .lte("start_at", pipelinePadEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      }
+    }
+
+    const [leadsRows, afsprakenDag, afsprakenPipeline, adviseursRes] =
+      await Promise.all([
+        loadGebeldLeads(),
+        loadAfsprakenCreated(padStart, padEnd),
+        loadPipelineAfspraken(),
+        sb
+          .from("adviseurs")
+          .select("id, naam, rol, actief, email")
+          .eq("actief", true)
+          .order("naam"),
+      ]);
 
     if (adviseursRes.error) throw adviseursRes.error;
 
@@ -229,9 +312,16 @@ export async function GET(req: NextRequest) {
       bellerId: bellerFilter,
     });
 
+    const pipeline14d = buildBelIngeplandPipeline({
+      afspraken: afsprakenPipeline,
+      days: 14,
+      bellerId: bellerFilter,
+    });
+
     return NextResponse.json({
       ok: true,
       ...result,
+      pipeline14d,
       lockBeller: lockToSelf,
       bellerId: bellerFilter,
     });

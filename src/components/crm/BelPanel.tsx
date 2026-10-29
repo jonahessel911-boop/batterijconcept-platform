@@ -222,6 +222,8 @@ export function BelPanel({
   const [terugbelAt, setTerugbelAt] = useState("");
   const [terugbelNotitie, setTerugbelNotitie] = useState("");
   const [terugbelWarm, setTerugbelWarm] = useState(false);
+  /** Apart van huisbezoek-adviseur — terugbel default = beller/jezelf, niet lead.adviseur. */
+  const [terugbelAssigneeId, setTerugbelAssigneeId] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   /** Contact/adres bewerken (postcode, huisnr, e-mail, …). */
@@ -277,13 +279,26 @@ export function BelPanel({
     return groups.filter((g) => g.items.length > 0);
   }, [terugbelMedewerkers]);
 
-  function pickTerugbelAssignee(preferred?: string | null): string {
-    if (preferred && terugbelMedewerkers.some((a) => a.id === preferred)) {
-      return preferred;
-    }
-    if (defaultAdviseurId && terugbelMedewerkers.some((a) => a.id === defaultAdviseurId)) {
-      return defaultAdviseurId;
-    }
+  /**
+   * Terugbel-default: ingelogde beller (jezelf), anders Sharath/eerste beller.
+   * Nooit de sales-adviseur van de lead (die staat in `adviseurId` voor huisbezoek).
+   */
+  function pickTerugbelAssignee(): string {
+    const self = defaultAdviseurId
+      ? terugbelMedewerkers.find((a) => a.id === defaultAdviseurId)
+      : undefined;
+    if (self && normalizeRol(self.rol) === "beller") return self.id;
+
+    const bellers = terugbelMedewerkers.filter(
+      (a) => normalizeRol(a.rol) === "beller"
+    );
+    const sharath = bellers.find((a) =>
+      a.naam.toLowerCase().includes("sharath")
+    );
+    if (sharath) return sharath.id;
+    if (bellers[0]) return bellers[0].id;
+
+    if (self) return self.id;
     return terugbelMedewerkers[0]?.id || "";
   }
 
@@ -570,6 +585,7 @@ export function BelPanel({
     setAndereOffertes(null);
     setTerugbelAt("");
     setTerugbelNotitie(current.terugbel_notitie || "");
+    setTerugbelAssigneeId("");
     setNoteDraft("");
     setSavingNote(false);
     setEditingGegevens(false);
@@ -934,9 +950,10 @@ export function BelPanel({
     setError(null);
     try {
       if (!terugbelAt) throw new Error("Kies datum en tijd");
-      const planAdviseurId = pickTerugbelAssignee(
-        lockAdviseur && defaultAdviseurId ? defaultAdviseurId : adviseurId
-      );
+      const planAdviseurId =
+        lockAdviseur && defaultAdviseurId
+          ? defaultAdviseurId
+          : terugbelAssigneeId || pickTerugbelAssignee();
       if (!planAdviseurId) throw new Error("Kies een medewerker");
       const note = terugbelNotitie.trim();
       if (!note) throw new Error("Vul een notitie in");
@@ -1559,7 +1576,7 @@ export function BelPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  setAdviseurId(pickTerugbelAssignee(adviseurId));
+                  setTerugbelAssigneeId(pickTerugbelAssignee());
                   setNextMode("terugbel");
                   setTerugbelWarm(false);
                   setError(null);
@@ -1574,7 +1591,7 @@ export function BelPanel({
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  setAdviseurId(pickTerugbelAssignee(adviseurId));
+                  setTerugbelAssigneeId(pickTerugbelAssignee());
                   setNextMode("terugbel");
                   setTerugbelWarm(true);
                   setError(null);
@@ -1654,8 +1671,8 @@ export function BelPanel({
                 Toewijzen aan
                 <select
                   required
-                  value={adviseurId}
-                  onChange={(e) => setAdviseurId(e.target.value)}
+                  value={terugbelAssigneeId}
+                  onChange={(e) => setTerugbelAssigneeId(e.target.value)}
                   className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
                 >
                   <option value="">Kies medewerker…</option>
@@ -1696,7 +1713,12 @@ export function BelPanel({
               </label>
               <button
                 type="submit"
-                disabled={busy || !adviseurId || !terugbelAt || !terugbelNotitie.trim()}
+                disabled={
+                  busy ||
+                  !terugbelAssigneeId ||
+                  !terugbelAt ||
+                  !terugbelNotitie.trim()
+                }
                 className="flex min-h-12 w-full items-center justify-center bg-[#C45A12] px-4 text-sm font-semibold text-white hover:bg-[#a84a0e] disabled:opacity-60"
               >
                 {busy

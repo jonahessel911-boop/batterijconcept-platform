@@ -363,6 +363,44 @@ export function aanbetalingVanOrder(opts: {
   };
 }
 
+/**
+ * Geen aanbetalingsfactuur / geen opstart-aanbetaling-taak.
+ * Bron: expliciet `te_innen = 0` (na Actie afronden), of berekend bedrag ≤ 0
+ * (handmatig €0).
+ */
+export function heeftGeenAanbetalingNodig(opts: {
+  aanbetalingTeInnenInc?: number | null;
+  aanbetalingModus?: AanbetalingModus | string | null;
+  aanbetalingBedragInc?: number | null;
+  subtotaalExBtw?: number | null;
+  btwBedrag?: number | null;
+  totaalIncBtw?: number | null;
+  financieringVoorbehoud?: boolean | null;
+}): boolean {
+  if (
+    opts.aanbetalingTeInnenInc != null &&
+    Number.isFinite(Number(opts.aanbetalingTeInnenInc))
+  ) {
+    return Number(opts.aanbetalingTeInnenInc) <= 0;
+  }
+  if (
+    opts.subtotaalExBtw == null &&
+    opts.totaalIncBtw == null &&
+    opts.aanbetalingBedragInc == null
+  ) {
+    return false;
+  }
+  const a = aanbetalingVanOrder({
+    subtotaalExBtw: Number(opts.subtotaalExBtw) || 0,
+    btwBedrag: opts.btwBedrag ?? undefined,
+    totaalIncBtw: opts.totaalIncBtw ?? undefined,
+    modus: opts.aanbetalingModus,
+    handmatigIncBtw: opts.aanbetalingBedragInc,
+    financieringVoorbehoud: opts.financieringVoorbehoud,
+  });
+  return a.bedragIncBtw <= 0;
+}
+
 export function factuurIsBetaald(status: string, betaaldOp?: string | null): boolean {
   if (status === "betaald") return true;
   return Boolean(betaaldOp);

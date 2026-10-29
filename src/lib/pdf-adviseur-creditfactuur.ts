@@ -1,5 +1,6 @@
 import {
   buildRelatieFactuurPdf,
+  cleanRelatieFactuurNotities,
   type RelatieFactuurIssuer,
   type RelatieFactuurRegel,
 } from "@/lib/pdf-relatie-factuur";
@@ -32,29 +33,31 @@ type Input = {
   regels: Regel[];
 };
 
-function escapeRe(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function isRestCommissie(
+  factuurNummer: string,
+  notities: string | null,
+  omschrijving?: string | null
+): boolean {
+  const blob = [factuurNummer, notities, omschrijving].filter(Boolean).join(" ");
+  return /RESTBETALING|tranche_b|rest-commissie|rest commissie|ref_offerte_tranche_b/i.test(
+    blob
+  );
 }
 
-function stripRef(
-  text: string,
-  label: "Offerte" | "Project",
-  value: string | null | undefined
-): string {
-  if (!value) return text;
-  const re1 = new RegExp(`\\s*·\\s*${label}\\s+${escapeRe(value)}`, "i");
-  const re2 = new RegExp(`${label}\\s+${escapeRe(value)}\\s*·\\s*`, "i");
-  return text.replace(re1, "").replace(re2, "");
-}
-
-function defaultCommissieOmschrijving(notities: string | null): string {
-  const n = notities || "";
-  const pctMatch = n.match(/(\d+(?:[.,]\d+)?)\s*%/);
-  const pctLabel = pctMatch ? pctMatch[1].replace(".", ",") : "10";
-  if (/tranche_b|rest-commissie|rest commissie|ref_offerte_tranche_b/i.test(n)) {
-    return `Commissie restant (${pctLabel}% omzet excl. btw − €250)`;
-  }
-  return "Commissie 1e deel (€250 excl. btw bij aanbetaling)";
+function commissieTitel(opts: {
+  factuurNummer: string;
+  notities: string | null;
+  omschrijving?: string | null;
+  leadNaam?: string | null;
+}): string {
+  const rest = isRestCommissie(
+    opts.factuurNummer,
+    opts.notities,
+    opts.omschrijving
+  );
+  const base = rest ? "Commissie restant" : "Commissie aanbetaling";
+  const klant = opts.leadNaam?.trim();
+  return klant ? `${base} · ${klant}` : base;
 }
 
 export async function buildAdviseurCreditfactuurPdf(
@@ -62,33 +65,23 @@ export async function buildAdviseurCreditfactuurPdf(
 ): Promise<Blob> {
   const regels: RelatieFactuurRegel[] =
     input.regels.length > 0
-      ? input.regels.map((r) => {
-          let base =
-            r.omschrijving?.trim() ||
-            [
-              "Commissie aanbetaling",
-              r.lead_naam,
-              r.klant_factuur_nummer
-                ? `klantfactuur ${r.klant_factuur_nummer}`
-                : null,
-              r.betaald_op ? `betaald ${r.betaald_op}` : null,
-            ]
-              .filter(Boolean)
-              .join(" · ");
-          base = stripRef(base, "Offerte", r.offerte_nummer);
-          base = stripRef(base, "Project", r.project_nummer);
-          return {
-            omschrijving:
-              base.replace(/^·\s*|·\s*$/g, "").trim() ||
-              "Commissie aanbetaling",
-            bedrag: r.fee,
-            offerte_nummer: r.offerte_nummer,
-            project_nummer: r.project_nummer,
-          };
-        })
+      ? input.regels.map((r) => ({
+          omschrijving: commissieTitel({
+            factuurNummer: input.factuur.factuur_nummer,
+            notities: input.factuur.notities,
+            omschrijving: r.omschrijving,
+            leadNaam: r.lead_naam,
+          }),
+          bedrag: r.fee,
+          offerte_nummer: r.offerte_nummer,
+          project_nummer: r.project_nummer,
+        }))
       : [
           {
-            omschrijving: defaultCommissieOmschrijving(input.factuur.notities),
+            omschrijving: commissieTitel({
+              factuurNummer: input.factuur.factuur_nummer,
+              notities: input.factuur.notities,
+            }),
             bedrag: input.factuur.bedrag_ex_btw,
           },
         ];
@@ -100,7 +93,7 @@ export async function buildAdviseurCreditfactuurPdf(
       bedrag_ex_btw: input.factuur.bedrag_ex_btw,
       bedrag_inc_btw: input.factuur.bedrag_inc_btw,
       btw_bedrag: input.factuur.btw_bedrag,
-      notities: input.factuur.notities,
+      notities: cleanRelatieFactuurNotities(input.factuur.notities),
       week_jaar: input.factuur.week_jaar,
       week_nummer: input.factuur.week_nummer,
       periode_van: input.factuur.periode_van,

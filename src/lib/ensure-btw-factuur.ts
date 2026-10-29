@@ -32,7 +32,9 @@ async function productLabelVoorOfferte(
 }
 
 /**
- * Maakt een concept-aanbetalingsfactuur bij een ondertekende Warmtefonds-offerte.
+ * Maakt/werkt een concept-aanbetalingsfactuur bij.
+ * Alleen aanroepen ná doorzetten naar backoffice (“Actie afronden”),
+ * met de definitieve aanbetaling — niet bij ondertekenen.
  * Wordt NIET automatisch naar de klant gestuurd.
  */
 export async function ensureBtwDraftFactuur(

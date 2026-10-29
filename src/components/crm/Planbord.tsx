@@ -23,6 +23,7 @@ import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import type {
   InstallatiePartner,
+  InstallatiePartnerTeamgenoot,
   Project,
   ServiceVerzoek,
 } from "@/types/database";
@@ -33,7 +34,10 @@ import {
   formatDateTimeNl,
   formatTimeNl,
 } from "@/lib/format";
-import { projectStatusLabel, normalizeProjectStatus } from "@/lib/labels";
+import {
+  normalizeProjectStatus,
+  resolveProjectStatusLabel,
+} from "@/lib/labels";
 import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import {
   isOpleveringsrapport,
@@ -50,6 +54,7 @@ import {
 } from "@/lib/planning-duur";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
 import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
+import { PartnerSlotPicker } from "@/components/crm/PartnerSlotPicker";
 import { SchouwFormulierModal } from "@/components/crm/SchouwFormulierModal";
 import {
   agendaWeekJumpOptions,
@@ -59,6 +64,11 @@ import {
   schouwWeekToMondayIso,
   schouwWeekValue,
 } from "@/lib/schouw-week";
+import {
+  PARTNER_VENSTERS,
+  partnerAfblokKey,
+  type PartnerVenster,
+} from "@/lib/partner-slots";
 
 type PlanSoort = "schouwweek" | "schouwdag" | "installatie" | "service";
 type AgendaView = "week" | "dag" | "maand" | "lijst";
@@ -494,15 +504,8 @@ function formatTimeRangeNl(
   return `${start}–${formatTimeNl(endAtFromStart(at, duurMinuten))}`;
 }
 
-/** Maand-chip hoogte ~ evenredig aan duur (schouw 30m klein, installatie 4u groot). */
-function monthChipHeightPx(duurMinuten: number): number {
-  const minH = 44;
-  const maxH = 132;
-  if (duurMinuten <= 0) return minH;
-  // 30 min → minH, 240 min → maxH
-  const t = (Math.min(Math.max(duurMinuten, 30), 240) - 30) / 210;
-  return Math.round(minH + t * (maxH - minH));
-}
+/** Max chips per maand-cel (rest via “+N meer”). */
+const MONTH_CHIPS_VISIBLE = 5;
 
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 20;
@@ -623,7 +626,13 @@ function PlanInplannenPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [soort, setSoort] = useState<PlanSoort>("schouwdag");
   const [partnerId, setPartnerId] = useState("");
+  const [teamgenootId, setTeamgenootId] = useState("");
+  const [teamgenoten, setTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
+  const [teamgenotenLoading, setTeamgenotenLoading] = useState(false);
   const [datetimeLocal, setDatetimeLocal] = useState("");
+  const [slotIso, setSlotIso] = useState<string | null>(null);
   const [schouwWeek, setSchouwWeek] = useState("");
   const [notities, setNotities] = useState("");
   const [busy, setBusy] = useState(false);
@@ -636,7 +645,9 @@ function PlanInplannenPanel({
     setSelectedId(null);
     setSoort("schouwdag");
     setPartnerId(defaultPartnerId || "");
+    setTeamgenootId("");
     setDatetimeLocal(defaultDatetimeForDay(dayKey, 9));
+    setSlotIso(null);
     const w = schouwWeekFromDate(dayKey + "T12:00:00");
     setSchouwWeek(schouwWeekValue(w.jaar, w.week));
     setNotities("");
@@ -662,7 +673,48 @@ function PlanInplannenPanel({
     if (!partnerId && selected.installatie_partner_id) {
       setPartnerId(selected.installatie_partner_id);
     }
-  }, [selected, partnerId]);
+    if (
+      selected.installatie_partner_id &&
+      selected.installatie_partner_id === partnerId &&
+      !teamgenootId &&
+      selected.installatie_teamgenoot_id
+    ) {
+      setTeamgenootId(selected.installatie_teamgenoot_id);
+    }
+  }, [selected, partnerId, teamgenootId]);
+
+  useEffect(() => {
+    if (!partnerId) {
+      setTeamgenoten([]);
+      setTeamgenootId("");
+      return;
+    }
+    let cancelled = false;
+    setTeamgenotenLoading(true);
+    void fetch(
+      `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerId)}`
+    )
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setTeamgenoten([]);
+          return;
+        }
+        setTeamgenoten(
+          (data.teamgenoten as InstallatiePartnerTeamgenoot[]) || []
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setTeamgenoten([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTeamgenotenLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [partnerId]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -680,13 +732,17 @@ function PlanInplannenPanel({
       if (soort === "schouwweek" || soort === "schouwdag") {
         const payload: Record<string, unknown> = {
           installatie_partner_id: partnerId,
+          installatie_teamgenoot_id: teamgenootId || null,
           schouw_notities: notities.trim() || null,
         };
         if (soort === "schouwdag") {
-          if (!datetimeLocal.trim()) throw new Error("Kies schouwdatum + tijd");
-          const parsed = new Date(datetimeLocal);
-          if (Number.isNaN(parsed.getTime())) {
-            throw new Error("Ongeldige schouwdatum");
+          const parsed = slotIso
+            ? new Date(slotIso)
+            : datetimeLocal.trim()
+              ? new Date(datetimeLocal)
+              : null;
+          if (!parsed || Number.isNaN(parsed.getTime())) {
+            throw new Error("Kies een open schouw-slot");
           }
           payload.schouw_at = parsed.toISOString();
           const derived = schouwWeekFromDate(parsed);
@@ -718,19 +774,18 @@ function PlanInplannenPanel({
         return;
       }
 
-      if (!datetimeLocal.trim()) {
+      const parsed = slotIso
+        ? new Date(slotIso)
+        : datetimeLocal.trim()
+          ? new Date(datetimeLocal)
+          : null;
+      if (!parsed || Number.isNaN(parsed.getTime())) {
         throw new Error(
           soort === "service"
             ? "Kies servicedatum + tijd"
-            : "Kies installatiedatum + tijd"
-        );
-      }
-      const parsed = new Date(datetimeLocal);
-      if (Number.isNaN(parsed.getTime())) {
-        throw new Error(
-          soort === "service"
-            ? "Ongeldige servicedatum"
-            : "Ongeldige installatiedatum"
+            : soort === "installatie"
+              ? "Kies een open installatie-slot"
+              : "Kies een open schouw-slot"
         );
       }
       if (soort === "service") {
@@ -768,6 +823,7 @@ function PlanInplannenPanel({
         body: JSON.stringify({
           installatie_at: parsed.toISOString(),
           installatie_partner_id: partnerId,
+          installatie_teamgenoot_id: teamgenootId || null,
           installatie_notities: notities.trim() || null,
         }),
       });
@@ -923,6 +979,55 @@ function PlanInplannenPanel({
                 </p>
               </fieldset>
 
+              <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                Installatiepartner *
+                <select
+                  value={partnerId}
+                  onChange={(e) => {
+                    setPartnerId(e.target.value);
+                    setTeamgenootId("");
+                    setDatetimeLocal(
+                      dayKey ? defaultDatetimeForDay(dayKey, 9) : ""
+                    );
+                    setSlotIso(null);
+                  }}
+                  required
+                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
+                >
+                  <option value="">Kies…</option>
+                  {partners.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.naam}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {partnerId ? (
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Medewerker
+                  <select
+                    value={teamgenootId}
+                    disabled={teamgenotenLoading}
+                    onChange={(e) => setTeamgenootId(e.target.value)}
+                    className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green disabled:opacity-60"
+                  >
+                    <option value="">
+                      {teamgenotenLoading
+                        ? "Laden…"
+                        : teamgenoten.length === 0
+                          ? "Geen medewerkers — partner voegt toe in Team"
+                          : "Nog niet gekoppeld…"}
+                    </option>
+                    {teamgenoten.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.naam}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
               {soort === "schouwweek" ? (
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Schouwweek
@@ -939,13 +1044,9 @@ function PlanInplannenPanel({
                     ))}
                   </select>
                 </label>
-              ) : (
+              ) : soort === "service" ? (
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  {soort === "schouwdag"
-                    ? "Schouwdatum + tijd"
-                    : soort === "service"
-                      ? "Servicedatum + tijd"
-                      : "Installatiedatum + tijd"}
+                  Servicedatum + tijd
                   <input
                     type="datetime-local"
                     value={datetimeLocal}
@@ -954,24 +1055,50 @@ function PlanInplannenPanel({
                     className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
                   />
                 </label>
+              ) : partnerId ? (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                    {soort === "installatie"
+                      ? "Kies installatie-slot *"
+                      : "Kies schouw-slot *"}
+                  </p>
+                  <div className="mt-1.5">
+                    <PartnerSlotPicker
+                      partnerId={partnerId}
+                      soort={soort === "installatie" ? "installatie" : "schouw"}
+                      leadId={
+                        (lead as { id?: string } | null)?.id ||
+                        selected?.lead_id ||
+                        null
+                      }
+                      excludeProjectId={selected?.id || null}
+                      dayKey={dayKey}
+                      value={slotIso}
+                      onChange={(iso) => {
+                        setSlotIso(iso);
+                        if (!iso) {
+                          setDatetimeLocal(
+                            dayKey ? defaultDatetimeForDay(dayKey, 9) : ""
+                          );
+                          return;
+                        }
+                        setDatetimeLocal(
+                          formatInTimeZone(
+                            new Date(iso),
+                            AMSTERDAM_TZ,
+                            "yyyy-MM-dd'T'HH:mm"
+                          )
+                        );
+                      }}
+                      disabled={busy}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-muted">
+                  Kies eerst een installatiepartner om open slots te zien.
+                </p>
               )}
-
-              <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                Installatiepartner *
-                <select
-                  value={partnerId}
-                  onChange={(e) => setPartnerId(e.target.value)}
-                  required
-                  className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green"
-                >
-                  <option value="">Kies…</option>
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.naam}
-                    </option>
-                  ))}
-                </select>
-              </label>
 
               {soort === "service" ? (
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -1023,7 +1150,7 @@ function PlanInplannenPanel({
                       </h3>
                       {status ? (
                         <span className="bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-                          {projectStatusLabel[status]}
+                          {resolveProjectStatusLabel(status, selected)}
                         </span>
                       ) : null}
                     </div>
@@ -1137,6 +1264,10 @@ function EventCard({
   const titleCls = isSolid ? "text-white" : "text-ink";
   const mutedCls = isSolid ? "text-white/85" : "text-muted";
 
+  const hasIcons =
+    Boolean(tel) ||
+    (isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url);
+
   return (
     <button
       type="button"
@@ -1145,7 +1276,7 @@ function EventCard({
         "group relative w-full overflow-hidden border text-left transition-shadow",
         style.bg,
         style.border,
-        compact ? "px-2.5 py-2" : "px-3 py-2.5",
+        compact ? "px-2 py-1.5 pr-9" : "px-3 py-2.5",
         past ? "opacity-45 grayscale-[0.35]" : "",
         selected ? "ring-2 ring-[#0D9488]/40" : "hover:shadow-sm",
       ].join(" ")}
@@ -1154,90 +1285,96 @@ function EventCard({
         className={`absolute inset-y-0 left-0 w-1 ${style.accent}`}
         aria-hidden
       />
-      <div className="flex items-start justify-between gap-2 pl-2">
-        <div className="min-w-0">
-          <p
-            className={[
-              "text-xs font-bold uppercase tracking-[0.04em]",
-              style.text,
-            ].join(" ")}
-          >
-            {kindLabel}
-            {timeRange ? (
-              <span
-                className={[
-                  "ml-2 text-sm font-bold tabular-nums normal-case tracking-normal",
-                  past ? "line-through decoration-2 opacity-80" : "",
-                ].join(" ")}
-              >
-                {timeRange}
-                {duurLabel ? (
-                  <span className="ml-1.5 font-semibold opacity-80">
-                    · {duurLabel}
-                  </span>
-                ) : null}
-              </span>
-            ) : null}
-            {past ? (
-              <span
-                className={[
-                  "ml-2 rounded-sm px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide normal-case",
-                  isSolid ? "bg-white/20 text-white/90" : "bg-black/10 text-ink/70",
-                ].join(" ")}
-              >
-                Geweest
-              </span>
-            ) : null}
-          </p>
-          <p
-            className={[
-              "mt-1 truncate font-semibold",
-              titleCls,
-              compact ? "text-sm" : "text-base",
-              past ? "opacity-80" : "",
-            ].join(" ")}
-            title={naam}
-          >
-            {naam}
-          </p>
-          {plaats ? (
-            <p
+      <div className={["min-w-0 pl-2", hasIcons && compact ? "pr-0" : ""].join(" ")}>
+        <p
+          className={[
+            "text-[10px] font-bold uppercase tracking-[0.04em]",
+            style.text,
+          ].join(" ")}
+        >
+          {kindLabel}
+          {timeRange ? (
+            <span
               className={[
-                "mt-0.5 truncate font-medium",
-                mutedCls,
-                compact ? "text-xs" : "text-sm",
+                "ml-1.5 text-xs font-bold tabular-nums normal-case tracking-normal",
+                past ? "line-through decoration-2 opacity-80" : "",
               ].join(" ")}
             >
-              {plaats}
-            </p>
+              {compact && bar.at ? formatTimeNl(bar.at) : timeRange}
+              {!compact && duurLabel ? (
+                <span className="ml-1.5 font-semibold opacity-80">
+                  · {duurLabel}
+                </span>
+              ) : null}
+            </span>
           ) : null}
-          {!compact && adresLines.length > 0 ? (
-            <div className="mt-1 space-y-0.5">
-              {adresLines
-                .filter((line) => !plaats || !line.includes(plaats))
-                .map((line) => (
-                  <p key={line} className={`truncate text-sm ${mutedCls}`}>
-                    {line}
-                  </p>
-                ))}
-            </div>
+          {past ? (
+            <span
+              className={[
+                "ml-1.5 rounded-sm px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide normal-case",
+                isSolid ? "bg-white/20 text-white/90" : "bg-black/10 text-ink/70",
+              ].join(" ")}
+            >
+              Geweest
+            </span>
           ) : null}
-          {!compact && partner?.naam ? (
-            <p className={`mt-1 truncate text-sm ${mutedCls}`}>{partner.naam}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        </p>
+        <p
+          className={[
+            "mt-0.5 truncate font-semibold leading-snug",
+            titleCls,
+            compact ? "text-[13px]" : "text-base",
+            past ? "opacity-80" : "",
+          ].join(" ")}
+          title={naam}
+        >
+          {naam}
+        </p>
+        {plaats ? (
+          <p
+            className={[
+              "mt-0.5 truncate font-medium leading-snug",
+              mutedCls,
+              compact ? "text-[11px]" : "text-sm",
+            ].join(" ")}
+          >
+            {plaats}
+          </p>
+        ) : null}
+        {!compact && adresLines.length > 0 ? (
+          <div className="mt-1 space-y-0.5">
+            {adresLines
+              .filter((line) => !plaats || !line.includes(plaats))
+              .map((line) => (
+                <p key={line} className={`truncate text-sm ${mutedCls}`}>
+                  {line}
+                </p>
+              ))}
+          </div>
+        ) : null}
+        {!compact && (partner?.naam || project.monteur) ? (
+          <p className={`mt-1 truncate text-sm ${mutedCls}`}>
+            {partner?.naam &&
+            project.monteur &&
+            project.monteur !== partner.naam
+              ? `${partner.naam} · ${project.monteur}`
+              : partner?.naam || project.monteur}
+          </p>
+        ) : null}
+      </div>
+      {hasIcons ? (
+        <div className="absolute right-1 top-1 flex flex-col items-end gap-0.5">
           {tel ? <PhoneCopyIcon telefoon={tel} /> : null}
           {isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url ? (
             <span
-              className="inline-flex h-7 w-7 items-center justify-center border border-[#FDBA74] bg-[#FFF7ED] text-xs font-bold text-[#C45A12]"
+              className="inline-flex h-6 w-6 items-center justify-center border border-[#FDBA74] bg-[#FFF7ED] text-[10px] font-bold text-[#C45A12]"
               title="Schouwformulier ontbreekt"
             >
               !
             </span>
           ) : null}
         </div>
-      </div>
+      ) : null}
     </button>
   );
 }
@@ -1267,6 +1404,7 @@ const SCHOUW_DONE_STATUSES = new Set([
   "installatie_ingepland",
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
 ]);
 
 function StatusCheckRow({
@@ -2038,7 +2176,7 @@ function AgendaItemSidebar({
 
             <DetailRow label="Status">
               <div className="space-y-2.5">
-                <p>{projectStatusLabel[status] || status}</p>
+                <p>{resolveProjectStatusLabel(status, project) || status}</p>
                 <div className="space-y-1.5 border border-line bg-[#FAFBFA] px-3 py-2.5">
                   <StatusCheckRow
                     ok={orderVolledigBetaald}
@@ -2121,10 +2259,23 @@ function AgendaItemSidebar({
 
             {!hidePartner ? (
               <DetailRow label="Installateur">
-                {partner?.naam ? (
+                {partner?.naam || project.monteur ? (
                   <div className="space-y-1">
-                    <p className="font-medium">{partner.naam}</p>
-                    {partner.telefoon ? (
+                    <p className="font-medium">
+                      {partner?.naam || "Geen partner"}
+                    </p>
+                    {project.monteur &&
+                    project.monteur !== partner?.naam ? (
+                      <p className="text-sm text-ink">
+                        Medewerker: {project.monteur}
+                      </p>
+                    ) : project.installatie_partner_id &&
+                      !project.monteur ? (
+                      <p className="text-sm text-muted">
+                        Medewerker nog niet gekoppeld
+                      </p>
+                    ) : null}
+                    {partner?.telefoon ? (
                       <a
                         href={`tel:${partner.telefoon}`}
                         className="block text-sm text-[#0F766E] hover:underline"
@@ -2132,7 +2283,7 @@ function AgendaItemSidebar({
                         {partner.telefoon}
                       </a>
                     ) : null}
-                    {partner.email ? (
+                    {partner?.email ? (
                       <a
                         href={`mailto:${partner.email}`}
                         className="block break-all text-sm text-[#0F766E] hover:underline"
@@ -2421,7 +2572,7 @@ function AgendaItemSidebar({
               : `/api/projecten/${project.id}/schouw-formulier`
           }
           notitie={noteDraft}
-          opnemerDefault={partner?.naam || project.monteur || null}
+          opnemerDefault={project.monteur || partner?.naam || null}
           onClose={() => setSchouwFormOpen(false)}
           onCreated={(result) => {
             const foto = result.foto;
@@ -2463,7 +2614,7 @@ function AgendaItemSidebar({
               ? fotosUploadUrl.replace(/\/fotos\/?$/, "/oplever-formulier")
               : `/api/projecten/${project.id}/oplever-formulier`
           }
-          monteurDefault={partner?.naam || project.monteur || null}
+          monteurDefault={project.monteur || partner?.naam || null}
           onClose={() => setOpleverFormOpen(false)}
           onCreated={(result) => {
             const foto = result.foto;
@@ -2644,8 +2795,69 @@ function monthGridDays(anchor: Date): DayCol[] {
 }
 
 function isSameMonthKey(dayKey: string, anchor: Date): boolean {
-  const local = toZonedTime(anchor, AMSTERDAM_TZ);
-  return dayKey.startsWith(format(local, "yyyy-MM"));
+  return dayKey.startsWith(
+    formatInTimeZone(anchor, AMSTERDAM_TZ, "yyyy-MM")
+  );
+}
+
+function MonthEventChip({
+  bar,
+  selected,
+  onSelect,
+}: {
+  bar: PlanbordBar;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const s = KIND_STYLE[bar.kind];
+  const past = isBarPast(bar);
+  const time = bar.at ? formatTimeNl(bar.at) : "";
+  const kindShort = planbordKindLabel(bar.kind, true);
+  const naam = klantNaam(bar.project);
+  const isSolid =
+    bar.kind === "installatie" ||
+    bar.kind === "service" ||
+    bar.kind === "levering";
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      title={`${time} ${kindShort} · ${naam}`}
+      className={[
+        "flex w-full min-w-0 items-baseline gap-1 border px-1.5 py-0.5 text-left leading-tight hover:opacity-90",
+        s.bg,
+        s.border,
+        s.text,
+        past ? "opacity-45 grayscale-[0.35]" : "",
+        selected ? "ring-1 ring-[#0D9488]" : "",
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "shrink-0 text-[10px] font-bold tabular-nums",
+          past ? "line-through" : "",
+        ].join(" ")}
+      >
+        {time}
+      </span>
+      <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide">
+        {kindShort}
+      </span>
+      <span
+        className={[
+          "min-w-0 truncate text-[11px] font-semibold",
+          isSolid ? "text-white" : "text-ink",
+          past ? "line-through opacity-80" : "",
+        ].join(" ")}
+      >
+        {naam}
+      </span>
+    </button>
+  );
 }
 
 const VIEW_OPTIONS: { id: AgendaView; label: string }[] = [
@@ -2671,6 +2883,7 @@ export function Planbord({
   portalToken,
   title,
   projectHref,
+  afblokPartnerId: afblokPartnerIdProp,
 }: {
   projecten: Project[];
   onProjectUpdated?: (project: Project) => void;
@@ -2680,6 +2893,8 @@ export function Planbord({
   portalToken?: string;
   title?: string;
   projectHref?: (projectId: string) => string;
+  /** Partner voor afblokmodus (portaal of CRM) */
+  afblokPartnerId?: string | null;
 }) {
   const readOnly = variant === "portal";
   const resolveProjectHref =
@@ -2697,6 +2912,17 @@ export function Planbord({
 
   const [anchor, setAnchor] = useState(() => new Date());
   const [view, setView] = useState<AgendaView>("week");
+  const [afblokMode, setAfblokMode] = useState(false);
+  const [afblokPartnerId, setAfblokPartnerId] = useState(
+    afblokPartnerIdProp || ""
+  );
+  const [afblokTeamgenoten, setAfblokTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
+  const [afblokTgId, setAfblokTgId] = useState("");
+  const [afblokkingen, setAfblokkingen] = useState<Set<string>>(new Set());
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [afblokPerMonteur, setAfblokPerMonteur] = useState(true);
 
   useEffect(() => {
     try {
@@ -2755,11 +2981,216 @@ export function Planbord({
     };
   }, [readOnly]);
 
+  useEffect(() => {
+    if (afblokPartnerIdProp) setAfblokPartnerId(afblokPartnerIdProp);
+  }, [afblokPartnerIdProp]);
+
+  useEffect(() => {
+    if (!afblokMode) return;
+    if (!afblokPartnerId && partners.length && !readOnly) {
+      setAfblokPartnerId(partners.find((p) => p.actief)?.id || partners[0].id);
+    }
+  }, [afblokMode, afblokPartnerId, partners, readOnly]);
+
+  useEffect(() => {
+    if (!afblokMode || !afblokPartnerId) {
+      setAfblokTeamgenoten([]);
+      setAfblokTgId("");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const url =
+          readOnly && portalToken
+            ? `/api/installatie/${encodeURIComponent(portalToken)}/teamgenoten`
+            : `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(afblokPartnerId)}`;
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const list = (
+          (data.teamgenoten || []) as InstallatiePartnerTeamgenoot[]
+        ).filter((t) => t.actief !== false);
+        setAfblokTeamgenoten(list);
+        setAfblokTgId((cur) =>
+          cur && list.some((t) => t.id === cur) ? cur : list[0]?.id || ""
+        );
+      } catch {
+        if (!cancelled) {
+          setAfblokTeamgenoten([]);
+          setAfblokTgId("");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [afblokMode, afblokPartnerId, readOnly, portalToken]);
+
   const weekDays = useMemo(() => weekDaysFrom(anchor), [anchor]);
   const monthDays = useMemo(() => monthGridDays(anchor), [anchor]);
   const weekInfo = useMemo(() => schouwWeekFromDate(anchor), [anchor]);
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
   const dayKey = useMemo(() => dayKeyAmsterdam(anchor), [anchor]);
+
+  const afblokRange = useMemo(() => {
+    const days = view === "maand" ? monthDays : weekDays;
+    return {
+      van: days[0]?.key || "",
+      tot: days[days.length - 1]?.key || "",
+    };
+  }, [view, weekDays, monthDays]);
+
+  const afblokEffectiveTg =
+    afblokPerMonteur && afblokTeamgenoten.length > 0
+      ? afblokTgId || null
+      : null;
+
+  useEffect(() => {
+    if (!afblokMode || !afblokPartnerId || !afblokRange.van || !afblokRange.tot) {
+      return;
+    }
+    if (afblokPerMonteur && afblokTeamgenoten.length > 0 && !afblokTgId) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tgQs =
+          afblokPerMonteur && afblokTgId
+            ? `&teamgenoot_id=${encodeURIComponent(afblokTgId)}`
+            : "";
+        const url =
+          readOnly && portalToken
+            ? `/api/installatie/${encodeURIComponent(portalToken)}/afblokkingen?van=${afblokRange.van}&tot=${afblokRange.tot}${tgQs}`
+            : `/api/installatie-partners/afblokkingen?partner_id=${encodeURIComponent(afblokPartnerId)}&van=${afblokRange.van}&tot=${afblokRange.tot}${tgQs}`;
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (typeof data.per_monteur === "boolean") {
+          setAfblokPerMonteur(data.per_monteur);
+        }
+        const next = new Set<string>();
+        const tgKey =
+          data.per_monteur === false ? null : afblokEffectiveTg;
+        for (const item of data.items || []) {
+          next.add(
+            partnerAfblokKey(
+              item.partner_id || afblokPartnerId,
+              item.dag,
+              item.venster as PartnerVenster,
+              item.teamgenoot_id ?? tgKey
+            )
+          );
+        }
+        setAfblokkingen(next);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    afblokMode,
+    afblokPartnerId,
+    afblokRange.van,
+    afblokRange.tot,
+    afblokTgId,
+    afblokTeamgenoten.length,
+    afblokPerMonteur,
+    afblokEffectiveTg,
+    readOnly,
+    portalToken,
+  ]);
+
+  function isVensterBlocked(dayKeyStr: string, venster: PartnerVenster) {
+    if (!afblokPartnerId) return false;
+    return afblokkingen.has(
+      partnerAfblokKey(
+        afblokPartnerId,
+        dayKeyStr,
+        venster,
+        afblokEffectiveTg
+      )
+    );
+  }
+
+  async function toggleVensterAfblok(
+    dayKeyStr: string,
+    venster: PartnerVenster
+  ) {
+    if (!afblokPartnerId || blockBusy) return;
+    if (
+      afblokPerMonteur &&
+      afblokTeamgenoten.length > 0 &&
+      !afblokTgId
+    ) {
+      setOkMsg(null);
+      return;
+    }
+    const key = partnerAfblokKey(
+      afblokPartnerId,
+      dayKeyStr,
+      venster,
+      afblokEffectiveTg
+    );
+    const currently = afblokkingen.has(key);
+    const nextBlocked = !currently;
+    setBlockBusy(true);
+    setAfblokkingen((prev) => {
+      const copy = new Set(prev);
+      if (nextBlocked) copy.add(key);
+      else copy.delete(key);
+      return copy;
+    });
+    try {
+      const url =
+        readOnly && portalToken
+          ? `/api/installatie/${encodeURIComponent(portalToken)}/afblokkingen`
+          : "/api/installatie-partners/afblokkingen";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          readOnly
+            ? {
+                dag: dayKeyStr,
+                venster,
+                geblokkeerd: nextBlocked,
+                teamgenoot_id: afblokEffectiveTg,
+              }
+            : {
+                partner_id: afblokPartnerId,
+                dag: dayKeyStr,
+                venster,
+                geblokkeerd: nextBlocked,
+                teamgenoot_id: afblokEffectiveTg,
+              }
+        ),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Afblokken mislukt");
+      if (typeof data.per_monteur === "boolean") {
+        setAfblokPerMonteur(data.per_monteur);
+      }
+      setOkMsg(
+        nextBlocked
+          ? `${venster === "ochtend" ? "Ochtend" : "Middag"} ${dayKeyStr.slice(8)} dicht`
+          : `${venster === "ochtend" ? "Ochtend" : "Middag"} ${dayKeyStr.slice(8)} weer open`
+      );
+    } catch (e) {
+      setAfblokkingen((prev) => {
+        const copy = new Set(prev);
+        if (currently) copy.add(key);
+        else copy.delete(key);
+        return copy;
+      });
+      setOkMsg(e instanceof Error ? e.message : "Afblokken mislukt");
+    } finally {
+      setBlockBusy(false);
+    }
+  }
 
   const headingLabel = useMemo(() => {
     if (view === "dag") {
@@ -2942,11 +3373,34 @@ export function Planbord({
     return timedAll.filter((b) => b.dayKeys[0] === dayKey);
   }, [timedAll, dayKey, view]);
 
+  const monthPrefix = useMemo(
+    () => formatInTimeZone(anchor, AMSTERDAM_TZ, "yyyy-MM"),
+    [anchor]
+  );
+
+  const monthStats = useMemo(() => {
+    let schouw = 0;
+    let installatie = 0;
+    let service = 0;
+    let levering = 0;
+    for (const bar of timedAll) {
+      const key = bar.dayKeys[0];
+      if (!key?.startsWith(monthPrefix)) continue;
+      if (bar.kind === "schouw" || bar.kind === "schouwweek") schouw += 1;
+      else if (bar.kind === "installatie") installatie += 1;
+      else if (bar.kind === "service") service += 1;
+      else if (bar.kind === "levering") levering += 1;
+    }
+    return {
+      schouw,
+      installatie,
+      service,
+      levering,
+      total: schouw + installatie + service + levering,
+    };
+  }, [timedAll, monthPrefix]);
+
   const listGroups = useMemo(() => {
-    const monthPrefix = format(
-      toZonedTime(anchor, AMSTERDAM_TZ),
-      "yyyy-MM"
-    );
     const groups: { dayKey: string; label: string; bars: PlanbordBar[] }[] = [];
     let current: (typeof groups)[number] | null = null;
     for (const bar of timedAll) {
@@ -2965,7 +3419,7 @@ export function Planbord({
       current.bars.push(bar);
     }
     return groups;
-  }, [timedAll, anchor]);
+  }, [timedAll, monthPrefix]);
 
   const openPlan = useCallback(
     (key: string, partnerId?: string | null) => {
@@ -3008,7 +3462,15 @@ export function Planbord({
     if (view === "dag") {
       setAnchor((d) => addDays(d, delta));
     } else if (view === "maand" || view === "lijst") {
-      setAnchor((d) => addMonths(d, delta));
+      // Altijd via midden van de maand → geen 31-okt → 1-dec shift
+      setAnchor((d) => {
+        const local = toZonedTime(d, AMSTERDAM_TZ);
+        const mid = addMonths(
+          new Date(local.getFullYear(), local.getMonth(), 15, 12, 0, 0),
+          delta
+        );
+        return fromZonedTime(mid, AMSTERDAM_TZ);
+      });
     } else {
       setAnchor((d) => addWeeks(d, delta));
     }
@@ -3033,6 +3495,17 @@ export function Planbord({
             {title || (readOnly ? "Agenda" : "Planbord")}
           </h2>
           <p className="mt-1 text-base capitalize text-muted">{headingLabel}</p>
+          {view === "maand" && monthStats.total > 0 ? (
+            <p className="mt-1 text-xs font-medium text-muted">
+              {monthStats.total} gepland
+              {monthStats.schouw ? ` · ${monthStats.schouw} schouw` : ""}
+              {monthStats.installatie
+                ? ` · ${monthStats.installatie} installatie`
+                : ""}
+              {monthStats.service ? ` · ${monthStats.service} service` : ""}
+              {monthStats.levering ? ` · ${monthStats.levering} levering` : ""}
+            </p>
+          ) : null}
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs font-semibold">
             <span className="inline-flex items-center gap-1.5 text-[#854D0E]">
               <span className="h-2.5 w-2.5 bg-[#FACC15]" aria-hidden />
@@ -3117,6 +3590,29 @@ export function Planbord({
               ))}
             </select>
           ) : null}
+          <button
+            type="button"
+            disabled={blockBusy}
+            onClick={() => {
+              setAfblokMode((v) => {
+                const next = !v;
+                setOkMsg(
+                  next
+                    ? "Afblok-modus: klik ochtend (09–12) of middag (13–17) om dicht/open te zetten"
+                    : null
+                );
+                return next;
+              });
+            }}
+            className={[
+              "shrink-0 border px-3 py-1.5 text-xs font-semibold disabled:opacity-60",
+              afblokMode
+                ? "border-[#B91C1C] bg-[#FEF2F2] text-[#B91C1C]"
+                : "border-line bg-white text-ink hover:bg-wash",
+            ].join(" ")}
+          >
+            {afblokMode ? "Klaar met afblokken" : "Afblokken"}
+          </button>
           {!readOnly ? (
             <button
               type="button"
@@ -3129,8 +3625,63 @@ export function Planbord({
         </div>
       </div>
 
+      {afblokMode ? (
+        <div className="space-y-2 border border-[#B91C1C]/25 bg-[#FEF2F2] px-4 py-3">
+          <p className="text-xs font-medium text-[#B91C1C]">
+            Afblok-modus — per dag 2 blokken (zoals adviseurs 4, maar hier
+            halve dagen): ochtend = installatie 1, middag = installatie 2. Klik
+            om dicht ↔ open. Alles open → max 2 installaties die dag inplannen.
+            {!afblokPerMonteur
+              ? " Let op: geldt nu voor heel het team (migratie per monteur nog open)."
+              : ""}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            {!readOnly && !afblokPartnerIdProp ? (
+              <select
+                value={afblokPartnerId}
+                onChange={(e) => setAfblokPartnerId(e.target.value)}
+                className="border border-[#FECACA] bg-white px-2 py-1.5 text-xs font-semibold outline-none"
+                aria-label="Partner afblokken"
+              >
+                <option value="">Partner…</option>
+                {partners.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.naam}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {afblokTeamgenoten.length > 0
+              ? afblokTeamgenoten.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setAfblokTgId(t.id)}
+                    className={[
+                      "border px-2.5 py-1.5 text-xs font-semibold",
+                      afblokTgId === t.id
+                        ? "border-[#B91C1C] bg-[#B91C1C] text-white"
+                        : "border-[#FECACA] bg-white text-[#B91C1C] hover:bg-[#FFF1F2]",
+                    ].join(" ")}
+                  >
+                    {t.naam}
+                  </button>
+                ))
+              : null}
+          </div>
+        </div>
+      ) : null}
+
       {okMsg ? (
-        <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+        <p
+          className={[
+            "border px-3 py-2 text-xs",
+            okMsg.toLowerCase().includes("mislukt") ||
+            okMsg.toLowerCase().includes("fout")
+              ? "border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]"
+              : "border-green/30 bg-green-soft text-green-dark",
+          ].join(" ")}
+        >
           {okMsg}
         </p>
       ) : null}
@@ -3214,7 +3765,7 @@ export function Planbord({
 
       {view === "week" ? (
         <div className="overflow-x-auto border border-line bg-white">
-          <div className="min-w-[56rem]">
+          <div className="min-w-[64rem]">
             <div className="grid grid-cols-7 border-b border-line">
               {weekDays.map((d) => {
                 const count = barsByDay.get(d.key)?.length ?? 0;
@@ -3225,7 +3776,7 @@ export function Planbord({
                     type="button"
                     onClick={() => goDay(d.key)}
                     className={[
-                      "border-r border-line px-2 py-3 text-left last:border-r-0 transition-colors",
+                      "border-r border-line px-2.5 py-3 text-left last:border-r-0 transition-colors",
                       isToday
                         ? "bg-[#F0FDFA] hover:bg-[#CCFBF1]"
                         : d.weekend
@@ -3260,7 +3811,7 @@ export function Planbord({
               })}
             </div>
 
-            <div className="grid min-h-[320px] grid-cols-7">
+            <div className="grid min-h-[280px] grid-cols-7">
               {weekDays.map((d) => {
                 const list = barsByDay.get(d.key) || [];
                 const isToday = d.key === todayKey;
@@ -3268,25 +3819,98 @@ export function Planbord({
                   <div
                     key={d.key}
                     className={[
-                      "min-h-[320px] space-y-1.5 border-r border-line p-1.5 last:border-r-0",
-                      isToday
-                        ? "bg-[#F0FDFA]/35"
-                        : d.weekend
-                          ? "bg-[#F8FAFC]"
-                          : "bg-white",
+                      "min-h-[280px] space-y-1.5 border-r border-line p-1.5 last:border-r-0",
+                      afblokMode
+                        ? "bg-[#FFF7F7]/50"
+                        : isToday
+                          ? "bg-[#F0FDFA]/35"
+                          : d.weekend
+                            ? "bg-[#F8FAFC]"
+                            : "bg-white",
                     ].join(" ")}
                   >
-                    {list.length === 0 ? (
+                    {afblokMode ? (
+                      <div className="space-y-1">
+                        {PARTNER_VENSTERS.map((venster) => {
+                          const blocked = isVensterBlocked(d.key, venster);
+                          const hasWork = list.some((b) => {
+                            if (!b.at) return false;
+                            const h = Number(
+                              formatInTimeZone(
+                                new Date(b.at),
+                                AMSTERDAM_TZ,
+                                "H"
+                              )
+                            );
+                            if (venster === "ochtend") return h >= 9 && h < 12;
+                            return h >= 13 && h < 17;
+                          });
+                          return (
+                            <button
+                              key={venster}
+                              type="button"
+                              disabled={blockBusy || !afblokPartnerId}
+                              onClick={() =>
+                                void toggleVensterAfblok(d.key, venster)
+                              }
+                              className={[
+                                "flex w-full flex-col gap-0.5 border px-2 py-2 text-left text-[11px] font-semibold disabled:opacity-50",
+                                blocked
+                                  ? "border-[#FECACA] bg-[#FEE2E2] text-[#991B1B]"
+                                  : hasWork
+                                    ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]"
+                                    : "border-dashed border-[#FECACA] bg-white text-[#B91C1C] hover:bg-[#FEF2F2]",
+                              ].join(" ")}
+                            >
+                              <span className="flex items-center justify-between gap-1">
+                                <span>
+                                  {venster === "ochtend"
+                                    ? "Ochtend 09–12"
+                                    : "Middag 13–17"}
+                                </span>
+                                <span className="uppercase tracking-wide">
+                                  {blocked
+                                    ? "Dicht"
+                                    : hasWork
+                                      ? "Bezet"
+                                      : "Open"}
+                                </span>
+                              </span>
+                              <span className="text-[10px] font-medium opacity-80">
+                                {venster === "ochtend"
+                                  ? "Installatie 1"
+                                  : "Installatie 2"}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {list.length > 0 ? (
+                          <div className="space-y-1 pt-1">
+                            {list.map((bar) => (
+                              <EventCard
+                                key={bar.key}
+                                bar={bar}
+                                schouwDoc={schouwDocs[bar.project.id]}
+                                hidePartner={readOnly}
+                                compact
+                                selected={selectedBar?.key === bar.key}
+                                onSelect={() => openBar(bar)}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : list.length === 0 ? (
                       !readOnly ? (
                         <button
                           type="button"
                           onClick={() => openPlan(d.key)}
-                          className="flex h-20 w-full items-center justify-center text-[11px] text-muted/60 hover:bg-wash hover:text-ink"
+                          className="flex h-16 w-full items-center justify-center text-[11px] text-muted/60 hover:bg-wash hover:text-ink"
                         >
                           +
                         </button>
                       ) : (
-                        <div className="flex h-20 items-center justify-center text-[11px] text-muted/50">
+                        <div className="flex h-16 items-center justify-center text-[11px] text-muted/50">
                           —
                         </div>
                       )
@@ -3315,145 +3939,120 @@ export function Planbord({
 
       {view === "maand" ? (
         <div className="overflow-x-auto border border-line bg-white">
-          <div className="min-w-[72rem]">
+          <div className="min-w-[56rem]">
             <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
               {["ma", "di", "wo", "do", "vr", "za", "zo"].map((d) => (
                 <div
                   key={d}
-                  className="border-r border-line px-3 py-3 text-center text-sm font-bold uppercase tracking-[0.06em] text-muted last:border-r-0"
+                  className="border-r border-line px-2 py-2 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-muted last:border-r-0"
                 >
                   {d}
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-7">
+            <div className="grid grid-cols-7 auto-rows-fr">
               {monthDays.map((d) => {
                 const inMonth = isSameMonthKey(d.key, anchor);
-                // Alleen dagen van deze maand — geen uitloop vorige/volgende maand
-                if (!inMonth) {
-                  return (
-                    <div
-                      key={d.key}
-                      className="min-h-[14rem] border-b border-r border-line bg-[#F4F6F5] last:border-r-0"
-                      aria-hidden
-                    />
-                  );
-                }
                 const list = timedAll.filter((b) => b.dayKeys[0] === d.key);
                 const isToday = d.key === todayKey;
-                const visible = list.slice(0, 4);
+                const visible = list.slice(0, MONTH_CHIPS_VISIBLE);
+                const more = list.length - visible.length;
                 return (
                   <div
                     key={d.key}
                     className={[
-                      "min-h-[14rem] border-b border-r border-line bg-white p-2.5 text-left last:border-r-0 align-top",
-                      isToday ? "bg-[#F0FDFA]" : "",
+                      "flex min-h-[7.5rem] flex-col border-b border-r border-line p-1.5 last:border-r-0",
+                      inMonth
+                        ? isToday
+                          ? "bg-[#F0FDFA]"
+                          : "bg-white"
+                        : "bg-[#F4F6F5]",
                     ].join(" ")}
                   >
-                    <button
-                      type="button"
-                      onClick={() => goDay(d.key)}
-                      className={[
-                        "inline-flex h-9 min-w-9 items-center justify-center font-display text-lg font-semibold tabular-nums leading-none hover:opacity-80",
-                        isToday
-                          ? "bg-[#0D9488] px-2 text-white"
-                          : "text-ink",
-                      ].join(" ")}
-                      title="Open dagoverzicht"
-                    >
-                      {format(d.date, "d")}
-                    </button>
-                    <div className="mt-2 space-y-1.5">
-                      {visible.map((bar) => {
-                        const s = KIND_STYLE[bar.kind];
-                        const past = isBarPast(bar);
-                        const range = formatTimeRangeNl(bar.at, bar.duurMinuten);
-                        const isSolid =
-                          bar.kind === "installatie" ||
-                          bar.kind === "service" ||
-                          bar.kind === "levering";
-                        const kindShort = planbordKindLabel(bar.kind, true);
-                        const naam = klantNaam(bar.project);
-                        const plaats = klantPlaats(bar.project);
-                        const tel = leadOf(bar.project)?.telefoon?.trim() || null;
-                        return (
-                          <div
-                            key={bar.key}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => openBar(bar)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                openBar(bar);
+                    <div className="mb-1 flex items-center justify-between gap-1">
+                      <button
+                        type="button"
+                        onClick={() => goDay(d.key)}
+                        className={[
+                          "inline-flex h-7 min-w-7 items-center justify-center font-display text-sm font-semibold tabular-nums leading-none hover:opacity-80",
+                          isToday
+                            ? "bg-[#0D9488] px-1.5 text-white"
+                            : inMonth
+                              ? "text-ink"
+                              : "text-muted/55",
+                        ].join(" ")}
+                        title="Open dagoverzicht"
+                      >
+                        {format(d.date, "d")}
+                      </button>
+                      {list.length > 0 ? (
+                        <span
+                          className={[
+                            "text-[10px] font-semibold tabular-nums",
+                            inMonth ? "text-muted" : "text-muted/50",
+                          ].join(" ")}
+                        >
+                          {list.length}×
+                        </span>
+                      ) : null}
+                    </div>
+                    {afblokMode && inMonth ? (
+                      <div className="mb-1 space-y-0.5">
+                        {PARTNER_VENSTERS.map((venster) => {
+                          const blocked = isVensterBlocked(d.key, venster);
+                          return (
+                            <button
+                              key={venster}
+                              type="button"
+                              disabled={blockBusy || !afblokPartnerId}
+                              onClick={() =>
+                                void toggleVensterAfblok(d.key, venster)
                               }
-                            }}
-                            className={[
-                              "relative flex cursor-pointer flex-col justify-start border px-2 py-1.5 pr-9 text-left hover:shadow-sm",
-                              s.bg,
-                              s.border,
-                              s.text,
-                              past ? "opacity-40 grayscale-[0.4]" : "",
-                              selectedBar?.key === bar.key
-                                ? "ring-2 ring-[#0D9488]/40"
-                                : "",
-                            ].join(" ")}
-                            style={{ minHeight: monthChipHeightPx(bar.duurMinuten) }}
-                          >
-                            <p
                               className={[
-                                "truncate text-sm font-bold tabular-nums leading-tight",
-                                past ? "line-through" : "",
+                                "flex w-full items-center justify-between border px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide disabled:opacity-50",
+                                blocked
+                                  ? "border-[#FECACA] bg-[#FEE2E2] text-[#991B1B]"
+                                  : "border-dashed border-[#FECACA] bg-white text-[#B91C1C]",
                               ].join(" ")}
                             >
-                              {range || ""}{" "}
-                              {kindShort}
-                            </p>
-                            <p
-                              className={[
-                                "mt-0.5 truncate text-sm font-semibold leading-tight",
-                                isSolid ? "text-white" : "text-ink",
-                                past ? "line-through opacity-80" : "",
-                              ].join(" ")}
-                              title={naam}
-                            >
-                              {naam}
-                            </p>
-                            {plaats ? (
-                              <p
-                                className={[
-                                  "mt-0.5 truncate text-xs font-medium leading-tight",
-                                  isSolid ? "text-white/85" : "text-[#854D0E]/90",
-                                ].join(" ")}
-                              >
-                                {plaats}
-                              </p>
-                            ) : null}
-                            {bar.duurMinuten >= 60 ? (
-                              <p
-                                className={[
-                                  "mt-auto pt-1 text-xs font-medium",
-                                  isSolid ? "text-white/80" : "text-[#854D0E]/80",
-                                ].join(" ")}
-                              >
-                                {formatDuurLabel(bar.duurMinuten)}
-                              </p>
-                            ) : null}
-                            {tel ? (
-                              <span className="absolute right-1 top-1">
-                                <PhoneCopyIcon telefoon={tel} />
+                              <span>
+                                {venster === "ochtend" ? "Ocht." : "Mid."}
                               </span>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                      {list.length > visible.length ? (
+                              <span>{blocked ? "Dicht" : "Open"}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="flex min-h-0 flex-1 flex-col gap-0.5">
+                      {visible.map((bar) => (
+                        <MonthEventChip
+                          key={bar.key}
+                          bar={bar}
+                          selected={selectedBar?.key === bar.key}
+                          onSelect={() => openBar(bar)}
+                        />
+                      ))}
+                      {more > 0 ? (
                         <button
                           type="button"
                           onClick={() => goDay(d.key)}
-                          className="px-0.5 text-left text-sm font-semibold text-muted hover:text-ink"
+                          className={[
+                            "px-0.5 text-left text-[10px] font-semibold hover:underline",
+                            inMonth ? "text-muted hover:text-ink" : "text-muted/60",
+                          ].join(" ")}
                         >
-                          +{list.length - visible.length} meer
+                          +{more} meer
+                        </button>
+                      ) : null}
+                      {list.length === 0 && inMonth && !readOnly && !afblokMode ? (
+                        <button
+                          type="button"
+                          onClick={() => openPlan(d.key)}
+                          className="mt-auto flex h-6 w-full items-center justify-center text-[10px] text-muted/40 hover:bg-wash hover:text-muted"
+                          title="Inplannen"
+                        >
+                          +
                         </button>
                       ) : null}
                     </div>

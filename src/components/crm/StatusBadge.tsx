@@ -8,6 +8,7 @@ import {
   afspraakStatusLabel,
   normalizeProjectStatus,
   resolveDisplayProjectStatus,
+  resolveProjectStatusLabel,
 } from "@/lib/labels";
 
 export function StatusBadge({
@@ -50,7 +51,10 @@ export function StatusBadge({
         ? resolveDisplayProjectStatus({ ...project, status: value })
         : normalizeProjectStatus(value)
       : value;
-  const label = (labels as Record<string, string>)[resolved] ?? value;
+  const label =
+    kind === "project"
+      ? resolveProjectStatusLabel(resolved, project)
+      : ((labels as Record<string, string>)[resolved] ?? value);
 
   return (
     <span

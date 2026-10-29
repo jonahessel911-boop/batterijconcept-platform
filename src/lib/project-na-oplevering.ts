@@ -20,7 +20,7 @@ async function ensureOpleveringAfrondTaken(
 /**
  * Na upload opleveringsrapport / opleverformulier (handtekening installateur):
  * zet status op installatie_voltooid + concept creditfactuur voor partner
- * + 2 backoffice-acties (overstap dynamische leverancier + BTW terugvrage, deadline 2 dagen).
+ * + backoffice-acties (overstap, BTW, review — deadline eerstvolgende werkdag na installatie).
  */
 export async function maybeAdvanceProjectNaOplevering(
   sb: SupabaseClient,
@@ -59,12 +59,31 @@ export async function maybeAdvanceProjectNaOplevering(
     return { advanced: false, from: current, to: null };
   }
 
-  // Al op installatie_voltooid: afrond-taken alsnog zekerstellen (idempotent)
+  // Al op installatie_voltooid: afrond-taken + concept-CF alsnog zekerstellen
   if (current === "installatie_voltooid") {
     await ensureOpleveringAfrondTaken(sb, projectId, current);
-    return { advanced: false, from: current, to: null };
+    let creditfactuur_id: string | null = null;
+    try {
+      const cf = await ensurePartnerInstallatieCreditfactuur(sb, projectId);
+      if (cf.ok && cf.creditfactuur_id) {
+        creditfactuur_id = cf.creditfactuur_id;
+      } else if (!cf.ok) {
+        console.error(
+          "ensurePartnerInstallatieCreditfactuur:",
+          cf.error || cf.skipped
+        );
+      }
+    } catch (e) {
+      console.error("ensurePartnerInstallatieCreditfactuur:", e);
+    }
+    return {
+      advanced: false,
+      from: current,
+      to: null,
+      creditfactuur_id,
+    };
   }
-  if (current === "review_gevraagd" || current === "service") {
+  if (current === "review_gevraagd" || current === "afgerond" || current === "service") {
     return { advanced: false, from: current, to: null };
   }
 

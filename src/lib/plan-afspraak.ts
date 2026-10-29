@@ -38,7 +38,7 @@ import { isFinancieringStatus } from "@/lib/financiering-status";
 import { normalizeRol } from "@/lib/rollen";
 
 export const AFSPRAAK_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)";
+  "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)";
 
 export type PlanAfspraakInput = {
   lead_id: string;
@@ -170,11 +170,11 @@ export async function planAfspraak(
     insertRow.ingepland_door_id = ingeplandDoor;
   }
 
-  // Terugbel / telefonisch: mag over bezette of afgeblokte fysieke blokken.
-  // Huisbezoeken blijven strikte agenda-regels volgen.
+  // Terugbel / telefonisch: mag over bezette of afgeblokte fysieke blokken
+  // én in geblokkeerde weken. Huisbezoeken blijven strikte agenda-regels volgen.
   const softSlot = isTerugbelSoort(soort) || afspraakMagOverBezetSlot(soort);
 
-  if (!isTerugbelSoort(soort)) {
+  if (!softSlot) {
     const { data: adviseurMeta } = await sb
       .from("adviseurs")
       .select("startdatum")
@@ -203,10 +203,7 @@ export async function planAfspraak(
       };
     }
 
-    if (
-      !softSlot &&
-      (await isSlotAfgeblokt(sb, input.adviseur_id, start))
-    ) {
+    if (await isSlotAfgeblokt(sb, input.adviseur_id, start)) {
       return {
         ok: false,
         status: 409,

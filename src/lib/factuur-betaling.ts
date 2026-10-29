@@ -211,6 +211,47 @@ export function factuurIsOverdue(opts: {
   return end.getTime() < (opts.now || new Date()).getTime();
 }
 
+/**
+ * Backoffice-actie voor openstaande (niet-credit) facturen:
+ * - `controleren`: klant gaf een betaaldatum door en die dag is bereikt
+ * - `opvolgen`: >1 kalenderdag na vervaldatum, nog geen afgesproken betaaldatum
+ */
+export function factuurOpvolgActie(opts: {
+  status: string;
+  vervaldatum?: string | null;
+  afgesproken_betaaldatum?: string | null;
+  betaald_op?: string | null;
+  credit_van_factuur_id?: string | null;
+  heeftCredit?: boolean;
+  now?: Date;
+}): "opvolgen" | "controleren" | null {
+  if (opts.credit_van_factuur_id) return null;
+  if (opts.heeftCredit) return null;
+  if (opts.status === "betaald" || opts.betaald_op) return null;
+  if (!factuurIsOpenstaand(opts.status)) return null;
+
+  const now = opts.now || new Date();
+  const today = formatInTimeZone(now, AMSTERDAM_TZ, "yyyy-MM-dd");
+  const afspraak = opts.afgesproken_betaaldatum?.slice(0, 10) || null;
+
+  if (afspraak) {
+    // Vanaf de afgesproken dag: betaling controleren
+    if (today >= afspraak) return "controleren";
+    return null;
+  }
+
+  const verval = opts.vervaldatum?.slice(0, 10) || null;
+  if (!verval) return null;
+
+  const daysLate = differenceInCalendarDays(
+    toZonedTime(new Date(`${today}T12:00:00`), AMSTERDAM_TZ),
+    toZonedTime(new Date(`${verval}T12:00:00`), AMSTERDAM_TZ)
+  );
+  // Langer dan 1 dag te laat
+  if (daysLate > 1) return "opvolgen";
+  return null;
+}
+
 export function betalingsOmschrijving(offerteNummer?: string | null): string {
   return (offerteNummer || "").trim() || "";
 }

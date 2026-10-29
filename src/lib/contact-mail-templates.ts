@@ -21,6 +21,10 @@ export function contactMailAnnuleringOfInstallatie(opts: {
   orderTotaalIncBtw?: number | null;
   projectNummer?: string | null;
   offerteNummer?: string | null;
+  /** Einddatum bedenktijd, bv. "14 oktober 2026". */
+  bedenktijdEindLabel?: string | null;
+  /** Startdatum bedenktijd (= ondertekening), optioneel. */
+  bedenktijdStartLabel?: string | null;
 }): { subject: string; bericht: string; kostenIncBtw: number | null } {
   const order = Number(opts.orderTotaalIncBtw);
   const hasOrder = Number.isFinite(order) && order > 0;
@@ -30,6 +34,8 @@ export function contactMailAnnuleringOfInstallatie(opts: {
   const orderLabel = hasOrder ? formatEuro(order) : null;
   const projectNr = opts.projectNummer?.trim() || null;
   const offNr = opts.offerteNummer?.trim() || null;
+  const eindLabel = opts.bedenktijdEindLabel?.trim() || null;
+  const startLabel = opts.bedenktijdStartLabel?.trim() || null;
 
   const subject = projectNr
     ? `Keuze: annulering of installatie — ${projectNr}`
@@ -39,11 +45,17 @@ export function contactMailAnnuleringOfInstallatie(opts: {
     .filter(Boolean)
     .join(" / ");
 
+  const bedenktijdZin = eindLabel
+    ? `Je wettelijke herroepingsrecht (bedenktijd van 14 dagen${
+        startLabel ? `, gestart op ${startLabel}` : ""
+      }) is verlopen op ${eindLabel}. Daarom vragen we je nu te kiezen tussen één van de volgende opties:`
+    : "Je wettelijke herroepingsrecht (bedenktijd van 14 dagen) is voorbij. Daarom vragen we je nu te kiezen tussen één van de volgende opties:";
+
   const bericht = [
     refs
       ? `We nemen contact met je op over ${refs}.`
       : "We nemen contact met je op over je bestelling.",
-    "Je wettelijke herroepingsrecht (bedenktijd) is voorbij. Daarom vragen we je nu te kiezen tussen één van de volgende opties:",
+    bedenktijdZin,
     `1. Installatie doorzetten — je werkt mee in het verdere proces (documenten, planning en eventuele financiering), zodat we de installatie kunnen uitvoeren.`,
     `2. Annuleren — dan ben je op grond van artikel ${AV_ANNULERING_ARTIKEL} van onze algemene voorwaarden ${pct}% annuleringskosten verschuldigd${
       orderLabel

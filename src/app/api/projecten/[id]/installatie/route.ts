@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { appBaseUrl, monteurCcEmail, sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import {
   installatieKlantEmail,
@@ -24,6 +24,7 @@ export async function POST(
   let body: {
     installatie_at?: string;
     installatie_partner_id?: string;
+    installatie_teamgenoot_id?: string | null;
     installatie_notities?: string | null;
   };
   try {
@@ -85,24 +86,68 @@ export async function POST(
       );
     }
 
+    let teamgenootId: string | null =
+      body.installatie_teamgenoot_id?.trim() || null;
+    let monteurNaam: string | null = null;
+    let monteurEmail: string | null = null;
+    if (teamgenootId) {
+      const { data: tg } = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, naam, email, actief")
+        .eq("id", teamgenootId)
+        .eq("partner_id", partner.id)
+        .maybeSingle();
+      if (!tg || tg.actief === false) {
+        return NextResponse.json(
+          { error: "Medewerker niet gevonden bij deze installateur" },
+          { status: 400 }
+        );
+      }
+      teamgenootId = tg.id;
+      monteurNaam = tg.naam;
+      monteurEmail = tg.email?.trim() || null;
+    }
+
     const installatieNotities = body.installatie_notities?.trim() || null;
-    const { data: updated, error: updateErr } = await sb
+    const updatePatch: Record<string, unknown> = {
+      installatie_at: installatieAt.toISOString(),
+      installatie_notities: installatieNotities,
+      installatie_partner_id: partner.id,
+      monteur: monteurNaam,
+      installatie_teamgenoot_id: teamgenootId,
+      status: "installatie_ingepland",
+      installatie_herinnering_verstuurd: false,
+      installatie_mail_klant_verstuurd: false,
+      installatie_mail_partner_verstuurd: false,
+    };
+
+    let { data: updated, error: updateErr } = await sb
       .from("projecten")
-      .update({
-        installatie_at: installatieAt.toISOString(),
-        installatie_notities: installatieNotities,
-        installatie_partner_id: partner.id,
-        monteur: partner.naam,
-        status: "installatie_ingepland",
-        installatie_herinnering_verstuurd: false,
-        installatie_mail_klant_verstuurd: false,
-        installatie_mail_partner_verstuurd: false,
-      })
+      .update(updatePatch)
       .eq("id", id)
       .select(
         "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
       )
       .single();
+
+    if (
+      updateErr &&
+      (updateErr.message?.includes("installatie_teamgenoot_id") ||
+        updateErr.code === "42703")
+    ) {
+      const fallback = { ...updatePatch };
+      delete fallback.installatie_teamgenoot_id;
+      const retry = await sb
+        .from("projecten")
+        .update(fallback)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
+        )
+        .single();
+      updated = retry.data;
+      updateErr = retry.error;
+    }
 
     if (updateErr || !updated) {
       return NextResponse.json(
@@ -202,7 +247,8 @@ export async function POST(
       };
     }
 
-    if (partner.email?.trim() && partner.portal_token) {
+    const monteurCc = monteurCcEmail(partner.email, monteurEmail);
+    if ((partner.email?.trim() || monteurCc) && partner.portal_token) {
       const portalUrl = `${appBaseUrl()}/installatie/${partner.portal_token}`;
       const html = installatiePartnerEmail({
         partnerNaam: partner.naam,
@@ -215,8 +261,12 @@ export async function POST(
         notities: installatieNotities,
         portalUrl,
       });
+      const to = partner.email?.trim() || monteurCc!;
+      const cc =
+        partner.email?.trim() && monteurCc ? monteurCc : null;
       const sent = await sendEmail({
-        to: partner.email.trim(),
+        to,
+        cc,
         subject: "Nieuwe installatie ingepland — Batterijconcept",
         html,
         tag: "installatie-partner",
@@ -229,9 +279,11 @@ export async function POST(
       mails.partner = {
         ok: false,
         skipped: true,
-        error: partner.email?.trim()
-          ? "Geen portal-token voor partner"
-          : "Geen e-mailadres op partner",
+        error: partner.portal_token
+          ? partner.email?.trim() || monteurCc
+            ? "Onbekende mailfout"
+            : "Geen e-mailadres op partner of monteur"
+          : "Geen portal-token voor partner",
       };
     }
 

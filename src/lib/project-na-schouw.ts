@@ -34,6 +34,7 @@ const PIPELINE_RANK: Record<string, number> = {
   installatie_ingepland: 9,
   installatie_voltooid: 10,
   review_gevraagd: 11,
+  afgerond: 12,
 };
 
 function rank(status: string | null | undefined): number {

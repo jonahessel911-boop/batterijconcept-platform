@@ -32,6 +32,7 @@ type Totals = {
   omzet_ex_btw: number;
   commissie_verwacht: number;
   commissie_verdiend: number;
+  commissie_uitbetaald: number;
   geannuleerd: number;
   netto: number;
   actief: number;
@@ -1401,7 +1402,7 @@ export function NettoBoord({
           </div>
 
           {totals ? (
-            <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-3 lg:grid-cols-6">
               {(
                 [
                   { id: "deals", label: "Deals", value: String(totals.aantal) },
@@ -1415,6 +1416,11 @@ export function NettoBoord({
                     label: "Commissie verwacht",
                     value: formatEuro(totals.commissie_verwacht),
                     accent: true,
+                  },
+                  {
+                    id: "uitbetaald",
+                    label: "Uitbetaald commissie",
+                    value: formatEuro(totals.commissie_uitbetaald || 0),
                   },
                   {
                     id: "getriggerd",

@@ -1,25 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { isPartnerVenster, type PartnerVenster } from "@/lib/partner-slots";
+import {
+  loadPartnerAfblokkingen,
+  togglePartnerAfblokking,
+} from "@/lib/partner-afblokkingen-db";
 
 export const runtime = "nodejs";
 
-function isMissingTable(error: { code?: string; message?: string } | null) {
-  if (!error) return false;
-  const msg = error.message || "";
-  return (
-    error.code === "42703" ||
-    error.code === "42P01" ||
-    error.code === "PGRST205" ||
-    msg.includes("partner_afblokkingen") ||
-    msg.includes("schema cache") ||
-    msg.includes("does not exist")
-  );
-}
-
 /**
- * GET /api/installatie-partners/afblokkingen?partner_id=…&van=yyyy-MM-dd&tot=yyyy-MM-dd
- * Of: ?partner_ids=id1,id2&van=…&tot=…
+ * GET ?partner_id=&van=&tot=&teamgenoot_id=
  */
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -27,6 +17,7 @@ export async function GET(req: NextRequest) {
   const tot = p.get("tot");
   const one = p.get("partner_id");
   const many = p.get("partner_ids");
+  const teamgenootId = p.get("teamgenoot_id")?.trim() || null;
   const ids = [
     ...(one ? [one] : []),
     ...(many
@@ -52,27 +43,25 @@ export async function GET(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
-      .from("partner_afblokkingen")
-      .select("id, partner_id, dag, venster")
-      .in("partner_id", ids)
-      .gte("dag", van)
-      .lte("dag", tot)
-      .order("dag")
-      .order("venster");
+    const result = await loadPartnerAfblokkingen(sb, {
+      partnerIds: ids,
+      van,
+      tot,
+      teamgenootId,
+    });
 
-    if (error) {
-      if (isMissingTable(error)) {
-        return NextResponse.json({
-          items: [],
-          hint: "Run supabase/migrate-partner-agenda.sql",
-          migration_required: true,
-        });
-      }
-      throw error;
+    if (result.error && result.items.length === 0 && !result.migrationRequired) {
+      return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
-    return NextResponse.json({ items: data || [] });
+    return NextResponse.json({
+      items: result.items,
+      per_monteur: result.perMonteur,
+      migration_required: result.migrationRequired || false,
+      hint: result.migrationRequired
+        ? "Run supabase/migrate-partner-afblokkingen-teamgenoot.sql"
+        : undefined,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Fout" },
@@ -82,8 +71,7 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/installatie-partners/afblokkingen
- * Body: { partner_id, dag: "yyyy-MM-dd", venster: "ochtend"|"middag", geblokkeerd: boolean }
+ * POST Body: { partner_id, dag, venster, geblokkeerd, teamgenoot_id? }
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -91,6 +79,7 @@ export async function POST(req: NextRequest) {
     dag?: string;
     venster?: string;
     geblokkeerd?: boolean;
+    teamgenoot_id?: string | null;
   };
   try {
     body = await req.json();
@@ -118,66 +107,51 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const geblokkeerd = body.geblokkeerd !== false;
-  const v = venster as PartnerVenster;
+  const teamgenootId = body.teamgenoot_id?.trim() || null;
 
   try {
     const sb = getSupabaseAdmin();
 
-    if (!geblokkeerd) {
-      const { error } = await sb
-        .from("partner_afblokkingen")
-        .delete()
+    if (teamgenootId) {
+      const { data: tg } = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id")
+        .eq("id", teamgenootId)
         .eq("partner_id", partner_id)
-        .eq("dag", dag)
-        .eq("venster", v);
-
-      if (error) {
-        if (isMissingTable(error)) {
-          return NextResponse.json(
-            {
-              error:
-                "Database-migratie ontbreekt. Run supabase/migrate-partner-agenda.sql in Supabase.",
-              migration_required: true,
-            },
-            { status: 503 }
-          );
-        }
-        throw error;
-      }
-      return NextResponse.json({
-        geblokkeerd: false,
-        message: `${dag} ${v} weer open`,
-      });
-    }
-
-    const { data, error } = await sb
-      .from("partner_afblokkingen")
-      .upsert(
-        { partner_id, dag, venster: v },
-        { onConflict: "partner_id,dag,venster" }
-      )
-      .select("id, partner_id, dag, venster")
-      .single();
-
-    if (error) {
-      if (isMissingTable(error)) {
+        .maybeSingle();
+      if (!tg) {
         return NextResponse.json(
-          {
-            error:
-              "Database-migratie ontbreekt. Run supabase/migrate-partner-agenda.sql in Supabase.",
-            migration_required: true,
-          },
-          { status: 503 }
+          { error: "Teamgenoot niet gevonden" },
+          { status: 400 }
         );
       }
-      throw error;
+    }
+
+    const result = await togglePartnerAfblokking(sb, {
+      partnerId: partner_id,
+      dag,
+      venster: venster as PartnerVenster,
+      geblokkeerd: body.geblokkeerd !== false,
+      teamgenootId,
+    });
+
+    if (result.error) {
+      return NextResponse.json(
+        {
+          error: result.error,
+          migration_required: result.migrationRequired,
+          per_monteur: result.perMonteur,
+        },
+        { status: 503 }
+      );
     }
 
     return NextResponse.json({
-      item: data,
-      geblokkeerd: true,
-      message: `${dag} ${v} geblokkeerd`,
+      item: result.item || null,
+      geblokkeerd: result.geblokkeerd,
+      message: result.message,
+      per_monteur: result.perMonteur,
+      migration_required: result.migrationRequired || false,
     });
   } catch (e) {
     return NextResponse.json(

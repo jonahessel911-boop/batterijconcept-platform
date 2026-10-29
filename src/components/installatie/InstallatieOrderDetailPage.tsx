@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { Project, ProjectFoto, ProjectStatus } from "@/types/database";
+import type {
+  InstallatiePartnerTeamgenoot,
+  Project,
+  ProjectFoto,
+  ProjectStatus,
+} from "@/types/database";
 import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import { adresRegel, formatDateTimeLongNl } from "@/lib/format";
 import { isOpleveringsrapport } from "@/lib/project-documenten";
@@ -56,6 +61,9 @@ export function InstallatieOrderDetailPage() {
     ondertekend_op: string | null;
   } | null>(null);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
+  const [teamgenoten, setTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -66,12 +74,20 @@ export function InstallatieOrderDetailPage() {
   const [status, setStatus] = useState<ProjectStatus>("schouwdag_ingepland");
   const [schouwNotities, setSchouwNotities] = useState("");
   const [installatieNotities, setInstallatieNotities] = useState("");
+  const [teamgenootId, setTeamgenootId] = useState("");
   const [opleverFormOpen, setOpleverFormOpen] = useState(false);
 
   const syncForm = useCallback((o: OrderDetail) => {
     setStatus(installerStatusOf(o));
     setSchouwNotities(o.schouw_notities || "");
     setInstallatieNotities(o.installatie_notities || "");
+    const tg = o.installatie_teamgenoot;
+    const tgOne = Array.isArray(tg) ? tg[0] : tg;
+    setTeamgenootId(
+      o.installatie_teamgenoot_id ||
+        tgOne?.id ||
+        ""
+    );
   }, []);
 
   const load = useCallback(async () => {
@@ -87,6 +103,9 @@ export function InstallatieOrderDetailPage() {
       setOrder(o);
       setOfferte(data.offerte || null);
       setFotos(data.fotos || []);
+      setTeamgenoten(
+        (data.teamgenoten || []) as InstallatiePartnerTeamgenoot[]
+      );
       syncForm(o);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
@@ -142,6 +161,15 @@ export function InstallatieOrderDetailPage() {
       },
       "notities",
       "Notities opgeslagen."
+    );
+  }
+
+  async function saveMedewerker(id: string) {
+    setTeamgenootId(id);
+    await patchOrder(
+      { installatie_teamgenoot_id: id || null },
+      "medewerker",
+      id ? "Medewerker gekoppeld." : "Medewerker ontkoppeld."
     );
   }
 
@@ -208,22 +236,27 @@ export function InstallatieOrderDetailPage() {
   const shownStatus = installerStatusOf(order);
 
   return (
-    <div className="min-h-screen bg-wash">
-      <header className="border-b border-line bg-green-dark px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-3xl">
+    <div className="min-h-screen bg-[#F7F9F7]">
+      <header className="border-b border-line bg-white">
+        <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-6 sm:py-6">
           <Link
             href={`/installatie/${token}`}
-            className="text-sm font-medium text-white/70 hover:text-white"
+            className="text-sm font-medium text-muted hover:text-ink"
           >
-            ← Alle orders
+            ← Agenda
           </Link>
-          <p className="mt-3 font-mono text-xs font-semibold text-orange">
-            {order.project_nummer}
+          <p className="mt-4 font-display text-[13px] font-semibold tracking-[0.04em] text-green-deeper">
+            Batterij<span className="text-orange">concept</span>
+            {order.project_nummer ? (
+              <span className="ml-2 font-mono text-xs font-semibold tracking-normal text-muted">
+                {order.project_nummer}
+              </span>
+            ) : null}
           </p>
-          <h1 className="mt-1 font-display text-2xl font-semibold text-white">
+          <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink">
             {lead?.naam || order.titel || "Order"}
           </h1>
-          <p className="mt-1 text-sm text-white/70">
+          <p className="mt-1 text-sm text-muted">
             {installerStatusLabel(shownStatus)}
           </p>
         </div>
@@ -285,6 +318,51 @@ export function InstallatieOrderDetailPage() {
             ) : null}
           </section>
         )}
+
+        <section className="border border-line bg-white p-5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            Medewerker
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Koppel wie van jullie team deze klus doet.
+          </p>
+          {teamgenoten.length === 0 ? (
+            <p className="mt-3 border border-line bg-[#FAFBFA] px-3 py-2.5 text-sm text-muted">
+              Nog geen monteurs. Voeg ze toe onder{" "}
+              <Link
+                href={`/installatie/${token}?tab=team`}
+                className="font-semibold text-green-deeper hover:underline"
+              >
+                Team
+              </Link>
+              .
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <select
+                value={teamgenootId}
+                disabled={busy === "medewerker"}
+                onChange={(e) => void saveMedewerker(e.target.value)}
+                className="min-h-11 flex-1 border border-line bg-white px-3 text-sm text-ink outline-none focus:border-green-deeper disabled:opacity-60"
+              >
+                <option value="">Nog niet gekoppeld…</option>
+                {teamgenoten.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.naam}
+                  </option>
+                ))}
+              </select>
+              {busy === "medewerker" ? (
+                <span className="text-xs text-muted">Opslaan…</span>
+              ) : null}
+            </div>
+          )}
+          {order.monteur && !teamgenootId ? (
+            <p className="mt-2 text-xs text-muted">
+              Huidige naam op project: {order.monteur}
+            </p>
+          ) : null}
+        </section>
 
         <section className="border border-line bg-white p-5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">

@@ -12,6 +12,13 @@ import {
   type MarketingMetaRow,
   type MarketingOfferte,
 } from "@/lib/marketing-rapportage";
+import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
+import { weekKeyString } from "@/lib/adviseur-beschikbaarheid";
+import {
+  leadsNeededForForwardHorizon,
+  type CeoPlanbaarAdviseur,
+} from "@/lib/ceo-unit-targets";
+import { getDaysInMonth } from "date-fns";
 import {
   conversieMonthRangeContaining,
   conversieWeekRangeContaining,
@@ -233,6 +240,91 @@ export async function GET(req: NextRequest) {
         (syncRes.data as { meta_laatste_sync_at?: string | null } | null)
           ?.meta_laatste_sync_at || null,
     });
+
+    // Oranje lijn: leads nodig per bucket (week = 7d vooruit, maand = dagen in maand)
+    try {
+      const { data: advRows } = await sb
+        .from("adviseurs")
+        .select("id, naam, email, rol, actief, startdatum")
+        .eq("actief", true);
+      const adviseursCap: CeoPlanbaarAdviseur[] = (advRows || [])
+        .filter((a) =>
+          isPlanbaarAdviseur({
+            naam: a.naam as string,
+            email: (a.email as string | null) ?? null,
+            actief: a.actief !== false,
+            rol: (a.rol as string | null) ?? null,
+          })
+        )
+        .map((a) => ({
+          id: a.id as string,
+          naam: (a.naam as string) || "Adviseur",
+          email: (a.email as string | null) ?? null,
+          rol: (a.rol as string | null) ?? null,
+          actief: a.actief !== false,
+          startdatum: (a.startdatum as string | null) ?? null,
+        }));
+      const adviseurIds = adviseursCap.map((a) => a.id);
+      const jaren = new Set<number>();
+      for (const w of result.series) {
+        jaren.add(Number(w.startYmd.slice(0, 4)));
+        jaren.add(Number(w.endYmd.slice(0, 4)));
+      }
+      for (const m of result.months) {
+        jaren.add(Number(m.startYmd.slice(0, 4)));
+        jaren.add(Number(m.endYmd.slice(0, 4)));
+      }
+      jaren.add(Number(today.slice(0, 4)));
+      const unavailableByAdviseur = new Map<string, Set<string>>();
+      if (adviseurIds.length > 0 && jaren.size > 0) {
+        const { data: unav } = await sb
+          .from("adviseur_beschikbaarheid")
+          .select("adviseur_id, jaar, week, beschikbaar")
+          .in("adviseur_id", adviseurIds)
+          .in("jaar", [...jaren])
+          .eq("beschikbaar", false);
+        for (const row of unav || []) {
+          const aid = row.adviseur_id as string;
+          const key = weekKeyString(row.jaar as number, row.week as number);
+          if (!unavailableByAdviseur.has(aid)) {
+            unavailableByAdviseur.set(aid, new Set());
+          }
+          unavailableByAdviseur.get(aid)!.add(key);
+        }
+      }
+
+      for (const w of result.series) {
+        const asOf = w.startYmd > today ? today : w.startYmd;
+        const need = await leadsNeededForForwardHorizon(sb, {
+          todayYmd: asOf,
+          forwardDays: 7,
+          lookbackDays: 7,
+          adviseursCap,
+          unavailableByAdviseur,
+        });
+        w.leadsNodig = need.targetLeads;
+        // Altijd ÷ 7 (volle week), niet ÷ aantal dagen tot vandaag
+        const dailyNeed = Math.ceil(need.targetLeads / 7);
+        for (const d of w.days || []) {
+          d.leadsNodig = dailyNeed;
+        }
+      }
+      for (const m of result.months) {
+        const [y, mo] = m.monthKey.split("-").map(Number);
+        const days = getDaysInMonth(new Date(y, mo - 1, 1));
+        const asOf = m.startYmd > today ? today : m.startYmd;
+        const need = await leadsNeededForForwardHorizon(sb, {
+          todayYmd: asOf,
+          forwardDays: days,
+          lookbackDays: Math.min(14, days),
+          adviseursCap,
+          unavailableByAdviseur,
+        });
+        m.leadsNodig = need.targetLeads;
+      }
+    } catch {
+      // Capaciteit optioneel — grafiek blijft werken zonder lijn
+    }
 
     return NextResponse.json({
       ok: true,

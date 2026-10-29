@@ -89,6 +89,10 @@ type ChartBucket = MarketingMetrics & {
   key: string;
   label: string;
   shortLabel: string;
+  /** Cumulatieve leads t/m deze bucket (dag-drill: schema) */
+  cumLeads?: number;
+  /** Cumulatief leads-doel t/m deze bucket (lineair over de week) */
+  cumLeadsNodig?: number;
 };
 
 function shiftMonthYm(ym: string, delta: number): string {
@@ -222,20 +226,36 @@ const METRIC_HEADERS = (
 function TrendChart({
   buckets,
   compareLabel,
+  onBucketClick,
+  paceMode = false,
 }: {
   buckets: ChartBucket[];
-  /** "vorige week" | "vorige maand" */
+  /** "vorige week" | "vorige maand" | "vorige dag" */
   compareLabel: string;
+  onBucketClick?: (bucket: ChartBucket) => void;
+  /** Dag-drill: oranje lijn = cumulatief weekdoel (op schema) */
+  paceMode?: boolean;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverBi, setHoverBi] = useState<number | null>(null);
   const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
 
   const maxSpend = Math.max(1, ...buckets.map((b) => b.spend));
-  const maxLeads = Math.max(1, ...buckets.map((b) => b.leads));
-  const maxRoas = Math.max(
+  // Staven: dagelijkse/wekelijkse leads (+ dagtotaal-doel)
+  const maxLeads = Math.max(
     1,
-    ...buckets.map((b) => (b.roas != null && b.roas > 0 ? b.roas : 0))
+    ...buckets.map((b) => b.leads),
+    ...buckets.map((b) =>
+      b.leadsNodig != null && b.leadsNodig > 0 ? b.leadsNodig : 0
+    )
+  );
+  // Schema-lijnen (cumulatief) op eigen schaal zodat staven leesbaar blijven
+  const maxPace = Math.max(
+    1,
+    ...buckets.map((b) => b.cumLeads ?? 0),
+    ...buckets.map((b) =>
+      b.cumLeadsNodig != null && b.cumLeadsNodig > 0 ? b.cumLeadsNodig : 0
+    )
   );
   const w = 1200;
   const h = 480;
@@ -249,20 +269,48 @@ function TrendChart({
   const step = innerW / n;
   const barScale = 0.92;
 
-  const roasPts = buckets.map((bk, i) => {
+  function yForLeads(v: number) {
+    return (
+      padT +
+      innerH * (1 - (Math.min(maxLeads, Math.max(0, v)) / maxLeads) * barScale)
+    );
+  }
+  function yForPace(v: number) {
+    return (
+      padT +
+      innerH * (1 - (Math.min(maxPace, Math.max(0, v)) / maxPace) * barScale)
+    );
+  }
+
+  // Oranje lijn = leads nodig (week) of cumulatief schema (dag-drill)
+  const needPts = buckets.map((bk, i) => {
     const x = padL + step * (i + 0.5);
-    const r = bk.roas;
+    const nNeed = paceMode ? bk.cumLeadsNodig : bk.leadsNodig;
     const y =
-      r == null
+      nNeed == null || nNeed <= 0
         ? null
-        : padT +
-          innerH * (1 - (Math.min(maxRoas, Math.max(0, r)) / maxRoas) * barScale);
-    return { x, y, r };
+        : paceMode
+          ? yForPace(nNeed)
+          : yForLeads(nNeed);
+    return { x, y, nNeed };
   });
-  const lineD = roasPts
-    .filter((p): p is { x: number; y: number; r: number } => p.y != null)
+  const lineD = needPts
+    .filter(
+      (p): p is { x: number; y: number; nNeed: number } => p.y != null
+    )
     .map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
     .join(" ");
+
+  // Cumulatieve actuals (alleen paceMode) — tweede lijn om schema te zien
+  const cumActualD = paceMode
+    ? buckets
+        .map((bk, i) => {
+          const x = padL + step * (i + 0.5);
+          const y = yForPace(bk.cumLeads ?? 0);
+          return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+        })
+        .join(" ")
+    : "";
 
   function updateTipPos(e: MouseEvent) {
     const el = wrapRef.current;
@@ -283,6 +331,7 @@ function TrendChart({
     ? {
         spend: pctChange(tip.spend, tipPrev?.spend),
         leads: pctChange(tip.leads, tipPrev?.leads),
+        afspraken: pctChange(tip.afspraken, tipPrev?.afspraken),
         cpl: pctChange(tip.cpl, tipPrev?.cpl),
         cpa: pctChange(tip.cpa, tipPrev?.cpa),
         cac: pctChange(tip.cac, tipPrev?.cac),
@@ -297,8 +346,8 @@ function TrendChart({
           const box = wrapRef.current;
           const width = box?.clientWidth ?? 400;
           const height = box?.clientHeight ?? 320;
-          const tipW = 220;
-          const tipH = tipPrev ? 210 : 150;
+          const tipW = tip?.leadsNodig != null ? 268 : 228;
+          const tipH = tipPrev ? 250 : 190;
           const preferLeft = tipPos.x > width * 0.55;
           let left = preferLeft
             ? tipPos.x - tipW - 12
@@ -318,46 +367,63 @@ function TrendChart({
 
   const tipRows: {
     label: string;
-    value: string;
+    huidig: string;
+    doel: string | null;
     delta: number | null;
-    emphasize?: boolean;
   }[] = tip
     ? [
-        { label: "Spend", value: formatEuro(tip.spend), delta: tipDeltas?.spend ?? null },
-        { label: "Leads", value: num(tip.leads), delta: tipDeltas?.leads ?? null },
+        {
+          label: "Spend",
+          huidig: formatEuro(tip.spend),
+          doel: null,
+          delta: tipDeltas?.spend ?? null,
+        },
+        {
+          label: "Leads",
+          huidig: num(tip.leads),
+          doel: tip.leadsNodig != null ? num(tip.leadsNodig) : null,
+          delta: tipDeltas?.leads ?? null,
+        },
+        {
+          label: "Afspr.",
+          huidig: num(tip.afspraken),
+          doel: null,
+          delta: tipDeltas?.afspraken ?? null,
+        },
         {
           label: "CPL",
-          value: tip.cpl != null ? formatEuro(tip.cpl) : "—",
+          huidig: tip.cpl != null ? formatEuro(tip.cpl) : "—",
+          doel: null,
           delta: tipDeltas?.cpl ?? null,
         },
         {
           label: "CPA",
-          value: tip.cpa != null ? formatEuro(tip.cpa) : "—",
+          huidig: tip.cpa != null ? formatEuro(tip.cpa) : "—",
+          doel: null,
           delta: tipDeltas?.cpa ?? null,
         },
         {
           label: "CPD",
-          value: tip.cac != null ? formatEuro(tip.cac) : "—",
+          huidig: tip.cac != null ? formatEuro(tip.cac) : "—",
+          doel: null,
           delta: tipDeltas?.cac ?? null,
         },
         {
           label: "Omzet",
-          value: formatEuro(tip.omzet),
+          huidig: formatEuro(tip.omzet),
+          doel: null,
           delta: tipDeltas?.omzet ?? null,
         },
         {
-          label: "RPA",
-          value: tip.rpa != null ? formatEuro(tip.rpa) : "—",
-          delta: tipDeltas?.rpa ?? null,
-        },
-        {
           label: "ROAS",
-          value: fmtRoas(tip.roas),
+          huidig: fmtRoas(tip.roas),
+          doel: null,
           delta: tipDeltas?.roas ?? null,
-          emphasize: true,
         },
       ]
     : [];
+  const showDoelCol = tipRows.some((r) => r.doel != null);
+  const showDeltaCol = Boolean(tipPrev);
 
   return (
     <div className="space-y-2">
@@ -381,11 +447,11 @@ function TrendChart({
             const base = padT + innerH;
             const active = hoverBi === i;
             const prev = i > 0 ? buckets[i - 1] : null;
-            const dRoas = pctChange(bk.roas, prev?.roas);
+            const dLeads = pctChange(bk.leads, prev?.leads);
             return (
               <g
                 key={bk.key}
-                className="cursor-pointer"
+                className={onBucketClick ? "cursor-pointer" : "cursor-default"}
                 onMouseEnter={(e) => {
                   setHoverBi(i);
                   updateTipPos(e);
@@ -394,6 +460,7 @@ function TrendChart({
                   setHoverBi(i);
                   updateTipPos(e);
                 }}
+                onClick={() => onBucketClick?.(bk)}
               >
                 <rect
                   x={cx - step * 0.45}
@@ -428,23 +495,36 @@ function TrendChart({
                 >
                   {bk.shortLabel}
                 </text>
-                {dRoas != null ? (
+                {dLeads != null ? (
                   <text
                     x={cx}
                     y={h - 10}
                     textAnchor="middle"
                     fill={
-                      dRoas > 0 ? "#0a4727" : dRoas < 0 ? "#C45A12" : "#6b7280"
+                      dLeads > 0 ? "#0a4727" : dLeads < 0 ? "#C45A12" : "#6b7280"
                     }
                     fontSize={12}
                     fontWeight={700}
                   >
-                    {fmtPctDelta(dRoas)}
+                    {fmtPctDelta(dLeads)}
                   </text>
                 ) : null}
               </g>
             );
           })}
+          {cumActualD ? (
+            <path
+              d={cumActualD}
+              fill="none"
+              stroke="#0a4727"
+              strokeWidth={2.5}
+              strokeDasharray="6 4"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              pointerEvents="none"
+              opacity={0.85}
+            />
+          ) : null}
           {lineD ? (
             <path
               d={lineD}
@@ -466,28 +546,69 @@ function TrendChart({
               <MetaMark className="h-3 w-[18px] shrink-0" />
               <span className="truncate">{tip.label}</span>
             </p>
-            <div className="grid grid-cols-[auto_1fr_auto] gap-x-2 gap-y-0.5 tabular-nums">
-              {tipRows.map((row) => (
-                <Fragment key={row.label}>
-                  <span className="text-muted">{row.label}</span>
-                  <span
-                    className={[
-                      "text-right font-semibold",
-                      row.emphasize ? "text-green-dark" : "text-ink",
-                    ].join(" ")}
-                  >
-                    {row.value}
+            <table className="w-full border-collapse text-[11px] tabular-nums">
+              <thead>
+                <tr className="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                  <th className="pb-1 pr-2 text-left font-semibold" />
+                  <th className="pb-1 pl-2 text-right font-semibold">Huidig</th>
+                  {showDoelCol ? (
+                    <th className="pb-1 pl-2 text-right font-semibold">Doel</th>
+                  ) : null}
+                  {showDeltaCol ? (
+                    <th className="pb-1 pl-2 text-right font-semibold">Δ</th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {tipRows.map((row) => (
+                  <tr key={row.label}>
+                    <td className="py-0.5 pr-2 text-left text-muted">
+                      {row.label}
+                    </td>
+                    <td className="py-0.5 pl-2 text-right font-semibold text-ink">
+                      {row.huidig}
+                    </td>
+                    {showDoelCol ? (
+                      <td
+                        className={`py-0.5 pl-2 text-right font-semibold ${
+                          row.doel != null ? "text-green-dark" : "text-muted/40"
+                        }`}
+                      >
+                        {row.doel ?? "—"}
+                      </td>
+                    ) : null}
+                    {showDeltaCol ? (
+                      <td
+                        className={`py-0.5 pl-2 text-right font-semibold ${deltaTone(row.delta)}`}
+                      >
+                        {fmtPctDelta(row.delta)}
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {paceMode && tip.cumLeads != null && tip.cumLeadsNodig != null ? (
+              <p className="mt-1.5 text-[10px] tabular-nums text-muted">
+                Cum.{" "}
+                <span className="font-semibold text-ink">
+                  {num(tip.cumLeads)}
+                </span>
+                {" / "}
+                <span className="font-semibold text-[#C45A12]">
+                  {num(tip.cumLeadsNodig)}
+                </span>
+                {tip.cumLeads >= tip.cumLeadsNodig ? (
+                  <span className="ml-1 font-semibold text-green-dark">
+                    op schema
                   </span>
-                  <span
-                    className={`min-w-[2.75rem] text-right font-semibold ${
-                      tipPrev ? deltaTone(row.delta) : "text-transparent"
-                    }`}
-                  >
-                    {tipPrev ? fmtPctDelta(row.delta) : "·"}
+                ) : (
+                  <span className="ml-1 font-semibold text-[#C45A12]">
+                    −{num(tip.cumLeadsNodig - tip.cumLeads)}
                   </span>
-                </Fragment>
-              ))}
-            </div>
+                )}
+              </p>
+            ) : null}
             {tipPrev ? (
               <p className="mt-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
                 Δ vs {compareLabel}
@@ -532,6 +653,8 @@ export function MarketingPanel({
   const [syncing, setSyncing] = useState(false);
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const [openWeeks, setOpenWeeks] = useState<Set<string>>(new Set());
+  /** Week-key waarnaar is ingezoomd (dag-breakdown); null = weekoverzicht */
+  const [drillWeekKey, setDrillWeekKey] = useState<string | null>(null);
 
   const weekOptions = useMemo(() => {
     const base = agendaWeekJumpOptions(26, 2);
@@ -674,6 +797,11 @@ export function MarketingPanel({
     return data.totals;
   }, [data, mode, monthYm]);
 
+  const drillWeek = useMemo(() => {
+    if (!data || !drillWeekKey || mode !== "weeks") return null;
+    return data.series.find((w) => w.weekKey === drillWeekKey) ?? null;
+  }, [data, drillWeekKey, mode]);
+
   const chartBuckets: ChartBucket[] = useMemo(() => {
     if (!data) return [];
     if (mode === "month") {
@@ -712,12 +840,52 @@ export function MarketingPanel({
           rpa: m.rpa,
           roas: m.roas,
           roi: m.roi,
+          leadsNodig: m.leadsNodig ?? null,
         }));
       const first = months.findIndex(
         (m) => m.spend > 0 || m.leads > 0 || m.afspraken > 0 || m.deals > 0
       );
       return first > 0 ? months.slice(first) : months;
     }
+
+    // Dag-drill: alle dagen van de aangeklikte week + cumulatief schema
+    if (drillWeek) {
+      const weekNeed = drillWeek.leadsNodig ?? 0;
+      const nDays = 7;
+      let cumLeads = 0;
+      return (drillWeek.days || []).map((d, i) => {
+        cumLeads += d.leads;
+        const cumLeadsNodig =
+          weekNeed > 0
+            ? Math.round((weekNeed * (i + 1)) / nDays)
+            : d.leadsNodig ?? null;
+        const dayParts = d.label.split(/\s+/);
+        const shortLabel =
+          dayParts.length >= 2
+            ? `${dayParts[0].replace(/\.$/, "")} ${dayParts[1]}`
+            : d.dayKey.slice(8);
+        return {
+          key: d.dayKey,
+          label: d.label,
+          shortLabel,
+          spend: d.spend,
+          leads: d.leads,
+          afspraken: d.afspraken,
+          deals: d.deals,
+          omzet: d.omzet,
+          cpl: d.cpl,
+          cpa: d.cpa,
+          cac: d.cac,
+          rpa: d.rpa,
+          roas: d.roas,
+          roi: d.roi,
+          leadsNodig: d.leadsNodig ?? null,
+          cumLeads,
+          cumLeadsNodig: cumLeadsNodig ?? undefined,
+        };
+      });
+    }
+
     // Weekview: afgelopen 12 weken, start bij eerste week mét data
     const weeks = data.series.map((w) => ({
       key: w.weekKey,
@@ -734,15 +902,24 @@ export function MarketingPanel({
       rpa: w.rpa,
       roas: w.roas,
       roi: w.roi,
+      leadsNodig: w.leadsNodig ?? null,
     }));
     const first = weeks.findIndex(
       (w) => w.spend > 0 || w.leads > 0 || w.afspraken > 0 || w.deals > 0
     );
     return first > 0 ? weeks.slice(first) : weeks;
-  }, [data, mode]);
+  }, [data, mode, drillWeek]);
 
-  const compareLabel = mode === "month" ? "vorige maand" : "vorige week";
-  const chartTitle = mode === "month" ? "Per maand" : "Per week";
+  const compareLabel = drillWeek
+    ? "vorige dag"
+    : mode === "month"
+      ? "vorige maand"
+      : "vorige week";
+  const chartTitle = drillWeek
+    ? drillWeek.label
+    : mode === "month"
+      ? "Per maand"
+      : "Per week";
 
   return (
     <div className="space-y-4">
@@ -769,7 +946,10 @@ export function MarketingPanel({
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setMode(id)}
+                    onClick={() => {
+                      setMode(id);
+                      setDrillWeekKey(null);
+                    }}
                     className={[
                       "px-2.5 py-1.5 text-xs font-semibold transition",
                       mode === id
@@ -798,7 +978,10 @@ export function MarketingPanel({
                   Eindweek
                   <select
                     value={weekKey}
-                    onChange={(e) => setWeekKey(e.target.value)}
+                    onChange={(e) => {
+                      setWeekKey(e.target.value);
+                      setDrillWeekKey(null);
+                    }}
                     className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
                   >
                     {weekOptions.map((o) => (
@@ -879,14 +1062,66 @@ export function MarketingPanel({
           </div>
 
           <section className="overflow-hidden rounded-2xl border border-line bg-white">
-            <header className="border-b border-line px-4 py-3">
-              <p className="flex items-center gap-2 font-display text-sm font-semibold text-ink">
-                <MetaMark className="h-3.5 w-5" />
-                {chartTitle}
-              </p>
+            <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+              <div className="flex items-center gap-2">
+                {drillWeek ? (
+                  <button
+                    type="button"
+                    onClick={() => setDrillWeekKey(null)}
+                    className="rounded border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash"
+                  >
+                    ← Weken
+                  </button>
+                ) : null}
+                <p className="flex items-center gap-2 font-display text-sm font-semibold text-ink">
+                  <MetaMark className="h-3.5 w-5" />
+                  {chartTitle}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-3 bg-[#A8D5B5]" />
+                  Spend
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-3 bg-[#0a4727]" />
+                  Leads
+                </span>
+                {drillWeek ? (
+                  <>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-[#0a4727]" />
+                      Cum. leads
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-0.5 w-4 bg-[#C45A12]" />
+                      Schema (doel)
+                    </span>
+                  </>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block h-0.5 w-4 bg-[#C45A12]" />
+                    Leads nodig
+                  </span>
+                )}
+              </div>
             </header>
             <div className="px-1 py-3 sm:px-2">
-              <TrendChart buckets={chartBuckets} compareLabel={compareLabel} />
+              <TrendChart
+                buckets={chartBuckets}
+                compareLabel={compareLabel}
+                paceMode={Boolean(drillWeek)}
+                onBucketClick={
+                  mode === "weeks" && !drillWeek
+                    ? (bk) => setDrillWeekKey(bk.key)
+                    : undefined
+                }
+              />
+              {mode === "weeks" && !drillWeek ? (
+                <p className="px-3 pb-1 text-center text-[10px] text-muted">
+                  Klik op een week voor de dagen
+                </p>
+              ) : null}
             </div>
           </section>
 

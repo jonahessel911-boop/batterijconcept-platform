@@ -90,6 +90,8 @@ export type NettoBoardRow = {
   commissie_tranche_a_triggered: boolean;
   commissie_tranche_b_triggered: boolean;
   commissie_verdiend: number;
+  /** Som van getriggerde tranches waarvan de CF status=betaald is. */
+  commissie_uitbetaald: number;
   fases: NettoFase[];
   progress_done: number;
   progress_total: number;
@@ -235,6 +237,7 @@ const PIPELINE: ProjectStatus[] = [
   "installatie_ingepland",
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
 ];
 
 /** Warmtefonds-subpipeline — niet via algemene pipeline-rank afleiden. */
@@ -316,7 +319,7 @@ function reached(
 ): boolean {
   const st = normalizeProjectStatus(status);
   if (st === "annulering") return false;
-  if (st === "service" || st === "review_gevraagd" || st === "installatie_voltooid") {
+  if (st === "service" || st === "review_gevraagd" || st === "afgerond" || st === "installatie_voltooid") {
     return rank(target) <= rank("installatie_voltooid");
   }
   return rank(st) >= rank(target);
@@ -534,6 +537,7 @@ export function buildNettoFases(ctx: BuildCtx): NettoFase[] {
       !cancelled &&
         (Boolean(ctx.reviewGevraagdAt) ||
           reached(st, "review_gevraagd") ||
+          reached(st, "afgerond") ||
           normalizeProjectStatus(st) === "service"),
       ctx.reviewGevraagdAt || null
     ),

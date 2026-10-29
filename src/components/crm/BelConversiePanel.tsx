@@ -31,7 +31,7 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import { useCrmSession } from "@/hooks/useCrmSession";
-import { BelSlotsCompactView } from "./BelSlotsCompactView";
+import { BELLER_PER_INGEPLANDE_AFSPRAAK } from "@/lib/ops-commissie";
 
 type BelConversieBellerOption = {
   id: string;
@@ -54,6 +54,13 @@ type BelConversieData = {
     nonNieuwLeadToAppt?: number | null;
   };
   lockBeller?: boolean;
+  /** Beller-account: simpele eigen tellers (geen team-doelen). */
+  mijn?: {
+    ingeplandPeriode: number;
+    ingeplandDezeWeek: number;
+    ingeplandVandaag: number;
+    verdiendEuro: number;
+  } | null;
   targets?: BelConversieTargets;
   recenteAfspraken?: BelConversieRecenteAfspraak[];
   series?: BelConversieSeriesBucket[];
@@ -399,7 +406,7 @@ function BelSeriesChart({
                 <span className="font-semibold text-[#C45A12]">
                   {num(tip.geannuleerd)}
                   {tip.annuleringsPct != null
-                    ? ` (${num(tip.annuleringsPct, 1)}%)`
+                    ? ` (${num(tip.annuleringsPct, 1)}% van geplaatst)`
                     : ""}
                 </span>
               </li>
@@ -447,6 +454,8 @@ export function BelConversiePanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const lockBeller = Boolean(data?.lockBeller) || rol === "beller";
+  /** Huisbezoekenlijst alleen bij teamoverzicht; week-/dagoel altijd (bedrijfsdoel). */
+  const showTeamExtras = !lockBeller && !bellerId;
 
   const weekOptions = useMemo(() => {
     const base = agendaWeekJumpOptions(26, 4);
@@ -575,15 +584,14 @@ export function BelConversiePanel() {
   }, [series]);
 
   /**
-   * Weekdoel = dagoel × 5 (tempo om 2 weken vol te plannen).
+   * Weekdoel = dagoel × 5 (tempo: vrije slots komende ~2 weken + uitval).
    * Dagoel = vrije slots over horizon ÷ werkdagen (+20% uitval), evt. hoger bij inhaal.
    */
+  /** Altijd teamtargets — nooit persoonlijke conversie als fallback. */
   const weekTarget = useMemo(() => {
     const t = data?.targets;
     const doel = Math.round(t?.doelDezeWeek ?? 0);
-    const gepland = Math.round(
-      t?.geplandDezeWeek ?? seriesSums.ingepland ?? totals?.ingepland ?? 0
-    );
+    const gepland = Math.round(t?.geplandDezeWeek ?? 0);
     if (doel <= 0 && gepland <= 0) return null;
     const pct =
       t?.pctDezeWeek != null
@@ -600,7 +608,7 @@ export function BelConversiePanel() {
           ? gepland >= doel
           : false;
     return { doel, gepland, pct, gehaald };
-  }, [data?.targets, seriesSums.ingepland, totals?.ingepland]);
+  }, [data?.targets]);
 
   const dayTarget = useMemo(() => {
     const t = data?.targets;
@@ -618,48 +626,85 @@ export function BelConversiePanel() {
     };
   }, [data?.targets]);
 
+  const selectedWeekInfo = useMemo(
+    () => schouwWeekFromDate(`${anchorYmd}T12:00:00`),
+    [anchorYmd]
+  );
+
+  const mijn = data?.mijn;
+  const bellerSimpel = lockBeller;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-display text-lg font-semibold text-ink">
-            Bel conversie
+            {bellerSimpel ? "Mijn planning" : "Bel conversie"}
           </p>
           <p className="mt-0.5 text-xs text-muted">
-            Één staaf per {mode === "week" ? "dag" : "week"}
-            {lockBeller
-              ? ` · ${session?.naam || "jouw belpogingen"}`
-              : bellerId
-                ? ` · ${bellerOptions.find((b) => b.id === bellerId)?.naam || "beller"}`
-                : " · alle bellers"}
+            {bellerSimpel
+              ? `${session?.naam || "Jij"} · ingepland & verdiensten`
+              : `Één staaf per ${mode === "week" ? "dag" : "week"}${
+                  bellerId
+                    ? ` · ${bellerOptions.find((b) => b.id === bellerId)?.naam || "beller"}`
+                    : " · alle bellers"
+                }`}
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <div className="flex flex-wrap justify-end gap-1.5">
-            {(
-              [
-                ["week", "Week (per dag)"],
-                ["month", "Maand (per week)"],
-              ] as const
-            ).map(([id, label]) => {
-              const active = mode === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setMode(id)}
-                  className={[
-                    "rounded-lg px-2.5 py-1.5 text-xs font-semibold transition",
-                    active
-                      ? "bg-[#0a4727] text-white"
-                      : "border border-line bg-white text-muted hover:bg-wash hover:text-ink",
-                  ].join(" ")}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          {!bellerSimpel ? (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {(
+                [
+                  ["week", "Week (per dag)"],
+                  ["month", "Maand (per week)"],
+                ] as const
+              ).map(([id, label]) => {
+                const active = mode === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setMode(id)}
+                    className={[
+                      "rounded-lg px-2.5 py-1.5 text-xs font-semibold transition",
+                      active
+                        ? "bg-[#0a4727] text-white"
+                        : "border border-line bg-white text-muted hover:bg-wash hover:text-ink",
+                    ].join(" ")}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {(
+                [
+                  ["week", "Deze week"],
+                  ["month", "Deze maand"],
+                ] as const
+              ).map(([id, label]) => {
+                const active = mode === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setMode(id)}
+                    className={[
+                      "rounded-lg px-2.5 py-1.5 text-xs font-semibold transition",
+                      active
+                        ? "bg-[#0a4727] text-white"
+                        : "border border-line bg-white text-muted hover:bg-wash hover:text-ink",
+                    ].join(" ")}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div className="flex flex-wrap items-end justify-end gap-2">
             {!lockBeller ? (
               <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -735,9 +780,79 @@ export function BelConversiePanel() {
 
       {loading && !data ? (
         <p className="text-sm text-muted">Laden…</p>
+      ) : data && bellerSimpel ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Ingepland
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+                {num(mijn?.ingeplandPeriode ?? totals?.ingepland)}
+              </p>
+              <p className="mt-1 text-xs text-muted">{rangeLabel}</p>
+            </div>
+            <div className="rounded-2xl border border-green/30 bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Verdiend
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-green-dark">
+                €
+                {num(
+                  mijn?.verdiendEuro ??
+                    Math.round(
+                      Math.max(0, totals?.ingepland ?? 0) *
+                        BELLER_PER_INGEPLANDE_AFSPRAAK *
+                        100
+                    ) / 100
+                )}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                €{BELLER_PER_INGEPLANDE_AFSPRAAK} per ingepland
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Deze week
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+                {num(mijn?.ingeplandDezeWeek)}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Week {selectedWeekInfo.week}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Vandaag
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+                {num(mijn?.ingeplandVandaag)}
+              </p>
+              <p className="mt-1 text-xs text-muted">{today}</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-line bg-white p-5 sm:p-6">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                  {mode === "week" ? "Per dag" : "Per week"}
+                </p>
+                <p className="mt-0.5 text-xs text-muted">
+                  Staven = jouw belresultaat · lijn = teamdoel
+                </p>
+              </div>
+              {loading ? (
+                <span className="text-xs text-muted">Vernieuwen…</span>
+              ) : null}
+            </div>
+            <BelSeriesChart series={series} granularity={granularity} />
+          </div>
+        </>
       ) : data ? (
         <>
-          <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-8">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-8">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -757,13 +872,11 @@ export function BelConversiePanel() {
             <div
               className={[
                 "rounded-2xl border bg-white p-4",
-                weekTarget?.gehaald
-                  ? "border-green/40"
-                  : "border-line",
+                weekTarget?.gehaald ? "border-green/40" : "border-line",
               ].join(" ")}
             >
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                {mode === "week" ? "Weekdoel" : "Periodedoel"}
+                {mode === "week" ? "Team weekdoel" : "Team maanddoel"}
               </p>
               <p
                 className={[
@@ -791,9 +904,6 @@ export function BelConversiePanel() {
                     ? `Gehaald · ${num(weekTarget.pct)}%`
                     : `Nog niet · ${num(weekTarget.pct)}%`}
               </p>
-              <p className="mt-0.5 text-[10px] text-muted">
-                Tempo 2 weken vol · dagoel × 5
-              </p>
             </div>
             <div
               className={[
@@ -802,7 +912,7 @@ export function BelConversiePanel() {
               ].join(" ")}
             >
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                Dagoel
+                Team dagoel
               </p>
               <p
                 className={[
@@ -829,13 +939,6 @@ export function BelConversiePanel() {
                   : dayTarget.gehaald
                     ? `Gehaald · ${num(dayTarget.pct)}%`
                     : `Nog niet · ${num(dayTarget.pct)}%`}
-              </p>
-              <p className="mt-0.5 text-[10px] text-muted">
-                {data?.targets?.horizonNog != null && data.targets.horizonNog > 0
-                  ? `${num(data.targets.horizonNog)} vrij t/m +2 wkn · +20% uitval`
-                  : dayTarget && dayTarget.resterendeDagen > 0
-                    ? `Restant week ÷ ${dayTarget.resterendeDagen} dag${dayTarget.resterendeDagen === 1 ? "" : "en"}`
-                    : "Tempo om horizon vol te plannen"}
               </p>
             </div>
             <div className="rounded-2xl border border-green/30 bg-white p-4">
@@ -884,8 +987,6 @@ export function BelConversiePanel() {
             </div>
           </div>
 
-          <BelSlotsCompactView days={14} />
-
           <div className="rounded-2xl border border-line bg-white p-5 sm:p-6">
             <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
               <div>
@@ -916,9 +1017,11 @@ export function BelConversiePanel() {
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     Ingepland
                   </th>
-                  <th className="px-3 py-2.5 font-semibold tabular-nums">
-                    Doel
-                  </th>
+                  {showTeamExtras ? (
+                    <th className="px-3 py-2.5 font-semibold tabular-nums">
+                      Doel
+                    </th>
+                  ) : null}
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     L→A %
                   </th>
@@ -940,7 +1043,7 @@ export function BelConversiePanel() {
                 {series.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={showTeamExtras ? 8 : 7}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Geen data in deze periode.
@@ -961,9 +1064,11 @@ export function BelConversiePanel() {
                       <td className="px-3 py-2.5 tabular-nums text-ink">
                         {num(b.ingepland)}
                       </td>
-                      <td className="px-3 py-2.5 tabular-nums text-[#C45A12]">
-                        {(b.doel || 0) > 0 ? num(b.doel) : "—"}
-                      </td>
+                      {showTeamExtras ? (
+                        <td className="px-3 py-2.5 tabular-nums text-[#C45A12]">
+                          {(b.doel || 0) > 0 ? num(b.doel) : "—"}
+                        </td>
+                      ) : null}
                       <td className="px-3 py-2.5 font-semibold tabular-nums text-green-dark">
                         {b.leadToAppt != null
                           ? `${num(b.leadToAppt, 1)}%`
@@ -982,7 +1087,7 @@ export function BelConversiePanel() {
                             <span className="ml-1 text-[11px] font-normal text-muted">
                               (
                               {b.annuleringsPct != null
-                                ? `${num(b.annuleringsPct, 1)}%`
+                                ? `${num(b.annuleringsPct, 1)}% van geplaatst`
                                 : "—"}
                               )
                             </span>
@@ -1004,6 +1109,7 @@ export function BelConversiePanel() {
             </table>
           </div>
 
+          {showTeamExtras ? (
           <div className="overflow-x-auto rounded-2xl border border-line bg-white">
             <div className="border-b border-line px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -1101,6 +1207,7 @@ export function BelConversiePanel() {
               </tbody>
             </table>
           </div>
+          ) : null}
         </>
       ) : null}
     </div>

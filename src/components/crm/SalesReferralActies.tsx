@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useCrmSession } from "@/hooks/useCrmSession";
 import {
   REFERRAL_TAK_AUTO_KEY,
   REFERRAL_TAK_TITEL,
@@ -11,13 +12,14 @@ type ReferralTaak = {
   id: string;
   titel: string;
   project_id: string;
+  verantwoordelijke_id?: string | null;
   projecten?: {
     id: string;
     project_nummer?: string | null;
     lead_id?: string | null;
     leads?:
-      | { naam?: string | null; telefoon?: string | null }
-      | { naam?: string | null; telefoon?: string | null }[]
+      | { naam?: string | null; telefoon?: string | null; adviseur_id?: string | null }
+      | { naam?: string | null; telefoon?: string | null; adviseur_id?: string | null }[]
       | null;
   } | null;
 };
@@ -33,12 +35,30 @@ function leadId(t: ReferralTaak): string | null {
   return t.projecten?.lead_id || null;
 }
 
+function leadAdviseurId(t: ReferralTaak): string | null {
+  const raw = t.projecten?.leads;
+  const lead = Array.isArray(raw) ? raw[0] : raw;
+  return lead?.adviseur_id?.trim() || null;
+}
+
+/** Alleen tonen aan de sale-adviseur van die lead. */
+function isEigenReferral(t: ReferralTaak, me: string): boolean {
+  const owner = leadAdviseurId(t) || t.verantwoordelijke_id || null;
+  return owner === me;
+}
+
 export function SalesReferralActies() {
+  const { session } = useCrmSession();
+  const me = session?.id || null;
   const [taken, setTaken] = useState<ReferralTaak[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!me) {
+      setTaken([]);
+      return;
+    }
     try {
       const res = await fetch(
         `/api/taken?open=1&auto_key=${encodeURIComponent(REFERRAL_TAK_AUTO_KEY)}&limit=50`
@@ -53,13 +73,16 @@ export function SalesReferralActies() {
         setError(null);
         return;
       }
-      setTaken((data.taken || []) as ReferralTaak[]);
+      const mine = ((data.taken || []) as ReferralTaak[]).filter((t) =>
+        isEigenReferral(t, me)
+      );
+      setTaken(mine);
       setError(null);
     } catch {
       setTaken([]);
       setError(null);
     }
-  }, []);
+  }, [me]);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => void load());

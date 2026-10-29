@@ -7,13 +7,20 @@ import {
   isAanbetalingFactuur,
 } from "@/lib/netto-boord";
 import {
+  creditWeekByYearWeek,
   creditWeekFromDate,
   previousCreditWeek,
+  weekBeforePreviousCreditWeek,
   formatCreditFactuurNummer,
+  formatCreditFactuurNummerSalesWeek,
+  isCreditWeekAfgesloten,
+  isSalesWeekFactuurNummer,
+  type CreditWeek,
 } from "@/lib/adviseur-creditfactuur";
 import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
@@ -74,6 +81,254 @@ function applyMaxFee(
     maxBedrag != null && Number(maxBedrag) > 0 ? Number(maxBedrag) : null;
   if (max != null && fee > max) return max;
   return fee;
+}
+
+/** Hernummer bedragen op basis van alle regels. */
+export async function recalcAdviseurCreditfactuurFromRegels(
+  sb: SupabaseClient,
+  creditfactuurId: string
+): Promise<void> {
+  const { data: regels } = await sb
+    .from("adviseur_creditfactuur_regels")
+    .select("bedrag")
+    .eq("creditfactuur_id", creditfactuurId);
+  const som =
+    Math.round(
+      (regels || []).reduce((s, r) => s + (Number(r.bedrag) || 0), 0) * 100
+    ) / 100;
+  const amounts = bedragenMetBtw(som);
+  await sb
+    .from("adviseur_creditfacturen")
+    .update({
+      aantal_aanbetalingen: (regels || []).length,
+      bedrag_ex_btw: amounts.bedrag_ex_btw,
+      btw_bedrag: amounts.btw_bedrag,
+      bedrag_inc_btw: amounts.bedrag_inc_btw,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", creditfactuurId);
+}
+
+/**
+ * Vind of maak de weekfactuur (één per adviseur per ISO-week) voor sales-commissie.
+ */
+export async function findOrCreateWeekSalesCreditfactuur(
+  sb: SupabaseClient,
+  opts: {
+    adviseurId: string;
+    week: CreditWeek;
+    notities?: string | null;
+  }
+): Promise<{ id: string; status: string; created: boolean; error?: string }> {
+  const factuurNummer = formatCreditFactuurNummerSalesWeek(
+    opts.week.jaar,
+    opts.week.week,
+    opts.adviseurId
+  );
+
+  const { data: byNr } = await sb
+    .from("adviseur_creditfacturen")
+    .select("id, status")
+    .eq("factuur_nummer", factuurNummer)
+    .neq("status", "geannuleerd")
+    .maybeSingle();
+
+  if (byNr?.id) {
+    return {
+      id: byNr.id as string,
+      status: byNr.status as string,
+      created: false,
+    };
+  }
+
+  // Bestaande open weekfactuur (zelfde adviseur+week, week-nummering)
+  const { data: openWeek } = await sb
+    .from("adviseur_creditfacturen")
+    .select("id, status, factuur_nummer")
+    .eq("adviseur_id", opts.adviseurId)
+    .eq("week_jaar", opts.week.jaar)
+    .eq("week_nummer", opts.week.week)
+    .neq("status", "geannuleerd")
+    .in("status", ["concept", "verzonden", "goedgekeurd"])
+    .order("created_at", { ascending: true })
+    .limit(20);
+
+  const weekHit = (openWeek || []).find((f) =>
+    isSalesWeekFactuurNummer(f.factuur_nummer as string)
+  );
+  if (weekHit?.id) {
+    return {
+      id: weekHit.id as string,
+      status: weekHit.status as string,
+      created: false,
+    };
+  }
+
+  const betaaldag = opts.week.betaalWoensdag;
+  const { data: created, error } = await sb
+    .from("adviseur_creditfacturen")
+    .insert({
+      adviseur_id: opts.adviseurId,
+      factuur_nummer: factuurNummer,
+      status: "concept",
+      week_jaar: opts.week.jaar,
+      week_nummer: opts.week.week,
+      periode_van: opts.week.van,
+      periode_tot: opts.week.tot,
+      aantal_aanbetalingen: 0,
+      bedrag_ex_btw: 0,
+      btw_bedrag: 0,
+      bedrag_inc_btw: 0,
+      factuurdatum: betaaldag,
+      notities: [
+        opts.notities,
+        `Sales-commissie week ${opts.week.week} (${opts.week.van} t/m ${opts.week.tot})`,
+        `Verwerking woensdag ${betaaldag}`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    })
+    .select("id, status")
+    .single();
+
+  if (error || !created) {
+    if (error?.code === "23505") {
+      const { data: again } = await sb
+        .from("adviseur_creditfacturen")
+        .select("id, status")
+        .eq("factuur_nummer", factuurNummer)
+        .maybeSingle();
+      if (again?.id) {
+        return {
+          id: again.id as string,
+          status: again.status as string,
+          created: false,
+        };
+      }
+    }
+    return {
+      id: "",
+      status: "",
+      created: false,
+      error: error?.message || "Weekfactuur aanmaken mislukt",
+    };
+  }
+
+  return {
+    id: created.id as string,
+    status: (created.status as string) || "concept",
+    created: true,
+  };
+}
+
+/**
+ * Zet losse AANBETALING/OFF-concepten om naar één weekfactuur per adviseur.
+ * Regels verhuizen; oude CF’s worden geannuleerd.
+ */
+export async function consolidateAdviseurWeekSalesCreditfacturen(
+  sb: SupabaseClient,
+  opts: { adviseurId: string; jaar: number; week: number }
+): Promise<{ weekCfId: string | null; merged: number }> {
+  const { data: open } = await sb
+    .from("adviseur_creditfacturen")
+    .select("id, status, factuur_nummer, notities, bedrag_ex_btw")
+    .eq("adviseur_id", opts.adviseurId)
+    .eq("week_jaar", opts.jaar)
+    .eq("week_nummer", opts.week)
+    .neq("status", "geannuleerd")
+    .neq("status", "betaald")
+    .not("factuur_nummer", "ilike", "%/RESTBETALING/%")
+    .not("notities", "ilike", "%[WF]%")
+    .order("created_at", { ascending: true });
+
+  const sales = (open || []).filter((f) => {
+    const nr = String(f.factuur_nummer || "");
+    if (isSalesWeekFactuurNummer(nr)) return true;
+    if (/\/AANBETALING\//i.test(nr)) return true;
+    if (/^CF-\d{4}-W\d{2}-/i.test(nr)) return true;
+    return false;
+  });
+
+  if (sales.length === 0) return { weekCfId: null, merged: 0 };
+
+  const week = creditWeekByYearWeek(opts.jaar, opts.week);
+
+  const target = await findOrCreateWeekSalesCreditfactuur(sb, {
+    adviseurId: opts.adviseurId,
+    week,
+  });
+  if (!target.id) return { weekCfId: null, merged: 0 };
+
+  let merged = 0;
+  for (const cf of sales) {
+    if (cf.id === target.id) continue;
+    const { data: regels } = await sb
+      .from("adviseur_creditfactuur_regels")
+      .select("id, factuur_id")
+      .eq("creditfactuur_id", cf.id);
+
+    if (regels && regels.length > 0) {
+      for (const r of regels) {
+        const { error } = await sb
+          .from("adviseur_creditfactuur_regels")
+          .update({ creditfactuur_id: target.id })
+          .eq("id", r.id);
+        if (!error) merged += 1;
+      }
+    }
+
+    await sb
+      .from("adviseur_creditfacturen")
+      .update({ status: "geannuleerd", updated_at: new Date().toISOString() })
+      .eq("id", cf.id);
+  }
+
+  await recalcAdviseurCreditfactuurFromRegels(sb, target.id);
+  return { weekCfId: target.id, merged };
+}
+
+/** Consolideer open sales-weken (vorige + week ervoor) voor alle adviseurs. */
+export async function consolidateOpenSalesWeekCreditfacturen(
+  sb: SupabaseClient,
+  now: Date = new Date()
+): Promise<number> {
+  const prev = previousCreditWeek(now);
+  const older = weekBeforePreviousCreditWeek(now);
+  const weeks = [
+    { jaar: older.jaar, week: older.week },
+    { jaar: prev.jaar, week: prev.week },
+  ];
+
+  const { data: open } = await sb
+    .from("adviseur_creditfacturen")
+    .select("adviseur_id, week_jaar, week_nummer")
+    .neq("status", "geannuleerd")
+    .neq("status", "betaald")
+    .in(
+      "week_jaar",
+      [...new Set(weeks.map((w) => w.jaar))]
+    )
+    .limit(2000);
+
+  const keys = new Set<string>();
+  for (const row of open || []) {
+    const jaar = row.week_jaar as number;
+    const week = row.week_nummer as number;
+    if (!weeks.some((w) => w.jaar === jaar && w.week === week)) continue;
+    keys.add(`${row.adviseur_id}|${jaar}|${week}`);
+  }
+
+  let total = 0;
+  for (const key of keys) {
+    const [adviseurId, jaarS, weekS] = key.split("|");
+    const r = await consolidateAdviseurWeekSalesCreditfacturen(sb, {
+      adviseurId,
+      jaar: Number(jaarS),
+      week: Number(weekS),
+    });
+    total += r.merged;
+  }
+  return total;
 }
 
 /**
@@ -170,15 +425,16 @@ export async function ensureNettoAanbetalingCreditfactuur(
   const { data: adv } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
+      "id, naam, rol, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
     )
     .eq("id", lead.adviseur_id)
     .maybeSingle();
 
   if (!adv) return { ok: true, skipped: "adviseur_ontbreekt" };
-  if (!adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
-    return { ok: true, skipped: "zzp_gegevens_incompleet" };
+  if (isUitgeslotenVanSalesCommissie(adv as { naam?: string; rol?: string })) {
+    return { ok: true, skipped: "geen_verkoper" };
   }
+  // Concept mag zonder ZZP; versturen (Bevestig) vereist wel KvK/IBAN.
 
   const { data: off } = fac.offerte_id
     ? await sb
@@ -205,141 +461,25 @@ export async function ensureNettoAanbetalingCreditfactuur(
   fee = applyMaxFee(fee, adv.max_factuur_bedrag);
   if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_a" };
 
-  const amounts = bedragenMetBtw(fee);
-
   const weekInfo = creditWeekFromDate(
     fac.betaald_op ? new Date(fac.betaald_op) : new Date()
   );
-  const betaaldag = weekInfo.betaalWoensdag;
-
-  // Zoek bestaande CF voor deze order (ook als al verzonden — dan alleen regel koppelen)
-  let creditId: string | null = null;
-  let creditStatus: string | null = null;
-  if (off?.offerte_nummer) {
-    const tag = offerteRefTag(off.offerte_nummer);
-    const { data: orderCf } = await sb
-      .from("adviseur_creditfacturen")
-      .select("id, status")
-      .eq("adviseur_id", adv.id)
-      .neq("status", "geannuleerd")
-      .ilike("notities", `%${tag}%`)
-      .not("notities", "ilike", "%ref_offerte_tranche_b:%")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (orderCf?.id) {
-      creditId = orderCf.id as string;
-      creditStatus = orderCf.status as string;
-    }
-    // Fallback op factuurnummer
-    if (!creditId) {
-      const { data: byNr } = await sb
-        .from("adviseur_creditfacturen")
-        .select("id, status")
-        .eq("adviseur_id", adv.id)
-        .neq("status", "geannuleerd")
-        .ilike("factuur_nummer", `%/AANBETALING/${off.offerte_nummer}`)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (byNr?.id) {
-        creditId = byNr.id as string;
-        creditStatus = byNr.status as string;
-      }
-    }
+  // Concept pas als de betaalweek afgesloten is (vorige week of ouder)
+  if (!isCreditWeekAfgesloten(weekInfo)) {
+    return { ok: true, skipped: "week_nog_open" };
   }
 
-  let created = false;
-  if (!creditId) {
-    if (!off?.offerte_nummer) {
-      return { ok: false, error: "Offertenummer ontbreekt voor creditfactuur" };
-    }
-    const factuurNummer = formatCreditFactuurNummer(
-      weekInfo.jaar,
-      "aanbetaling",
-      off.offerte_nummer
-    );
-    const tag = offerteRefTag(off.offerte_nummer);
-
-    const { data: newCf, error: createErr } = await sb
-      .from("adviseur_creditfacturen")
-      .insert({
-        adviseur_id: adv.id,
-        factuur_nummer: factuurNummer,
-        status: "concept",
-        week_jaar: weekInfo.jaar,
-        week_nummer: weekInfo.week,
-        periode_van: weekInfo.van,
-        periode_tot: weekInfo.tot,
-        aantal_aanbetalingen: 1,
-        bedrag_ex_btw: amounts.bedrag_ex_btw,
-        btw_bedrag: amounts.btw_bedrag,
-        bedrag_inc_btw: amounts.bedrag_inc_btw,
-        factuurdatum: betaaldag,
-        notities: [
-          tag,
-          `Commissie aanbetaling · verwerking woensdag ${betaaldag}`,
-          `Offerte ${off.offerte_nummer}`,
-          project?.project_nummer ? `Project ${project.project_nummer}` : null,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-      })
-      .select("id")
-      .single();
-
-    if (createErr || !newCf) {
-      // Unieke factuurnummer: pak bestaande rij
-      if (createErr?.code === "23505") {
-        const { data: again } = await sb
-          .from("adviseur_creditfacturen")
-          .select("id, status")
-          .eq("factuur_nummer", factuurNummer)
-          .maybeSingle();
-        if (again?.id) {
-          creditId = again.id as string;
-          creditStatus = again.status as string;
-        } else {
-          return {
-            ok: false,
-            error: createErr?.message || "CF aanmaken mislukt",
-          };
-        }
-      } else {
-        return {
-          ok: false,
-          error: createErr?.message || "CF aanmaken mislukt",
-        };
-      }
-    } else {
-      creditId = newCf.id as string;
-      creditStatus = "concept";
-      created = true;
-    }
+  // Één weekfactuur per adviseur — alle sales-regels van die week erop
+  const weekCf = await findOrCreateWeekSalesCreditfactuur(sb, {
+    adviseurId: adv.id,
+    week: weekInfo,
+  });
+  if (!weekCf.id) {
+    return { ok: false, error: weekCf.error || "Weekfactuur aanmaken mislukt" };
   }
 
-  if (!creditId) {
-    return { ok: false, error: "Geen creditfactuur-id" };
-  }
-
-  // Alleen concepten herberekenen / week zetten
-  if (creditStatus === "concept") {
-    await sb
-      .from("adviseur_creditfacturen")
-      .update({
-        aantal_aanbetalingen: 1,
-        bedrag_ex_btw: amounts.bedrag_ex_btw,
-        btw_bedrag: amounts.btw_bedrag,
-        bedrag_inc_btw: amounts.bedrag_inc_btw,
-        week_jaar: weekInfo.jaar,
-        week_nummer: weekInfo.week,
-        periode_van: weekInfo.van,
-        periode_tot: weekInfo.tot,
-        factuurdatum: betaaldag,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", creditId);
-  }
+  const creditId = weekCf.id;
+  const created = weekCf.created;
 
   const { error: regelErr } = await sb.from("adviseur_creditfactuur_regels").insert({
     creditfactuur_id: creditId,
@@ -370,6 +510,10 @@ export async function ensureNettoAanbetalingCreditfactuur(
       };
     }
     return { ok: false, error: regelErr.message };
+  }
+
+  if (weekCf.status === "concept") {
+    await recalcAdviseurCreditfactuurFromRegels(sb, creditId);
   }
 
   const mailed = autoVerstuur ? await tryVerstuur(sb, creditId) : false;
@@ -413,12 +557,12 @@ export function magWoensdagVersturen(cf: {
 }): boolean {
   const nr = String(cf.factuur_nummer || "");
   if (/\/RESTBETALING\//i.test(nr)) return true;
-  if (/\/AANBETALING\//i.test(nr)) {
+  if (/\/AANBETALING\//i.test(nr) || isSalesWeekFactuurNummer(nr)) {
     return (
       Number(cf.aantal_aanbetalingen) > 0 || Boolean(cf.has_regels)
     );
   }
-  // Handmatige / week-batch concepten: alleen met bedrag-regels of expliciet aantal
+  // Weekfactuur / handmatig: alleen met regels of expliciet aantal
   return Number(cf.aantal_aanbetalingen) > 0 || Boolean(cf.has_regels);
 }
 
@@ -481,15 +625,16 @@ export async function ensureAdviseurCommissieTrancheB(
   const { data: adv } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
+      "id, naam, rol, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, actief, commissie_pct"
     )
     .eq("id", lead.adviseur_id)
     .maybeSingle();
 
   if (!adv) return { ok: true, skipped: "adviseur_ontbreekt" };
-  if (!adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
-    return { ok: true, skipped: "zzp_gegevens_incompleet" };
+  if (isUitgeslotenVanSalesCommissie(adv as { naam?: string; rol?: string })) {
+    return { ok: true, skipped: "geen_verkoper" };
   }
+  // Concept mag zonder ZZP; versturen (Bevestig) vereist wel KvK/IBAN.
 
   const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
   const omzetEx = await omzetExFromOfferte(sb, off.id || project.offerte_id, off);
@@ -535,6 +680,9 @@ export async function ensureAdviseurCommissieTrancheB(
     (project as { installatie_voltooid_at?: string | null })
       .installatie_voltooid_at || new Date().toISOString();
   const weekInfo = creditWeekFromDate(new Date(eventAt));
+  if (!isCreditWeekAfgesloten(weekInfo)) {
+    return { ok: true, skipped: "week_nog_open", bedrag: fee };
+  }
   const factuurNummer = formatCreditFactuurNummer(
     weekInfo.jaar,
     "restbetaling",
@@ -702,7 +850,7 @@ export async function runWoensdagCommissieBatch(
     const retry = await sb
       .from("projecten")
       .select("id, project_nummer, status, updated_at")
-      .in("status", ["installatie_voltooid", "review_gevraagd", "service"])
+      .in("status", ["installatie_voltooid", "review_gevraagd", "afgerond", "service"])
       .gte("updated_at", weekStartIso)
       .lte("updated_at", weekEndIso)
       .limit(2000);

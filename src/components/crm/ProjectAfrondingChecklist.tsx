@@ -10,6 +10,7 @@ const SHOW_FROM = new Set([
   "installatie_ingepland",
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
   "service",
 ]);
 
@@ -24,16 +25,30 @@ const ITEMS: { id: ItemId; label: string }[] = [
     id: "overstap_dynamische_leverancier_at",
     label: "Overstap dynamische leverancier",
   },
-  { id: "review_gevraagd_at", label: "Review" },
+  { id: "review_gevraagd_at", label: "Review gevraagd" },
 ];
 
 function isDone(project: Project, id: ItemId): boolean {
-  if (project[id]) return true;
-  if (id === "review_gevraagd_at") {
-    const st = normalizeProjectStatus(project.status);
-    return st === "review_gevraagd" || st === "service";
-  }
-  return false;
+  return Boolean(project[id]);
+}
+
+function allAfterSaleDone(
+  project: Project,
+  override?: Partial<Record<ItemId, string | null>>
+): boolean {
+  const btw =
+    override && "btw_terugvragen_aangevraagd_at" in override
+      ? override.btw_terugvragen_aangevraagd_at
+      : project.btw_terugvragen_aangevraagd_at;
+  const overstap =
+    override && "overstap_dynamische_leverancier_at" in override
+      ? override.overstap_dynamische_leverancier_at
+      : project.overstap_dynamische_leverancier_at;
+  const review =
+    override && "review_gevraagd_at" in override
+      ? override.review_gevraagd_at
+      : project.review_gevraagd_at;
+  return Boolean(btw && overstap && review);
 }
 
 export function showProjectAfronding(project: Project): boolean {
@@ -53,15 +68,23 @@ export function ProjectAfrondingChecklist({
 
   if (!showProjectAfronding(project)) return null;
 
+  const status = normalizeProjectStatus(project.status);
+  const isAfterSale = status === "afgerond";
+
   async function toggle(id: ItemId) {
     setBusy(id);
     setError(null);
     const next = isDone(project, id) ? null : new Date().toISOString();
     try {
       const body: Record<string, string | null> = { [id]: next };
-      // Review afvinken → status Review gevraagd → sales-actie referrals
-      if (id === "review_gevraagd_at" && next) {
-        body.status = "review_gevraagd";
+      // Pas naar After sale als alle drie klaar zijn
+      if (
+        next &&
+        allAfterSaleDone(project, { [id]: next }) &&
+        status !== "afgerond" &&
+        status !== "service"
+      ) {
+        body.status = "afgerond";
       }
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
@@ -85,8 +108,13 @@ export function ProjectAfrondingChecklist({
   return (
     <section className="border border-line bg-white px-4 py-4 sm:px-5">
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-        Fase 4 — Afronding
+        After sale
       </h2>
+      <p className="mt-1 text-[11px] text-muted">
+        {isAfterSale
+          ? "Alle stappen afgerond — status After sale."
+          : "Na oplevering: BTW, overstap en review. Daarna → After sale."}
+      </p>
       <ul className="mt-3 space-y-2">
         {ITEMS.map((item) => {
           const done = isDone(project, item.id);

@@ -27,13 +27,22 @@ const ORDER_SELECT = `id, project_nummer, titel, status, offerte_id, schouw_at, 
          service_at, service_notities,
          installateur_notitie, installateur_notitie_door,
          backoffice_notitie, backoffice_notitie_door,
-         monteur, startdatum, opleverdatum, created_at,
+         monteur, installatie_teamgenoot_id, startdatum, opleverdatum, created_at,
          leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
-         offertes(id, offerte_nummer, status, ondertekend_op)`;
+         offertes(id, offerte_nummer, status, ondertekend_op),
+         installatie_teamgenoot:installatie_partner_teamgenoten!installatie_teamgenoot_id(id, naam, email, telefoon)`;
 
 const ORDER_SELECT_FALLBACK = `id, project_nummer, titel, status, offerte_id, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
            monteur, startdatum, opleverdatum, created_at,
            leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats)`;
+
+const ORDER_SELECT_NO_TG_JOIN = `id, project_nummer, titel, status, offerte_id, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
+         service_at, service_notities,
+         installateur_notitie, installateur_notitie_door,
+         backoffice_notitie, backoffice_notitie_door,
+         monteur, installatie_teamgenoot_id, startdatum, opleverdatum, created_at,
+         leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
+         offertes(id, offerte_nummer, status, ondertekend_op)`;
 
 /** GET /api/installatie/[token]/orders/[projectId] */
 export async function GET(
@@ -60,8 +69,22 @@ export async function GET(
 
     if (
       error &&
+      (error.message?.includes("installatie_teamgenoot") ||
+        error.message?.includes("installatie_partner_teamgenoten"))
+    ) {
+      ({ data: order, error } = await sb
+        .from("projecten")
+        .select(ORDER_SELECT_NO_TG_JOIN)
+        .eq("id", projectId)
+        .eq("installatie_partner_id", partner.id)
+        .single());
+    }
+
+    if (
+      error &&
       (error.message?.includes("installateur_notitie") ||
         error.message?.includes("offertes") ||
+        error.message?.includes("installatie_teamgenoot") ||
         error.code === "42703" ||
         error.code === "PGRST200")
     ) {
@@ -138,11 +161,18 @@ export async function GET(
       url: urlMap.get(f.storage_path) || null,
     }));
 
+    const { data: teamgenoten } = await sb
+      .from("installatie_partner_teamgenoten")
+      .select("id, naam, email, telefoon, actief")
+      .eq("partner_id", partner.id)
+      .order("naam");
+
     return NextResponse.json({
       partner: { id: partner.id, naam: partner.naam },
       order,
       offerte: offerteMeta,
       fotos: fotosWithUrl,
+      teamgenoten: (teamgenoten || []).filter((t) => t.actief !== false),
     });
   } catch (e) {
     return NextResponse.json(
@@ -154,7 +184,7 @@ export async function GET(
 
 /**
  * PATCH /api/installatie/[token]/orders/[projectId]
- * Status + notities door installateur — geen planning, geen e-mails.
+ * Status + notities + monteur-koppeling door installateur.
  */
 export async function PATCH(
   req: NextRequest,
@@ -166,6 +196,7 @@ export async function PATCH(
     schouw_notities?: string | null;
     installatie_notities?: string | null;
     service_notities?: string | null;
+    installatie_teamgenoot_id?: string | null;
   };
   try {
     body = await req.json();
@@ -218,6 +249,29 @@ export async function PATCH(
       patch.service_notities = body.service_notities?.trim() || null;
     }
 
+    if (body.installatie_teamgenoot_id !== undefined) {
+      const tgId = body.installatie_teamgenoot_id?.trim() || null;
+      if (tgId) {
+        const { data: tg } = await sb
+          .from("installatie_partner_teamgenoten")
+          .select("id, naam, actief")
+          .eq("id", tgId)
+          .eq("partner_id", partner.id)
+          .maybeSingle();
+        if (!tg || tg.actief === false) {
+          return NextResponse.json(
+            { error: "Medewerker niet gevonden" },
+            { status: 400 }
+          );
+        }
+        patch.installatie_teamgenoot_id = tg.id;
+        patch.monteur = tg.naam;
+      } else {
+        patch.installatie_teamgenoot_id = null;
+        patch.monteur = null;
+      }
+    }
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
         { error: "Niets om bij te werken" },
@@ -225,13 +279,40 @@ export async function PATCH(
       );
     }
 
-    let { data: order, error } = await sb
-      .from("projecten")
-      .update(patch)
-      .eq("id", projectId)
-      .eq("installatie_partner_id", partner.id)
-      .select(ORDER_SELECT)
-      .single();
+    async function doUpdate(select: string, usePatch: Record<string, unknown>) {
+      return sb
+        .from("projecten")
+        .update(usePatch)
+        .eq("id", projectId)
+        .eq("installatie_partner_id", partner!.id)
+        .select(select)
+        .single();
+    }
+
+    let { data: order, error } = await doUpdate(ORDER_SELECT, patch);
+
+    // Kolom installatie_teamgenoot_id ontbreekt → alleen monteur-tekst
+    if (
+      error &&
+      body.installatie_teamgenoot_id !== undefined &&
+      (error.code === "42703" ||
+        error.message?.includes("installatie_teamgenoot_id"))
+    ) {
+      const fallbackPatch = { ...patch };
+      delete fallbackPatch.installatie_teamgenoot_id;
+      ({ data: order, error } = await doUpdate(
+        ORDER_SELECT_FALLBACK,
+        fallbackPatch
+      ));
+    }
+
+    if (
+      error &&
+      (error.message?.includes("installatie_teamgenoot") ||
+        error.message?.includes("installatie_partner_teamgenoten"))
+    ) {
+      ({ data: order, error } = await doUpdate(ORDER_SELECT_NO_TG_JOIN, patch));
+    }
 
     if (
       error &&
@@ -240,14 +321,7 @@ export async function PATCH(
         error.code === "42703" ||
         error.code === "PGRST200")
     ) {
-      const retry = await sb
-        .from("projecten")
-        .update(patch)
-        .eq("id", projectId)
-        .eq("installatie_partner_id", partner.id)
-        .select(ORDER_SELECT_FALLBACK)
-        .single();
-      // Fallback select mist optionele joins/kolommen — widen voor TS
+      const retry = await doUpdate(ORDER_SELECT_FALLBACK, patch);
       order = retry.data as typeof order;
       error = retry.error;
     }

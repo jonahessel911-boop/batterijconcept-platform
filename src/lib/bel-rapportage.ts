@@ -76,6 +76,124 @@ export type BelRapportage = {
   months: BelMonthBucket[];
 };
 
+/** Vooruitblik: actieve huisbezoeken met start_at in de komende N dagen, per ISO-week. */
+export type BelPipelineWeek = {
+  weekKey: string;
+  label: string;
+  /** Dagen van deze week die in het 14-dagenvenster vallen */
+  startYmd: string;
+  endYmd: string;
+  count: number;
+};
+
+export type BelIngeplandPipeline = {
+  fromYmd: string;
+  toYmd: string;
+  days: number;
+  total: number;
+  /**
+   * Van die komende bezoeken: hoeveel zijn in de afgelopen `days` dagen
+   * geboekt (created_at).
+   */
+  geboektLaatsteDagen: number;
+  /** Startdatum (ymd) van het “afgelopen N dagen” boekingsvenster. */
+  geboektVanYmd: string;
+  weeks: BelPipelineWeek[];
+};
+
+/**
+ * Hoeveel huisbezoeken staan er ingepland in de komende `days` dagen,
+ * gesplitst per week (van/voor welke week het bezoek valt).
+ * Plus: hoeveel daarvan zijn in diezelfde N dagen terug geboekt.
+ */
+export function buildBelIngeplandPipeline(opts: {
+  afspraken: BelConversieAfspraak[];
+  days?: number;
+  now?: Date;
+  /** Optioneel: alleen afspraken van deze beller (ingepland_door of adviseur). */
+  bellerId?: string | null;
+}): BelIngeplandPipeline {
+  const days = Math.max(1, opts.days ?? 14);
+  const now = opts.now ?? new Date();
+  const fromYmd = ymdAmsterdam(toZonedTime(now, AMSTERDAM_TZ));
+  const toYmd = shiftYmd(fromYmd, days - 1);
+  const geboektVanYmd = shiftYmd(fromYmd, -(days - 1));
+  const filter = opts.bellerId?.trim() || null;
+  const { start: rangeStart, end: rangeEnd } = (() => {
+    const [fy, fm, fd] = fromYmd.split("-").map(Number);
+    const [ty, tm, td] = toYmd.split("-").map(Number);
+    return {
+      start: fromZonedTime(new Date(fy, fm - 1, fd, 0, 0, 0, 0), AMSTERDAM_TZ),
+      end: fromZonedTime(new Date(ty, tm - 1, td, 23, 59, 59, 999), AMSTERDAM_TZ),
+    };
+  })();
+  const { start: bookStart, end: bookEnd } = (() => {
+    const [by, bm, bd] = geboektVanYmd.split("-").map(Number);
+    const [fy, fm, fd] = fromYmd.split("-").map(Number);
+    return {
+      start: fromZonedTime(new Date(by, bm - 1, bd, 0, 0, 0, 0), AMSTERDAM_TZ),
+      end: fromZonedTime(new Date(fy, fm - 1, fd, 23, 59, 59, 999), AMSTERDAM_TZ),
+    };
+  })();
+
+  const counts = new Map<string, number>();
+  let geboektLaatsteDagen = 0;
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekAfspraak(a)) continue;
+    if (!a.start_at) continue;
+    if (!inAmsterdamDayRange(a.start_at, rangeStart, rangeEnd)) continue;
+    if (filter) {
+      const door = (a.ingepland_door_id || a.adviseur_id || "").trim();
+      if (door !== filter) continue;
+    }
+    const w = schouwWeekFromDate(a.start_at);
+    const key = schouwWeekValue(w.jaar, w.week);
+    counts.set(key, (counts.get(key) || 0) + 1);
+    if (
+      a.created_at &&
+      inAmsterdamDayRange(a.created_at, bookStart, bookEnd)
+    ) {
+      geboektLaatsteDagen += 1;
+    }
+  }
+
+  const weeks: BelPipelineWeek[] = [];
+  let cursor = fromYmd;
+  const seen = new Set<string>();
+  while (cursor <= toYmd) {
+    const info = schouwWeekFromDate(noonAmsterdamFromYmd(cursor));
+    const key = schouwWeekValue(info.jaar, info.week);
+    if (!seen.has(key)) {
+      seen.add(key);
+      const monday = String(
+        schouwWeekToMondayIso(info.jaar, info.week)
+      ).slice(0, 10);
+      const sunday = shiftYmd(monday, 6);
+      const winStart = monday < fromYmd ? fromYmd : monday;
+      const winEnd = sunday > toYmd ? toYmd : sunday;
+      weeks.push({
+        weekKey: key,
+        label: formatSchouwWeekLabel(info.jaar, info.week),
+        startYmd: winStart,
+        endYmd: winEnd,
+        count: counts.get(key) || 0,
+      });
+    }
+    cursor = shiftYmd(cursor, 1);
+  }
+
+  const total = weeks.reduce((s, w) => s + w.count, 0);
+  return {
+    fromYmd,
+    toYmd,
+    days,
+    total,
+    geboektLaatsteDagen,
+    geboektVanYmd,
+    weeks,
+  };
+}
+
 type Acc = {
   gebeld: number;
   ingepland: number;

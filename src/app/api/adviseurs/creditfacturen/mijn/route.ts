@@ -5,6 +5,13 @@ import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { mailGoedgekeurdeAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
+import {
+  consolidateAdviseurWeekSalesCreditfacturen,
+} from "@/lib/netto-creditfactuur";
+import {
+  previousCreditWeek,
+  weekBeforePreviousCreditWeek,
+} from "@/lib/adviseur-creditfactuur";
 
 export const runtime = "nodejs";
 
@@ -31,6 +38,16 @@ export async function GET() {
 
   try {
     const sb = getSupabaseAdmin();
+    const prev = previousCreditWeek();
+    const older = weekBeforePreviousCreditWeek();
+    for (const w of [older, prev]) {
+      await consolidateAdviseurWeekSalesCreditfacturen(sb, {
+        adviseurId: auth.session.adviseurId,
+        jaar: w.jaar,
+        week: w.week,
+      });
+    }
+
     const { data: facturen, error } = await sb
       .from("adviseur_creditfacturen")
       .select(

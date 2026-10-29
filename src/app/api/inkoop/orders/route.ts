@@ -55,6 +55,7 @@ const CANDIDATE_STATUSES = new Set([
   "installatie_ingepland",
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
   "service",
 ]);
 

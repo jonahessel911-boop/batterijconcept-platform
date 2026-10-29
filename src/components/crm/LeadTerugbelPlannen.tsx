@@ -68,15 +68,31 @@ export function LeadTerugbelPlannen({
     return groups.filter((g) => g.items.length > 0);
   }, [medewerkers]);
 
-  const preferred =
-    (defaultAdviseurId &&
-      medewerkers.some((a) => a.id === defaultAdviseurId) &&
-      defaultAdviseurId) ||
-    (lead.beller_id &&
-      medewerkers.some((a) => a.id === lead.beller_id) &&
-      lead.beller_id) ||
-    medewerkers[0]?.id ||
-    "";
+  /** Jezelf als beller → anders Sharath/eerste beller → nooit lead.adviseur. */
+  const preferred = (() => {
+    const self = defaultAdviseurId
+      ? medewerkers.find((a) => a.id === defaultAdviseurId)
+      : undefined;
+    if (self && normalizeRol(self.rol) === "beller") return self.id;
+
+    const bellers = medewerkers.filter(
+      (a) => normalizeRol(a.rol) === "beller"
+    );
+    const sharath = bellers.find((a) =>
+      a.naam.toLowerCase().includes("sharath")
+    );
+    if (sharath) return sharath.id;
+    if (bellers[0]) return bellers[0].id;
+
+    if (self) return self.id;
+    if (
+      lead.beller_id &&
+      medewerkers.some((a) => a.id === lead.beller_id)
+    ) {
+      return lead.beller_id;
+    }
+    return medewerkers[0]?.id || "";
+  })();
 
   const [adviseurId, setAdviseurId] = useState(preferred);
   const [startAt, setStartAt] = useState("");

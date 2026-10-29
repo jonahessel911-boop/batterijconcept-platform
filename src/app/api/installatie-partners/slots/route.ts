@@ -19,6 +19,7 @@ import {
   type PartnerSlotSoort,
   type PartnerVenster,
 } from "@/lib/partner-slots";
+import { loadPartnerAfblokkingen } from "@/lib/partner-afblokkingen-db";
 import { travelTimeBetween } from "@/lib/travel-time";
 
 export const runtime = "nodejs";
@@ -123,7 +124,11 @@ export async function GET(req: NextRequest) {
       );
     if (projErr) throw projErr;
 
-    const busy: BusySlot[] = [];
+    type BusyWithMeta = BusySlot & {
+      kind: "schouw" | "installatie";
+      project_nummer?: string | null;
+    };
+    const busy: BusyWithMeta[] = [];
     for (const row of projects || []) {
       if (excludeProjectId && row.id === excludeProjectId) continue;
       const lead = row.leads as
@@ -148,6 +153,7 @@ export async function GET(req: NextRequest) {
             start_at: start.toISOString(),
             end_at: addMinutes(start, SCHOUW_DUUR_MINUTEN).toISOString(),
             address: usableAddress,
+            kind: "schouw",
           });
         }
       }
@@ -159,26 +165,70 @@ export async function GET(req: NextRequest) {
             start_at: start.toISOString(),
             end_at: addMinutes(start, duur).toISOString(),
             address: usableAddress,
+            kind: "installatie",
           });
         }
       }
     }
 
-    // Afblokkingen
+    // Afblokkingen: partner-breed OF alle actieve teamgenoten geblokkeerd
     const afblokMap = new Map<string, Set<PartnerVenster>>();
-    const afblokRes = await sb
-      .from("partner_afblokkingen")
-      .select("dag, venster")
-      .eq("partner_id", partnerId)
-      .gte("dag", van)
-      .lte("dag", tot);
+    const [{ data: teamRows }, afblokLoaded] = await Promise.all([
+      sb
+        .from("installatie_partner_teamgenoten")
+        .select("id")
+        .eq("partner_id", partnerId)
+        .eq("actief", true),
+      loadPartnerAfblokkingen(sb, {
+        partnerIds: [partnerId],
+        van,
+        tot,
+      }),
+    ]);
+    const activeTgIds = (teamRows || []).map((t) => t.id as string);
+    const tgCount = activeTgIds.length;
 
-    if (!afblokRes.error) {
-      for (const row of afblokRes.data || []) {
+    {
+      const byDayVenster = new Map<
+        string,
+        { partnerWide: boolean; tgBlocked: Set<string> }
+      >();
+      for (const row of afblokLoaded.items) {
         if (!isPartnerVenster(row.venster)) continue;
-        const set = afblokMap.get(row.dag) || new Set<PartnerVenster>();
-        set.add(row.venster);
-        afblokMap.set(row.dag, set);
+        const k = `${row.dag}:${row.venster}`;
+        const cur = byDayVenster.get(k) || {
+          partnerWide: false,
+          tgBlocked: new Set<string>(),
+        };
+        if (!row.teamgenoot_id) cur.partnerWide = true;
+        else cur.tgBlocked.add(row.teamgenoot_id);
+        byDayVenster.set(k, cur);
+      }
+      for (const [k, info] of byDayVenster) {
+        const [dag, venster] = k.split(":") as [string, PartnerVenster];
+        const allTgBlocked =
+          tgCount > 0 &&
+          activeTgIds.every((id) => info.tgBlocked.has(id));
+        // Partner-breed dicht, of alle monteurs hebben dit venster geblokkeerd
+        // (zonder teamgenoot-kolom: partnerWide-items gelden voor iedereen)
+        if (
+          info.partnerWide ||
+          allTgBlocked ||
+          (!afblokLoaded.perMonteur && info.partnerWide)
+        ) {
+          const set = afblokMap.get(dag) || new Set<PartnerVenster>();
+          set.add(venster);
+          afblokMap.set(dag, set);
+        }
+      }
+      // Legacy zonder teamgenoot_id: elk item is partner-breed
+      if (!afblokLoaded.perMonteur) {
+        for (const row of afblokLoaded.items) {
+          if (!isPartnerVenster(row.venster)) continue;
+          const set = afblokMap.get(row.dag) || new Set<PartnerVenster>();
+          set.add(row.venster);
+          afblokMap.set(row.dag, set);
+        }
       }
     }
 
@@ -238,7 +288,13 @@ export async function GET(req: NextRequest) {
       beschikbaar: boolean;
       reason?: string;
       reistijd_min?: number | null;
+      reistijd_vanaf?: "vorige_installatie" | "vorige_schouw" | "startadres" | null;
+      reistijd_label?: string | null;
     }[] = [];
+
+    const busyMetaByStart = new Map(
+      busy.map((b) => [b.start_at, b] as const)
+    );
 
     for (const slot of allSlots) {
       if (slot.busy) {
@@ -253,16 +309,26 @@ export async function GET(req: NextRequest) {
       }
 
       const dayKey = dayKeyAmsterdam(slot.start);
-      const dayStops = (byDay.get(dayKey) || []).map((b) => ({
-        start: new Date(b.start_at),
-        end: new Date(b.end_at),
-        address: b.address || null,
-      }));
+      const dayStops = (byDay.get(dayKey) || []).map((b) => {
+        const meta = busyMetaByStart.get(b.start_at);
+        return {
+          start: new Date(b.start_at),
+          end: new Date(b.end_at),
+          address: b.address || null,
+          kind: meta?.kind || null,
+        };
+      });
 
       // Reistijd: vorige stop (of startadres) → target → volgende stop
       let travelBefore = bufferMin;
       let travelAfter = bufferMin;
       let reistijdShown: number | null = null;
+      let reistijdVanaf:
+        | "vorige_installatie"
+        | "vorige_schouw"
+        | "startadres"
+        | null = null;
+      let reistijdLabel: string | null = null;
 
       if (targetAddress) {
         const prev = [...dayStops]
@@ -280,6 +346,20 @@ export async function GET(req: NextRequest) {
           ? await travelMin(targetAddress, next.address)
           : bufferMin;
         reistijdShown = travelBefore;
+        if (prev?.kind === "installatie") {
+          reistijdVanaf = "vorige_installatie";
+          reistijdLabel = prev.address
+            ? `Vorige installatie · ${prev.address}`
+            : "Vorige installatie";
+        } else if (prev?.kind === "schouw") {
+          reistijdVanaf = "vorige_schouw";
+          reistijdLabel = prev.address
+            ? `Vorige schouw · ${prev.address}`
+            : "Vorige schouw";
+        } else if (startAdres && fromAddr === startAdres) {
+          reistijdVanaf = "startadres";
+          reistijdLabel = `Startadres · ${startAdres}`;
+        }
       } else if (dayStops.length > 0) {
         // Geen lead-adres: vaste buffer tussen stops
         travelBefore = bufferMin;
@@ -305,6 +385,8 @@ export async function GET(req: NextRequest) {
           beschikbaar: false,
           reason: "Onvoldoende reistijd",
           reistijd_min: reistijdShown,
+          reistijd_vanaf: reistijdVanaf,
+          reistijd_label: reistijdLabel,
         });
         continue;
       }
@@ -315,8 +397,12 @@ export async function GET(req: NextRequest) {
         venster: slot.venster,
         beschikbaar: true,
         reistijd_min: reistijdShown,
+        reistijd_vanaf: reistijdVanaf,
+        reistijd_label: reistijdLabel,
       });
     }
+
+    const beschikbaar = slotsOut.filter((s) => s.beschikbaar);
 
     return NextResponse.json({
       partner_id: partnerId,
@@ -326,8 +412,9 @@ export async function GET(req: NextRequest) {
       tot,
       buffer_min: bufferMin,
       start_adres: startAdres,
+      max_installaties_per_dag: 2,
       slots: slotsOut,
-      beschikbaar: slotsOut.filter((s) => s.beschikbaar),
+      beschikbaar,
     });
   } catch (e) {
     return NextResponse.json(

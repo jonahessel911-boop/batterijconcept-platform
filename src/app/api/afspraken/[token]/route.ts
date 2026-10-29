@@ -204,6 +204,37 @@ export async function POST(
 
       await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
 
+      try {
+        const { logLeadEvent } = await import("@/lib/lead-events");
+        const { formatDateTimeNl } = await import("@/lib/format");
+        const { afspraakSoortLabel, normalizeAfspraakSoort } = await import(
+          "@/lib/afspraak-soort"
+        );
+        const soortLabel =
+          afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)] ||
+          "Afspraak";
+        await logLeadEvent({
+          leadId: afspraak.lead_id as string,
+          soort: "afspraak",
+          titel: `${soortLabel} geannuleerd`,
+          detail: [
+            formatDateTimeNl(afspraak.start_at as string),
+            "Klant",
+            `Reden: ${annuleerNotitie}`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          meta: {
+            afspraak_id: afspraak.id,
+            status: "geannuleerd",
+            reden: annuleerNotitie,
+            bron: "klant",
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
+
       // Klant-annulering fysieke afspraak → status voor appointment setter (Bel)
       if (
         afspraak.lead_id &&

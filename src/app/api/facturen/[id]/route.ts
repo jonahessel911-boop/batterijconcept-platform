@@ -339,6 +339,15 @@ export async function DELETE(
     if (!factuur) {
       return NextResponse.json({ error: "Factuur niet gevonden" }, { status: 404 });
     }
+    if (factuur.status !== "concept") {
+      return NextResponse.json(
+        {
+          error:
+            "Alleen conceptfacturen kunnen worden verwijderd. Verzonden of betaalde facturen blijven staan (gebruik eventueel een creditnota).",
+        },
+        { status: 409 }
+      );
+    }
 
     // Gekoppeld aan adviseur-creditfactuur → FK restrict
     const { data: creditRegel, error: creditErr } = await sb

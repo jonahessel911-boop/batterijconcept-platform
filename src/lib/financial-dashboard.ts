@@ -1178,6 +1178,7 @@ export function buildFreeCashflow(
       const installVoltooid =
         project?.status === "installatie_voltooid" ||
         project?.status === "review_gevraagd" ||
+        project?.status === "afgerond" ||
         project?.status === "service" ||
         Boolean(project?.installatie_voltooid_at);
       if (installVoltooid && trancheB > 0) {

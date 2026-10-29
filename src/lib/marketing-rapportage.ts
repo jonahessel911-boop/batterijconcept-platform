@@ -33,11 +33,23 @@ export type MarketingMetrics = {
   rpa: number | null;
   roas: number | null;
   roi: number | null;
+  /**
+   * Leads nodig om agenda te vullen (80% slots ÷ L→A).
+   * Gezet in de API; null als niet berekend.
+   */
+  leadsNodig?: number | null;
 };
 
 export type MarketingCampaignRow = MarketingMetrics & {
   key: string;
   label: string;
+};
+
+export type MarketingDayBucket = MarketingMetrics & {
+  dayKey: string;
+  label: string;
+  startYmd: string;
+  endYmd: string;
 };
 
 export type MarketingWeekBucket = MarketingMetrics & {
@@ -46,6 +58,8 @@ export type MarketingWeekBucket = MarketingMetrics & {
   startYmd: string;
   endYmd: string;
   campaigns: MarketingCampaignRow[];
+  /** Dagen in deze week (voor drill-down) */
+  days: MarketingDayBucket[];
 };
 
 export type MarketingMonthBucket = MarketingMetrics & {
@@ -385,9 +399,15 @@ export function buildMarketingRapportage(opts: {
   const weeks = listWeekWindows(startYmd, endYmd);
   const weekAcc = new Map<string, Acc>();
   const weekCampAcc = new Map<string, Map<string, Acc>>();
+  const dayAcc = new Map<string, Acc>();
   for (const w of weeks) {
     weekAcc.set(w.weekKey, newAcc());
     weekCampAcc.set(w.weekKey, new Map());
+    // Altijd ma–zo (7 dagen), ook als de week nog loopt / deels buiten range
+    const sun = shiftYmd(w.startYmd, 6);
+    for (let ymd = w.startYmd; ymd <= sun; ymd = shiftYmd(ymd, 1)) {
+      if (!dayAcc.has(ymd)) dayAcc.set(ymd, newAcc());
+    }
   }
 
   function ensureCamp(weekKey: string, campKey: string): Acc {
@@ -400,6 +420,11 @@ export function buildMarketingRapportage(opts: {
     if (!inYmdRange(ymd, startYmd, endYmd)) return null;
     const info = schouwWeekFromDate(noonAmsterdamFromYmd(ymd));
     return schouwWeekValue(info.jaar, info.week);
+  }
+
+  function ensureDay(ymd: string): Acc | null {
+    if (!dayAcc.has(ymd)) return null;
+    return dayAcc.get(ymd)!;
   }
 
   // Spend (Meta) — canonical campaign_name
@@ -415,6 +440,8 @@ export function buildMarketingRapportage(opts: {
     const spend = Number(m.spend) || 0;
     weekAcc.get(wk)!.spend += spend;
     ensureCamp(wk, camp).spend += spend;
+    const da = ensureDay(m.datum);
+    if (da) da.spend += spend;
   }
 
   // Leads (DB)
@@ -426,6 +453,7 @@ export function buildMarketingRapportage(opts: {
     const camp = leadCampaign.get(l.id) || "Onbekend";
     weekAcc.get(wk)!.leadIds.add(l.id);
     ensureCamp(wk, camp).leadIds.add(l.id);
+    ensureDay(ymd)?.leadIds.add(l.id);
   }
 
   // Afspraken: nieuwe huisbezoeken op created_at (wanneer ingepland)
@@ -441,6 +469,8 @@ export function buildMarketingRapportage(opts: {
     const camp = leadCampaign.get(a.lead_id) || "Onbekend";
     weekAcc.get(wk)!.afspraken += 1;
     ensureCamp(wk, camp).afspraken += 1;
+    const da = ensureDay(ymd);
+    if (da) da.afspraken += 1;
   }
 
   // Deals / omzet (DB, via lead-campagne)
@@ -458,6 +488,11 @@ export function buildMarketingRapportage(opts: {
     const ca = ensureCamp(wk, camp);
     ca.deals += 1;
     ca.omzet += omzet;
+    const da = ensureDay(ymd);
+    if (da) {
+      da.deals += 1;
+      da.omzet += omzet;
+    }
   }
 
   const series: MarketingWeekBucket[] = weeks.map((w) => {
@@ -477,6 +512,18 @@ export function buildMarketingRapportage(opts: {
         (a, b) =>
           b.spend - a.spend || b.omzet - a.omzet || b.leads - a.leads
       );
+    const days: MarketingDayBucket[] = [];
+    const weekSun = shiftYmd(w.startYmd, 6);
+    for (let ymd = w.startYmd; ymd <= weekSun; ymd = shiftYmd(ymd, 1)) {
+      const da = dayAcc.get(ymd) || newAcc();
+      days.push({
+        dayKey: ymd,
+        label: format(noonAmsterdamFromYmd(ymd), "EEE d MMM", { locale: nl }),
+        startYmd: ymd,
+        endYmd: ymd,
+        ...accToMetrics(da),
+      });
+    }
     return {
       weekKey: w.weekKey,
       label: w.label,
@@ -484,6 +531,7 @@ export function buildMarketingRapportage(opts: {
       endYmd: w.endYmd,
       ...accToMetrics(acc),
       campaigns,
+      days,
     };
   });
 

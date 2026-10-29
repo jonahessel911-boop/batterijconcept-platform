@@ -3,6 +3,10 @@ import { isSchouwFormulier } from "@/lib/project-documenten";
 import { normalizeProjectStatus, projectStatusLabel } from "@/lib/labels";
 import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  annuleringsDoorFromAfspraak,
+  annuleringsNotitieFromAfspraak,
+} from "@/lib/bel-queue";
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export type NettoTimelineKind =
@@ -108,7 +112,7 @@ const EVENT_KINDS = new Set<NettoTimelineKind>([
 const BACKOFFICE_SOORT_LABEL: Record<string, string> = {
   bel_schouw_aanbetaling: "Bel schouw / aanbetaling",
   schakel_financiering: "Schakel financiering",
-  nabellen_factuur: "Nabellen factuur",
+  nabellen_factuur: "Factuur opvolgen",
   herplan_afspraak: "Herplan afspraak",
 };
 
@@ -157,8 +161,10 @@ type BuildInput = {
     id: string;
     start_at: string;
     created_at: string | null;
+    updated_at?: string | null;
     status: string;
     soort: string | null;
+    notities?: string | null;
     adviseur_naam?: string | null;
   }>;
   taken: Array<{
@@ -607,15 +613,31 @@ export function buildNettoTimeline(input: BuildInput): NettoTimelineItem[] {
   }
 
   for (const a of input.afspraken) {
+    const cancelled = a.status === "geannuleerd";
+    const soortLabel =
+      afspraakSoortLabel[normalizeAfspraakSoort(a.soort)] ||
+      a.soort ||
+      "Afspraak";
+    const reden = cancelled
+      ? annuleringsNotitieFromAfspraak({ notities: a.notities ?? null })
+      : null;
+    const door = cancelled
+      ? annuleringsDoorFromAfspraak({ notities: a.notities ?? null })
+      : null;
     items.push({
       id: `afs-${a.id}`,
-      at: a.created_at || a.start_at,
+      at: cancelled
+        ? a.updated_at || a.created_at || a.start_at
+        : a.created_at || a.start_at,
       kind: "afspraak",
-      titel: `Afspraak ${afspraakSoortLabel[normalizeAfspraakSoort(a.soort)] || a.soort || ""}`.trim(),
+      titel: cancelled
+        ? `${soortLabel} geannuleerd`
+        : `Afspraak ${soortLabel}`.trim(),
       detail: [
         formatDateTimeNl(a.start_at),
-        a.status,
-        a.adviseur_naam,
+        cancelled ? null : a.status,
+        door || a.adviseur_naam || null,
+        reden ? `Reden: ${reden}` : null,
       ]
         .filter(Boolean)
         .join(" · "),

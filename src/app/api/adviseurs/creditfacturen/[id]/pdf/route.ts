@@ -47,14 +47,29 @@ export async function GET(
       return NextResponse.json({ error: "Geen toegang" }, { status: 403 });
     }
 
-    const { data: adv } = await sb
+    let advRes = await sb
       .from("adviseurs")
       .select(
-        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
+        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats, start_adres"
       )
       .eq("id", fac.adviseur_id)
       .maybeSingle();
 
+    if (
+      advRes.error &&
+      (advRes.error.message?.includes("start_adres") ||
+        advRes.error.code === "42703")
+    ) {
+      advRes = await sb
+        .from("adviseurs")
+        .select(
+          "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
+        )
+        .eq("id", fac.adviseur_id)
+        .maybeSingle();
+    }
+
+    const adv = advRes.data;
     if (!adv) {
       return NextResponse.json(
         { error: "Adviseur niet gevonden" },

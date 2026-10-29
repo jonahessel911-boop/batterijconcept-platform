@@ -7,8 +7,16 @@ import type {
   ProjectStatus,
   ServiceVerzoekStatus,
 } from "@/types/database";
-import { remapLegacyProjectStatus } from "@/lib/project-status-config";
+import {
+  remapLegacyProjectStatus,
+  resolveBetaalwijze,
+  type Betaalwijze,
+} from "@/lib/project-status-config";
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
+
+/** Warmtefonds: restantfactuur = declaratie ingediend. */
+export const PROJECT_STATUS_LABEL_RESTFACTUUR_WF =
+  "Factuur WF - Declaratie ingediend";
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
@@ -155,12 +163,50 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   restfactuur_betaald: "Restfactuur betaald — materiaal inkopen",
   materiaal_besteld: "Materiaal ingekocht — wachten op levering",
   installatie_ingepland: "Installatie ingepland",
-  installatie_voltooid: "Installatie voltooid",
-  review_gevraagd: "Review gevraagd",
+  installatie_voltooid: "After sale - installatie voltooid",
+  review_gevraagd: "After sale - review gevraagd",
+  afgerond: "After sale",
   service: "Service",
   annulering: "Annulering",
   hold_sales_actie: "HOLD SALES ACTIE",
 };
+
+type ProjectStatusLabelContext = {
+  betaalwijze?: string | null;
+  leads?: { status?: string | null } | null;
+  offertes?:
+    | { financiering_voorbehoud?: boolean | null }
+    | { financiering_voorbehoud?: boolean | null }[]
+    | null;
+};
+
+/**
+ * Weergavelabel voor projectstatus.
+ * Warmtefonds + restfactuur_verstuurd → "Factuur WF - Declaratie ingediend".
+ */
+export function resolveProjectStatusLabel(
+  status: string | null | undefined,
+  project?: ProjectStatusLabelContext | null,
+  betaalwijzeOverride?: Betaalwijze | null
+): string {
+  const st = normalizeProjectStatus(status);
+  const base = projectStatusLabel[st] || status || "";
+  if (st !== "restfactuur_verstuurd") return base;
+
+  let bw = betaalwijzeOverride ?? null;
+  if (!bw && project) {
+    const off = Array.isArray(project.offertes)
+      ? project.offertes[0]
+      : project.offertes;
+    bw = resolveBetaalwijze({
+      betaalwijze: project.betaalwijze,
+      leadStatus: project.leads?.status ?? null,
+      financieringVoorbehoud: off?.financiering_voorbehoud,
+    });
+  }
+  if (bw === "warmtefonds") return PROJECT_STATUS_LABEL_RESTFACTUUR_WF;
+  return base;
+}
 
 /** @deprecated Gebruik projectPipelineFor(betaalwijze) — warmtefonds-default. */
 export const PROJECT_PIPELINE: ProjectStatus[] = [
@@ -180,6 +226,7 @@ export const PROJECT_PIPELINE: ProjectStatus[] = [
   "installatie_ingepland",
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
 ];
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
@@ -376,6 +423,8 @@ export function statusTone(
         "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
       review_gevraagd:
         "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
+      afgerond:
+        "border border-[#0D5C32]/35 bg-[#E8F6EC] text-[#0D5C32]",
       service: "border border-[#00695C]/30 bg-[#E0F2F1] text-[#00695C]",
       annulering:
         "border border-[#C62828]/30 bg-[#FDECEA] text-[#C62828]",

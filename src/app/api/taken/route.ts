@@ -5,16 +5,28 @@ import { errMessage } from "@/lib/errors";
 import { isProjectAfdeling, PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import { dueAtFromDays } from "@/lib/project-taken";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
 import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 
 export const runtime = "nodejs";
 
 const SELECT =
-  "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), aangemaakt_door:adviseurs!aangemaakt_door_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon))";
+  "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), aangemaakt_door:adviseurs!aangemaakt_door_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon, adviseur_id))";
 
 const SELECT_FALLBACK =
-  "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon))";
+  "*, verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), projecten(id, project_nummer, titel, status, lead_id, leads(naam, plaats, telefoon, adviseur_id))";
+
+function leadAdviseurIdFromTaak(row: {
+  projecten?: {
+    leads?:
+      | { adviseur_id?: string | null }
+      | { adviseur_id?: string | null }[]
+      | null;
+  } | null;
+}): string | null {
+  const raw = row.projecten?.leads;
+  const lead = Array.isArray(raw) ? raw[0] : raw;
+  return lead?.adviseur_id?.trim() || null;
+}
 
 /** GET /api/taken — open + recente taken (optioneel ?project_id=) */
 export async function GET(req: NextRequest) {
@@ -31,13 +43,13 @@ export async function GET(req: NextRequest) {
     const sb = getSupabaseAdmin();
     const jar = await cookies();
     const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-    const rol = session ? normalizeRol(session.rol) : null;
 
-    // Referral-banner: alleen de sale-adviseur (admin mag alles zien)
-    const filterReferralToSelf =
-      autoKey === REFERRAL_TAK_AUTO_KEY &&
-      rol !== "admin" &&
-      Boolean(session?.adviseurId);
+    // Referral-banner: altijd alleen in het account van de sale-adviseur
+    // (ook admin/backoffice zien geen andermans referrals).
+    const isReferralQuery = autoKey === REFERRAL_TAK_AUTO_KEY;
+    if (isReferralQuery && !session?.adviseurId) {
+      return NextResponse.json({ taken: [] });
+    }
 
     async function run(select: string, withNullsFirst: boolean) {
       let q = sb
@@ -50,13 +62,10 @@ export async function GET(req: NextRequest) {
             : { ascending: true }
         )
         .order("created_at", { ascending: false })
-        .limit(limit);
+        .limit(isReferralQuery ? Math.max(limit, 200) : limit);
       if (projectId) q = q.eq("project_id", projectId);
       if (autoKey) q = q.eq("auto_key", autoKey);
       if (openOnly) q = q.neq("status", "done");
-      if (filterReferralToSelf && session?.adviseurId) {
-        q = q.eq("verantwoordelijke_id", session.adviseurId);
-      }
       return q;
     }
 
@@ -100,7 +109,27 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ taken: data || [] });
+    let taken = data || [];
+    if (isReferralQuery && session?.adviseurId) {
+      const me = session.adviseurId;
+      taken = taken.filter((row) => {
+        const r = row as {
+          verantwoordelijke_id?: string | null;
+          projecten?: {
+            leads?:
+              | { adviseur_id?: string | null }
+              | { adviseur_id?: string | null }[]
+              | null;
+          } | null;
+        };
+        const leadAdviseur = leadAdviseurIdFromTaak(r);
+        // Sale-eigenaar: lead.adviseur_id (saler), anders toegewezen verantwoordelijke
+        const owner = leadAdviseur || r.verantwoordelijke_id || null;
+        return owner === me;
+      });
+    }
+
+    return NextResponse.json({ taken });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout"), taken: [] },

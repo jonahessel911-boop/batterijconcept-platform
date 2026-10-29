@@ -214,34 +214,51 @@ export function afspraakZichtbaarInAgenda(
 }
 
 /**
- * Openstaand vervolg ná een fysiek bezoek.
- * Alleen echte vervolgen (punt/tel/fysiek/warme bel) — koude terugbel telt niet.
+ * Openstaand vervolg ná deze afspraak (niet de afspraak zelf).
+ * Alleen echte vervolgen (punt/tel/fysiek) — terugbel (koud/warm) telt niet,
+ * anders blokkeert een bel-chip het afboeken van een telefonisch vervolg.
  */
 export function hasOpenVervolgVoorLead(
   afspraken: Afspraak[],
   leadId: string,
-  afterStartAt: string
+  afterStartAt: string,
+  /** Huidige afspraak uitsluiten — anders telt een vervolg_tel zichzelf als “al opgevolgd”. */
+  excludeAfspraakId?: string | null
 ): boolean {
   const after = new Date(afterStartAt).getTime();
   return afspraken.some((a) => {
+    if (excludeAfspraakId && a.id === excludeAfspraakId) return false;
     if (a.lead_id !== leadId) return false;
     if (!ACTIEF.has(a.status)) return false;
     const s = normalizeAfspraakSoort(a.soort);
-    if (
-      s !== "vervolg_punt" &&
-      s !== "warme_bel" &&
-      s !== "vervolg_tel" &&
-      s !== "vervolg_fysiek"
-    ) {
+    if (s !== "vervolg_punt" && s !== "vervolg_tel" && s !== "vervolg_fysiek") {
       return false;
     }
-    return new Date(a.start_at).getTime() >= after;
+    // Strikt later — zelfde starttijd mag nooit als “al opgevolgd” tellen
+    return new Date(a.start_at).getTime() > after;
   });
 }
 
 /**
- * Afgelopen fysieke afspraak zonder vervolg → “I” / actie nodig,
- * tenzij lead is afgeboekt (geen interesse / geen contact / …).
+ * Agenda-afspraken die na afloop een uitkomst / afboeking nodig hebben.
+ * Fysiek (nieuw / vervolg op locatie) én telefonisch (vervolg tel / punt).
+ * Koude/warme terugbel → Bel-panel; Warmtefonds → eigen knop.
+ */
+export function afspraakVereistAfboeking(
+  soort: string | null | undefined
+): boolean {
+  const s = normalizeAfspraakSoort(soort);
+  return (
+    s === "nieuw" ||
+    s === "vervolg_fysiek" ||
+    s === "vervolg_tel" ||
+    s === "vervolg_punt"
+  );
+}
+
+/**
+ * Afgelopen afspraak (fysiek of telefonisch) zonder vervolg → “I” / actie nodig.
+ * Cron mag status al op `voltooid` zetten; zonder uitkomst blijft afboeken nodig.
  */
 export function needsVervolgPunt(
   afspraak: Afspraak,
@@ -249,7 +266,7 @@ export function needsVervolgPunt(
   now = new Date(),
   leadStatusOverride?: string | null
 ): boolean {
-  if (!afspraakBlokkeertAgenda(afspraak.soort)) return false;
+  if (!afspraakVereistAfboeking(afspraak.soort)) return false;
   if (afspraak.status === "geannuleerd") return false;
   if (!afspraakIsAfgelopen(afspraak, now)) return false;
   const leadStatus =
@@ -257,7 +274,14 @@ export function needsVervolgPunt(
   if (leadStatus && VERVOLG_PUNT_VRIJGESTELD.has(leadStatus as LeadStatus)) {
     return false;
   }
-  if (hasOpenVervolgVoorLead(allAfspraken, afspraak.lead_id, afspraak.start_at)) {
+  if (
+    hasOpenVervolgVoorLead(
+      allAfspraken,
+      afspraak.lead_id,
+      afspraak.start_at,
+      afspraak.id
+    )
+  ) {
     return false;
   }
   return true;

@@ -259,6 +259,7 @@ export async function PATCH(
           .in("soort", ["nieuw", "vervolg_fysiek"]);
       }
 
+      // Concept-aanbetalingsfactuur pas hier: doorgezet naar BO met juiste bedrag
       await ensureBtwDraftFactuur(sb, {
         offerteId: offerte.id,
         leadId: offerte.lead_id,
@@ -274,30 +275,9 @@ export async function PATCH(
             ? Number(offerte.aanbetaling_bedrag_inc)
             : null,
       });
-    } else if (
-      offerte.status === "ondertekend" &&
-      (body.aanbetaling_modus != null ||
-        body.aanbetaling_bedrag_inc !== undefined ||
-        body.aanbetaling_te_innen_inc !== undefined ||
-        body.financiering_voorbehoud !== undefined)
-    ) {
-      // Tussentijdse wijzigingen: factuur bijwerken zonder project
-      await ensureBtwDraftFactuur(sb, {
-        offerteId: offerte.id,
-        leadId: offerte.lead_id,
-        projectId: null,
-        offerteNummer: offerte.offerte_nummer,
-        btwBedrag: Number(offerte.btw_bedrag) || 0,
-        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
-        aanbetalingModus: offerte.aanbetaling_modus,
-        aanbetalingBedragInc:
-          offerte.aanbetaling_bedrag_inc != null
-            ? Number(offerte.aanbetaling_bedrag_inc)
-            : null,
-      });
     }
+    // Geen concept-factuur bij tussentijdse aanbetaling-wijzigingen vóór
+    // “Actie afronden” — bedrag staat dan nog niet definitief.
 
     return NextResponse.json({ offerte });
   } catch (e) {

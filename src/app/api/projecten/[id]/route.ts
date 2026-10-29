@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import type { Betaalwijze, Project, ProjectStatus } from "@/types/database";
-import { PROJECT_STATUSES, projectStatusLabel } from "@/lib/labels";
+import {
+  PROJECT_STATUSES,
+  resolveProjectStatusLabel,
+} from "@/lib/labels";
 import {
   FINANCIERING_STATUS_LABEL,
   isFinancieringStatus,
@@ -31,7 +34,23 @@ import type { InkoopLeverancierStatus } from "@/lib/project-inkoop-checklist";
 export const runtime = "nodejs";
 
 const PROJECT_SELECT =
-  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
+  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), installatie_teamgenoot:installatie_partner_teamgenoten!installatie_teamgenoot_id(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
+
+const PROJECT_SELECT_NO_TG =
+  "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
+
+function isTeamgenootSelectError(error: {
+  message?: string;
+  code?: string;
+} | null): boolean {
+  if (!error?.message) return false;
+  return (
+    error.message.includes("installatie_teamgenoot") ||
+    error.message.includes("installatie_partner_teamgenoten") ||
+    (error.code === "42703" &&
+      error.message.includes("installatie_teamgenoot_id"))
+  );
+}
 
 /** GET /api/projecten/[id] — projectdetail (ook via lead_id als fallback). */
 export async function GET(
@@ -45,11 +64,19 @@ export async function GET(
 
   try {
     const sb = getSupabaseAdmin();
-    const byId = await sb
+    let byId = await sb
       .from("projecten")
       .select(PROJECT_SELECT)
       .eq("id", id)
       .maybeSingle();
+
+    if (byId.error && isTeamgenootSelectError(byId.error)) {
+      byId = await sb
+        .from("projecten")
+        .select(PROJECT_SELECT_NO_TG)
+        .eq("id", id)
+        .maybeSingle();
+    }
 
     if (byId.error) {
       return NextResponse.json(
@@ -62,13 +89,23 @@ export async function GET(
     }
 
     // Soms wordt per ongeluk een lead-id gebruikt — stuur door naar het project.
-    const byLead = await sb
+    let byLead = await sb
       .from("projecten")
       .select(PROJECT_SELECT)
       .eq("lead_id", id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+
+    if (byLead.error && isTeamgenootSelectError(byLead.error)) {
+      byLead = await sb
+        .from("projecten")
+        .select(PROJECT_SELECT_NO_TG)
+        .eq("lead_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    }
 
     if (byLead.error) {
       return NextResponse.json(
@@ -126,6 +163,8 @@ export async function PATCH(
     afdeling?: string | null;
     verantwoordelijke_id?: string | null;
     installatie_partner_id?: string | null;
+    /** Monteur van de gekozen installatiepartner. */
+    installatie_teamgenoot_id?: string | null;
     betaalwijze?: Betaalwijze;
     betaalwijze_reden?: string | null;
     schouw_notities?: string | null;
@@ -249,7 +288,7 @@ export async function PATCH(
     patch[key] = d.toISOString();
   }
   if (
-    body.status === "review_gevraagd" &&
+    (body.status === "review_gevraagd" || body.status === "afgerond") &&
     patch.review_gevraagd_at === undefined
   ) {
     patch.review_gevraagd_at = new Date().toISOString();
@@ -380,6 +419,14 @@ export async function PATCH(
   if (body.installatie_partner_id !== undefined) {
     patch.installatie_partner_id =
       body.installatie_partner_id?.trim() || null;
+    // Partner-wissel: medewerker opnieuw laten kiezen
+    patch.installatie_teamgenoot_id = null;
+    patch.monteur = null;
+  }
+  if (body.installatie_teamgenoot_id !== undefined) {
+    // Wordt hieronder gevalideerd t.o.v. partner (na before-load).
+    patch.installatie_teamgenoot_id =
+      body.installatie_teamgenoot_id?.trim() || null;
   }
   if (body.schouw_notities !== undefined) {
     patch.schouw_notities = body.schouw_notities?.trim() || null;
@@ -412,10 +459,50 @@ export async function PATCH(
     const { data: before } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
+
+    // Medewerker koppelen: moet bij de (nieuwe) partner horen + sync monteur-tekst
+    if (body.installatie_teamgenoot_id !== undefined) {
+      const tgId =
+        typeof patch.installatie_teamgenoot_id === "string"
+          ? patch.installatie_teamgenoot_id
+          : null;
+      const partnerIdForTg =
+        (typeof patch.installatie_partner_id === "string"
+          ? patch.installatie_partner_id
+          : null) ||
+        (before as { installatie_partner_id?: string | null } | null)
+          ?.installatie_partner_id ||
+        null;
+      if (tgId) {
+        if (!partnerIdForTg) {
+          return NextResponse.json(
+            { error: "Kies eerst een installateur" },
+            { status: 400 }
+          );
+        }
+        const { data: tg } = await sb
+          .from("installatie_partner_teamgenoten")
+          .select("id, naam, actief")
+          .eq("id", tgId)
+          .eq("partner_id", partnerIdForTg)
+          .maybeSingle();
+        if (!tg || tg.actief === false) {
+          return NextResponse.json(
+            { error: "Medewerker niet gevonden bij deze installateur" },
+            { status: 400 }
+          );
+        }
+        patch.installatie_teamgenoot_id = tg.id;
+        patch.monteur = tg.naam;
+      } else {
+        patch.installatie_teamgenoot_id = null;
+        patch.monteur = null;
+      }
+    }
 
     // Eigen middelen: schouwweek via PATCH pas ná 50% betaling
     const settingSchouwWeek =
@@ -463,17 +550,45 @@ export async function PATCH(
       }
     }
 
-    // Review-checkbox → status Review gevraagd (sales-actie referrals)
-    const reviewAtComing =
-      typeof patch.review_gevraagd_at === "string" &&
-      !(before as { review_gevraagd_at?: string | null } | null)
-        ?.review_gevraagd_at;
+    // After sale: pas als BTW + overstap + review allemaal gezet zijn
+    const beforeRow = before as {
+      status?: string | null;
+      btw_terugvragen_aangevraagd_at?: string | null;
+      overstap_dynamische_leverancier_at?: string | null;
+      review_gevraagd_at?: string | null;
+    } | null;
+    const mergedBtw =
+      patch.btw_terugvragen_aangevraagd_at !== undefined
+        ? patch.btw_terugvragen_aangevraagd_at
+        : beforeRow?.btw_terugvragen_aangevraagd_at;
+    const mergedOverstap =
+      patch.overstap_dynamische_leverancier_at !== undefined
+        ? patch.overstap_dynamische_leverancier_at
+        : beforeRow?.overstap_dynamische_leverancier_at;
+    const mergedReview =
+      patch.review_gevraagd_at !== undefined
+        ? patch.review_gevraagd_at
+        : beforeRow?.review_gevraagd_at;
+    const allAfterSaleDone = Boolean(
+      mergedBtw && mergedOverstap && mergedReview
+    );
     if (
-      reviewAtComing &&
+      allAfterSaleDone &&
       patch.status === undefined &&
-      before?.status !== "review_gevraagd"
+      beforeRow?.status !== "afgerond" &&
+      beforeRow?.status !== "service" &&
+      beforeRow?.status !== "annulering" &&
+      beforeRow?.status !== "hold_sales_actie"
     ) {
-      patch.status = "review_gevraagd";
+      patch.status = "afgerond";
+    }
+    // Handmatig/legacy "review_gevraagd" zonder volledige checklist → blijf
+    // op after-sale-installatie-voltooid tot alle drie klaar zijn.
+    if (patch.status === "review_gevraagd" && !allAfterSaleDone) {
+      patch.status = "installatie_voltooid";
+    }
+    if (patch.status === "review_gevraagd" && allAfterSaleDone) {
+      patch.status = "afgerond";
     }
 
     if (
@@ -518,14 +633,35 @@ export async function PATCH(
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
     }
 
+    const PROJECT_PATCH_SELECT =
+      "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), installatie_teamgenoot:installatie_partner_teamgenoten!installatie_teamgenoot_id(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
+    const PROJECT_PATCH_SELECT_NO_TG =
+      "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)";
+
     let { data, error } = await sb
       .from("projecten")
       .update(patch)
       .eq("id", id)
-      .select(
-        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op, track_token, track_mail_verstuurd_at, track_last_seen_at, track_view_count)"
-      )
+      .select(PROJECT_PATCH_SELECT)
       .single();
+
+    if (error && isTeamgenootSelectError(error)) {
+      const fallbackPatch = { ...patch };
+      if (
+        error.message?.includes("installatie_teamgenoot_id") ||
+        error.code === "42703"
+      ) {
+        delete fallbackPatch.installatie_teamgenoot_id;
+      }
+      const retryTg = await sb
+        .from("projecten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .select(PROJECT_PATCH_SELECT_NO_TG)
+        .single();
+      data = retryTg.data;
+      error = retryTg.error;
+    }
 
     // Kolom materiaal_leverdatum nog niet gemigreerd → bewaar in materiaal_checks.
     if (error && isMateriaalLeverdatumColumnError(error)) {
@@ -549,7 +685,7 @@ export async function PATCH(
         .update(fallbackPatch)
         .eq("id", id)
         .select(
-          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
+          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
         )
         .single();
       data = retryLever.data;
@@ -594,7 +730,7 @@ export async function PATCH(
         .update(fallbackPatch)
         .eq("id", id)
         .select(
-          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
+          "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, terugbellen, terugbel_notitie, beller_id, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
         )
         .single();
       data = retryLev.data;
@@ -658,6 +794,46 @@ export async function PATCH(
         },
         { status: 500 }
       );
+    }
+
+    // Review afgevinkt → aparte review-mail + Trustpilot AFS (verified)
+    if (reviewAtComing) {
+      try {
+        const { sendReviewVerzoekKlantMail } = await import(
+          "@/lib/review-verzoek-mail"
+        );
+        const sent = await sendReviewVerzoekKlantMail(
+          sb,
+          id,
+          data as Record<string, unknown>
+        );
+        const leadIdForReview =
+          (before?.lead_id || (data as { lead_id?: string }).lead_id) as
+            | string
+            | undefined;
+        if (leadIdForReview) {
+          await logLeadEvent({
+            leadId: leadIdForReview,
+            soort: sent.ok ? "email" : "status",
+            titel: sent.ok
+              ? "Reviewverzoek verstuurd (Trustpilot)"
+              : "Reviewverzoek mail mislukt",
+            detail: sent.ok
+              ? "Klantmail + BCC Trustpilot AFS (verified review)"
+              : sent.error || "Onbekende fout",
+            meta: {
+              project_id: id,
+              project_nummer: (data as { project_nummer?: string })
+                .project_nummer,
+              tag: "review-verzoek",
+              message_id: sent.messageId || null,
+              trustpilot_afs: true,
+            },
+          });
+        }
+      } catch (e) {
+        console.error("sendReviewVerzoekKlantMail:", e);
+      }
     }
 
     if (
@@ -741,10 +917,10 @@ export async function PATCH(
         await logLeadEvent({
           leadId,
           soort: "status",
-          titel: `Projectstatus: ${projectStatusLabel[body.status] || body.status}`,
+          titel: `Projectstatus: ${resolveProjectStatusLabel(body.status, data) || body.status}`,
           detail: [
             before.status
-              ? `Was: ${projectStatusLabel[before.status as ProjectStatus] || before.status}`
+              ? `Was: ${resolveProjectStatusLabel(before.status, before) || before.status}`
               : null,
             aangevraagdAt
               ? `Aangevraagd op ${new Date(aangevraagdAt).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" })}`

@@ -37,6 +37,7 @@ export function defaultAfdelingVoorStatus(status: string): ProjectAfdeling {
     case "materiaal_installatie":
       return "Installatie";
     case "review_gevraagd":
+    case "afgerond":
       return "Verkoop";
     case "aanbetaling_betaald":
     case "warmtefonds_afspraak_ingepland":

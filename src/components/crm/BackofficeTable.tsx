@@ -14,12 +14,24 @@ import type {
 } from "@/types/database";
 import { formatDateShort, formatTimeNl } from "@/lib/format";
 import {
-  normalizeProjectStatus,
-  PROJECT_STATUSES,
   projectStatusLabel,
   resolveDisplayProjectStatus,
 } from "@/lib/labels";
-import { openBackofficeActies } from "@/lib/backoffice-acties";
+import {
+  isProjectFilterWachtExtern,
+  isWarmtefondsProject,
+  isWarmtefondsWachtOpExtern,
+  openBackofficeActies,
+} from "@/lib/backoffice-acties";
+import {
+  normalizeFinancieringStatus,
+  resolveFinancieringStatus,
+} from "@/lib/financiering-status";
+import {
+  projectStatusesFor,
+  toOperationalStatus,
+  type ProjectStatusKey,
+} from "@/lib/project-status-config";
 import {
   isOpleveringsrapport,
   isSchouwFormulier,
@@ -36,6 +48,19 @@ import { rememberCrmReturnUrl } from "./DetailChrome";
 import { KlantContactMailModal } from "./KlantContactMailModal";
 
 const PAGE_SIZE = 10;
+
+/** Opgeschoonde orderstatussen (geen parallelle WF-/aanbetalings-statussen). */
+const STATUS_FILTER_OPTIONS: ProjectStatusKey[] = [
+  ...new Set([
+    ...projectStatusesFor("warmtefonds"),
+    ...projectStatusesFor("eigen_middelen"),
+  ]),
+];
+
+function statusFilterLabel(st: ProjectStatusKey): string {
+  if (st === "restfactuur_verstuurd") return "Factuur WF / Restfactuur";
+  return projectStatusLabel[st] || st;
+}
 
 function leadAdres(p: Project): string {
   const l = p.leads;
@@ -205,8 +230,14 @@ export function BackofficeTable({
 }) {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [actief, setActief] = useState<ActiefFilter>("actief");
+  const [actief, setActief] = useState<ActiefFilter>("alles");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "">("");
+  const [financieringFilter, setFinancieringFilter] = useState<
+    "" | "em" | "wf"
+  >("");
+  /** Standaard Actie aan — wachten-op-extern uitfilteren. */
+  const [filterActie, setFilterActie] = useState(true);
+  const [filterWachtExtern, setFilterWachtExtern] = useState(false);
   const [medewerkerId, setMedewerkerId] = useState("");
   const [datumFilter, setDatumFilter] = useState<
     "" | "deze_week" | "deze_maand" | "gepland"
@@ -236,24 +267,55 @@ export function BackofficeTable({
     return () => cancelAnimationFrame(frame);
   }, [loadTaken]);
 
-  const projectIdsWithActie = useMemo(() => {
-    const ids = new Set<string>();
-    for (const t of openTaken) {
-      if (t.project_id) ids.add(t.project_id);
-    }
-    for (const a of openBackofficeActies(projecten, facturen, new Date(), {
-      leads,
-      afspraken,
-    })) {
-      if (a.projectId) ids.add(a.projectId);
-    }
-    return ids;
-  }, [openTaken, projecten, facturen, leads, afspraken]);
+  const { projectIdsWithActie, projectIdsActie, projectIdsWachtExtern } =
+    useMemo(() => {
+      const withAny = new Set<string>();
+      const actieIds = new Set<string>();
+      const wachtIds = new Set<string>();
+      for (const t of openTaken) {
+        if (t.project_id) {
+          withAny.add(t.project_id);
+          actieIds.add(t.project_id);
+        }
+      }
+      for (const a of openBackofficeActies(projecten, facturen, new Date(), {
+        leads,
+        afspraken,
+      })) {
+        if (!a.projectId) continue;
+        withAny.add(a.projectId);
+        // Eén project kan beide hebben; eerst wacht, daarna actie overschrijft niet
+        if (isProjectFilterWachtExtern(a)) wachtIds.add(a.projectId);
+        else actieIds.add(a.projectId);
+      }
+      for (const p of projecten) {
+        if (!isWarmtefondsWachtOpExtern(p)) continue;
+        withAny.add(p.id);
+        const raw = resolveFinancieringStatus(p);
+        const n = normalizeFinancieringStatus(raw);
+        // Documenten / doorgestuurd = BO-werk; in behandeling = echt wachten
+        if (
+          n === "doorgestuurd_naar_edwin" ||
+          n === "documenten_aanleveren" ||
+          raw === "afspraak_ingepland"
+        ) {
+          actieIds.add(p.id);
+        } else {
+          wachtIds.add(p.id);
+        }
+      }
+      return {
+        projectIdsWithActie: withAny,
+        projectIdsActie: actieIds,
+        projectIdsWachtExtern: wachtIds,
+      };
+    }, [openTaken, projecten, facturen, leads, afspraken]);
 
-  const filtered = useMemo(() => {
+  const baseFiltered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let list = projecten.filter((p) => {
       const st = resolveDisplayProjectStatus(p);
+      const opSt = toOperationalStatus(st);
       if (actief === "annuleringen") {
         if (st !== "annulering") return false;
       } else if (actief === "hold_sales") {
@@ -266,12 +328,17 @@ export function BackofficeTable({
         return false;
       } else if (
         actief === "actief" &&
-        (st === "installatie_voltooid" || st === "service")
+        (st === "installatie_voltooid" ||
+          st === "review_gevraagd" ||
+          st === "afgerond" ||
+          st === "service")
       ) {
         return false;
       } else if (
         actief === "afgerond" &&
         st !== "installatie_voltooid" &&
+        st !== "review_gevraagd" &&
+        st !== "afgerond" &&
         st !== "service"
       ) {
         return false;
@@ -281,7 +348,16 @@ export function BackofficeTable({
       ) {
         return false;
       }
-      if (statusFilter && st !== statusFilter) return false;
+      if (statusFilter && opSt !== statusFilter && st !== statusFilter) {
+        return false;
+      }
+
+      if (financieringFilter === "wf" && !isWarmtefondsProject(p)) {
+        return false;
+      }
+      if (financieringFilter === "em" && isWarmtefondsProject(p)) {
+        return false;
+      }
 
       if (medewerkerId) {
         if (
@@ -352,10 +428,28 @@ export function BackofficeTable({
     q,
     actief,
     statusFilter,
+    financieringFilter,
     medewerkerId,
     datumFilter,
     sortDir,
     projectIdsWithActie,
+  ]);
+
+  const filtered = useMemo(() => {
+    if (!filterActie && !filterWachtExtern) return baseFiltered;
+    return baseFiltered.filter((p) => {
+      const inActie = projectIdsActie.has(p.id);
+      const inWacht = projectIdsWachtExtern.has(p.id);
+      if (filterActie && filterWachtExtern) return inActie || inWacht;
+      if (filterActie) return inActie;
+      return inWacht;
+    });
+  }, [
+    baseFiltered,
+    filterActie,
+    filterWachtExtern,
+    projectIdsActie,
+    projectIdsWachtExtern,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -417,7 +511,17 @@ export function BackofficeTable({
 
   useEffect(() => {
     setPage(1);
-  }, [q, actief, statusFilter, medewerkerId, datumFilter, sortDir]);
+  }, [
+    q,
+    actief,
+    statusFilter,
+    financieringFilter,
+    filterActie,
+    filterWachtExtern,
+    medewerkerId,
+    datumFilter,
+    sortDir,
+  ]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
@@ -430,12 +534,24 @@ export function BackofficeTable({
 
   const filterBtn =
     "inline-flex items-center gap-1.5 border border-line bg-white px-3 py-2 text-sm text-ink hover:bg-wash";
+  const checkBtn = (on: boolean) =>
+    [
+      "inline-flex cursor-pointer items-center gap-1.5 border px-3 py-2 text-sm select-none",
+      on
+        ? "border-green bg-[#E8F6EC] font-semibold text-[#0D5C32]"
+        : "border-line bg-white text-ink hover:bg-wash",
+    ].join(" ");
 
   function projectHref(id: string) {
     return `/projecten/${id}?from=orders`;
   }
 
-  const actieCount = filtered.filter((p) => projectIdsWithActie.has(p.id)).length;
+  const actieCount = baseFiltered.filter((p) =>
+    projectIdsActie.has(p.id)
+  ).length;
+  const wachtCount = baseFiltered.filter((p) =>
+    projectIdsWachtExtern.has(p.id)
+  ).length;
 
   return (
     <div className="mx-5 mb-5 mt-5 space-y-4">
@@ -478,7 +594,7 @@ export function BackofficeTable({
         >
           <option value="actief">Actief</option>
           <option value="actie_vereist">Actie vereist</option>
-          <option value="afgerond">Afgerond</option>
+          <option value="afgerond">After sale</option>
           <option value="hold_sales">HOLD sales</option>
           <option value="annuleringen">Annuleringen</option>
           <option value="alles">Alles</option>
@@ -507,11 +623,24 @@ export function BackofficeTable({
           aria-label="Filter status"
         >
           <option value="">Status</option>
-          {PROJECT_STATUSES.map((st) => (
+          {STATUS_FILTER_OPTIONS.map((st) => (
             <option key={st} value={st}>
-              {projectStatusLabel[st]}
+              {statusFilterLabel(st)}
             </option>
           ))}
+        </select>
+
+        <select
+          value={financieringFilter}
+          onChange={(e) =>
+            setFinancieringFilter(e.target.value as "" | "em" | "wf")
+          }
+          className={filterBtn}
+          aria-label="Filter financiering"
+        >
+          <option value="">Financiering</option>
+          <option value="em">EM</option>
+          <option value="wf">WF</option>
         </select>
 
         <select
@@ -529,6 +658,36 @@ export function BackofficeTable({
               </option>
             ))}
         </select>
+
+        <label className={checkBtn(filterActie)}>
+          <input
+            type="checkbox"
+            className="accent-[#0D5C32]"
+            checked={filterActie}
+            onChange={(e) => setFilterActie(e.target.checked)}
+          />
+          Actie
+          {actieCount > 0 ? (
+            <span className="tabular-nums text-[11px] opacity-70">
+              ({actieCount})
+            </span>
+          ) : null}
+        </label>
+
+        <label className={checkBtn(filterWachtExtern)}>
+          <input
+            type="checkbox"
+            className="accent-[#0D5C32]"
+            checked={filterWachtExtern}
+            onChange={(e) => setFilterWachtExtern(e.target.checked)}
+          />
+          Wachten Extern
+          {wachtCount > 0 ? (
+            <span className="tabular-nums text-[11px] opacity-70">
+              ({wachtCount})
+            </span>
+          ) : null}
+        </label>
       </div>
 
       {filtered.length === 0 ? (
@@ -545,7 +704,7 @@ export function BackofficeTable({
           <div className="divide-y divide-line md:hidden">
             {pageRows.map((p) => {
               const leden = lidNamen(p);
-              const hasActie = projectIdsWithActie.has(p.id);
+              const hasActie = projectIdsActie.has(p.id);
               return (
                 <div
                   key={p.id}
@@ -682,7 +841,7 @@ export function BackofficeTable({
                   const lid = lidNaam(p);
                   const leden = lidNamen(p);
                   const adres = leadAdres(p);
-                  const hasActie = projectIdsWithActie.has(p.id);
+                  const hasActie = projectIdsActie.has(p.id);
                   const docs = docFlags[p.id];
                   return (
                     <tr

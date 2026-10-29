@@ -12,6 +12,15 @@ import {
   factuurDisplayStatus,
   factuurIsOverdue,
 } from "@/lib/factuur-betaling";
+import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { isWarmtefondsSale } from "@/lib/backoffice-acties";
+import {
+  factuurSoortHint,
+  factuurSoortLabel,
+  factuurSoortTone,
+  isFactuurWfLaterBetaald,
+  resolveFactuurSoort,
+} from "@/lib/factuur-soort";
 import { StatusBadge } from "./StatusBadge";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 
@@ -64,6 +73,7 @@ export function FactuurPage() {
   const [busy, setBusy] = useState<
     | "pdf"
     | "send"
+    | "reminder"
     | "paid"
     | "delete"
     | "save"
@@ -161,7 +171,23 @@ export function FactuurPage() {
             : Promise.resolve({ data: null }),
           fac.project_id
             ? sb.from("projecten").select("*").eq("id", fac.project_id).single()
-            : Promise.resolve({ data: null }),
+            : fac.offerte_id
+              ? sb
+                  .from("projecten")
+                  .select("*")
+                  .eq("offerte_id", fac.offerte_id)
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+              : fac.lead_id
+                ? sb
+                    .from("projecten")
+                    .select("*")
+                    .eq("lead_id", fac.lead_id)
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+                : Promise.resolve({ data: null }),
         ]);
 
         setOfferte((o.data as Offerte) || null);
@@ -364,6 +390,42 @@ export function FactuurPage() {
     }
   }
 
+  async function sendWarmtefondsHerinnering() {
+    if (!factuur) return;
+    if (
+      !confirm(
+        `Herinneringsmail voor aanbetaling ${factuur.factuur_nummer} sturen naar ${
+          lead?.email || factuur.leads?.email || "de klant"
+        }?\n\nVriendelijke herinnering dat de aanbetaling nodig is om Warmtefonds aan te vragen. Factuur-PDF gaat mee als bijlage.`
+      )
+    ) {
+      return;
+    }
+    setBusy("reminder");
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${factuur.id}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send_reminder" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Herinnering versturen mislukt"
+        );
+      }
+      setMsg("Herinneringsmail is verstuurd (met factuur-PDF).");
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Herinnering versturen mislukt"
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function markAsPaid() {
     if (!factuur) return;
     if (
@@ -549,7 +611,20 @@ export function FactuurPage() {
     : creditVanRaw;
   const isCredit = Boolean(factuur.credit_van_factuur_id);
   const heeftCredit = credits.length > 0;
-  const overdue = factuurIsOverdue({ ...factuur, heeftCredit });
+  const isWarmtefonds =
+    project?.betaalwijze === "eigen_middelen"
+      ? false
+      : project?.betaalwijze === "warmtefonds"
+        ? true
+        : isWarmtefondsSale({
+            financieringVoorbehoud: offerte?.financiering_voorbehoud,
+          });
+  const factuurSoort = resolveFactuurSoort(factuur, {
+    isWarmtefonds,
+  });
+  const wfLater = isFactuurWfLaterBetaald(factuur, { isWarmtefonds });
+  const overdue =
+    factuurIsOverdue({ ...factuur, heeftCredit }) && !wfLater;
   const displayStatus = factuurDisplayStatus(factuur, { heeftCredit });
   const creditSign = isCredit ? -1 : 1;
   const displayEx = creditSign * Math.abs(Number(factuur.bedrag_ex_btw) || 0);
@@ -570,6 +645,14 @@ export function FactuurPage() {
           creditVan?.factuur_nummer ? ` bij ${creditVan.factuur_nummer}` : ""
         }`
       : "Factuur");
+  const isAanbetaling = isAanbetalingFactuurOmschrijving(factuur.omschrijving);
+  const canSendWfHerinnering =
+    !isCredit &&
+    !heeftCredit &&
+    isAanbetaling &&
+    isWarmtefonds &&
+    (factuur.status === "verzonden" || factuur.status === "deels_betaald") &&
+    Boolean(klantEmail);
 
   return (
     <DetailShell onRefresh={load} loading={loading} activeTab="facturen">
@@ -597,6 +680,14 @@ export function FactuurPage() {
       {/* Actiebalk */}
       <div className="mb-4 flex flex-wrap items-center gap-2 border border-line bg-white px-4 py-3">
         <StatusBadge kind="factuur" value={displayStatus} />
+        {!isCredit && factuurSoort !== "credit" ? (
+          <span
+            title={factuurSoortHint[factuurSoort]}
+            className={`inline-flex items-center px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${factuurSoortTone(factuurSoort)}`}
+          >
+            {factuurSoortLabel[factuurSoort]}
+          </span>
+        ) : null}
         {heeftCredit && factuur.status !== "vervallen" ? (
           <span className="text-[11px] font-medium text-muted">
             Was: {factuur.status.replace("_", " ")}
@@ -622,6 +713,19 @@ export function FactuurPage() {
         ) : null}
 
         <div className="ml-auto flex flex-wrap gap-2">
+          {project ? (
+            <Link
+              href={`/projecten/${project.id}`}
+              className="border border-line bg-white px-3.5 py-2 text-sm font-semibold text-ink hover:bg-wash"
+            >
+              Project
+              {project.project_nummer ? (
+                <span className="ml-1.5 font-normal text-muted">
+                  {project.project_nummer}
+                </span>
+              ) : null}
+            </Link>
+          ) : null}
           <button
             type="button"
             disabled={busy !== null}
@@ -645,14 +749,29 @@ export function FactuurPage() {
                 ? "Verstuur"
                 : "Opnieuw versturen"}
           </button>
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void removeFactuur()}
-            className="border border-[#D32F2F]/35 bg-white px-3.5 py-2 text-sm font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
-          >
-            {busy === "delete" ? "…" : "Verwijderen"}
-          </button>
+          {canSendWfHerinnering ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void sendWarmtefondsHerinnering()}
+              className="border border-[#1A4A6E]/35 bg-[#E8F0F6] px-3.5 py-2 text-sm font-semibold text-[#1A4A6E] hover:bg-[#d9e6f0] disabled:opacity-50"
+              title="Vriendelijke herinnering: aanbetaling nodig vóór Warmtefonds-aanvraag"
+            >
+              {busy === "reminder"
+                ? "Herinnering…"
+                : "Stuur herinneringsmail"}
+            </button>
+          ) : null}
+          {isDraft ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => void removeFactuur()}
+              className="border border-[#D32F2F]/35 bg-white px-3.5 py-2 text-sm font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
+            >
+              {busy === "delete" ? "…" : "Verwijderen"}
+            </button>
+          ) : null}
         </div>
       </div>
 

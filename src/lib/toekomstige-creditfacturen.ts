@@ -7,6 +7,7 @@ import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import {
   creditWeekFromDate,
   previousCreditWeek,
+  weekBeforePreviousCreditWeek,
   type CreditWeek,
   VERKOPER_AANBETALING_FEE,
 } from "@/lib/adviseur-creditfactuur";
@@ -15,6 +16,7 @@ import {
   commissieTrancheA,
   NETTO_AANBETALING_COMMISSIE,
 } from "@/lib/netto-boord";
+import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
 import { addDays } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 
@@ -29,6 +31,8 @@ export type ToekomstigeCfRegel = {
   betaaldOp: string;
   bedragExBtw: number;
   status: "nieuw" | "concept_bestaat" | "zzp_incompleet" | "geen_adviseur";
+  /** Concept kan, Bevestig nog niet (ontbrekende ZZP). */
+  zzpIncompleet?: boolean;
   creditfactuurId: string | null;
   creditfactuurNummer: string | null;
 };
@@ -96,6 +100,10 @@ export async function buildToekomstigeVerkoperCreditfacturen(
 ): Promise<ToekomstigeCreditfacturenPreview> {
   const moment = nextVerkoperCommissieMoment(now);
   const week = moment.week;
+  // Vorige week + week daarvoor (openstaande/late aanbetalingen, bv. Manting)
+  const weekOlder = weekBeforePreviousCreditWeek(now);
+  const van = weekOlder.van < week.van ? weekOlder.van : week.van;
+  const tot = week.tot;
 
   const { data: facs } = await sb
     .from("facturen")
@@ -103,8 +111,8 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       "id, factuur_nummer, lead_id, status, omschrijving, betaald_op, offerte_id"
     )
     .eq("status", "betaald")
-    .gte("betaald_op", week.van)
-    .lte("betaald_op", week.tot)
+    .gte("betaald_op", van)
+    .lte("betaald_op", tot)
     .limit(2000);
 
   const aanbetalingen = (facs || []).filter((f) =>
@@ -197,7 +205,7 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     ? await sb
         .from("adviseurs")
         .select(
-          "id, naam, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, commissie_pct"
+          "id, naam, rol, bedrijfsnaam, kvk_nummer, iban, max_factuur_bedrag, commissie_pct"
         )
         .in("id", advIds)
     : { data: [] as unknown[] };
@@ -207,6 +215,7 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       a as {
         id: string;
         naam: string;
+        rol: string | null;
         bedrijfsnaam: string | null;
         kvk_nummer: string | null;
         iban: string | null;
@@ -249,21 +258,26 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     }
 
     const adv = advById.get(lead.adviseur_id);
+    // Alleen echte verkopers — geen admin/Huub/backoffice e.d.
+    if (!adv || isUitgeslotenVanSalesCommissie(adv)) {
+      continue;
+    }
+
     let fee =
       omzetEx > 0
-        ? commissieTrancheA(omzetEx, adv?.commissie_pct)
+        ? commissieTrancheA(omzetEx, adv.commissie_pct)
         : NETTO_AANBETALING_COMMISSIE;
     const max =
-      adv?.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0
+      adv.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0
         ? Number(adv.max_factuur_bedrag)
         : null;
     if (max != null && fee > max) fee = max;
 
-    let status: ToekomstigeCfRegel["status"] = "nieuw";
-    if (existing) status = "concept_bestaat";
-    else if (!adv?.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
-      status = "zzp_incompleet";
-    }
+    const zzpIncompleet =
+      !adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban;
+    const status: ToekomstigeCfRegel["status"] = existing
+      ? "concept_bestaat"
+      : "nieuw";
 
     regels.push({
       factuurId: fac.id as string,
@@ -272,10 +286,11 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       leadNaam: lead.naam,
       offerteNummer: off?.offerte_nummer ?? null,
       adviseurId: lead.adviseur_id,
-      adviseurNaam: adv?.naam || "Adviseur",
+      adviseurNaam: adv.naam || "Adviseur",
       betaaldOp: String(fac.betaald_op || "").slice(0, 10),
       bedragExBtw: Math.round(fee * 100) / 100,
       status,
+      zzpIncompleet,
       creditfactuurId: existing?.cfId ?? null,
       creditfactuurNummer: existing?.cfNummer ?? null,
     });
@@ -308,7 +323,9 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     };
     cur.orders += 1;
     cur.bedragExBtw = Math.round((cur.bedragExBtw + r.bedragExBtw) * 100) / 100;
-    if (r.status === "zzp_incompleet") cur.geblokkeerdOrders += 1;
+    if (r.zzpIncompleet || r.status === "zzp_incompleet") {
+      cur.geblokkeerdOrders += 1;
+    }
     perMap.set(r.adviseurId, cur);
   }
 
@@ -332,7 +349,10 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       nieuw: regels.filter((r) => r.status === "nieuw").length,
       alConcept: regels.filter((r) => r.status === "concept_bestaat").length,
       geblokkeerd: regels.filter(
-        (r) => r.status === "zzp_incompleet" || r.status === "geen_adviseur"
+        (r) =>
+          r.status === "zzp_incompleet" ||
+          r.status === "geen_adviseur" ||
+          r.zzpIncompleet
       ).length,
     },
     perAdviseur: [...perMap.values()].sort((a, b) =>

@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import type {
+  BelIngeplandPipeline,
   BelMetrics,
   BelMonthBucket,
   BelWeekBucket,
@@ -37,6 +38,7 @@ type BelData = {
   totals: BelMetrics;
   series: BelWeekBucket[];
   months: BelMonthBucket[];
+  pipeline14d?: BelIngeplandPipeline | null;
 };
 
 type RangeMode = "weeks" | "month";
@@ -948,6 +950,66 @@ export function BelDashboardPanel({
               )}
             </div>
           </section>
+
+          {data.pipeline14d ? (
+            <section className="overflow-hidden rounded-2xl border border-line bg-white">
+              <header className="flex flex-wrap items-end justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+                <div>
+                  <p className="font-display text-base font-semibold text-ink">
+                    Ingepland komende 14 dagen
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    Actieve huisbezoeken met startdatum van{" "}
+                    {data.pipeline14d.fromYmd} t/m {data.pipeline14d.toYmd} —
+                    per week waarvoor ze gepland staan.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-end gap-4 sm:gap-6">
+                  <div className="text-right">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Geboekt laatste 14d
+                    </p>
+                    <p className="font-display text-2xl font-semibold tabular-nums text-ink">
+                      {num(data.pipeline14d.geboektLaatsteDagen ?? 0)}
+                    </p>
+                    <p className="text-[11px] text-muted">
+                      voor komende 14d
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Totaal in agenda
+                    </p>
+                    <p className="font-display text-2xl font-semibold tabular-nums text-ink">
+                      {num(data.pipeline14d.total)}
+                    </p>
+                    <p className="text-[11px] text-muted">komende 14d</p>
+                  </div>
+                </div>
+              </header>
+              <div className="grid gap-2 p-3 sm:grid-cols-2 sm:p-4 lg:grid-cols-3">
+                {data.pipeline14d.weeks.map((w) => (
+                  <div
+                    key={w.weekKey}
+                    className="rounded-xl border border-line bg-[#FAFBFA] px-3.5 py-3"
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
+                      {w.weekKey}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-ink">
+                      {w.label}
+                    </p>
+                    <p className="mt-2 font-display text-3xl font-semibold tabular-nums text-ink">
+                      {num(w.count)}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      huisbezoeken · {w.startYmd} – {w.endYmd}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </>
       ) : null}
     </div>

@@ -123,98 +123,97 @@ export function PartnerTeamgenotenPanel({ portalToken }: Props) {
 
   return (
     <div className="space-y-5">
-      <div className="border border-line bg-white px-4 py-4 sm:px-5">
-        <h2 className="font-display text-lg font-semibold text-ink">
-          Teamgenoten
-        </h2>
-        <p className="mt-0.5 text-sm text-muted">
-          Monteurs die onder jouw installatiepartner vallen. Voeg collega’s toe
-          zodat het team hier zichtbaar is.
-        </p>
+      <section className="border border-line bg-white">
+        <div className="border-b border-line px-5 py-4">
+          <h2 className="font-display text-lg font-semibold text-ink">Team</h2>
+          <p className="mt-0.5 text-sm text-muted">
+            Monteurs onder jouw bedrijf — nodig voor afblokken per persoon.
+          </p>
+        </div>
 
         <form
           onSubmit={(e) => void addTeamgenoot(e)}
-          className="mt-4 grid gap-3 sm:grid-cols-3"
+          className="grid gap-3 px-5 py-4 sm:grid-cols-3"
         >
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
             Naam *
             <input
               required
               value={naam}
               onChange={(e) => setNaam(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              placeholder="Bijv. Jan de Vries"
+              className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green-deeper"
+              placeholder="Bijv. Mohammed Ahmed"
             />
           </label>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
             E-mail
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              placeholder="optioneel"
+              className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green-deeper"
+              placeholder="Optioneel"
             />
           </label>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
             Telefoon
             <input
               value={telefoon}
               onChange={(e) => setTelefoon(e.target.value)}
-              className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
-              placeholder="optioneel"
+              className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green-deeper"
+              placeholder="Optioneel"
             />
           </label>
           <div className="sm:col-span-3">
             <button
               type="submit"
               disabled={saving || !naam.trim()}
-              className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              className="bg-green-deeper px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
-              {saving ? "Bezig…" : "+ Teamgenoot toevoegen"}
+              {saving ? "Bezig…" : "Toevoegen"}
             </button>
           </div>
         </form>
-      </div>
+      </section>
 
-      {migrationHint && (
-        <p className="border border-[#C9A227]/40 bg-[#FFF8E6] px-4 py-3 text-sm text-ink">
+      {migrationHint ? (
+        <p className="border border-[#E8D48B] bg-[#FFFBEB] px-4 py-3 text-sm text-[#92400E]">
           {migrationHint}
         </p>
-      )}
-      {error && (
-        <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
+      ) : null}
+      {error ? (
+        <p className="border border-[#C45A12]/25 bg-[#FFF7F0] px-4 py-3 text-sm text-[#9A3412]">
           {error}
         </p>
-      )}
-      {okMsg && (
-        <p className="border border-green/30 bg-green-soft px-4 py-3 text-sm text-green-dark">
+      ) : null}
+      {okMsg ? (
+        <p className="border border-green/25 bg-green-soft px-4 py-3 text-sm text-green-dark">
           {okMsg}
         </p>
-      )}
+      ) : null}
 
       {loading ? (
-        <p className="py-10 text-center text-sm text-muted">Laden…</p>
+        <p className="py-12 text-center text-sm text-muted">Laden…</p>
       ) : items.length === 0 ? (
-        <div className="border border-line bg-white px-5 py-12 text-center">
+        <div className="border border-line bg-white px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
-            Nog geen teamgenoten
+            Nog geen monteurs
           </p>
           <p className="mt-1 text-sm text-muted">
-            Voeg hierboven de eerste monteur toe.
+            Voeg hierboven de eerste toe.
           </p>
         </div>
       ) : (
-        <div className="border border-line bg-white">
+        <section className="border border-line bg-white">
           <ul className="divide-y divide-line">
             {actief.map((t) => (
               <li
                 key={t.id}
-                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5"
+                className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
               >
                 <div className="min-w-0">
                   <p className="font-semibold text-ink">{t.naam}</p>
-                  <p className="text-xs text-muted">
+                  <p className="mt-0.5 text-sm text-muted">
                     {[t.email, t.telefoon].filter(Boolean).join(" · ") ||
                       "Geen contactgegevens"}
                   </p>
@@ -223,14 +222,14 @@ export function PartnerTeamgenotenPanel({ portalToken }: Props) {
                   <button
                     type="button"
                     onClick={() => void setActief(t.id, false)}
-                    className="border border-line bg-white px-2.5 py-1.5 text-xs font-semibold text-muted hover:bg-wash"
+                    className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash"
                   >
                     Deactiveren
                   </button>
                   <button
                     type="button"
                     onClick={() => void remove(t.id, t.naam)}
-                    className="border border-[#C45A12]/40 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFF0E6]"
+                    className="border border-[#C45A12]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFF7F0]"
                   >
                     Verwijderen
                   </button>
@@ -240,26 +239,26 @@ export function PartnerTeamgenotenPanel({ portalToken }: Props) {
             {inactief.map((t) => (
               <li
                 key={t.id}
-                className="flex flex-wrap items-center justify-between gap-3 bg-wash/40 px-4 py-3 sm:px-5"
+                className="flex flex-wrap items-center justify-between gap-3 bg-[#FAFBFA] px-5 py-4"
               >
                 <div className="min-w-0">
                   <p className="font-semibold text-muted line-through">
                     {t.naam}
                   </p>
-                  <p className="text-xs text-muted">Inactief</p>
+                  <p className="mt-0.5 text-sm text-muted">Inactief</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => void setActief(t.id, true)}
-                    className="border border-line bg-white px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                    className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
                   >
                     Activeren
                   </button>
                   <button
                     type="button"
                     onClick={() => void remove(t.id, t.naam)}
-                    className="border border-[#C45A12]/40 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFF0E6]"
+                    className="border border-[#C45A12]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFF7F0]"
                   >
                     Verwijderen
                   </button>
@@ -267,7 +266,7 @@ export function PartnerTeamgenotenPanel({ portalToken }: Props) {
               </li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
     </div>
   );

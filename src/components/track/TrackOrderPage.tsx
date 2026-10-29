@@ -445,6 +445,28 @@ function OverstapHeader({
   );
 }
 
+function OverstapJaarrekeningTip({ className }: { className?: string }) {
+  return (
+    <div
+      className={[
+        "rounded-xl bg-[#F4F8F5] px-4 py-3 text-sm leading-relaxed text-[#122018]",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <p className="font-semibold text-[#0D5C32]">Leg alvast klaar</p>
+      <p className="mt-1.5 text-[#5A6B60]">
+        Leg je{" "}
+        <strong className="text-[#122018]">energiejaarrekening</strong> er
+        weer bij — dan kunnen we de aanvraag makkelijker doorlopen.
+        Alternatief: het groene boekje van de adviseur (stroom- en
+        gasverbruik).
+      </p>
+    </div>
+  );
+}
+
 function serviceAfspraakStatus(at: string): string {
   const ms = new Date(at).getTime();
   if (Number.isNaN(ms)) return "Gepland";
@@ -556,10 +578,13 @@ function DatumOptieTab({
     return (
       <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
         {soort === "overstap" ? (
-          <OverstapHeader
-            title="Overstap gepland"
-            subtitle={`Je afspraak staat gepland op ${agendaItem.when}.`}
-          />
+          <>
+            <OverstapHeader
+              title="Overstap gepland"
+              subtitle={`Je afspraak staat gepland op ${agendaItem.when}.`}
+            />
+            <OverstapJaarrekeningTip className="mt-4" />
+          </>
         ) : (
           <>
             <h2 className="font-display text-lg font-semibold text-[#122018]">
@@ -602,10 +627,13 @@ function DatumOptieTab({
     return (
       <section className="mt-6 rounded-xl border border-[#D8E4DC] bg-white px-4 py-5 sm:px-5">
         {soort === "overstap" ? (
-          <OverstapHeader
-            title="Overstap bevestigd"
-            subtitle={`Je hebt gekozen voor ${formatDateTimeLongNl(optie.gekozen_slot)}. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven.`}
-          />
+          <>
+            <OverstapHeader
+              title="Overstap bevestigd"
+              subtitle={`Je hebt gekozen voor ${formatDateTimeLongNl(optie.gekozen_slot)}. We nemen telefonisch contact met je op om de overstap voor je te regelen — we bellen naar het nummer dat je hebt doorgegeven.`}
+            />
+            <OverstapJaarrekeningTip className="mt-4" />
+          </>
         ) : (
           <>
             <h2 className="font-display text-lg font-semibold text-[#122018]">
@@ -757,14 +785,7 @@ function DatumOptieWizard({
                 : "We gaan de overstap samen met je inregelen. Je ontvangt zo een mail — bewaar die voor het gesprek."
             }
           />
-          <div className="rounded-xl bg-[#F4F8F5] px-4 py-3 text-sm leading-relaxed text-[#122018]">
-            <p className="font-semibold text-[#0D5C32]">Leg alvast klaar</p>
-            <p className="mt-1.5 text-[#5A6B60]">
-              Het groene boekje van de adviseur, of je laatste jaarrekening —
-              met je <strong className="text-[#122018]">stroomverbruik</strong>{" "}
-              en <strong className="text-[#122018]">gasverbruik</strong>.
-            </p>
-          </div>
+          <OverstapJaarrekeningTip />
           <a
             href={FRANK_ENERGIE_OVERSTAP_URL}
             target="_blank"

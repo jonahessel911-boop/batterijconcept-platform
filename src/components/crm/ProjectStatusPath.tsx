@@ -4,6 +4,7 @@ import type { ProjectStatus } from "@/types/database";
 import {
   normalizeProjectStatus,
   projectStatusLabel,
+  resolveProjectStatusLabel,
 } from "@/lib/labels";
 import {
   PROJECT_STATUS_BY_KEY,
@@ -73,7 +74,7 @@ export function ProjectStatusPath({
             Orderstatus
           </p>
           <p className="mt-0.5 truncate text-[15px] font-semibold text-ink">
-            {projectStatusLabel[current] || current}
+            {resolveProjectStatusLabel(current, null, betaalwijze) || current}
           </p>
         </div>
         {!isSideStatus && currentIdx >= 0 ? (
@@ -207,7 +208,7 @@ export function ProjectStatusPath({
                             <span className="h-1.5 w-1.5 rounded-full bg-white" />
                           ) : null}
                         </span>
-                        {projectStatusLabel[step]}
+                        {resolveProjectStatusLabel(step, null, betaalwijze)}
                       </button>
                     </li>
                   );

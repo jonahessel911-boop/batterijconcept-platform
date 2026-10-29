@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { addDays, getISOWeekYear } from "date-fns";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { isAdminEmail } from "@/lib/admin-adviseur";
@@ -14,6 +15,7 @@ import {
   huisbezoekLeadIdsOpDag,
   inAmsterdamDayRange,
   isHuisbezoekAfspraak,
+  maandDoelFromTweeWekenSlots,
   todayAmsterdamYmd,
   type BelConversieAfspraak,
   type BelConversieCpa,
@@ -27,7 +29,6 @@ import {
 import {
   DEFAULT_TARGETS,
   parseAdminTargetsStore,
-  resolvePersonTargets,
 } from "@/lib/admin-targets";
 import {
   dayKeyAmsterdam,
@@ -43,6 +44,7 @@ import {
   MAX_BELPOGINGEN_PER_DAG,
 } from "@/lib/bel-queue";
 import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
+import { BELLER_PER_INGEPLANDE_AFSPRAAK } from "@/lib/ops-commissie";
 import {
   schouwWeekFromDate,
   schouwWeekToMondayIso,
@@ -220,63 +222,34 @@ async function loadUnavailableByAdviseur(
 }
 
 /**
- * Weekdoel afspraken uit admin-targets (persoon / fallback team).
- * - Één beller: diens afsprakenGepland.
- * - Team-fallback: som actieve beller + backoffice.
+ * Team-fallback als er geen capaciteit is.
+ * Altijd één teamgetal — geen som van individuele beller-targets.
  */
-function belWeekDoelAfspraken(
-  goalsRaw: unknown,
-  adviseurs: { id: string; rol?: string | null; actief?: boolean }[],
-  bellerId?: string | null
-): { weeklyAfspraken: number; leadToAppt: number; dailyAfspraken: number } {
+function belWeekDoelAfspraken(goalsRaw: unknown): {
+  weeklyAfspraken: number;
+  leadToAppt: number;
+  dailyAfspraken: number;
+} {
   const store = parseAdminTargetsStore(goalsRaw);
-  const base = store.defaults.beller || DEFAULT_TARGETS.beller;
-
-  if (bellerId) {
-    const { effective } = resolvePersonTargets(store, "beller", bellerId);
-    const weekly = Math.max(0, Math.round(effective.afsprakenGepland || 0));
-    return {
-      weeklyAfspraken: weekly,
-      leadToAppt: effective.leadToAppt,
-      dailyAfspraken: weekly > 0 ? Math.ceil(weekly / 5) : 0,
-    };
-  }
-
-  // Team-fallback: actieve bellers + backoffice (iedereen die belt)
-  const callers = adviseurs.filter((a) => {
-    if (a.actief === false) return false;
-    const r = normalizeRol(a.rol);
-    return r === "beller" || r === "backoffice";
-  });
-  if (callers.length === 0) {
-    const weekly = Math.max(0, Math.round(base.afsprakenGepland || 0));
-    return {
-      weeklyAfspraken: weekly,
-      leadToAppt: base.leadToAppt,
-      dailyAfspraken: weekly > 0 ? Math.ceil(weekly / 5) : 0,
-    };
-  }
-  let weeklyAfspraken = 0;
-  let l2aSum = 0;
-  for (const c of callers) {
-    const { effective } = resolvePersonTargets(store, "beller", c.id);
-    weeklyAfspraken += Math.max(0, Math.round(effective.afsprakenGepland || 0));
-    l2aSum += effective.leadToAppt;
-  }
+  const base =
+    store.defaults.team ||
+    store.defaults.beller ||
+    DEFAULT_TARGETS.team ||
+    DEFAULT_TARGETS.beller;
+  const weekly = Math.max(0, Math.round(base.afsprakenGepland || 0));
   return {
-    weeklyAfspraken,
-    leadToAppt: Math.round((l2aSum / callers.length) * 10) / 10,
-    dailyAfspraken:
-      weeklyAfspraken > 0 ? Math.ceil(weeklyAfspraken / 5) : 0,
+    weeklyAfspraken: weekly,
+    leadToAppt: base.leadToAppt,
+    dailyAfspraken: weekly > 0 ? Math.ceil(weekly / 5) : 0,
   };
 }
 
-/** @deprecated alias — L2A-team gemiddelde + weekvolume bellers */
-function belTeamWeeklyTargets(
-  goalsRaw: unknown,
-  adviseurs: { id: string; rol?: string | null; actief?: boolean }[]
-): { weeklyAfspraken: number; leadToAppt: number } {
-  const t = belWeekDoelAfspraken(goalsRaw, adviseurs, null);
+/** @deprecated alias — team weekvolume + L→A */
+function belTeamWeeklyTargets(goalsRaw: unknown): {
+  weeklyAfspraken: number;
+  leadToAppt: number;
+} {
+  const t = belWeekDoelAfspraken(goalsRaw);
   return {
     weeklyAfspraken: t.weeklyAfspraken,
     leadToAppt: t.leadToAppt,
@@ -309,9 +282,6 @@ export async function GET(req: NextRequest) {
     ? (fromParam as string)
     : resolved.startYmd;
   const dateYmd = customRange ? (toParam as string) : resolved.endYmd;
-  // Van=tot=vandaag: team/verdiensten = vandaag, weekkaart blijft ISO-week (geen periode-schaling).
-  const isTodayOnlyRange =
-    customRange && rangeStartYmd === dateYmd && rangeStartYmd === todayYmd;
   const periodDays = customRange
     ? Math.max(
         1,
@@ -363,22 +333,87 @@ export async function GET(req: NextRequest) {
     const padStart = new Date(start.getTime() - 12 * 3600 * 1000).toISOString();
     const padEnd = new Date(end.getTime() + 12 * 3600 * 1000).toISOString();
 
-    const [leadsFull, afsprakenDagRes, adviseursRes, goalsRaw] =
+    async function loadGebeldLeads(): Promise<BelConversieLead[]> {
+      try {
+        return await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
+          sb
+            .from("leads")
+            .select(
+              "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
+            )
+            .gte("laatst_gebeld_at", padStart)
+            .lte("laatst_gebeld_at", padEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = (e as { code?: string })?.code;
+        const missingCol =
+          msg.includes("laatst_gebeld_door") ||
+          msg.includes("lander") ||
+          msg.includes("campaign_name") ||
+          msg.includes("ad_name") ||
+          msg.includes("utm_source") ||
+          code === "42703";
+        if (!missingCol) throw e;
+        const rows = await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
+          sb
+            .from("leads")
+            .select(
+              "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id"
+            )
+            .gte("laatst_gebeld_at", padStart)
+            .lte("laatst_gebeld_at", padEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+        return rows.map((l) => ({
+          ...l,
+          laatst_gebeld_door: null,
+          utm_source: null,
+          lander: null,
+          campaign_name: null,
+          ad_name: null,
+        }));
+      }
+    }
+
+    async function loadAfsprakenDag(): Promise<BelConversieAfspraak[]> {
+      try {
+        return await fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select(
+              "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+            )
+            .gte("created_at", padStart)
+            .lte("created_at", padEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const code = (e as { code?: string })?.code;
+        if (!msg.includes("ingepland_door_id") && code !== "42703") throw e;
+        return fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select(
+              "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id"
+            )
+            .gte("created_at", padStart)
+            .lte("created_at", padEnd)
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        );
+      }
+    }
+
+    const [leadsLoaded, afsprakenLoaded, adviseursRes, goalsRaw] =
       await Promise.all([
-        sb
-          .from("leads")
-          .select(
-            "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
-          )
-          .gte("laatst_gebeld_at", padStart)
-          .lte("laatst_gebeld_at", padEnd),
-        sb
-          .from("afspraken")
-          .select(
-            "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
-          )
-          .gte("created_at", padStart)
-          .lte("created_at", padEnd),
+        loadGebeldLeads(),
+        loadAfsprakenDag(),
         sb
           .from("adviseurs")
           .select("id, naam, rol, actief, email, startdatum")
@@ -387,54 +422,39 @@ export async function GET(req: NextRequest) {
         loadGoalsRaw(sb),
       ]);
 
-    let leadsRows: BelConversieLead[] = (leadsFull.data ||
-      []) as BelConversieLead[];
-    if (leadsFull.error) {
-      const missingCol =
-        leadsFull.error.message?.includes("laatst_gebeld_door") ||
-        leadsFull.error.message?.includes("lander") ||
-        leadsFull.error.message?.includes("campaign_name") ||
-        leadsFull.error.message?.includes("ad_name") ||
-        leadsFull.error.message?.includes("utm_source") ||
-        leadsFull.error.code === "42703";
-      if (!missingCol) throw leadsFull.error;
-      const retry = await sb
-        .from("leads")
-        .select(
-          "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id"
-        )
-        .gte("laatst_gebeld_at", padStart)
-        .lte("laatst_gebeld_at", padEnd);
-      if (retry.error) throw retry.error;
-      leadsRows = (retry.data || []).map((l) => ({
-        ...(l as BelConversieLead),
-        laatst_gebeld_door: null,
-        utm_source: null,
-        lander: null,
-        campaign_name: null,
-        ad_name: null,
-      }));
-    }
-
-    let afsprakenDag = (afsprakenDagRes.data || []) as BelConversieAfspraak[];
-    if (
-      afsprakenDagRes.error &&
-      (afsprakenDagRes.error.message?.includes("ingepland_door_id") ||
-        afsprakenDagRes.error.code === "42703")
-    ) {
-      const retryAfs = await sb
-        .from("afspraken")
-        .select(
-          "id, lead_id, created_at, start_at, status, soort, adviseur_id"
-        )
-        .gte("created_at", padStart)
-        .lte("created_at", padEnd);
-      if (retryAfs.error) throw retryAfs.error;
-      afsprakenDag = (retryAfs.data || []) as BelConversieAfspraak[];
-    } else if (afsprakenDagRes.error) {
-      throw afsprakenDagRes.error;
-    }
     if (adviseursRes.error) throw adviseursRes.error;
+
+    let leadsRows = leadsLoaded;
+    const afsprakenDag = afsprakenLoaded;
+
+    // Annuleringen in het venster (updated_at) — ook als created_at eerder was
+    {
+      try {
+        const cancelRows = await fetchAllRows<BelConversieAfspraak>(
+          (fromIdx, toIdx) =>
+            sb
+              .from("afspraken")
+              .select(
+                "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+              )
+              .eq("soort", "nieuw")
+              .eq("status", "geannuleerd")
+              .gte("updated_at", padStart)
+              .lte("updated_at", padEnd)
+              .order("id", { ascending: true })
+              .range(fromIdx, toIdx)
+        );
+        const seen = new Set(afsprakenDag.map((a) => a.id));
+        for (const a of cancelRows) {
+          if (!seen.has(a.id)) {
+            seen.add(a.id);
+            afsprakenDag.push(a);
+          }
+        }
+      } catch {
+        /* annulerings-merge optioneel */
+      }
+    }
 
     const adviseurRows = (adviseursRes.data || []).map((a) => ({
       id: a.id as string,
@@ -454,16 +474,21 @@ export async function GET(req: NextRequest) {
     ];
     let huisbezoekHistorie = afsprakenDag;
     if (periodeNieuwLeadIds.length > 0) {
-      const { data: histRows, error: histErr } = await sb
-        .from("afspraken")
-        .select(
-          "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
-        )
-        .eq("soort", "nieuw")
-        .in("lead_id", periodeNieuwLeadIds);
-      if (!histErr && histRows) {
-        huisbezoekHistorie = histRows as BelConversieAfspraak[];
+      const hist: BelConversieAfspraak[] = [];
+      for (let i = 0; i < periodeNieuwLeadIds.length; i += 200) {
+        const chunk = periodeNieuwLeadIds.slice(i, i + 200);
+        const { data: histRows } = await sb
+          .from("afspraken")
+          .select(
+            "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+          )
+          .eq("soort", "nieuw")
+          .in("lead_id", chunk);
+        if (histRows?.length) {
+          hist.push(...(histRows as BelConversieAfspraak[]));
+        }
       }
+      if (hist.length > 0) huisbezoekHistorie = hist;
     }
 
     const huisbezoekIds = huisbezoekLeadIdsOpDag(
@@ -473,9 +498,15 @@ export async function GET(req: NextRequest) {
       huisbezoekHistorie
     );
 
-    const missingLeadIds = [...huisbezoekIds].filter(
-      (id) => !leadsRows.some((l) => l.id === id)
-    );
+    // Ook leads van geannuleerde afspraken (created_at eerder, updated_at in venster)
+    // — die zitten niet in huisbezoekIds maar wel in recenteAfspraken.
+    const knownLeadIds = new Set(leadsRows.map((l) => l.id));
+    const missingLeadIds = [
+      ...new Set([
+        ...huisbezoekIds,
+        ...afsprakenDag.map((a) => a.lead_id).filter(Boolean),
+      ]),
+    ].filter((id) => !knownLeadIds.has(id));
     if (missingLeadIds.length > 0) {
       const { data: extra, error: extraErr } = await sb
         .from("leads")
@@ -550,7 +581,7 @@ export async function GET(req: NextRequest) {
         const { data, error } = await sb
           .from("afspraken")
           .select(
-            "id, lead_id, created_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+            "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
           )
           .in("lead_id", slice);
         if (error) throw error;
@@ -562,7 +593,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const teamTargets = belTeamWeeklyTargets(goalsRaw, adviseurRows);
+    const teamTargets = belTeamWeeklyTargets(goalsRaw);
 
     // Belbare leads: nog niet definitief afgeboekt (geen_contact telt wél mee)
     const BELBAAR_STATUSES = [
@@ -611,20 +642,27 @@ export async function GET(req: NextRequest) {
         new Date(y, m - 1, d - 6, 0, 0, 0, 0),
         AMSTERDAM_TZ
       );
-      const [gebeld7, afs7] = await Promise.all([
-        sb
-          .from("leads")
-          .select("id")
-          .gte("laatst_gebeld_at", startDay.toISOString())
-          .lte("laatst_gebeld_at", endDay.toISOString()),
-        sb
-          .from("afspraken")
-          .select("id, lead_id, created_at, start_at, status, soort")
-          .gte("created_at", startDay.toISOString())
-          .lte("created_at", endDay.toISOString()),
+      const [gebeld7, afs7Rows] = await Promise.all([
+        fetchAllRows<{ id: string }>((fromIdx, toIdx) =>
+          sb
+            .from("leads")
+            .select("id")
+            .gte("laatst_gebeld_at", startDay.toISOString())
+            .lte("laatst_gebeld_at", endDay.toISOString())
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        ),
+        fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
+          sb
+            .from("afspraken")
+            .select("id, lead_id, created_at, start_at, status, soort")
+            .gte("created_at", startDay.toISOString())
+            .lte("created_at", endDay.toISOString())
+            .order("id", { ascending: true })
+            .range(fromIdx, toIdx)
+        ),
       ]);
-      const gebeldIds = new Set((gebeld7.data || []).map((l) => l.id as string));
-      const afs7Rows = (afs7.data || []) as BelConversieAfspraak[];
+      const gebeldIds = new Set(gebeld7.map((l) => l.id));
       const leadIds7 = [
         ...new Set(
           afs7Rows
@@ -662,6 +700,9 @@ export async function GET(req: NextRequest) {
     // Weekstand = huidige ISO-week t/m vandaag (tenzij custom range → periode-teller).
     let geplandVandaag = 0;
     let geplandDezeWeek = 0;
+    /** Persoonlijk (ingepland_door) — voor beller-account. */
+    let mijnGeplandVandaag = 0;
+    let mijnGeplandDezeWeek = 0;
     try {
       const { start: dayStart } = amsDayBounds(todayYmd);
       const { end: dayEnd } = amsDayBounds(todayYmd);
@@ -672,7 +713,9 @@ export async function GET(req: NextRequest) {
       const { end: weekEnd } = amsDayBounds(weekEndYmd);
       const { data: afsOps, error: afsOpsErr } = await sb
         .from("afspraken")
-        .select("id, lead_id, created_at, start_at, status, soort")
+        .select(
+          "id, lead_id, created_at, start_at, status, soort, ingepland_door_id"
+        )
         .gte("created_at", weekStart.toISOString())
         .lte("created_at", dayEnd.toISOString());
       if (!afsOpsErr) {
@@ -688,7 +731,9 @@ export async function GET(req: NextRequest) {
         if (opsLeadIds.length > 0) {
           const { data: oh } = await sb
             .from("afspraken")
-            .select("id, lead_id, created_at, start_at, status, soort")
+            .select(
+              "id, lead_id, created_at, start_at, status, soort, ingepland_door_id"
+            )
             .eq("soort", "nieuw")
             .in("lead_id", opsLeadIds);
           if (oh) opsHist = oh as BelConversieAfspraak[];
@@ -705,10 +750,29 @@ export async function GET(req: NextRequest) {
           weekEnd,
           opsHist
         ).size;
+        if (sessionRol === "beller" && sessionId) {
+          const vanMij = afsOpsRows.filter(
+            (a) => (a.ingepland_door_id || "").trim() === sessionId
+          );
+          mijnGeplandVandaag = huisbezoekLeadIdsOpDag(
+            vanMij,
+            dayStart,
+            dayEnd,
+            opsHist
+          ).size;
+          mijnGeplandDezeWeek = huisbezoekLeadIdsOpDag(
+            vanMij,
+            weekStart,
+            weekEnd,
+            opsHist
+          ).size;
+        }
       }
     } catch {
       geplandVandaag = 0;
       geplandDezeWeek = 0;
+      mijnGeplandVandaag = 0;
+      mijnGeplandDezeWeek = 0;
     }
 
     // Capaciteit: deze week + 2 weken vooruit → tempo om vrije slots vol te plannen (+20%)
@@ -810,16 +874,11 @@ export async function GET(req: NextRequest) {
       horizon = null;
     }
 
-    // Bij custom range (niet alleen vandaag): week-kaart = netto in de gekozen periode.
-    // Dag-kaart blijft altijd vandaag (geplandVandaag hierboven).
-    const geplandVoorWeekKaart =
-      customRange && !isTodayOnlyRange
-        ? huisbezoekIds.size
-        : geplandDezeWeek;
-
+    // Week-/dagoel altijd o.b.v. vrije slots (fill-ahead), ook in maandview.
+    // Niet vermenigvuldigen met alle werkdagen in het filter (dat gaf 462 in nov).
     const targets = buildBelConversieTargets({
       geplandVandaag,
-      geplandDezeWeek: geplandVoorWeekKaart,
+      geplandDezeWeek,
       leadToApptDoel,
       fromYmd: todayYmd,
       horizon,
@@ -828,34 +887,6 @@ export async function GET(req: NextRequest) {
       leadsBelbaarTotaal,
       leadsBelbaarVandaag,
     });
-
-    // Custom range (niet vandaag-only): weekdoel schalen op bel-werkdagen in het filter
-    if (customRange && !isTodayOnlyRange) {
-      const { countWeekdaysInclusive } = await import("@/lib/bel-conversie");
-      const workdays = Math.max(
-        1,
-        countWeekdaysInclusive(rangeStartYmd, dateYmd)
-      );
-      const periodeDoel =
-        targets.doelVandaag > 0
-          ? targets.doelVandaag * workdays
-          : targets.doelDezeWeek;
-      targets.doelDezeWeek = periodeDoel;
-      targets.geplandDezeWeek = geplandVoorWeekKaart;
-      targets.nogDezeWeek = Math.max(0, periodeDoel - geplandVoorWeekKaart);
-      targets.pctDezeWeek =
-        periodeDoel > 0
-          ? Math.min(
-              100,
-              Math.round((geplandVoorWeekKaart / periodeDoel) * 100)
-            )
-          : geplandVoorWeekKaart > 0
-            ? 100
-            : 0;
-      targets.finishDezeWeek =
-        periodeDoel > 0 ? geplandVoorWeekKaart >= periodeDoel : false;
-      targets.resterendeWerkdagenWeek = workdays;
-    }
 
     const cpa = await loadBelConversieCpa(sb, dateYmd, cpaDays);
 
@@ -874,11 +905,8 @@ export async function GET(req: NextRequest) {
         skipAdminIds.add(a.id);
       }
     }
-    // Bel-account: altijd alleen eigen gebelde leads (backoffice/admin mag alles)
-    const lockToSelf =
-      sessionRol === "beller" &&
-      sessionId &&
-      callerIds.has(sessionId);
+    // Bel-account: altijd alleen eigen conversie (ook als nog niet in callerIds-set)
+    const lockToSelf = sessionRol === "beller" && Boolean(sessionId);
     const effectiveBellerId = lockToSelf
       ? sessionId
       : bellerIdFilter && callerIds.has(bellerIdFilter)
@@ -899,7 +927,7 @@ export async function GET(req: NextRequest) {
       fallbackBellerId,
       targets,
       geplandVandaagForTargets: geplandVandaag,
-      geplandDezeWeekForTargets: geplandVoorWeekKaart,
+      geplandDezeWeekForTargets: geplandDezeWeek,
     });
 
     const bellerOptions = allResult.byBeller
@@ -925,51 +953,33 @@ export async function GET(req: NextRequest) {
           bellerId: effectiveBellerId,
           targets,
           geplandVandaagForTargets: geplandVandaag,
-          geplandDezeWeekForTargets: geplandVoorWeekKaart,
+          geplandDezeWeekForTargets: geplandDezeWeek,
         })
       : allResult;
 
-    // Weekdoel team: dagoel×5 (tempo 2 weken vol); dagoel = fill-ahead + evt. inhaal.
-    // Één beller: admin-target afsprakenGepland / week.
-    const { countWeekdaysInclusive } = await import("@/lib/bel-conversie");
-    const workdaysInRange = countWeekdaysInclusive(rangeStartYmd, dateYmd);
-    let chartDoelPerDag: number;
-    let chartDoelPerWeek: number;
-    let periodDoel: number;
-
-    if (effectiveBellerId) {
-      const person = belWeekDoelAfspraken(
-        goalsRaw,
-        adviseurRows,
-        effectiveBellerId
-      );
-      chartDoelPerDag = person.dailyAfspraken;
-      chartDoelPerWeek = person.weeklyAfspraken;
-      periodDoel =
-        seriesGranularity === "day"
-          ? workdaysInRange >= 5
-            ? person.weeklyAfspraken
-            : person.weeklyAfspraken > 0 && workdaysInRange > 0
-              ? Math.round((person.weeklyAfspraken * workdaysInRange) / 5)
-              : 0
-          : 0; // maand: som per weekbucket hieronder
-    } else {
-      // Team: weekdoel open slots+uitval; grafiek-dagoel = live inhaal-dagoel
-      chartDoelPerDag = Math.max(0, Math.round(targets.doelVandaag || 0));
-      chartDoelPerWeek = Math.max(0, Math.round(targets.doelDezeWeek || 0));
-      periodDoel = chartDoelPerWeek;
-      if (periodDoel <= 0 && chartDoelPerDag <= 0) {
-        const team = belWeekDoelAfspraken(goalsRaw, adviseurRows, null);
-        chartDoelPerDag = team.dailyAfspraken;
-        chartDoelPerWeek = team.weeklyAfspraken;
-        periodDoel =
-          workdaysInRange >= 5
-            ? team.weeklyAfspraken
-            : team.weeklyAfspraken > 0 && workdaysInRange > 0
-              ? Math.round((team.weeklyAfspraken * workdaysInRange) / 5)
-              : 0;
-      }
-    }
+    // Dag/week = fill-ahead tempo. Maand = (vrije slots 2 weken + uitval) × 2.
+    const chartDoelPerDag = Math.max(0, Math.round(targets.doelVandaag || 0));
+    const chartDoelPerWeek = Math.max(0, Math.round(targets.doelDezeWeek || 0));
+    const teamGeplandWeek = Math.max(
+      0,
+      Math.round(allResult.targets?.geplandDezeWeek ?? 0)
+    );
+    const teamGeplandDag = Math.max(
+      0,
+      Math.round(allResult.targets?.geplandVandaag ?? 0)
+    );
+    const { doel14dagen, doelMaand } = maandDoelFromTweeWekenSlots(
+      targets.horizonNog ?? 0
+    );
+    const teamGeplandPeriode = Math.max(
+      0,
+      Math.round(allResult.totals?.ingepland ?? 0)
+    );
+    const isMaandView = seriesGranularity === "week";
+    const periodeDoelUi = isMaandView ? doelMaand : chartDoelPerWeek;
+    const periodeGeplandUi = isMaandView
+      ? teamGeplandPeriode
+      : teamGeplandWeek;
 
     const series = buildBelConversieSeries({
       rangeStartYmd,
@@ -985,26 +995,35 @@ export async function GET(req: NextRequest) {
       doelPerWeek: chartDoelPerWeek,
     });
 
-    if (seriesGranularity === "week") {
-      periodDoel = series.reduce((s, b) => s + (b.doel || 0), 0);
-    }
-
-    const seriesIngepland = series.reduce((s, b) => s + b.ingepland, 0);
-    const periodGepland = seriesIngepland;
-    const periodPct =
-      periodDoel > 0
-        ? Math.min(100, Math.round((periodGepland / periodDoel) * 100))
-        : periodGepland > 0
+    const periodePct =
+      periodeDoelUi > 0
+        ? Math.min(
+            100,
+            Math.round((periodeGeplandUi / periodeDoelUi) * 100)
+          )
+        : periodeGeplandUi > 0
+          ? 100
+          : 0;
+    const dayPct =
+      chartDoelPerDag > 0
+        ? Math.min(100, Math.round((teamGeplandDag / chartDoelPerDag) * 100))
+        : teamGeplandDag > 0
           ? 100
           : 0;
     const targetsForUi = {
       ...result.targets,
       doelVandaag: chartDoelPerDag,
-      doelDezeWeek: periodDoel,
-      geplandDezeWeek: periodGepland,
-      nogDezeWeek: Math.max(0, periodDoel - periodGepland),
-      pctDezeWeek: periodPct,
-      finishDezeWeek: periodDoel > 0 ? periodGepland >= periodDoel : false,
+      geplandVandaag: teamGeplandDag,
+      nogVandaag: Math.max(0, chartDoelPerDag - teamGeplandDag),
+      pctVandaag: dayPct,
+      finishVandaag:
+        chartDoelPerDag > 0 ? teamGeplandDag >= chartDoelPerDag : false,
+      doelDezeWeek: periodeDoelUi,
+      geplandDezeWeek: periodeGeplandUi,
+      nogDezeWeek: Math.max(0, periodeDoelUi - periodeGeplandUi),
+      pctDezeWeek: periodePct,
+      finishDezeWeek:
+        periodeDoelUi > 0 ? periodeGeplandUi >= periodeDoelUi : false,
     };
 
     return NextResponse.json({
@@ -1018,13 +1037,33 @@ export async function GET(req: NextRequest) {
         : bellerOptions,
       bellerId: effectiveBellerId,
       lockBeller: Boolean(lockToSelf),
+      /** Alleen relevant voor beller-account (geen team-doelen). */
+      mijn:
+        lockToSelf
+          ? {
+              ingeplandPeriode: Math.max(
+                0,
+                Math.round(result.totals?.ingepland ?? 0)
+              ),
+              ingeplandDezeWeek: mijnGeplandDezeWeek,
+              ingeplandVandaag: mijnGeplandVandaag,
+              verdiendEuro:
+                Math.round(
+                  Math.max(0, Math.round(result.totals?.ingepland ?? 0)) *
+                    BELLER_PER_INGEPLANDE_AFSPRAAK *
+                    100
+                ) / 100,
+            }
+          : null,
       cpa,
       meta: {
         sessionRol,
         fallbackBellerId,
         weeklyAfsprakenDoel: chartDoelPerWeek,
         dailyAfsprakenDoel: chartDoelPerDag,
-        weekDoelBron: effectiveBellerId ? "admin_beller" : "capaciteit",
+        tweeWekenDoel: doel14dagen,
+        maandDoel: doelMaand,
+        weekDoelBron: "capaciteit",
         period: customRange ? "custom" : resolved.period,
         periodLabel,
         periodDays,

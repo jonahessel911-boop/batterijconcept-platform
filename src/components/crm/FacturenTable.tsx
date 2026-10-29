@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Factuur } from "@/types/database";
+import type { Factuur, Project } from "@/types/database";
 import { StatusBadge } from "./StatusBadge";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import {
@@ -11,6 +11,14 @@ import {
   factuurDisplayStatus,
   factuurIsOverdue,
 } from "@/lib/factuur-betaling";
+import {
+  factuurSoortHint,
+  factuurSoortLabel,
+  factuurSoortTone,
+  isFactuurWfLaterBetaald,
+  isWarmtefondsFactuurContext,
+  resolveFactuurSoort,
+} from "@/lib/factuur-soort";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 
 type StatusFilter = "actief" | "alles" | "betaald" | "open" | "concept";
@@ -62,10 +70,13 @@ function currentKwartaalKey(now = new Date()): string {
 
 export function FacturenTable({
   facturen,
+  projecten = [],
   /** BTW-/betalings-KPI's alleen voor admin */
   showFinanceKpis = false,
 }: {
   facturen: Factuur[];
+  /** Voor WF/EM-soortbadges */
+  projecten?: Project[];
   showFinanceKpis?: boolean;
 }) {
   const router = useRouter();
@@ -75,6 +86,41 @@ export function FacturenTable({
   function openFactuur(id: string) {
     rememberCrmReturnUrl();
     router.push(`/facturen/${id}`);
+  }
+
+  const projectById = useMemo(() => {
+    const map = new Map<string, Project>();
+    for (const p of projecten) map.set(p.id, p);
+    return map;
+  }, [projecten]);
+
+  const projectByOfferte = useMemo(() => {
+    const map = new Map<string, Project>();
+    for (const p of projecten) {
+      if (p.offerte_id) map.set(p.offerte_id, p);
+    }
+    return map;
+  }, [projecten]);
+
+  const projectByLead = useMemo(() => {
+    const map = new Map<string, Project>();
+    for (const p of projecten) {
+      if (p.lead_id && !map.has(p.lead_id)) map.set(p.lead_id, p);
+    }
+    return map;
+  }, [projecten]);
+
+  function projectVoorFactuur(f: Factuur): Project | null {
+    if (f.project_id && projectById.has(f.project_id)) {
+      return projectById.get(f.project_id) || null;
+    }
+    if (f.offerte_id && projectByOfferte.has(f.offerte_id)) {
+      return projectByOfferte.get(f.offerte_id) || null;
+    }
+    if (f.lead_id && projectByLead.has(f.lead_id)) {
+      return projectByLead.get(f.lead_id) || null;
+    }
+    return null;
   }
 
   const creditsByParent = useMemo(() => {
@@ -87,6 +133,18 @@ export function FacturenTable({
     }
     return map;
   }, [facturen]);
+
+  function factuurMeta(f: Factuur) {
+    const project = projectVoorFactuur(f);
+    const isWf = isWarmtefondsFactuurContext({ project });
+    const soort = resolveFactuurSoort(f, { isWarmtefonds: isWf });
+    const wfLater = isFactuurWfLaterBetaald(f, { isWarmtefonds: isWf });
+    const heeftCredit = (creditsByParent.get(f.id) || []).length > 0;
+    const overdueRaw = factuurIsOverdue({ ...f, heeftCredit });
+    // WF-intern/declaratie: geen verlopen-alarm (betaling via fonds)
+    const overdue = overdueRaw && !wfLater;
+    return { soort, wfLater, heeftCredit, overdue };
+  }
 
   const filtered = useMemo(() => {
     // Creditfacturen staan onder de oorspronkelijke factuur — niet als aparte rij
@@ -115,24 +173,32 @@ export function FacturenTable({
         break;
     }
     const q = search.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter((f) => {
-      const lead = f.leads;
-      const hay = [
-        f.factuur_nummer,
-        f.omschrijving,
-        lead?.naam,
-        lead?.email,
-        lead?.telefoon,
-        lead?.lead_number,
-        f.offertes?.offerte_nummer,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
+    if (q) {
+      base = base.filter((f) => {
+        const lead = f.leads;
+        const hay = [
+          f.factuur_nummer,
+          f.omschrijving,
+          lead?.naam,
+          lead?.email,
+          lead?.telefoon,
+          lead?.lead_number,
+          f.offertes?.offerte_nummer,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    // Verlopen bovenaan (excl. WF-intern/declaratie), daarna nieuwste factuurdatum
+    return [...base].sort((a, b) => {
+      const aOver = factuurMeta(a).overdue;
+      const bOver = factuurMeta(b).overdue;
+      if (aOver !== bOver) return aOver ? -1 : 1;
+      return (b.factuurdatum || "").localeCompare(a.factuurdatum || "");
     });
-  }, [facturen, filter, search, creditsByParent]);
+  }, [facturen, filter, search, creditsByParent, projecten]);
 
   const overview = useMemo(() => {
     let ontvangenBtw = 0;
@@ -374,8 +440,7 @@ export function FacturenTable({
         <>
           <div className="crm-card-list flex md:hidden">
             {filtered.map((f) => {
-              const heeftCredit = (creditsByParent.get(f.id) || []).length > 0;
-              const overdue = factuurIsOverdue({ ...f, heeftCredit });
+              const { soort, heeftCredit, overdue } = factuurMeta(f);
               const displayStatus = factuurDisplayStatus(f, {
                 heeftCredit,
               });
@@ -401,7 +466,17 @@ export function FacturenTable({
                           {f.factuur_nummer}
                         </p>
                       </div>
-                      <StatusBadge kind="factuur" value={displayStatus} />
+                      <div className="flex flex-col items-end gap-1">
+                        <StatusBadge kind="factuur" value={displayStatus} />
+                        {soort !== "credit" ? (
+                          <span
+                            title={factuurSoortHint[soort]}
+                            className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${factuurSoortTone(soort)}`}
+                          >
+                            {factuurSoortLabel[soort]}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                     <p className="mt-2 text-sm font-medium text-ink">
                       {formatEuro(f.bedrag_inc_btw)}
@@ -425,7 +500,11 @@ export function FacturenTable({
                       f.afgesproken_betaaldatum
                         ? ` · Betaalt ${formatDateShort(f.afgesproken_betaaldatum)}`
                         : ""}
-                      {overdue ? " · Verlopen" : ""}
+                      {overdue ? (
+                        <span className="ml-1.5 inline-block border border-[#C45A12]/40 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                          Verlopen
+                        </span>
+                      ) : null}
                     </p>
                   </button>
                   <Link
@@ -458,9 +537,7 @@ export function FacturenTable({
               </thead>
               <tbody>
                 {filtered.map((f) => {
-                  const heeftCredit =
-                    (creditsByParent.get(f.id) || []).length > 0;
-                  const overdue = factuurIsOverdue({ ...f, heeftCredit });
+                  const { soort, heeftCredit, overdue } = factuurMeta(f);
                   const displayStatus = factuurDisplayStatus(f, {
                     heeftCredit,
                   });
@@ -492,7 +569,22 @@ export function FacturenTable({
                         {f.omschrijving || "—"}
                       </td>
                       <td>
-                        <StatusBadge kind="factuur" value={displayStatus} />
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <StatusBadge kind="factuur" value={displayStatus} />
+                          {soort !== "credit" ? (
+                            <span
+                              title={factuurSoortHint[soort]}
+                              className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${factuurSoortTone(soort)}`}
+                            >
+                              {factuurSoortLabel[soort]}
+                            </span>
+                          ) : null}
+                          {overdue ? (
+                            <span className="border border-[#C45A12]/40 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
+                              Verlopen
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="whitespace-nowrap font-medium">
                         {formatEuro(f.bedrag_inc_btw)}
@@ -512,7 +604,6 @@ export function FacturenTable({
                         ].join(" ")}
                       >
                         {formatDateShort(f.vervaldatum)}
-                        {overdue ? " · Verlopen" : ""}
                       </td>
                       <td className="whitespace-nowrap text-muted">
                         {f.afgesproken_betaaldatum

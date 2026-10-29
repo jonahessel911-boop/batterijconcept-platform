@@ -275,6 +275,35 @@ export function ProjectFinancieelSection({
     }
   }
 
+  async function deleteConcept(f: Factuur) {
+    if (f.status !== "concept") return;
+    if (
+      !confirm(
+        `Concept ${f.factuur_nummer} definitief verwijderen?\n\nDit kan niet ongedaan worden.`
+      )
+    ) {
+      return;
+    }
+    setBusy(`delete-${f.id}`);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/facturen/${f.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Verwijderen mislukt"
+        );
+      }
+      setMsg(`Concept ${f.factuur_nummer} verwijderd.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verwijderen mislukt");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function markPaid(f: Factuur) {
     if (
       !confirm(
@@ -548,6 +577,16 @@ export function ProjectFinancieelSection({
                             Versturen
                           </button>
                         )}
+                        {f.status === "concept" ? (
+                          <button
+                            type="button"
+                            disabled={Boolean(rowBusy)}
+                            onClick={() => void deleteConcept(f)}
+                            className="border border-[#D32F2F]/35 px-2 py-1 text-[11px] font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
+                          >
+                            Verwijderen
+                          </button>
+                        ) : null}
                         {(f.status === "verzonden" ||
                           f.status === "deels_betaald") && (
                           <button
@@ -662,6 +701,16 @@ export function ProjectFinancieelSection({
                                     Versturen
                                   </button>
                                 )}
+                                {c.status === "concept" ? (
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(cBusy)}
+                                    onClick={() => void deleteConcept(c)}
+                                    className="border border-[#D32F2F]/35 px-2 py-1 text-[11px] font-semibold text-[#B71C1C] hover:bg-[#FFEBEE] disabled:opacity-50"
+                                  >
+                                    Verwijderen
+                                  </button>
+                                ) : null}
                               </div>
                             </li>
                           );

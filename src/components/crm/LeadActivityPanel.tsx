@@ -12,6 +12,10 @@ import type {
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
 import { afspraakSoortLabel, normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  annuleringsDoorFromAfspraak,
+  annuleringsNotitieFromAfspraak,
+} from "@/lib/bel-queue";
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import { useCrmSession } from "@/hooks/useCrmSession";
@@ -89,6 +93,7 @@ const PROJECT_STATUS_LABEL: Record<string, string> = {
   installatie_ingepland: "Installatie ingepland",
   installatie_voltooid: "Installatie voltooid",
   review_gevraagd: "Review gevraagd",
+  afgerond: "Afgerond",
   service: "Service / nazorg",
   annulering: "Annulering",
   hold_sales_actie: "HOLD SALES ACTIE",
@@ -418,15 +423,26 @@ function buildFromEntities(opts: {
   }
 
   for (const a of opts.afspraken) {
-    // Skip if already in lead_events as afspraak to reduce noise? Keep both for clarity on status.
+    const cancelled = a.status === "geannuleerd";
+    const soortLabel =
+      afspraakSoortLabel[normalizeAfspraakSoort(a.soort)] || "Afspraak";
+    const reden = cancelled ? annuleringsNotitieFromAfspraak(a) : null;
+    const door = cancelled ? annuleringsDoorFromAfspraak(a) : null;
     items.push({
       id: `afs-${a.id}`,
-      at: a.created_at || a.start_at,
+      at: cancelled
+        ? a.updated_at || a.created_at || a.start_at
+        : a.created_at || a.start_at,
       kind: "afspraak",
-      titel: `Afspraak ${afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}`,
-      detail: `${formatDateTimeNl(a.start_at)} · ${a.status}${
-        a.adviseurs?.naam ? ` · ${a.adviseurs.naam}` : ""
-      }`,
+      titel: cancelled ? `${soortLabel} geannuleerd` : `Afspraak ${soortLabel}`,
+      detail: [
+        formatDateTimeNl(a.start_at),
+        cancelled ? null : a.status,
+        door || a.adviseurs?.naam || null,
+        reden ? `Reden: ${reden}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     });
   }
 
@@ -501,7 +517,7 @@ export function LeadActivityPanel({
             sb
               .from("afspraken")
               .select(
-                "id, start_at, created_at, status, soort, adviseurs!adviseur_id(naam)"
+                "id, start_at, created_at, updated_at, status, soort, notities, adviseurs!adviseur_id(naam)"
               )
               .eq("lead_id", leadId)
               .order("start_at", { ascending: false })

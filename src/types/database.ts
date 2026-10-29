@@ -57,6 +57,7 @@ export type ProjectStatus =
   | "installatie_ingepland"
   | "installatie_voltooid"
   | "review_gevraagd"
+  | "afgerond"
   | "service"
   | "annulering"
   | "hold_sales_actie";
@@ -476,6 +477,8 @@ export interface PartnerAfblokkingen {
   partner_id: string;
   dag: string;
   venster: "ochtend" | "middag";
+  /** Monteur; null = partner-breed (legacy) */
+  teamgenoot_id?: string | null;
   created_at: string;
 }
 
@@ -568,6 +571,8 @@ export interface Project {
   startdatum: string | null;
   opleverdatum: string | null;
   monteur: string | null;
+  /** Gekoppelde monteur (teamgenoot) van de installatiepartner. */
+  installatie_teamgenoot_id?: string | null;
   notities: string | null;
   projectkosten: number;
   /** Warmtefonds of eigen middelen — bepaalt beschikbare statussen. */
@@ -583,6 +588,10 @@ export interface Project {
   schouw_week?: number | null;
   schouw_notities?: string | null;
   installatie_partner_id?: string | null;
+  installatie_teamgenoot?: Pick<
+    InstallatiePartnerTeamgenoot,
+    "id" | "naam" | "telefoon" | "email"
+  > | null;
   schouw_mail_klant_verstuurd?: boolean;
   schouw_mail_partner_verstuurd?: boolean;
   installatie_at?: string | null;
@@ -673,6 +682,9 @@ export interface Project {
     | "plaats"
     | "adviseur_id"
     | "status"
+    | "terugbellen"
+    | "terugbel_notitie"
+    | "beller_id"
   > & {
     adviseurs?: Pick<Adviseur, "id" | "naam"> | null;
   }) | null;

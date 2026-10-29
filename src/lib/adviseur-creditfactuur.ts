@@ -50,6 +50,24 @@ export function previousCreditWeek(now: Date = new Date()): CreditWeek {
   return creditWeekFromDate(subWeeks(toZonedTime(now, AMSTERDAM_TZ), 1));
 }
 
+/** Week vóór de vorige (bijv. Manting meenemen in deze uitbetalingsronde). */
+export function weekBeforePreviousCreditWeek(
+  now: Date = new Date()
+): CreditWeek {
+  return creditWeekFromDate(subWeeks(toZonedTime(now, AMSTERDAM_TZ), 2));
+}
+
+/** Week is afgesloten (= vorige of ouder) → concept mag. Huidige week wacht. */
+export function isCreditWeekAfgesloten(
+  week: Pick<CreditWeek, "jaar" | "week">,
+  now: Date = new Date()
+): boolean {
+  const prev = previousCreditWeek(now);
+  if (week.jaar < prev.jaar) return true;
+  if (week.jaar > prev.jaar) return false;
+  return week.week <= prev.week;
+}
+
 export function creditWeekByYearWeek(jaar: number, week: number): CreditWeek {
   // Donderdag in die ISO-week is altijd in het juiste jaar
   const jan4 = toZonedTime(new Date(Date.UTC(jaar, 0, 4)), AMSTERDAM_TZ);
@@ -156,4 +174,21 @@ export function formatCreditFactuurNummerWeek(
   seq: number
 ): string {
   return `CF-${jaar}-W${String(week).padStart(2, "0")}-${String(seq).padStart(3, "0")}`;
+}
+
+/**
+ * Één sales-weekfactuur per adviseur: CF-2026-W43-A1B2C3D4
+ * (alle commissieregels van die week op één document).
+ */
+export function formatCreditFactuurNummerSalesWeek(
+  jaar: number,
+  week: number,
+  adviseurId: string
+): string {
+  const short = adviseurId.replace(/-/g, "").slice(0, 8).toUpperCase();
+  return `CF-${jaar}-W${String(week).padStart(2, "0")}-${short}`;
+}
+
+export function isSalesWeekFactuurNummer(nummer: string | null | undefined): boolean {
+  return /^CF-\d{4}-W\d{2}-[A-Z0-9]+$/i.test(String(nummer || "").trim());
 }

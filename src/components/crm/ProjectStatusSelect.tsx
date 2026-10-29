@@ -5,8 +5,8 @@ import { createPortal } from "react-dom";
 import type { Project, ProjectStatus } from "@/types/database";
 import {
   normalizeProjectStatus,
-  projectStatusLabel,
   resolveDisplayProjectStatus,
+  resolveProjectStatusLabel,
   statusTone,
 } from "@/lib/labels";
 import {
@@ -333,7 +333,7 @@ export function ProjectStatusSelect({
                           statusTone("project", st),
                         ].join(" ")}
                       >
-                        {projectStatusLabel[st] ||
+                        {resolveProjectStatusLabel(st, project, betaalwijze) ||
                           PROJECT_STATUS_DEFS.find((d) => d.key === st)?.label}
                       </span>
                     </button>
@@ -366,7 +366,8 @@ export function ProjectStatusSelect({
         title="Status wijzigen"
       >
         <span className="truncate">
-          {projectStatusLabel[displayStatus] || displayStatus}
+          {resolveProjectStatusLabel(displayStatus, project, betaalwijze) ||
+            displayStatus}
         </span>
         <span className="text-[9px] opacity-70" aria-hidden>
           ▾

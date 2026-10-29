@@ -1269,7 +1269,7 @@ export function CrmShell() {
         userRol === "adviseur" ? "Maandleaderboard" : "Sales Leaderboard",
       sub:
         userRol === "adviseur"
-          ? "Ranking deze kalendermaand · sales, aanbetalingen, gelopen, conversie"
+          ? "Ranking deze kalendermaand · sales, aanbetalingen, conversie, gelopen"
           : "Live sale-momenten bij ondertekende offertes",
     },
     weekmeeting: {
@@ -1400,24 +1400,6 @@ export function CrmShell() {
           >
             Uitloggen
           </button>
-          {impersonator ? (
-            <button
-              type="button"
-              disabled={impersonateBusy}
-              onClick={() => {
-                setImpersonateBusy(true);
-                void fetch("/api/auth/impersonate", { method: "DELETE" })
-                  .then(() => {
-                    clearCrmShellCache();
-                    window.location.href = "/";
-                  })
-                  .finally(() => setImpersonateBusy(false));
-              }}
-              className="mt-2 w-full border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash"
-            >
-              Terug naar admin
-            </button>
-          ) : null}
         </div>
       </div>
     );
@@ -1769,6 +1751,9 @@ export function CrmShell() {
                           userRol === "admin" ? updateLeadBeller : undefined
                         }
                         showAdminSlots={userRol === "admin"}
+                        showConversie={
+                          userRol === "admin" || userRol === "backoffice"
+                        }
                       />
                     </div>
                   ))}
@@ -1852,6 +1837,7 @@ export function CrmShell() {
                   ) : (
                     <FacturenTable
                       facturen={scopedFacturen}
+                      projecten={scopedProjecten}
                       showFinanceKpis={userRol === "admin"}
                     />
                   ))}

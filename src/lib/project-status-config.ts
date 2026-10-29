@@ -45,6 +45,7 @@ export type ProjectStatusKey =
   | "installatie_ingepland"
   | "installatie_voltooid"
   | "review_gevraagd"
+  | "afgerond"
   | "service"
   | "annulering"
   | "hold_sales_actie";
@@ -167,17 +168,12 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "schouwdag_ingepland",
-    /** Alleen exacte schouwdag (niet week-placeholder) */
+    /** Alleen exacte schouwdag (niet week-placeholder). Geen herinner-actie. */
     label: "Schouw gepland",
     fase: "schouw",
     scope: "beide",
     inPipeline: true,
-    taak: {
-      autoKeySuffix: "herinneren",
-      titel: "Schouwdag bevestigen/herinneren richting datum",
-      afdeling: "Planning",
-      due: { kind: "schouw_minus_days", days: 2 },
-    },
+    taak: null,
   },
   {
     key: "schouw_voltooid",
@@ -191,9 +187,19 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
       afdeling: "Facturatie",
       due: { kind: "days", days: 1 },
     },
+    taakPerBetaalwijze: {
+      warmtefonds: {
+        autoKeySuffix: "wf_betaling_installatie",
+        titel:
+          "Betaling warmtefonds controleren, indien die betaald is installatie inplannen",
+        afdeling: "Planning",
+        due: { kind: "days", days: 1 },
+      },
+    },
   },
   {
     key: "restfactuur_verstuurd",
+    /** EM: Restfactuur verstuurd · WF: Factuur WF - Declaratie ingediend (labels.ts) */
     label: "Restfactuur verstuurd",
     fase: "eindafrekening",
     scope: "beide",
@@ -258,25 +264,30 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "installatie_voltooid",
-    label: "Installatie voltooid",
+    label: "After sale - installatie voltooid",
     fase: "afronding",
     scope: "beide",
     inPipeline: true,
-    /** Concrete acties via autoTakenVoorStatus (2× deadline 2 dagen). */
+    /** Nazorg: overstap + BTW + review via autoTakenVoorStatus. */
     taak: null,
   },
   {
     key: "review_gevraagd",
-    label: "Review gevraagd",
+    label: "After sale - review gevraagd",
+    fase: "afronding",
+    scope: "beide",
+    /** Legacy tussenstap; eindstatus = afgerond (After sale). */
+    inPipeline: true,
+    taak: null,
+  },
+  {
+    key: "afgerond",
+    label: "After sale",
     fase: "afronding",
     scope: "beide",
     inPipeline: true,
-    taak: {
-      autoKeySuffix: "referrals",
-      titel: "PROJECT IS AFGEROND, VRAAG REFERRALS",
-      afdeling: "Verkoop",
-      due: { kind: "days", days: 1 },
-    },
+    /** Referrals via autoTakenVoorStatus. */
+    taak: null,
   },
   {
     key: "service",
@@ -433,6 +444,7 @@ export function remapLegacyProjectStatus(
     case "installatie_ingepland":
     case "installatie_voltooid":
     case "review_gevraagd":
+    case "afgerond":
     case "service":
     case "annulering":
     case "hold_sales_actie":
@@ -474,9 +486,11 @@ export const BETAALWIJZE_LABEL: Record<Betaalwijze, string> = {
  */
 export function statusNaSchouwInplannen(opts: {
   exacteDag: boolean;
-  warmtefonds: boolean;
+  /** @deprecated Week-only blijft altijd in Opstarten; WF-voltooid via kickoff-complete. */
+  warmtefonds?: boolean;
 }): ProjectStatusKey {
   if (opts.exacteDag) return "schouwdag_ingepland";
-  if (opts.warmtefonds) return "opstarten_voltooid_afwachten_wf";
+  // Alleen week: blijf in Opstarten — aanbetaling / Edwin kunnen nog open.
+  // `opstarten_voltooid_afwachten_wf` volgt pas als kickoff echt compleet is.
   return "schouwweek_inplannen";
 }

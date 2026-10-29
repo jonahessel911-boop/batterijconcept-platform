@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 /**
  * GET /api/maand-leaderboard
  * Query: month=YYYY-MM (default: huidige kalendermaand)
- * Zichtbaar voor ingelogde adviseurs (+ admin / sales_manager).
+ * Zichtbaar voor ingelogde adviseurs (+ admin / backoffice / sales_manager).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
     if (
       rol !== "adviseur" &&
       rol !== "admin" &&
+      rol !== "backoffice" &&
       rol !== "sales_manager"
     ) {
       return NextResponse.json({ error: "Geen toegang" }, { status: 403 });

@@ -15,6 +15,7 @@ import {
   REFERRAL_TAK_AUTO_KEY,
   REFERRAL_TAK_TITEL,
 } from "@/lib/sales-referral-taak";
+import { nextWeekdayAmsterdamAfter } from "@/lib/inkoop-sla";
 export type TaakStatus = "todo" | "doing" | "done";
 
 export type AutoTaakDef = {
@@ -27,30 +28,44 @@ export type AutoTaakDef = {
   dueAt?: string | null;
 };
 
+/** Nazorg na oplevering: overstap / BTW / review. */
+export const OPLEVERING_REVIEW_TAK_AUTO_KEY =
+  "installatie_voltooid:review_vragen";
+
 type DueContext = {
   schouwAt?: string | null;
   installatieAt?: string | null;
+  /** Moment status installatie voltooid (fallback als geen installatie_at). */
+  installatieVoltooidAt?: string | null;
   now?: Date;
 };
 
 type KickoffDueContext = DueContext & {
   /** Eigen middelen: schouwweek-taak pas ná 50% betaling. */
   aanbetalingBetaald?: boolean;
+  /** Handmatig €0 → geen aanbetalingsfactuur/taak. */
+  geenAanbetalingNodig?: boolean;
 };
 
 /** Auto-taken bij status Opstarten. WF parallel; EM gestaffeld. */
 function kickoffAutoTaken(
   warmtefonds: boolean,
-  opts: { aanbetalingBetaald?: boolean } = {}
+  opts: {
+    aanbetalingBetaald?: boolean;
+    geenAanbetalingNodig?: boolean;
+  } = {}
 ): AutoTaakDef[] {
-  const taken: AutoTaakDef[] = [
-    {
+  const taken: AutoTaakDef[] = [];
+  if (!opts.geenAanbetalingNodig) {
+    taken.push({
       autoKey: "kickoff:aanbetaling",
-      titel: warmtefonds ? "BTW-factuur versturen" : "50% aanbetaling versturen",
+      titel: warmtefonds
+        ? "BTW-factuur versturen"
+        : "50% aanbetaling versturen",
       afdeling: "Facturatie",
       dueInDays: 1,
-    },
-  ];
+    });
+  }
   if (warmtefonds) {
     taken.push({
       autoKey: "kickoff:wf_afspraak",
@@ -59,8 +74,8 @@ function kickoffAutoTaken(
       dueInDays: 1,
     });
   }
-  // WF: schouwweek parallel. EM: pas ná 50% betaling.
-  if (warmtefonds || opts.aanbetalingBetaald) {
+  // WF: schouwweek parallel. EM: pas ná 50% betaling (of geen aanbetaling).
+  if (warmtefonds || opts.aanbetalingBetaald || opts.geenAanbetalingNodig) {
     taken.push({
       autoKey: "kickoff:schouwweek",
       titel: warmtefonds
@@ -85,29 +100,45 @@ export function autoTakenVoorStatus(
   if (key === "schouwweek_inplannen") {
     return kickoffAutoTaken(betaalwijze === "warmtefonds", {
       aanbetalingBetaald: ctx.aanbetalingBetaald,
+      geenAanbetalingNodig: ctx.geenAanbetalingNodig,
     });
   }
 
-  // Na opleveringformulier: 2 backoffice-acties, deadline binnen 2 dagen
+  // Na oplevering: overstap + BTW + review — deadline = eerstvolgende werkdag na installatie
   if (key === "installatie_voltooid") {
+    const anchor =
+      ctx.installatieAt || ctx.installatieVoltooidAt || null;
+    const dueAt = anchor
+      ? nextWeekdayAmsterdamAfter(anchor).toISOString()
+      : undefined;
+    const dueInDays = dueAt ? null : 1;
     return [
       {
         autoKey: "installatie_voltooid:overstap_leverancier",
         titel: "Overstappen dynamische leverancier",
         afdeling: "Backoffice",
-        dueInDays: 2,
+        dueInDays,
+        dueAt,
       },
       {
         autoKey: "installatie_voltooid:btw_terugvragen",
         titel: "BTW terugvrage starten",
         afdeling: "Backoffice",
-        dueInDays: 2,
+        dueInDays,
+        dueAt,
+      },
+      {
+        autoKey: OPLEVERING_REVIEW_TAK_AUTO_KEY,
+        titel: "Review vragen",
+        afdeling: "Backoffice",
+        dueInDays,
+        dueAt,
       },
     ];
   }
 
   // Review afgevinkt → sales vraagt referrals
-  if (key === "review_gevraagd") {
+  if (key === "review_gevraagd" || key === "afgerond") {
     return [
       {
         autoKey: REFERRAL_TAK_AUTO_KEY,

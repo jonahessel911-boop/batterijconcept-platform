@@ -4,12 +4,17 @@ import type { Afspraak, Factuur, Lead, Project } from "@/types/database";
 import {
   isAanbetalingFactuurOmschrijving,
   isOrderVolledigBetaald,
+  isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
-import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
+import {
+  ANNULERING_ACTIE_DAG,
+  annuleringsActieVanaf,
+  bedenktijdVanOndertekening,
+} from "@/lib/bedenktijd";
 import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
 import {
   factuurEffectieveDeadline,
-  factuurIsOverdue,
+  factuurOpvolgActie,
   vervaldatumEndOfDay,
 } from "@/lib/factuur-betaling";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
@@ -30,6 +35,7 @@ import {
 import {
   isKickoffComplete,
   isSchouwweekKickoffActionable,
+  projectHeeftGeenAanbetalingNodig,
   showProjectKickoff,
 } from "@/lib/project-kickoff";
 import { resolveProjectVolgendeStap } from "@/lib/project-volgende-stap";
@@ -52,6 +58,7 @@ export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
   | "schakel_financiering"
   | "nabellen_factuur"
+  | "wf_aanbetaling_herinnering"
   | "herplan_afspraak"
   | "volgende_stap"
   | "bestel_materiaal"
@@ -256,28 +263,85 @@ export function isSchakelFinancieringActieOpen(project: Project): boolean {
   return true;
 }
 
+function factuurHoortBijProject(project: Project, f: Factuur): boolean {
+  return (
+    f.project_id === project.id ||
+    (!f.project_id && f.lead_id === project.lead_id) ||
+    (project.offerte_id != null && f.offerte_id === project.offerte_id)
+  );
+}
+
+/** Ids van facturen waarvoor al een creditfactuur bestaat. */
+function gecrediteerdeFactuurIds(facturen: Factuur[]): Set<string> {
+  const ids = new Set<string>();
+  for (const f of facturen) {
+    if (f.credit_van_factuur_id) ids.add(f.credit_van_factuur_id);
+  }
+  return ids;
+}
+
+/**
+ * Aanbetalingsfactuur is gecrediteerd → uit betalings-/aanzeg-flow.
+ */
+export function heeftGecrediteerdeAanbetaling(
+  project: Project,
+  facturen: Factuur[]
+): boolean {
+  const credited = gecrediteerdeFactuurIds(facturen);
+  if (credited.size === 0) return false;
+  return facturen.some(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      factuurHoortBijProject(project, f) &&
+      isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+      credited.has(f.id)
+  );
+}
+
 /**
  * Aanbetalingsfactuur verstuurd maar nog niet (volledig) betaald.
+ * Gecrediteerde aanbetalingen tellen niet mee.
  */
 export function heeftVerzondenOnbetaaldeAanbetaling(
   project: Project,
   facturen: Factuur[]
 ): boolean {
+  if (heeftGecrediteerdeAanbetaling(project, facturen)) return false;
+  const credited = gecrediteerdeFactuurIds(facturen);
   return facturen.some(
     (f) =>
-      (f.project_id === project.id ||
-        (!f.project_id && f.lead_id === project.lead_id)) &&
+      !f.credit_van_factuur_id &&
+      !credited.has(f.id) &&
+      factuurHoortBijProject(project, f) &&
       isAanbetalingFactuurOmschrijving(f.omschrijving) &&
       (f.status === "verzonden" || f.status === "deels_betaald")
   );
 }
 
+/** Minimaal één (deel)betaalde factuur bij dit project (geen credits / gecrediteerd). */
+export function heeftMinimaalEenBetaaldeFactuur(
+  project: Project,
+  facturen: Factuur[]
+): boolean {
+  const credited = gecrediteerdeFactuurIds(facturen);
+  return facturen.some(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      !credited.has(f.id) &&
+      factuurHoortBijProject(project, f) &&
+      (f.status === "betaald" || f.status === "deels_betaald")
+  );
+}
+
 /**
- * Annulering-opvolging (aangetekende brief) alleen als:
- * 1. wettelijke bedenktijd voorbij (≥14 dagen na ondertekenen),
- * 2. aanbetalingsfactuur verstuurd maar nog niet aanbetaald,
- * 3. status nog niet op annulering,
- * én brief nog niet verstuurd.
+ * Vanaf dag 15 na ondertekenen (na 14 dagen bedenktijd):
+ * opvolging annuleringskosten / installatie doorzetten.
+ * Open als:
+ * 1. kalenderdag ≥ dag 15 (Amsterdam, 00:00),
+ * 2. nog geen factuur (deels)betaald,
+ * 3. aanbetaling niet gecrediteerd,
+ * 4. status niet annulering / HOLD,
+ * 5. aangetekende brief nog niet afgerond.
  */
 export function isAangetekendeBriefActieOpen(
   project: Project,
@@ -287,16 +351,19 @@ export function isAangetekendeBriefActieOpen(
   if (isProjectBuitenActies(project)) return false;
   if (project.aangetekende_brief_verstuurd_at) return false;
 
-  const bedenktijd = bedenktijdVanOndertekening(
-    projectOfferte(project)?.ondertekend_op,
-    now
-  );
-  if (!bedenktijd?.klaar) return false;
+  const vanaf = annuleringsActieVanaf(projectOfferte(project)?.ondertekend_op);
+  if (!vanaf || now.getTime() < vanaf.getTime()) return false;
 
-  return heeftVerzondenOnbetaaldeAanbetaling(project, facturen);
+  if (heeftGecrediteerdeAanbetaling(project, facturen)) return false;
+  if (heeftMinimaalEenBetaaldeFactuur(project, facturen)) return false;
+
+  return true;
 }
 
 export function belSchouwActieTitel(project: Project): string {
+  if (projectHeeftGeenAanbetalingNodig(project)) {
+    return "Lead bellen voor schouw";
+  }
   return isWarmtefondsProject(project)
     ? "Lead bellen voor schouw + aanbetaling"
     : "Lead bellen voor schouw";
@@ -408,15 +475,20 @@ export function openBelSchouwActies(
       project,
       projectFacturen
     );
+    const geenAanbetaling = projectHeeftGeenAanbetalingNodig(project);
     items.push({
       id: `bel-schouw-${project.id}`,
       soort: "bel_schouw_aanbetaling",
       titel: belSchouwActieTitel(project),
       detail: warmtefonds
-        ? `Opstarten: aanbetalingsfactuur, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
-        : schouwActionable
-          ? `Opstarten: 50% betaald — schouwweek inplannen (${schouwWeekLabel}).`
-          : `Opstarten: eerst 50%-factuur; schouwweek (${schouwWeekLabel}) volgt na betaling.`,
+        ? geenAanbetaling
+          ? `Opstarten: geen aanbetaling, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
+          : `Opstarten: aanbetalingsfactuur, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
+        : geenAanbetaling
+          ? `Opstarten: geen aanbetaling — schouwweek inplannen (${schouwWeekLabel}).`
+          : schouwActionable
+            ? `Opstarten: 50% betaald — schouwweek inplannen (${schouwWeekLabel}).`
+            : `Opstarten: eerst 50%-factuur; schouwweek (${schouwWeekLabel}) volgt na betaling.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
@@ -485,22 +557,31 @@ export function openAangetekendeBriefActies(
   for (const project of projecten) {
     if (!isAangetekendeBriefActieOpen(project, facturen, now)) continue;
     const saleAt = saleMomentVanProject(project);
-    const deadlineAt = addDays(now, 3);
+    // Zelfde dag zichtbaar onder Vandaag — bedenktijd is al voorbij.
+    const deadlineAt = new Date(now);
     deadlineAt.setHours(17, 0, 0, 0);
     const lead = leadFromProject(project);
     const offerte = projectOfferte(project);
+    const bedenktijd = bedenktijdVanOndertekening(
+      offerte?.ondertekend_op,
+      now
+    );
+    const bedenktijdDetail = bedenktijd
+      ? `Bedenktijd 14 dagen verlopen (dag ${ANNULERING_ACTIE_DAG} sinds ${bedenktijd.startLabel}; verlopen sinds ${bedenktijd.eindLabel}).`
+      : `Bedenktijd voorbij — actie vanaf dag ${ANNULERING_ACTIE_DAG}.`;
     items.push({
       id: `aangetekende-brief-${project.id}`,
       soort: "aangetekende_brief",
       titel:
-        "Aangetekende brief: annuleringskosten of installatie doorzetten",
-      detail:
-        "Bedenktijd voorbij en aanbetaling open. Download de brief (PDF), verstuur per post, en markeer afgerond.",
-      reden:
-        "Wettelijke bedenktijd is voorbij, aanbetalingsfactuur staat open — formeel aanzeggen vóór officiële annulering.",
+        "Annuleringskosten of installatie doorzetten",
+      detail: `${bedenktijdDetail} Aanbetaling niet betaald. Stuur de mail «Annulering of installatie» (template Contact). Markeer afgerond na verzending; PDF-brief optioneel.`,
+      reden: bedenktijd
+        ? `Dag ${ANNULERING_ACTIE_DAG}+ na ondertekenen (${bedenktijd.startLabel}): geen betaalde factuur — formeel opvolgen met mailtemplate.`
+        : `Dag ${ANNULERING_ACTIE_DAG}+ na ondertekenen: geen betaalde factuur en niet geannuleerd — formeel opvolgen met mailtemplate.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
-      overdue: false,
+      overdue: now.getTime() > deadlineAt.getTime(),
+      prio: true,
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
       telefoon: lead?.telefoon || null,
@@ -518,8 +599,19 @@ export function openAangetekendeBriefActies(
 
 export function openNabellenFactuurActies(
   facturen: Factuur[],
-  now = new Date()
+  now = new Date(),
+  projecten: Project[] = []
 ): BackofficeActie[] {
+  const projectById = new Map(projecten.map((p) => [p.id, p]));
+  const projectByLead = new Map<string, Project>();
+  const projectByOfferte = new Map<string, Project>();
+  for (const p of projecten) {
+    if (p.lead_id && !projectByLead.has(p.lead_id)) {
+      projectByLead.set(p.lead_id, p);
+    }
+    if (p.offerte_id) projectByOfferte.set(p.offerte_id, p);
+  }
+
   const metCredit = new Set(
     facturen
       .map((f) => f.credit_van_factuur_id)
@@ -529,39 +621,64 @@ export function openNabellenFactuurActies(
   for (const f of facturen) {
     if (f.credit_van_factuur_id) continue;
     if (metCredit.has(f.id)) continue;
-    // Alleen aanbetalingsfacturen nábellen na verlopen (3 d).
-    // Warmtefonds-restant heeft langere termijn en geen korte opvolg-actie.
-    if (!isAanbetalingFactuurOmschrijving(f.omschrijving)) continue;
+
+    // HOLD sales / annulering → bij adviseur, niet in BO-acties
+    const linkedProject =
+      (f.project_id ? projectById.get(f.project_id) : undefined) ||
+      (f.offerte_id ? projectByOfferte.get(f.offerte_id) : undefined) ||
+      (f.lead_id ? projectByLead.get(f.lead_id) : undefined);
+    if (linkedProject && isProjectBuitenActies(linkedProject)) continue;
+
+    // Warmtefonds-restfactuur: betaalroute via fonds, geen BO-opvolging
     if (
-      !factuurIsOverdue({
-        status: f.status,
-        vervaldatum: f.vervaldatum,
-        afgesproken_betaaldatum: f.afgesproken_betaaldatum,
-        betaald_op: f.betaald_op,
-        credit_van_factuur_id: f.credit_van_factuur_id,
-        now,
-      })
+      linkedProject &&
+      isWarmtefondsProject(linkedProject) &&
+      isRestantFactuurOmschrijving(f.omschrijving)
     ) {
       continue;
     }
+
+    const fase = factuurOpvolgActie({
+      status: f.status,
+      vervaldatum: f.vervaldatum,
+      afgesproken_betaaldatum: f.afgesproken_betaaldatum,
+      betaald_op: f.betaald_op,
+      credit_van_factuur_id: f.credit_van_factuur_id,
+      now,
+    });
+    if (!fase) continue;
+
     const lead = leadFromFactuur(f);
     const offerteNummer =
       f.offertes?.offerte_nummer ||
       (f.omschrijving?.match(/OFF-[\w-]+/i)?.[0] ?? null);
+    const afspraak = f.afgesproken_betaaldatum?.slice(0, 10) || null;
     const deadline =
       factuurEffectieveDeadline({
         vervaldatum: f.vervaldatum,
         afgesproken_betaaldatum: f.afgesproken_betaaldatum,
       }) || f.vervaldatum;
+
+    const titel =
+      fase === "controleren" ? "Betaling controleren" : "Factuur opvolgen";
+    const detail =
+      fase === "controleren"
+        ? `Klant gaf aan te betalen op ${
+            afspraak ? formatDateNl(`${afspraak}T12:00:00`) : "—"
+          }. Controleer of factuur ${f.factuur_nummer} binnen is.`
+        : `Factuur ${f.factuur_nummer} is langer dan 1 dag te laat en nog niet betaald.`;
+
     items.push({
       id: `nabellen-factuur-${f.id}`,
       soort: "nabellen_factuur",
-      titel: "Nabellen factuur",
-      detail: `Factuur ${f.factuur_nummer} is verlopen en nog niet betaald.`,
+      titel,
+      detail,
+      reden: detail,
       deadlineAt: deadline
         ? vervaldatumEndOfDay(deadline).toISOString()
         : now.toISOString(),
       overdue: true,
+      prio: true,
       leadId: f.lead_id,
       leadNaam: lead?.naam || "—",
       telefoon: (lead as { telefoon?: string | null } | null)?.telefoon || null,
@@ -575,14 +692,93 @@ export function openNabellenFactuurActies(
 }
 
 /**
- * @deprecated Herplannen zit in de Bel-wachtrij (appointment setter), niet
- * meer in backoffice-Acties. Functie blijft voor eventuele API/rapportage.
- *
+ * Warmtefonds: openstaande aanbetaling → vriendelijke herinneringsmail,
+ * zodat we pas na betaling Warmtefonds kunnen aanvragen.
+ */
+export function openWarmtefondsAanbetalingHerinneringActies(
+  facturen: Factuur[],
+  now = new Date(),
+  projecten: Project[] = []
+): BackofficeActie[] {
+  const projectById = new Map(projecten.map((p) => [p.id, p]));
+  const projectByLead = new Map<string, Project>();
+  const projectByOfferte = new Map<string, Project>();
+  for (const p of projecten) {
+    if (p.lead_id && !projectByLead.has(p.lead_id)) {
+      projectByLead.set(p.lead_id, p);
+    }
+    if (p.offerte_id) projectByOfferte.set(p.offerte_id, p);
+  }
+
+  const metCredit = new Set(
+    facturen
+      .map((f) => f.credit_van_factuur_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const items: BackofficeActie[] = [];
+
+  for (const f of facturen) {
+    if (f.credit_van_factuur_id) continue;
+    if (metCredit.has(f.id)) continue;
+    if (!f.lead_id) continue;
+    if (!isAanbetalingFactuurOmschrijving(f.omschrijving)) continue;
+    if (f.status !== "verzonden" && f.status !== "deels_betaald") continue;
+
+    const project =
+      (f.project_id ? projectById.get(f.project_id) : undefined) ||
+      (f.offerte_id ? projectByOfferte.get(f.offerte_id) : undefined) ||
+      (f.lead_id ? projectByLead.get(f.lead_id) : undefined);
+    if (!project) continue;
+    if (isProjectBuitenActies(project)) continue;
+    if (!isWarmtefondsProject(project)) continue;
+    // Na WF-aanvraag is deze herinnering niet meer de juiste actie
+    if (project.warmtefonds_aangevraagd_at) continue;
+
+    const lead = leadFromFactuur(f);
+    const deadline =
+      factuurEffectieveDeadline({
+        vervaldatum: f.vervaldatum,
+        afgesproken_betaaldatum: f.afgesproken_betaaldatum,
+      }) || f.vervaldatum;
+    const deadlineAt = deadline
+      ? vervaldatumEndOfDay(deadline)
+      : now;
+    const overdue = now.getTime() > deadlineAt.getTime();
+    const msTot = deadlineAt.getTime() - now.getTime();
+    const prio = overdue || msTot <= 2 * 24 * 60 * 60 * 1000;
+
+    items.push({
+      id: `wf-aanbetaling-herinnering-${f.id}`,
+      soort: "wf_aanbetaling_herinnering",
+      titel: "Herinneringsmail aanbetaling (Warmtefonds)",
+      detail: `Aanbetaling ${f.factuur_nummer} openstaand — nodig vóór Warmtefonds-aanvraag. Stuur vriendelijke herinnering met factuur-PDF.`,
+      reden: `Warmtefonds: aanbetaling ${f.factuur_nummer} nog niet (volledig) betaald.`,
+      deadlineAt: deadlineAt.toISOString(),
+      overdue,
+      prio,
+      leadId: f.lead_id,
+      leadNaam: lead?.naam || "—",
+      telefoon: (lead as { telefoon?: string | null } | null)?.telefoon || null,
+      offerteNummer:
+        f.offertes?.offerte_nummer ||
+        (f.omschrijving?.match(/OFF-[\w-]+/i)?.[0] ?? null),
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      factuurId: f.id,
+      factuurNummer: f.factuur_nummer,
+      href: `/facturen/${f.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
+/**
  * Huisbezoek opnieuw inplannen:
- * - Klant: status `afspraak_afgezegd_klant` (zonder nieuwe actieve afspraak)
- * - Deur niet open: status `deur_niet_open` (afgeboekt bezoek, opnieuw plannen)
- * - Adviseur/CRM: `Annulering (CRM)` zonder vervangende afspraak, en lead
- *   nog niet afgeboekt/sale (anders hoort herplannen niet meer)
+ * - Klant: status `afspraak_afgezegd_klant` → Bel-wachtrij
+ * - Deur niet open: status `deur_niet_open` → Bel-wachtrij
+ * - Adviseur/CRM: `Annulering (CRM)` zonder vervangende afspraak → BO-Acties
+ *   (lead nog niet afgeboekt/sale)
  */
 type HerplanAfspraak = Pick<
   Afspraak,
@@ -850,6 +1046,8 @@ export function openVolgendeStapActies(
         (!f.project_id && f.lead_id === project.lead_id)
     );
     const op = toOperationalStatus(project.status);
+    // Review/referrals = sales-actie (SalesReferralActies), niet backoffice.
+    if (op === "review_gevraagd" || op === "afgerond") continue;
     if (
       op === "schouwweek_inplannen" &&
       !isKickoffComplete(project, related)
@@ -859,6 +1057,7 @@ export function openVolgendeStapActies(
 
     const stap = resolveProjectVolgendeStap(project, now, related);
     if (!stap) continue;
+    if (/vraag referrals|project is afgerond/i.test(stap.titel)) continue;
 
     // Feiten winnen: geen “inplannen”-actie als de datum al staat.
     if (
@@ -872,6 +1071,19 @@ export function openVolgendeStapActies(
       /schouwdag inplannen/i.test(stap.titel)
     ) {
       continue;
+    }
+    // Schouw al geweest (of formulier): geen herinner-actie meer
+    if (
+      /schouwdag bevestigen|schouwdag herinneren|herinneren richting datum/i.test(
+        stap.titel
+      )
+    ) {
+      const schouwAt = project.schouw_at
+        ? new Date(project.schouw_at).getTime()
+        : NaN;
+      if (Number.isFinite(schouwAt) && schouwAt <= now.getTime()) {
+        continue;
+      }
     }
     if (
       project.installatie_at &&
@@ -987,6 +1199,57 @@ export function isWarmtefondsGoedgekeurd(project: Project): boolean {
   return idx >= 0 && from >= 0 && idx >= from;
 }
 
+/**
+ * Acties-tab bucket “Wacht op extern”: wachten/opvolgen zonder harde interne deadline.
+ * (Nabellen/schakelen horen hier historisch ook — te laat → Te laat-bucket.)
+ */
+export function isBackofficeActieWachtExtern(actie: BackofficeActie): boolean {
+  // Actieve BO-taak: herinneringsmail sturen (niet “wacht op extern”)
+  if (actie.soort === "wf_aanbetaling_herinnering") return false;
+  if (actie.soort === "wacht_warmtefonds") return true;
+  if (actie.soort === "schakel_financiering") return true;
+  if (actie.soort === "nabellen_factuur") return true;
+  if (actie.later) return true;
+  const t = (actie.titel || "").toLowerCase();
+  return (
+    t.includes("wacht") ||
+    t.includes("edwin") ||
+    t.includes("financiering") ||
+    t.includes("warmtefonds")
+  );
+}
+
+/**
+ * Projecten-filter “Wachten Extern”: alleen echt wachten (geen BO-werk vandaag).
+ * Documenten/Edwin/nabellen/schakelen = Actie.
+ */
+export function isProjectFilterWachtExtern(actie: BackofficeActie): boolean {
+  if (actie.later) return true;
+  if (actie.overdue || actie.vastgelopen) return false;
+
+  if (actie.soort === "wacht_warmtefonds") {
+    const t = (actie.titel || "").toLowerCase();
+    // Documenten / afspraak / aanvraag indienen → BO moet iets doen = Actie
+    if (
+      t.includes("document") ||
+      t.includes("afspraak") ||
+      t.includes("aanvraag indienen") ||
+      t.includes("opvragen")
+    ) {
+      return false;
+    }
+    // Wachten op beoordeling / opvolgen bij WF
+    return true;
+  }
+
+  if (actie.soort === "volgende_stap") {
+    const t = (actie.titel || "").toLowerCase();
+    return /\bwacht op\b/.test(t);
+  }
+
+  return false;
+}
+
 /** Nog wachten op Warmtefonds (vóór goedkeuring) — hoort in “Wacht op extern”. */
 export function isWarmtefondsWachtOpExtern(project: Project): boolean {
   if (!isWarmtefondsProject(project)) return false;
@@ -1000,17 +1263,53 @@ export function isWarmtefondsWachtOpExtern(project: Project): boolean {
   return idx >= 0 && from >= 0 && idx < from;
 }
 
-function warmtefondsWachtTitel(status: FinancieringStatus): string {
+/**
+ * Onderscheid binnen Wacht op extern (Warmtefonds):
+ * - afspraak_inplannen: doorgestuurd / documenten / afspraak
+ * - goedkeuring: aanvraag bij WF in behandeling
+ */
+export type WarmtefondsWachtFase = "afspraak_inplannen" | "goedkeuring";
+
+export function warmtefondsWachtFaseVanStatus(
+  status: FinancieringStatus | string | null | undefined
+): WarmtefondsWachtFase {
   const n = normalizeFinancieringStatus(status) || status;
   if (n === "in_behandeling" || status === "aanvraag_gedaan") {
-    return "Wachten goedkeuring Warmtefonds";
+    return "goedkeuring";
   }
-  return (
-    FINANCIERING_STATUS_TAAK[status]?.titel ||
-    FINANCIERING_STATUS_TAAK[n]?.titel ||
-    FINANCIERING_STATUS_LABEL[n] ||
-    "Warmtefonds opvolgen"
-  );
+  return "afspraak_inplannen";
+}
+
+export function warmtefondsWachtFaseVanProject(
+  project: Project
+): WarmtefondsWachtFase | null {
+  if (!isWarmtefondsWachtOpExtern(project)) return null;
+  return warmtefondsWachtFaseVanStatus(resolveFinancieringStatus(project));
+}
+
+export function warmtefondsWachtFaseVanActie(
+  actie: Pick<BackofficeActie, "soort" | "titel" | "project">
+): WarmtefondsWachtFase | null {
+  if (actie.soort !== "wacht_warmtefonds") return null;
+  if (actie.project) {
+    const fromProject = warmtefondsWachtFaseVanProject(actie.project);
+    if (fromProject) return fromProject;
+  }
+  const t = (actie.titel || "").toLowerCase();
+  if (
+    t.includes("goedkeuring") ||
+    t.includes("in behandeling") ||
+    t.includes("opvolgen")
+  ) {
+    return "goedkeuring";
+  }
+  return "afspraak_inplannen";
+}
+
+function warmtefondsWachtTitel(status: FinancieringStatus): string {
+  return warmtefondsWachtFaseVanStatus(status) === "goedkeuring"
+    ? "Wachten op goedkeuring WF"
+    : "Wachten Afspraak Inplannen WF";
 }
 
 /**
@@ -1039,6 +1338,7 @@ export function openWarmtefondsWachtActies(
 
     const lead = leadFromProject(project);
     const offerte = projectOfferte(project);
+    const fase = warmtefondsWachtFaseVanStatus(raw);
     const titel = warmtefondsWachtTitel(raw);
     const statusLabel =
       FINANCIERING_STATUS_LABEL[n] || FINANCIERING_STATUS_LABEL[raw] || n;
@@ -1047,11 +1347,14 @@ export function openWarmtefondsWachtActies(
       id: `wacht-wf-${project.id}`,
       soort: "wacht_warmtefonds",
       titel,
-      detail: `Status: ${statusLabel} — zodra goedgekeurd → schouw inplannen`,
+      detail:
+        fase === "goedkeuring"
+          ? `Status: ${statusLabel} — zodra goedgekeurd → schouw inplannen`
+          : `Status: ${statusLabel} — documenten/afspraak afronden, daarna wachten op goedkeuring`,
       reden:
-        n === "in_behandeling" || raw === "aanvraag_gedaan"
+        fase === "goedkeuring"
           ? "Warmtefonds beoordeelt de aanvraag. Check portaal/Edwin; bij goedkeuring plan je de schouw."
-          : `Warmtefonds-fase “${statusLabel}” afronden vóór schouw.`,
+          : `Warmtefonds-fase “${statusLabel}”: documenten opvragen of afspraak inplannen.`,
       deadlineAt: due.toISOString(),
       saleAt: sale.toISOString(),
       overdue: false,
@@ -1278,15 +1581,25 @@ export function openBackofficeActies(
     }
   );
 
-  // Herplan (klant afgezegd / deur niet open) → appointment setter (Bel),
-  // niet meer als backoffice-Actie.
+  // Klant-afzegging / deur-niet-open → Bel-wachtrij.
+  // Adviseur/CRM-annulering → wel als BO-actie (herplannen).
+  const herplanAdviseur = openHerplanAfspraakActies(
+    opts?.leads || [],
+    opts?.afspraken || [],
+    now,
+    opts?.adviseurs || []
+  ).filter((a) => a.herplanBron === "adviseur");
+
   return [
     ...opstart,
     ...schouw,
+    ...herplanAdviseur,
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, facturen, now),
+    ...openNabellenFactuurActies(facturen, now, projecten),
+    ...openWarmtefondsAanbetalingHerinneringActies(facturen, now, projecten),
     ...volgende,
   ].sort(
     (a, b) =>
@@ -1309,6 +1622,9 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "aangetekende_brief",
   "schakel_financiering",
   "wacht_warmtefonds",
+  "nabellen_factuur",
+  "wf_aanbetaling_herinnering",
+  "herplan_afspraak",
 ]);
 
 export type ActiesTabId =
@@ -1333,13 +1649,20 @@ export function actieTabVoorSoort(
   if (soort === "volgende_stap") {
     const t = titel || "";
     if (/materiaal|inkoop|bestel/i.test(t)) return "purchasing";
-    if (/overstap|btw|review|nazorg/i.test(t)) return "nazorg";
+    // review/referrals horen niet in BO-acties (sales); overstap/btw wel nazorg
+    if (/overstap|btw|nazorg/i.test(t)) return "nazorg";
     return "projecten";
   }
   if (soort === "schouw_inplannen" || soort === "bel_schouw_aanbetaling") {
     return "projecten";
   }
-  if (soort === "nabellen_factuur") return "afspraken";
+  if (
+    soort === "nabellen_factuur" ||
+    soort === "wf_aanbetaling_herinnering" ||
+    soort === "herplan_afspraak"
+  ) {
+    return "afspraken";
+  }
   return "projecten";
 }
 

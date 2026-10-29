@@ -57,6 +57,16 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
   return "adviseur";
 }
 
+/** Geen sales-commissie (admins, Huub, enz.). */
+export function isUitgeslotenVanSalesCommissie(person: {
+  naam?: string | null;
+  rol?: string | null;
+}): boolean {
+  const naam = (person.naam || "").trim().toLowerCase();
+  if (naam.includes("huub") && naam.includes("veldman")) return true;
+  return normalizeRol(person.rol) !== "adviseur";
+}
+
 /** Tabs die deze rol mag zien (volgorde = menuvvolgorde). */
 export function tabsVoorRol(
   rol: GebruikerRol,

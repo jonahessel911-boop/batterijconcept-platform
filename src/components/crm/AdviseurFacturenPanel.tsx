@@ -142,10 +142,10 @@ export function AdviseurFacturenPanel({
         <div className="border border-orange/40 bg-white">
           <div className="border-b border-orange/30 bg-[#FFF0E6] px-4 py-3 sm:px-5">
             <h2 className="font-display text-lg font-semibold text-ink">
-              Te goedkeuren
+              Te accepteren
             </h2>
             <p className="mt-0.5 text-sm text-muted">
-              Controleer de PDF en keur goed zodat Batterijconcept kan
+              Controleer de PDF en accepteer zodat Batterijconcept kan
               uitbetalen.{" "}
               <span className="font-semibold text-[#C45A12]">
                 {pending.length} open
@@ -185,7 +185,7 @@ export function AdviseurFacturenPanel({
                     onClick={() => void goedkeuren(f.id)}
                     className="bg-orange px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                   >
-                    {busyId === f.id ? "Bezig…" : "Goedkeuren"}
+                    {busyId === f.id ? "Bezig…" : "Accepteer"}
                   </button>
                 </div>
               </li>

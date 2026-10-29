@@ -144,9 +144,13 @@ export function BackofficeKpiDashboard() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Acties vóór deadline"
-          value={pct(actieDeadline.voorPct)}
-          hint={`${num(actieDeadline.voorDeadline)} van ${num(actieDeadline.voltooid)} voltooid in periode`}
+          label="Acties op tijd voltooid"
+          value={
+            actieDeadline.voorPct != null
+              ? `${pct(actieDeadline.voorPct)}/100%`
+              : "—/100%"
+          }
+          hint={`${num(actieDeadline.voorDeadline)} van ${num(actieDeadline.voltooid)} voltooid in periode · doel 100%`}
         />
         <KpiCard
           label="Acties ná deadline"

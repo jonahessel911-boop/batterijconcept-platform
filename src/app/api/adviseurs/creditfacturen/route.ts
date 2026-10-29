@@ -17,10 +17,12 @@ import {
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
 import {
+  consolidateOpenSalesWeekCreditfacturen,
   ensureAdviseurCommissieTrancheB,
   ensureNettoAanbetalingCreditfactuur,
 } from "@/lib/netto-creditfactuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
 
 export const runtime = "nodejs";
 
@@ -40,7 +42,7 @@ export async function GET(req: NextRequest) {
       const { data: facturen, error: facErr } = await sb
         .from("adviseur_creditfacturen")
         .select(
-          "*, adviseurs!adviseur_id(id, naam, bedrijfsnaam, kvk_nummer, iban)"
+          "*, adviseurs!adviseur_id(id, naam, rol, bedrijfsnaam, kvk_nummer, iban, start_adres)"
         )
         .order("week_jaar", { ascending: false })
         .order("week_nummer", { ascending: false })
@@ -67,15 +69,63 @@ export async function GET(req: NextRequest) {
         .eq("actief", true)
         .order("naam");
 
-      const adviseurs = (salesAdviseurs || []).filter((a) => {
-        const rol = (a.rol || "adviseur") as string;
-        return rol === "adviseur" || rol === "admin";
+      const adviseurs = (salesAdviseurs || []).filter(
+        (a) => !isUitgeslotenVanSalesCommissie(a)
+      );
+
+      // Huub/admin e.d.: openstaande sales-CF's annuleren (geen commissie)
+      const rawFacs = facturen || [];
+      const teAnnuleren = rawFacs.filter((f) => {
+        const adv = f.adviseurs as
+          | { naam?: string | null; rol?: string | null }
+          | { naam?: string | null; rol?: string | null }[]
+          | null;
+        const a = Array.isArray(adv) ? adv[0] : adv;
+        if (!a || !isUitgeslotenVanSalesCommissie(a)) return false;
+        return (
+          f.status === "concept" ||
+          f.status === "verzonden" ||
+          f.status === "goedgekeurd"
+        );
+      });
+      if (teAnnuleren.length > 0) {
+        await sb
+          .from("adviseur_creditfacturen")
+          .update({ status: "geannuleerd" })
+          .in(
+            "id",
+            teAnnuleren.map((f) => f.id)
+          );
+      }
+
+      // Losse AANBETALING/OFF → één weekfactuur per adviseur (portal + PDF)
+      await consolidateOpenSalesWeekCreditfacturen(sb);
+
+      const { data: facturenAfter } = await sb
+        .from("adviseur_creditfacturen")
+        .select(
+          "*, adviseurs!adviseur_id(id, naam, rol, bedrijfsnaam, kvk_nummer, iban, start_adres)"
+        )
+        .order("week_jaar", { ascending: false })
+        .order("week_nummer", { ascending: false })
+        .limit(200);
+
+      const facturenClean = (facturenAfter || rawFacs).filter((f) => {
+        if (f.status === "geannuleerd") return false;
+        const adv = f.adviseurs as
+          | { naam?: string | null; rol?: string | null }
+          | { naam?: string | null; rol?: string | null }[]
+          | null;
+        const a = Array.isArray(adv) ? adv[0] : adv;
+        if (a && isUitgeslotenVanSalesCommissie(a)) return false;
+        if (teAnnuleren.some((x) => x.id === f.id)) return false;
+        return true;
       });
 
       return NextResponse.json({
         week: weekInfo,
         fee_per_aanbetaling: VERKOPER_AANBETALING_FEE,
-        facturen: facturen || [],
+        facturen: facturenClean,
         adviseurs,
       });
     } catch (e) {
@@ -400,7 +450,7 @@ export async function POST(req: NextRequest) {
     const { data: adviseur, error: advErr } = await sb
       .from("adviseurs")
       .select(
-        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag"
+        "id, naam, rol, email, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag"
       )
       .eq("id", body.adviseur_id)
       .single();
@@ -414,6 +464,13 @@ export async function POST(req: NextRequest) {
               : "Adviseur niet gevonden",
         },
         { status: advErr?.code === "42703" ? 503 : 404 }
+      );
+    }
+
+    if (isUitgeslotenVanSalesCommissie(adviseur)) {
+      return NextResponse.json(
+        { error: "Deze persoon krijgt geen sales-commissie (geen adviseur)." },
+        { status: 400 }
       );
     }
 

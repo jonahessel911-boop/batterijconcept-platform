@@ -40,12 +40,12 @@ import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
   afspraakStuurtMail,
+  afspraakTypeLabel,
   afspraakZichtbaarInAgenda,
   isSaleUitkomst,
   isWarmtefondsAanvraagSoort,
   needsVervolgPunt,
   normalizeAfspraakSoort,
-  soortVoorVervolgUitkomst,
   uitkomstVereistVervolgPunt,
 } from "@/lib/afspraak-soort";
 import {
@@ -319,13 +319,18 @@ function AfspraakChip({
   const cancelled = afspraak.status === "geannuleerd";
   const struck = cancelled;
   const done = afspraak.status === "voltooid";
-  const needsAction = needsVervolgPunt(afspraak, allAfspraken);
   const afboek =
     leadStatus ||
     (typeof afspraak.leads === "object" && afspraak.leads && "status" in afspraak.leads
       ? (afspraak.leads as { status?: string | null }).status
       : null) ||
     null;
+  const needsAction = needsVervolgPunt(
+    afspraak,
+    allAfspraken,
+    new Date(),
+    afboek
+  );
   const accent = afspraakAgendaAccent(
     afspraak.status,
     normalizeAfspraakSoort(afspraak.soort),
@@ -561,6 +566,7 @@ function FooterAction({
 export function AfspraakDetail({
   afspraak,
   allAfspraken,
+  leadStatus: leadStatusProp,
   onClose,
   onUpdated,
   onRemoved,
@@ -568,6 +574,8 @@ export function AfspraakDetail({
 }: {
   afspraak: Afspraak;
   allAfspraken: Afspraak[];
+  /** Leadstatus uit parent (bootstrap/API) — betrouwbaarder dan join op afspraak. */
+  leadStatus?: string | null;
   onClose: () => void;
   onUpdated: (a: Afspraak) => void;
   onRemoved: (id: string) => void;
@@ -639,22 +647,27 @@ export function AfspraakDetail({
   const lead = current.leads;
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
+  const leadStatusNow =
+    leadStatusProp || current.leads?.status || null;
   const needsAction = needsVervolgPunt(
     current,
     allAfspraken,
     new Date(),
-    current.leads?.status
+    leadStatusNow
   );
-  const leadStatusNow = current.leads?.status || null;
   const dealNogAfboeken = leadStatusNow === "deal" && needsAction;
   const actionBadgeLabel = dealNogAfboeken
     ? "Uitkomst nodig"
     : "Vervolg punt nodig";
+  const isTelefonischAfspraak =
+    afspraakTypeLabel(current.soort, current.leads?.status) === "Tel";
   const actionIntro = dealNogAfboeken
     ? "Offerte is getekend (deal). Kies sale met financiering of eigen middelen om de afspraak af te boeken."
     : isSaleUitkomst(uitkomst)
       ? "Sale geselecteerd — vul hieronder de backoffice in en rond de actie af."
-      : "Fysieke afspraak is klaar. Kies of het een sale/deal is of niet. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie.";
+      : isTelefonischAfspraak
+        ? "Telefonische afspraak is klaar. Kies een uitkomst. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie."
+        : "Fysieke afspraak is klaar. Kies of het een sale/deal is of niet. Bij een vervolg plan je hieronder ook het volgende moment; bij een eindstatus volstaat uitkomst + notitie.";
   const actionTitle = isSaleUitkomst(uitkomst)
     ? "Actie vereist"
     : dealNogAfboeken
@@ -1343,13 +1356,8 @@ export function AfspraakDetail({
       if (!current.adviseur_id) throw new Error("Geen adviseur op deze afspraak");
 
       const needsVervolg = uitkomstVereistVervolgPunt(uitkomst);
-      let parsed: Date | null = null;
-      if (needsVervolg) {
-        if (!vervolgAt) throw new Error("Kies datum en tijd voor het vervolg");
-        parsed = new Date(vervolgAt);
-        if (Number.isNaN(parsed.getTime())) {
-          throw new Error("Ongeldige datum/tijd");
-        }
+      if (needsVervolg && !vervolgAt) {
+        throw new Error("Kies datum en tijd voor het vervolg");
       }
 
       if (isSale) {
@@ -1406,60 +1414,51 @@ export function AfspraakDetail({
           });
           if (opbelErr) throw new Error(opbelErr);
         }
-      }
 
-      const sb = getSupabaseBrowser();
-      const { error: statusErr } = await sb
-        .from("leads")
-        .update({ status: uitkomst })
-        .eq("id", current.lead_id);
-      if (statusErr) throw statusErr;
-
-      // Afspraak echt afboeken (anders blijft oranje “I” / telt niet in dashboard)
-      const { error: afspraakErr } = await sb
-        .from("afspraken")
-        .update({ status: "voltooid" })
-        .eq("id", current.id);
-      if (afspraakErr) throw afspraakErr;
-
-      const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
-      fireMetaCapiSync(current.lead_id);
-
-      if (needsVervolg && parsed) {
-        const res = await fetch("/api/afspraken", {
+        const sb = getSupabaseBrowser();
+        const { error: statusErr } = await sb
+          .from("leads")
+          .update({ status: uitkomst })
+          .eq("id", current.lead_id);
+        if (statusErr) throw statusErr;
+        const { error: afspraakErr } = await sb
+          .from("afspraken")
+          .update({ status: "voltooid" })
+          .eq("id", current.id);
+        if (afspraakErr) throw afspraakErr;
+        const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
+        fireMetaCapiSync(current.lead_id);
+        void fetch(`/api/leads/${current.lead_id}/events`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            lead_id: current.lead_id,
-            adviseur_id: current.adviseur_id,
-            start_at: parsed.toISOString(),
-            notities: noteText,
-            soort: soortVoorVervolgUitkomst(uitkomst),
+            soort: "status",
+            titel: `Status → ${leadStatusLabel[uitkomst] || uitkomst}`,
+            detail: "Via actiepunten na afspraak + backoffice afgerond",
+          }),
+        }).catch(() => {});
+      } else {
+        // Niet-sale (incl. telefonisch vervolg): server-side afboek
+        // Vervolg eerst plannen, pas daarna huidige afspraak dichtzetten.
+        const res = await fetch("/api/afspraken/afboek", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            afspraak_id: current.id,
+            uitkomst,
+            notitie: noteText,
+            // datetime-local als Amsterdam-lokaal (niet via Date→ISO offset)
+            ...(needsVervolg && vervolgAt ? { vervolg_at: vervolgAt } : {}),
           }),
         });
-        const data = await res.json();
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          vervolg?: Afspraak;
+        };
         if (!res.ok) {
-          throw new Error(data.error || "Vervolg punt opslaan mislukt");
+          throw new Error(data.error || "Afboeken mislukt");
         }
-        if (data.afspraak) onCreated(data.afspraak as Afspraak);
-      } else if (!isSale) {
-        // Eindstatus: notitie op lead bewaren
-        const { data: leadRow } = await sb
-          .from("leads")
-          .select("notities")
-          .eq("id", current.lead_id)
-          .maybeSingle();
-        const stamp = new Date().toLocaleString("nl-NL", {
-          timeZone: "Europe/Amsterdam",
-        });
-        const line = `[${stamp}] Uitkomst afspraak: ${leadStatusLabel[uitkomst] || uitkomst} — ${noteText}`;
-        const prev = (leadRow?.notities || "").trim();
-        await sb
-          .from("leads")
-          .update({
-            notities: prev ? `${prev}\n${line}` : line,
-          })
-          .eq("id", current.lead_id);
+        if (data.vervolg) onCreated(data.vervolg);
       }
 
       const next: Afspraak = {
@@ -1471,20 +1470,6 @@ export function AfspraakDetail({
       };
       setCurrent(next);
       onUpdated(next);
-
-      void fetch(`/api/leads/${current.lead_id}/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          soort: "status",
-          titel: `Status → ${leadStatusLabel[uitkomst] || uitkomst}`,
-          detail: isSale
-            ? "Via actiepunten na afspraak + backoffice afgerond"
-            : needsVervolg
-              ? "Via actiepunten na afspraak + vervolg punt"
-              : "Via actiepunten na afspraak (eindstatus)",
-        }),
-      }).catch(() => {});
 
       setVervolgAt("");
       setVervolgNotitie("");

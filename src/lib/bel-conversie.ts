@@ -37,6 +37,8 @@ export type BelConversieAfspraak = {
   id: string;
   lead_id: string;
   created_at: string | null;
+  /** Laatste wijziging — bij status=geannuleerd ≈ annuleringsmoment */
+  updated_at?: string | null;
   start_at: string;
   status: string | null;
   soort: string | null;
@@ -112,14 +114,11 @@ export type BelConversieHorizonWeek = {
   slotsOpen: number;
 };
 
-/** Targets + voortgang: tempo om horizon (deze week + 2 weken) vol te plannen. */
+/** Targets + voortgang: tempo om komende 2 weken agenda’s vol te krijgen. */
 export type BelConversieTargets = {
   /** Huisbezoeken gepland op de geselecteerde dag */
   geplandVandaag: number;
-  /**
-   * Dagoel = tempo om vrije slots over de horizon vol te plannen (+ uitval),
-   * eventueel hoger bij inhaal t.o.v. weekdoel.
-   */
+  /** Dagoel = vrije slots (2w) ÷ resterende werkdagen × (1 + uitval). */
   doelVandaag: number;
   /** max(0, doel − gepland) */
   nogVandaag: number;
@@ -128,8 +127,8 @@ export type BelConversieTargets = {
   /** gepland ≥ doel */
   finishVandaag: boolean;
   /**
-   * Weekdoel = dagoel × 5 bel-werkdagen (weektempo om 2 weken vol te krijgen).
-   * Tellers: huisbezoeken gezet deze ISO-week.
+   * Weekdoel = dagoel × 5 bel-werkdagen.
+   * Tempo om alle vrije slots in de komende ~2 weken vol te plannen (+uitvalmarge).
    */
   doelDezeWeek: number;
   /** Huisbezoeken ingepland in de huidige ISO-week */
@@ -237,6 +236,20 @@ export const BEL_TARGET_WEEKS_AHEAD = 3;
  * 0.2 = 20% meer afspraken inplannen dan strikt nodig voor de vrije slots.
  */
 export const BEL_TARGET_UITVAL_MARGE = 0.2;
+
+/**
+ * 14-dagen target = vrije slots komende ~2 weken (+ uitvalmarge).
+ * Maanddoel = dat × 2 (twee van zulke blokken).
+ */
+export function maandDoelFromTweeWekenSlots(
+  slotsVrij: number,
+  uitvalMarge = BEL_TARGET_UITVAL_MARGE
+): { doel14dagen: number; doelMaand: number } {
+  const vrij = Math.max(0, Math.round(slotsVrij));
+  const marge = Math.max(0, uitvalMarge);
+  const doel14dagen = Math.ceil(vrij * (1 + marge));
+  return { doel14dagen, doelMaand: doel14dagen * 2 };
+}
 
 /**
  * Dagoel huisbezoeken =
@@ -523,6 +536,110 @@ export function eersteNieuweHuisbezoekIdPerLead(
 }
 
 /**
+ * Chronologisch eerste `nieuw`-huisbezoek per lead (ook als die geannuleerd is).
+ * Gebruikt voor uitval: “eerste booking die dag die later sneuvelde”.
+ */
+export function eersteNieuwAnyStatusIdPerLead(
+  afspraken: BelConversieAfspraak[]
+): Map<string, string> {
+  const best = new Map<string, { id: string; at: number }>();
+  for (const a of afspraken) {
+    if (!isHuisbezoekSoort(a) || !a.created_at) continue;
+    const at = new Date(a.created_at).getTime();
+    if (!Number.isFinite(at)) continue;
+    const prev = best.get(a.lead_id);
+    if (!prev || at < prev.at) {
+      best.set(a.lead_id, { id: a.id, at });
+    }
+  }
+  const out = new Map<string, string>();
+  for (const [leadId, v] of best) out.set(leadId, v.id);
+  return out;
+}
+
+/** Unieke afspraken (id) uit meerdere lijsten. */
+function mergeAfsprakenById(
+  ...lists: (BelConversieAfspraak[] | null | undefined)[]
+): BelConversieAfspraak[] {
+  const seen = new Set<string>();
+  const out: BelConversieAfspraak[] = [];
+  for (const list of lists) {
+    for (const a of list || []) {
+      if (!a?.id || seen.has(a.id)) continue;
+      seen.add(a.id);
+      out.push(a);
+    }
+  }
+  return out;
+}
+
+/**
+ * Moment waarop een huisbezoek is geannuleerd (updated_at, anders created_at).
+ */
+export function annuleringsMomentIso(
+  a: BelConversieAfspraak
+): string | null {
+  const u = (a.updated_at || "").trim();
+  if (u) return u;
+  const c = (a.created_at || "").trim();
+  return c || null;
+}
+
+/**
+ * Eerste nieuw-huisbezoeken die in [start, end] zijn geannuleerd (updated_at).
+ * Telt dus ook bookings van eerdere dagen die vandaag sneuvelden.
+ * % uitval = geannuleerd ÷ (actief ingepland + geannuleerd).
+ */
+export function countGeannuleerdeEersteHuisbezoeken(opts: {
+  afspraken: BelConversieAfspraak[];
+  historie?: BelConversieAfspraak[];
+  start: Date;
+  end: Date;
+  /** Alleen tellen als ingepland_door_id matcht (of fallback). */
+  filterBellerId?: string | null;
+  fallbackBellerId?: string | null;
+  skipAdminIds?: ReadonlySet<string> | null;
+}): { geannuleerd: number; byDoor: Map<string, number> } {
+  const pool = mergeAfsprakenById(opts.afspraken, opts.historie);
+  const eersteAny = eersteNieuwAnyStatusIdPerLead(pool);
+  const filter = opts.filterBellerId?.trim() || null;
+  const skip = opts.skipAdminIds ?? null;
+  const byDoor = new Map<string, number>();
+  let geannuleerd = 0;
+
+  for (const a of pool) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (a.status !== "geannuleerd") continue;
+    if (eersteAny.get(a.lead_id) !== a.id) continue;
+    const when = annuleringsMomentIso(a);
+    if (!when || !inAmsterdamDayRange(when, opts.start, opts.end)) continue;
+
+    const door = (a.ingepland_door_id || "").trim();
+    let attributed = door;
+    if (!attributed || (skip && skip.has(attributed))) {
+      attributed = opts.fallbackBellerId?.trim() || "";
+    }
+    if (filter && attributed !== filter) continue;
+
+    geannuleerd += 1;
+    const key = attributed || "__onbekend__";
+    byDoor.set(key, (byDoor.get(key) || 0) + 1);
+  }
+
+  return { geannuleerd, byDoor };
+}
+
+export function annuleringsPctVanGeplaatst(
+  geannuleerd: number,
+  ingeplandActief: number
+): number | null {
+  const g = Math.max(0, Math.round(geannuleerd));
+  const i = Math.max(0, Math.round(ingeplandActief));
+  const u = safeDiv(g, i + g);
+  return u != null ? round2(u * 100) : null;
+}
+
+/**
  * true als dit het eerste nieuwe huisbezoek van de lead is.
  * Actief: exact de chronologisch eerste niet-geannuleerde.
  * Geannuleerd: alleen als er geen actief 1e is én dit de vroegste nieuw-rij is.
@@ -631,11 +748,14 @@ export function buildBelConversieTargets(opts: {
   );
 
   // Tempo = vrije slots over horizon (deze week + 2 weken) vol + uitvalmarge.
-  // Niet alleen “open slots deze week” — anders blijft week 45/46 leeg.
   const fill =
     horizonWeeks.length > 0 && slotsVrij > 0
       ? dailyDoelToFillAheadWeeks({
-          weeks: horizonWeeks,
+          weeks: horizonWeeks.map((w) => ({
+            jaar: w.jaar,
+            week: w.week,
+            slotsVrij: w.slotsVrij,
+          })),
           fromYmd,
           uitvalMarge,
         })
@@ -869,26 +989,32 @@ export function buildBelConversie(opts: {
     }
   }
 
-  // Uitval per beller: geannuleerde nieuw-afspraken die zij inzette
-  for (const a of opts.afspraken) {
-    if (!isHuisbezoekSoort(a)) continue;
-    if (a.status !== "geannuleerd") continue;
-    if (!a.created_at) continue;
-    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
-    const door = (a.ingepland_door_id || "").trim();
-    let id = door || "";
-    if (!id || skipNonCallerIds.has(id)) {
+  // Uitval per beller: eerste-nieuw geannuleerd in venster (annuleringsmoment)
+  const uitval = countGeannuleerdeEersteHuisbezoeken({
+    afspraken: opts.afspraken,
+    historie,
+    start,
+    end,
+    filterBellerId: filterBeller,
+    fallbackBellerId: orphanFallback,
+    skipAdminIds: skipNonCallerIds,
+  });
+  for (const [doorKey, n] of uitval.byDoor) {
+    let id = doorKey;
+    if (id !== "__onbekend__" && skipNonCallerIds.has(id)) {
       id = orphanFallback || "__onbekend__";
     }
-    if (!allowedCallerIds.has(id) && id !== "__onbekend__") {
+    if (id !== "__onbekend__" && !allowedCallerIds.has(id)) {
       id = orphanFallback || "__onbekend__";
     }
     if (filterBeller && id !== filterBeller) continue;
     const acc = touch(id);
-    acc.geannuleerd += 1;
-    geannuleerdTotal += 1;
-    bumpReden(acc.redenen, "geannuleerd");
-    bumpReden(redenenTotal, "geannuleerd");
+    acc.geannuleerd += n;
+    geannuleerdTotal += n;
+    for (let i = 0; i < n; i++) {
+      bumpReden(acc.redenen, "geannuleerd");
+      bumpReden(redenenTotal, "geannuleerd");
+    }
   }
 
   // Filter byId na attribution — nonNieuw-tellers / size moeten matchen
@@ -933,7 +1059,6 @@ export function buildBelConversie(opts: {
     )
     .map(([id, acc]) => {
       const l2a = safeDiv(acc.ingepland, acc.gebeld);
-      const uitval = safeDiv(acc.geannuleerd, acc.ingepland + acc.geannuleerd);
       return {
         bellerId: id === "__onbekend__" ? null : id,
         bellerNaam:
@@ -943,7 +1068,10 @@ export function buildBelConversie(opts: {
         gebeld: acc.gebeld,
         ingepland: acc.ingepland,
         geannuleerd: acc.geannuleerd,
-        annuleringsPct: uitval != null ? round2(uitval * 100) : null,
+        annuleringsPct: annuleringsPctVanGeplaatst(
+          acc.geannuleerd,
+          acc.ingepland
+        ),
         leadToAppt: l2a != null ? round2(l2a * 100) : null,
         redenen: acc.redenen,
       };
@@ -1010,17 +1138,27 @@ export function buildBelConversie(opts: {
     leadsBelbaarVandaag: baseTargets.leadsBelbaarVandaag,
   });
 
-  // Ingeplande nieuwe huisbezoeken (created_at in periode): alleen 1e per lead.
-  // Actief + nog niet gelopen, én geannuleerde (doorstreept; tellen niet in totals).
+  // Ingeplande nieuwe huisbezoeken: 1e per lead.
+  // Actief (created_at in periode, nog niet gelopen) + geannuleerd (annuleringsmoment in periode).
   const now = new Date();
+  const eersteAnyIds = eersteNieuwAnyStatusIdPerLead(historie);
   const recenteAfspraken: BelConversieRecenteAfspraak[] = [];
-  for (const a of opts.afspraken) {
+  const recenteSeen = new Set<string>();
+  for (const a of mergeAfsprakenById(opts.afspraken, historie)) {
     if (!isHuisbezoekSoort(a)) continue;
-    if (!a.created_at) continue;
-    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
-    if (!isEersteNieuweHuisbezoek(a, eersteIds, historie)) continue;
     const geannuleerd = a.status === "geannuleerd";
-    if (!geannuleerd && !isAfspraakNogNietGelopen(a, now)) continue;
+    if (geannuleerd) {
+      const when = annuleringsMomentIso(a);
+      if (!when || !inAmsterdamDayRange(when, start, end)) continue;
+      if (eersteAnyIds.get(a.lead_id) !== a.id) continue;
+    } else {
+      if (!a.created_at) continue;
+      if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+      if (!isEersteNieuweHuisbezoek(a, eersteIds, historie)) continue;
+      if (!isAfspraakNogNietGelopen(a, now)) continue;
+    }
+    if (recenteSeen.has(a.id)) continue;
+    recenteSeen.add(a.id);
     const lead =
       byId.get(a.lead_id) || opts.leads.find((l) => l.id === a.lead_id);
     // Alleen echte planner (ingepland_door). Geen Tarik/claim-fallback op oude rijen.
@@ -1070,10 +1208,10 @@ export function buildBelConversie(opts: {
       gebeld,
       ingepland: ingeplandTotal,
       geannuleerd: geannuleerdTotal,
-      annuleringsPct: (() => {
-        const u = safeDiv(geannuleerdTotal, ingeplandTotal + geannuleerdTotal);
-        return u != null ? round2(u * 100) : null;
-      })(),
+      annuleringsPct: annuleringsPctVanGeplaatst(
+        geannuleerdTotal,
+        ingeplandTotal
+      ),
       leadToAppt,
       redenen,
       nonNieuwGebeld,
@@ -1210,34 +1348,27 @@ export function scoreBelConversieWindow(opts: {
     }
   }
 
-  // Uitval: nieuw-huisbezoeken gezet in venster die geannuleerd zijn
-  let geannuleerd = 0;
-  for (const a of opts.afspraken) {
-    if (!isHuisbezoekSoort(a)) continue;
-    if (a.status !== "geannuleerd") continue;
-    if (!a.created_at) continue;
-    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
-    if (filterBeller) {
-      const door = (a.ingepland_door_id || "").trim();
-      const attributed =
-        door && !(opts.skipAdminIds && opts.skipAdminIds.has(door))
-          ? door
-          : opts.fallbackBellerId || null;
-      if (attributed !== filterBeller) continue;
-    }
-    geannuleerd += 1;
-  }
+  // Uitval: eerste-nieuw geannuleerd in dit venster (op annuleringsmoment)
+  const { geannuleerd } = countGeannuleerdeEersteHuisbezoeken({
+    afspraken: opts.afspraken,
+    historie: opts.huisbezoekHistorie,
+    start,
+    end,
+    filterBellerId: filterBeller,
+    fallbackBellerId: opts.fallbackBellerId,
+    skipAdminIds: opts.skipAdminIds,
+  });
 
   const gebeld = byId.size;
   const l2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
-  const uitval = safeDiv(geannuleerd, ingepland + geannuleerd);
+  const uitvalPct = annuleringsPctVanGeplaatst(geannuleerd, ingepland);
   return {
     ingepland,
     gebeld,
     geenInteresse,
     geenContact,
     geannuleerd,
-    annuleringsPct: uitval != null ? round2(uitval * 100) : null,
+    annuleringsPct: uitvalPct,
     nonNieuwGebeld,
     nonNieuwIngepland,
     leadToAppt: l2a != null ? round2(l2a * 100) : null,

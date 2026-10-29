@@ -4,11 +4,21 @@ import { buildSignedOffertePdf } from "@/lib/pdf-offerte";
 import { adresRegel } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
-import { offerteOndertekendEmail } from "@/lib/email/templates";
-import { ensureBtwDraftFactuur } from "@/lib/ensure-btw-factuur";
-// Project pas na backoffice-actie afronden (niet bij ondertekenen)
+import {
+  offerteOndertekendEmail,
+  orderGetekendInternEmail,
+} from "@/lib/email/templates";
+import { DEFAULT_INSTALLATIE_STANDAARD, PRODUCT_SELECT_INKOOP } from "@/lib/inkoop";
+import { hardwareKostenVoorRegelsMetProducten } from "@/lib/project-kosten";
+import { commissiePctToFraction } from "@/lib/netto-boord";
+// Project + aanbetalingsfactuur pas na “Actie afronden” (niet bij ondertekenen)
 
 export const runtime = "nodejs";
+
+/** Interne ping bij iedere getekende order. */
+const ORDER_GETEKEND_NOTIFY_TO =
+  process.env.ORDER_GETEKEND_NOTIFY_EMAIL?.trim() ||
+  "jonahessel911@gmail.com";
 
 type Body = {
   naam: string;
@@ -157,32 +167,8 @@ export async function POST(
 
     const klantNaam = body.naam.trim() || offerte.leads?.naam || "klant";
 
-    // Concept BTW-factuur (draft, niet mailen). Project volgt pas na
-    // “Actie afronden” op de ondertekende offerte.
-    let factuurMeta: {
-      id: string;
-      factuur_nummer: string;
-      created: boolean;
-    } | null = null;
-    try {
-      factuurMeta = await ensureBtwDraftFactuur(supabase, {
-        offerteId: offerte.id,
-        leadId: offerte.lead_id,
-        projectId: null,
-        offerteNummer: offerte.offerte_nummer,
-        btwBedrag: Number(offerte.btw_bedrag) || 0,
-        subtotaalExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-        totaalIncBtw: Number(offerte.totaal_inc_btw) || 0,
-        financieringVoorbehoud: Boolean(offerte.financiering_voorbehoud),
-        aanbetalingModus: offerte.aanbetaling_modus,
-        aanbetalingBedragInc:
-          offerte.aanbetaling_bedrag_inc != null
-            ? Number(offerte.aanbetaling_bedrag_inc)
-            : null,
-      });
-    } catch (facErr) {
-      console.error("BTW-factuur na ondertekening:", facErr);
-    }
+    // Geen aanbetalingsfactuur-concept bij ondertekenen — pas bij
+    // “Actie afronden” / doorzetten naar backoffice (juiste aanbetaling).
 
     // Concept commissiefactuur voor de adviseur (€250 excl. + btw)
     try {
@@ -231,6 +217,77 @@ export async function POST(
       }
     }
 
+    // Interne ping: adviseur + bedrag ex + bruto marge
+    try {
+      const { data: leadRow } = await supabase
+        .from("leads")
+        .select("adviseur_id, naam, adviseurs!adviseur_id(naam, commissie_pct)")
+        .eq("id", offerte.lead_id)
+        .maybeSingle();
+      const advJoin = leadRow?.adviseurs;
+      const adv = Array.isArray(advJoin) ? advJoin[0] : advJoin;
+      const adviseurNaam =
+        (adv as { naam?: string | null } | null)?.naam?.trim() || "Onbekend";
+      const commissiePct =
+        (adv as { commissie_pct?: number | null } | null)?.commissie_pct ??
+        null;
+
+      let producten: Parameters<
+        typeof hardwareKostenVoorRegelsMetProducten
+      >[1] = [];
+      const { data: prodRows, error: prodErr } = await supabase
+        .from("producten")
+        .select(PRODUCT_SELECT_INKOOP)
+        .eq("actief", true);
+      if (!prodErr && prodRows?.length) {
+        producten = prodRows as typeof producten;
+      }
+
+      const bedragExBtw = Number(offerte.subtotaal_ex_btw) || 0;
+      const inkoop = hardwareKostenVoorRegelsMetProducten(
+        regels,
+        producten
+      ).totaal;
+      let installatie = DEFAULT_INSTALLATIE_STANDAARD;
+      const { data: inst } = await supabase
+        .from("dashboard_instellingen")
+        .select("standaard_installatie")
+        .eq("actief", true)
+        .limit(1)
+        .maybeSingle();
+      const standaard = Number(
+        (inst as { standaard_installatie?: number | null } | null)
+          ?.standaard_installatie
+      );
+      if (standaard > 0) installatie = standaard;
+      const salesCommissie =
+        bedragExBtw * commissiePctToFraction(commissiePct);
+      const brutoMarge =
+        Math.round(
+          (bedragExBtw - inkoop - installatie - salesCommissie) * 100
+        ) / 100;
+
+      const internHtml = orderGetekendInternEmail({
+        offerteNummer: offerte.offerte_nummer,
+        klantNaam: leadRow?.naam || klantNaam,
+        adviseurNaam,
+        bedragExBtw,
+        brutoMarge,
+        ondertekendOp,
+      });
+      const internSent = await sendEmail({
+        to: ORDER_GETEKEND_NOTIFY_TO,
+        subject: `Order getekend · ${offerte.offerte_nummer} · ${adviseurNaam}`,
+        html: internHtml,
+        tag: "order-getekend-intern",
+      });
+      if (!internSent.ok) {
+        console.error("Order-getekend intern mail:", internSent.error);
+      }
+    } catch (internErr) {
+      console.error("Order-getekend intern mail:", internErr);
+    }
+
     // JSON i.p.v. raw PDF — voorkomt hangende blob-download in de browser
     return NextResponse.json({
       ok: true,
@@ -239,8 +296,8 @@ export async function POST(
       pdf_base64: pdfBytes.toString("base64"),
       project_id: null,
       project_nummer: null,
-      factuur_id: factuurMeta?.id ?? null,
-      factuur_nummer: factuurMeta?.factuur_nummer ?? null,
+      factuur_id: null,
+      factuur_nummer: null,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Onbekende fout";

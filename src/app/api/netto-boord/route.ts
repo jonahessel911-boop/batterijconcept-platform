@@ -277,9 +277,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Alle actieve adviseur-CFs → map A/B op offertenummer
+    // Alle actieve adviseur-CFs → map A/B op offertenummer + status (uitbetaald)
     const creditAByOfferte = new Map<string, { id: string; nummer: string }>();
     const creditBByOfferte = new Map<string, { id: string; nummer: string }>();
+    const creditStatusById = new Map<string, string>();
+    const creditNummerById = new Map<string, string>();
     const { data: allCfs } = await sb
       .from("adviseur_creditfacturen")
       .select("id, factuur_nummer, notities, status")
@@ -290,7 +292,10 @@ export async function GET(req: NextRequest) {
         id: string;
         factuur_nummer: string;
         notities: string | null;
+        status: string;
       };
+      creditStatusById.set(row.id, row.status);
+      creditNummerById.set(row.id, row.factuur_nummer || "");
       const notes = row.notities || "";
       const nr = row.factuur_nummer || "";
       const mB = notes.match(/ref_offerte_tranche_b:([^\s·]+)/i);
@@ -307,25 +312,6 @@ export async function GET(req: NextRequest) {
       const aanbMatch = nr.match(/\/AANBETALING\/(.+)$/i);
       if (aanbMatch?.[1]) {
         creditAByOfferte.set(aanbMatch[1], { id: row.id, nummer: nr });
-      }
-    }
-
-    const creditIds = [
-      ...new Set([
-        ...creditByFactuur.values(),
-        ...[...creditAByOfferte.values()].map((x) => x.id),
-        ...[...creditBByOfferte.values()].map((x) => x.id),
-      ]),
-    ];
-    const creditNummerById = new Map<string, string>();
-    if (creditIds.length) {
-      const { data: cfs } = await sb
-        .from("adviseur_creditfacturen")
-        .select("id, factuur_nummer")
-        .in("id", creditIds);
-      for (const cf of cfs || []) {
-        const row = cf as { id: string; factuur_nummer: string };
-        creditNummerById.set(row.id, row.factuur_nummer);
       }
     }
 
@@ -488,6 +474,7 @@ export async function GET(req: NextRequest) {
       const installatieVoltooid =
         projStatus === "installatie_voltooid" ||
         projStatus === "review_gevraagd" ||
+        projStatus === "afgerond" ||
         projStatus === "service";
       const commissie = resolveNettoCommissie({
         omzetExBtw: bedragEx,
@@ -515,6 +502,20 @@ export async function GET(req: NextRequest) {
         (offNr ? creditAByOfferte.get(offNr) || null : null);
       const creditB = offNr ? creditBByOfferte.get(offNr) || null : null;
       const creditId = creditA?.id || null;
+      const creditABetaald =
+        Boolean(creditA?.id) &&
+        creditStatusById.get(creditA!.id) === "betaald";
+      const creditBBetaald =
+        Boolean(creditB?.id) &&
+        creditStatusById.get(creditB!.id) === "betaald";
+      const commissieUitbetaald = round2(
+        (creditABetaald && commissie.tranche_a_triggered
+          ? commissie.tranche_a
+          : 0) +
+          (creditBBetaald && commissie.tranche_b_triggered
+            ? commissie.tranche_b
+            : 0)
+      );
 
       const statusSinds = geannuleerd
         ? project?.updated_at || (o.updated_at as string | null)
@@ -586,6 +587,7 @@ export async function GET(req: NextRequest) {
         commissie_tranche_a_triggered: commissie.tranche_a_triggered,
         commissie_tranche_b_triggered: commissie.tranche_b_triggered,
         commissie_verdiend: commissie.verdiend,
+        commissie_uitbetaald: commissieUitbetaald,
         fases,
         progress_done: progressDone,
         progress_total: progress.total,
@@ -657,6 +659,9 @@ export async function GET(req: NextRequest) {
       ),
       commissie_verdiend: round2(
         commissieRows.reduce((s, r) => s + r.commissie_verdiend, 0)
+      ),
+      commissie_uitbetaald: round2(
+        commissieRows.reduce((s, r) => s + r.commissie_uitbetaald, 0)
       ),
       geannuleerd: annuleringenCount,
       netto: actiefScoped.filter((r) => r.board_status === "netto").length,

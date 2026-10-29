@@ -149,11 +149,15 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
     case "opstarten_voltooid_afwachten_wf":
       return "Opstarten klaar — wacht op Warmtefonds. Schouwdag pas plannen na goedkeuring (of in het schouwvenster).";
     case "schouwdag_ingepland":
-      return "De schouwdag staat; zorg dat klant en installateur scherp staan.";
+      return "Schouwdag staat gepland. Na de schouw volgt de volgende stap automatisch.";
     case "schouw_voltooid":
-      return "Schouwformulier binnen. Check Financieel: is alles betaald? Zo ja → installatie plannen; zo nee → restfactuur.";
+      return wf
+        ? "Schouw is geweest. Controleer of Warmtefonds heeft betaald; zo ja → installatie inplannen."
+        : "Schouwformulier binnen. Check Financieel: is alles betaald? Zo ja → installatie plannen; zo nee → restfactuur.";
     case "restfactuur_verstuurd":
-      return "Zonder betaling kunnen we niet veilig door naar installatie/inkoop.";
+      return wf
+        ? "Factuur WF verstuurd (declaratie). Wacht op Warmtefonds-uitbetaling vóór installatie/inkoop."
+        : "Zonder betaling kunnen we niet veilig door naar installatie/inkoop.";
     case "restfactuur_betaald":
       return "Alles betaald — plan eerst de installatiedatum. Purchasing verschijnt daarna automatisch (5 werkdagen vóór installatie).";
     case "materiaal_besteld":
@@ -161,7 +165,8 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
     case "installatie_voltooid":
       return "Afronden: BTW terugvragen, overstap dynamische leverancier, daarna review.";
     case "review_gevraagd":
-      return "Reviews helpen nieuwe klanten over de streep.";
+    case "afgerond":
+      return "Project afgerond — referrals en nazorg bij sales.";
     default:
       return wf
         ? "Warmtefonds loopt parallel; houd de orderstatus bij."
@@ -433,6 +438,14 @@ export function effectiveOperationalStatus(
   } else if (project.installatie_at) {
     const min: ProjectStatusKey = "installatie_ingepland";
     if (opRank(status) < opRank(min)) status = min;
+  } else if (
+    project.schouw_at &&
+    !Number.isNaN(new Date(project.schouw_at).getTime()) &&
+    new Date(project.schouw_at).getTime() <= Date.now()
+  ) {
+    // Schouw is geweest → geen herinner-actie meer; door naar na-schouw stap
+    const min: ProjectStatusKey = "schouw_voltooid";
+    if (opRank(status) < opRank(min)) status = min;
   } else if (isSchouwdagDefinitief(project)) {
     const min: ProjectStatusKey = "schouwdag_ingepland";
     if (
@@ -467,6 +480,9 @@ export function resolveProjectVolgendeStap(
   }
 
   const status = effectiveOperationalStatus(project);
+  // Referrals vragen = sales-actie (Verkoop-taak + SalesReferralActies), geen BO-stap.
+  if (status === "review_gevraagd" || status === "afgerond") return null;
+
   const betaalwijze = betaalwijzeVanProject(project);
 
   if (status === "schouwweek_inplannen") {

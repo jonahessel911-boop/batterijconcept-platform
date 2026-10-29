@@ -11,6 +11,7 @@ export const INKOOP_DAGEN_VOOR_INSTALLATIE = 5;
 const KLAAR_ZONDER_INKOOP = new Set([
   "installatie_voltooid",
   "review_gevraagd",
+  "afgerond",
   "service",
   "annulering",
 ]);
@@ -35,6 +36,27 @@ export function subtractWeekdaysAmsterdam(at: Date, days: number): Date {
     if (!isAmsterdamWeekend(iso)) left -= 1;
   }
   return iso;
+}
+
+/**
+ * Eerstvolgende werkdag (ma–vr) ná `at` in Europe/Amsterdam, 17:00.
+ * Za/zo → maandag. Vrijdag → maandag.
+ */
+export function nextWeekdayAmsterdamAfter(at: Date | string): Date {
+  const start = typeof at === "string" ? new Date(at) : at;
+  let iso = start;
+  // Minstens één kalenderdag vooruit, daarna weekend overslaan
+  {
+    const local = toZonedTime(iso, AMSTERDAM_TZ);
+    iso = fromZonedTime(addDays(local, 1), AMSTERDAM_TZ);
+  }
+  while (isAmsterdamWeekend(iso)) {
+    const local = toZonedTime(iso, AMSTERDAM_TZ);
+    iso = fromZonedTime(addDays(local, 1), AMSTERDAM_TZ);
+  }
+  const local = toZonedTime(iso, AMSTERDAM_TZ);
+  local.setHours(17, 0, 0, 0);
+  return fromZonedTime(local, AMSTERDAM_TZ);
 }
 
 /** 17:00 Amsterdam, N werkdagen vóór de installatie (levering alleen ma–vr). */

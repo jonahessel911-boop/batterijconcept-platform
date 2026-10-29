@@ -1,6 +1,6 @@
 /**
  * Maandelijkse adviseur-leaderboard (kalendermaand).
- * Ranking op aantal sales; metrics: sales, aanbetalingen, gelopen, conversie.
+ * Ranking: sales → aanbetalingen → conversie → gelopen.
  */
 
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
@@ -209,6 +209,7 @@ export async function buildMaandLeaderboard(
       (a, b) =>
         b.sales - a.sales ||
         b.aanbetalingen - a.aanbetalingen ||
+        (b.conversie_pct ?? 0) - (a.conversie_pct ?? 0) ||
         b.gelopen - a.gelopen ||
         a.naam.localeCompare(b.naam, "nl")
     )

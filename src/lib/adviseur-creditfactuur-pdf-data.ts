@@ -28,6 +28,7 @@ type AdvRow = {
   factuur_adres?: string | null;
   factuur_postcode?: string | null;
   factuur_plaats?: string | null;
+  start_adres?: string | null;
 };
 
 /** Haal offerte- en projectnummers op voor creditregels. */
@@ -178,6 +179,7 @@ export async function buildAdviseurCreditPdfBytes(
       factuur_adres: adv.factuur_adres,
       factuur_postcode: adv.factuur_postcode,
       factuur_plaats: adv.factuur_plaats,
+      start_adres: adv.start_adres,
     },
     regels: enriched,
   });

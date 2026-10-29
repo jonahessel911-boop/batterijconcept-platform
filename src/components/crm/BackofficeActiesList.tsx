@@ -19,10 +19,12 @@ import {
   edwinWhatsappUrl,
   financieringSchakelBericht,
   isWarmtefondsProject,
+  isBackofficeActieWachtExtern,
   actiesVoorActiesTab,
   openBackofficeActies,
   recommendedSchouwWeekForProject,
   saleMomentVanProject,
+  warmtefondsWachtFaseVanActie,
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
@@ -58,6 +60,7 @@ import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
 import { PartnerSlotPicker } from "./PartnerSlotPicker";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
+import { KlantContactMailModal } from "./KlantContactMailModal";
 import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
 import { apexProductUrl } from "@/lib/apex-product-url";
 import { formatInTimeZone } from "date-fns-tz";
@@ -80,6 +83,8 @@ type SectionId =
   | "volgende"
   | "inkoop"
   | "warmtefonds"
+  | "wf_afspraak"
+  | "wf_goedkeuring"
   | "stap1"
   | "factuur"
   | "aangetekend"
@@ -100,6 +105,7 @@ type TaskRow = {
     | "schouw_week"
     | "edwin_doorsturen"
     | "nabellen"
+    | "wf_aanbetaling_herinnering"
     | "aangetekende_brief";
   titel: string;
   klant: string;
@@ -133,6 +139,14 @@ const SECTION_META: Record<
   warmtefonds: {
     label: "Warmtefonds",
     accent: "bg-[#E8F0F6] text-[#1A4A6E]",
+  },
+  wf_afspraak: {
+    label: "Wachten Afspraak Inplannen WF",
+    accent: "bg-[#E8F0F6] text-[#1A4A6E]",
+  },
+  wf_goedkeuring: {
+    label: "Wachten op goedkeuring WF",
+    accent: "bg-[#EEF2FF] text-[#3730A3]",
   },
   stap1: {
     label: "Opstarten",
@@ -194,8 +208,12 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       label: "Factuur",
       className: "bg-[#FFF0E6] text-[#C45A12]",
     },
+    wf_aanbetaling_herinnering: {
+      label: "Warmtefonds",
+      className: "bg-[#E8F0F6] text-[#1A4A6E]",
+    },
     aangetekende_brief: {
-      label: "Aangetekend",
+      label: "Bedenktijd",
       className: "bg-[#FFF0E6] text-[#9A3B1A]",
     },
   };
@@ -224,6 +242,8 @@ const SOORT_FILTER_ORDER: SoortFilter[] = [
   "factuur",
   "inkoop",
   "volgende",
+  "wf_afspraak",
+  "wf_goedkeuring",
   "warmtefonds",
   "herplan",
   "aangetekend",
@@ -234,6 +254,8 @@ const SOORT_FILTER_ORDER: SoortFilter[] = [
 function soortFilterLabel(id: SoortFilter): string {
   if (id === "alle") return "Alles";
   if (id === "nazorg") return "Nazorg";
+  if (id === "wf_afspraak") return "Wachten Afspraak Inplannen WF";
+  if (id === "wf_goedkeuring") return "Wachten op goedkeuring WF";
   return SECTION_META[id].label;
 }
 
@@ -260,25 +282,15 @@ function calendarDaysUntil(dueAt: string, now = new Date()): number {
   return Math.round((due.getTime() - today.getTime()) / 86_400_000);
 }
 
-function isWachtOpExtern(actie: BackofficeActie): boolean {
-  if (actie.soort === "wacht_warmtefonds") return true;
-  if (actie.soort === "schakel_financiering") return true;
-  if (actie.soort === "nabellen_factuur") return true;
-  if (actie.later) return true;
-  const t = (actie.titel || "").toLowerCase();
-  return (
-    t.includes("wacht") ||
-    t.includes("edwin") ||
-    t.includes("financiering") ||
-    t.includes("warmtefonds")
-  );
-}
-
 function bucketVoorActie(
   actie: BackofficeActie,
   now = new Date()
 ): ActieBucket {
-  if (isWachtOpExtern(actie) && !actie.overdue && !actie.vastgelopen) {
+  if (
+    isBackofficeActieWachtExtern(actie) &&
+    !actie.overdue &&
+    !actie.vastgelopen
+  ) {
     return "wacht_extern";
   }
   const days = calendarDaysUntil(actie.deadlineAt, now);
@@ -506,12 +518,16 @@ function verzondenFacturenVoorActie(
   });
 }
 
-function SaleNotities({
+/** Zijpaneel: opstart-/backoffice-notitie naast de actie-werkruimte. */
+function SaleNotitiesAside({
   actie,
   projecten,
+  forceShow = false,
 }: {
   actie: BackofficeActie;
   projecten: Project[];
+  /** Toon paneel ook zonder notitie (lege staat) */
+  forceShow?: boolean;
 }) {
   const project =
     actie.project ||
@@ -522,39 +538,52 @@ function SaleNotities({
 
   const backoffice = project.backoffice_notitie?.trim() || "";
   const installateur = project.installateur_notitie?.trim() || "";
-  if (!backoffice && !installateur) return null;
+  if (!backoffice && !installateur && !forceShow) return null;
 
   return (
-    <div className="mt-1.5 space-y-1 rounded border border-line/80 bg-wash/40 px-2 py-1.5 text-[11px] leading-snug text-muted">
-      {backoffice ? (
-        <p>
-          <span className="font-semibold text-ink">Backoffice</span>
-          {project.backoffice_notitie_door?.trim() ? (
-            <span className="text-[10px] text-muted">
-              {" "}
-              · {project.backoffice_notitie_door.trim()}
-            </span>
+    <aside className="w-full shrink-0 lg:sticky lg:top-0 lg:w-[16.5rem] xl:w-[18rem]">
+      <div className="overflow-hidden rounded-2xl border border-line bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
+        <div className="border-b border-line bg-white px-3.5 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
+            Opstart
+          </p>
+          <p className="mt-0.5 font-display text-sm font-semibold text-ink">
+            Backoffice notitie
+          </p>
+        </div>
+        <div className="border-l-[3px] border-l-[#0a4727] px-3.5 py-3.5">
+          {backoffice ? (
+            <div>
+              {project.backoffice_notitie_door?.trim() ? (
+                <p className="mb-1.5 text-[10px] font-medium text-muted">
+                  {project.backoffice_notitie_door.trim()}
+                </p>
+              ) : null}
+              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+                {backoffice}
+              </p>
+            </div>
+          ) : (
+            <p className="text-[12px] italic leading-relaxed text-muted">
+              Geen notitie van sales — check het project bij twijfel.
+            </p>
+          )}
+          {installateur ? (
+            <div className="mt-3 border-t border-line/70 pt-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Installateur
+                {project.installateur_notitie_door?.trim()
+                  ? ` · ${project.installateur_notitie_door.trim()}`
+                  : ""}
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-ink/90">
+                {installateur}
+              </p>
+            </div>
           ) : null}
-          <span className="mt-0.5 block whitespace-pre-wrap text-ink/90">
-            {backoffice}
-          </span>
-        </p>
-      ) : null}
-      {installateur ? (
-        <p className={backoffice ? "border-t border-line/60 pt-1" : ""}>
-          <span className="font-semibold text-ink">Installateur</span>
-          {project.installateur_notitie_door?.trim() ? (
-            <span className="text-[10px] text-muted">
-              {" "}
-              · {project.installateur_notitie_door.trim()}
-            </span>
-          ) : null}
-          <span className="mt-0.5 block whitespace-pre-wrap text-ink/90">
-            {installateur}
-          </span>
-        </p>
-      ) : null}
-    </div>
+        </div>
+      </div>
+    </aside>
   );
 }
 
@@ -670,9 +699,11 @@ function buildTaskRows(
       continue;
     }
     if (actie.soort === "wacht_warmtefonds") {
+      const fase = warmtefondsWachtFaseVanActie(actie);
       rows.push({
         key: `${actie.id}-wf-wacht`,
-        section: "warmtefonds",
+        section:
+          fase === "goedkeuring" ? "wf_goedkeuring" : "wf_afspraak",
         actie,
         kind: "wacht_warmtefonds",
         titel: actie.titel,
@@ -690,11 +721,29 @@ function buildTaskRows(
         section: "factuur",
         actie,
         kind: "nabellen",
-        titel: `Nabellen ${actie.factuurNummer || "factuur"}`,
+        titel: actie.titel || `Factuur opvolgen ${actie.factuurNummer || ""}`,
         klant: actie.leadNaam,
         meta: actie.factuurNummer || undefined,
         dueAt: actie.deadlineAt,
         overdue: actie.overdue,
+        done: false,
+      });
+      continue;
+    }
+    if (actie.soort === "wf_aanbetaling_herinnering") {
+      rows.push({
+        key: `${actie.id}-wf-herinnering`,
+        section: "factuur",
+        actie,
+        kind: "wf_aanbetaling_herinnering",
+        titel:
+          actie.titel ||
+          `Herinneringsmail aanbetaling ${actie.factuurNummer || ""}`,
+        klant: actie.leadNaam,
+        meta: actie.factuurNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio,
         done: false,
       });
       continue;
@@ -838,6 +887,10 @@ export function BackofficeActiesList({
   const [msg, setMsg] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [factuurKeuze, setFactuurKeuze] = useState<Record<string, string>>({});
+  /** Aangegeven betaaldatum per nabellen-actie (yyyy-MM-dd). */
+  const [aangegevenBetaaldatum, setAangegevenBetaaldatum] = useState<
+    Record<string, string>
+  >({});
   const [weekKeuze, setWeekKeuze] = useState<Record<string, string>>({});
   const [schouwAtKeuze, setSchouwAtKeuze] = useState<Record<string, string>>(
     {}
@@ -870,6 +923,10 @@ export function BackofficeActiesList({
     klantNaam: string;
     projectNummer: string | null;
   } | null>(null);
+  /** Mail «Annulering of installatie» vanuit bedenktijd-actie. */
+  const [contactMailProject, setContactMailProject] = useState<Project | null>(
+    null
+  );
 
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -975,12 +1032,18 @@ export function BackofficeActiesList({
         }
         const key = (t.auto_key || "").toLowerCase();
         const titel = (t.titel || "").toLowerCase();
+        // Referrals = sales (Verkoop), niet in backoffice-Acties.
+        if (key.includes("referral") || titel.includes("vraag referrals")) {
+          return false;
+        }
         return (
           key.includes("overstap") ||
           key.includes("btw_terug") ||
+          key.includes("review_vragen") ||
           titel.includes("overstap") ||
           titel.includes("btw terug") ||
-          titel.includes("dynamische")
+          titel.includes("dynamische") ||
+          titel.includes("review vragen")
         );
       }),
     [projectTaken, projecten]
@@ -1325,6 +1388,27 @@ export function BackofficeActiesList({
     setBusyId(taak.id);
     setError(null);
     try {
+      // Review vragen afronden → zelfde als Review-checkbox (mail + status)
+      const isReviewVragen = (taak.auto_key || "")
+        .toLowerCase()
+        .includes("review_vragen");
+      if (isReviewVragen && taak.project_id) {
+        const revRes = await fetch(`/api/projecten/${taak.project_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            review_gevraagd_at: new Date().toISOString(),
+            status: "afgerond",
+          }),
+        });
+        if (!revRes.ok) {
+          const revData = await revRes.json().catch(() => ({}));
+          throw new Error(
+            (revData as { error?: string }).error ||
+              "Review markeren mislukt"
+          );
+        }
+      }
       const res = await fetch(`/api/taken/${taak.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1463,9 +1547,12 @@ export function BackofficeActiesList({
       setMsg("Actie verwijderd.");
       return;
     }
-    if (actie.soort === "nabellen_factuur") {
+    if (
+      actie.soort === "nabellen_factuur" ||
+      actie.soort === "wf_aanbetaling_herinnering"
+    ) {
       setError(
-        "Factuur-acties verwijder je door de factuur als betaald te markeren, of via het factuur-scherm."
+        "Factuur-acties verdwijnen als de aanbetaling betaald is, of als Warmtefonds is aangevraagd."
       );
       return;
     }
@@ -1668,8 +1755,12 @@ export function BackofficeActiesList({
     });
     if (!items.every((i) => i.done)) return;
     const completedAt = new Date().toISOString();
+    const warmtefonds = isWarmtefondsProject(project);
     await patchProject(actie, {
       bel_schouw_aanbetaling_at: completedAt,
+      ...(warmtefonds
+        ? { status: "opstarten_voltooid_afwachten_wf" as const }
+        : {}),
     });
     void logBackofficeActieEvent({
       soort: "bel_schouw_aanbetaling",
@@ -1755,6 +1846,111 @@ export function BackofficeActiesList({
       void loadProjectTaken();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Markeren mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function stuurWfAanbetalingHerinnering(actie: BackofficeActie) {
+    if (!actie.factuurId) return;
+    if (
+      !confirm(
+        `Herinneringsmail voor aanbetaling ${actie.factuurNummer || ""} sturen?\n\nVriendelijke herinnering dat de aanbetaling nodig is om Warmtefonds aan te vragen. Factuur-PDF gaat mee als bijlage.`
+      )
+    ) {
+      return;
+    }
+    setBusyId(`${actie.id}-wf-herinnering`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/facturen/${actie.factuurId}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send_reminder" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Herinnering versturen mislukt"
+        );
+      }
+      setMsg(
+        `Herinneringsmail aanbetaling ${actie.factuurNummer || ""} verstuurd.`
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Herinnering versturen mislukt"
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function opnieuwVerstuurFactuur(actie: BackofficeActie) {
+    if (!actie.factuurId) return;
+    if (
+      !confirm(
+        `Factuur ${actie.factuurNummer || ""} opnieuw per e-mail versturen?`
+      )
+    ) {
+      return;
+    }
+    setBusyId(`${actie.id}-herstuur`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/facturen/${actie.factuurId}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opnieuw versturen mislukt");
+      if (data.factuur) onFactuurUpdated?.(data.factuur as Factuur);
+      setMsg(
+        `Factuur ${actie.factuurNummer || ""} opnieuw verstuurd naar de klant.`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opnieuw versturen mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setAangegevenTeBetalen(actie: BackofficeActie) {
+    if (!actie.factuurId) return;
+    const datum = (aangegevenBetaaldatum[actie.id] || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datum)) {
+      setError("Kies eerst de datum waarop de klant zegt te betalen.");
+      return;
+    }
+    setBusyId(`${actie.id}-aangegeven`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/facturen/${actie.factuurId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ afgesproken_betaaldatum: datum }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data.error || "Afgesproken betaaldatum opslaan mislukt"
+        );
+      }
+      if (data.factuur) onFactuurUpdated?.(data.factuur as Factuur);
+      const [y, m, d] = datum.split("-");
+      setMsg(
+        `Afgesproken: klant betaalt op ${d}-${m}-${y}. Op die dag verschijnt “Betaling controleren”.`
+      );
+      setAangegevenBetaaldatum((prev) => {
+        const next = { ...prev };
+        delete next[actie.id];
+        return next;
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Afgesproken betaaldatum mislukt"
+      );
     } finally {
       setBusyId(null);
     }
@@ -1967,7 +2163,10 @@ export function BackofficeActiesList({
         setMsg("Schouwweek gezet.");
       } else if (row.kind === "herplan") {
         await voltooiHerplan(actie);
-      } else if (row.kind === "nabellen") {
+      } else if (
+        row.kind === "nabellen" ||
+        row.kind === "wf_aanbetaling_herinnering"
+      ) {
         await markFactuurBetaald(actie);
       } else if (row.kind === "financiering") {
         await markFinancieringGeschakeld(actie);
@@ -2083,7 +2282,7 @@ export function BackofficeActiesList({
     return (
       <div className="space-y-3">
         {(actie.reden || actie.detail) &&
-        row.kind === "volgende_stap" ? (
+        (row.kind === "volgende_stap" || row.kind === "nabellen") ? (
           <p className="text-[12px] leading-relaxed text-muted">
             <span className="font-semibold text-ink">Waarom: </span>
             {actie.reden || actie.detail}
@@ -2146,24 +2345,80 @@ export function BackofficeActiesList({
           ) : null}
 
           {row.kind === "nabellen" ? (
-            <button
-              type="button"
-              onClick={() => void markFactuurBetaald(actie)}
-              className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
-            >
-              Markeer betaald
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-herstuur`}
+                onClick={() => void opnieuwVerstuurFactuur(actie)}
+                className="inline-flex h-9 items-center border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+              >
+                {busyId === `${actie.id}-herstuur`
+                  ? "Bezig…"
+                  : "Opnieuw versturen"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void markFactuurBetaald(actie)}
+                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
+              >
+                Markeer betaald
+              </button>
+            </>
+          ) : null}
+
+          {row.kind === "wf_aanbetaling_herinnering" ? (
+            <>
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-wf-herinnering`}
+                onClick={() => void stuurWfAanbetalingHerinnering(actie)}
+                className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {busyId === `${actie.id}-wf-herinnering`
+                  ? "Bezig…"
+                  : "Stuur herinneringsmail"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void markFactuurBetaald(actie)}
+                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
+              >
+                Markeer betaald
+              </button>
+            </>
           ) : null}
 
           {row.kind === "aangetekende_brief" ? (
-            <button
-              type="button"
-              disabled={busyId === `${actie.id}-aangetekend`}
-              onClick={() => void markAangetekendeBriefAfgerond(actie)}
-              className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-            >
-              Brief afgerond
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={!actie.project}
+                onClick={() => {
+                  if (actie.project) setContactMailProject(actie.project);
+                }}
+                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                Mail klant
+              </button>
+              {actie.projectId ? (
+                <a
+                  href={`/api/projecten/${actie.projectId}/aangetekende-brief`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-9 items-center border border-[#9A3B1A]/30 bg-[#FFF6F2] px-3 text-xs font-semibold text-[#9A3B1A] hover:bg-[#FFE8DF]"
+                >
+                  PDF
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-aangetekend`}
+                onClick={() => void markAangetekendeBriefAfgerond(actie)}
+                className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold hover:bg-wash disabled:opacity-50"
+              >
+                Afgerond
+              </button>
+            </>
           ) : null}
 
           {actie.projectId ? (
@@ -2174,7 +2429,59 @@ export function BackofficeActiesList({
               Open project
             </Link>
           ) : null}
+          {actie.factuurId &&
+          (row.kind === "nabellen" ||
+            row.kind === "wf_aanbetaling_herinnering") ? (
+            <Link
+              href={`/facturen/${actie.factuurId}`}
+              className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink hover:bg-wash"
+            >
+              Open factuur
+            </Link>
+          ) : null}
         </div>
+
+        {row.kind === "nabellen" ? (
+          <div className="rounded-sm border border-line bg-white px-3.5 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Heeft aangegeven te betalen
+            </p>
+            <p className="mt-1 text-[12px] text-muted">
+              Zet de datum die de klant noemt. Op die dag komt de actie{" "}
+              <span className="font-semibold text-ink">Betaling controleren</span>{" "}
+              terug.
+            </p>
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="block text-[11px] text-muted">
+                Datum
+                <input
+                  type="date"
+                  value={aangegevenBetaaldatum[actie.id] || ""}
+                  onChange={(e) =>
+                    setAangegevenBetaaldatum((prev) => ({
+                      ...prev,
+                      [actie.id]: e.target.value,
+                    }))
+                  }
+                  className="mt-1 block border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+                />
+              </label>
+              <button
+                type="button"
+                disabled={
+                  busyId === `${actie.id}-aangegeven` ||
+                  !(aangegevenBetaaldatum[actie.id] || "").trim()
+                }
+                onClick={() => void setAangegevenTeBetalen(actie)}
+                className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {busyId === `${actie.id}-aangegeven`
+                  ? "Opslaan…"
+                  : "Opslaan afspraak"}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {row.kind === "wacht_warmtefonds" && actie.project
           ? (() => {
@@ -2852,6 +3159,20 @@ export function BackofficeActiesList({
       const m = SECTION_META.stap1;
       return { label: m.label, className: m.accent };
     }
+    // WF wacht-extern: pill = fase (Afspraak / Goedkeuring), niet generiek Warmtefonds
+    if (
+      row.kind === "wacht_warmtefonds" &&
+      (row.section === "wf_afspraak" || row.section === "wf_goedkeuring")
+    ) {
+      const m = SECTION_META[row.section];
+      return {
+        label:
+          row.section === "wf_afspraak"
+            ? "Afspraak WF"
+            : "Wachten op goedkeuring WF",
+        className: m.accent,
+      };
+    }
     const fromType = TYPE_PILL[row.kind];
     if (fromType) return fromType;
     const m = SECTION_META[row.section];
@@ -3438,11 +3759,13 @@ export function BackofficeActiesList({
                           ? "Zet hier de Warmtefonds-status. Bij goedkeuring verdwijnt deze actie — daarna schouw plannen."
                           : selectedRow.kind === "nabellen"
                             ? "Openstaande betaling afronden."
-                            : isRestfactuurActie(actie)
-                              ? "Restfactuur opstellen en versturen."
-                              : isInstallatieActie(actie)
-                                ? "Installatie inplannen."
-                                : actie.reden || null;
+                            : selectedRow.kind === "wf_aanbetaling_herinnering"
+                              ? "Stuur een vriendelijke herinnering: aanbetaling is nodig om Warmtefonds aan te vragen. Factuur-PDF gaat mee."
+                              : isRestfactuurActie(actie)
+                                ? "Restfactuur opstellen en versturen."
+                                : isInstallatieActie(actie)
+                                  ? "Installatie inplannen."
+                                  : actie.reden || null;
 
         return (
           <div className="flex min-h-[min(78vh,44rem)] flex-col border border-line bg-white">
@@ -3590,21 +3913,35 @@ export function BackofficeActiesList({
               </div>
             </div>
 
-            {/* Werkruimte */}
+            {/* Werkruimte + backoffice-notitie (opstart) naast */}
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <div className="mx-auto w-full max-w-2xl space-y-5">
-                <div>
-                  <h3 className="font-display text-xl font-semibold leading-snug text-ink sm:text-[1.4rem]">
-                    {selectedRow.titel}
-                  </h3>
-                  {doel ? (
-                    <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
-                      {doel}
-                    </p>
-                  ) : null}
+              <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
+                <div className="min-w-0 flex-1 space-y-5 lg:max-w-2xl">
+                  <div>
+                    <h3 className="font-display text-xl font-semibold leading-snug text-ink sm:text-[1.4rem]">
+                      {selectedRow.titel}
+                    </h3>
+                    {doel ? (
+                      <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+                        {doel}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {actieWerkPanel(selectedRow, { hideContact: true })}
                 </div>
 
-                {actieWerkPanel(selectedRow, { hideContact: true })}
+                <SaleNotitiesAside
+                  actie={actie}
+                  projecten={projecten}
+                  forceShow={
+                    selectedRow.kind === "factuur_versturen" ||
+                    selectedRow.kind === "schouw_week" ||
+                    selectedRow.kind === "schouw_inplannen" ||
+                    selectedRow.kind === "edwin_doorsturen" ||
+                    selectedRow.kind === "bestel_materiaal"
+                  }
+                />
               </div>
             </div>
 
@@ -3686,6 +4023,19 @@ export function BackofficeActiesList({
           onSent={() => {
             setMsg("Overstap-mail verstuurd naar de klant.");
             void loadProjectTaken();
+          }}
+        />
+      ) : null}
+
+      {contactMailProject ? (
+        <KlantContactMailModal
+          project={contactMailProject}
+          initialTemplate="annulering_of_installatie"
+          onClose={() => setContactMailProject(null)}
+          onSent={() => {
+            setMsg(
+              "Mail «Annulering of installatie» verstuurd — markeer de actie Afgerond als klaar."
+            );
           }}
         />
       ) : null}

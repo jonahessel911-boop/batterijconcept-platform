@@ -155,7 +155,9 @@ export async function GET(req: NextRequest) {
         .order("created_at", { ascending: false }),
       sb
         .from("afspraken")
-        .select("id, start_at, created_at, status, soort, adviseurs!adviseur_id(naam)")
+        .select(
+          "id, start_at, created_at, updated_at, status, soort, notities, adviseurs!adviseur_id(naam)"
+        )
         .eq("lead_id", leadId)
         .order("start_at", { ascending: false })
         .limit(50),
@@ -285,8 +287,10 @@ export async function GET(req: NextRequest) {
       id: string;
       start_at: string;
       created_at: string | null;
+      updated_at?: string | null;
       status: string;
       soort: string | null;
+      notities?: string | null;
       adviseurs?: AdvJoin;
     }>).map((a) => {
       const adv = Array.isArray(a.adviseurs) ? a.adviseurs[0] : a.adviseurs;
@@ -294,8 +298,10 @@ export async function GET(req: NextRequest) {
         id: a.id,
         start_at: a.start_at,
         created_at: a.created_at,
+        updated_at: a.updated_at || null,
         status: a.status,
         soort: a.soort,
+        notities: a.notities || null,
         adviseur_naam: adv?.naam || null,
       };
     });

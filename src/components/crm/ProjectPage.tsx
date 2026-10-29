@@ -5,8 +5,11 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
+  Afspraak,
   Factuur,
   InstallatiePartner,
+  InstallatiePartnerTeamgenoot,
+  Lead,
   LeadEvent,
   Project,
   ProjectFoto,
@@ -24,11 +27,17 @@ import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { projectStatusLabel } from "@/lib/labels";
 import {
+  afspraakSoortLabel,
+  isTerugbelSoort,
+  normalizeAfspraakSoort,
+} from "@/lib/afspraak-soort";
+import {
   formatProjectSchouwWeek,
   isSchouwdagDefinitief,
   schouwWeekFromDate,
 } from "@/lib/schouw-week";
 import { useCrmSession } from "@/hooks/useCrmSession";
+import { getSupabaseBrowser } from "@/lib/supabase";
 import { backofficeHref, parseBoView } from "@/lib/bo-view";
 import { ProjectStatusPath } from "./ProjectStatusPath";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
@@ -61,11 +70,19 @@ import {
   isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
 import { KlantContactMailModal } from "./KlantContactMailModal";
+import { LeadTerugbelPlannen } from "./LeadTerugbelPlannen";
+import type { ContactMailTemplateId } from "@/lib/contact-mail-templates";
 import {
   AnnuleringBedenktijdModal,
   type AnnuleringKeuze,
 } from "./AnnuleringBedenktijdModal";
 import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
+
+const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
+
+function isActieveTerugbel(a: Afspraak): boolean {
+  return ACTIEVE_AFSPRAAK.has(a.status) && isTerugbelSoort(a.soort);
+}
 
 type FeedIcon =
   | "calendar"
@@ -354,8 +371,20 @@ export function ProjectPage() {
     []
   );
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
+  const [partnerTeamgenoten, setPartnerTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
+  const [partnerTeamgenotenLoading, setPartnerTeamgenotenLoading] =
+    useState(false);
   const [medewerkerBusy, setMedewerkerBusy] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+  const [contactInitialTemplate, setContactInitialTemplate] =
+    useState<ContactMailTemplateId | null>(null);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
+  const [terugbelOpen, setTerugbelOpen] = useState(false);
+  const [completingAfspraakId, setCompletingAfspraakId] = useState<
+    string | null
+  >(null);
 
   const [newTaakOpen, setNewTaakOpen] = useState(false);
   /** agenda = bo_agenda (Taken agenda); taak = project_taken */
@@ -422,6 +451,7 @@ export function ProjectPage() {
         partnerRes,
         eventsRes,
         serviceRes,
+        afspraakRes,
       ] = await Promise.all([
         fetch(`/api/projecten/${projectId}/fotos`),
         fetch(`/api/taken/sync`, {
@@ -436,6 +466,14 @@ export function ProjectPage() {
           ? fetch(`/api/leads/${resolvedLeadId}/events`)
           : Promise.resolve(null),
         fetch(`/api/service-verzoeken?project_id=${projectId}`),
+        resolvedLeadId
+          ? getSupabaseBrowser()
+              .from("afspraken")
+              .select("*, adviseurs!adviseur_id(naam)")
+              .eq("lead_id", resolvedLeadId)
+              .order("start_at", { ascending: false })
+              .limit(20)
+          : Promise.resolve({ data: [] as Afspraak[], error: null }),
       ]);
       const fotoData = await fotoRes.json().catch(() => ({}));
       const takenData = await takenRes.json().catch(() => ({}));
@@ -461,6 +499,11 @@ export function ProjectPage() {
           ? ((serviceData.verzoeken as ServiceVerzoek[]) || [])
           : []
       );
+      setAfspraken(
+        !afspraakRes.error && afspraakRes.data
+          ? (afspraakRes.data as Afspraak[])
+          : []
+      );
       const list = ((advData.adviseurs as Adviseur[]) || []).filter(
         (a) => a.actief !== false
       );
@@ -482,6 +525,39 @@ export function ProjectPage() {
     const frame = requestAnimationFrame(() => void load());
     return () => cancelAnimationFrame(frame);
   }, [load]);
+
+  const partnerIdForTeam = project?.installatie_partner_id || null;
+  useEffect(() => {
+    if (!partnerIdForTeam) {
+      setPartnerTeamgenoten([]);
+      return;
+    }
+    let cancelled = false;
+    setPartnerTeamgenotenLoading(true);
+    void fetch(
+      `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerIdForTeam)}`
+    )
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setPartnerTeamgenoten([]);
+          return;
+        }
+        setPartnerTeamgenoten(
+          (data.teamgenoten as InstallatiePartnerTeamgenoot[]) || []
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPartnerTeamgenoten([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPartnerTeamgenotenLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [partnerIdForTeam]);
 
   const refreshLeadEvents = useCallback(async (leadId: string | null | undefined) => {
     if (!leadId) {
@@ -800,12 +876,72 @@ export function ProjectPage() {
                       telefoon: partner.telefoon,
                     }
                   : null,
-                monteur: partner?.naam || p.monteur,
+                installatie_teamgenoot_id: null,
+                installatie_teamgenoot: null,
+                monteur: null,
               }
             : p
         );
       }
-      setOkMsg("Installateur bijgewerkt.");
+      setOkMsg(
+        partnerId
+          ? "Installateur gekoppeld. Kies hieronder de medewerker."
+          : "Installateur ontkoppeld."
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setMedewerkerBusy(false);
+    }
+  }
+
+  async function savePartnerMedewerker(teamgenootId: string | null) {
+    if (!project) return;
+    setMedewerkerBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          installatie_teamgenoot_id: teamgenootId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      const updated = (data as { project?: Project }).project;
+      if (updated) {
+        setProject((p) => (p ? { ...p, ...updated } : p));
+      } else {
+        const tg =
+          partnerTeamgenoten.find((t) => t.id === teamgenootId) || null;
+        setProject((p) =>
+          p
+            ? {
+                ...p,
+                installatie_teamgenoot_id: teamgenootId,
+                installatie_teamgenoot: tg
+                  ? {
+                      id: tg.id,
+                      naam: tg.naam,
+                      email: tg.email,
+                      telefoon: tg.telefoon,
+                    }
+                  : null,
+                monteur: tg?.naam || null,
+              }
+            : p
+        );
+      }
+      setOkMsg(
+        teamgenootId
+          ? "Medewerker gekoppeld."
+          : "Medewerker ontkoppeld."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
@@ -956,7 +1092,81 @@ export function ProjectPage() {
     setNewDue(start.slice(0, 10));
     setNewStartLocal(start);
     setNewEndLocal(plusOneHourLocal(start));
+    setTerugbelOpen(false);
     setNewTaakOpen(true);
+  }
+
+  async function refreshAfspraken(leadId: string) {
+    const { data, error: afErr } = await getSupabaseBrowser()
+      .from("afspraken")
+      .select("*, adviseurs!adviseur_id(naam)")
+      .eq("lead_id", leadId)
+      .order("start_at", { ascending: false })
+      .limit(20);
+    if (!afErr) setAfspraken((data as Afspraak[]) || []);
+  }
+
+  async function voltooiTerugbel(afspraakId: string) {
+    if (!project?.lead_id) return;
+    const leadId = project.lead_id;
+    setCompletingAfspraakId(afspraakId);
+    setError(null);
+    try {
+      const sb = getSupabaseBrowser();
+      const { error: afErr } = await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .eq("id", afspraakId);
+      if (afErr) throw afErr;
+
+      const otherOpen = afspraken.some(
+        (a) => a.id !== afspraakId && isActieveTerugbel(a)
+      );
+      if (!otherOpen) {
+        const { error: leadErr } = await sb
+          .from("leads")
+          .update({ terugbellen: false, terugbel_notitie: null })
+          .eq("id", leadId);
+        if (leadErr) throw leadErr;
+        setProject((prev) => {
+          if (!prev) return prev;
+          const raw = Array.isArray(prev.leads) ? prev.leads[0] : prev.leads;
+          if (!raw) return prev;
+          const nextLead = {
+            ...raw,
+            terugbellen: false,
+            terugbel_notitie: null,
+          };
+          return {
+            ...prev,
+            leads: Array.isArray(prev.leads) ? [nextLead] : nextLead,
+          };
+        });
+      }
+
+      setAfspraken((prev) =>
+        prev.map((a) =>
+          a.id === afspraakId ? { ...a, status: "voltooid" } : a
+        )
+      );
+      void fetch(`/api/leads/${leadId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          soort: "terugbel",
+          titel: "Terugbelafspraak voltooid",
+          detail: null,
+        }),
+      }).catch(() => undefined);
+      void refreshLeadEvents(leadId);
+      setOkMsg("Terugbelafspraak gemarkeerd als voltooid.");
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Voltooien van terugbel mislukt"
+      );
+    } finally {
+      setCompletingAfspraakId(null);
+    }
   }
 
   async function createTaak() {
@@ -1557,8 +1767,47 @@ export function ProjectPage() {
     (a) =>
       a.soort === "schakel_financiering" || a.soort === "aangetekende_brief"
   );
-
-  const openActieCount = openTaken.length + openBoActies.length;
+  const openTerugbel = afspraken
+    .filter(isActieveTerugbel)
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    );
+  const openActieCount =
+    openTaken.length + openBoActies.length + openTerugbel.length;
+  const leadForTerugbel: Lead | null = lead
+    ? ({
+        id: project.lead_id,
+        lead_number: lead.lead_number || "",
+        naam: lead.naam || klantNaam,
+        email: lead.email || null,
+        telefoon: lead.telefoon || null,
+        postcode: lead.postcode || null,
+        huisnummer: lead.huisnummer || null,
+        toevoeging: lead.toevoeging || null,
+        straat: lead.straat || null,
+        plaats: lead.plaats || null,
+        utm_source: null,
+        utm_medium: null,
+        utm_campaign: null,
+        utm_content: null,
+        utm_term: null,
+        lander: null,
+        campaign_name: null,
+        ad_name: null,
+        bron: null,
+        status: (lead.status || "deal") as Lead["status"],
+        prioriteit: "normaal",
+        notities: lead.notities || null,
+        terugbellen: lead.terugbellen,
+        terugbel_notitie: lead.terugbel_notitie,
+        adviseur_id: lead.adviseur_id || null,
+        beller_id: lead.beller_id || null,
+        created_at: project.created_at,
+        updated_at: project.updated_at,
+      } as Lead)
+    : null;
 
   const feed: FeedItem[] = [
     {
@@ -1688,9 +1937,19 @@ export function ProjectPage() {
       at: project.updated_at || project.created_at,
       title: "Installatie gepland",
       body: `Installatiedatum is gepland op ${formatDateTimeNl(project.installatie_at)}${
-        project.installatie_partners?.naam || project.monteur
-          ? ` · ${project.installatie_partners?.naam || project.monteur}`
-          : ""
+        (() => {
+          const tg = project.installatie_teamgenoot;
+          const tgOne = Array.isArray(tg) ? tg[0] : tg;
+          const monteurLabel = tgOne?.naam || project.monteur;
+          const partnerLabel = project.installatie_partners?.naam;
+          if (monteurLabel && partnerLabel && monteurLabel !== partnerLabel) {
+            return ` · ${partnerLabel} · ${monteurLabel}`;
+          }
+          if (partnerLabel || monteurLabel) {
+            return ` · ${partnerLabel || monteurLabel}`;
+          }
+          return "";
+        })()
       }`,
       kind: "event",
       icon: "installatie",
@@ -1700,6 +1959,7 @@ export function ProjectPage() {
   if (
     project.status === "installatie_voltooid" ||
     project.status === "review_gevraagd" ||
+    project.status === "afgerond" ||
     project.status === "service"
   ) {
     feed.push({
@@ -2042,6 +2302,37 @@ export function ProjectPage() {
       {error ? (
         <div className="mb-4 border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
           {error}
+        </div>
+      ) : null}
+
+      {openTerugbel[0] ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#C45A12]">
+              Terugbel gepland
+            </p>
+            <p className="mt-0.5 text-xs tabular-nums text-[#C45A12]/90">
+              {formatDateTimeNl(openTerugbel[0].start_at)}
+              {openTerugbel[0].adviseurs?.naam
+                ? ` · ${openTerugbel[0].adviseurs.naam}`
+                : ""}
+              {openTerugbel.length > 1
+                ? ` · +${openTerugbel.length - 1} meer`
+                : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setMainTab("overzicht");
+              setTerugbelOpen(false);
+              const el = document.getElementById("project-openstaande-acties");
+              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className="shrink-0 border border-[#C45A12]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1]"
+          >
+            Bekijk
+          </button>
         </div>
       ) : null}
 
@@ -2640,22 +2931,84 @@ export function ProjectPage() {
               ) : null}
 
               {/* Openstaande acties — afvinken → chat */}
-              <section className="border border-line bg-white">
-                <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+              <section
+                id="project-openstaande-acties"
+                className="border border-line bg-white"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
                   <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
                     Openstaande acties
                     {openActieCount > 0 ? ` (${openActieCount})` : ""}
                   </h2>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      newTaakOpen ? setNewTaakOpen(false) : openNewTaakForm()
-                    }
-                    className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c]"
-                  >
-                    {newTaakOpen ? "Sluiten" : "+ Agenda"}
-                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!leadForTerugbel}
+                      onClick={() => {
+                        if (terugbelOpen) {
+                          setTerugbelOpen(false);
+                          return;
+                        }
+                        setNewTaakOpen(false);
+                        setTerugbelOpen(true);
+                      }}
+                      className="border border-[#C45A12]/40 bg-[#FFF0E6] px-3 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D4] disabled:opacity-50"
+                    >
+                      {terugbelOpen ? "Sluiten" : "Terugbel"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        newTaakOpen
+                          ? setNewTaakOpen(false)
+                          : openNewTaakForm()
+                      }
+                      className="bg-orange px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e0651c]"
+                    >
+                      {newTaakOpen ? "Sluiten" : "+ Agenda"}
+                    </button>
+                  </div>
                 </div>
+                {terugbelOpen && leadForTerugbel ? (
+                  <div className="border-b border-line bg-[#FFF8F3] px-4 py-4">
+                    <LeadTerugbelPlannen
+                      lead={leadForTerugbel}
+                      adviseurs={adviseurs}
+                      warm={false}
+                      lockAdviseur={false}
+                      defaultAdviseurId={
+                        leadForTerugbel.beller_id ||
+                        session?.id ||
+                        leadForTerugbel.adviseur_id ||
+                        undefined
+                      }
+                      onCancel={() => setTerugbelOpen(false)}
+                      onPlanned={() => {
+                        setTerugbelOpen(false);
+                        setOkMsg("Terugbelafspraak gepland.");
+                        void refreshAfspraken(project.lead_id);
+                        void refreshLeadEvents(project.lead_id);
+                        setProject((prev) => {
+                          if (!prev) return prev;
+                          const raw = Array.isArray(prev.leads)
+                            ? prev.leads[0]
+                            : prev.leads;
+                          if (!raw) return prev;
+                          const nextLead = {
+                            ...raw,
+                            terugbellen: true,
+                          };
+                          return {
+                            ...prev,
+                            leads: Array.isArray(prev.leads)
+                              ? [nextLead]
+                              : nextLead,
+                          };
+                        });
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {newTaakOpen ? (
                   <div className="space-y-3 border-b border-line bg-wash/40 px-4 py-4">
                     <div className="flex flex-wrap gap-2">
@@ -2796,12 +3149,49 @@ export function ProjectPage() {
                     </div>
                   </div>
                 ) : null}
-                {openActieCount === 0 ? (
+                {openActieCount === 0 && !terugbelOpen ? (
                   <p className="px-4 py-4 text-sm text-muted">
                     Geen openstaande acties voor deze klant.
                   </p>
-                ) : (
+                ) : openActieCount === 0 ? null : (
                   <ul className="divide-y divide-line">
+                    {openTerugbel.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex flex-wrap items-center justify-between gap-3 bg-[#FFF8F3] px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-[#C45A12]">
+                            {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
+                          </p>
+                          <p className="mt-0.5 text-[11px] tabular-nums text-[#C45A12]/90">
+                            {formatDateTimeNl(a.start_at)}
+                            {a.adviseurs?.naam
+                              ? ` · ${a.adviseurs.naam}`
+                              : ""}
+                          </p>
+                          {a.notities?.trim() ? (
+                            <p className="mt-0.5 text-[11px] text-muted">
+                              {a.notities.trim()}
+                            </p>
+                          ) : lead?.terugbel_notitie?.trim() ? (
+                            <p className="mt-0.5 text-[11px] text-muted">
+                              {lead.terugbel_notitie.trim()}
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={completingAfspraakId !== null}
+                          onClick={() => void voltooiTerugbel(a.id)}
+                          className="shrink-0 border border-[#C45A12]/40 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
+                        >
+                          {completingAfspraakId === a.id
+                            ? "Bezig…"
+                            : "Voltooid"}
+                        </button>
+                      </li>
+                    ))}
                     {openBoActies.map((a) => (
                       <li
                         key={a.id}
@@ -2819,14 +3209,28 @@ export function ProjectPage() {
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
                           {a.soort === "aangetekende_brief" ? (
-                            <a
-                              href={`/api/projecten/${project.id}/aangetekende-brief`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="border border-[#9A3B1A]/30 bg-[#FFF6F2] px-2.5 py-1.5 text-[11px] font-semibold text-[#9A3B1A] hover:bg-[#FFE8DF]"
-                            >
-                              Download PDF
-                            </a>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setContactInitialTemplate(
+                                    "annulering_of_installatie"
+                                  );
+                                  setContactOpen(true);
+                                }}
+                                className="border border-green/30 bg-green px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-green-dark"
+                              >
+                                Mail klant
+                              </button>
+                              <a
+                                href={`/api/projecten/${project.id}/aangetekende-brief`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="border border-[#9A3B1A]/30 bg-[#FFF6F2] px-2.5 py-1.5 text-[11px] font-semibold text-[#9A3B1A] hover:bg-[#FFE8DF]"
+                              >
+                                PDF
+                              </a>
+                            </>
                           ) : null}
                           <button
                             type="button"
@@ -3234,7 +3638,10 @@ export function ProjectPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setContactOpen(true)}
+                  onClick={() => {
+                    setContactInitialTemplate(null);
+                    setContactOpen(true);
+                  }}
                   className="shrink-0 border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:border-green hover:text-green-dark"
                 >
                   Contact
@@ -3316,6 +3723,42 @@ export function ProjectPage() {
                     ))}
                   </select>
                 </label>
+                {project.installatie_partner_id ? (
+                  <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                    Medewerker
+                    <select
+                      value={
+                        project.installatie_teamgenoot_id ||
+                        (Array.isArray(project.installatie_teamgenoot)
+                          ? project.installatie_teamgenoot[0]?.id
+                          : project.installatie_teamgenoot?.id) ||
+                        ""
+                      }
+                      disabled={
+                        medewerkerBusy || partnerTeamgenotenLoading
+                      }
+                      onChange={(e) =>
+                        void savePartnerMedewerker(
+                          e.target.value ? e.target.value : null
+                        )
+                      }
+                      className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green disabled:opacity-60"
+                    >
+                      <option value="">
+                        {partnerTeamgenotenLoading
+                          ? "Laden…"
+                          : partnerTeamgenoten.length === 0
+                            ? "Geen medewerkers — partner voegt toe in Team"
+                            : "Nog niet gekoppeld…"}
+                      </option>
+                      {partnerTeamgenoten.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.naam}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
             </section>
           )}
@@ -3426,7 +3869,11 @@ export function ProjectPage() {
       {contactOpen ? (
         <KlantContactMailModal
           project={project}
-          onClose={() => setContactOpen(false)}
+          initialTemplate={contactInitialTemplate}
+          onClose={() => {
+            setContactOpen(false);
+            setContactInitialTemplate(null);
+          }}
           onSent={() => void refreshLeadEvents(project.lead_id)}
         />
       ) : null}

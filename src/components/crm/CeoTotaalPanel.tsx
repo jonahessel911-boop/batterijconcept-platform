@@ -7,6 +7,7 @@ import { SalesDashboardPanel } from "./SalesDashboardPanel";
 import { BelDashboardPanel } from "./BelDashboardPanel";
 import { ProjectedPnlPanel } from "./ProjectedPnlPanel";
 import { CurrentPnlPanel } from "./CurrentPnlPanel";
+import { CeoUnitTargetsPanel } from "./CeoUnitTargetsPanel";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,
@@ -167,6 +168,8 @@ export function CeoTotaalPanel() {
             hideRangeControls
           />
         </section>
+        <hr className="border-line" />
+        <CeoUnitTargetsPanel />
       </div>
     </div>
   );

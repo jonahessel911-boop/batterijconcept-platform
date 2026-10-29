@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { appBaseUrl, monteurCcEmail, sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { schouwKlantEmail, schouwPartnerEmail } from "@/lib/email/templates";
 import {
@@ -18,7 +18,8 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/projecten/[id]/schouw
- * Plant schouw in op ISO-week (+ optioneel partner) en mailt klant (+ partner).
+ * Plant schouw in op ISO-week (+ optioneel partner) en mailt klant.
+ * Partner/monteur alleen bij definitieve schouwdag (niet bij week-only).
  */
 export async function POST(
   req: NextRequest,
@@ -31,6 +32,7 @@ export async function POST(
     /** Legacy: exacte datetime — wordt omgezet naar week. */
     schouw_at?: string;
     installatie_partner_id?: string | null;
+    installatie_teamgenoot_id?: string | null;
     schouw_notities?: string | null;
   };
   try {
@@ -120,21 +122,38 @@ export async function POST(
                   financieringVoorbehoud: offRaw?.financiering_voorbehoud,
                 });
 
-    // Eigen middelen: schouwweek pas ná 50% betaling
+    // Eigen middelen: schouwweek pas ná 50% betaling (tenzij handmatig €0)
     if (!warmtefondsForStatus) {
-      const { data: facturenRows } = await sb
-        .from("facturen")
-        .select("status, omschrijving, credit_van_factuur_id")
-        .eq("project_id", id);
-      const { isAanbetalingBetaald } = await import("@/lib/project-kickoff");
-      if (!isAanbetalingBetaald(facturenRows || [])) {
-        return NextResponse.json(
-          {
-            error:
-              "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
-          },
-          { status: 400 }
-        );
+      const { data: projectFull } = await sb
+        .from("projecten")
+        .select(
+          "aanbetaling_te_innen_inc, offertes(aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, financiering_voorbehoud)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      const {
+        isAanbetalingBetaald,
+        projectHeeftGeenAanbetalingNodig,
+      } = await import("@/lib/project-kickoff");
+      const geenAanbetaling = projectHeeftGeenAanbetalingNodig(
+        (projectFull || project) as Parameters<
+          typeof projectHeeftGeenAanbetalingNodig
+        >[0]
+      );
+      if (!geenAanbetaling) {
+        const { data: facturenRows } = await sb
+          .from("facturen")
+          .select("status, omschrijving, credit_van_factuur_id")
+          .eq("project_id", id);
+        if (!isAanbetalingBetaald(facturenRows || [])) {
+          return NextResponse.json(
+            {
+              error:
+                "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
@@ -168,9 +187,9 @@ export async function POST(
       );
     }
 
-    let partnerNaam: string | null = null;
     let partnerEmail: string | null = null;
     let partnerToken: string | null = null;
+    let partnerNaam: string | null = null;
     {
       const { data: partner, error: partnerErr } = await sb
         .from("installatie_partners")
@@ -183,9 +202,31 @@ export async function POST(
           { status: 404 }
         );
       }
-      partnerNaam = partner.naam;
       partnerEmail = partner.email;
       partnerToken = partner.portal_token;
+      partnerNaam = partner.naam;
+    }
+
+    let teamgenootId: string | null =
+      body.installatie_teamgenoot_id?.trim() || null;
+    let monteurNaam: string | null = null;
+    let monteurEmail: string | null = null;
+    if (teamgenootId) {
+      const { data: tg } = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, naam, email, actief")
+        .eq("id", teamgenootId)
+        .eq("partner_id", partnerId)
+        .maybeSingle();
+      if (!tg || tg.actief === false) {
+        return NextResponse.json(
+          { error: "Medewerker niet gevonden bij deze installateur" },
+          { status: 400 }
+        );
+      }
+      teamgenootId = tg.id;
+      monteurNaam = tg.naam;
+      monteurEmail = tg.email?.trim() || null;
     }
 
     const schouwNotities = body.schouw_notities?.trim() || null;
@@ -198,11 +239,12 @@ export async function POST(
       schouw_mail_klant_verstuurd: false,
       schouw_mail_partner_verstuurd: false,
       installatie_partner_id: partnerId,
-      monteur: partnerNaam,
+      installatie_teamgenoot_id: teamgenootId,
+      monteur: monteurNaam,
       status: nextStatus,
     };
 
-    const { data: updated, error: updateErr } = await sb
+    let { data: updated, error: updateErr } = await sb
       .from("projecten")
       .update(patch)
       .eq("id", id)
@@ -210,6 +252,25 @@ export async function POST(
         "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
       )
       .single();
+
+    if (
+      updateErr &&
+      (updateErr.message?.includes("installatie_teamgenoot_id") ||
+        updateErr.code === "42703")
+    ) {
+      const fallback = { ...patch };
+      delete fallback.installatie_teamgenoot_id;
+      const retry = await sb
+        .from("projecten")
+        .update(fallback)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, track_token)"
+        )
+        .single();
+      updated = retry.data;
+      updateErr = retry.error;
+    }
 
     if (updateErr || !updated) {
       const missingWeek =
@@ -367,7 +428,13 @@ export async function POST(
       console.warn("Schouw gepland zonder klantmail — geen e-mailadres", id);
     }
 
-    if (partnerEmail?.trim() && partnerToken) {
+    // Partner/monteur alleen bij definitieve schouwdag — niet bij week-placeholder.
+    const monteurCc = monteurCcEmail(partnerEmail, monteurEmail);
+    if (
+      exactSchouwAt &&
+      (partnerEmail?.trim() || monteurCc) &&
+      partnerToken
+    ) {
       const portalUrl = `${appBaseUrl()}/installatie/${partnerToken}`;
       const partnerHtml = schouwPartnerEmail({
         partnerNaam: partnerNaam || "partner",
@@ -382,8 +449,12 @@ export async function POST(
         notities: schouwNotities,
         portalUrl,
       });
+      const to = partnerEmail?.trim() || monteurCc!;
+      const cc =
+        partnerEmail?.trim() && monteurCc ? monteurCc : null;
       const sent = await sendEmail({
-        to: partnerEmail.trim(),
+        to,
+        cc,
         subject: "Nieuwe schouw gepland — Batterijconcept",
         html: partnerHtml,
         tag: "schouw-partner",

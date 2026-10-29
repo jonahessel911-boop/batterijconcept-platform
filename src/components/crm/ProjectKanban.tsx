@@ -57,6 +57,7 @@ const COLUMN_ACCENT: Partial<Record<ProjectStatus, string>> = {
   installatie_ingepland: "#C45A12",
   installatie_voltooid: "#0D5C32",
   review_gevraagd: "#0D7A6F",
+  afgerond: "#0D5C32",
   service: "#00695C",
   annulering: "#C62828",
   hold_sales_actie: "#5A4A6E",
@@ -227,7 +228,9 @@ export function ProjectKanban({
                 style={{ borderTop: `3px solid ${accent}` }}
               >
                 <h3 className="text-[12px] font-semibold text-ink">
-                  {projectStatusLabel[status]}
+                  {status === "restfactuur_verstuurd"
+                    ? "Factuur WF / Restfactuur"
+                    : projectStatusLabel[status]}
                 </h3>
                 <span
                   className="inline-flex min-w-[1.5rem] items-center justify-center px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-white"

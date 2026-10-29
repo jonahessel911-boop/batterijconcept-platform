@@ -18,6 +18,20 @@ export type EmailAttachment = {
   content: Buffer | string;
 };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** CC voor monteur/teamgenoot — alleen als geldig én anders dan partner. */
+export function monteurCcEmail(
+  partnerEmail: string | null | undefined,
+  monteurEmail: string | null | undefined
+): string | null {
+  const monteur = monteurEmail?.trim() || "";
+  if (!monteur || !EMAIL_RE.test(monteur)) return null;
+  const partner = partnerEmail?.trim().toLowerCase() || "";
+  if (partner && monteur.toLowerCase() === partner) return null;
+  return monteur;
+}
+
 function htmlToPlainText(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -59,7 +73,7 @@ export async function sendEmail(opts: {
   }
 
   const to = opts.to.trim();
-  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+  if (!to || !EMAIL_RE.test(to)) {
     return { ok: false, error: "Ongeldig e-mailadres (aan)" };
   }
 

@@ -77,6 +77,29 @@ function dayKeyAmsterdam(date: Date | string): string {
   return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
+/** Compacte kolomtitel: voornaam (+ initialen bij gelijke voornamen). */
+function adviseurKortLabel(naam: string, allNames: string[]): string {
+  const parts = naam.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0] || naam;
+  const sameFirst = allNames.filter(
+    (n) => (n.trim().split(/\s+/)[0] || "") === first
+  ).length;
+  if (sameFirst <= 1 || parts.length < 2) return first;
+  const initials = parts
+    .slice(1)
+    .map((p) => p[0]?.toUpperCase())
+    .filter(Boolean)
+    .join("");
+  return initials ? `${first} ${initials}.` : first;
+}
+
+function agendaGridCols(adviseurCount: number): string {
+  // Altijd volle breedte verdelen — geen vaste px-minima → geen horizontaal scrollen
+  const n = Math.max(adviseurCount, 1);
+  const timeCol = n >= 8 ? "48px" : "56px";
+  return `${timeCol} repeat(${n}, minmax(0, 1fr))`;
+}
+
 function weekDaysFrom(anchor: Date) {
   const local = toZonedTime(anchor, AMSTERDAM_TZ);
   const monday = startOfWeek(local, { weekStartsOn: 1 });
@@ -219,12 +242,14 @@ function stickerMeta(
     // keep planned look unless explicitly something else
   }
 
-  // Past visit not yet checked out → amber “niet tijdig afgeboekt”
+  // Past visit/call not yet checked out → amber “niet tijdig afgeboekt”
+  // (ook als cron status al op voltooid zette, of lead nog op vervolg_tel staat)
   if (
     needsCheckout &&
     a.status !== "geannuleerd" &&
-    a.status !== "voltooid" &&
-    statusLabel === "Afspraak ingepland"
+    (statusLabel === "Afspraak ingepland" ||
+      statusLabel === "Doorgegaan" ||
+      statusLabel === "Doorgegaan + Vervolg")
   ) {
     statusLabel = "Doorgegaan niet tijdig afgeboekt";
     statusColor = "#CA8A04";
@@ -343,11 +368,11 @@ function GeblokkeerdCell({
       "repeating-linear-gradient(135deg, #FEF2F2, #FEF2F2 6px, #FEE2E2 6px, #FEE2E2 12px)",
   };
   const className =
-    "flex h-full min-h-[2.25rem] w-full items-center justify-center gap-1 rounded border border-[#FECACA] px-1.5 py-1 text-[#B91C1C]";
+    "flex h-full min-h-[2.25rem] w-full items-center justify-center gap-0.5 rounded border border-[#FECACA] px-0.5 py-1 text-[#B91C1C]";
   const body = (
     <>
       <span className="text-[10px]">🔒</span>
-      <span className="text-[10px] font-semibold">Geblokkeerd</span>
+      <span className="truncate text-[9px] font-semibold">Blok</span>
     </>
   );
   if (onClick) {
@@ -379,6 +404,8 @@ export function AgendaPanel({
   onBellerChange,
   /** Admin: toon beschikbare slots voor de geselecteerde week. */
   showAdminSlots = false,
+  /** Admin/backoffice: toon maandconversie (sales/gelopen) bij kolomnamen. */
+  showConversie = false,
 }: {
   leads: Lead[];
   afspraken?: Afspraak[];
@@ -387,6 +414,7 @@ export function AgendaPanel({
   onStatusChange?: (leadId: string, status: LeadStatus) => void;
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
   showAdminSlots?: boolean;
+  showConversie?: boolean;
 }) {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -415,6 +443,10 @@ export function AgendaPanel({
   const [beschikbaarMap, setBeschikbaarMap] = useState<Map<string, boolean>>(
     new Map()
   );
+  /** Maandconversie sales/gelopen per adviseur (alleen admin/backoffice). */
+  const [conversieByAdviseur, setConversieByAdviseur] = useState<
+    Map<string, number>
+  >(() => new Map());
   const [selected, setSelected] = useState<Afspraak | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
 
@@ -558,16 +590,33 @@ export function AgendaPanel({
   const beschikbaarSlotsByAdviseur = slotStatsByAdviseur.beschikbaar;
 
   /**
-   * Nog vrije (lege) planbare slots in de geselecteerde week (admin-kpi).
+   * Ingepland vs totaal planbare slots deze week (admin-kpi).
    */
-  const beschikbareSlotsWeek = useMemo(() => {
-    if (!showAdminSlots) return 0;
-    let n = 0;
-    for (const adv of planAdviseurs) {
-      n += slotStatsByAdviseur.vrij.get(adv.id) || 0;
+  const slotsWeekTotals = useMemo(() => {
+    if (!showAdminSlots) return { ingepland: 0, totaal: 0 };
+    let ingepland = 0;
+    let totaal = 0;
+    // Alleen zichtbare adviseurs (filter Adviseurs)
+    for (const adv of visibleAdviseurs) {
+      ingepland += slotStatsByAdviseur.gepland.get(adv.id) || 0;
+      totaal += slotStatsByAdviseur.beschikbaar.get(adv.id) || 0;
     }
-    return n;
-  }, [showAdminSlots, planAdviseurs, slotStatsByAdviseur]);
+    return { ingepland, totaal };
+  }, [showAdminSlots, visibleAdviseurs, slotStatsByAdviseur]);
+
+  /** Fysiek nieuwe huisbezoeken (soort=nieuw) in de geselecteerde week. */
+  const nieuweHuisbezoekenWeek = useMemo(() => {
+    if (!showAdminSlots) return 0;
+    const dayKeys = new Set(days.map((d) => d.key));
+    const advIds = new Set(visibleAdviseurs.map((a) => a.id));
+    return afspraken.filter((a) => {
+      if (a.status === "geannuleerd") return false;
+      if (normalizeAfspraakSoort(a.soort) !== "nieuw") return false;
+      if (!dayKeys.has(dayKeyAmsterdam(a.start_at))) return false;
+      if (!advIds.has(a.adviseur_id)) return false;
+      return true;
+    }).length;
+  }, [showAdminSlots, days, visibleAdviseurs, afspraken]);
 
   /** Leads met een zichtbare agenda-afspraak op de gekozen leads-dag. */
   const leadsVoorDag = useMemo(() => {
@@ -729,6 +778,38 @@ export function AgendaPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Maandconversie (sales / gelopen) — alleen admin/backoffice in team-agenda
+  useEffect(() => {
+    if (!showConversie || defaultAdviseurId) {
+      setConversieByAdviseur(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/maand-leaderboard", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          rows?: { adviseur_id: string; conversie_pct: number | null }[];
+        };
+        if (!res.ok || cancelled) return;
+        const map = new Map<string, number>();
+        for (const row of data.rows || []) {
+          if (row.conversie_pct == null) continue;
+          map.set(row.adviseur_id, Math.round(row.conversie_pct));
+        }
+        if (!cancelled) setConversieByAdviseur(map);
+      } catch {
+        if (!cancelled) setConversieByAdviseur(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showConversie, defaultAdviseurId]);
 
   // Beschikbaarheid alle zichtbare adviseurs voor dit jaar
   useEffect(() => {
@@ -1036,7 +1117,9 @@ export function AgendaPanel({
   const leadsTitle = leadsIsToday
     ? `Leads vandaag · ${leadsDayLabel}`
     : `Leads · ${leadsDayLabel}`;
-  const gridCols = `72px repeat(${visibleAdviseurs.length}, minmax(160px, 1fr))`;
+  const gridCols = agendaGridCols(visibleAdviseurs.length);
+  const adviseurNamen = visibleAdviseurs.map((a) => a.naam);
+  const hiddenCount = planAdviseurs.length - visibleAdviseurs.length;
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col bg-white">
@@ -1077,14 +1160,24 @@ export function AgendaPanel({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             {showAdminSlots && mainView === "agenda" ? (
-              <p className="mb-1.5 text-sm font-semibold tabular-nums text-ink">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Beschikbare slots deze week
-                </span>
-                <span className="mt-0.5 block font-display text-2xl font-semibold sm:text-3xl">
-                  {beschikbareSlotsWeek}
-                </span>
-              </p>
+              <div className="mb-1.5 flex flex-wrap gap-6 text-sm font-semibold tabular-nums text-ink">
+                <p>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Totaal ingepland / Totaal slots
+                  </span>
+                  <span className="mt-0.5 block font-display text-2xl font-semibold sm:text-3xl">
+                    {slotsWeekTotals.ingepland}/{slotsWeekTotals.totaal}
+                  </span>
+                </p>
+                <p>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Fysiek nieuwe huisbezoeken
+                  </span>
+                  <span className="mt-0.5 block font-display text-2xl font-semibold sm:text-3xl">
+                    {nieuweHuisbezoekenWeek}
+                  </span>
+                </p>
+              </div>
             ) : null}
             <h1 className="font-display text-xl font-semibold text-ink sm:text-2xl">
               {mainView === "leads" ? leadsTitle : weekTitle}
@@ -1291,11 +1384,38 @@ export function AgendaPanel({
                   className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
                 >
                   Adviseurs
+                  {hiddenCount > 0 ? (
+                    <span className="ml-1 text-muted">
+                      (−{hiddenCount})
+                    </span>
+                  ) : null}
                 </button>
                 {adviseurMenuOpen && (
-                  <div className="absolute right-0 z-20 mt-1 max-h-64 w-56 overflow-auto border border-line bg-white p-2 shadow-lg">
+                  <div className="absolute right-0 z-20 mt-1 max-h-72 w-60 overflow-auto border border-line bg-white p-2 shadow-lg">
+                    <div className="mb-1 flex gap-1 border-b border-line pb-2">
+                      <button
+                        type="button"
+                        className="flex-1 rounded border border-line px-2 py-1 text-[11px] font-semibold hover:bg-wash"
+                        onClick={() => setHiddenIds(new Set())}
+                      >
+                        Alles
+                      </button>
+                      <button
+                        type="button"
+                        className="flex-1 rounded border border-line px-2 py-1 text-[11px] font-semibold hover:bg-wash"
+                        onClick={() =>
+                          setHiddenIds(
+                            new Set(planAdviseurs.map((a) => a.id))
+                          )
+                        }
+                      >
+                        Geen
+                      </button>
+                    </div>
                     {planAdviseurs.map((a) => {
                       const hidden = hiddenIds.has(a.id);
+                      const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
+                      const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
                       return (
                         <label
                           key={a.id}
@@ -1313,7 +1433,10 @@ export function AgendaPanel({
                               });
                             }}
                           />
-                          {a.naam}
+                          <span className="min-w-0 flex-1 truncate">{a.naam}</span>
+                          <span className="shrink-0 tabular-nums text-[10px] text-muted">
+                            {gepland}/{totaal}
+                          </span>
                         </label>
                       );
                     })}
@@ -1353,46 +1476,72 @@ export function AgendaPanel({
         ref={slideRef}
         className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth"
       >
-        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-auto">
+        <div className="min-h-0 w-full min-w-full shrink-0 snap-start overflow-y-auto overflow-x-hidden">
         {loading ? (
           <p className="p-8 text-center text-sm text-muted">Laden…</p>
         ) : visibleAdviseurs.length === 0 ? (
           <p className="p-8 text-center text-sm text-muted">
             Geen adviseurs zichtbaar.
+            {!defaultAdviseurId && hiddenCount > 0 ? (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="font-semibold text-green underline"
+                  onClick={() => setHiddenIds(new Set())}
+                >
+                  Toon alle {planAdviseurs.length}
+                </button>
+              </>
+            ) : null}
           </p>
         ) : (
-          <div className="min-w-max">
-            {/* Column headers — linker kolom sticky zodat dagen zichtbaar blijven bij scroll */}
-            <div
-              className="sticky top-0 z-20 grid border-b border-line bg-white"
-              style={{ gridTemplateColumns: gridCols }}
-            >
-              <div className="sticky left-0 z-30 border-r border-line bg-[#FAFBFA]" />
-              {visibleAdviseurs.map((a) => {
-                const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
-                const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
-                return (
-                  <div
-                    key={a.id}
-                    className="border-r border-line px-2 py-2.5 text-center"
-                  >
-                    <p className="truncate text-xs font-semibold text-ink">
-                      {a.naam}
-                      <span
-                        className="ml-1 font-medium tabular-nums text-muted"
-                        title="Geplande blokken / totaal beschikbare blokken deze week"
-                      >
-                        ({gepland}/{totaal})
-                      </span>
-                    </p>
-                    {isWeekBlocked(a.id) && (
-                      <p className="mt-0.5 text-[10px] font-semibold text-[#B91C1C]">
-                        Week geblokkeerd
+          <div className="w-full">
+            {/* Sticky kolomheaders — één rij namen, volle breedte */}
+            <div className="sticky top-0 z-30 border-b border-line bg-white">
+              <div
+                className="grid bg-white"
+                style={{ gridTemplateColumns: gridCols }}
+              >
+                <div className="border-r border-line bg-[#FAFBFA]" />
+                {visibleAdviseurs.map((a) => {
+                  const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
+                  const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
+                  const cr = showConversie
+                    ? conversieByAdviseur.get(a.id)
+                    : undefined;
+                  const label = adviseurKortLabel(a.naam, adviseurNamen);
+                  return (
+                    <div
+                      key={a.id}
+                      className="min-w-0 border-r border-line px-0.5 py-1.5 text-center"
+                      title={
+                        cr != null
+                          ? `${a.naam} · ${gepland}/${totaal} · ${cr}% cr (maand)`
+                          : `${a.naam} · ${gepland}/${totaal}`
+                      }
+                    >
+                      <p className="truncate text-[11px] font-semibold leading-tight text-ink">
+                        {label}
+                        {cr != null ? (
+                          <span className="font-medium text-muted">
+                            {" "}
+                            ({cr}% cr)
+                          </span>
+                        ) : null}
                       </p>
-                    )}
-                  </div>
-                );
-              })}
+                      <p className="mt-0.5 text-[10px] font-medium tabular-nums text-muted">
+                        {gepland}/{totaal}
+                      </p>
+                      {isWeekBlocked(a.id) && (
+                        <p className="mt-0.5 text-[9px] font-semibold text-[#B91C1C]">
+                          Blok
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {visibleDays.map((day) => (
@@ -1401,16 +1550,16 @@ export function AgendaPanel({
                   className="grid border-b border-line bg-[#F3F4F6]"
                   style={{ gridTemplateColumns: gridCols }}
                 >
-                  <div className="sticky left-0 z-10 flex items-center border-r border-line bg-[#F3F4F6] px-1.5 py-1.5">
-                    <span className="w-full text-center text-[10px] font-bold uppercase leading-tight tracking-wide text-[#4B5563]">
+                  <div className="flex items-center border-r border-line bg-[#F3F4F6] px-0.5 py-1">
+                    <span className="w-full text-center text-[9px] font-bold uppercase leading-tight tracking-wide text-[#4B5563]">
                       {format(day.date, "EEE", { locale: nl })}
-                      <span className="mt-0.5 block text-[11px] font-semibold tabular-nums normal-case tracking-normal">
+                      <span className="mt-0.5 block text-[10px] font-semibold tabular-nums normal-case tracking-normal">
                         {format(day.date, "d", { locale: nl })}
                       </span>
                     </span>
                   </div>
                   <div
-                    className="flex items-center px-3 py-1.5 text-xs font-semibold capitalize text-[#4B5563]"
+                    className="flex items-center px-2 py-1 text-[11px] font-semibold capitalize text-[#4B5563]"
                     style={{ gridColumn: `2 / -1` }}
                   >
                     {format(day.date, "EEEE d MMM.", { locale: nl })}
@@ -1422,7 +1571,7 @@ export function AgendaPanel({
                     className="grid border-b border-line"
                     style={{ gridTemplateColumns: gridCols }}
                   >
-                    <div className="sticky left-0 z-10 flex items-start justify-end border-r border-line bg-[#FAFBFA] px-2 py-1.5 text-[10px] font-semibold tabular-nums text-muted">
+                    <div className="flex items-start justify-end border-r border-line bg-[#FAFBFA] px-1 py-1.5 text-[12px] font-bold tabular-nums leading-none text-ink">
                       {row.label}
                     </div>
                     {visibleAdviseurs.map((adv) => {
@@ -1442,7 +1591,7 @@ export function AgendaPanel({
                         <div
                           key={`${adv.id}-${day.key}-${slotIdx}`}
                           className={[
-                            "min-h-[2.75rem] border-r border-line p-1",
+                            "min-h-[2.75rem] min-w-0 border-r border-line p-0.5",
                             afblokMode && items.length === 0
                               ? "bg-[#FFF7F7]/60"
                               : "",
@@ -1504,21 +1653,6 @@ export function AgendaPanel({
                                       : undefined
                                 }
                               />
-                              {!afblokMode && !weekBlocked ? (
-                                <button
-                                  type="button"
-                                  disabled={blockBusy}
-                                  onClick={() =>
-                                    openPlan(adv.id, day.key, slotIdx, {
-                                      overBezet: true,
-                                    })
-                                  }
-                                  className="flex w-full items-center justify-center rounded border border-dashed border-[#2F6B9A]/40 px-1 py-0.5 text-[10px] font-semibold text-[#1F5078] hover:bg-[#E7F2FA] disabled:opacity-50"
-                                  title="Telefonisch vervolg plannen op dit afgeblokte blok"
-                                >
-                                  + Tel
-                                </button>
-                              ) : null}
                             </div>
                           ) : items.length > 0 ? (
                             <div className="space-y-1">
@@ -1555,21 +1689,6 @@ export function AgendaPanel({
                                   />
                                 );
                               })}
-                              {!afblokMode ? (
-                                <button
-                                  type="button"
-                                  disabled={blockBusy}
-                                  onClick={() =>
-                                    openPlan(adv.id, day.key, slotIdx, {
-                                      overBezet: true,
-                                    })
-                                  }
-                                  className="flex w-full items-center justify-center rounded border border-dashed border-[#2F6B9A]/40 px-1 py-0.5 text-[10px] font-semibold text-[#1F5078] hover:bg-[#E7F2FA] disabled:opacity-50"
-                                  title="Telefonisch vervolg plannen op dit bezette blok"
-                                >
-                                  + Tel
-                                </button>
-                              ) : null}
                             </div>
                           ) : (
                             <button
@@ -1637,6 +1756,11 @@ export function AgendaPanel({
         <AfspraakDetail
           afspraak={selected}
           allAfspraken={afspraken}
+          leadStatus={
+            leadStatusById.get(selected.lead_id) ||
+            selected.leads?.status ||
+            null
+          }
           onClose={() => setSelected(null)}
           onUpdated={(a) => {
             setAfspraken((prev) => prev.map((x) => (x.id === a.id ? a : x)));

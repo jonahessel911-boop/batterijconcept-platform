@@ -2,8 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { MaandLeaderboardRow } from "@/lib/maand-leaderboard";
+import { useCrmSession } from "@/hooks/useCrmSession";
 
-const BG = "/sales/leaderboard-bg.png";
+const BG_DEFAULT = "/sales/leaderboard-bg.png";
+const BG_WINNY = "/sales/leaderboard-bg-winny.jpg";
+
+function isWinnySession(opts: {
+  email?: string | null;
+  naam?: string | null;
+}): boolean {
+  const email = (opts.email || "").trim().toLowerCase();
+  if (email === "winny@bogerschalets.nl") return true;
+  const naam = (opts.naam || "").trim().toLowerCase();
+  return naam.startsWith("winny");
+}
 
 type ApiResponse = {
   ok?: boolean;
@@ -141,6 +153,7 @@ function PodiumCard({
 }
 
 export function MaandLeaderboardPanel() {
+  const { session } = useCrmSession();
   const [rows, setRows] = useState<MaandLeaderboardRow[]>([]);
   const [label, setLabel] = useState("");
   const [meId, setMeId] = useState<string | null>(null);
@@ -174,6 +187,12 @@ export function MaandLeaderboardPanel() {
   const top3 = rows.slice(0, 3);
   const rest = rows.slice(3);
   const myRow = meId ? rows.find((r) => r.adviseur_id === meId) : null;
+  const bgSrc = isWinnySession({
+    email: session?.email,
+    naam: session?.naam || myRow?.naam,
+  })
+    ? BG_WINNY
+    : BG_DEFAULT;
 
   return (
     <div className="relative min-h-[calc(100dvh-7.5rem)] w-full overflow-auto bg-black text-white sm:min-h-[calc(100dvh-8.5rem)]">
@@ -196,7 +215,7 @@ export function MaandLeaderboardPanel() {
 
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={BG}
+        src={bgSrc}
         alt=""
         className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-90"
       />
@@ -211,7 +230,7 @@ export function MaandLeaderboardPanel() {
             {label || "Deze maand"}
           </h1>
           <p className="mt-3 text-sm text-white/65">
-            Ranking op sales · aanbetalingen · gelopen afspraken · conversie
+            Ranking op sales · aanbetalingen · conversie · gelopen
           </p>
         </header>
 

@@ -27,20 +27,53 @@ export async function verstuurAdviseurCreditfactuur(
     return { ok: false, error: "Factuur is al goedgekeurd", status: 400 };
   }
 
-  const { data: adv } = await sb
+  let advRes = await sb
     .from("adviseurs")
     .select(
-      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
+      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats, start_adres"
     )
     .eq("id", fac.adviseur_id)
     .maybeSingle();
+  if (
+    advRes.error &&
+    (advRes.error.message?.includes("start_adres") ||
+      advRes.error.code === "42703")
+  ) {
+    advRes = await sb
+      .from("adviseurs")
+      .select(
+        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
+      )
+      .eq("id", fac.adviseur_id)
+      .maybeSingle();
+  }
+  const adv = advRes.data as
+    | {
+        id: string;
+        naam: string;
+        email?: string | null;
+        bedrijfsnaam: string | null;
+        kvk_nummer: string | null;
+        btw_nummer?: string | null;
+        iban: string | null;
+        factuur_adres?: string | null;
+        factuur_postcode?: string | null;
+        factuur_plaats?: string | null;
+        start_adres?: string | null;
+      }
+    | null;
   if (!adv) {
     return { ok: false, error: "Adviseur niet gevonden", status: 404 };
   }
   if (!adv.email?.trim()) {
     return { ok: false, error: "Adviseur heeft geen e-mailadres", status: 400 };
   }
-  if (!adv.bedrijfsnaam || !adv.kvk_nummer || !adv.iban) {
+  const zzpCompleet = Boolean(
+    adv.bedrijfsnaam && adv.kvk_nummer && adv.iban
+  );
+  const heeftStartadres = Boolean(adv.start_adres?.trim());
+  // Tijdelijk: met startadres mag bevestigen zonder KvK/IBAN (adres op PDF)
+  if (!zzpCompleet && !heeftStartadres) {
     return {
       ok: false,
       error: "Vul eerst KvK-gegevens in bij de adviseur",

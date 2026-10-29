@@ -64,12 +64,17 @@ export function isPartnerVenster(v: string): v is PartnerVenster {
   return v === "ochtend" || v === "middag";
 }
 
+/**
+ * Key voor afblok-set. teamgenootId null/"_" = partner-breed.
+ */
 export function partnerAfblokKey(
   partnerId: string,
   dag: string,
-  venster: PartnerVenster
+  venster: PartnerVenster,
+  teamgenootId?: string | null
 ): string {
-  return `${partnerId}:${dag}:${venster}`;
+  const who = teamgenootId?.trim() || "_";
+  return `${partnerId}:${who}:${dag}:${venster}`;
 }
 
 export function dayKeyAmsterdam(date: Date | string): string {

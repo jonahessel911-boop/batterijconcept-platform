@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  heeftGeenAanbetalingNodig,
+  isAanbetalingFactuurOmschrijving,
+} from "@/lib/aanbetaling";
 import {
   autoTakenVoorFinanciering,
   autoTakenVoorStatus,
@@ -23,9 +26,11 @@ import {
 } from "@/lib/financiering-status";
 import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
+import { OPLEVERING_REVIEW_TAK_AUTO_KEY } from "@/lib/project-taken";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
+const OPLEVERING_AUTO_PREFIX = "installatie_voltooid:";
 
 /** Facturen waarvoor bij annulering een credit-actie nodig is. */
 const CREDIT_ELIGIBLE_STATUSES = [
@@ -38,15 +43,36 @@ type ProjectSchouwFields = {
   status: string;
   betaalwijze?: string | null;
   financiering_status?: string | null;
+  aanbetaling_te_innen_inc?: number | null;
   schouw_jaar?: number | null;
   schouw_week?: number | null;
   schouw_at?: string | null;
   installatie_at?: string | null;
   installatie_voltooid_at?: string | null;
+  btw_terugvragen_aangevraagd_at?: string | null;
+  overstap_dynamische_leverancier_at?: string | null;
+  review_gevraagd_at?: string | null;
   leads?: { status?: string | null } | { status?: string | null }[] | null;
-  offertes?: {
-    financiering_voorbehoud?: boolean | null;
-  } | null;
+  offertes?:
+    | {
+        financiering_voorbehoud?: boolean | null;
+        subtotaal_ex_btw?: number | null;
+        btw_bedrag?: number | null;
+        totaal_inc_btw?: number | null;
+        aanbetaling_modus?: string | null;
+        aanbetaling_bedrag_inc?: number | null;
+        aanbetaling_te_innen_inc?: number | null;
+      }
+    | {
+        financiering_voorbehoud?: boolean | null;
+        subtotaal_ex_btw?: number | null;
+        btw_bedrag?: number | null;
+        totaal_inc_btw?: number | null;
+        aanbetaling_modus?: string | null;
+        aanbetaling_bedrag_inc?: number | null;
+        aanbetaling_te_innen_inc?: number | null;
+      }[]
+    | null;
 };
 
 function schouwWeekOf(project: ProjectSchouwFields): {
@@ -141,7 +167,7 @@ export async function syncAutoTakenVoorProject(
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, betaalwijze, financiering_status, schouw_jaar, schouw_week, schouw_at, installatie_at, leads(status), offertes(financiering_voorbehoud)"
+      "status, betaalwijze, financiering_status, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -150,10 +176,12 @@ export async function syncAutoTakenVoorProject(
     status,
     betaalwijze: null,
     financiering_status: null,
+    aanbetaling_te_innen_inc: null,
     schouw_jaar: null,
     schouw_week: null,
     schouw_at: null,
     installatie_at: null,
+    installatie_voltooid_at: null,
   };
 
   const statusKey = remapLegacyProjectStatus(status);
@@ -167,8 +195,22 @@ export async function syncAutoTakenVoorProject(
   } else {
     const betaalwijze = betaalwijzeOf(project);
     const operational = effectiveOperationalStatus(project);
-    let aanbetalingBetaald = false;
+    const off = Array.isArray(project.offertes)
+      ? project.offertes[0]
+      : project.offertes;
+    const geenAanbetalingNodig = heeftGeenAanbetalingNodig({
+      aanbetalingTeInnenInc:
+        project.aanbetaling_te_innen_inc ?? off?.aanbetaling_te_innen_inc,
+      aanbetalingModus: off?.aanbetaling_modus,
+      aanbetalingBedragInc: off?.aanbetaling_bedrag_inc,
+      subtotaalExBtw: off?.subtotaal_ex_btw,
+      btwBedrag: off?.btw_bedrag,
+      totaalIncBtw: off?.totaal_inc_btw,
+      financieringVoorbehoud: off?.financiering_voorbehoud,
+    });
+    let aanbetalingBetaald = geenAanbetalingNodig;
     if (
+      !aanbetalingBetaald &&
       betaalwijze === "eigen_middelen" &&
       operational === "schouwweek_inplannen"
     ) {
@@ -186,9 +228,52 @@ export async function syncAutoTakenVoorProject(
     for (const d of autoTakenVoorStatus(operational, betaalwijze, {
       schouwAt: project.schouw_at,
       installatieAt: project.installatie_at,
+      installatieVoltooidAt: project.installatie_voltooid_at,
       aanbetalingBetaald,
+      geenAanbetalingNodig,
     })) {
       defs.push({ ...d });
+    }
+
+    // Nazorg (overstap/BTW/review) blijft open tot checklist-velden gezet zijn,
+    // ook als status al review_gevraagd/service is.
+    if (
+      operational === "review_gevraagd" ||
+      operational === "afgerond" ||
+      operational === "service" ||
+      operational === "installatie_voltooid"
+    ) {
+      const afrondDefs = autoTakenVoorStatus(
+        "installatie_voltooid",
+        betaalwijze,
+        {
+          schouwAt: project.schouw_at,
+          installatieAt: project.installatie_at,
+          installatieVoltooidAt: project.installatie_voltooid_at,
+        }
+      );
+      for (const d of afrondDefs) {
+        if (defs.some((x) => x.autoKey === d.autoKey)) continue;
+        if (
+          d.autoKey === "installatie_voltooid:overstap_leverancier" &&
+          project.overstap_dynamische_leverancier_at
+        ) {
+          continue;
+        }
+        if (
+          d.autoKey === "installatie_voltooid:btw_terugvragen" &&
+          project.btw_terugvragen_aangevraagd_at
+        ) {
+          continue;
+        }
+        if (
+          d.autoKey === OPLEVERING_REVIEW_TAK_AUTO_KEY &&
+          project.review_gevraagd_at
+        ) {
+          continue;
+        }
+        defs.push({ ...d });
+      }
     }
 
     const finStatus =
@@ -301,6 +386,21 @@ export async function syncAutoTakenVoorProject(
         cur.status !== "done" &&
         cur.due_at !== dueAt
       ) {
+        await sb
+          .from("project_taken")
+          .update({
+            due_at: dueAt,
+            titel: def.titel,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", cur.id);
+      } else if (
+        def.autoKey.startsWith(OPLEVERING_AUTO_PREFIX) &&
+        cur.status !== "done" &&
+        dueAt &&
+        cur.due_at !== dueAt
+      ) {
+        // Corrigeer deadline naar eerstvolgende werkdag na installatie
         await sb
           .from("project_taken")
           .update({

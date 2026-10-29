@@ -458,6 +458,40 @@ export function trackAndTraceIntroEmail(opts: {
   });
 }
 
+/** Interne ping: nieuwe getekende order. */
+export function orderGetekendInternEmail(opts: {
+  offerteNummer: string;
+  klantNaam?: string | null;
+  adviseurNaam: string;
+  bedragExBtw: number;
+  brutoMarge: number;
+  ondertekendOp?: string | Date;
+}) {
+  const when = opts.ondertekendOp
+    ? formatDateTimeLongNl(opts.ondertekendOp)
+    : null;
+  const klant = opts.klantNaam?.trim() || "—";
+  return emailLayout({
+    title: `Order getekend ${opts.offerteNummer}`,
+    preheader: `${opts.adviseurNaam} · ${formatEuro(opts.bedragExBtw)} ex · marge ${formatEuro(opts.brutoMarge)}`,
+    bodyHtml: [
+      emailH1(`Order getekend — ${opts.offerteNummer}`),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Adviseur</strong><br />${opts.adviseurNaam}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${klant}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag ex btw</strong><br />${formatEuro(opts.bedragExBtw)}</p>
+         <p style="margin:0;font-size:15px;"><strong>Bruto marge</strong><br />${formatEuro(opts.brutoMarge)}</p>`
+      ),
+      when
+        ? emailP(`Ondertekend op ${when}.`)
+        : "",
+      emailMuted("Interne melding · Batterijconcept CRM"),
+    ]
+      .filter(Boolean)
+      .join(""),
+  });
+}
+
 export function offerteOndertekendEmail(opts: {
   naam: string;
   offerteNummer: string;
@@ -755,6 +789,70 @@ export function factuurVerzondenEmail(opts: {
   });
 }
 
+/** Klant: vriendelijke herinnering aanbetaling (Warmtefonds-route). */
+export function factuurWarmtefondsAanbetalingHerinneringEmail(opts: {
+  naam: string;
+  factuurNummer: string;
+  bedrag: string;
+  vervaldatum?: string | null;
+  iban?: string | null;
+  accountName?: string | null;
+  betalingskenmerk?: string | null;
+  projectNummer?: string | null;
+  trackUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const kenmerk = opts.betalingskenmerk || opts.factuurNummer;
+  const betalingHtml = opts.iban
+    ? emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Betalen</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">IBAN: <strong>${opts.iban}</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">T.n.v. <strong>${opts.accountName || "BatterijConcept"}</strong></p>
+         <p style="margin:0 0 6px;font-size:14px;">Omschrijving: <strong>${kenmerk}</strong></p>
+         ${
+           opts.vervaldatum
+             ? `<p style="margin:0;font-size:14px;">Uiterlijk: <strong>${opts.vervaldatum}</strong></p>`
+             : ""
+         }`
+      )
+    : "";
+
+  return emailLayout({
+    title: `Herinnering aanbetaling ${opts.factuurNummer}`,
+    preheader:
+      "Vriendelijke herinnering: je aanbetaling is nodig om Warmtefonds te kunnen aanvragen.",
+    bodyHtml: [
+      emailH1("Herinnering: aanbetaling voor Warmtefonds"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Dit is een vriendelijke herinnering aan je openstaande aanbetalingsfactuur. We hebben die nodig om de <strong>Warmtefonds-aanvraag</strong> voor je in te regelen — pas na ontvangst van de aanbetaling kunnen we die stap zetten."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
+         ${
+           opts.projectNummer
+             ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>`
+             : ""
+         }`
+      ),
+      betalingHtml,
+      emailP(
+        "In de bijlage vind je de factuur nog een keer als PDF. Zodra de betaling binnen is, gaan we verder met Warmtefonds."
+      ),
+      opts.trackUrl
+        ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
+        : "",
+      emailP(
+        "Vragen? Mail info@batterijconcept.nl of bel 085 800 1645 — we helpen je graag."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ]
+      .filter(Boolean)
+      .join(""),
+  });
+}
+
 /** Klant: factuur is als betaald gemarkeerd */
 export function factuurBetaaldEmail(opts: {
   naam: string;
@@ -915,21 +1013,17 @@ export function schouwPartnerEmail(opts: {
 /**
  * Klant: opleverformulier afgerond — installatie voltooid.
  * Volgende stap: overstap dynamische leverancier + BTW-terugvrage.
+ * (Review/Trustpilot zit in reviewVerzoekKlantEmail — apart bij Review-checkbox.)
  */
-const TRUSTPILOT_EVALUATE_URL =
-  "https://www.trustpilot.com/evaluate/batterijconcept.nl";
-
 export function installatieVoltooidKlantEmail(opts: {
   naam: string;
   projectNummer?: string | null;
-  trustpilotUrl?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
-  const trustpilotUrl = opts.trustpilotUrl || TRUSTPILOT_EVALUATE_URL;
   return emailLayout({
     title: "Gefeliciteerd — je installatie is voltooid!",
     preheader:
-      "Je batterij staat er. Beoordeel ons op Trustpilot — en we bellen over overstap & BTW-terugvrage.",
+      "Je batterij staat er — we bellen over overstap & BTW-terugvrage.",
     bodyHtml: [
       emailH1("Gefeliciteerd — je installatie is voltooid!"),
       emailP(`Hoi ${first},`),
@@ -942,16 +1036,71 @@ export function installatieVoltooidKlantEmail(opts: {
           )
         : "",
       emailP(
-        "Was je tevreden over de installatie? <strong>Beoordeel ons op Trustpilot</strong> — dat zou super fijn zijn."
-      ),
-      emailButton("Beoordeel ons op Trustpilot", trustpilotUrl),
-      emailP(
         "We nemen de <strong>eerstvolgende werkdag</strong> contact met je op om de overstap naar de dynamische energieleverancier en de BTW-terugvrage te starten."
       ),
       emailP(
         "Heb je tussentijds vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
       ),
       emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
+/** Trustpilot Automatic Feedback Service (verified review invite via BCC). */
+export const TRUSTPILOT_AFS_BCC =
+  process.env.TRUSTPILOT_AFS_BCC?.trim() ||
+  "batterijconcept.nl+fedfbf488b@invite.trustpilot.com";
+
+export const TRUSTPILOT_EVALUATE_URL =
+  process.env.TRUSTPILOT_EVALUATE_URL?.trim() ||
+  "https://www.trustpilot.com/evaluate/batterijconcept.nl";
+
+/**
+ * Klant: apart reviewverzoek (bij afvinken Review).
+ * BCC naar Trustpilot AFS → verified review invitation.
+ */
+export function reviewVerzoekKlantEmail(opts: {
+  naam: string;
+  email: string;
+  projectNummer?: string | null;
+  referenceId?: string | null;
+  trustpilotUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const trustpilotUrl = opts.trustpilotUrl || TRUSTPILOT_EVALUATE_URL;
+  const referenceId =
+    opts.referenceId?.trim() || opts.projectNummer?.trim() || null;
+  // Structured data voor Trustpilot AFS (verified reviews)
+  const afsPayload = JSON.stringify({
+    recipientName: opts.naam.trim() || first,
+    recipientEmail: opts.email.trim(),
+    ...(referenceId ? { referenceId } : {}),
+  });
+
+  return emailLayout({
+    title: "Hoe was jouw installatie? — Batterijconcept",
+    preheader: "Deel kort je ervaring op Trustpilot — dat helpt andere klanten.",
+    bodyHtml: [
+      emailH1("Hoe was jouw installatie?"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Hopelijk ben je tevreden over je thuisbatterij en de installatie. Zou je ons een <strong>korte review op Trustpilot</strong> willen geven? Dat helpt andere huishoudens bij hun keuze."
+      ),
+      opts.projectNummer
+        ? emailBox(
+            `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>`
+          )
+        : "",
+      emailButton("Beoordeel ons op Trustpilot", trustpilotUrl),
+      emailP(
+        "Je ontvangt mogelijk ook een aparte uitnodiging van Trustpilot om een <strong>geverifieerde review</strong> achter te laten."
+      ),
+      emailP(
+        "Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+      // Trustpilot AFS leest dit blok uit de BCC-kopie
+      `<script type="application/json+trustpilot">${afsPayload}</script>`,
     ].join(""),
   });
 }
@@ -1348,7 +1497,7 @@ export function overstapFrankEnergieEmail(opts: {
       emailButton("Naar Frank Energie", frankUrl),
       emailBox(
         `<p style="margin:0 0 10px;font-size:15px;font-weight:600;color:#0D5C32;">Leg alvast klaar</p>
-         <p style="margin:0 0 10px;font-size:14px;line-height:1.55;">Het <strong>groene boekje</strong> dat de adviseur met je heeft doorgenomen. Daarin kun je handig al deze gegevens terugvinden, of je kunt je laatste jaarrekening erbij pakken.</p>
+         <p style="margin:0 0 10px;font-size:14px;line-height:1.55;">Leg je <strong>energiejaarrekening</strong> er weer bij — dan kunnen we de aanvraag makkelijker doorlopen. Alternatief: het <strong>groene boekje</strong> van de adviseur.</p>
          <p style="margin:0 0 6px;font-size:14px;line-height:1.55;"><strong>Die zijn nodig voor de overstap:</strong></p>
          <p style="margin:0;font-size:14px;line-height:1.55;">• Je stroomverbruik<br />• Je gasverbruik</p>`
       ),
