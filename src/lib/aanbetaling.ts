@@ -115,6 +115,90 @@ export function isAanbetalingFactuurOmschrijving(
   return /aanbetaling|btw-factuur/i.test(omschrijving || "");
 }
 
+/** Minimale velden om chronologisch de eerste klantfactuur te bepalen. */
+export type EersteFactuurLike = {
+  id?: string | null;
+  status?: string | null;
+  omschrijving?: string | null;
+  credit_van_factuur_id?: string | null;
+  created_at?: string | null;
+  factuur_nummer?: string | null;
+  factuurdatum?: string | null;
+};
+
+/**
+ * Eerste (niet-credit, niet-vervallen, niet-concept) klantfactuur.
+ * Eigen middelen: leidend voor schouw (pas ná markering betaald).
+ */
+export function eersteKlantFactuur(
+  facturen: EersteFactuurLike[]
+): EersteFactuurLike | null {
+  const list = facturen.filter(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      f.status !== "vervallen" &&
+      f.status !== "concept"
+  );
+  if (list.length === 0) return null;
+  return [...list].sort((a, b) => {
+    const da = a.factuurdatum || a.created_at || "";
+    const db = b.factuurdatum || b.created_at || "";
+    if (da !== db) return da < db ? -1 : 1;
+    const na = a.factuur_nummer || "";
+    const nb = b.factuur_nummer || "";
+    if (na !== nb) return na < nb ? -1 : 1;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  })[0];
+}
+
+function isAanbetalingOmschrijvingBetaald(
+  facturen: EersteFactuurLike[]
+): boolean {
+  return facturen.some(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+      f.status === "betaald"
+  );
+}
+
+function isAanbetalingOmschrijvingVerstuurd(
+  facturen: EersteFactuurLike[]
+): boolean {
+  return facturen.some(
+    (f) =>
+      !f.credit_van_factuur_id &&
+      isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+      (f.status === "verzonden" ||
+        f.status === "deels_betaald" ||
+        f.status === "betaald")
+  );
+}
+
+/** EM: eerste factuur gemarkeerd als betaald (fallback: aanbetalings-omschrijving). */
+export function isEersteFactuurBetaald(
+  facturen: EersteFactuurLike[]
+): boolean {
+  const eerste = eersteKlantFactuur(facturen);
+  if (eerste?.status === "betaald") return true;
+  return isAanbetalingOmschrijvingBetaald(facturen);
+}
+
+export function isEersteFactuurVerstuurd(
+  facturen: EersteFactuurLike[]
+): boolean {
+  const eerste = eersteKlantFactuur(facturen);
+  if (
+    eerste &&
+    (eerste.status === "verzonden" ||
+      eerste.status === "deels_betaald" ||
+      eerste.status === "betaald")
+  ) {
+    return true;
+  }
+  return isAanbetalingOmschrijvingVerstuurd(facturen);
+}
+
 export function isRestantFactuurOmschrijving(
   omschrijving: string | null | undefined
 ): boolean {

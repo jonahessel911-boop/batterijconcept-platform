@@ -74,13 +74,13 @@ function kickoffAutoTaken(
       dueInDays: 1,
     });
   }
-  // WF: schouwweek parallel. EM: pas ná 50% betaling (of geen aanbetaling).
+  // WF: schouwweek parallel. EM: schouwdag pas ná 50% betaling (of geen aanbetaling).
   if (warmtefonds || opts.aanbetalingBetaald || opts.geenAanbetalingNodig) {
     taken.push({
       autoKey: "kickoff:schouwweek",
       titel: warmtefonds
         ? "Schouwweek inplannen + track & trace (±5 weken)"
-        : "Schouwweek inplannen + track & trace",
+        : "Schouwdag inplannen + track & trace",
       afdeling: "Planning",
       dueInDays: 1,
     });
@@ -163,6 +163,11 @@ export function autoTakenVoorStatus(
       dueInDays = null;
       dueAt = null;
       break;
+    case "next_weekday": {
+      const anchor = ctx.schouwAt ? new Date(ctx.schouwAt) : new Date();
+      dueAt = nextWeekdayAmsterdamAfter(anchor).toISOString();
+      break;
+    }
     case "schouw_minus_days":
       if (ctx.schouwAt) {
         dueAt = subDays(new Date(ctx.schouwAt), taak.due.days).toISOString();

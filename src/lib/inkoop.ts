@@ -217,7 +217,15 @@ export function findProductForRegel(
   }
   for (const p of producten) {
     const naam = normalizeText(p.naam);
-    if (naam && t.includes(naam)) return p;
+    if (naam && (t.includes(naam) || naam.includes(t))) return p;
+  }
+  // Merk + type (bijv. "Huawei LUNA" ↔ product "Huawei LUNA2000-…")
+  for (const p of producten) {
+    const naam = normalizeText(p.naam);
+    if (!naam) continue;
+    const tokens = naam.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
+    if (tokens.length === 0) continue;
+    if (tokens.every((tok) => t.includes(tok))) return p;
   }
   // Alpha ESS 9,3 fallback op eerste 9.3 product
   if (
@@ -227,6 +235,16 @@ export function findProductForRegel(
     return (
       producten.find((p) => p.sku?.includes("9.3") || p.sku?.includes("9,3")) ||
       null
+    );
+  }
+  // Huawei / LUNA zonder exacte catalogusnaam
+  if (t.includes("huawei") || t.includes("luna")) {
+    return (
+      producten.find((p) => {
+        const n = normalizeText(p.naam);
+        const s = normalizeText(p.sku || "");
+        return n.includes("huawei") || n.includes("luna") || s.includes("luna");
+      }) || null
     );
   }
   return null;

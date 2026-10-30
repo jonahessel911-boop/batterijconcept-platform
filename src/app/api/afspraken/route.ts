@@ -624,6 +624,7 @@ export async function POST(req: NextRequest) {
     partner_aanwezig?: boolean;
     andere_offertes_gehad?: boolean;
     soort?: string;
+    herplan?: boolean;
   };
   try {
     body = await req.json();
@@ -662,6 +663,7 @@ export async function POST(req: NextRequest) {
     );
     const result = await planAfspraak(sb, {
       ...body,
+      herplan: Boolean(body.herplan),
       ingepland_door_id: ingeplandDoorId,
     });
     if (!result.ok) {

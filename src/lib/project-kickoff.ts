@@ -2,15 +2,18 @@
  * Kickoff na getekende order.
  *
  * Warmtefonds: BTW-factuur + WF-afspraak + schouwweek parallel (incl. track & trace-mail)
- * Eigen middelen: sequentieel — eerst 50%-factuur, schouwweek pas ná betaling
+ * Eigen middelen: sequentieel — eerste factuur leidend; schouwdag pas ná
+ * markering betaald. Installatie volgt ná schouw.
  *
- * Track & trace is géén aparte taak — zit in de schouwweek-klantmail.
+ * Track & trace is géén aparte taak — zit in de schouw-klantmail.
  */
 import type { Factuur, Project } from "@/types/database";
 import {
   aanbetalingVanOrder,
   heeftGeenAanbetalingNodig,
   isAanbetalingFactuurOmschrijving,
+  isEersteFactuurBetaald,
+  isEersteFactuurVerstuurd,
 } from "@/lib/aanbetaling";
 import { isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { resolveFinancieringStatus } from "@/lib/financiering-status";
@@ -131,11 +134,16 @@ export function projectHeeftGeenAanbetalingNodig(project: Project): boolean {
 }
 
 export function isSchouwweekKickoffDone(project: Project): boolean {
+  // EM: exacte schouwdag; WF: week-placeholder volstaat voor kickoff
+  if (!isWarmtefondsProject(project)) {
+    return isSchouwdagDefinitief(project);
+  }
   return Boolean(project.schouw_jaar && project.schouw_week);
 }
 
 /**
- * Schouwweek mag als open actie: nog geen week, én (Warmtefonds óf EM 50% betaald).
+ * Schouw mag als open actie: nog niet gepland, én (Warmtefonds óf EM
+ * eerste factuur betaald).
  */
 export function isSchouwweekKickoffActionable(
   project: Project,
@@ -144,7 +152,7 @@ export function isSchouwweekKickoffActionable(
   if (isSchouwweekKickoffDone(project)) return false;
   if (isWarmtefondsProject(project)) return true;
   if (projectHeeftGeenAanbetalingNodig(project)) return true;
-  return isAanbetalingBetaald(facturen);
+  return isEersteFactuurBetaald(facturen);
 }
 
 /** Intake klaar zodra Edwin is aangeschreven (financiering gestart). */
@@ -159,9 +167,9 @@ export function projectKickoffItems(
   const wf = isWarmtefondsProject(project);
   const geenAanbetaling = projectHeeftGeenAanbetalingNodig(project);
   const aanbetalingDone =
-    geenAanbetaling || isAanbetalingKickoffDone(facturen);
+    geenAanbetaling || isEersteFactuurVerstuurd(facturen);
   const aanbetalingBetaald =
-    geenAanbetaling || isAanbetalingBetaald(facturen);
+    geenAanbetaling || isEersteFactuurBetaald(facturen);
   const schouwDone = isSchouwweekKickoffDone(project);
   const wfDone = isWfAfspraakKickoffDone(project);
   const schouwBlocked = !wf && !schouwDone && !aanbetalingBetaald;
@@ -197,19 +205,19 @@ export function projectKickoffItems(
 
   items.push({
     id: "schouwweek",
-    label: "Schouwweek inplannen",
+    label: wf ? "Schouwweek inplannen" : "Schouwdag inplannen",
     done: schouwDone,
     blocked: schouwBlocked || undefined,
     blockedReason: schouwBlocked
-      ? "Eerst 50% betaling afwachten"
+      ? "Eerst eerste factuur als betaald markeren"
       : undefined,
     detail: schouwDone
       ? formatProjectSchouwWeek(project) || "Ingepland"
       : schouwBlocked
-        ? "Eerst 50% betaling afwachten"
+        ? "Eerst eerste factuur als betaald markeren"
         : wf
           ? "Incl. track & trace-mail · meestal ±5 weken vooruit"
-          : "Incl. track & trace-mail naar de klant",
+          : "Incl. track & trace-mail · zo snel mogelijk een vaste dag",
   });
 
   return items;

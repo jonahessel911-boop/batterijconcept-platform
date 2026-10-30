@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { CrmTab } from "@/types/database";
-import { BO_VIEWS } from "@/lib/bo-view";
+import { BO_VIEWS, backofficeHref } from "@/lib/bo-view";
 import { useBoViewStore } from "@/lib/bo-view-store";
 
 type SidebarItem = {
@@ -203,6 +204,7 @@ export function CrmSidebar({
   onMobileClose?: () => void;
   boCounts?: { acties?: number };
 }) {
+  const router = useRouter();
   const [activeBoView, setBoView] = useBoViewStore();
   const allowed = new Set(allowedTabs);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
@@ -456,8 +458,13 @@ export function CrmSidebar({
                                           e.stopPropagation();
                                           setBoOpen(true);
                                           setBoView(sub.id);
-                                          if (active !== "projecten") {
-                                            onChange("projecten");
+                                          // Vanaf projectdetail: replaceState alleen wijzigt URL,
+                                          // Next blijft /projecten/[id] tonen → altijd soft-nav.
+                                          const onHome =
+                                            typeof window !== "undefined" &&
+                                            window.location.pathname === "/";
+                                          if (!onHome || active !== "projecten") {
+                                            router.push(backofficeHref(sub.id));
                                           }
                                           onMobileClose?.();
                                         }}

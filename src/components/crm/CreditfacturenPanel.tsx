@@ -10,6 +10,7 @@ import type {
 import { formatDateShort, formatEuro } from "@/lib/format";
 import {
   VERKOPER_AANBETALING_FEE,
+  creditWeekFromDate,
   previousCreditWeek,
   weekBeforePreviousCreditWeek,
 } from "@/lib/adviseur-creditfactuur";
@@ -20,6 +21,8 @@ type MainTab = "concept_ab" | "te_betalen" | "betaald";
 /** Unit-filter in de inbox (standaard Alles). */
 type UnitFilter = "alles" | "sales" | "wf" | "installatie";
 type CreateKind = "sales" | "wf" | "installatie";
+/** Concept-tab: huidige ronde, 1 week vooruit (deze week → volgende wo), of alles. */
+type WeekScope = "vorige" | "vooruit" | "alles";
 
 type OverviewFactuur = AdviseurCreditFactuur & {
   adviseurs?: {
@@ -69,9 +72,10 @@ type InboxRow = {
   searchText: string;
 };
 
-/** Eén uitbetalingsregel per persoon (sales). */
-type SalesPayoutGroup = {
+/** Eén uitbetalingsregel per relatie (sales én installatie). */
+type PayoutGroup = {
   key: string;
+  kind: "sales" | "installatie";
   relatieId: string;
   relatieNaam: string;
   bedrijfsnaam: string | null;
@@ -81,8 +85,11 @@ type SalesPayoutGroup = {
   bedragInc: number;
   kenmerk: string;
   rows: InboxRow[];
-  /** concept | verzonden | goedgekeurd | mixed */
+  /** concept | verzonden | goedgekeurd | betaald | mixed | preview */
   status: string;
+  /** Vooruitblik: nog geen (volledige) conceptfactuur — alleen preview. */
+  preview?: boolean;
+  previewOrders?: number;
 };
 
 function kvkIncompleet(r: {
@@ -274,9 +281,10 @@ export function CreditfacturenPanel({
   const [tab, setTab] = useState<MainTab>("concept_ab");
   const [unitFilter, setUnitFilter] = useState<UnitFilter>("alles");
   /** Concepten: standaard vorige week (commissieronde). */
-  const [weekScope, setWeekScope] = useState<"vorige" | "alles">("vorige");
+  const [weekScope, setWeekScope] = useState<WeekScope>("vorige");
   const vorigeWeek = useMemo(() => previousCreditWeek(), []);
   const weekDaarvoor = useMemo(() => weekBeforePreviousCreditWeek(), []);
+  const huidigeWeek = useMemo(() => creditWeekFromDate(), []);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
@@ -316,20 +324,25 @@ export function CreditfacturenPanel({
   const [creating, setCreating] = useState(false);
   const [toekomstig, setToekomstig] =
     useState<ToekomstigeCreditfacturenPreview | null>(null);
+  /** Alleen aanbetalingen van de huidige week → volgende woensdag. */
+  const [toekomstigVooruit, setToekomstigVooruit] =
+    useState<ToekomstigeCreditfacturenPreview | null>(null);
   const [creatingConcepts, setCreatingConcepts] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [advRes, partRes, toeRes] = await Promise.all([
+      const [advRes, partRes, toeRes, toeVooruitRes] = await Promise.all([
         fetch("/api/adviseurs/creditfacturen"),
         fetch("/api/partners/creditfacturen"),
         fetch("/api/adviseurs/creditfacturen/toekomstig"),
+        fetch("/api/adviseurs/creditfacturen/toekomstig?mode=vooruit"),
       ]);
       const advData = await advRes.json().catch(() => ({}));
       const partData = await partRes.json().catch(() => ({}));
       const toeData = await toeRes.json().catch(() => ({}));
+      const toeVooruitData = await toeVooruitRes.json().catch(() => ({}));
       if (!advRes.ok) {
         throw new Error(
           (advData as { error?: string }).error || "Adviseurs laden mislukt"
@@ -344,6 +357,13 @@ export function CreditfacturenPanel({
         setToekomstig(toeData as ToekomstigeCreditfacturenPreview);
       } else {
         setToekomstig(null);
+      }
+      if (toeVooruitRes.ok) {
+        setToekomstigVooruit(
+          toeVooruitData as ToekomstigeCreditfacturenPreview
+        );
+      } else {
+        setToekomstigVooruit(null);
       }
       setAllAdvFacturen(
         ((advData as { facturen?: OverviewFactuur[] }).facturen ||
@@ -551,22 +571,48 @@ export function CreditfacturenPanel({
     return false;
   };
 
+  /** Concepten die bij de huidige ISO-week horen (1 week vooruit). */
+  const inVooruitWeek = (r: InboxRow) => {
+    const w = toekomstigVooruit?.week ?? huidigeWeek;
+    if (r.weekJaar == null || r.weekNummer == null) return false;
+    return r.weekJaar === w.jaar && r.weekNummer === w.week;
+  };
+
   const tabCounts = useMemo(() => {
     const conceptAb = rows.filter((r) => {
       if (r.status !== "concept" && r.status !== "verzonden") return false;
       if (weekScope === "vorige" && !inUitbetalingsronde(r)) return false;
+      if (weekScope === "vooruit" && !inVooruitWeek(r)) return false;
       return true;
     });
     const teBetalen = rows.filter((r) => r.status === "goedgekeurd");
     const betaald = rows.filter((r) => r.status === "betaald");
+    const previewEuro =
+      weekScope === "vooruit" && toekomstigVooruit
+        ? toekomstigVooruit.totals.bedragExBtw
+        : 0;
     return {
-      concept_ab: conceptAb.length,
+      concept_ab:
+        weekScope === "vooruit" && toekomstigVooruit
+          ? Math.max(conceptAb.length, toekomstigVooruit.perAdviseur.length)
+          : conceptAb.length,
       te_betalen: teBetalen.length,
       betaald: betaald.length,
-      conceptEuro: conceptAb.reduce((s, r) => s + r.bedragEx, 0),
+      conceptEuro:
+        weekScope === "vooruit" && toekomstigVooruit
+          ? previewEuro
+          : conceptAb.reduce((s, r) => s + r.bedragEx, 0),
       teBetalenEuro: teBetalen.reduce((s, r) => s + r.bedragEx, 0),
     };
-  }, [rows, weekScope, vorigeWeek.jaar, vorigeWeek.week]);
+  }, [
+    rows,
+    weekScope,
+    vorigeWeek.jaar,
+    vorigeWeek.week,
+    toekomstigVooruit,
+    huidigeWeek.jaar,
+    huidigeWeek.week,
+  ]);
 
   const q = search.trim().toLowerCase();
 
@@ -577,6 +623,11 @@ export function CreditfacturenPanel({
       if (tab === "concept_ab") {
         if (r.status !== "concept" && r.status !== "verzonden") return false;
         if (weekScope === "vorige" && !inUitbetalingsronde(r)) return false;
+        if (weekScope === "vooruit") {
+          // Vooruitblik: sales-concepten van de aankomende week; installatie niet
+          if (r.kind === "installatie") return false;
+          if (r.kind === "sales" && !inVooruitWeek(r)) return false;
+        }
       } else if (tab === "te_betalen") {
         if (r.status !== "goedgekeurd") return false;
       } else if (tab === "betaald") {
@@ -592,59 +643,156 @@ export function CreditfacturenPanel({
       }
       return true;
     });
-  }, [rows, unitFilter, tab, q, weekScope, vorigeWeek.jaar, vorigeWeek.week]);
+  }, [
+    rows,
+    unitFilter,
+    tab,
+    q,
+    weekScope,
+    vorigeWeek.jaar,
+    vorigeWeek.week,
+    toekomstigVooruit,
+    huidigeWeek.jaar,
+    huidigeWeek.week,
+  ]);
 
   const salesAdviseurs = useMemo(
     () => adviseurs.filter((a) => !isUitgeslotenVanSalesCommissie(a)),
     [adviseurs]
   );
 
-  function payoutKenmerk(rows: InboxRow[]): string {
+  function payoutKenmerk(
+    kind: "sales" | "installatie",
+    list: InboxRow[]
+  ): string {
+    const prefix = kind === "sales" ? "betaalcommissie" : "installatie";
     const weeks = [
       ...new Set(
-        rows
+        list
           .map((r) => r.weekNummer)
           .filter((w): w is number => w != null)
       ),
     ].sort((a, b) => a - b);
-    if (weeks.length === 0) return `betaalcommissie W${vorigeWeek.week}`;
-    if (weeks.length === 1) return `betaalcommissie W${weeks[0]}`;
-    return `betaalcommissie W${weeks[0]}+W${weeks[weeks.length - 1]}`;
+    if (weeks.length === 0) {
+      if (kind === "installatie" && list.length === 1) return list[0].nummer;
+      if (kind === "installatie") return `${prefix} ${list.length}×`;
+      return `${prefix} W${vorigeWeek.week}`;
+    }
+    if (weeks.length === 1) return `${prefix} W${weeks[0]}`;
+    return `${prefix} W${weeks[0]}+W${weeks[weeks.length - 1]}`;
   }
 
-  const salesPayoutGroups = useMemo((): SalesPayoutGroup[] => {
-    const sales = filtered.filter((r) => r.kind === "sales");
+  function buildPayoutGroups(
+    kind: "sales" | "installatie",
+    list: InboxRow[]
+  ): PayoutGroup[] {
     const byPerson = new Map<string, InboxRow[]>();
-    for (const r of sales) {
-      const list = byPerson.get(r.relatieId) || [];
-      list.push(r);
-      byPerson.set(r.relatieId, list);
+    for (const r of list) {
+      const cur = byPerson.get(r.relatieId) || [];
+      cur.push(r);
+      byPerson.set(r.relatieId, cur);
     }
-    const groups: SalesPayoutGroup[] = [];
-    for (const [relatieId, list] of byPerson) {
-      const first = list[0];
-      const statuses = [...new Set(list.map((r) => r.status))];
+    const groups: PayoutGroup[] = [];
+    for (const [relatieId, personRows] of byPerson) {
+      const first = personRows[0];
+      const statuses = [...new Set(personRows.map((r) => r.status))];
       groups.push({
-        key: `sales:${relatieId}`,
+        key: `${kind}:${relatieId}`,
+        kind,
         relatieId,
         relatieNaam: first.relatieNaam,
         bedrijfsnaam: first.bedrijfsnaam,
         iban: first.iban,
-        kvkOk: list.every((r) => r.kvkOk),
-        bedragEx: list.reduce((s, r) => s + r.bedragEx, 0),
-        bedragInc: list.reduce((s, r) => s + r.bedragInc, 0),
-        kenmerk: payoutKenmerk(list),
-        rows: list,
+        kvkOk: personRows.every((r) => r.kvkOk),
+        bedragEx: personRows.reduce((s, r) => s + r.bedragEx, 0),
+        bedragInc: personRows.reduce((s, r) => s + r.bedragInc, 0),
+        kenmerk: payoutKenmerk(kind, personRows),
+        rows: personRows,
         status: statuses.length === 1 ? statuses[0] : "mixed",
       });
     }
     groups.sort((a, b) => a.relatieNaam.localeCompare(b.relatieNaam, "nl"));
     return groups;
-  }, [filtered, vorigeWeek.jaar, vorigeWeek.week]);
+  }
 
-  const installatieRows = useMemo(
-    () => filtered.filter((r) => r.kind === "installatie"),
-    [filtered]
+  const salesPayoutGroups = useMemo(() => {
+    const fromFacturen = buildPayoutGroups(
+      "sales",
+      filtered.filter((r) => r.kind === "sales")
+    );
+    if (weekScope !== "vooruit" || !toekomstigVooruit) return fromFacturen;
+
+    // 1 week vooruit: merge bestaande concepten + preview uit aanbetalingen deze week
+    const byId = new Map(fromFacturen.map((g) => [g.relatieId, g]));
+    const weekLabel = toekomstigVooruit.week.week;
+    const kenmerk = `betaalcommissie W${weekLabel}`;
+    const needle = q;
+
+    for (const p of toekomstigVooruit.perAdviseur) {
+      if (
+        needle &&
+        !p.naam.toLowerCase().includes(needle) &&
+        !p.id.toLowerCase().includes(needle)
+      ) {
+        continue;
+      }
+      const existing = byId.get(p.id);
+      if (existing) {
+        // Concepten bestaan al — toon factuurbedrag; vul aan als preview hoger is
+        if (p.bedragExBtw > existing.bedragEx) {
+          byId.set(p.id, {
+            ...existing,
+            bedragEx: p.bedragExBtw,
+            bedragInc: Math.round(p.bedragExBtw * 1.21 * 100) / 100,
+            kenmerk,
+            previewOrders: p.orders,
+          });
+        }
+        continue;
+      }
+      const adv = adviseurs.find((a) => a.id === p.id);
+      const kvkOk = Boolean(
+        adv?.bedrijfsnaam && adv?.kvk_nummer && adv?.iban
+      );
+      byId.set(p.id, {
+        key: `preview-sales:${p.id}`,
+        kind: "sales",
+        relatieId: p.id,
+        relatieNaam: p.naam,
+        bedrijfsnaam: adv?.bedrijfsnaam?.trim() || null,
+        iban: adv?.iban?.trim() || null,
+        kvkOk,
+        bedragEx: p.bedragExBtw,
+        bedragInc: Math.round(p.bedragExBtw * 1.21 * 100) / 100,
+        kenmerk,
+        rows: [],
+        status: "preview",
+        preview: true,
+        previewOrders: p.orders,
+      });
+    }
+
+    return [...byId.values()].sort((a, b) =>
+      a.relatieNaam.localeCompare(b.relatieNaam, "nl")
+    );
+  }, [
+    filtered,
+    weekScope,
+    toekomstigVooruit,
+    adviseurs,
+    q,
+    vorigeWeek.week,
+  ]);
+
+  const installatiePayoutGroups = useMemo(
+    () =>
+      weekScope === "vooruit"
+        ? []
+        : buildPayoutGroups(
+            "installatie",
+            filtered.filter((r) => r.kind === "installatie")
+          ),
+    [filtered, weekScope, vorigeWeek.week]
   );
 
   const otherFilteredRows = useMemo(
@@ -894,8 +1042,20 @@ export function CreditfacturenPanel({
     }
   }
 
-  /** Sales: alle CF's van één persoon → te betalen. */
-  async function bevestigSalesGroup(group: SalesPayoutGroup) {
+  function payoutApiUrl(row: InboxRow): string {
+    return row.source === "adviseur"
+      ? "/api/adviseurs/creditfacturen"
+      : "/api/partners/creditfacturen";
+  }
+
+  function payoutPdfUrl(row: InboxRow): string {
+    return row.source === "adviseur"
+      ? `/api/adviseurs/creditfacturen/${row.id}/pdf`
+      : `/api/partners/creditfacturen/${row.id}/pdf`;
+  }
+
+  /** Bevestig alle openstaande facturen van één relatie. */
+  async function bevestigPayoutGroup(group: PayoutGroup) {
     const targets = group.rows.filter(
       (r) => r.status === "concept" || r.status === "verzonden"
     );
@@ -904,11 +1064,20 @@ export function CreditfacturenPanel({
     setError(null);
     setOkMsg(null);
     try {
+      let anyTeBetalen = false;
       for (const row of targets) {
-        const res = await fetch("/api/adviseurs/creditfacturen", {
+        // Sales/adviseur → direct te betalen; partner → eerst verzonden (acceptatie)
+        const nextStatus =
+          row.source === "adviseur"
+            ? "goedgekeurd"
+            : row.status === "verzonden"
+              ? "goedgekeurd"
+              : "verzonden";
+        if (nextStatus === "goedgekeurd") anyTeBetalen = true;
+        const res = await fetch(payoutApiUrl(row), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: row.id, status: "goedgekeurd" }),
+          body: JSON.stringify({ id: row.id, status: nextStatus }),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -919,9 +1088,11 @@ export function CreditfacturenPanel({
         }
       }
       setOkMsg(
-        `${group.relatieNaam}: ${formatEuro(group.bedragEx)} bevestigd — te betalen.`
+        anyTeBetalen
+          ? `${group.relatieNaam}: ${formatEuro(group.bedragEx)} bevestigd — te betalen.`
+          : `${group.relatieNaam}: ${formatEuro(group.bedragEx)} bevestigd — wacht op acceptatie.`
       );
-      setTab("te_betalen");
+      if (anyTeBetalen) setTab("te_betalen");
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bevestigen mislukt");
@@ -930,14 +1101,12 @@ export function CreditfacturenPanel({
     }
   }
 
-  async function downloadSalesGroupPdfs(group: SalesPayoutGroup) {
+  async function downloadPayoutGroupPdfs(group: PayoutGroup) {
     setBusyId(`pdf-${group.key}`);
     setError(null);
     try {
       for (const row of group.rows) {
-        const res = await fetch(
-          `/api/adviseurs/creditfacturen/${row.id}/pdf`
-        );
+        const res = await fetch(payoutPdfUrl(row));
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
           throw new Error(
@@ -958,13 +1127,13 @@ export function CreditfacturenPanel({
     }
   }
 
-  async function markSalesGroupBetaald(group: SalesPayoutGroup) {
+  async function markPayoutGroupBetaald(group: PayoutGroup) {
     setBusyId(group.key);
     setError(null);
     setOkMsg(null);
     try {
       for (const row of group.rows) {
-        const res = await fetch("/api/adviseurs/creditfacturen", {
+        const res = await fetch(payoutApiUrl(row), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: row.id, status: "betaald" }),
@@ -1014,7 +1183,11 @@ export function CreditfacturenPanel({
     }
   }
 
-  const nieuwCount = toekomstig?.totals.nieuw ?? 0;
+  const bannerPreview =
+    weekScope === "vooruit" ? toekomstigVooruit : toekomstig;
+  const nieuwCount =
+    (weekScope === "vooruit" ? toekomstigVooruit : toekomstig)?.totals
+      .nieuw ?? 0;
 
   return (
     <div className={embedded ? "" : "space-y-4"}>
@@ -1111,30 +1284,59 @@ export function CreditfacturenPanel({
           ))}
         </div>
 
-        {toekomstig && tab === "concept_ab" ? (
-          <div className="border-b border-line bg-[#F7FAF8] px-4 py-3 sm:px-5">
+        {bannerPreview && tab === "concept_ab" ? (
+          <div
+            className={[
+              "border-b border-line px-4 py-3 sm:px-5",
+              weekScope === "vooruit" ? "bg-[#FFF8F0]" : "bg-[#F7FAF8]",
+            ].join(" ")}
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Aankomende betaling
+                  {weekScope === "vooruit"
+                    ? "1 week vooruit · volgende uitbetaling"
+                    : "Aankomende betaling"}
                 </p>
                 <p className="mt-0.5 font-display text-sm font-semibold text-ink">
-                  {toekomstig.betaalLabel}
+                  {bannerPreview.betaalLabel}
                 </p>
                 <p className="mt-0.5 text-xs text-muted">
-                  Week {toekomstig.week.week} ·{" "}
-                  {formatDateShort(`${toekomstig.week.van}T12:00:00`)} –{" "}
-                  {formatDateShort(`${toekomstig.week.tot}T12:00:00`)} ·{" "}
-                  {toekomstig.totals.orders} order
-                  {toekomstig.totals.orders === 1 ? "" : "s"}
+                  Week {bannerPreview.week.week} ·{" "}
+                  {formatDateShort(`${bannerPreview.week.van}T12:00:00`)} –{" "}
+                  {formatDateShort(`${bannerPreview.week.tot}T12:00:00`)} ·{" "}
+                  {bannerPreview.totals.orders} order
+                  {bannerPreview.totals.orders === 1 ? "" : "s"}
                   {nieuwCount > 0
                     ? ` · ${nieuwCount} nog zonder concept`
                     : ""}
+                  {weekScope === "vooruit"
+                    ? " · aanbetalingen deze week"
+                    : ""}
                 </p>
               </div>
-              <p className="font-display text-lg font-semibold tabular-nums text-ink">
-                {formatEuro(toekomstig.totals.bedragExBtw)}
-              </p>
+              <div className="text-right">
+                <p className="font-display text-lg font-semibold tabular-nums text-ink">
+                  {formatEuro(bannerPreview.totals.bedragExBtw)}
+                </p>
+                {weekScope !== "vooruit" ? (
+                  <button
+                    type="button"
+                    onClick={() => setWeekScope("vooruit")}
+                    className="mt-1 text-[11px] font-semibold text-green-dark hover:underline"
+                  >
+                    Bekijk 1 week vooruit →
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setWeekScope("vorige")}
+                    className="mt-1 text-[11px] font-semibold text-muted hover:underline"
+                  >
+                    ← Terug naar uitbetalingsronde
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ) : null}
@@ -1490,12 +1692,18 @@ export function CreditfacturenPanel({
                 <select
                   value={weekScope}
                   onChange={(e) =>
-                    setWeekScope(e.target.value as "vorige" | "alles")
+                    setWeekScope(e.target.value as WeekScope)
                   }
-                  className="min-w-[10rem] border border-line bg-white px-2.5 py-2 text-xs font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
+                  className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-xs font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
                 >
                   <option value="vorige">
                     W{weekDaarvoor.week}+W{vorigeWeek.week} (+ openstaand)
+                  </option>
+                  <option value="vooruit">
+                    W{toekomstigVooruit?.week.week ?? huidigeWeek.week} →{" "}
+                    {toekomstigVooruit?.betaalLabel ||
+                      `wo ${huidigeWeek.betaalWoensdag}`}{" "}
+                    (1 week vooruit)
                   </option>
                   <option value="alles">Alle weken</option>
                 </select>
@@ -1536,12 +1744,16 @@ export function CreditfacturenPanel({
 
         {loading ? (
           <p className="px-5 py-10 text-center text-sm text-muted">Laden…</p>
-        ) : filtered.length === 0 ? (
+        ) : filtered.length === 0 &&
+          salesPayoutGroups.length === 0 &&
+          installatiePayoutGroups.length === 0 ? (
           <p className="px-5 py-10 text-center text-sm text-muted">
             {tab === "concept_ab"
-              ? nieuwCount > 0
-                ? `Nog geen concepten. Klik “Maak ${nieuwCount} concepten” hierboven.`
-                : "Geen conceptfacturen. Aankomende aanbetalingen verschijnen hier."
+              ? weekScope === "vooruit"
+                ? "Nog geen aanbetalingen in deze week voor de volgende uitbetaling."
+                : nieuwCount > 0
+                  ? `Nog geen concepten. Klik “Maak ${nieuwCount} concepten” hierboven.`
+                  : "Geen conceptfacturen. Aankomende aanbetalingen verschijnen hier."
               : tab === "te_betalen"
                 ? "Geen goedgekeurde facturen te betalen."
                 : "Nog geen betaalde facturen."}
@@ -1553,8 +1765,8 @@ export function CreditfacturenPanel({
                 salesPayoutGroups.length > 0
                   ? `${salesPayoutGroups.length} sales`
                   : null,
-                installatieRows.length > 0
-                  ? `${installatieRows.length} installatie`
+                installatiePayoutGroups.length > 0
+                  ? `${installatiePayoutGroups.length} installatie`
                   : null,
                 otherFilteredRows.length > 0
                   ? `${otherFilteredRows.length} overig`
@@ -1563,15 +1775,22 @@ export function CreditfacturenPanel({
                 .filter(Boolean)
                 .join(" · ") ||
                 `${filtered.length} factuur${filtered.length === 1 ? "" : "en"}`}
+              {weekScope === "vooruit" ? " · vooruitblik" : ""}
               {q ? ` · zoek: “${search.trim()}”` : ""}
             </div>
 
-            {salesPayoutGroups.length > 0 ? (
+            {salesPayoutGroups.length > 0 ||
+            installatiePayoutGroups.length > 0 ? (
               <div className="overflow-x-auto">
-                <div className="border-b border-line bg-wash/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-4">
-                  Sales
-                </div>
-                <table className="w-full min-w-[780px] text-left text-sm">
+                <table className="w-full min-w-[960px] table-fixed text-left text-sm">
+                  <colgroup>
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "12%" }} />
+                    <col style={{ width: "22%" }} />
+                    <col style={{ width: "16%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "16%" }} />
+                  </colgroup>
                   <thead>
                     <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
                       <th className="px-3 py-1.5 sm:px-4">Relatie</th>
@@ -1582,268 +1801,204 @@ export function CreditfacturenPanel({
                       <th className="px-3 py-1.5 text-right sm:px-4"> </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-line">
-                    {salesPayoutGroups.map((g) => {
-                      const busy =
-                        busyId === g.key || busyId === `pdf-${g.key}`;
-                      const canBevestig =
-                        tab === "concept_ab" &&
-                        g.rows.some(
-                          (r) =>
-                            r.status === "concept" || r.status === "verzonden"
-                        );
-                      const canBetaald =
-                        tab === "te_betalen" &&
-                        g.rows.every((r) => r.status === "goedgekeurd");
-                      const isBetaald =
-                        tab === "betaald" || g.status === "betaald";
-                      const factuurHint = g.rows
-                        .map((r) => r.context || r.nummer)
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .join(" · ");
-                      return (
-                        <tr key={g.key} className="hover:bg-wash/60">
-                          <td className="px-3 py-1.5 sm:px-4">
-                            <span className="font-medium text-ink">
-                              {g.relatieNaam}
-                            </span>
-                            {g.bedrijfsnaam ? (
-                              <span className="ml-1.5 text-[11px] text-muted">
-                                {g.bedrijfsnaam}
-                              </span>
-                            ) : null}
-                            {!g.kvkOk ? (
-                              <span className="ml-1.5 text-[10px] font-semibold text-[#C45A12]">
-                                KvK/IBAN
-                              </span>
-                            ) : null}
+                  <tbody>
+                    {(
+                      [
+                        ["Sales", salesPayoutGroups],
+                        ["Installatie", installatiePayoutGroups],
+                      ] as const
+                    ).flatMap(([sectionTitle, groups]) => {
+                      if (groups.length === 0) return [];
+                      return [
+                        <tr key={`sec-${sectionTitle}`}>
+                          <td
+                            colSpan={6}
+                            className="border-b border-line bg-wash/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-4"
+                          >
+                            {sectionTitle}
+                            {weekScope === "vooruit" &&
+                            sectionTitle === "Sales"
+                              ? " · aanbetalingen → volgende wo"
+                              : ""}
                           </td>
-                          <td className="px-2 py-1.5 text-right">
-                            <span className="font-semibold tabular-nums text-ink">
-                              {formatEuro(g.bedragEx)}
-                            </span>
-                            <span className="ml-1 text-[10px] tabular-nums text-muted">
-                              ({formatEuro(g.bedragInc)} inc.)
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <div className="flex items-center gap-1">
-                              <span className="font-mono text-[11px] text-ink">
-                                {g.iban || "—"}
-                              </span>
-                              {g.iban ? (
-                                <CopyMini
-                                  copied={copiedKey === `${g.key}:iban`}
-                                  onCopy={() =>
-                                    void copyField(`${g.key}:iban`, g.iban!)
-                                  }
-                                />
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="max-w-[11rem] px-2 py-1.5">
-                            <div className="flex items-center gap-1">
-                              <span className="truncate text-[11px] text-ink">
-                                {g.kenmerk}
-                              </span>
-                              <CopyMini
-                                copied={copiedKey === `${g.key}:kenmerk`}
-                                onCopy={() =>
-                                  void copyField(`${g.key}:kenmerk`, g.kenmerk)
-                                }
-                              />
-                            </div>
-                          </td>
-                          <td className="max-w-[12rem] truncate px-2 py-1.5 text-[11px] text-muted">
-                            {factuurHint ||
-                              `${g.rows.length}×`}
-                          </td>
-                          <td className="px-3 py-1.5 text-right sm:px-4">
-                            <div className="inline-flex items-center justify-end gap-1">
-                              {isBetaald ? (
-                                <StatusBadge
-                                  status="betaald"
-                                  goedgekeurd_op={null}
-                                  betaald_op={
-                                    g.rows.find((r) => r.betaald_op)
-                                      ?.betaald_op || null
-                                  }
-                                />
-                              ) : (
-                                <StatusBadge
-                                  status={
-                                    g.status === "mixed" ? "concept" : g.status
-                                  }
-                                  goedgekeurd_op={null}
-                                  betaald_op={null}
-                                />
-                              )}
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => void downloadSalesGroupPdfs(g)}
-                                className="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold text-ink hover:bg-wash disabled:opacity-60"
-                              >
-                                PDF
-                              </button>
-                              {canBevestig ? (
-                                <button
-                                  type="button"
-                                  disabled={busy || !g.kvkOk}
-                                  onClick={() => void bevestigSalesGroup(g)}
-                                  className="bg-orange px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                  title={
-                                    !g.kvkOk
-                                      ? "Vul eerst ZZP-gegevens in"
-                                      : "Naar te betalen"
-                                  }
-                                >
-                                  Bevestig
-                                </button>
-                              ) : null}
-                              {canBetaald ? (
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => void markSalesGroupBetaald(g)}
-                                  className="bg-green px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                >
-                                  Betaald
-                                </button>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-
-            {installatieRows.length > 0 ? (
-              <div
-                className={`overflow-x-auto ${
-                  salesPayoutGroups.length > 0 ? "border-t border-line" : ""
-                }`}
-              >
-                <div className="border-b border-line bg-wash/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-4">
-                  Installatie
-                </div>
-                <table className="w-full min-w-[780px] text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      <th className="px-3 py-1.5 sm:px-4">Relatie</th>
-                      <th className="px-2 py-1.5 text-right">Overmaken</th>
-                      <th className="px-2 py-1.5">IBAN</th>
-                      <th className="px-2 py-1.5">Factuur</th>
-                      <th className="px-2 py-1.5">Project</th>
-                      <th className="px-3 py-1.5 text-right sm:px-4"> </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {installatieRows.map((r) => {
-                      const busy =
-                        busyId === r.key || busyId === `pdf-${r.key}`;
-                      return (
-                        <tr key={r.key} className="hover:bg-wash/60">
-                          <td className="px-3 py-1.5 sm:px-4">
-                            <span className="font-medium text-ink">
-                              {r.relatieNaam}
-                            </span>
-                            {r.bedrijfsnaam ? (
-                              <span className="ml-1.5 text-[11px] text-muted">
-                                {r.bedrijfsnaam}
-                              </span>
-                            ) : null}
-                            {!r.kvkOk ? (
-                              <span className="ml-1.5 text-[10px] font-semibold text-[#C45A12]">
-                                KvK/IBAN
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="px-2 py-1.5 text-right">
-                            <span className="font-semibold tabular-nums text-ink">
-                              {formatEuro(r.bedragEx)}
-                            </span>
-                            <span className="ml-1 text-[10px] tabular-nums text-muted">
-                              ({formatEuro(r.bedragInc)} inc.)
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <div className="flex items-center gap-1">
-                              <span className="font-mono text-[11px] text-ink">
-                                {r.iban || "—"}
-                              </span>
-                              {r.iban ? (
-                                <CopyMini
-                                  copied={copiedKey === `${r.key}:iban`}
-                                  onCopy={() =>
-                                    void copyField(`${r.key}:iban`, r.iban!)
-                                  }
-                                />
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="px-2 py-1.5 text-[11px] text-muted">
-                            {r.nummer}
-                          </td>
-                          <td className="max-w-[12rem] truncate px-2 py-1.5 text-[11px] text-muted">
-                            {r.context || "—"}
-                          </td>
-                          <td className="px-3 py-1.5 text-right sm:px-4">
-                            <div className="inline-flex items-center justify-end gap-1">
-                              <StatusBadge
-                                status={r.status}
-                                goedgekeurd_op={r.goedgekeurd_op}
-                                betaald_op={r.betaald_op}
-                              />
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => void downloadPdf(r)}
-                                className="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold text-ink hover:bg-wash disabled:opacity-60"
-                              >
-                                PDF
-                              </button>
-                              {r.status === "concept" ||
-                              r.status === "verzonden" ? (
-                                <button
-                                  type="button"
-                                  disabled={busy || !r.kvkOk}
-                                  onClick={() =>
-                                    void patchStatus(
-                                      r,
-                                      r.source === "adviseur"
-                                        ? "goedgekeurd"
-                                        : "verzonden"
-                                    )
-                                  }
-                                  className="bg-orange px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                  title={
-                                    !r.kvkOk
-                                      ? "Vul eerst ZZP-gegevens in"
-                                      : undefined
-                                  }
-                                >
-                                  Bevestig
-                                </button>
-                              ) : null}
-                              {r.status === "goedgekeurd" ? (
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => void patchStatus(r, "betaald")}
-                                  className="bg-green px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                >
-                                  Betaald
-                                </button>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      );
+                        </tr>,
+                        ...groups.map((g) => {
+                          const busy =
+                            busyId === g.key || busyId === `pdf-${g.key}`;
+                          const canBevestig =
+                            !g.preview &&
+                            tab === "concept_ab" &&
+                            g.rows.some(
+                              (r) =>
+                                r.status === "concept" ||
+                                r.status === "verzonden"
+                            );
+                          const canBetaald =
+                            !g.preview &&
+                            tab === "te_betalen" &&
+                            g.rows.every((r) => r.status === "goedgekeurd");
+                          const isBetaald =
+                            tab === "betaald" || g.status === "betaald";
+                          const factuurHint = g.preview
+                            ? `${g.previewOrders ?? 0} aanbetaling${
+                                (g.previewOrders ?? 0) === 1 ? "" : "en"
+                              }`
+                            : g.rows
+                                .map((r) => r.nummer)
+                                .filter(Boolean)
+                                .slice(0, 2)
+                                .join(" · ");
+                          const orderCount =
+                            g.preview && g.previewOrders
+                              ? g.previewOrders
+                              : g.rows.length;
+                          return (
+                            <tr
+                              key={g.key}
+                              className="border-b border-line hover:bg-wash/60"
+                            >
+                              <td className="px-3 py-1.5 sm:px-4">
+                                <div className="truncate font-medium text-ink">
+                                  {g.relatieNaam}
+                                </div>
+                                {g.bedrijfsnaam ? (
+                                  <div className="truncate text-[11px] text-muted">
+                                    {g.bedrijfsnaam}
+                                  </div>
+                                ) : null}
+                                {!g.kvkOk ? (
+                                  <div className="text-[10px] font-semibold text-[#C45A12]">
+                                    KvK/IBAN
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                <div className="font-semibold tabular-nums text-ink">
+                                  {formatEuro(g.bedragEx)}
+                                </div>
+                                <div className="text-[10px] tabular-nums text-muted">
+                                  {formatEuro(g.bedragInc)} inc.
+                                  {orderCount > 1
+                                    ? ` · ${orderCount}×`
+                                    : ""}
+                                </div>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <div className="flex min-w-0 items-center gap-1">
+                                  <span className="truncate font-mono text-[11px] text-ink">
+                                    {g.iban || "—"}
+                                  </span>
+                                  {g.iban ? (
+                                    <CopyMini
+                                      copied={copiedKey === `${g.key}:iban`}
+                                      onCopy={() =>
+                                        void copyField(
+                                          `${g.key}:iban`,
+                                          g.iban!
+                                        )
+                                      }
+                                    />
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <div className="flex min-w-0 items-center gap-1">
+                                  <span className="truncate text-[11px] text-ink">
+                                    {g.kenmerk}
+                                  </span>
+                                  <CopyMini
+                                    copied={copiedKey === `${g.key}:kenmerk`}
+                                    onCopy={() =>
+                                      void copyField(
+                                        `${g.key}:kenmerk`,
+                                        g.kenmerk
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </td>
+                              <td className="truncate px-2 py-1.5 text-[11px] text-muted">
+                                {factuurHint}
+                                {!g.preview && g.rows.length > 2
+                                  ? ` +${g.rows.length - 2}`
+                                  : ""}
+                              </td>
+                              <td className="px-3 py-1.5 text-right sm:px-4">
+                                <div className="inline-flex flex-wrap items-center justify-end gap-1">
+                                  {g.preview ? (
+                                    <span className="text-[11px] font-semibold text-[#854D0E]">
+                                      Vooruitblik
+                                    </span>
+                                  ) : isBetaald ? (
+                                    <StatusBadge
+                                      status="betaald"
+                                      goedgekeurd_op={null}
+                                      betaald_op={
+                                        g.rows.find((r) => r.betaald_op)
+                                          ?.betaald_op || null
+                                      }
+                                    />
+                                  ) : (
+                                    <StatusBadge
+                                      status={
+                                        g.status === "mixed"
+                                          ? "concept"
+                                          : g.status
+                                      }
+                                      goedgekeurd_op={null}
+                                      betaald_op={null}
+                                    />
+                                  )}
+                                  <button
+                                    type="button"
+                                    disabled={busy || g.preview || g.rows.length === 0}
+                                    onClick={() =>
+                                      void downloadPayoutGroupPdfs(g)
+                                    }
+                                    className="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                                    title={
+                                      g.preview
+                                        ? "Eerst concepten maken"
+                                        : undefined
+                                    }
+                                  >
+                                    PDF
+                                  </button>
+                                  {canBevestig ? (
+                                    <button
+                                      type="button"
+                                      disabled={busy || !g.kvkOk}
+                                      onClick={() =>
+                                        void bevestigPayoutGroup(g)
+                                      }
+                                      className="bg-orange px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
+                                      title={
+                                        !g.kvkOk
+                                          ? "Vul eerst ZZP-gegevens in"
+                                          : "Bevestig uitbetaling"
+                                      }
+                                    >
+                                      Bevestig
+                                    </button>
+                                  ) : null}
+                                  {canBetaald ? (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        void markPayoutGroupBetaald(g)
+                                      }
+                                      className="bg-green px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
+                                    >
+                                      Betaald
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }),
+                      ];
                     })}
                   </tbody>
                 </table>
@@ -1853,7 +2008,8 @@ export function CreditfacturenPanel({
             {otherFilteredRows.length > 0 ? (
               <div
                 className={`overflow-x-auto ${
-                  salesPayoutGroups.length > 0 || installatieRows.length > 0
+                  salesPayoutGroups.length > 0 ||
+                  installatiePayoutGroups.length > 0
                     ? "border-t border-line"
                     : ""
                 }`}

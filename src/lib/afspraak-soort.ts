@@ -77,12 +77,22 @@ export function normalizeAfspraakSoort(
   return "nieuw";
 }
 
-/** Fysieke afspraken blokkeren de agenda; bel/telefonisch/punt niet. */
+/**
+ * Fysieke huisafspraak (nieuw huisbezoek of vervolg op locatie).
+ * Alleen deze tellen voor agenda-blokkade én reistijd — nooit telefonisch.
+ */
 export function afspraakBlokkeertAgenda(
   soort: string | null | undefined
 ): boolean {
   const s = normalizeAfspraakSoort(soort);
   return s === "nieuw" || s === "vervolg_fysiek";
+}
+
+/** Alias: reistijd / route alleen t.o.v. fysieke huisafspraken. */
+export function afspraakTeltVoorReistijd(
+  soort: string | null | undefined
+): boolean {
+  return afspraakBlokkeertAgenda(soort);
 }
 
 /**

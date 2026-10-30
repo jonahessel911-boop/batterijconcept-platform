@@ -5,7 +5,7 @@ import type { Afspraak, Lead } from "@/types/database";
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
-import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { afspraakTeltVoorReistijd } from "@/lib/afspraak-soort";
 import type { FastDirectionSuggestion } from "@/lib/fast-direction";
 
 type AdresLead = Pick<
@@ -97,9 +97,9 @@ export function FastDirectionButton({
         .filter(
           (a) =>
             a.adviseur_id === adviseurId &&
-            afspraakBlokkeertAgenda(a.soort) &&
-            a.status !== "geannuleerd" &&
-            a.status !== "voltooid"
+            afspraakTeltVoorReistijd(a.soort) &&
+            a.status !== "geannuleerd"
+          // Alleen fysiek; voltooid huisbezoek telt mee als vorige stop
         )
         .map((a) => {
           const L = resolveLead(a, allLeads);

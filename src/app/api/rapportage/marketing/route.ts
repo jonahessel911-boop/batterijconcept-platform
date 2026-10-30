@@ -25,6 +25,7 @@ import {
   todayConversieYmd,
 } from "@/lib/conversie-period";
 import {
+  fetchMarketingMetaRowsFromInsights,
   metaAdsSpendConfigured,
   syncMetaAdSpendCampaignDetail,
 } from "@/lib/meta-ads-spend";
@@ -150,7 +151,7 @@ export async function GET(req: NextRequest) {
       AMSTERDAM_TZ
     ).toISOString();
 
-    const [leadsInRange, offertes, afsprakenRaw, metaSpend, syncRes] =
+    const [leadsInRange, offertes, afsprakenRaw, metaSpendDb, liveMeta, syncRes] =
       await Promise.all([
         fetchAllRows<MarketingLead>((fromIdx, toIdx) =>
           sb
@@ -184,18 +185,44 @@ export async function GET(req: NextRequest) {
             .order("created_at", { ascending: true })
             .range(fromIdx, toIdx)
         ).catch(() => [] as MarketingAfspraak[]),
-        fetchAllRows<MarketingMetaRow>((fromIdx, toIdx) =>
-          sb
-            .from("meta_ad_spend")
-            .select(
-              "datum, level, campaign_id, campaign_name, ad_id, ad_name, spend"
-            )
-            .in("level", ["campaign", "ad"])
-            .gte("datum", from)
-            .lte("datum", to)
-            .order("datum", { ascending: true })
-            .range(fromIdx, toIdx)
-        ).catch(() => [] as MarketingMetaRow[]),
+        (async () => {
+          try {
+            return await fetchAllRows<MarketingMetaRow>((fromIdx, toIdx) =>
+              sb
+                .from("meta_ad_spend")
+                .select(
+                  "datum, level, campaign_id, campaign_name, ad_id, ad_name, spend, leads"
+                )
+                .in("level", ["campaign", "ad"])
+                .gte("datum", from)
+                .lte("datum", to)
+                .order("datum", { ascending: true })
+                .range(fromIdx, toIdx)
+            );
+          } catch {
+            return fetchAllRows<MarketingMetaRow>((fromIdx, toIdx) =>
+              sb
+                .from("meta_ad_spend")
+                .select(
+                  "datum, level, campaign_id, campaign_name, ad_id, ad_name, spend"
+                )
+                .in("level", ["campaign", "ad"])
+                .gte("datum", from)
+                .lte("datum", to)
+                .order("datum", { ascending: true })
+                .range(fromIdx, toIdx)
+            ).catch(() => [] as MarketingMetaRow[]);
+          }
+        })(),
+        cfg.ok
+          ? fetchMarketingMetaRowsFromInsights({ since: from, until: to })
+          : Promise.resolve({
+              ok: false as const,
+              rows: [] as Awaited<
+                ReturnType<typeof fetchMarketingMetaRowsFromInsights>
+              >["rows"],
+              error: "not_configured",
+            }),
         sb
           .from("dashboard_instellingen")
           .select("meta_laatste_sync_at")
@@ -205,6 +232,18 @@ export async function GET(req: NextRequest) {
       ]);
 
     const afspraken = afsprakenRaw;
+
+    // Meta spend+leads: altijd live Insights als die leads heeft (DB kan incompleet zijn).
+    const liveCampLeads = liveMeta.ok
+      ? liveMeta.rows
+          .filter((r) => r.level === "campaign")
+          .reduce((s, r) => s + (r.leads || 0), 0)
+      : 0;
+    const metaSpendFinal: MarketingMetaRow[] =
+      liveMeta.ok && liveMeta.rows.length > 0
+        ? liveMeta.rows
+        : metaSpendDb;
+    const metaLeadsFromApi = liveCampLeads > 0;
 
     // Leads buiten created_at-range (deals/afspraken): campagne-key nog ophalen
     const leadIdsNeeded = new Set<string>([
@@ -240,8 +279,9 @@ export async function GET(req: NextRequest) {
       leads,
       offertes,
       afspraken,
-      metaSpend,
+      metaSpend: metaSpendFinal,
       metaConfigured: cfg.ok,
+      metaLeadsFromApi,
       // TikTok Ads reporting UX klaar; spend-sync volgt tot API-keys live zijn
       tiktokConfigured: false,
       tiktokSpend: 0,
@@ -362,7 +402,7 @@ export async function GET(req: NextRequest) {
       sync: syncInfo,
       metaCampaigns: [
         ...new Set(
-          metaSpend
+          metaSpendFinal
             .map((m) => (m.campaign_name || "").trim())
             .filter(Boolean)
         ),

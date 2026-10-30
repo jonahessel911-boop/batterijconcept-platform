@@ -61,9 +61,11 @@ import { PartnerSlotPicker } from "./PartnerSlotPicker";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { KlantContactMailModal } from "./KlantContactMailModal";
+import { ActiesEmailInbox } from "./ActiesEmailInbox";
 import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
 import { apexProductUrl } from "@/lib/apex-product-url";
-import { formatInTimeZone } from "date-fns-tz";
+import { addDays } from "date-fns";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
@@ -107,7 +109,8 @@ type TaskRow = {
     | "nabellen"
     | "wf_aanbetaling_herinnering"
     | "aangetekende_brief"
-    | "annulering_keuze_controle";
+    | "annulering_keuze_controle"
+    | "terugbel";
   titel: string;
   klant: string;
   meta?: string;
@@ -221,6 +224,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       label: "Bedenktijd",
       className: "bg-[#FFF0E6] text-[#9A3B1A]",
     },
+    terugbel: {
+      label: "Terugbel",
+      className: "bg-[#FFF0E6] text-[#C45A12]",
+    },
   };
 
 /** Filtertabs zoals in de Acties-werkvoorraad. */
@@ -239,6 +246,37 @@ const ACTIE_BUCKETS: {
 
 /** Soort-filter (categorie-pill). */
 type SoortFilter = "alle" | SectionId | "nazorg";
+
+const ACTIES_FILTERS_KEY = "bc_bo_acties_filters_v1";
+
+type ActiesFiltersStored = {
+  medewerkerId?: string;
+  bucket?: ActieBucket;
+  soortFilter?: SoortFilter;
+  zoek?: string;
+  /** yyyy-MM-dd — welke dag de focus-werklijst toont */
+  focusDayKey?: string;
+};
+
+function readActiesFilters(): ActiesFiltersStored {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(ACTIES_FILTERS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ActiesFiltersStored;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeActiesFilters(filters: ActiesFiltersStored) {
+  try {
+    localStorage.setItem(ACTIES_FILTERS_KEY, JSON.stringify(filters));
+  } catch {
+    /* ignore */
+  }
+}
 
 const SOORT_FILTER_ORDER: SoortFilter[] = [
   "alle",
@@ -285,6 +323,188 @@ function calendarDaysUntil(dueAt: string, now = new Date()): number {
   const due = new Date(`${dueYmd}T12:00:00`);
   const today = new Date(`${nowYmd}T12:00:00`);
   return Math.round((due.getTime() - today.getTime()) / 86_400_000);
+}
+
+/** Actie hoort bij focus-dag: deadline die dag, of (op vandaag) ook achterstallig. */
+function actieMatchesFocusDay(
+  actie: Pick<
+    BackofficeActie,
+    "deadlineAt" | "overdue" | "vastgelopen" | "soort"
+  > & { vastgelopen?: boolean },
+  dayKey: string,
+  now = new Date()
+): boolean {
+  const dueYmd = ymdAmsterdam(new Date(actie.deadlineAt));
+  if (dueYmd === dayKey) return true;
+  const todayKey = ymdAmsterdam(now);
+  if (dayKey !== todayKey) return false;
+  // Op vandaag: te late / vastgelopen acties meenemen (niet wacht-extern)
+  if (
+    isBackofficeActieWachtExtern(actie as BackofficeActie) &&
+    !actie.overdue &&
+    !actie.vastgelopen
+  ) {
+    return false;
+  }
+  const days = calendarDaysUntil(actie.deadlineAt, now);
+  return days < 0 || Boolean(actie.overdue) || Boolean(actie.vastgelopen);
+}
+
+function shiftDayKey(dayKey: string, delta: number): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const base = new Date(y!, m! - 1, d!, 12, 0, 0);
+  return ymdAmsterdam(addDays(base, delta));
+}
+
+function formatFocusDayLabel(dayKey: string): string {
+  const today = ymdAmsterdam(new Date());
+  if (dayKey === today) return "Vandaag";
+  if (dayKey === shiftDayKey(today, 1)) return "Morgen";
+  if (dayKey === shiftDayKey(today, -1)) return "Gisteren";
+  try {
+    return formatInTimeZone(
+      new Date(`${dayKey}T12:00:00`),
+      AMSTERDAM_TZ,
+      "EEEE d MMMM",
+      { locale: nl }
+    );
+  } catch {
+    return dayKey;
+  }
+}
+
+type OpvolgMode = "algemeen" | "specifiek";
+
+/** Standaard: +1 dag, zelfde lokale tijd als nu. */
+function defaultOpvolgDateTime(now = new Date()): {
+  date: string;
+  time: string;
+} {
+  const morgen = addDays(now, 1);
+  return {
+    date: formatInTimeZone(morgen, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    time: formatInTimeZone(now, AMSTERDAM_TZ, "HH:mm"),
+  };
+}
+
+/**
+ * Algemeen: dag zonder vast tijdstip (12:00) — rangschikt met andere dagtaken.
+ * Specifiek: exacte datum + tijd.
+ */
+function dueAtFromOpvolg(
+  date: string,
+  mode: OpvolgMode,
+  time: string
+): Date {
+  const hhmm =
+    mode === "specifiek" && /^\d{2}:\d{2}$/.test(time) ? time : "12:00";
+  return fromZonedTime(`${date}T${hhmm}:00`, AMSTERDAM_TZ);
+}
+
+function dueAtFromDayKey(dayKey: string): Date {
+  return fromZonedTime(`${dayKey}T17:00:00`, AMSTERDAM_TZ);
+}
+
+function digitsOnly(s: string | null | undefined): string {
+  return (s || "").replace(/\D/g, "");
+}
+
+function normalizePostcode(s: string | null | undefined): string {
+  return (s || "").replace(/\s+/g, "").toUpperCase();
+}
+
+/** Zoek open acties op tel / postcode / naam / project (terugbel). */
+/** Handmatige terugbel-taken gezet via Acties (niet bereikt / wacht op klant). */
+function isActiesOpvolgTaak(t: ProjectTaak): boolean {
+  if (t.status === "done") return false;
+  if (t.auto_key) return false;
+  const n = (t.notities || "").toLowerCase();
+  const titel = (t.titel || "").toLowerCase();
+  return (
+    n.includes("via acties:") ||
+    titel.startsWith("wacht op klant:") ||
+    titel.startsWith("nabellen (niet bereikt):")
+  );
+}
+
+function opvolgTaakToRow(
+  t: ProjectTaak,
+  projecten: Project[]
+): TaskRow {
+  const due = t.due_at || new Date().toISOString();
+  const overdue =
+    Boolean(t.due_at) && new Date(t.due_at!).getTime() < Date.now();
+  const leadRaw = t.projecten?.leads;
+  const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+  const leadId = t.projecten?.lead_id || "";
+  const leadNaam = lead?.naam || "—";
+  const project =
+    (t.project_id
+      ? projecten.find((p) => p.id === t.project_id)
+      : undefined) || undefined;
+  return {
+    key: `opvolg-${t.id}`,
+    section: "handmatig",
+    kind: "terugbel",
+    titel: t.titel || "Terugbellen",
+    klant: leadNaam,
+    meta: t.projecten?.project_nummer || undefined,
+    dueAt: due,
+    overdue,
+    prio: overdue || calendarDaysUntil(due) <= 1,
+    done: false,
+    actie: {
+      id: t.id,
+      soort: "volgende_stap",
+      titel: t.titel || "Terugbellen",
+      detail: t.notities || "Gepland terugbelmoment via Acties",
+      reden: t.notities || "Gepland terugbelmoment via Acties",
+      deadlineAt: due,
+      overdue,
+      prio: overdue || calendarDaysUntil(due) <= 1,
+      leadId,
+      leadNaam,
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      projectId: t.project_id || undefined,
+      projectNummer: t.projecten?.project_nummer || null,
+      href: t.project_id ? `/projecten/${t.project_id}` : "#",
+      project,
+    },
+  };
+}
+
+function actieMatchesJumpQuery(
+  row: TaskRow,
+  query: string,
+  leads: Lead[]
+): boolean {
+  const q = query.trim();
+  if (q.length < 2) return false;
+  const lead = leads.find((l) => l.id === row.actie.leadId);
+  const qDigits = digitsOnly(q);
+  const qPc = normalizePostcode(q);
+
+  if (qDigits.length >= 3) {
+    const tel = digitsOnly(row.actie.telefoon || lead?.telefoon);
+    if (tel && tel.includes(qDigits)) return true;
+  }
+  if (qPc.length >= 4) {
+    const pc = normalizePostcode(lead?.postcode);
+    if (pc && pc.startsWith(qPc)) return true;
+  }
+  const hay = [
+    row.klant,
+    row.titel,
+    row.actie.projectNummer,
+    row.actie.offerteNummer,
+    row.actie.plaats,
+    lead?.plaats,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return hay.includes(q.toLowerCase());
 }
 
 function bucketVoorActie(
@@ -862,14 +1082,20 @@ function buildTaskRows(
             done: false,
           });
         } else if (item.id === "schouwweek") {
-          // Eigen middelen: schouwweek pas ná 50% betaling
+          // Eigen middelen: schouwdag pas ná 50% betaling; WF: schouwweek
           if (item.blocked) continue;
+          const em =
+            actie.project != null && !isWarmtefondsProject(actie.project);
           rows.push({
             key: `${actie.id}-schouwweek`,
             section: "stap1",
-            actie: { ...actie, planSchouwweek: true },
-            kind: "schouw_week",
-            titel: "Schouwweek inplannen",
+            actie: {
+              ...actie,
+              planSchouwweek: !em,
+              planSchouwdag: em,
+            },
+            kind: em ? "schouw_inplannen" : "schouw_week",
+            titel: em ? "Schouwdag inplannen" : "Schouwweek inplannen",
             klant: actie.leadNaam,
             meta: actie.projectNummer || undefined,
             dueAt: actie.deadlineAt,
@@ -965,6 +1191,9 @@ export function BackofficeActiesList({
     Record<string, string>
   >({});
   const [weekKeuze, setWeekKeuze] = useState<Record<string, string>>({});
+  const [installatieAtKeuze, setInstallatieAtKeuze] = useState<
+    Record<string, string>
+  >({});
   const [schouwAtKeuze, setSchouwAtKeuze] = useState<Record<string, string>>(
     {}
   );
@@ -977,10 +1206,31 @@ export function BackofficeActiesList({
   /**
    * Filter medewerker. Leeg = alle acties.
    * Admin start op “Alle”; pure backoffice op “Mijn acties”.
+   * Opgeslagen keuze wint van de rol-default.
    */
   const [medewerkerId, setMedewerkerId] = useState("");
-  /** Focusmodus: werkvolgorde + checklist + klant (zoals mockup Action view). */
-  const [actionView, setActionView] = useState(false);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const hadStoredMedewerkerFilter = useRef(false);
+  /** Focusmodus: één taak tegelijk voor de gekozen dag. */
+  const [actionView, setActionView] = useState(true);
+  const [focusDayKey, setFocusDayKey] = useState(() =>
+    ymdAmsterdam(new Date())
+  );
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [showWachtExtern, setShowWachtExtern] = useState(false);
+  /** Vervolg: algemeen (dag) of specifiek (datum+tijd+notitie). */
+  const [opvolgMode, setOpvolgMode] = useState<OpvolgMode>("algemeen");
+  const [opvolgDate, setOpvolgDate] = useState(
+    () => defaultOpvolgDateTime().date
+  );
+  const [opvolgTime, setOpvolgTime] = useState(
+    () => defaultOpvolgDateTime().time
+  );
+  const [opvolgNote, setOpvolgNote] = useState("");
+  /** Terugbel-zoek in focusmodus (tel / postcode). */
+  const [focusJumpQ, setFocusJumpQ] = useState("");
+  /** Actie geopend via zoeken — mag buiten de dag-filter. */
+  const [jumpPinnedKey, setJumpPinnedKey] = useState<string | null>(null);
   /** Welke gekoppelde gesprek-stappen openstaan in de zijkant. */
   const [gesprekOpen, setGesprekOpen] = useState<Record<string, boolean>>({});
   const [edwinGestuurd, setEdwinGestuurd] = useState(false);
@@ -1016,9 +1266,41 @@ export function BackofficeActiesList({
   });
   const [newAfdeling, setNewAfdeling] = useState<string>("Backoffice");
 
+  // Filters uit localStorage (blijven staan bij terugkomen van project)
+  useEffect(() => {
+    const s = readActiesFilters();
+    if (
+      s.bucket &&
+      ACTIE_BUCKETS.some((b) => b.id === s.bucket)
+    ) {
+      setBucket(s.bucket);
+    }
+    if (s.soortFilter && SOORT_FILTER_ORDER.includes(s.soortFilter)) {
+      setSoortFilter(s.soortFilter);
+    }
+    if (typeof s.zoek === "string") setZoek(s.zoek);
+    if (typeof s.medewerkerId === "string") {
+      hadStoredMedewerkerFilter.current = true;
+      setMedewerkerId(s.medewerkerId);
+    }
+    if (
+      typeof s.focusDayKey === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(s.focusDayKey)
+    ) {
+      setFocusDayKey(s.focusDayKey);
+    }
+    setFiltersHydrated(true);
+  }, []);
+
   // Session/adviseurs laden asynchroon → default filter één keer zetten
+  // (overslaan als gebruiker al een opgeslagen medewerker-filter heeft)
   const filterDefaultGezet = useRef(false);
   useEffect(() => {
+    if (!filtersHydrated) return;
+    if (hadStoredMedewerkerFilter.current) {
+      filterDefaultGezet.current = true;
+      return;
+    }
     if (filterDefaultGezet.current || !adviseurId) return;
     if (adviseurs.length === 0) return;
     const me = adviseurs.find((a) => a.id === adviseurId);
@@ -1030,7 +1312,18 @@ export function BackofficeActiesList({
       setMedewerkerId("");
     }
     filterDefaultGezet.current = true;
-  }, [adviseurId, adviseurs]);
+  }, [filtersHydrated, adviseurId, adviseurs]);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
+    writeActiesFilters({
+      medewerkerId,
+      bucket,
+      soortFilter,
+      zoek,
+      focusDayKey,
+    });
+  }, [filtersHydrated, medewerkerId, bucket, soortFilter, zoek, focusDayKey]);
   useEffect(() => {
     if (!newPersonId && (adviseurId || defaultEigenaarId)) {
       setNewPersonId(adviseurId || defaultEigenaarId || "");
@@ -1081,7 +1374,18 @@ export function BackofficeActiesList({
 
   const defaultPartnerId = partners.length === 1 ? partners[0].id : "";
 
-  const openRows = useMemo(() => rows.filter((r) => !r.done), [rows]);
+  const opvolgRows = useMemo(
+    () =>
+      projectTaken
+        .filter(isActiesOpvolgTaak)
+        .map((t) => opvolgTaakToRow(t, projecten)),
+    [projectTaken, projecten]
+  );
+
+  const openRows = useMemo(
+    () => [...rows.filter((r) => !r.done), ...opvolgRows],
+    [rows, opvolgRows]
+  );
 
   const nazorgTaken = useMemo(
     () =>
@@ -1183,17 +1487,45 @@ export function BackofficeActiesList({
   const visibleRows = useMemo(() => {
     const q = zoek.trim().toLowerCase();
     const filtered = openRows.filter((r) => {
-      if (bucketVoorActie(r.actie) !== bucket) return false;
-      if (soortFilter === "nazorg") return false;
-      if (soortFilter !== "alle" && r.section !== soortFilter) return false;
+      if (actionView) {
+        if (!actieMatchesFocusDay(r.actie, focusDayKey)) return false;
+        if (
+          !showWachtExtern &&
+          isBackofficeActieWachtExtern(r.actie) &&
+          !r.actie.overdue &&
+          !r.actie.vastgelopen
+        ) {
+          return false;
+        }
+        // Focusmodus: alle soorten van die dag (geen soort-filter)
+      } else if (bucketVoorActie(r.actie) !== bucket) {
+        return false;
+      }
+      if (!actionView) {
+        if (soortFilter === "nazorg") return false;
+        if (soortFilter !== "alle" && r.section !== soortFilter) return false;
+      }
       if (medewerkerId) {
-        const eigenaar = eigenaarVoorActie(
-          r.actie,
-          projecten,
-          adviseurs,
-          defaultEigenaarId
-        );
-        if (eigenaar.id !== medewerkerId) return false;
+        if (r.kind === "terugbel") {
+          const taak = projectTaken.find((t) => t.id === r.actie.id);
+          const owner =
+            taak?.verantwoordelijke_id ||
+            eigenaarVoorActie(
+              r.actie,
+              projecten,
+              adviseurs,
+              defaultEigenaarId
+            ).id;
+          if (owner !== medewerkerId) return false;
+        } else {
+          const eigenaar = eigenaarVoorActie(
+            r.actie,
+            projecten,
+            adviseurs,
+            defaultEigenaarId
+          );
+          if (eigenaar.id !== medewerkerId) return false;
+        }
       }
       if (!q) return true;
       const hay = [
@@ -1214,6 +1546,9 @@ export function BackofficeActiesList({
     return [...filtered].sort(compareActieRows);
   }, [
     openRows,
+    actionView,
+    focusDayKey,
+    showWachtExtern,
     bucket,
     soortFilter,
     zoek,
@@ -1221,6 +1556,7 @@ export function BackofficeActiesList({
     projecten,
     adviseurs,
     defaultEigenaarId,
+    projectTaken,
   ]);
 
   const visibleNazorgTaken = useMemo(() => {
@@ -1363,10 +1699,23 @@ export function BackofficeActiesList({
     setSoortFilter("alle");
   }, [soortCounts, soortFilter]);
 
-  const selectedRow = useMemo(
-    () => visibleRows.find((r) => r.key === selectedKey) || null,
-    [visibleRows, selectedKey]
-  );
+  const focusJumpHits = useMemo(() => {
+    const q = focusJumpQ.trim();
+    if (!actionView || q.length < 2) return [] as TaskRow[];
+    return openRows
+      .filter((r) => actieMatchesJumpQuery(r, q, leads))
+      .sort(compareActieRows)
+      .slice(0, 12);
+  }, [actionView, focusJumpQ, openRows, leads]);
+
+  const selectedRow = useMemo(() => {
+    if (jumpPinnedKey) {
+      const pinned =
+        openRows.find((r) => r.key === jumpPinnedKey) || null;
+      if (pinned) return pinned;
+    }
+    return visibleRows.find((r) => r.key === selectedKey) || null;
+  }, [visibleRows, selectedKey, jumpPinnedKey, openRows]);
 
   const selectedProjectFacturen = useMemo(() => {
     const pid = selectedRow?.actie.projectId;
@@ -1377,20 +1726,48 @@ export function BackofficeActiesList({
     );
   }, [facturen, selectedRow]);
 
+  // Focusmodus: altijd een geldige actie voor de gekozen dag selecteren
+  useEffect(() => {
+    if (!actionView) return;
+    if (jumpPinnedKey) {
+      if (!openRows.some((r) => r.key === jumpPinnedKey)) {
+        setJumpPinnedKey(null);
+      } else {
+        setSelectedKey(jumpPinnedKey);
+        setNotesOpen(false);
+        return;
+      }
+    }
+    setSelectedKey((prev) => {
+      if (visibleRows.length === 0) return null;
+      if (prev && visibleRows.some((r) => r.key === prev)) return prev;
+      return visibleRows[0]!.key;
+    });
+    setNotesOpen(false);
+  }, [actionView, focusDayKey, visibleRows, jumpPinnedKey, openRows]);
+
   // Bij selectie: focus op gekozen actiesoort
   useEffect(() => {
-    const row = visibleRows.find((r) => r.key === selectedKey) || null;
+    const row =
+      (jumpPinnedKey
+        ? openRows.find((r) => r.key === jumpPinnedKey)
+        : null) ||
+      visibleRows.find((r) => r.key === selectedKey) ||
+      null;
     if (!row) {
       setGesprekOpen({});
       setEdwinGestuurd(false);
+      setLaatsteContactAt(null);
+      resetOpvolgDefaults();
       return;
     }
     setGesprekOpen({ [row.kind]: true });
     setEdwinGestuurd(false);
     setLaatsteContactAt(null);
+    resetOpvolgDefaults();
     // Alleen bij wissel van geselecteerde rij
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
+  }, [selectedKey, jumpPinnedKey]);
 
   const geenEigenaarCount = useMemo(
     () =>
@@ -1998,12 +2375,18 @@ export function BackofficeActiesList({
     }
   }
 
-  async function markFactuurBetaald(actie: BackofficeActie) {
-    if (!actie.factuurId) return;
-    if (!confirm(`Factuur ${actie.factuurNummer || ""} markeren als betaald?`)) {
-      return;
+  async function markFactuurBetaald(
+    actie: BackofficeActie,
+    opts?: { skipConfirm?: boolean; goNext?: boolean }
+  ) {
+    if (!actie.factuurId) return false;
+    if (
+      !opts?.skipConfirm &&
+      !confirm(`Factuur ${actie.factuurNummer || ""} markeren als betaald?`)
+    ) {
+      return false;
     }
-    setBusyId(actie.id);
+    setBusyId(`${actie.id}-betaald`);
     setError(null);
     try {
       const completedAt = new Date().toISOString();
@@ -2027,9 +2410,21 @@ export function BackofficeActiesList({
         deadlineAt: actie.deadlineAt,
         completedAt,
       });
+      setMsg(`Factuur ${actie.factuurNummer || ""} gemarkeerd als betaald.`);
       void loadProjectTaken();
+      if (opts?.goNext !== false && actionView) {
+        if (jumpPinnedKey) setJumpPinnedKey(null);
+        else if (
+          selectedIndex >= 0 &&
+          selectedIndex < visibleRows.length - 1
+        ) {
+          goNextActie();
+        }
+      }
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Markeren mislukt");
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -2100,11 +2495,18 @@ export function BackofficeActiesList({
     }
   }
 
-  async function setAangegevenTeBetalen(actie: BackofficeActie) {
+  async function setAangegevenTeBetalen(
+    actie: BackofficeActie,
+    dayKey?: string
+  ) {
     if (!actie.factuurId) return;
-    const datum = (aangegevenBetaaldatum[actie.id] || "").trim();
+    const datum = (
+      dayKey ||
+      aangegevenBetaaldatum[actie.id] ||
+      ""
+    ).trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(datum)) {
-      setError("Kies eerst de datum waarop de klant zegt te betalen.");
+      setError("Kies eerst wanneer de klant zegt te betalen.");
       return;
     }
     setBusyId(`${actie.id}-aangegeven`);
@@ -2122,15 +2524,23 @@ export function BackofficeActiesList({
         );
       }
       if (data.factuur) onFactuurUpdated?.(data.factuur as Factuur);
-      const [y, m, d] = datum.split("-");
       setMsg(
-        `Afgesproken: klant betaalt op ${d}-${m}-${y}. Op die dag verschijnt “Betaling controleren”.`
+        `Afgesproken: betaalt op ${formatFocusDayLabel(datum)}. Die dag komt “Betaling controleren” terug.`
       );
       setAangegevenBetaaldatum((prev) => {
         const next = { ...prev };
         delete next[actie.id];
         return next;
       });
+      if (actionView) {
+        if (jumpPinnedKey) setJumpPinnedKey(null);
+        else if (
+          selectedIndex >= 0 &&
+          selectedIndex < visibleRows.length - 1
+        ) {
+          goNextActie();
+        }
+      }
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Afgesproken betaaldatum mislukt"
@@ -2255,7 +2665,18 @@ export function BackofficeActiesList({
     }
   }
 
-  /** Niet bereikt → morgen opnieuw (handmatige opvolgtaak). */
+  function resetOpvolgDefaults() {
+    const d = defaultOpvolgDateTime();
+    setOpvolgMode("algemeen");
+    setOpvolgDate(d.date);
+    setOpvolgTime(d.time);
+    setOpvolgNote("");
+  }
+
+  /**
+   * Niet bereikt → morgen algemeen.
+   * Terugbel → gekozen datum (algemeen zonder tijd, of specifiek met tijd + notitie).
+   */
   async function planOpvolging(
     actie: BackofficeActie,
     soort: "niet_bereikt" | "wacht_klant"
@@ -2264,13 +2685,43 @@ export function BackofficeActiesList({
       setError("Geen project om opvolging op te zetten.");
       return;
     }
-    const due = new Date();
-    due.setDate(due.getDate() + (soort === "wacht_klant" ? 3 : 1));
-    due.setHours(17, 0, 0, 0);
+    const ownerId =
+      medewerkerId || adviseurId || defaultEigenaarId || null;
+    if (!ownerId) {
+      setError("Geen medewerker om de terugbel-actie aan te koppelen.");
+      return;
+    }
+
+    const mode: OpvolgMode =
+      soort === "niet_bereikt" ? "algemeen" : opvolgMode;
+    const date =
+      soort === "niet_bereikt"
+        ? defaultOpvolgDateTime().date
+        : opvolgDate;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError("Kies een geldige datum.");
+      return;
+    }
+    if (mode === "specifiek" && !/^\d{2}:\d{2}$/.test(opvolgTime)) {
+      setError("Kies een geldige tijd.");
+      return;
+    }
+
+    const due = dueAtFromOpvolg(date, mode, opvolgTime);
+    const note = opvolgNote.trim();
     const titel =
       soort === "wacht_klant"
         ? `Wacht op klant: ${actie.titel}`
         : `Nabellen (niet bereikt): ${actie.titel}`;
+    const notities =
+      soort === "niet_bereikt"
+        ? "Via Acties: klant niet bereikt"
+        : mode === "specifiek"
+          ? note
+            ? `Via Acties: specifiek terugbel · ${note}`
+            : "Via Acties: specifiek terugbel"
+          : "Via Acties: algemeen terugbel (geen vast tijdstip)";
+
     setBusyId(`${actie.id}-opvolg`);
     setError(null);
     try {
@@ -2281,13 +2732,9 @@ export function BackofficeActiesList({
           project_id: actie.projectId,
           titel,
           afdeling: "Backoffice",
-          verantwoordelijke_id:
-            medewerkerId || adviseurId || defaultEigenaarId || undefined,
+          verantwoordelijke_id: ownerId,
           due_at: due.toISOString(),
-          notities:
-            soort === "wacht_klant"
-              ? "Via Acties: wacht op reactie klant"
-              : "Via Acties: klant niet bereikt",
+          notities,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -2296,22 +2743,33 @@ export function BackofficeActiesList({
           (data as { error?: string }).error || "Opvolging mislukt"
         );
       }
+      const whenLabel =
+        mode === "specifiek"
+          ? `${formatFocusDayLabel(date)} ${opvolgTime}`
+          : formatFocusDayLabel(date);
       await logBelContact(
         actie,
-        soort === "wacht_klant" ? "Wacht op klant" : "Niet bereikt"
+        soort === "wacht_klant"
+          ? `Terugbellen · ${mode} · ${whenLabel}`
+          : "Niet bereikt · morgen opnieuw"
       );
       setMsg(
         soort === "wacht_klant"
-          ? "Opvolging gezet: wacht op klant (over 3 dagen)."
+          ? mode === "specifiek"
+            ? `Specifiek terugbel gezet: ${whenLabel}.`
+            : `Algemeen terugbel gezet op ${whenLabel} — zonder vast tijdstip.`
           : "Opvolging gezet: morgen opnieuw bellen."
       );
+      resetOpvolgDefaults();
       void loadProjectTaken();
-      // Door naar volgende in focusmodus
       if (actionView) {
-        if (selectedIndex >= 0 && selectedIndex < visibleRows.length - 1) {
+        if (jumpPinnedKey) {
+          setJumpPinnedKey(null);
+        } else if (
+          selectedIndex >= 0 &&
+          selectedIndex < visibleRows.length - 1
+        ) {
           goNextActie();
-        } else {
-          setActionView(false);
         }
       }
     } catch (e) {
@@ -2319,6 +2777,20 @@ export function BackofficeActiesList({
     } finally {
       setBusyId(null);
     }
+  }
+
+  function openJumpHit(row: TaskRow) {
+    setJumpPinnedKey(row.key);
+    setSelectedKey(row.key);
+    setFocusJumpQ("");
+    setNotesOpen(false);
+    setMsg(null);
+  }
+
+  function exitJumpPin() {
+    setJumpPinnedKey(null);
+    if (visibleRows[0]) setSelectedKey(visibleRows[0].key);
+    else setSelectedKey(null);
   }
 
   async function afrondenEnVolgende(row: TaskRow) {
@@ -2351,13 +2823,29 @@ export function BackofficeActiesList({
         row.kind === "nabellen" ||
         row.kind === "wf_aanbetaling_herinnering"
       ) {
-        await markFactuurBetaald(actie);
+        const ok = await markFactuurBetaald(actie, { goNext: false });
+        if (!ok) return;
       } else if (row.kind === "financiering") {
         await markFinancieringGeschakeld(actie);
       } else if (row.kind === "aangetekende_brief") {
         await markAangetekendeBriefAfgerond(actie);
       } else if (row.kind === "annulering_keuze_controle") {
         await markAnnuleringKeuzeInstallatie(actie);
+      } else if (row.kind === "terugbel") {
+        const res = await fetch(`/api/taken/${actie.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "done" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Afronden mislukt"
+          );
+        }
+        await logBelContact(actie, `Terugbel afgerond: ${actie.titel}`);
+        setMsg("Terugbel-actie afgerond.");
+        void loadProjectTaken();
       } else if (
         row.kind === "volgende_stap" ||
         row.kind === "schouw_inplannen" ||
@@ -2369,11 +2857,13 @@ export function BackofficeActiesList({
         setMsg("Actie afgerond — ga door naar de volgende.");
       }
 
-      if (selectedIndex >= 0 && selectedIndex < visibleRows.length - 1) {
+      if (jumpPinnedKey) {
+        setJumpPinnedKey(null);
+      } else if (
+        selectedIndex >= 0 &&
+        selectedIndex < visibleRows.length - 1
+      ) {
         goNextActie();
-      } else {
-        setActionView(false);
-        setExpandedRow(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Afronden mislukt");
@@ -2431,14 +2921,20 @@ export function BackofficeActiesList({
 
   function isInstallatieActie(actie: BackofficeActie): boolean {
     const t = `${actie.titel || ""} ${actie.detail || ""}`.toLowerCase();
-    return t.includes("installatie");
+    // Niet de oude “betaling controleren … installatie”-titel
+    if (/betaling warmtefonds controleren/i.test(t)) return false;
+    return (
+      /installatiedatum inplannen|installatie inplannen/i.test(t) ||
+      (t.includes("installatie") && !t.includes("controleren"))
+    );
   }
 
   /** Werkpaneel: echte knoppen per actiesoort (lijst + action view). */
   function actieWerkPanel(
     row: TaskRow,
-    opts?: { hideContact?: boolean }
+    opts?: { hideContact?: boolean; compact?: boolean }
   ) {
+    const compact = Boolean(opts?.compact);
     const actie = row.actie;
     const drafts = draftFacturenVoorActie(actie, facturen);
     const selectedFactuur =
@@ -2468,11 +2964,105 @@ export function BackofficeActiesList({
     return (
       <div className="space-y-3">
         {(actie.reden || actie.detail) &&
-        (row.kind === "volgende_stap" || row.kind === "nabellen") ? (
+        row.kind === "volgende_stap" &&
+        !compact ? (
           <p className="text-[12px] leading-relaxed text-muted">
             <span className="font-semibold text-ink">Waarom: </span>
             {actie.reden || actie.detail}
           </p>
+        ) : null}
+
+        {/* Factuur opvolgen — één duidelijke keuze i.p.v. 3 knoppen */}
+        {row.kind === "nabellen" ? (
+          <div
+            className={
+              compact
+                ? "space-y-2.5 border border-line bg-white px-3 py-3"
+                : "space-y-3 border border-line bg-white px-4 py-4"
+            }
+          >
+            <div>
+              <p className="text-sm font-semibold text-ink">
+                Wat zei de klant?
+              </p>
+              <p className="mt-0.5 text-[12px] text-muted">
+                {actie.factuurNummer || "Factuur"} · langer dan 1 dag te laat
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={busyId === `${actie.id}-betaald`}
+              onClick={() => void markFactuurBetaald(actie)}
+              className="flex h-11 w-full items-center justify-center bg-green text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+            >
+              {busyId === `${actie.id}-betaald`
+                ? "Bezig…"
+                : "Is betaald → klaar"}
+            </button>
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Of: betaalt later op…
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <input
+                  type="date"
+                  value={
+                    aangegevenBetaaldatum[actie.id] ||
+                    defaultOpvolgDateTime().date
+                  }
+                  onChange={(e) =>
+                    setAangegevenBetaaldatum((prev) => ({
+                      ...prev,
+                      [actie.id]: e.target.value,
+                    }))
+                  }
+                  className="h-9 border border-line bg-white px-2 text-xs text-ink"
+                />
+                <button
+                  type="button"
+                  disabled={busyId === `${actie.id}-aangegeven`}
+                  onClick={() =>
+                    void setAangegevenTeBetalen(
+                      actie,
+                      aangegevenBetaaldatum[actie.id] ||
+                        defaultOpvolgDateTime().date
+                    )
+                  }
+                  className="h-9 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:border-ink hover:bg-wash disabled:opacity-50"
+                >
+                  {busyId === `${actie.id}-aangegeven`
+                    ? "…"
+                    : "Zet betaaldatum"}
+                </button>
+              </div>
+              <p className="text-[11px] text-muted">
+                Die dag komt “Betaling controleren” terug.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 pt-0.5 text-[12px]">
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-herstuur`}
+                onClick={() => void opnieuwVerstuurFactuur(actie)}
+                className="font-semibold text-muted underline-offset-2 hover:text-ink hover:underline disabled:opacity-50"
+              >
+                {busyId === `${actie.id}-herstuur`
+                  ? "Bezig…"
+                  : "Factuur opnieuw mailen"}
+              </button>
+              {actie.factuurId ? (
+                <Link
+                  href={`/facturen/${actie.factuurId}`}
+                  className="font-semibold text-muted underline-offset-2 hover:text-ink hover:underline"
+                >
+                  Bekijk factuur
+                </Link>
+              ) : null}
+            </div>
+          </div>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
@@ -2483,6 +3073,13 @@ export function BackofficeActiesList({
             >
               Bel klant
             </a>
+          ) : null}
+
+          {row.kind === "terugbel" ? (
+            <p className="w-full text-[13px] text-muted">
+              Bel de klant terug. Klaar? Druk op{" "}
+              <span className="font-semibold text-ink">Afronden</span>.
+            </p>
           ) : null}
 
           {row.kind === "herplan" ? (
@@ -2526,28 +3123,6 @@ export function BackofficeActiesList({
                 className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold hover:bg-wash"
               >
                 Afgerond
-              </button>
-            </>
-          ) : null}
-
-          {row.kind === "nabellen" ? (
-            <>
-              <button
-                type="button"
-                disabled={busyId === `${actie.id}-herstuur`}
-                onClick={() => void opnieuwVerstuurFactuur(actie)}
-                className="inline-flex h-9 items-center border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-              >
-                {busyId === `${actie.id}-herstuur`
-                  ? "Bezig…"
-                  : "Opnieuw versturen"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void markFactuurBetaald(actie)}
-                className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
-              >
-                Markeer betaald
               </button>
             </>
           ) : null}
@@ -2630,7 +3205,7 @@ export function BackofficeActiesList({
             </>
           ) : null}
 
-          {actie.projectId ? (
+          {actie.projectId && !compact ? (
             <Link
               href={`/projecten/${actie.projectId}?from=acties`}
               className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink hover:bg-wash"
@@ -2638,9 +3213,7 @@ export function BackofficeActiesList({
               Open project
             </Link>
           ) : null}
-          {actie.factuurId &&
-          (row.kind === "nabellen" ||
-            row.kind === "wf_aanbetaling_herinnering") ? (
+          {actie.factuurId && row.kind === "wf_aanbetaling_herinnering" ? (
             <Link
               href={`/facturen/${actie.factuurId}`}
               className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink hover:bg-wash"
@@ -2649,48 +3222,6 @@ export function BackofficeActiesList({
             </Link>
           ) : null}
         </div>
-
-        {row.kind === "nabellen" ? (
-          <div className="rounded-sm border border-line bg-white px-3.5 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-              Heeft aangegeven te betalen
-            </p>
-            <p className="mt-1 text-[12px] text-muted">
-              Zet de datum die de klant noemt. Op die dag komt de actie{" "}
-              <span className="font-semibold text-ink">Betaling controleren</span>{" "}
-              terug.
-            </p>
-            <div className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="block text-[11px] text-muted">
-                Datum
-                <input
-                  type="date"
-                  value={aangegevenBetaaldatum[actie.id] || ""}
-                  onChange={(e) =>
-                    setAangegevenBetaaldatum((prev) => ({
-                      ...prev,
-                      [actie.id]: e.target.value,
-                    }))
-                  }
-                  className="mt-1 block border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
-                />
-              </label>
-              <button
-                type="button"
-                disabled={
-                  busyId === `${actie.id}-aangegeven` ||
-                  !(aangegevenBetaaldatum[actie.id] || "").trim()
-                }
-                onClick={() => void setAangegevenTeBetalen(actie)}
-                className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
-              >
-                {busyId === `${actie.id}-aangegeven`
-                  ? "Opslaan…"
-                  : "Opslaan afspraak"}
-              </button>
-            </div>
-          </div>
-        ) : null}
 
         {row.kind === "wacht_warmtefonds" && actie.project
           ? (() => {
@@ -2795,18 +3326,37 @@ export function BackofficeActiesList({
           actie.planSchouwweek ||
           row.kind === "schouw_inplannen" ||
           row.kind === "schouw_week") ? (
-          <div className="space-y-3 border border-line bg-white px-4 py-4">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wash text-[11px] font-bold text-muted">
-                1
-              </span>
+          <div
+            className={
+              compact
+                ? "space-y-2 border border-line bg-white px-3 py-2.5"
+                : "space-y-3 border border-line bg-white px-4 py-4"
+            }
+          >
+            <div className={compact ? "min-w-0" : "flex items-start gap-3"}>
+              {!compact ? (
+                <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wash text-[11px] font-bold text-muted">
+                  1
+                </span>
+              ) : null}
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-ink">
+                <p
+                  className={
+                    compact
+                      ? "text-xs font-semibold text-ink"
+                      : "text-sm font-semibold text-ink"
+                  }
+                >
                   {actie.planSchouwdag || row.kind === "schouw_inplannen"
                     ? "Exacte schouwdag afspreken"
                     : "Schouwweek zetten"}
+                  {compact && actie.schouwWeekLabel ? (
+                    <span className="ml-1.5 font-normal text-muted">
+                      · {actie.schouwWeekLabel}
+                    </span>
+                  ) : null}
                 </p>
-                {actie.schouwWeekLabel ? (
+                {!compact && actie.schouwWeekLabel ? (
                   <p className="mt-0.5 text-[12px] text-muted">
                     Week:{" "}
                     <span className="font-medium text-ink">
@@ -2866,17 +3416,24 @@ export function BackofficeActiesList({
 
                 {(actie.planSchouwdag || row.kind === "schouw_inplannen") &&
                 selectedPartner ? (
-                  <div className="mt-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Beschikbaar slot
-                    </p>
-                    <div className="mt-1.5">
+                  <div className={compact ? "mt-2" : "mt-3"}>
+                    {!compact ? (
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Beschikbaar slot
+                      </p>
+                    ) : null}
+                    <div className={compact ? "" : "mt-1.5"}>
                       <PartnerSlotPicker
                         partnerId={selectedPartner}
                         soort="schouw"
                         leadId={actie.leadId}
+                        projectId={actie.projectId || null}
                         excludeProjectId={actie.projectId || null}
+                        compact={compact}
                         value={selectedSchouwAt || null}
+                        onPartnerChange={(pid) =>
+                          setPartnerKeuze((p) => ({ ...p, [actie.id]: pid }))
+                        }
                         onChange={(iso) =>
                           setSchouwAtKeuze((p) => {
                             if (!iso) {
@@ -2902,7 +3459,12 @@ export function BackofficeActiesList({
                       !selectedSchouwAt)
                   }
                   onClick={() => void planSchouwWeek(actie)}
-                  className="mt-4 inline-flex h-10 items-center bg-orange px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                  className={[
+                    "inline-flex items-center bg-orange font-semibold text-white hover:opacity-90 disabled:opacity-40",
+                    compact
+                      ? "mt-2 h-9 px-3 text-xs"
+                      : "mt-4 h-10 px-4 text-sm",
+                  ].join(" ")}
                 >
                   {busyId === `${actie.id}-schouw`
                     ? "Bezig…"
@@ -3206,24 +3768,143 @@ export function BackofficeActiesList({
           </div>
         ) : null}
 
-        {row.kind === "volgende_stap" && installatie && !restfactuur ? (
-          <p className="text-[12px] text-muted">
-            Installatie plannen doe je op het project (agenda / partner-slots).
-            {actie.projectId ? (
-              <>
-                {" "}
-                <Link
-                  href={`/projecten/${actie.projectId}?from=acties`}
-                  className="font-semibold text-green-deeper hover:underline"
-                >
-                  Open project →
-                </Link>
-              </>
+        {row.kind === "volgende_stap" &&
+        installatie &&
+        !restfactuur &&
+        actie.projectId ? (
+          <div
+            className={
+              compact
+                ? "space-y-2 border border-line bg-wash/50 p-2.5"
+                : "space-y-3 border border-line bg-wash/50 p-3"
+            }
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Aanbevolen installatie
+            </p>
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Partner
+              <select
+                value={selectedPartner || ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setPartnerKeuze((p) => {
+                    if (!v) {
+                      const next = { ...p };
+                      delete next[actie.id];
+                      return next;
+                    }
+                    return { ...p, [actie.id]: v };
+                  });
+                  setInstallatieAtKeuze((p) => {
+                    const next = { ...p };
+                    delete next[actie.id];
+                    return next;
+                  });
+                }}
+                className="mt-1 block w-full max-w-md border border-line bg-white px-2.5 py-2 text-sm outline-none focus:border-green"
+              >
+                <option value="">Kies partner…</option>
+                {partners.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.naam}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedPartner ? (
+              <PartnerSlotPicker
+                partnerId={selectedPartner}
+                soort="installatie"
+                leadId={actie.leadId}
+                projectId={actie.projectId}
+                excludeProjectId={actie.projectId}
+                showBest
+                lockBestToPartner
+                compact={compact}
+                afterIso={actie.project?.schouw_at || null}
+                value={installatieAtKeuze[actie.id] || null}
+                onPartnerChange={(pid) =>
+                  setPartnerKeuze((p) => ({ ...p, [actie.id]: pid }))
+                }
+                onChange={(iso) =>
+                  setInstallatieAtKeuze((p) => {
+                    if (!iso) {
+                      const next = { ...p };
+                      delete next[actie.id];
+                      return next;
+                    }
+                    return { ...p, [actie.id]: iso };
+                  })
+                }
+              />
             ) : null}
-          </p>
+            <button
+              type="button"
+              disabled={
+                busyId === `${actie.id}-installatie` ||
+                !selectedPartner ||
+                !installatieAtKeuze[actie.id]
+              }
+              onClick={() => void planInstallatieFromActie(actie)}
+              className="inline-flex h-10 items-center bg-green px-4 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-40"
+            >
+              {busyId === `${actie.id}-installatie`
+                ? "Bezig…"
+                : "Installatie vastleggen"}
+            </button>
+          </div>
         ) : null}
       </div>
     );
+  }
+
+  async function planInstallatieFromActie(actie: BackofficeActie) {
+    if (!actie.projectId) return;
+    const partnerId =
+      partnerKeuze[actie.id] ||
+      actie.project?.installatie_partner_id ||
+      defaultPartnerId;
+    const iso = installatieAtKeuze[actie.id];
+    if (!partnerId || !iso) {
+      setError("Kies partner en installatie-slot");
+      return;
+    }
+    setBusyId(`${actie.id}-installatie`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projecten/${actie.projectId}/installatie`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          installatie_at: new Date(iso).toISOString(),
+          installatie_partner_id: partnerId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Installatie opslaan mislukt");
+      if (data.project) onProjectUpdated?.(data.project as Project);
+      setExpandedRow(null);
+      setInstallatieAtKeuze((p) => {
+        const next = { ...p };
+        delete next[actie.id];
+        return next;
+      });
+      setMsg("Installatie ingepland.");
+      if (actionView) {
+        if (jumpPinnedKey) setJumpPinnedKey(null);
+        else if (
+          selectedIndex >= 0 &&
+          selectedIndex < visibleRows.length - 1
+        ) {
+          goNextActie();
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Installatie opslaan mislukt");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function planSchouwWeek(actie: BackofficeActie) {
@@ -3341,26 +4022,413 @@ export function BackofficeActiesList({
     ? visibleRows.findIndex((r) => r.key === selectedRow.key)
     : -1;
 
+  const todayKey = ymdAmsterdam(new Date());
+  const focusDayLabel = formatFocusDayLabel(focusDayKey);
+
   function openActionView(key?: string) {
     const target =
       key ||
       selectedKey ||
       visibleRows[0]?.key ||
       null;
-    if (!target) return;
-    setSelectedKey(target);
+    const row = target
+      ? visibleRows.find((r) => r.key === target) ||
+        openRows.find((r) => r.key === target) ||
+        null
+      : null;
+    if (row) {
+      const dueYmd = ymdAmsterdam(new Date(row.dueAt));
+      const today = ymdAmsterdam(new Date());
+      // Achterstallig valt onder vandaag in focusmodus
+      setFocusDayKey(dueYmd < today ? today : dueYmd);
+      setSelectedKey(row.key);
+    }
     setExpandedRow(null);
     setActionView(true);
   }
 
   function goPrevActie() {
+    if (jumpPinnedKey) {
+      exitJumpPin();
+      return;
+    }
     if (selectedIndex <= 0) return;
-    setSelectedKey(visibleRows[selectedIndex - 1].key);
+    setSelectedKey(visibleRows[selectedIndex - 1]!.key);
   }
 
   function goNextActie() {
+    if (jumpPinnedKey) {
+      exitJumpPin();
+      return;
+    }
     if (selectedIndex < 0 || selectedIndex >= visibleRows.length - 1) return;
-    setSelectedKey(visibleRows[selectedIndex + 1].key);
+    setSelectedKey(visibleRows[selectedIndex + 1]!.key);
+  }
+
+  function shiftFocusDay(delta: number) {
+    setJumpPinnedKey(null);
+    setFocusDayKey((prev) => shiftDayKey(prev, delta));
+  }
+
+  function focusFactuurKaart(fac: Factuur | null | undefined, actie: BackofficeActie) {
+    const lead = leads.find((l) => l.id === actie.leadId) || null;
+    const straat = [lead?.straat, lead?.huisnummer, lead?.toevoeging]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const plaats = [lead?.postcode, lead?.plaats].filter(Boolean).join(" ").trim();
+    const inc = fac ? Number(fac.bedrag_inc_btw) || 0 : null;
+    const factuurId = fac?.id || actie.factuurId || null;
+    const nummer = fac?.factuur_nummer || actie.factuurNummer || "—";
+
+    return (
+      <article className="flex h-full min-h-0 flex-col border border-line bg-white">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Factuur
+            </p>
+            <p className="truncate font-mono text-sm font-semibold text-ink">
+              {nummer}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="font-display text-base font-semibold tabular-nums text-ink">
+              {inc != null ? formatEuro(inc) : "—"}
+            </p>
+            <p className="text-[11px] font-medium text-muted">
+              {fac?.status || "open"}
+              {fac?.vervaldatum
+                ? ` · vervalt ${formatDateShort(fac.vervaldatum)}`
+                : ""}
+            </p>
+          </div>
+        </div>
+        {factuurId ? (
+          <iframe
+            key={factuurId}
+            title={`Factuur ${nummer}`}
+            src={`/api/facturen/${factuurId}/pdf?inline=1`}
+            className="min-h-0 w-full flex-1 border-0 bg-[#F3F4F3]"
+          />
+        ) : (
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 text-[13px]">
+            <p className="font-semibold text-ink">
+              {lead?.naam || actie.leadNaam}
+            </p>
+            {straat ? <p className="text-muted">{straat}</p> : null}
+            {plaats ? <p className="text-muted">{plaats}</p> : null}
+            {lead?.email ? (
+              <p className="text-muted">{lead.email}</p>
+            ) : null}
+            {fac?.omschrijving ? (
+              <p className="border-t border-line pt-2 text-ink">
+                {fac.omschrijving}
+              </p>
+            ) : (
+              <p className="text-muted">Geen factuur om te tonen.</p>
+            )}
+          </div>
+        )}
+      </article>
+    );
+  }
+
+  function focusActieIcoon(
+    kind: "check" | "mail" | "calendar" | "phone" | "clock" | "bolt" | "pin"
+  ) {
+    const common = "h-4 w-4";
+    switch (kind) {
+      case "check":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+            <path
+              d="M8 12.5 10.8 15.2 16.2 9.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      case "mail":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <rect
+              x="3.5"
+              y="5.5"
+              width="17"
+              height="13"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            />
+            <path
+              d="m4 7 8 6 8-6"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      case "calendar":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <rect
+              x="3.5"
+              y="5"
+              width="17"
+              height="15"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            />
+            <path d="M8 3.5v3M16 3.5v3M3.5 9.5h17" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case "phone":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <path
+              d="M8.5 4.5h2.2l1 4.2-1.7 1a10 10 0 0 0 4.3 4.3l1-1.7 4.2 1v2.2A2 2 0 0 1 17.5 18 13.5 13.5 0 0 1 6 6.5a2 2 0 0 1 2.5-2Z"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      case "clock":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 7.5V12l3.2 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case "bolt":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <path
+              d="M13 3 6.5 13.5H12l-1 7.5L18.5 10H13L13 3Z"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      case "pin":
+        return (
+          <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden>
+            <path
+              d="M12 21s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10Z"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            />
+            <circle cx="12" cy="11" r="2" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        );
+    }
+  }
+
+  /** Actiekaart: icoon + titel + wat er gebeurt. */
+  function focusActieKaart(opts: {
+    icon: "check" | "mail" | "calendar" | "phone" | "clock" | "bolt" | "pin";
+    titel: string;
+    uitleg: string;
+    onClick: () => void;
+    disabled?: boolean;
+    tone?: "default" | "green" | "orange" | "soft-orange";
+  }) {
+    const tone = opts.tone || "default";
+    const shell =
+      tone === "green"
+        ? "border-green/40 bg-green text-white hover:bg-green-dark"
+        : tone === "orange"
+          ? "border-orange/40 bg-orange text-white hover:opacity-90"
+          : tone === "soft-orange"
+            ? "border-[#F3D2B8] bg-[#FFF4EB] text-ink hover:bg-[#FFE8D6]"
+            : "border-line bg-white text-ink hover:bg-wash";
+    const iconWrap =
+      tone === "green" || tone === "orange"
+        ? "bg-white/20 text-white"
+        : tone === "soft-orange"
+          ? "bg-orange/15 text-orange"
+          : "bg-wash text-ink";
+    const uitlegCls =
+      tone === "green" || tone === "orange"
+        ? "text-white/85"
+        : "text-muted";
+    return (
+      <button
+        type="button"
+        disabled={opts.disabled}
+        onClick={opts.onClick}
+        className={[
+          "flex w-full items-center gap-2.5 border px-2.5 py-2.5 text-left transition disabled:opacity-45",
+          shell,
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "inline-flex h-9 w-9 shrink-0 items-center justify-center",
+            iconWrap,
+          ].join(" ")}
+        >
+          {focusActieIcoon(opts.icon)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-semibold leading-snug">
+            {opts.titel}
+          </span>
+          <span className={["mt-0.5 block text-[11px] leading-snug", uitlegCls].join(" ")}>
+            {opts.uitleg}
+          </span>
+        </span>
+        <span className="shrink-0 text-sm opacity-60" aria-hidden>
+          ›
+        </span>
+      </button>
+    );
+  }
+
+  /** Datum/tijd voor vervolg — compact, boven de actiekaarten. */
+  function focusWanneerKiezer() {
+    return (
+      <div className="space-y-1.5 border border-line bg-white px-2.5 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Wanneer?
+        </p>
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            onClick={() => setOpvolgMode("algemeen")}
+            className={[
+              "h-8 text-[11px] font-semibold",
+              opvolgMode === "algemeen"
+                ? "bg-ink text-white"
+                : "border border-line bg-white text-ink hover:bg-wash",
+            ].join(" ")}
+          >
+            Algemeen
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpvolgMode("specifiek")}
+            className={[
+              "h-8 text-[11px] font-semibold",
+              opvolgMode === "specifiek"
+                ? "bg-ink text-white"
+                : "border border-line bg-white text-ink hover:bg-wash",
+            ].join(" ")}
+          >
+            Specifiek
+          </button>
+        </div>
+        <p className="text-[11px] leading-snug text-muted">
+          {opvolgMode === "algemeen"
+            ? "Die dag zonder vast tijdstip — tussen de andere acties."
+            : "Vast moment (klant afspraak of zelf gekozen) + optionele notitie."}
+        </p>
+        <div
+          className={
+            opvolgMode === "specifiek"
+              ? "grid grid-cols-2 gap-1.5"
+              : "grid grid-cols-1"
+          }
+        >
+          <label className="block min-w-0">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Datum
+            </span>
+            <input
+              type="date"
+              value={opvolgDate}
+              onChange={(e) => setOpvolgDate(e.target.value)}
+              className="h-9 w-full border border-line bg-white px-2 text-[12px] text-ink"
+            />
+          </label>
+          {opvolgMode === "specifiek" ? (
+            <label className="block min-w-0">
+              <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Tijd
+              </span>
+              <input
+                type="time"
+                value={opvolgTime}
+                onChange={(e) => setOpvolgTime(e.target.value)}
+                className="h-9 w-full border border-line bg-white px-2 text-[12px] text-ink"
+              />
+            </label>
+          ) : null}
+        </div>
+        {opvolgMode === "specifiek" ? (
+          <label className="block">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Notitie
+            </span>
+            <textarea
+              value={opvolgNote}
+              onChange={(e) => setOpvolgNote(e.target.value)}
+              rows={2}
+              placeholder="Bijv. bel na 14:00 / klant op werk"
+              className="w-full resize-none border border-line bg-white px-2 py-1.5 text-[12px] text-ink placeholder:text-muted"
+            />
+          </label>
+        ) : null}
+      </div>
+    );
+  }
+
+  /**
+   * Vervolg-actiekaarten (terugbel / betaalt later).
+   * Datum komt uit focusWanneerKiezer erboven.
+   */
+  function focusVervolgBlok(
+    actie: BackofficeActie,
+    opts?: { factuurUitkomst?: boolean }
+  ) {
+    const busyOpvolg = busyId === `${actie.id}-opvolg`;
+    const busyBetaalt = busyId === `${actie.id}-aangegeven`;
+    const whenLabel =
+      opvolgMode === "specifiek"
+        ? `${formatFocusDayLabel(opvolgDate)} ${opvolgTime}`
+        : formatFocusDayLabel(opvolgDate);
+
+    return (
+      <div className="space-y-1.5">
+        {focusWanneerKiezer()}
+        {opts?.factuurUitkomst ? (
+          focusActieKaart({
+            icon: "calendar",
+            titel: `Betaalt later · ${formatFocusDayLabel(opvolgDate)}`,
+            uitleg:
+              "Klant heeft een betaaldatum doorgegeven. Die dag komt “betaling controleren” terug.",
+            disabled: !actie.factuurId || busyBetaalt,
+            onClick: () => void setAangegevenTeBetalen(actie, opvolgDate),
+          })
+        ) : null}
+        {focusActieKaart({
+          icon: "phone",
+          titel: "Niet bereikt",
+          uitleg: "Geen gehoor — automatisch morgen opnieuw in de actielijst.",
+          disabled: !actie.projectId || busyOpvolg,
+          tone: "soft-orange",
+          onClick: () => void planOpvolging(actie, "niet_bereikt"),
+        })}
+        {focusActieKaart({
+          icon: "clock",
+          titel: `Zet terugbel · ${whenLabel}`,
+          uitleg:
+            opvolgMode === "specifiek"
+              ? "Zet een terugbel-actie op dit exacte moment."
+              : "Zet een terugbel-actie op die dag, zonder vast tijdstip.",
+          disabled: !actie.projectId || busyOpvolg,
+          tone: "orange",
+          onClick: () => void planOpvolging(actie, "wacht_klant"),
+        })}
+      </div>
+    );
   }
 
   function categoryPillForRow(row: TaskRow): { label: string; className: string } {
@@ -3392,14 +4460,20 @@ export function BackofficeActiesList({
   }
 
   return (
-    <div className="space-y-4 px-5 pb-6 pt-4">
+    <div
+      className={
+        actionView
+          ? "flex h-[calc(100dvh-5.25rem)] max-h-[calc(100dvh-5.25rem)] flex-col overflow-hidden px-3 pt-2 pb-2"
+          : "space-y-4 px-5 pb-6 pt-4"
+      }
+    >
       {error && (
-        <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-sm text-[#C45A12]">
+        <p className="shrink-0 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-1.5 text-sm text-[#C45A12]">
           {error}
         </p>
       )}
       {msg ? (
-        <p className="border border-green/30 bg-green-soft px-3 py-2 text-sm text-green-dark">
+        <p className="shrink-0 border border-green/30 bg-green-soft px-3 py-1.5 text-sm text-green-dark">
           {msg}
         </p>
       ) : null}
@@ -3411,7 +4485,7 @@ export function BackofficeActiesList({
             Acties
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            Je werkvoorraad, op volgorde van deadline
+            Overzicht — open focusmodus om per dag te werken
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -3436,11 +4510,10 @@ export function BackofficeActiesList({
           </label>
           <button
             type="button"
-            disabled={visibleRows.length === 0}
             onClick={() => openActionView()}
-            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            className="bg-orange px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
           >
-            Start Action view →
+            Focusmodus →
           </button>
         </div>
       </div>
@@ -3650,7 +4723,7 @@ export function BackofficeActiesList({
         </div>
       ) : null}
 
-      {actionView && selectedRow ? null : (
+      {actionView ? null : (
       <div className="min-w-0 space-y-3">
       {tabEmpty ? (
         <div className="border border-line bg-white px-4 py-14 text-center text-sm text-muted">
@@ -3911,289 +4984,733 @@ export function BackofficeActiesList({
       </div>
       )}
 
-      {actionView && selectedRow ? (() => {
-        const actie = selectedRow.actie;
-        const due = deadlinePill({
-          dueAt: selectedRow.dueAt,
-          overdue: selectedRow.overdue,
-          vastgelopen: actie.vastgelopen,
-        });
-        const project = actie.project;
+      {actionView ? (() => {
+        const actie = selectedRow?.actie;
+        const project = actie?.project;
         const warmtefonds = project ? isWarmtefondsProject(project) : false;
-        const drafts = draftFacturenVoorActie(actie, facturen);
-        const saleAt = actie.saleAt
-          ? new Date(actie.saleAt)
-          : project
-            ? saleMomentVanProject(project)
-            : new Date();
-        const recommended = project
-          ? recommendedSchouwWeekForProject(project, saleAt)
-          : { jaar: saleAt.getFullYear(), week: 1 };
-        const recommendedValue = schouwWeekValue(
-          recommended.jaar,
-          recommended.week
-        );
-        const selectedWeek = weekKeuze[actie.id] || recommendedValue;
-        const selectedFactuur =
-          factuurKeuze[actie.id] ||
-          (drafts.length === 1 ? drafts[0].id : "");
-        const selectedPartner =
-          partnerKeuze[actie.id] ||
-          project?.installatie_partner_id ||
-          defaultPartnerId;
-        const bedragen = project
-          ? kickoffWarmtefondsBedragen(project, selectedProjectFacturen)
-          : { aanbetalingInc: null, warmtefondsInc: null };
-        const lead = leads.find((l) => l.id === actie.leadId) || null;
-        const tel = actie.telefoon || lead?.telefoon || null;
-        const eigenaar = selectedEigenaar;
-        const canFinish = true;
-
-        const doel =
-          selectedRow.kind === "factuur_versturen"
-            ? "Maak of verstuur de aanbetalingsfactuur naar de klant."
-            : selectedRow.kind === "edwin_doorsturen"
-              ? "Stuur de klantgegevens naar Edwin zodat hij de Warmtefonds-afspraak kan inplannen."
-              : selectedRow.kind === "schouw_week"
-                ? "Zet de schouwweek (incl. track & trace naar de klant)."
-                : selectedRow.kind === "schouw_inplannen"
-                  ? "Exacte schouwdag en tijd met de klant afspreken."
-                  : selectedRow.kind === "herplan"
-                    ? "Nieuwe afspraak inplannen."
-                    : selectedRow.kind === "bestel_materiaal"
-                      ? "Materiaalbestelling vastleggen."
-                      : selectedRow.kind === "financiering"
-                        ? "Warmtefonds / financiering oppakken."
-                        : selectedRow.kind === "wacht_warmtefonds"
-                          ? "Zet hier de Warmtefonds-status. Bij goedkeuring verdwijnt deze actie — daarna schouw plannen."
-                          : selectedRow.kind === "nabellen"
-                            ? "Openstaande betaling afronden."
-                            : selectedRow.kind === "wf_aanbetaling_herinnering"
-                              ? "Stuur een vriendelijke herinnering: aanbetaling is nodig om Warmtefonds aan te vragen. Factuur-PDF gaat mee."
-                              : isRestfactuurActie(actie)
-                                ? "Restfactuur opstellen en versturen."
-                                : isInstallatieActie(actie)
-                                  ? "Installatie inplannen."
-                                  : actie.reden || null;
+        const lead = actie
+          ? leads.find((l) => l.id === actie.leadId) || null
+          : null;
+        const tel = actie?.telefoon || lead?.telefoon || null;
+        const hasNotes =
+          Boolean(project?.backoffice_notitie?.trim()) ||
+          Boolean(project?.installateur_notitie?.trim());
 
         return (
-          <div className="flex min-h-[min(78vh,44rem)] flex-col border border-line bg-white">
-            {/* Top: navigatie */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setActionView(false)}
-                  className="text-xs font-semibold text-muted hover:text-ink"
-                >
-                  ← Lijst
-                </button>
-                <p className="text-xs text-muted">
-                  Taak{" "}
-                  <span className="font-semibold text-ink">
-                    {selectedIndex + 1}
-                  </span>{" "}
-                  van {visibleRows.length}
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={selectedIndex <= 0}
-                  onClick={goPrevActie}
-                  className="h-8 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-35"
-                >
-                  Vorige
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    selectedIndex < 0 ||
-                    selectedIndex >= visibleRows.length - 1
-                  }
-                  onClick={goNextActie}
-                  className="h-8 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-35"
-                >
-                  Volgende
-                </button>
-              </div>
-            </div>
-
-            {/* Queue: horizontale strip */}
-            <div className="flex gap-1.5 overflow-x-auto border-b border-line bg-wash/50 px-3 py-2">
-              {visibleRows.map((row, idx) => {
-                const active = row.key === selectedRow.key;
-                const rowDue = deadlinePill({
-                  dueAt: row.dueAt,
-                  overdue: row.overdue,
-                  vastgelopen: row.actie.vastgelopen,
-                });
-                return (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-line bg-white">
+            {/* Dagkiezer + terugbel-zoek */}
+            <div className="shrink-0 space-y-1.5 border-b border-line px-3 py-2 sm:px-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <button
-                    key={row.key}
                     type="button"
-                    onClick={() => setSelectedKey(row.key)}
-                    title={`${row.klant} — ${row.titel}`}
+                    onClick={() => {
+                      setJumpPinnedKey(null);
+                      setFocusJumpQ("");
+                      setActionView(false);
+                    }}
+                    className="text-xs font-semibold text-muted hover:text-ink"
+                  >
+                    ← Lijst
+                  </button>
+                  <span
+                    className="hidden h-4 w-px bg-line sm:block"
+                    aria-hidden
+                  />
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => shiftFocusDay(-1)}
+                      aria-label="Vorige dag"
+                      className="inline-flex h-9 w-9 items-center justify-center border border-line bg-white text-ink hover:bg-wash"
+                    >
+                      ‹
+                    </button>
+                    <label className="relative">
+                      <span className="sr-only">Datum</span>
+                      <input
+                        type="date"
+                        value={focusDayKey}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+                            setJumpPinnedKey(null);
+                            setFocusDayKey(v);
+                          }
+                        }}
+                        className="absolute inset-0 cursor-pointer opacity-0"
+                      />
+                      <span className="inline-flex h-9 min-w-[11rem] items-center justify-center border border-line bg-wash px-3 text-sm font-semibold capitalize text-ink">
+                        {focusDayLabel}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => shiftFocusDay(1)}
+                      aria-label="Volgende dag"
+                      className="inline-flex h-9 w-9 items-center justify-center border border-line bg-white text-ink hover:bg-wash"
+                    >
+                      ›
+                    </button>
+                  </div>
+                  {focusDayKey !== todayKey ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJumpPinnedKey(null);
+                        setFocusDayKey(todayKey);
+                      }}
+                      className="h-9 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:bg-wash"
+                    >
+                      Vandaag
+                    </button>
+                  ) : null}
+                  <p className="text-xs text-muted">
+                    <span className="font-semibold tabular-nums text-ink">
+                      {visibleRows.length}
+                    </span>{" "}
+                    {visibleRows.length === 1 ? "actie" : "acties"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs text-muted">
+                    <select
+                      value={medewerkerId}
+                      onChange={(e) => setMedewerkerId(e.target.value)}
+                      className="h-9 min-w-[9rem] border border-line bg-white px-2 text-sm text-ink outline-none focus:border-green"
+                    >
+                      {adviseurId ? (
+                        <option value={adviseurId}>Mijn acties</option>
+                      ) : null}
+                      <option value="">Alle</option>
+                      {medewerkers
+                        .filter((a) => a.id !== adviseurId)
+                        .map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.naam}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowWachtExtern((v) => !v)}
                     className={[
-                      "shrink-0 border px-2.5 py-1.5 text-left transition",
-                      active
-                        ? "border-orange bg-white shadow-sm"
-                        : "border-transparent bg-transparent hover:border-line hover:bg-white",
+                      "h-9 border px-2.5 text-xs font-semibold",
+                      showWachtExtern
+                        ? "border-ink bg-ink text-white"
+                        : "border-line bg-white text-muted hover:text-ink",
                     ].join(" ")}
                   >
-                    <p className="max-w-[9rem] truncate text-[11px] font-semibold text-ink">
-                      {idx + 1}. {row.klant}
-                    </p>
-                    <p
-                      className={[
-                        "mt-0.5 text-[10px] font-medium",
-                        rowDue.className,
-                      ].join(" ")}
-                    >
-                      {rowDue.when.split(" - ")[0]}
-                    </p>
+                    Wacht extern
                   </button>
-                );
-              })}
-            </div>
-
-            {/* Klantstrip */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold text-green-deeper">
-                  {initialsVanNaam(actie.leadNaam)}
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">
-                    {actie.leadNaam}
-                  </p>
-                  <p className="truncate text-[11px] text-muted">
-                    <span className="font-mono">
-                      {actie.projectNummer || actie.offerteNummer || "—"}
-                    </span>
-                    {warmtefonds ? " · Warmtefonds" : ""}
-                    {eigenaar
-                      ? ` · ${eigenaar.naam.split(" ")[0]}`
-                      : ""}
-                    {laatsteContactAt
-                      ? ` · contact ${formatInTimeZone(
-                          new Date(laatsteContactAt),
-                          AMSTERDAM_TZ,
-                          "d MMM HH:mm",
-                          { locale: nl }
-                        )}`
-                      : ""}
-                  </p>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={[
-                    "inline-flex items-center px-2 py-1 text-[11px] font-semibold",
-                    selectedRow.overdue || actie.vastgelopen
-                      ? "bg-[#FEE2E2] text-[#991B1B]"
-                      : "bg-[#FFF0E6] text-[#C45A12]",
-                  ].join(" ")}
-                >
-                  {due.when}
-                </span>
-                {tel ? (
-                  <a
-                    href={`tel:${tel.replace(/\s/g, "")}`}
-                    onClick={() =>
-                      void logBelContact(
-                        actie,
-                        `Gebeld via Acties · ${tel}`
-                      )
-                    }
-                    className="inline-flex h-9 items-center gap-1.5 bg-green px-3.5 text-xs font-semibold text-white hover:bg-green-dark"
-                  >
-                    Bel {tel}
-                  </a>
-                ) : null}
-                {actie.projectId ? (
-                  <Link
-                    href={`/projecten/${actie.projectId}?from=acties`}
-                    className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink hover:bg-wash"
-                  >
-                    Project
-                  </Link>
+
+              <div className="relative max-w-xl">
+                <input
+                  type="search"
+                  value={focusJumpQ}
+                  onChange={(e) => setFocusJumpQ(e.target.value)}
+                  placeholder="Terugbel? Zoek op telefoon of postcode…"
+                  className="h-10 w-full border border-line bg-white px-3 text-sm text-ink outline-none placeholder:text-muted focus:border-green"
+                  autoComplete="off"
+                />
+                {focusJumpQ.trim().length >= 2 ? (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto border border-line bg-white shadow-lg">
+                    {focusJumpHits.length === 0 ? (
+                      <p className="px-3 py-3 text-sm text-muted">
+                        Geen openstaande actie voor dit zoekwoord.
+                      </p>
+                    ) : (
+                      <ul>
+                        {focusJumpHits.map((row) => {
+                          const lead = leads.find(
+                            (l) => l.id === row.actie.leadId
+                          );
+                          const tel =
+                            row.actie.telefoon || lead?.telefoon || null;
+                          const pc = lead?.postcode || null;
+                          const active = row.key === jumpPinnedKey;
+                          return (
+                            <li key={row.key}>
+                              <button
+                                type="button"
+                                onClick={() => openJumpHit(row)}
+                                className={[
+                                  "flex w-full flex-col gap-0.5 border-b border-line px-3 py-2.5 text-left last:border-b-0",
+                                  active
+                                    ? "bg-orange/10"
+                                    : "hover:bg-wash",
+                                ].join(" ")}
+                              >
+                                <span className="flex flex-wrap items-baseline justify-between gap-2">
+                                  <span className="text-sm font-semibold text-ink">
+                                    {row.klant}
+                                  </span>
+                                  <span className="text-[11px] font-medium text-muted">
+                                    {row.actie.projectNummer ||
+                                      row.actie.offerteNummer ||
+                                      "—"}
+                                  </span>
+                                </span>
+                                <span className="text-[12px] text-ink">
+                                  {row.titel}
+                                </span>
+                                <span className="text-[11px] text-muted">
+                                  {[tel, pc, row.actie.plaats || lead?.plaats]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
                 ) : null}
               </div>
             </div>
 
-            {/* Werkruimte + backoffice-notitie (opstart) naast */}
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
-                <div className="min-w-0 flex-1 space-y-5 lg:max-w-2xl">
-                  <div>
-                    <h3 className="font-display text-xl font-semibold leading-snug text-ink sm:text-[1.4rem]">
-                      {selectedRow.titel}
-                    </h3>
-                    {doel ? (
-                      <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
-                        {doel}
+            {!selectedRow || !actie ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-20 text-center">
+                <p className="font-display text-xl font-semibold text-ink">
+                  Niks voor {focusDayLabel.toLowerCase()}
+                </p>
+                <p className="max-w-sm text-sm text-muted">
+                  Geen openstaande acties op deze dag. Kies een andere datum of
+                  open de lijst.
+                </p>
+                <div className="mt-2 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => shiftFocusDay(1)}
+                    className="h-9 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash"
+                  >
+                    Volgende dag →
+                  </button>
+                  {focusDayKey !== todayKey ? (
+                    <button
+                      type="button"
+                      onClick={() => setFocusDayKey(todayKey)}
+                      className="h-9 bg-orange px-3 text-xs font-semibold text-white hover:opacity-90"
+                    >
+                      Naar vandaag
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Klant · acties · pijltjes rechts vast (niet meeschuiven met Bel/Notitie) */}
+                <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 sm:px-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <p className="truncate text-sm font-semibold text-ink">
+                        {actie.leadNaam}
                       </p>
+                      <p className="truncate text-[11px] text-muted">
+                        {jumpPinnedKey ? (
+                          <>
+                            <span className="font-semibold text-orange">
+                              Via zoeken
+                            </span>
+                            {" · "}
+                            <button
+                              type="button"
+                              onClick={exitJumpPin}
+                              className="font-semibold text-ink underline-offset-2 hover:underline"
+                            >
+                              terug
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {selectedIndex + 1}/{visibleRows.length}
+                          </>
+                        )}
+                        {" · "}
+                        <span className="font-mono">
+                          {actie.projectNummer || actie.offerteNummer || "—"}
+                        </span>
+                        {warmtefonds ? " · WF" : ""}
+                      </p>
+                    </div>
+                    <p className="truncate text-[12px] font-semibold text-ink">
+                      {selectedRow.titel}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center justify-end gap-1.5">
+                    {tel ? (
+                      <a
+                        href={`tel:${tel.replace(/\s/g, "")}`}
+                        onClick={() =>
+                          void logBelContact(
+                            actie,
+                            `Gebeld via Acties · ${tel}`
+                          )
+                        }
+                        className="inline-flex h-8 items-center bg-green px-2.5 text-xs font-semibold text-white hover:bg-green-dark"
+                      >
+                        Bel
+                      </a>
+                    ) : null}
+                    {hasNotes ? (
+                      <button
+                        type="button"
+                        onClick={() => setNotesOpen((v) => !v)}
+                        className={[
+                          "inline-flex h-8 items-center border px-2 text-[11px] font-semibold",
+                          notesOpen
+                            ? "border-ink bg-ink text-white"
+                            : "border-line bg-white text-ink hover:bg-wash",
+                        ].join(" ")}
+                      >
+                        Notitie
+                      </button>
+                    ) : null}
+                    {actie.projectId ? (
+                      <Link
+                        href={`/projecten/${actie.projectId}?from=acties`}
+                        className="inline-flex h-8 items-center border border-line px-2 text-[11px] font-semibold text-ink hover:bg-wash"
+                      >
+                        Project
+                      </Link>
                     ) : null}
                   </div>
-
-                  {actieWerkPanel(selectedRow, { hideContact: true })}
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={!jumpPinnedKey && selectedIndex <= 0}
+                      onClick={goPrevActie}
+                      aria-label="Vorige actie"
+                      className="inline-flex h-8 w-8 items-center justify-center border border-line bg-white text-sm font-semibold text-ink hover:bg-wash disabled:opacity-35"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        !jumpPinnedKey &&
+                        (selectedIndex < 0 ||
+                          selectedIndex >= visibleRows.length - 1)
+                      }
+                      onClick={goNextActie}
+                      aria-label="Volgende actie"
+                      className="inline-flex h-8 w-8 items-center justify-center border border-line bg-white text-sm font-semibold text-ink hover:bg-wash disabled:opacity-35"
+                    >
+                      ›
+                    </button>
+                  </div>
                 </div>
 
-                <SaleNotitiesAside
-                  actie={actie}
-                  projecten={projecten}
-                  forceShow={
-                    selectedRow.kind === "factuur_versturen" ||
-                    selectedRow.kind === "schouw_week" ||
-                    selectedRow.kind === "schouw_inplannen" ||
-                    selectedRow.kind === "edwin_doorsturen" ||
-                    selectedRow.kind === "bestel_materiaal"
-                  }
-                />
-              </div>
-            </div>
+                {/* Split: links content · rechts acties */}
+                <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden px-3 py-2 lg:grid-cols-[minmax(0,1.25fr)_minmax(17rem,0.9fr)] sm:px-4">
+                  {/* LINKS — factuur / agenda */}
+                  <div className="min-h-0 overflow-hidden">
+                    {selectedRow.kind === "nabellen" ||
+                    selectedRow.kind === "wf_aanbetaling_herinnering" ||
+                    selectedRow.kind === "factuur_versturen" ? (
+                      focusFactuurKaart(
+                        (actie.factuurId
+                          ? facturen.find((f) => f.id === actie.factuurId)
+                          : null) ||
+                          aanbetalingDraftsVoorActie(actie, facturen)[0] ||
+                          null,
+                        actie
+                      )
+                    ) : selectedRow.kind === "herplan" ? (
+                      <div className="flex h-full min-h-0 flex-col overflow-hidden border border-line bg-white">
+                        <div className="shrink-0 border-b border-line px-2.5 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                            Slimme inplanner
+                          </p>
+                          <p className="mt-0.5 text-[12px] text-muted">
+                            Kies adviseur + beste slot voor {actie.leadNaam}.
+                          </p>
+                        </div>
+                        <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2.5">
+                          {(() => {
+                            const lead =
+                              leads.find((l) => l.id === actie.leadId) || null;
+                            if (!lead) {
+                              return (
+                                <div className="space-y-2">
+                                  <p className="text-sm text-muted">
+                                    Lead niet geladen — open de lead om te
+                                    herplannen.
+                                  </p>
+                                  <Link
+                                    href={`/leads/${actie.leadId}`}
+                                    className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
+                                  >
+                                    Open lead
+                                  </Link>
+                                </div>
+                              );
+                            }
+                            return (
+                              <LeadAfspraakPlannen
+                                lead={lead}
+                                adviseurs={adviseurs}
+                                onPlanned={() => {
+                                  void (async () => {
+                                    await voltooiHerplan(actie);
+                                    setMsg(
+                                      "Afspraak herpland — actie afgerond."
+                                    );
+                                    if (
+                                      selectedIndex >= 0 &&
+                                      selectedIndex < visibleRows.length - 1
+                                    ) {
+                                      goNextActie();
+                                    }
+                                  })();
+                                }}
+                              />
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    ) : selectedRow.kind === "schouw_inplannen" ||
+                      selectedRow.kind === "schouw_week" ||
+                      (selectedRow.kind === "volgende_stap" &&
+                        isInstallatieActie(actie)) ? (
+                      <div className="flex h-full min-h-0 flex-col overflow-hidden border border-line bg-white p-2.5">
+                        <p className="mb-1.5 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          {isInstallatieActie(actie)
+                            ? "Installatie-agenda"
+                            : "Schouw-agenda"}
+                        </p>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                          {(() => {
+                            const pid =
+                              partnerKeuze[actie.id] ||
+                              actie.project?.installatie_partner_id ||
+                              defaultPartnerId;
+                            if (!pid) {
+                              return (
+                                <p className="text-sm text-muted">
+                                  Kies rechts eerst een partner.
+                                </p>
+                              );
+                            }
+                            return (
+                              <PartnerSlotPicker
+                                partnerId={pid}
+                                soort={
+                                  isInstallatieActie(actie)
+                                    ? "installatie"
+                                    : "schouw"
+                                }
+                                leadId={actie.leadId}
+                                projectId={actie.projectId || null}
+                                excludeProjectId={actie.projectId || null}
+                                compact
+                                showBest
+                                lockBestToPartner={isInstallatieActie(actie)}
+                                afterIso={
+                                  isInstallatieActie(actie)
+                                    ? actie.project?.schouw_at || null
+                                    : null
+                                }
+                                value={
+                                  isInstallatieActie(actie)
+                                    ? installatieAtKeuze[actie.id] || null
+                                    : schouwAtKeuze[actie.id] || null
+                                }
+                                onPartnerChange={(id) =>
+                                  setPartnerKeuze((p) => ({
+                                    ...p,
+                                    [actie.id]: id,
+                                  }))
+                                }
+                                onChange={(iso) => {
+                                  if (isInstallatieActie(actie)) {
+                                    setInstallatieAtKeuze((p) => {
+                                      if (!iso) {
+                                        const n = { ...p };
+                                        delete n[actie.id];
+                                        return n;
+                                      }
+                                      return { ...p, [actie.id]: iso };
+                                    });
+                                  } else {
+                                    setSchouwAtKeuze((p) => {
+                                      if (!iso) {
+                                        const n = { ...p };
+                                        delete n[actie.id];
+                                        return n;
+                                      }
+                                      return { ...p, [actie.id]: iso };
+                                    });
+                                  }
+                                }}
+                              />
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex h-full items-center justify-center border border-line bg-wash/40 px-4 text-center text-sm text-muted">
+                        {selectedRow.titel}
+                      </div>
+                    )}
+                  </div>
 
-            {/* Footer: opvolgen + afronden */}
-            <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-white px-4 py-3 sm:px-5">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={busyId === `${actie.id}-opvolg`}
-                  onClick={() => void planOpvolging(actie, "niet_bereikt")}
-                  className="h-9 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                >
-                  Niet bereikt
-                </button>
-                <button
-                  type="button"
-                  disabled={busyId === `${actie.id}-opvolg`}
-                  onClick={() => void planOpvolging(actie, "wacht_klant")}
-                  className="h-9 border border-line bg-white px-3 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                >
-                  Wacht op klant
-                </button>
-              </div>
-              <div className="flex flex-col items-stretch gap-1 sm:items-end">
-                <button
-                  type="button"
-                  disabled={
-                    !canFinish || busyId === `${actie.id}-afronden`
-                  }
-                  onClick={() => void afrondenEnVolgende(selectedRow)}
-                  className="h-10 bg-orange px-5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {busyId === `${actie.id}-afronden`
-                    ? "Bezig…"
-                    : "Afronden & volgende →"}
-                </button>
-                {!canFinish ? (
-                  <p className="text-[11px] text-muted">
-                    Rond eerst de stappen hierboven af.
-                  </p>
-                ) : null}
-              </div>
-            </div>
+                  {/* RECHTS — wat jij doet (actiekaarten met icoon + uitleg) */}
+                  <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border border-line bg-[#FAFBFA] p-2.5">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Wat wil je doen?
+                      </p>
+                      <p className="mt-0.5 text-sm font-semibold leading-snug text-ink">
+                        {selectedRow.titel}
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-muted">
+                        Kies één uitkomst. Elke knop legt uit wat er gebeurt.
+                      </p>
+                    </div>
+
+                    {selectedRow.kind === "nabellen" ? (
+                      <div className="space-y-1.5">
+                        {focusActieKaart({
+                          icon: "check",
+                          titel:
+                            busyId === `${actie.id}-betaald`
+                              ? "Bezig…"
+                              : "Is betaald → klaar",
+                          uitleg:
+                            "Betaling is binnen. Factuur wordt gemarkeerd als betaald.",
+                          tone: "green",
+                          disabled: busyId === `${actie.id}-betaald`,
+                          onClick: () => void markFactuurBetaald(actie),
+                        })}
+                        {focusActieKaart({
+                          icon: "mail",
+                          titel:
+                            busyId === `${actie.id}-herstuur`
+                              ? "Bezig…"
+                              : "Factuur opnieuw mailen",
+                          uitleg:
+                            "Stuur de factuur nog eens naar de klant (PDF bijlage).",
+                          disabled: busyId === `${actie.id}-herstuur`,
+                          onClick: () => void opnieuwVerstuurFactuur(actie),
+                        })}
+                        {focusVervolgBlok(actie, { factuurUitkomst: true })}
+                      </div>
+                    ) : selectedRow.kind === "wf_aanbetaling_herinnering" ? (
+                      <div className="space-y-1.5">
+                        {focusActieKaart({
+                          icon: "mail",
+                          titel:
+                            busyId === `${actie.id}-wf-herinnering`
+                              ? "Bezig…"
+                              : "Stuur herinneringsmail",
+                          uitleg:
+                            "Vriendelijke herinnering: aanbetaling nodig voor Warmtefonds-aanvraag.",
+                          tone: "orange",
+                          disabled:
+                            busyId === `${actie.id}-wf-herinnering`,
+                          onClick: () =>
+                            void stuurWfAanbetalingHerinnering(actie),
+                        })}
+                        {focusActieKaart({
+                          icon: "check",
+                          titel:
+                            busyId === `${actie.id}-betaald`
+                              ? "Bezig…"
+                              : "Is betaald → klaar",
+                          uitleg:
+                            "Aanbetaling is binnen. Factuur markeren als betaald.",
+                          tone: "green",
+                          disabled: busyId === `${actie.id}-betaald`,
+                          onClick: () => void markFactuurBetaald(actie),
+                        })}
+                        {focusVervolgBlok(actie, { factuurUitkomst: true })}
+                      </div>
+                    ) : selectedRow.kind === "factuur_versturen" ? (
+                      <div className="space-y-1.5">
+                        {focusActieKaart({
+                          icon: "mail",
+                          titel:
+                            busyId === `${actie.id}-factuur`
+                              ? "Bezig…"
+                              : "Versturen naar klant",
+                          uitleg:
+                            "Maak/verstuur de aanbetalingsfactuur naar de klant.",
+                          tone: "green",
+                          disabled: busyId === `${actie.id}-factuur`,
+                          onClick: () =>
+                            void verstuurAanbetalingsFactuur(actie),
+                        })}
+                        {focusVervolgBlok(actie)}
+                      </div>
+                    ) : selectedRow.kind === "schouw_inplannen" ||
+                      selectedRow.kind === "schouw_week" ||
+                      (selectedRow.kind === "volgende_stap" &&
+                        isInstallatieActie(actie)) ? (
+                      <>
+                        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          Partner
+                          <select
+                            value={
+                              partnerKeuze[actie.id] ||
+                              actie.project?.installatie_partner_id ||
+                              defaultPartnerId ||
+                              ""
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setPartnerKeuze((p) => ({
+                                ...p,
+                                [actie.id]: v,
+                              }));
+                              setSchouwAtKeuze((p) => {
+                                const n = { ...p };
+                                delete n[actie.id];
+                                return n;
+                              });
+                              setInstallatieAtKeuze((p) => {
+                                const n = { ...p };
+                                delete n[actie.id];
+                                return n;
+                              });
+                            }}
+                            className="mt-1 block h-9 w-full border border-line bg-white px-2 text-sm outline-none focus:border-green"
+                          >
+                            <option value="">Kies partner…</option>
+                            {partners.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.naam}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {focusActieKaart({
+                          icon: "pin",
+                          titel:
+                            busyId === `${actie.id}-schouw` ||
+                            busyId === `${actie.id}-installatie`
+                              ? "Bezig…"
+                              : isInstallatieActie(actie)
+                                ? "Installatie vastleggen"
+                                : selectedRow.kind === "schouw_week"
+                                  ? "Schouwweek zetten"
+                                  : "Schouwdag vastleggen",
+                          uitleg: isInstallatieActie(actie)
+                            ? "Leg de gekozen installatieslot vast bij de partner."
+                            : selectedRow.kind === "schouw_week"
+                              ? "Zet de schouwweek (placeholder) op dit project."
+                              : "Leg de gekozen schouwslot vast bij de partner.",
+                          tone: "orange",
+                          disabled:
+                            busyId === `${actie.id}-schouw` ||
+                            busyId === `${actie.id}-installatie` ||
+                            !(
+                              partnerKeuze[actie.id] ||
+                              actie.project?.installatie_partner_id ||
+                              defaultPartnerId
+                            ) ||
+                            (selectedRow.kind !== "schouw_week" &&
+                              !(
+                                schouwAtKeuze[actie.id] ||
+                                installatieAtKeuze[actie.id]
+                              )),
+                          onClick: () => {
+                            if (
+                              selectedRow.kind === "volgende_stap" &&
+                              isInstallatieActie(actie)
+                            ) {
+                              void planInstallatieFromActie(actie);
+                            } else {
+                              void planSchouwWeek(actie);
+                            }
+                          },
+                        })}
+                        {focusVervolgBlok(actie)}
+                      </>
+                    ) : selectedRow.kind === "herplan" ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] leading-snug text-muted">
+                          Plan links een nieuw slot met de slimme inplanner.
+                          Daarna is deze herplan-actie klaar.
+                        </p>
+                        {focusActieKaart({
+                          icon: "pin",
+                          titel: "Open inplanner in popup",
+                          uitleg:
+                            "Zelfde planner als links, in een groter venster.",
+                          onClick: () => setHerplanActie(actie),
+                        })}
+                        {focusVervolgBlok(actie)}
+                        {focusActieKaart({
+                          icon: "check",
+                          titel:
+                            busyId === `${actie.id}-afronden`
+                              ? "…"
+                              : "Al herpland → afronden",
+                          uitleg:
+                            "Afspraak staat al elders gezet. Rond deze actie af en ga door.",
+                          tone: "green",
+                          disabled: busyId === `${actie.id}-afronden`,
+                          onClick: () => void afrondenEnVolgende(selectedRow),
+                        })}
+                      </div>
+                    ) : (
+                      <>
+                        {actieWerkPanel(selectedRow, {
+                          hideContact: true,
+                          compact: true,
+                        })}
+                        {focusVervolgBlok(actie)}
+                      </>
+                    )}
+
+                    {notesOpen ? (
+                      <div className="max-h-24 overflow-y-auto">
+                        <SaleNotitiesAside
+                          actie={actie}
+                          projecten={projecten}
+                          forceShow
+                        />
+                      </div>
+                    ) : null}
+
+                    {selectedRow.kind !== "nabellen" &&
+                    selectedRow.kind !== "wf_aanbetaling_herinnering" &&
+                    selectedRow.kind !== "factuur_versturen" &&
+                    selectedRow.kind !== "schouw_inplannen" &&
+                    selectedRow.kind !== "schouw_week" &&
+                    selectedRow.kind !== "herplan" &&
+                    !(
+                      selectedRow.kind === "volgende_stap" &&
+                      isInstallatieActie(actie)
+                    ) ? (
+                      <button
+                        type="button"
+                        disabled={busyId === `${actie.id}-afronden`}
+                        onClick={() => void afrondenEnVolgende(selectedRow)}
+                        className="mt-auto flex h-9 w-full items-center justify-center bg-ink text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                      >
+                        {busyId === `${actie.id}-afronden`
+                          ? "…"
+                          : "Afronden & volgende →"}
+                      </button>
+                    ) : null}
+
+                    <ActiesEmailInbox
+                      email={
+                        leads.find((l) => l.id === actie.leadId)?.email || null
+                      }
+                      leadId={actie.leadId}
+                      leadNaam={actie.leadNaam}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         );
       })() : null}

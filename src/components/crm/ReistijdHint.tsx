@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead } from "@/types/database";
 import { AMSTERDAM_TZ, adresRegel, formatTimeNl } from "@/lib/format";
-import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { afspraakTeltVoorReistijd } from "@/lib/afspraak-soort";
 import { resolveDayStartAdres } from "@/lib/start-adres";
 
 type AdresLead = Pick<
@@ -55,8 +55,9 @@ async function fetchTravel(
 }
 
 /**
- * Bij gekozen timeslot: reistijd vanaf vorige afspraak (of startpunt)
- * én gap + reistijd naar de volgende afspraak diezelfde dag.
+ * Bij gekozen timeslot: reistijd vanaf vorige fysieke huisafspraak
+ * (of startpunt) én naar de volgende fysieke diezelfde dag.
+ * Telefonisch / bel telt nooit mee.
  */
 export function ReistijdHint({
   adviseurId,
@@ -102,7 +103,7 @@ export function ReistijdHint({
       .filter(
         (a) =>
           a.adviseur_id === adviseurId &&
-          afspraakBlokkeertAgenda(a.soort) &&
+          afspraakTeltVoorReistijd(a.soort) &&
           a.status !== "geannuleerd" &&
           formatInTimeZone(a.start_at, AMSTERDAM_TZ, "yyyy-MM-dd") === dayKey
       )
@@ -134,7 +135,7 @@ export function ReistijdHint({
         if (prev) {
           const prevLead = resolveAfspraakLead(prev, allLeads);
           from = prevLead ? adresRegel(prevLead) : "";
-          label = prevLead?.naam || "vorige afspraak";
+          label = prevLead?.naam || "vorig huisbezoek";
         } else {
           // Maandag → Daltonlaan (ochtendmeeting), tenzij adviseur meeting overslaat
           const dayStart = resolveDayStartAdres(startAdres, startAt, adviseurId);
@@ -150,7 +151,7 @@ export function ReistijdHint({
             if (cancelled) return;
             if (travel) {
               const prefix = prev
-                ? `Vanaf vorige (${label})`
+                ? `Vanaf vorig huisbezoek (${label})`
                 : `Vanaf startpunt (${label})`;
               out.push(
                 `${prefix}: ${travel.durationText}${
@@ -167,13 +168,13 @@ export function ReistijdHint({
       // ── Naar volgende afspraak ────────────────────────────────────
       if (next) {
         const nextLead = resolveAfspraakLead(next, allLeads);
-        const nextNaam = nextLead?.naam || "volgende afspraak";
+        const nextNaam = nextLead?.naam || "volgend huisbezoek";
         const nextTime = formatTimeNl(next.start_at);
         const gapMin = Math.round(
           (new Date(next.start_at).getTime() - endMs) / 60_000
         );
         const gapLabel = formatGapMinutes(gapMin);
-        let nextLine = `Naar volgende (${nextNaam} ${nextTime}): ${gapLabel} tussenruimte`;
+        let nextLine = `Naar volgend huisbezoek (${nextNaam} ${nextTime}): ${gapLabel} tussenruimte`;
 
         const nextAdres = nextLead ? adresRegel(nextLead) : "";
         if (to && to !== "—" && nextAdres && nextAdres !== "—") {

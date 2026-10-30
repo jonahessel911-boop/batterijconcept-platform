@@ -1,6 +1,6 @@
 /**
- * Marketing-rapportage: Meta ad spend (Amsterdam) + leads/afspraken/deals/omzet uit DB.
- * CPL = spend/leads · CPA = spend/afspraken · CPD/CAC = spend/deals
+ * Marketing-rapportage: Meta spend + leads uit Insights API; Native/overig leads +
+ * afspraken/deals/omzet uit DB. CPL = spend/leads · CPA = spend/afspraken · CPD = spend/deals
  * RPA = omzet/afspraken · ROAS = omzet/spend · ROI = (omzet−spend)/spend
  */
 
@@ -209,6 +209,8 @@ export type MarketingMetaRow = {
   ad_id?: string | null;
   ad_name?: string | null;
   spend: number;
+  /** Meta Insights lead-count (API); null/undefined = nog niet gesync. */
+  leads?: number | null;
 };
 
 export function adKeyFromLead(l: { ad_name?: string | null }): string {
@@ -317,6 +319,7 @@ export function resolveCampaignKey(
 function mergeAccInto(target: Acc, from: Acc): void {
   for (const id of from.leadIds) target.leadIds.add(id);
   target.spend += from.spend;
+  target.apiLeads += from.apiLeads;
   target.afspraken += from.afspraken;
   target.deals += from.deals;
   target.omzet += from.omzet;
@@ -329,7 +332,10 @@ function collapseZeroSpendIntoSiblings(
   for (const [key, acc] of [...campMap.entries()]) {
     if (acc.spend > 0) continue;
     const hasActivity =
-      acc.leadIds.size > 0 || acc.afspraken > 0 || acc.deals > 0;
+      acc.leadIds.size > 0 ||
+      acc.apiLeads > 0 ||
+      acc.afspraken > 0 ||
+      acc.deals > 0;
     if (!hasActivity) {
       campMap.delete(key);
       adByCamp?.delete(key);
@@ -350,6 +356,7 @@ function collapseZeroSpendIntoSiblings(
 
     const t = campMap.get(targetKey)!;
     for (const id of acc.leadIds) t.leadIds.add(id);
+    t.apiLeads += acc.apiLeads;
     t.afspraken += acc.afspraken;
     t.deals += acc.deals;
     t.omzet += acc.omzet;
@@ -444,20 +451,30 @@ function inYmdRange(ymd: string, start: string, end: string): boolean {
 
 type Acc = {
   spend: number;
+  /** CRM-leads (Native / Search / TikTok tot API live is). */
   leadIds: Set<string>;
+  /** Meta (en later TikTok) leads rechtstreeks uit ads API. */
+  apiLeads: number;
   afspraken: number;
   deals: number;
   omzet: number;
 };
 
 function newAcc(): Acc {
-  return { spend: 0, leadIds: new Set(), afspraken: 0, deals: 0, omzet: 0 };
+  return {
+    spend: 0,
+    leadIds: new Set(),
+    apiLeads: 0,
+    afspraken: 0,
+    deals: 0,
+    omzet: 0,
+  };
 }
 
 function accToMetrics(a: Acc): MarketingMetrics {
   return finalizeMetrics({
     spend: a.spend,
-    leads: a.leadIds.size,
+    leads: a.apiLeads + a.leadIds.size,
     afspraken: a.afspraken,
     deals: a.deals,
     omzet: a.omzet,
@@ -644,6 +661,11 @@ export function buildMarketingRapportage(opts: {
   afspraken?: MarketingAfspraak[];
   metaSpend: MarketingMetaRow[];
   metaConfigured?: boolean;
+  /**
+   * true = Meta lead-KPI komt uit Insights API; CRM-Meta-leads niet meetellen.
+   * false = fallback op CRM (als API geen leads leverde).
+   */
+  metaLeadsFromApi?: boolean;
   tiktokConfigured?: boolean;
   tiktokSpend?: number;
   lastSyncAt?: string | null;
@@ -757,7 +779,7 @@ export function buildMarketingRapportage(opts: {
     return dayAcc.get(ymd)!;
   }
 
-  // Spend (Meta) — campaign-level telt in totalen; ad-level alleen onder campagne
+  // Spend + leads (Meta Insights API) — campaign-level in totalen; ad-level onder campagne
   for (const m of opts.metaSpend) {
     if (m.level !== "campaign" && m.level !== "ad") continue;
     if (!inYmdRange(m.datum, startYmd, endYmd)) continue;
@@ -768,24 +790,41 @@ export function buildMarketingRapportage(opts: {
       metaNames
     );
     const spend = Number(m.spend) || 0;
+    const apiLeads = Math.max(0, Math.round(Number(m.leads) || 0));
     const source = "Meta";
     if (m.level === "campaign") {
       weekAcc.get(wk)!.spend += spend;
-      ensureCamp(wk, source, camp).spend += spend;
-      ensureSourceAcc(weekSourceAcc.get(wk)!, source).spend += spend;
+      weekAcc.get(wk)!.apiLeads += apiLeads;
+      const ca = ensureCamp(wk, source, camp);
+      ca.spend += spend;
+      ca.apiLeads += apiLeads;
+      const sa = ensureSourceAcc(weekSourceAcc.get(wk)!, source);
+      sa.spend += spend;
+      sa.apiLeads += apiLeads;
       sourceNames.add(source);
       const da = ensureDay(m.datum);
-      if (da) da.spend += spend;
+      if (da) {
+        da.spend += spend;
+        da.apiLeads += apiLeads;
+      }
       const dsm = daySourceAcc.get(m.datum);
-      if (dsm) ensureSourceAcc(dsm, source).spend += spend;
+      if (dsm) {
+        const dsa = ensureSourceAcc(dsm, source);
+        dsa.spend += spend;
+        dsa.apiLeads += apiLeads;
+      }
     } else {
       const ad = adKeyFromMeta(m);
       ensureCamp(wk, source, camp);
-      ensureCampAd(wk, source, camp, ad).spend += spend;
+      const aa = ensureCampAd(wk, source, camp, ad);
+      aa.spend += spend;
+      aa.apiLeads += apiLeads;
     }
   }
 
-  // Leads (DB)
+  // Leads (DB) — Native/TikTok via CRM; Meta alleen als Insights geen leads gaf.
+  // Afspraken/deals blijven via CRM gekoppeld, ook bij Meta.
+  const skipCrmMetaLeads = Boolean(opts.metaLeadsFromApi);
   for (const l of opts.leads) {
     const ymd = ymdFromIso(l.created_at);
     if (!inYmdRange(ymd, startYmd, endYmd)) continue;
@@ -794,11 +833,14 @@ export function buildMarketingRapportage(opts: {
     const camp = leadCampaign.get(l.id) || "Onbekend";
     const ad = leadAd.get(l.id) || "Onbekend";
     const source = leadSource.get(l.id) || "Onbekend";
+    sourceNames.add(source);
+    if (source === "Meta" && skipCrmMetaLeads) {
+      continue;
+    }
     weekAcc.get(wk)!.leadIds.add(l.id);
     ensureCamp(wk, source, camp).leadIds.add(l.id);
     ensureCampAd(wk, source, camp, ad).leadIds.add(l.id);
     ensureDay(ymd)?.leadIds.add(l.id);
-    sourceNames.add(source);
     ensureSourceAcc(weekSourceAcc.get(wk)!, source).leadIds.add(l.id);
     const dsm = daySourceAcc.get(ymd);
     if (dsm) ensureSourceAcc(dsm, source).leadIds.add(l.id);

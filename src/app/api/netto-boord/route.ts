@@ -516,6 +516,9 @@ export async function GET(req: NextRequest) {
             ? commissie.tranche_b
             : 0)
       );
+      const commissieRestOpen = round2(
+        creditBBetaald || commissie.tranche_b <= 0 ? 0 : commissie.tranche_b
+      );
 
       const statusSinds = geannuleerd
         ? project?.updated_at || (o.updated_at as string | null)
@@ -586,8 +589,11 @@ export async function GET(req: NextRequest) {
         commissie_tranche_b: commissie.tranche_b,
         commissie_tranche_a_triggered: commissie.tranche_a_triggered,
         commissie_tranche_b_triggered: commissie.tranche_b_triggered,
+        commissie_tranche_a_uitbetaald: creditABetaald,
+        commissie_tranche_b_uitbetaald: creditBBetaald,
         commissie_verdiend: commissie.verdiend,
         commissie_uitbetaald: commissieUitbetaald,
+        commissie_rest_open: commissieRestOpen,
         fases,
         progress_done: progressDone,
         progress_total: progress.total,

@@ -45,7 +45,12 @@ import {
   projectHeeftGeenAanbetalingNodig,
   showProjectKickoff,
 } from "@/lib/project-kickoff";
-import { resolveProjectVolgendeStap } from "@/lib/project-volgende-stap";
+import {
+  kanEmInstallatieInplannen,
+  kanWfInstallatieInplannen,
+  kanWfSchouwdagInplannen,
+  resolveProjectVolgendeStap,
+} from "@/lib/project-volgende-stap";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import {
   bestelDeadlineVoorInstallatie,
@@ -551,10 +556,10 @@ export function openBelSchouwActies(
           ? `Opstarten: geen aanbetaling, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
           : `Opstarten: aanbetalingsfactuur, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
         : geenAanbetaling
-          ? `Opstarten: geen aanbetaling — schouwweek inplannen (${schouwWeekLabel}).`
+          ? `Opstarten: geen aanbetaling — schouwdag inplannen (${schouwWeekLabel}).`
           : schouwActionable
-            ? `Opstarten: 50% betaald — schouwweek inplannen (${schouwWeekLabel}).`
-            : `Opstarten: eerst 50%-factuur; schouwweek (${schouwWeekLabel}) volgt na betaling.`,
+            ? `Opstarten: 50% betaald — schouwdag inplannen (${schouwWeekLabel}).`
+            : `Opstarten: eerst 50%-factuur; schouwdag (${schouwWeekLabel}) volgt na betaling.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
@@ -571,7 +576,8 @@ export function openBelSchouwActies(
       schouwJaar: schouw.jaar,
       schouwWeek: schouw.week,
       schouwWeekLabel,
-      planSchouwweek: schouwActionable,
+      planSchouwweek: schouwActionable && warmtefonds,
+      planSchouwdag: schouwActionable && !warmtefonds,
       project,
     });
   }
@@ -1178,11 +1184,29 @@ export function openVolgendeStapActies(
     const stap = resolveProjectVolgendeStap(project, now, related);
     if (!stap) continue;
     if (/vraag referrals|project is afgerond/i.test(stap.titel)) continue;
+    // Legacy: “betaling WF controleren” is geen actie meer
+    if (/betaling warmtefonds controleren/i.test(stap.titel)) continue;
 
     // Feiten winnen: geen “inplannen”-actie als de datum al staat.
     if (
       project.installatie_at &&
       /installatiedatum inplannen|installatie inplannen/i.test(stap.titel)
+    ) {
+      continue;
+    }
+    // WF: installatie pas bij ≥95% betaald + schouwdag gepland
+    if (
+      /installatiedatum inplannen|installatie inplannen/i.test(stap.titel) &&
+      isWarmtefondsProject(project) &&
+      !kanWfInstallatieInplannen(project, related)
+    ) {
+      continue;
+    }
+    // EM: installatie pas ná schouw + eerste factuur betaald
+    if (
+      /installatiedatum inplannen|installatie inplannen/i.test(stap.titel) &&
+      !isWarmtefondsProject(project) &&
+      !kanEmInstallatieInplannen(project, related)
     ) {
       continue;
     }
@@ -1546,7 +1570,7 @@ export function openBestelMateriaalActies(
       soort: "bestel_materiaal",
       titel: "Batterij bestellen",
       detail: `Besteldatum ${bestelLabel} · installatie ${installLabel}${pn ? ` · ${pn}` : ""}`,
-      reden: `Bestellen vóór ${bestelLabel} (${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór installatie)`,
+      reden: `Installatie staat gepland — bestel de batterij vóór ${bestelLabel} (${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen vóór installatie). Open Purchasing.`,
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleMomentVanProject(project).toISOString(),
       overdue,
@@ -1574,11 +1598,12 @@ export function openBestelMateriaalActies(
 
 /**
  * Schouwdag inplannen:
- * - Warmtefonds: pas ná goedkeuring (niet eerder op schouwweek-window).
- * - Eigen middelen: 1 week vóór schouwweek (window/overdue).
+ * - Warmtefonds: ná goedkeuring én ≥95% van het offertebedrag betaald.
+ * - Eigen middelen: 1 week vóór schouwweek (window/overdue); betaling via kickoff.
  */
 export function openSchouwInplannenActies(
   projecten: Project[],
+  facturen: Factuur[] = [],
   now = new Date()
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
@@ -1592,9 +1617,17 @@ export function openSchouwInplannenActies(
     const week = project.schouw_week ?? null;
     const warmtefonds = isWarmtefondsProject(project);
     const wfGoedgekeurd = isWarmtefondsGoedgekeurd(project);
+    const related = facturen.filter(
+      (f) =>
+        f.project_id === project.id ||
+        (!f.project_id && f.lead_id === project.lead_id) ||
+        (project.offerte_id != null && f.offerte_id === project.offerte_id)
+    );
 
     // WF: geen schouwdag-actie tot financiering goedgekeurd is
     if (warmtefonds && !wfGoedgekeurd) continue;
+    // WF: exacte schouwdag pas bij ≥95% t.o.v. volledig offertebedrag
+    if (warmtefonds && !kanWfSchouwdagInplannen(project, related)) continue;
 
     let deadlineAt: Date | null = null;
     let detail = "";
@@ -1609,21 +1642,21 @@ export function openSchouwInplannenActies(
         deadlineAt = due;
         const weekLabel = formatSchouwWeekLabel(jaar, week);
         detail = warmtefonds
-          ? `Warmtefonds goedgekeurd · schouwweek ${weekLabel} — plan de exacte schouwdag`
+          ? `≥95% offerte betaald · schouwweek ${weekLabel} — plan de exacte schouwdag`
           : `Schouwweek ${weekLabel} — plan de exacte schouwdag`;
         reden = warmtefonds
-          ? "Warmtefonds is goedgekeurd; plan nu de schouwdag."
+          ? "Offerte grotendeels betaald; plan nu de schouwdag."
           : overdue
             ? `Schouwdag had uiterlijk 1 week vóór schouwweek ${weekLabel} gepland moeten zijn.`
             : `Plan de schouwdag in (window: 1 week vóór schouwweek ${weekLabel}).`;
       }
     }
 
-    if (!deadlineAt && wfGoedgekeurd) {
+    if (!deadlineAt && wfGoedgekeurd && kanWfSchouwdagInplannen(project, related)) {
       deadlineAt = softDueOverWerkdagen(now, 2);
-      detail = "Warmtefonds goedgekeurd — schouwdag inplannen";
+      detail = "≥95% offerte betaald — schouwdag inplannen";
       reden =
-        "Warmtefonds is goedgekeurd; plan zo snel mogelijk de schouwdag.";
+        "Offerte grotendeels betaald; plan zo snel mogelijk de schouwdag.";
     }
 
     if (!deadlineAt) continue;
@@ -1681,7 +1714,7 @@ export function openBackofficeActies(
   }
 ): BackofficeActie[] {
   const opstart = openBelSchouwActies(projecten, facturen, now);
-  const schouw = openSchouwInplannenActies(projecten, now);
+  const schouw = openSchouwInplannenActies(projecten, facturen, now);
   const schouwProjectIds = new Set(
     schouw.map((a) => a.projectId).filter(Boolean) as string[]
   );

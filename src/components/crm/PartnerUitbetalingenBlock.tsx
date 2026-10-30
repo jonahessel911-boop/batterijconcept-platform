@@ -21,13 +21,28 @@ type FactuurRow = {
 
 function kindLabel(
   source: "adviseur" | "partner",
-  nummer: string
+  nummer: string,
+  omschrijving?: string | null
 ): string {
-  if (source === "partner") return "Installatie";
+  if (source === "partner") {
+    const o = (omschrijving || "").toLowerCase();
+    if (
+      o.includes("extra") ||
+      o.includes("meterkast") ||
+      o.includes("materiaal") ||
+      o.includes("meerwerk") ||
+      o.includes("regels")
+    ) {
+      return "Extra";
+    }
+    return "Installatie";
+  }
   if (/\/AANBETALING\//i.test(nummer)) return "Commissie A";
   if (/\/RESTBETALING\//i.test(nummer)) return "Commissie B";
   return "Commissie";
 }
+
+type DraftRegel = { omschrijving: string; bedrag: string };
 
 function statusLabel(status: string): string {
   if (status === "concept") return "Te versturen";
@@ -57,6 +72,9 @@ export function PartnerUitbetalingenBlock({
   const [showCreate, setShowCreate] = useState(false);
   const [bedrag, setBedrag] = useState(kind === "adviseur" ? "250" : "");
   const [omschrijving, setOmschrijving] = useState("");
+  const [partnerRegels, setPartnerRegels] = useState<DraftRegel[]>([
+    { omschrijving: "", bedrag: "" },
+  ]);
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
@@ -169,30 +187,48 @@ export function PartnerUitbetalingenBlock({
   async function createManual() {
     setCreating(true);
     try {
-      const amount = Number(bedrag.replace(",", "."));
-      if (!Number.isFinite(amount) || amount <= 0) {
-        throw new Error("Vul een geldig bedrag excl. btw in.");
+      let res: Response;
+      if (kind === "adviseur") {
+        const amount = Number(bedrag.replace(",", "."));
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw new Error("Vul een geldig bedrag excl. btw in.");
+        }
+        res = await fetch("/api/adviseurs/creditfacturen", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adviseur_id: id,
+            bedrag_ex_btw: amount,
+            omschrijving: omschrijving.trim() || undefined,
+          }),
+        });
+      } else {
+        const regels = partnerRegels
+          .map((r) => ({
+            omschrijving: r.omschrijving.trim(),
+            bedrag_ex_btw: Number(String(r.bedrag).replace(",", ".")),
+          }))
+          .filter(
+            (r) =>
+              r.omschrijving &&
+              Number.isFinite(r.bedrag_ex_btw) &&
+              r.bedrag_ex_btw > 0
+          );
+        if (regels.length === 0) {
+          throw new Error(
+            "Voeg minstens één regel toe (omschrijving + bedrag excl. btw)."
+          );
+        }
+        res = await fetch("/api/partners/creditfacturen", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            partner_id: id,
+            regels,
+            omschrijving: omschrijving.trim() || undefined,
+          }),
+        });
       }
-      const res =
-        kind === "adviseur"
-          ? await fetch("/api/adviseurs/creditfacturen", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                adviseur_id: id,
-                bedrag_ex_btw: amount,
-                omschrijving: omschrijving.trim() || undefined,
-              }),
-            })
-          : await fetch("/api/partners/creditfacturen", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                partner_id: id,
-                bedrag_ex_btw: amount,
-                omschrijving: omschrijving.trim() || undefined,
-              }),
-            });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
@@ -202,9 +238,10 @@ export function PartnerUitbetalingenBlock({
       const nummer =
         (json as { factuur?: { factuur_nummer?: string } }).factuur
           ?.factuur_nummer || "concept";
-      onMessage(`Concept ${nummer} aangemaakt.`);
+      onMessage(`Concept ${nummer} aangemaakt (incl. 21% btw).`);
       setShowCreate(false);
       setOmschrijving("");
+      setPartnerRegels([{ omschrijving: "", bedrag: "" }]);
       await load();
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Aanmaken mislukt", true);
@@ -264,27 +301,104 @@ export function PartnerUitbetalingenBlock({
 
       {showCreate ? (
         <div className="space-y-3 border-b border-line bg-wash/40 px-4 py-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Bedrag excl. btw
-              <input
-                type="text"
-                inputMode="decimal"
-                value={bedrag}
-                onChange={(e) => setBedrag(e.target.value)}
-                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
-              />
-            </label>
-            <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Omschrijving (optioneel)
-              <input
-                type="text"
-                value={omschrijving}
-                onChange={(e) => setOmschrijving(e.target.value)}
-                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
-              />
-            </label>
-          </div>
+          {kind === "partner" ? (
+            <>
+              <p className="text-xs text-muted">
+                Vrije regels excl. btw · 21% btw wordt automatisch berekend.
+              </p>
+              {partnerRegels.map((r, idx) => (
+                <div
+                  key={idx}
+                  className="grid gap-2 sm:grid-cols-[1fr_7rem_auto]"
+                >
+                  <input
+                    type="text"
+                    placeholder="Omschrijving (meterkast, materiaal…)"
+                    value={r.omschrijving}
+                    onChange={(e) =>
+                      setPartnerRegels((prev) =>
+                        prev.map((x, i) =>
+                          i === idx
+                            ? { ...x, omschrijving: e.target.value }
+                            : x
+                        )
+                      )
+                    }
+                    className="border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
+                  />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="€ excl."
+                    value={r.bedrag}
+                    onChange={(e) =>
+                      setPartnerRegels((prev) =>
+                        prev.map((x, i) =>
+                          i === idx ? { ...x, bedrag: e.target.value } : x
+                        )
+                      )
+                    }
+                    className="border border-line bg-white px-3 py-2 text-sm tabular-nums outline-none focus:border-green"
+                  />
+                  <button
+                    type="button"
+                    disabled={partnerRegels.length <= 1}
+                    onClick={() =>
+                      setPartnerRegels((prev) =>
+                        prev.filter((_, i) => i !== idx)
+                      )
+                    }
+                    className="border border-line px-2 py-2 text-xs text-muted disabled:opacity-40"
+                  >
+                    Weg
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() =>
+                  setPartnerRegels((prev) => [
+                    ...prev,
+                    { omschrijving: "", bedrag: "" },
+                  ])
+                }
+                className="text-xs font-semibold text-green-dark hover:underline"
+              >
+                + Regel
+              </button>
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Factuurtitel (optioneel)
+                <input
+                  type="text"
+                  value={omschrijving}
+                  onChange={(e) => setOmschrijving(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                />
+              </label>
+            </>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Bedrag excl. btw
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={bedrag}
+                  onChange={(e) => setBedrag(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                />
+              </label>
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Omschrijving (optioneel)
+                <input
+                  type="text"
+                  value={omschrijving}
+                  onChange={(e) => setOmschrijving(e.target.value)}
+                  className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                />
+              </label>
+            </div>
+          )}
           <button
             type="button"
             disabled={creating}
@@ -306,7 +420,7 @@ export function PartnerUitbetalingenBlock({
         <ul className="divide-y divide-line">
           {visible.map((f) => {
             const busy = busyId === f.id || busyId === `pdf-${f.id}`;
-            const label = kindLabel(kind, f.factuur_nummer);
+            const label = kindLabel(kind, f.factuur_nummer, f.omschrijving);
             return (
               <li
                 key={f.id}

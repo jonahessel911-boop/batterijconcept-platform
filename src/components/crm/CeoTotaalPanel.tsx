@@ -33,6 +33,7 @@ export function CeoTotaalPanel() {
   const [monthYm, setMonthYm] = useState(today.slice(0, 7));
 
   const weekOptions = useMemo(() => {
+    // 26 weken terug + deze week + 2 weken vooruit (leads/afspraken plannen)
     const base = agendaWeekJumpOptions(26, 2);
     if (weekKey && !base.some((o) => o.value === weekKey)) {
       const p = parseSchouwWeekValue(weekKey);
@@ -59,9 +60,9 @@ export function CeoTotaalPanel() {
         <div>
           <p className="font-display text-base font-semibold text-ink">Totaal</p>
           <p className="mt-0.5 text-xs text-muted">
-            Kies hieronder de periode — alle blokken (Marketing · Sales ·
-            Callcenter · Projected/Current P&L) tonen data t/m die week of
-            maand.
+            Eindweek tot 2 weken vooruit — aandachtspunten tonen leads/slots
+            voor díe week; Marketing · Sales · Callcenter · P&amp;L t/m die
+            week of maand.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">

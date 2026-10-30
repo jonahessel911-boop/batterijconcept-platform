@@ -602,6 +602,7 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
 }): { geannuleerd: number; byDoor: Map<string, number> } {
   const pool = mergeAfsprakenById(opts.afspraken, opts.historie);
   const eersteAny = eersteNieuwAnyStatusIdPerLead(pool);
+  const eersteActief = eersteNieuweHuisbezoekIdPerLead(pool);
   const filter = opts.filterBellerId?.trim() || null;
   const skip = opts.skipAdminIds ?? null;
   const byDoor = new Map<string, number>();
@@ -611,6 +612,8 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
     if (!isHuisbezoekSoort(a)) continue;
     if (a.status !== "geannuleerd") continue;
     if (eersteAny.get(a.lead_id) !== a.id) continue;
+    // Herpland (actief nieuw bezoek later) → geen uitval; netto gered, geen extra
+    if (eersteActief.has(a.lead_id)) continue;
     const when = annuleringsMomentIso(a);
     if (!when || !inAmsterdamDayRange(when, opts.start, opts.end)) continue;
 

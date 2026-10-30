@@ -2,27 +2,16 @@ import { jsPDF } from "jspdf";
 import { addDays, parseISO } from "date-fns";
 import { formatDateShort } from "@/lib/format";
 import { companyInfo, formatEuroPdf } from "@/lib/pdf-brand";
+import {
+  RELATIE_BTW_PCT,
+  bedragenMetBtw,
+} from "@/lib/relatie-btw";
+
+export { RELATIE_BTW_PCT, bedragenMetBtw } from "@/lib/relatie-btw";
 
 export const RELATIE_FACTUUR_BETAALTERMIJN_DAGEN = 7;
 /** Partner/monteur selfbilling: betaaltermijn 14 dagen. */
 export const PARTNER_FACTUUR_BETAALTERMIJN_DAGEN = 14;
-/** NL BTW-tarief op selfbilling-facturen (commissie/vergoeding). */
-export const RELATIE_BTW_PCT = 0.21;
-
-/**
- * Selfbilling adviseur/partner → Batterijconcept.
- * Commissie/vergoeding is exclusief btw; hierop komt 21% btw (niet verlegd).
- */
-export function bedragenMetBtw(exBtw: number): {
-  bedrag_ex_btw: number;
-  btw_bedrag: number;
-  bedrag_inc_btw: number;
-} {
-  const bedrag_ex_btw = Math.round(exBtw * 100) / 100;
-  const btw_bedrag = Math.round(bedrag_ex_btw * RELATIE_BTW_PCT * 100) / 100;
-  const bedrag_inc_btw = Math.round((bedrag_ex_btw + btw_bedrag) * 100) / 100;
-  return { bedrag_ex_btw, btw_bedrag, bedrag_inc_btw };
-}
 
 /** Herbereken BTW vanuit bedrag_ex_btw (corrigeert oude verlegd-facturen). */
 export function normalizeRelatieFactuurBedragen(fac: {

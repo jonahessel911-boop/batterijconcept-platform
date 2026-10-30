@@ -21,6 +21,7 @@ import {
 } from "@/lib/partner-slots";
 import { loadPartnerAfblokkingen } from "@/lib/partner-afblokkingen-db";
 import { travelTimeBetween } from "@/lib/travel-time";
+import { resolvePartnerStartAdres } from "@/lib/start-adres";
 
 export const runtime = "nodejs";
 
@@ -107,7 +108,8 @@ export async function GET(req: NextRequest) {
       partner.reistijd_buffer_min >= 0
         ? partner.reistijd_buffer_min
         : DEFAULT_PARTNER_REISTIJD_BUFFER_MIN;
-    const startAdres = (partner.start_adres || "").trim() || null;
+    const resolvedStart = resolvePartnerStartAdres(partner.start_adres);
+    const startAdres = resolvedStart.address;
 
     // Bestaande planningen (ruim venster; filteren per dag hieronder)
     const rangeStartIso = fromZonedTime(`${van}T00:00:00`, AMSTERDAM_TZ).toISOString();
@@ -412,6 +414,8 @@ export async function GET(req: NextRequest) {
       tot,
       buffer_min: bufferMin,
       start_adres: startAdres,
+      start_adres_label: resolvedStart.label,
+      start_adres_fallback: resolvedStart.isFallback,
       max_installaties_per_dag: 2,
       slots: slotsOut,
       beschikbaar,

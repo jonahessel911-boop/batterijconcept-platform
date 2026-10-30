@@ -8,6 +8,7 @@ import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { nextWeekdayAmsterdamAfter } from "@/lib/inkoop-sla";
 import {
   dueAtVoorSchouwdagInplan,
   formatSchouwWeekLabel,
@@ -22,7 +23,12 @@ import {
   normalizeFinancieringStatus,
   resolveFinancieringStatus,
 } from "@/lib/financiering-status";
-import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  heeftGeenAanbetalingNodig,
+  isEersteFactuurBetaald,
+  isEersteFactuurVerstuurd,
+  orderBetalingProgress,
+} from "@/lib/aanbetaling";
 import {
   resolveBetaalwijze,
   resolveStatusTaak,
@@ -32,25 +38,106 @@ import {
 } from "@/lib/project-status-config";
 import type { Factuur, Project } from "@/types/database";
 
-function aanbetalingFacturenVan(facturen: Factuur[]): Factuur[] {
+/** Warmtefonds: installatie-actie pas vanaf dit % betaald (gemarkeerd). */
+export const WF_INSTALLATIE_MIN_BETAALD_PCT = 95;
+
+function facturenVoorProject(project: Project, facturen: Factuur[]): Factuur[] {
   return facturen.filter(
     (f) =>
-      !f.credit_van_factuur_id &&
-      isAanbetalingFactuurOmschrijving(f.omschrijving)
+      f.project_id === project.id ||
+      (!f.project_id && f.lead_id === project.lead_id) ||
+      (project.offerte_id != null && f.offerte_id === project.offerte_id)
   );
 }
 
-function isAanbetalingVerstuurd(facturen: Factuur[]): boolean {
-  return aanbetalingFacturenVan(facturen).some(
-    (f) =>
-      f.status === "verzonden" ||
-      f.status === "deels_betaald" ||
-      f.status === "betaald"
+function projectOfferteVoorEm(project: Project) {
+  return Array.isArray(project.offertes) ? project.offertes[0] : project.offertes;
+}
+
+function emGeenAanbetalingNodig(project: Project): boolean {
+  const off = projectOfferteVoorEm(project) as
+    | {
+        subtotaal_ex_btw?: number | null;
+        btw_bedrag?: number | null;
+        totaal_inc_btw?: number | null;
+        aanbetaling_modus?: string | null;
+        aanbetaling_bedrag_inc?: number | null;
+        aanbetaling_te_innen_inc?: number | null;
+        financiering_voorbehoud?: boolean | null;
+      }
+    | null
+    | undefined;
+  return heeftGeenAanbetalingNodig({
+    aanbetalingTeInnenInc:
+      project.aanbetaling_te_innen_inc ?? off?.aanbetaling_te_innen_inc,
+    aanbetalingModus: off?.aanbetaling_modus,
+    aanbetalingBedragInc: off?.aanbetaling_bedrag_inc,
+    subtotaalExBtw: off?.subtotaal_ex_btw,
+    btwBedrag: off?.btw_bedrag,
+    totaalIncBtw: off?.totaal_inc_btw,
+    financieringVoorbehoud: off?.financiering_voorbehoud ?? false,
+  });
+}
+
+/**
+ * Betaald t.o.v. volledig offertebedrag (niet t.o.v. alleen verstuurde facturen).
+ */
+export function orderBetalingPctTegenOfferte(
+  project: Project,
+  facturen: Factuur[] = []
+): number {
+  const off = projectOfferteVoorEm(project);
+  return orderBetalingProgress({
+    facturen: facturenVoorProject(project, facturen),
+    orderIncBtw: off?.totaal_inc_btw,
+  }).pct;
+}
+
+/**
+ * WF: exacte schouwdag in Acties pas bij ≥95% van het offertebedrag betaald.
+ * (Alleen “aanbetaling betaald” / verstuurde facturen is niet genoeg.)
+ */
+export function kanWfSchouwdagInplannen(
+  project: Project,
+  facturen: Factuur[] = []
+): boolean {
+  if (isSchouwdagDefinitief(project)) return false;
+  return (
+    orderBetalingPctTegenOfferte(project, facturen) >=
+    WF_INSTALLATIE_MIN_BETAALD_PCT
   );
 }
 
-function isAanbetalingBetaald(facturen: Factuur[]): boolean {
-  return aanbetalingFacturenVan(facturen).some((f) => f.status === "betaald");
+/**
+ * WF-installatie in Acties: schouwdag definitief gepland + ≥95% van offerte betaald.
+ */
+export function kanWfInstallatieInplannen(
+  project: Project,
+  facturen: Factuur[] = []
+): boolean {
+  if (project.installatie_at) return false;
+  if (!isSchouwdagDefinitief(project)) return false;
+  return (
+    orderBetalingPctTegenOfferte(project, facturen) >=
+    WF_INSTALLATIE_MIN_BETAALD_PCT
+  );
+}
+
+/**
+ * EM-installatie: schouwdag gepland + ≥95% van het offertebedrag betaald.
+ * (Eerste factuur ontgrendelt alleen de schouw-actie; installatie vraagt het totaal.)
+ */
+export function kanEmInstallatieInplannen(
+  project: Project,
+  facturen: Factuur[] = []
+): boolean {
+  if (project.installatie_at) return false;
+  if (!isSchouwdagDefinitief(project)) return false;
+  if (emGeenAanbetalingNodig(project)) return true;
+  return (
+    orderBetalingPctTegenOfferte(project, facturen) >=
+    WF_INSTALLATIE_MIN_BETAALD_PCT
+  );
 }
 
 function betaalwijzeVanProject(project: Project): Betaalwijze {
@@ -152,16 +239,18 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
       return "Schouwdag staat gepland. Na de schouw volgt de volgende stap automatisch.";
     case "schouw_voltooid":
       return wf
-        ? "Schouw is geweest. Controleer of Warmtefonds heeft betaald; zo ja → installatie inplannen."
+        ? "Schouw is geweest. Zodra Warmtefonds heeft betaald (én schouwformulier binnen is) volgt automatisch: installatie inplannen."
         : "Schouwformulier binnen. Check Financieel: is alles betaald? Zo ja → installatie plannen; zo nee → restfactuur.";
     case "restfactuur_verstuurd":
       return wf
         ? "Factuur WF verstuurd (declaratie). Wacht op Warmtefonds-uitbetaling vóór installatie/inkoop."
         : "Zonder betaling kunnen we niet veilig door naar installatie/inkoop.";
     case "restfactuur_betaald":
-      return "Alles betaald — plan eerst de installatiedatum. Purchasing verschijnt daarna automatisch (5 werkdagen vóór installatie).";
+      return wf
+        ? "Warmtefonds: ≥95% betaald én schouwdag gepland — plan de installatiedatum. Daarna komt Purchasing automatisch (5 werkdagen vóór installatie)."
+        : "Eerste factuur betaald én schouwdag gepland — plan de installatiedatum. Daarna komt Purchasing automatisch (batterij inkopen, 5 werkdagen vóór installatie).";
     case "materiaal_besteld":
-      return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in.";
+      return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in (uiterlijk volgende werkdag).";
     case "installatie_voltooid":
       return "Afronden: BTW terugvragen, overstap dynamische leverancier, daarna review.";
     case "review_gevraagd":
@@ -185,16 +274,35 @@ function volgendeStapNaOpstarten(
   if (!week) {
     const due = dueEndOfDayInDays(1, now);
 
-    // Eigen middelen: sequentieel — factuur → betaling → schouwweek
+    // Eigen middelen: eerste factuur leidend → betaald → schouwdag
     if (!wf) {
-      const betaald = isAanbetalingBetaald(facturen);
-      const factuurVerstuurd = isAanbetalingVerstuurd(facturen);
+      if (emGeenAanbetalingNodig(project)) {
+        return {
+          eyebrow: "Volgende stap",
+          titel: "Schouwdag inplannen",
+          reden: "Geen aanbetaling nodig — plan nu de schouwdag (incl. track & trace).",
+          uiterlijkLabel: formatUiterlijkAt(due),
+          uiterlijkAt: due,
+          urgent: true,
+          overdue: false,
+          actie: {
+            kind: "anchor",
+            label: "Plan schouwdag",
+            href: "#project-afspraken",
+            openSoort: "schouwdag",
+          },
+        };
+      }
+
+      const betaald = isEersteFactuurBetaald(facturen);
+      const factuurVerstuurd = isEersteFactuurVerstuurd(facturen);
 
       if (!factuurVerstuurd) {
         return {
           eyebrow: "Volgende stap",
-          titel: "50% aanbetaling versturen",
-          reden: "Eigen middelen: eerst de 50%-factuur; schouwweek volgt na betaling.",
+          titel: "Eerste factuur versturen",
+          reden:
+            "Eigen middelen: de eerste factuur is leidend; schouwdag volgt na markering betaald.",
           uiterlijkLabel: formatUiterlijkAt(due),
           uiterlijkAt: due,
           urgent: true,
@@ -210,9 +318,9 @@ function volgendeStapNaOpstarten(
       if (!betaald) {
         return {
           eyebrow: "Volgende stap",
-          titel: "Wacht op 50% betaling",
+          titel: "Wacht op betaling eerste factuur",
           reden:
-            "Factuur is verstuurd. Schouwweek plant je in zodra de 50% binnen is.",
+            "Eerste factuur is verstuurd. Markeer als betaald → daarna schouwdag inplannen.",
           uiterlijkLabel: "Na betaling",
           uiterlijkAt: null,
           urgent: false,
@@ -223,16 +331,18 @@ function volgendeStapNaOpstarten(
 
       return {
         eyebrow: "Volgende stap",
-        titel: "Schouwweek inplannen",
-        reden: "50% is betaald — plan nu de schouwweek (incl. track & trace).",
+        titel: "Schouwdag inplannen",
+        reden:
+          "Eerste factuur is betaald — plan nu de schouwdag (incl. track & trace).",
         uiterlijkLabel: formatUiterlijkAt(due),
         uiterlijkAt: due,
         urgent: true,
         overdue: false,
         actie: {
           kind: "anchor",
-          label: "Plan schouwweek",
+          label: "Plan schouwdag",
           href: "#project-afspraken",
+          openSoort: "schouwdag",
         },
       };
     }
@@ -276,6 +386,11 @@ function volgendeStapNaOpstarten(
     return null;
   }
 
+  // WF: exacte schouwdag pas bij ≥95% van het offertebedrag (niet alleen verstuurde facturen)
+  if (wf && !kanWfSchouwdagInplannen(project, facturen)) {
+    return null;
+  }
+
   const belweek = schouwWeekEerder(week.jaar, week.week);
   const dueAt = dueAtVoorSchouwdagInplan(week.jaar, week.week);
   const inWindow = isInSchouwdagPlannenWindow(week.jaar, week.week, now);
@@ -287,7 +402,7 @@ function volgendeStapNaOpstarten(
     return {
       eyebrow: overdue ? "Volgende stap — te laat" : "Volgende stap",
       titel: "Schouwdag inplannen met de klant",
-      reden: `Warmtefonds goedgekeurd · schouwweek ${schouwLabel} — plan nu de exacte schouwdag.`,
+      reden: `≥95% van de offerte betaald · schouwweek ${schouwLabel} — plan nu de exacte schouwdag.`,
       uiterlijkLabel: formatUiterlijkAt(dueAt),
       uiterlijkAt: dueAt,
       urgent: true,
@@ -366,6 +481,14 @@ function volgendeStapVanTaak(
         ).toISOString();
       }
       break;
+    case "next_weekday": {
+      // Klaar-moment ≈ laatste statusupdate (betaling/schouwformulier → restfactuur_betaald)
+      const anchorRaw = project.updated_at || project.created_at;
+      const anchor = anchorRaw ? new Date(anchorRaw) : now;
+      const base = Number.isNaN(anchor.getTime()) ? now : anchor;
+      uiterlijkAt = nextWeekdayAmsterdamAfter(base).toISOString();
+      break;
+    }
     case "none":
       uiterlijkAt = null;
       break;
@@ -382,9 +505,19 @@ function volgendeStapVanTaak(
       ? formatUiterlijkAt(uiterlijkAt)
       : "Geen vaste deadline — zo snel mogelijk",
     uiterlijkAt,
-    urgent: overdue || taak.due.kind === "days",
+    urgent:
+      overdue ||
+      taak.due.kind === "days" ||
+      taak.due.kind === "next_weekday",
     overdue,
-    actie: null,
+    actie:
+      /installatiedatum inplannen/i.test(taak.titel)
+        ? {
+            kind: "anchor",
+            label: "Plan installatie",
+            href: "#project-afspraken",
+          }
+        : null,
   };
 }
 
@@ -487,6 +620,56 @@ export function resolveProjectVolgendeStap(
 
   if (status === "schouwweek_inplannen") {
     return volgendeStapNaOpstarten(project, now, facturen);
+  }
+
+  // Warmtefonds: installatie-actie pas bij ≥95% betaald + schouwdag gepland.
+  // Geen “betaling controleren”-actie tussendoor.
+  if (betaalwijze === "warmtefonds") {
+    const isInstallatieKandidaat =
+      status === "schouwdag_ingepland" ||
+      status === "schouw_voltooid" ||
+      status === "restfactuur_verstuurd" ||
+      status === "restfactuur_betaald" ||
+      status === "materiaal_besteld";
+    if (isInstallatieKandidaat) {
+      if (!kanWfInstallatieInplannen(project, facturen)) {
+        return null;
+      }
+      // Toon installatie-stap (niet restfactuur-opvolgen / lege schouw-status)
+      return volgendeStapVanTaak(
+        "restfactuur_betaald",
+        betaalwijze,
+        project,
+        now
+      );
+    }
+  }
+
+  // Eigen middelen: installatie pas ná schouw + eerste factuur betaald.
+  // Eerste factuur betaald zonder schouw → schouw-actie (via opstarten-pad).
+  if (betaalwijze === "eigen_middelen") {
+    const isInstallatieKandidaat =
+      status === "schouw_voltooid" ||
+      status === "restfactuur_verstuurd" ||
+      status === "restfactuur_betaald" ||
+      status === "materiaal_besteld";
+    if (isInstallatieKandidaat) {
+      if (!kanEmInstallatieInplannen(project, facturen)) {
+        if (
+          isEersteFactuurBetaald(facturenVoorProject(project, facturen)) ||
+          emGeenAanbetalingNodig(project)
+        ) {
+          return volgendeStapNaOpstarten(project, now, facturen);
+        }
+        return null;
+      }
+      return volgendeStapVanTaak(
+        "restfactuur_betaald",
+        betaalwijze,
+        project,
+        now
+      );
+    }
   }
 
   return volgendeStapVanTaak(status, betaalwijze, project, now);

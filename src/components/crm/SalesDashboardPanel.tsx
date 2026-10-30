@@ -132,12 +132,12 @@ function MetricsCells({
         {num(m.niet_afgeboekt)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>{num(m.sales)}</td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td
+        className={`${base} whitespace-nowrap text-right font-semibold text-[#1D4ED8]`}
+      >
         {fmtPct(m.conv_gelopen_sale_pct)}
       </td>
-      <td
-        className={`${base} whitespace-nowrap text-right text-green-dark`}
-      >
+      <td className={`${base} whitespace-nowrap text-right text-muted`}>
         {fmtPct(m.conv_ingepland_sale_pct)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>
@@ -183,15 +183,17 @@ function TrendChart({
   const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
 
   const maxIngepland = Math.max(1, ...buckets.map((b) => b.ingepland));
-  const maxSales = Math.max(1, ...buckets.map((b) => b.sales));
+  // Main KPI: gelopen → sale % (vaste schaal tot ≥40% zodat verschillen zichtbaar blijven)
   const maxConv = Math.max(
-    1,
+    40,
     ...buckets.map((b) =>
-      b.conv_ingepland_sale_pct != null && b.conv_ingepland_sale_pct > 0
-        ? b.conv_ingepland_sale_pct
+      b.conv_gelopen_sale_pct != null && b.conv_gelopen_sale_pct > 0
+        ? b.conv_gelopen_sale_pct
         : 0
     )
   );
+  /** Hoofd-KPI-kleur — bewust niet groen (volume) of oranje (Δ) */
+  const CONV_GS_COLOR = "#1D4ED8";
   const w = 1200;
   const h = 480;
   const padL = 28;
@@ -206,7 +208,7 @@ function TrendChart({
 
   const convPts = buckets.map((bk, i) => {
     const x = padL + step * (i + 0.5);
-    const r = bk.conv_ingepland_sale_pct;
+    const r = bk.conv_gelopen_sale_pct;
     const y =
       r == null
         ? null
@@ -316,6 +318,7 @@ function TrendChart({
           label: "G→S",
           value: fmtPct(tip.conv_gelopen_sale_pct),
           delta: tipDeltas?.convGS ?? null,
+          emphasize: true,
         },
         {
           label: "I→S",
@@ -326,7 +329,6 @@ function TrendChart({
           label: "Omzet",
           value: formatEuro(tip.omzet),
           delta: tipDeltas?.omzet ?? null,
-          emphasize: true,
         },
         {
           label: "AOV",
@@ -356,19 +358,18 @@ function TrendChart({
           preserveAspectRatio="none"
           className="block h-52 w-full sm:h-64 lg:h-72"
           role="img"
-          aria-label={`Sales trend — vergelijking met ${compareLabel}`}
+          aria-label={`Sales: conversie gelopen→sale per periode — Δ vs ${compareLabel}`}
         >
           {buckets.map((bk, i) => {
             const cx = padL + step * (i + 0.5);
-            const barW = Math.max(8, step * 0.34);
+            const barW = Math.max(10, step * 0.42);
             const hIng = (bk.ingepland / maxIngepland) * (innerH * barScale);
-            const hSales = (bk.sales / maxSales) * (innerH * barScale);
             const base = padT + innerH;
             const active = hoverBi === i;
             const prev = i > 0 ? buckets[i - 1] : null;
             const dConv = pctChange(
-              bk.conv_ingepland_sale_pct,
-              prev?.conv_ingepland_sale_pct
+              bk.conv_gelopen_sale_pct,
+              prev?.conv_gelopen_sale_pct
             );
             return (
               <g
@@ -388,23 +389,15 @@ function TrendChart({
                   y={padT}
                   width={step * 0.9}
                   height={innerH}
-                  fill={active ? "rgba(10,71,39,0.04)" : "transparent"}
+                  fill={active ? "rgba(29,78,216,0.06)" : "transparent"}
                 />
                 <rect
-                  x={cx - barW}
+                  x={cx - barW / 2}
                   y={base - hIng}
                   width={barW}
                   height={Math.max(1, hIng)}
                   fill="#A8D5B5"
-                  opacity={active || hoverBi == null ? 1 : 0.45}
-                />
-                <rect
-                  x={cx}
-                  y={base - hSales}
-                  width={barW}
-                  height={Math.max(1, hSales)}
-                  fill="#0a4727"
-                  opacity={active || hoverBi == null ? 1 : 0.45}
+                  opacity={active || hoverBi == null ? 1 : 0.4}
                 />
                 <text
                   x={cx}
@@ -422,7 +415,7 @@ function TrendChart({
                     y={h - 10}
                     textAnchor="middle"
                     fill={
-                      dConv > 0 ? "#0a4727" : dConv < 0 ? "#C45A12" : "#6b7280"
+                      dConv > 0 ? "#1D4ED8" : dConv < 0 ? "#C45A12" : "#6b7280"
                     }
                     fontSize={12}
                     fontWeight={700}
@@ -437,13 +430,27 @@ function TrendChart({
             <path
               d={lineD}
               fill="none"
-              stroke="#C45A12"
-              strokeWidth={3.5}
+              stroke={CONV_GS_COLOR}
+              strokeWidth={4}
               strokeLinejoin="round"
               strokeLinecap="round"
               pointerEvents="none"
             />
           ) : null}
+          {convPts.map((p, i) =>
+            p.y == null ? null : (
+              <circle
+                key={`gs-${buckets[i]?.key ?? i}`}
+                cx={p.x}
+                cy={p.y}
+                r={hoverBi === i ? 6 : 4.5}
+                fill="#fff"
+                stroke={CONV_GS_COLOR}
+                strokeWidth={2.5}
+                pointerEvents="none"
+              />
+            )
+          )}
         </svg>
         {tip && tipStyle ? (
           <div
@@ -461,11 +468,19 @@ function TrendChart({
             >
               {tipRows.map((row) => (
                 <Fragment key={row.label}>
-                  <span className="text-muted">{row.label}</span>
+                  <span
+                    className={
+                      row.emphasize
+                        ? "font-semibold text-[#1D4ED8]"
+                        : "text-muted"
+                    }
+                  >
+                    {row.label}
+                  </span>
                   <span
                     className={[
                       "text-right font-semibold whitespace-nowrap",
-                      row.emphasize ? "text-green-dark" : "text-ink",
+                      row.emphasize ? "text-[#1D4ED8]" : "text-ink",
                     ].join(" ")}
                   >
                     {row.value}
@@ -493,13 +508,9 @@ function TrendChart({
           <span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#A8D5B5]" />
           Ingepland
         </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#0a4727]" />
-          Sales
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-0.5 w-3 bg-[#C45A12]" />
-          Conv. I→S
+        <span className="inline-flex items-center gap-1.5 font-semibold text-[#1D4ED8]">
+          <span className="inline-block h-1 w-4 rounded-full bg-[#1D4ED8]" />
+          Conversie gelopen → sale
         </span>
       </div>
     </div>
@@ -800,6 +811,13 @@ export function SalesDashboardPanel({
             <header className="border-b border-line px-4 py-3">
               <p className="font-display text-sm font-semibold text-ink">
                 {chartTitle}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted">
+                Hoofd-KPI:{" "}
+                <span className="font-semibold text-[#1D4ED8]">
+                  conversie gelopen → sale
+                </span>
+                {" · "}balken = ingepland
               </p>
             </header>
             <div className="px-1 py-3 sm:px-2">

@@ -89,9 +89,15 @@ export type NettoBoardRow = {
   commissie_tranche_b: number;
   commissie_tranche_a_triggered: boolean;
   commissie_tranche_b_triggered: boolean;
+  /** Tranche A creditfactuur status=betaald (uitbetaling naar adviseur). */
+  commissie_tranche_a_uitbetaald: boolean;
+  /** Tranche B creditfactuur status=betaald (uitbetaling naar adviseur). */
+  commissie_tranche_b_uitbetaald: boolean;
   commissie_verdiend: number;
   /** Som van getriggerde tranches waarvan de CF status=betaald is. */
   commissie_uitbetaald: number;
+  /** Restcommissie (tranche B) die nog niet is uitbetaald aan de adviseur. */
+  commissie_rest_open: number;
   fases: NettoFase[];
   progress_done: number;
   progress_total: number;

@@ -227,7 +227,17 @@ export function isInkoopUitsluitenRegel(omschrijving: string): boolean {
   if (!t) return true;
 
   if (
-    /btw.?subsid|subsidie.?aanvraag|warmtefonds|aanvraag\s*service|installatie\s*\+|installatieopname|installatie.?opname|service.?installatie/.test(
+    /btw.?subsid|subsidie.?aanvraag|warmtefonds|aanvraag\s*service|financiering.?aanvraag|installatie\s*\+|installatieopname|installatie.?opname|service.?installatie|administratie|adviesgesprek|voorrijkosten|arbeidsuren|korting|tegoed/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+
+  // Pure installatie-/montage-dienst zonder productmerk of kWh
+  if (
+    /^(installatie|montage|plaatsing|arbeid)\b/.test(t) &&
+    !/batter|alpha|huawei|luna|enphase|growatt|byd|tesla|module|noodstroom|kwh|omvormer/.test(
       t
     )
   ) {
@@ -237,10 +247,68 @@ export function isInkoopUitsluitenRegel(omschrijving: string): boolean {
   // Losse omvormer-regel (bijv. "5 kW omvormer") — zit al in Alpha ESS-pakket
   const isStandaloneOmvormer =
     /\bomvormer\b/.test(t) &&
-    !/alpha|ae-g3|batter|kwh|smile/.test(t);
+    !/alpha|ae-g3|batter|kwh|smile|huawei|luna|enphase|growatt|byd|tesla/.test(
+      t
+    );
   if (isStandaloneOmvormer) return true;
 
   return false;
+}
+
+/** Alpha ESS-pakket (split batterij/omvormer + standaard accessoires). */
+export function isAlphaEssRegel(
+  omschrijving: string,
+  sku?: string | null
+): boolean {
+  const t = `${omschrijving} ${sku || ""}`.toLowerCase();
+  return /alpha|ae-g3|smile/.test(t);
+}
+
+/**
+ * Fysiek inkoopbaar product uit de offerte (batterij, noodstroom, …).
+ * Geen diensten (BTW/WF/installatie) — die vallen onder isInkoopUitsluitenRegel.
+ */
+export function isInkoopProductRegel(
+  omschrijving: string,
+  product?: {
+    sku?: string | null;
+    inkoop_batterij?: number | null;
+    inkoop_omvormer?: number | null;
+    inkoop_installatie?: number | null;
+    inkoop_warmtefonds?: number | null;
+    prijs_ex_btw?: number | null;
+  } | null
+): boolean {
+  if (isInkoopUitsluitenRegel(omschrijving)) return false;
+  const t = omschrijving.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const bat = Number(product?.inkoop_batterij || 0);
+  const omv = Number(product?.inkoop_omvormer || 0);
+  const wf = Number(product?.inkoop_warmtefonds || 0);
+  const inst = Number(product?.inkoop_installatie || 0);
+  // Alleen Warmtefonds-/installatie-dienst in de catalogus → geen purchasing-regel
+  if (product && bat + omv <= 0 && (wf > 0 || inst > 0) && !product.sku) {
+    return false;
+  }
+  if (product && (bat + omv > 0 || product.sku || Number(product.prijs_ex_btw || 0) > 0)) {
+    return true;
+  }
+
+  return /batter|alpha|ae-g3|smile|huawei|luna|enphase|growatt|byd|tesla|powerwall|solaredge|noodstroom|backup|eps|wall.?box|laadpaal|meter|dtsu|kabel|module|\bkwh\b|omvormer|inverter|baseplate|bracket|thuisbatterij/.test(
+    t
+  );
+}
+
+/** Inkoopbedrag ex btw per stuk voor een niet-Alpha productregel. */
+function productInkoopExPerStuk(
+  product: ProductInkoop | null
+): number {
+  if (!product) return 0;
+  const bat = Number(product.inkoop_batterij || 0);
+  const omv = Number(product.inkoop_omvormer || 0);
+  if (bat + omv > 0) return round2(bat + omv);
+  // Geen Alpha-split bekend: toon catalogusprijs als richtbedrag (niet WF/installatie)
+  return round2(Number(product.prijs_ex_btw || 0));
 }
 
 /**
@@ -332,8 +400,10 @@ export function buildInkoopChecklist(
       ? Number(product.inkoop_batterij || 0) > 0 ||
         Number(product.inkoop_omvormer || 0) > 0
       : false;
+    const alpha = isAlphaEssRegel(r.omschrijving, product?.sku || r.sku);
 
-    if (product && hasHardware) {
+    // Alpha ESS met inkoop-split: batterij + omvormer apart
+    if (product && hasHardware && alpha) {
       const batterij = round2(n * Number(product.inkoop_batterij || 0));
       const omvormer = round2(n * Number(product.inkoop_omvormer || 0));
       if (batterij > 0) {
@@ -361,14 +431,32 @@ export function buildInkoopChecklist(
       continue;
     }
 
+    // Non-Alpha catalogusproduct met hardware-split (zeldzaam) → één productregel
+    if (product && hasHardware && !alpha) {
+      items.push({
+        key: `regel:${r.id}:product`,
+        label: r.omschrijving.trim(),
+        sku: product.sku,
+        aantal: n,
+        inkoopExBtw: round2(
+          n *
+            (Number(product.inkoop_batterij || 0) +
+              Number(product.inkoop_omvormer || 0))
+        ),
+        bron: "offerte",
+        regelId: r.id,
+      });
+      continue;
+    }
+
     // Fallback: Alpha ESS-achtige regels zonder catalogusmatch
     const modules = modulesVoorSku(
       product?.sku || r.sku || guessSkuFromText(r.omschrijving)
     );
-    const looksLikeBattery =
-      /alpha|batter|ae-g3|smile/i.test(r.omschrijving) &&
-      /\d+[.,]\d+/.test(r.omschrijving);
-    if (looksLikeBattery) {
+    const looksLikeAlphaBattery =
+      alpha &&
+      (/batter|kwh/i.test(r.omschrijving) || /\d+[.,]\d+/.test(r.omschrijving));
+    if (looksLikeAlphaBattery) {
       items.push({
         key: `regel:${r.id}:batterij`,
         label: `${r.omschrijving} — batterij`,
@@ -390,49 +478,71 @@ export function buildInkoopChecklist(
       continue;
     }
 
-    // Geen overige diensten/regels in de inkooplijst
+    // Overige producten uit offerte (Huawei, noodstroom, meters, …)
+    if (isInkoopProductRegel(r.omschrijving, product)) {
+      items.push({
+        key: `regel:${r.id}:product`,
+        label: r.omschrijving.trim(),
+        sku: product?.sku || r.sku || null,
+        aantal: n,
+        inkoopExBtw: round2(n * productInkoopExPerStuk(product)),
+        bron: "offerte",
+        regelId: r.id,
+      });
+    }
   }
 
-  const montage = parseMontageAccessoire(checks?.[SCHOUW_MONTAGE_CHECK_KEY]);
-  const showWallbracket =
-    montage === "wallbracket" ||
-    checks?.[INKOOP_WALLBRACKET.key] != null ||
-    Boolean(getInkoopItemNote(checks, INKOOP_WALLBRACKET.key));
+  // Alpha ESS-standaardaccessoires alleen bij Alpha-pakket op de offerte
+  // (niet bij bv. alleen Huawei / noodstroom).
+  const hasAlphaPakket = items.some(
+    (i) =>
+      i.bron === "offerte" &&
+      (i.key.endsWith(":batterij") || i.key.endsWith(":omvormer")) &&
+      isAlphaEssRegel(i.label, i.sku)
+  );
 
-  // Baseplate altijd (standaard); doorstreept als schouw wall bracket koos.
-  items.push({
-    key: INKOOP_BASEPLATE.key,
-    label: INKOOP_BASEPLATE.naam,
-    sku: INKOOP_BASEPLATE.sku,
-    aantal: 1,
-    inkoopExBtw: INKOOP_BASEPLATE.inkoopExBtw,
-    bron: "standaard",
-    notitie: getInkoopItemNote(checks, INKOOP_BASEPLATE.key),
-  });
+  if (hasAlphaPakket) {
+    const montage = parseMontageAccessoire(checks?.[SCHOUW_MONTAGE_CHECK_KEY]);
+    const showWallbracket =
+      montage === "wallbracket" ||
+      checks?.[INKOOP_WALLBRACKET.key] != null ||
+      Boolean(getInkoopItemNote(checks, INKOOP_WALLBRACKET.key));
 
-  if (showWallbracket) {
+    // Baseplate standaard; doorstreept als schouw wall bracket koos.
     items.push({
-      key: INKOOP_WALLBRACKET.key,
-      label: INKOOP_WALLBRACKET.naam,
-      sku: INKOOP_WALLBRACKET.sku,
+      key: INKOOP_BASEPLATE.key,
+      label: INKOOP_BASEPLATE.naam,
+      sku: INKOOP_BASEPLATE.sku,
       aantal: 1,
-      inkoopExBtw: INKOOP_WALLBRACKET.inkoopExBtw,
+      inkoopExBtw: INKOOP_BASEPLATE.inkoopExBtw,
       bron: "standaard",
-      notitie: getInkoopItemNote(checks, INKOOP_WALLBRACKET.key),
+      notitie: getInkoopItemNote(checks, INKOOP_BASEPLATE.key),
     });
-  }
 
-  for (const a of STANDAARD_INKOOP_ACCESSOIRES) {
-    if (a.key === INKOOP_BASEPLATE.key) continue;
-    items.push({
-      key: a.key,
-      label: a.naam,
-      sku: a.sku,
-      aantal: 1,
-      inkoopExBtw: a.inkoopExBtw,
-      bron: "standaard",
-      notitie: getInkoopItemNote(checks, a.key),
-    });
+    if (showWallbracket) {
+      items.push({
+        key: INKOOP_WALLBRACKET.key,
+        label: INKOOP_WALLBRACKET.naam,
+        sku: INKOOP_WALLBRACKET.sku,
+        aantal: 1,
+        inkoopExBtw: INKOOP_WALLBRACKET.inkoopExBtw,
+        bron: "standaard",
+        notitie: getInkoopItemNote(checks, INKOOP_WALLBRACKET.key),
+      });
+    }
+
+    for (const a of STANDAARD_INKOOP_ACCESSOIRES) {
+      if (a.key === INKOOP_BASEPLATE.key) continue;
+      items.push({
+        key: a.key,
+        label: a.naam,
+        sku: a.sku,
+        aantal: 1,
+        inkoopExBtw: a.inkoopExBtw,
+        bron: "standaard",
+        notitie: getInkoopItemNote(checks, a.key),
+      });
+    }
   }
 
   return items;

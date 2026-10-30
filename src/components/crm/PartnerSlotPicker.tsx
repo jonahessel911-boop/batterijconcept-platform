@@ -22,17 +22,44 @@ export type PartnerSlotOption = {
   reistijd_label?: string | null;
 };
 
+export type BestPartnerSlotOption = {
+  slot_id: string;
+  start_at: string;
+  end_at: string;
+  venster: PartnerVenster;
+  label_kort: string;
+  partner_id: string;
+  partner_naam: string;
+  reistijd_min: number | null;
+  reistijd_vanaf_startadres: boolean;
+  start_adres_fallback?: boolean;
+};
+
 type Props = {
   partnerId: string;
   soort: "schouw" | "installatie";
   leadId?: string | null;
+  /** Voor cross-partner beste momenten (2 weken) */
+  projectId?: string | null;
   excludeProjectId?: string | null;
   /** Beperk tot één dag (yyyy-MM-dd), bijv. vanuit planbord-klik */
   dayKey?: string | null;
   value: string | null;
   onChange: (isoStart: string | null, slot?: PartnerSlotOption | null) => void;
+  /** Wordt aangeroepen als beste-slot een andere partner kiest */
+  onPartnerChange?: (partnerId: string) => void;
   daysAhead?: number;
   disabled?: boolean;
+  /** Alleen slots na deze ISO (installatie-opvolg na schouw) */
+  afterIso?: string | null;
+  /** Toon “Beste momenten” (default: ja als project/lead bekend en geen dayKey) */
+  showBest?: boolean;
+  /** Beperk beste momenten tot huidige partner (default: false = alle partners) */
+  lockBestToPartner?: boolean;
+  /** Compacte layout (focusmodus Acties — past in één viewport) */
+  compact?: boolean;
+  /** Max aantal beste-momenten (default 8, compact 3) */
+  bestLimit?: number;
 };
 
 function dayKeyOf(iso: string): string {
@@ -76,19 +103,32 @@ export function PartnerSlotPicker({
   partnerId,
   soort,
   leadId,
+  projectId,
   excludeProjectId,
   dayKey,
   value,
   onChange,
+  onPartnerChange,
   daysAhead = 28,
   disabled,
+  afterIso = null,
+  showBest,
+  lockBestToPartner = false,
+  compact = false,
+  bestLimit,
 }: Props) {
+  const bestCap = bestLimit ?? (compact ? 3 : 8);
   const [slots, setSlots] = useState<PartnerSlotOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(
     dayKey || null
   );
+  const [bestSlots, setBestSlots] = useState<BestPartnerSlotOption[]>([]);
+  const [bestLoading, setBestLoading] = useState(false);
+  const [bestNote, setBestNote] = useState<string | null>(null);
+  const wantBest =
+    showBest ?? Boolean((projectId || leadId) && !dayKey);
 
   const range = useMemo(() => {
     if (dayKey) return { van: dayKey, tot: dayKey };
@@ -131,10 +171,75 @@ export function PartnerSlotPicker({
     void load();
   }, [load]);
 
+  const loadBest = useCallback(async () => {
+    if (!wantBest) {
+      setBestSlots([]);
+      setBestNote(null);
+      return;
+    }
+    setBestLoading(true);
+    try {
+      const params = new URLSearchParams({
+        soort,
+        days: "14",
+        limit: String(bestCap),
+      });
+      if (projectId) params.set("project_id", projectId);
+      else if (leadId) params.set("lead_id", leadId);
+      if (lockBestToPartner && partnerId) {
+        params.set("partner_id", partnerId);
+      }
+      if (afterIso) params.set("after", afterIso);
+      const res = await fetch(`/api/best-partner-slots?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBestSlots([]);
+        setBestNote((data as { error?: string }).error || null);
+        return;
+      }
+      setBestSlots(
+        ((data as { slots?: BestPartnerSlotOption[] }).slots || []) as BestPartnerSlotOption[]
+      );
+      setBestNote((data as { note?: string | null }).note || null);
+    } catch {
+      setBestSlots([]);
+      setBestNote(null);
+    } finally {
+      setBestLoading(false);
+    }
+  }, [
+    wantBest,
+    soort,
+    projectId,
+    leadId,
+    partnerId,
+    afterIso,
+    lockBestToPartner,
+    bestCap,
+  ]);
+
+  useEffect(() => {
+    void loadBest();
+  }, [loadBest]);
+
   // dayKey van buitenaf (planbord) wint
   useEffect(() => {
     if (dayKey) setSelectedDay(dayKey);
   }, [dayKey]);
+
+  function pickBest(b: BestPartnerSlotOption) {
+    if (b.partner_id !== partnerId) {
+      onPartnerChange?.(b.partner_id);
+    }
+    onChange(b.start_at, {
+      start_at: b.start_at,
+      end_at: b.end_at,
+      venster: b.venster,
+      beschikbaar: true,
+      reistijd_min: b.reistijd_min,
+      reistijd_vanaf: b.reistijd_vanaf_startadres ? "startadres" : null,
+    });
+  }
 
   const available = useMemo(
     () => slots.filter((s) => s.beschikbaar !== false),
@@ -209,7 +314,7 @@ export function PartnerSlotPicker({
   const hasSelection = Boolean(value);
 
   return (
-    <div className="space-y-3">
+    <div className={compact ? "space-y-2" : "space-y-3"}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -223,15 +328,20 @@ export function PartnerSlotPicker({
                     ? "Installatie inplannen"
                     : "Schouw inplannen"}
           </p>
-          <p className="mt-0.5 text-[11px] text-muted">
-            {soort === "installatie"
-              ? "Max. 1 ochtend + 1 middag per dag"
-              : "Slots van 30 min · open vensters"}
-          </p>
+          {!compact ? (
+            <p className="mt-0.5 text-[11px] text-muted">
+              {soort === "installatie"
+                ? "Max. 1 ochtend + 1 middag per dag"
+                : "Slots van 30 min · open vensters"}
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => {
+            void load();
+            void loadBest();
+          }}
           disabled={loading || disabled}
           className="text-xs font-medium text-green-dark hover:underline disabled:opacity-50"
         >
@@ -282,6 +392,71 @@ export function PartnerSlotPicker({
         </p>
       ) : null}
 
+      {wantBest && !value ? (
+        <div
+          className={
+            compact
+              ? "border border-line bg-wash/60 px-2 py-1.5"
+              : "border border-line bg-wash/60 px-3 py-2.5"
+          }
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            {compact ? "Top slots" : "Beste momenten (2 weken)"}
+          </p>
+          {bestLoading ? (
+            <p className="mt-1 text-xs text-muted">Laden…</p>
+          ) : bestSlots.length === 0 ? (
+            <p className="mt-1 text-xs text-muted">
+              {bestNote || "Geen top-opties gevonden."}
+            </p>
+          ) : compact ? (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {bestSlots.map((b) => (
+                <button
+                  key={b.slot_id}
+                  type="button"
+                  disabled={disabled}
+                  title={`${b.partner_naam}${b.reistijd_min != null ? ` · ~${b.reistijd_min} min` : ""}`}
+                  onClick={() => pickBest(b)}
+                  className="border border-line bg-white px-2 py-1.5 text-left text-[11px] font-semibold text-ink transition hover:border-green"
+                >
+                  {b.label_kort}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <ul className="mt-2 space-y-1.5">
+              {bestSlots.map((b) => (
+                <li key={b.slot_id}>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => pickBest(b)}
+                    className="flex w-full items-start justify-between gap-2 border border-line bg-white px-2.5 py-2 text-left text-sm transition hover:border-green"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-ink">
+                        {b.label_kort}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted">
+                        {b.partner_naam}
+                        {b.venster === "ochtend" ? " · ochtend" : " · middag"}
+                        {b.start_adres_fallback ? " · via Cabrondom" : ""}
+                      </span>
+                    </span>
+                    {b.reistijd_min != null ? (
+                      <span className="shrink-0 text-[11px] font-medium tabular-nums text-green-dark">
+                        ~{b.reistijd_min} min
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-muted">Slots laden…</p>
       ) : error ? (
@@ -295,15 +470,15 @@ export function PartnerSlotPicker({
           afblokkingen of kies een andere partner.
         </p>
       ) : (
-        <div className="space-y-3">
+        <div className={compact ? "space-y-2" : "space-y-3"}>
           {/* Stap 1: dag */}
           {!lockedToDay ? (
             <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                 1. Dag
               </p>
-              <div className="flex gap-1.5 overflow-x-auto pb-1">
-                {days.map((d) => {
+              <div className="flex gap-1 overflow-x-auto pb-0.5">
+                {(compact ? days.slice(0, 10) : days).map((d) => {
                   const active = selectedDay === d.dayKey;
                   return (
                     <button
@@ -312,24 +487,32 @@ export function PartnerSlotPicker({
                       disabled={disabled}
                       onClick={() => pickDay(d.dayKey)}
                       className={[
-                        "shrink-0 border px-2.5 py-2 text-left transition",
+                        "shrink-0 border text-left transition",
+                        compact ? "px-2 py-1.5" : "px-2.5 py-2",
                         active
                           ? "border-green bg-green text-white"
                           : "border-line bg-white text-ink hover:border-green",
                       ].join(" ")}
                     >
-                      <span className="block text-xs font-semibold capitalize">
-                        {dayChipLabel(d.dayKey)}
-                      </span>
                       <span
                         className={[
-                          "mt-0.5 block text-[10px] font-medium",
-                          active ? "text-white/85" : "text-muted",
+                          "block font-semibold capitalize",
+                          compact ? "text-[11px]" : "text-xs",
                         ].join(" ")}
                       >
-                        {d.slots.length}{" "}
-                        {d.slots.length === 1 ? "slot" : "slots"}
+                        {dayChipLabel(d.dayKey)}
                       </span>
+                      {!compact ? (
+                        <span
+                          className={[
+                            "mt-0.5 block text-[10px] font-medium",
+                            active ? "text-white/85" : "text-muted",
+                          ].join(" ")}
+                        >
+                          {d.slots.length}{" "}
+                          {d.slots.length === 1 ? "slot" : "slots"}
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -344,7 +527,7 @@ export function PartnerSlotPicker({
           {/* Stap 2: tijd */}
           {selectedDay ? (
             <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                 {lockedToDay ? "Tijd" : "2. Tijd"}
                 <span className="ml-1.5 font-normal normal-case tracking-normal text-muted">
                   {dayChipLabel(selectedDay)}
@@ -399,7 +582,13 @@ export function PartnerSlotPicker({
                         <p className="mb-1.5 text-[11px] font-semibold text-muted">
                           {label}
                         </p>
-                        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+                        <div
+                          className={
+                            compact
+                              ? "grid grid-cols-4 gap-1 sm:grid-cols-6"
+                              : "grid grid-cols-3 gap-1.5 sm:grid-cols-4"
+                          }
+                        >
                           {list.map((s) => {
                             const selected = value === s.start_at;
                             return (
@@ -409,7 +598,10 @@ export function PartnerSlotPicker({
                                 disabled={disabled}
                                 onClick={() => onChange(s.start_at, s)}
                                 className={[
-                                  "border px-2 py-2 text-center text-sm font-semibold tabular-nums transition",
+                                  "border text-center font-semibold tabular-nums transition",
+                                  compact
+                                    ? "px-1.5 py-1.5 text-xs"
+                                    : "px-2 py-2 text-sm",
                                   selected
                                     ? "border-green bg-green text-white"
                                     : "border-line bg-white text-ink hover:border-green",

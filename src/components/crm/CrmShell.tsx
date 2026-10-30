@@ -558,7 +558,7 @@ export function CrmShell() {
         sb
           .from("afspraken")
           .select(
-            "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, adviseurs!adviseur_id(naam, email)"
+            "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, updated_at, ingepland_door_id, adviseurs!adviseur_id(naam, email)"
           )
           .order("start_at", { ascending: true }),
         sb

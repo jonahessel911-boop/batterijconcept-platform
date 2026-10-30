@@ -108,12 +108,12 @@ export function ProjectAfrondingChecklist({
   return (
     <section className="border border-line bg-white px-4 py-4 sm:px-5">
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-        After sale
+        Afronding
       </h2>
       <p className="mt-1 text-[11px] text-muted">
         {isAfterSale
-          ? "Alle stappen afgerond — status After sale."
-          : "Na oplevering: BTW, overstap en review. Daarna → After sale."}
+          ? "Alle stappen klaar — status Afgerond."
+          : "Na oplevering: BTW, overstap en review. Daarna → Afgerond."}
       </p>
       <ul className="mt-3 space-y-2">
         {ITEMS.map((item) => {

@@ -746,24 +746,42 @@ function DetailDrawer({
                       <dd
                         className={[
                           "font-semibold tabular-nums",
-                          row.commissie_tranche_a_triggered
+                          row.commissie_tranche_a_uitbetaald
                             ? "text-green"
-                            : "text-muted",
+                            : row.commissie_tranche_a_triggered
+                              ? "text-green-deeper"
+                              : "text-muted",
                         ].join(" ")}
                       >
                         {formatEuro(row.commissie_tranche_a)}
-                        {!row.commissie_tranche_a_triggered ? (
+                        {row.commissie_tranche_a_uitbetaald ? (
+                          <span className="ml-1 text-[11px] font-normal">
+                            betaald
+                          </span>
+                        ) : !row.commissie_tranche_a_triggered ? (
                           <span className="ml-1 text-[11px] font-normal">
                             open
                           </span>
-                        ) : null}
+                        ) : (
+                          <span className="ml-1 text-[11px] font-normal">
+                            te ontvangen
+                          </span>
+                        )}
                       </dd>
                     </div>
-                    {!row.commissie_tranche_a_triggered ? (
+                    {row.commissie_tranche_a_uitbetaald ? (
+                      <p className="mt-1 text-[11px] text-green-deeper">
+                        Uitbetaald aan adviseur (uitbetalingen).
+                      </p>
+                    ) : !row.commissie_tranche_a_triggered ? (
                       <p className="mt-1 text-[11px] text-muted">
                         Volgt zodra de aanbetaling is betaald.
                       </p>
-                    ) : null}
+                    ) : (
+                      <p className="mt-1 text-[11px] text-muted">
+                        Aanbetaling binnen — wacht op uitbetaling naar adviseur.
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex justify-between gap-3">
@@ -776,24 +794,34 @@ function DetailDrawer({
                     <dd
                       className={[
                         "font-semibold tabular-nums",
-                        row.commissie_tranche_b_triggered
+                        row.commissie_tranche_b_uitbetaald
                           ? "text-green"
                           : "text-muted",
                       ].join(" ")}
                     >
                       {formatEuro(row.commissie_tranche_b)}
-                      {!row.commissie_tranche_b_triggered &&
-                      row.commissie_tranche_b > 0 ? (
+                      {row.commissie_tranche_b_uitbetaald ? (
+                        <span className="ml-1 text-[11px] font-normal">
+                          betaald
+                        </span>
+                      ) : row.commissie_rest_open > 0 ? (
                         <span className="ml-1 text-[11px] font-normal">
                           open
                         </span>
                       ) : null}
                     </dd>
                   </div>
-                  {!row.commissie_tranche_b_triggered &&
-                  row.commissie_tranche_b > 0 ? (
-                    <p className="text-[11px] text-muted">
-                      Rest volgt bij installatie voltooid (netto sale).
+                  {row.commissie_rest_open > 0 ? (
+                    <p className="text-[11px] font-medium text-ink">
+                      Restcommissie open:{" "}
+                      <span className="tabular-nums">
+                        {formatEuro(row.commissie_rest_open)}
+                      </span>
+                      {!row.commissie_tranche_b_triggered
+                        ? " · volgt bij installatie voltooid"
+                        : row.commissie_tranche_b_uitbetaald
+                          ? ""
+                          : " · wacht op uitbetaling"}
                     </p>
                   ) : null}
 
@@ -1173,15 +1201,23 @@ function DetailDrawer({
               {formatEuro(row.bedrag_ex_btw)}
               {" · "}
               A {formatEuro(row.commissie_tranche_a)}
-              {row.commissie_tranche_a_triggered ? "" : " open"}
+              {row.commissie_tranche_a_uitbetaald
+                ? " betaald"
+                : row.commissie_tranche_a_triggered
+                  ? " te ontvangen"
+                  : " open"}
               {" + "}
               B {formatEuro(row.commissie_tranche_b)}
-              {row.commissie_tranche_b_triggered ||
-              row.commissie_tranche_b <= 0
-                ? ""
-                : " open"}
+              {row.commissie_tranche_b_uitbetaald
+                ? " betaald"
+                : row.commissie_rest_open > 0
+                  ? " open"
+                  : ""}
               {" · "}
-              getriggerd {formatEuro(row.commissie_verdiend)}
+              uitbetaald {formatEuro(row.commissie_uitbetaald)}
+              {row.commissie_rest_open > 0
+                ? ` · rest open ${formatEuro(row.commissie_rest_open)}`
+                : ""}
             </p>
           )}
         </div>

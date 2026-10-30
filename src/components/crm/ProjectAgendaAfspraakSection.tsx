@@ -507,8 +507,13 @@ export function ProjectAgendaAfspraakSection({
               partnerId={partnerId}
               soort="schouw"
               leadId={project.lead_id}
+              projectId={project.id}
               excludeProjectId={project.id}
               value={schouwAtIso}
+              onPartnerChange={(pid) => {
+                setPartnerId(pid);
+                setSchouwAtIso(null);
+              }}
               onChange={setSchouwAtIso}
               disabled={busy}
             />
@@ -519,8 +524,16 @@ export function ProjectAgendaAfspraakSection({
               partnerId={partnerId}
               soort="installatie"
               leadId={project.lead_id}
+              projectId={project.id}
               excludeProjectId={project.id}
+              showBest
+              lockBestToPartner={Boolean(project.schouw_at)}
+              afterIso={project.schouw_at || null}
               value={installatieAtIso}
+              onPartnerChange={(pid) => {
+                setPartnerId(pid);
+                setInstallatieAtIso(null);
+              }}
               onChange={setInstallatieAtIso}
               disabled={busy}
             />

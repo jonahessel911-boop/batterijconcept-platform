@@ -56,6 +56,8 @@ export type DueRule =
   | { kind: "days"; days: number }
   | { kind: "schouw_minus_days"; days: number }
   | { kind: "installatie_minus_days"; days: number }
+  /** Eerstvolgende werkdag (ma–vr) 17:00 ná klaar-moment. */
+  | { kind: "next_weekday" }
   | { kind: "none" };
 
 export type StatusTaakConfig = {
@@ -187,14 +189,13 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
       afdeling: "Facturatie",
       due: { kind: "days", days: 1 },
     },
+    /**
+     * Warmtefonds: géén “betaling controleren”-actie.
+     * Wachten tot WF betaald + schouwformulier → status restfactuur_betaald
+     * → dan pas “Installatiedatum inplannen”.
+     */
     taakPerBetaalwijze: {
-      warmtefonds: {
-        autoKeySuffix: "wf_betaling_installatie",
-        titel:
-          "Betaling warmtefonds controleren, indien die betaald is installatie inplannen",
-        afdeling: "Planning",
-        due: { kind: "days", days: 1 },
-      },
+      warmtefonds: null,
     },
   },
   {
@@ -226,14 +227,15 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     scope: "beide",
     inPipeline: true,
     /**
-     * Eerst installatiedatum zetten. Purchasing volgt daarna automatisch
-     * (Acties → Purchasing) met deadline = 5 werkdagen vóór installatie.
+     * Volledig betaald + schouwformulier → installatie inplannen
+     * (deadline = volgende werkdag). Daarna Purchasing automatisch
+     * (5 werkdagen vóór installatie).
      */
     taak: {
       autoKeySuffix: "installatie",
       titel: "Installatiedatum inplannen",
       afdeling: "Planning",
-      due: { kind: "none" },
+      due: { kind: "next_weekday" },
     },
   },
   {
@@ -250,7 +252,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
       autoKeySuffix: "installatie",
       titel: "Installatiedatum inplannen",
       afdeling: "Planning",
-      due: { kind: "none" },
+      due: { kind: "next_weekday" },
     },
   },
   {
@@ -276,13 +278,13 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     label: "After sale - review gevraagd",
     fase: "afronding",
     scope: "beide",
-    /** Legacy tussenstap; eindstatus = afgerond (After sale). */
+    /** Legacy tussenstap; eindstatus = afgerond (helemaal klaar). */
     inPipeline: true,
     taak: null,
   },
   {
     key: "afgerond",
-    label: "After sale",
+    label: "Afgerond",
     fase: "afronding",
     scope: "beide",
     inPipeline: true,

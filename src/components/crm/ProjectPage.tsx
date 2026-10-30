@@ -72,8 +72,10 @@ import {
 } from "@/lib/project-kickoff";
 import {
   aanbetalingVanOrder,
+  isAanbetalingFactuurOmschrijving,
   isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
+import { OmzettenNaarWarmtefondsModal } from "./OmzettenNaarWarmtefondsModal";
 import { KlantContactMailModal } from "./KlantContactMailModal";
 import { LeadTerugbelPlannen } from "./LeadTerugbelPlannen";
 import type { ContactMailTemplateId } from "@/lib/contact-mail-templates";
@@ -407,6 +409,7 @@ export function ProjectPage() {
   const [trackLinkBusy, setTrackLinkBusy] = useState(false);
   const [datumOptieOpen, setDatumOptieOpen] = useState(false);
   const [wfPortalBusy, setWfPortalBusy] = useState(false);
+  const [omzetWfOpen, setOmzetWfOpen] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
   const [gegevensDraft, setGegevensDraft] = useState<GegevensDraft | null>(
@@ -2595,7 +2598,15 @@ export function ProjectPage() {
                               ? "…"
                               : "Warmtefonds portaal →"}
                           </button>
-                        ) : null}
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setOmzetWfOpen(true)}
+                            className="border border-[#0D9488]/40 bg-[#F0FDFA] px-2 py-1 text-[11px] font-semibold text-[#115E59] hover:bg-[#CCFBF1]"
+                          >
+                            Omzetten naar Warmtefonds →
+                          </button>
+                        )}
                       </div>
                       {hasOfferte ? (
                         <p className="text-[11px] text-muted">
@@ -2935,6 +2946,7 @@ export function ProjectPage() {
               <ProjectKickoffChecklist
                 project={project}
                 facturen={facturen}
+                onOmzettenNaarWarmtefonds={() => setOmzetWfOpen(true)}
                 onFinancieringUpdated={(p) => {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
@@ -3104,6 +3116,13 @@ export function ProjectPage() {
                             btwBedrag: Number(off?.btw_bedrag) || 0,
                             totaalIncBtw: Number(off?.totaal_inc_btw) || 0,
                             financieringVoorbehoud: false,
+                            modus: off?.aanbetaling_modus as
+                              | "helft"
+                              | "handmatig"
+                              | "btw"
+                              | "restant"
+                              | undefined,
+                            handmatigIncBtw: off?.aanbetaling_bedrag_inc,
                           });
                           return (
                             <div className="space-y-3">
@@ -3132,13 +3151,22 @@ export function ProjectPage() {
                                   </span>
                                 </p>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setMainTab("financieel")}
-                                className="text-xs font-semibold text-[#0F766E] hover:underline"
-                              >
-                                Open Financieel →
-                              </button>
+                              <div className="flex flex-wrap items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setOmzetWfOpen(true)}
+                                  className="text-xs font-semibold text-orange hover:underline"
+                                >
+                                  Omzetten naar Warmtefonds →
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setMainTab("financieel")}
+                                  className="text-xs font-semibold text-[#0F766E] hover:underline"
+                                >
+                                  Open Financieel →
+                                </button>
+                              </div>
                             </div>
                           );
                         })()}
@@ -4144,6 +4172,39 @@ export function ProjectPage() {
                 }
               })();
             }
+          }}
+        />
+      ) : null}
+      {omzetWfOpen && project ? (
+        <OmzettenNaarWarmtefondsModal
+          open={omzetWfOpen}
+          onClose={() => setOmzetWfOpen(false)}
+          projectId={project.id}
+          leadId={project.lead_id}
+          offerte={
+            (Array.isArray(project.offertes)
+              ? project.offertes[0]
+              : project.offertes) ||
+            (project.offerte_id
+              ? {
+                  id: project.offerte_id,
+                  subtotaal_ex_btw: null,
+                  btw_bedrag: null,
+                  totaal_inc_btw: null,
+                }
+              : null)
+          }
+          hasVerstuurdeAanbetaling={facturen.some(
+            (f) =>
+              !f.credit_van_factuur_id &&
+              isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+              (f.status === "verzonden" ||
+                f.status === "deels_betaald" ||
+                f.status === "betaald")
+          )}
+          onDone={async () => {
+            setOkMsg("Project omgezet naar Warmtefonds.");
+            await load();
           }}
         />
       ) : null}

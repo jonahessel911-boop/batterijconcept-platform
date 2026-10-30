@@ -201,6 +201,11 @@ export function LeadPage() {
   const [completingAfspraakId, setCompletingAfspraakId] = useState<string | null>(
     null
   );
+  const [annuleerAfspraakId, setAnnuleerAfspraakId] = useState<string | null>(
+    null
+  );
+  const [annuleerNotitie, setAnnuleerNotitie] = useState("");
+  const [annuleerBusy, setAnnuleerBusy] = useState(false);
   const [claimBusy, setClaimBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -509,6 +514,62 @@ export function LeadPage() {
     }
   }
 
+  function startAnnuleerAfspraak(afspraakId: string) {
+    setAnnuleerAfspraakId(afspraakId);
+    setAnnuleerNotitie("");
+    setErrorMsg(null);
+    setOkMsg(null);
+  }
+
+  function cancelAnnuleerForm() {
+    setAnnuleerAfspraakId(null);
+    setAnnuleerNotitie("");
+  }
+
+  async function bevestigAnnuleerAfspraak() {
+    if (!annuleerAfspraakId) return;
+    const notitie = annuleerNotitie.trim();
+    if (notitie.length < 3) {
+      setErrorMsg("Vul een notitie in bij annuleren (min. 3 tekens).");
+      return;
+    }
+    setAnnuleerBusy(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: annuleerAfspraakId,
+          action: "annuleer",
+          notitie,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Annuleren mislukt"
+        );
+      }
+      const next = (data as { afspraak?: Afspraak }).afspraak;
+      setAfspraken((prev) =>
+        prev.map((a) =>
+          a.id === annuleerAfspraakId
+            ? next || { ...a, status: "geannuleerd" }
+            : a
+        )
+      );
+      setAnnuleerAfspraakId(null);
+      setAnnuleerNotitie("");
+      setOkMsg("Afspraak geannuleerd.");
+      setActivityKey((k) => k + 1);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Annuleren mislukt");
+    } finally {
+      setAnnuleerBusy(false);
+    }
+  }
+
   /** Terugbel-afspraak afvinken + lead-vlag wissen (zelfde flow als Bellen). */
   async function voltooiTerugbel(afspraakId: string) {
     if (!lead) return;
@@ -693,13 +754,14 @@ export function LeadPage() {
 
   function afspraakRow(a: Afspraak, variant: "upcoming" | "past") {
     const terugbel = isActieveTerugbel(a);
+    const kanAnnuleren = ACTIEVE_AFSPRAAK.has(a.status);
+    const annuleerOpen = annuleerAfspraakId === a.id;
     const focused = focusAfspraakId === a.id;
     return (
       <li
         id={`afspraak-${a.id}`}
         key={a.id}
         className={[
-          "flex items-start gap-3 px-3 py-2.5",
           focused
             ? "bg-green-soft ring-2 ring-inset ring-green"
             : variant === "upcoming"
@@ -707,46 +769,96 @@ export function LeadPage() {
               : "border-b border-line last:border-b-0",
         ].join(" ")}
       >
-        <span
-          className={[
-            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-            variant === "upcoming"
-              ? "bg-green text-white"
-              : "bg-wash text-muted",
-          ].join(" ")}
-        >
-          <CalendarIcon className="h-3.5 w-3.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p
+        <div className="flex items-start gap-3 px-3 py-2.5">
+          <span
             className={[
-              "text-sm tabular-nums",
+              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
               variant === "upcoming"
-                ? "font-semibold text-ink"
-                : "font-medium text-ink",
+                ? "bg-green text-white"
+                : "bg-wash text-muted",
             ].join(" ")}
           >
-            {formatDateTimeNl(a.start_at)}
-          </p>
-          <p className="mt-0.5 text-xs text-muted">
-            {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
-            {variant === "upcoming" && a.adviseurs?.naam
-              ? ` · ${a.adviseurs.naam}`
-              : ""}
-            {" · "}
-            {a.status}
-          </p>
+            <CalendarIcon className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p
+              className={[
+                "text-sm tabular-nums",
+                variant === "upcoming"
+                  ? "font-semibold text-ink"
+                  : "font-medium text-ink",
+              ].join(" ")}
+            >
+              {formatDateTimeNl(a.start_at)}
+            </p>
+            <p className="mt-0.5 text-xs text-muted">
+              {afspraakSoortLabel[normalizeAfspraakSoort(a.soort)]}
+              {variant === "upcoming" && a.adviseurs?.naam
+                ? ` · ${a.adviseurs.naam}`
+                : ""}
+              {" · "}
+              {a.status}
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 self-center">
+            {terugbel ? (
+              <button
+                type="button"
+                disabled={completingAfspraakId !== null || annuleerBusy}
+                onClick={() => void voltooiTerugbel(a.id)}
+                className="border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
+              >
+                {completingAfspraakId === a.id ? "Bezig…" : "Voltooid"}
+              </button>
+            ) : null}
+            {kanAnnuleren ? (
+              <button
+                type="button"
+                disabled={annuleerBusy || completingAfspraakId !== null}
+                onClick={() =>
+                  annuleerOpen
+                    ? cancelAnnuleerForm()
+                    : startAnnuleerAfspraak(a.id)
+                }
+                className="border border-line px-2.5 py-1.5 text-xs font-semibold text-muted hover:border-[#C45A12]/40 hover:bg-[#FFF0E6] hover:text-[#C45A12] disabled:opacity-50"
+              >
+                {annuleerOpen ? "Sluiten" : "Annuleren"}
+              </button>
+            ) : null}
+          </div>
         </div>
-        {terugbel && (
-          <button
-            type="button"
-            disabled={completingAfspraakId !== null}
-            onClick={() => void voltooiTerugbel(a.id)}
-            className="shrink-0 self-center border border-[#C45A12]/40 bg-[#FFF0E6] px-2.5 py-1.5 text-xs font-semibold text-[#C45A12] hover:bg-[#FFE4D1] disabled:opacity-50"
-          >
-            {completingAfspraakId === a.id ? "Bezig…" : "Voltooid"}
-          </button>
-        )}
+        {annuleerOpen ? (
+          <div className="border-t border-line/70 bg-white px-3 py-3 sm:px-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Reden annulering
+              <textarea
+                value={annuleerNotitie}
+                onChange={(e) => setAnnuleerNotitie(e.target.value)}
+                rows={2}
+                placeholder="Waarom wordt deze afspraak geannuleerd?"
+                className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={annuleerBusy}
+                onClick={cancelAnnuleerForm}
+                className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
+              >
+                Terug
+              </button>
+              <button
+                type="button"
+                disabled={annuleerBusy || annuleerNotitie.trim().length < 3}
+                onClick={() => void bevestigAnnuleerAfspraak()}
+                className="bg-[#C45A12] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-50"
+              >
+                {annuleerBusy ? "Bezig…" : "Afspraak annuleren"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </li>
     );
   }

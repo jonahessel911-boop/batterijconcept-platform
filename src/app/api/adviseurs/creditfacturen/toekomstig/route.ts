@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
@@ -8,8 +8,10 @@ import { ensureNettoAanbetalingCreditfactuur } from "@/lib/netto-creditfactuur";
 
 export const runtime = "nodejs";
 
-/** GET /api/adviseurs/creditfacturen/toekomstig — preview eerstvolgende woensdag-run */
-export async function GET() {
+/** GET /api/adviseurs/creditfacturen/toekomstig — preview eerstvolgende woensdag-run
+ *  ?mode=vooruit → alleen aanbetalingen van de huidige week (volgende uitbetaling)
+ */
+export async function GET(req: NextRequest) {
   try {
     const jar = await cookies();
     const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
@@ -17,8 +19,13 @@ export async function GET() {
       return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
     }
 
+    const modeRaw = (req.nextUrl.searchParams.get("mode") || "").toLowerCase();
+    const mode = modeRaw === "vooruit" ? "vooruit" : "default";
+
     const sb = getSupabaseAdmin();
-    const preview = await buildToekomstigeVerkoperCreditfacturen(sb);
+    const preview = await buildToekomstigeVerkoperCreditfacturen(sb, new Date(), {
+      mode,
+    });
     return NextResponse.json({ ok: true, ...preview });
   } catch (e) {
     return NextResponse.json(

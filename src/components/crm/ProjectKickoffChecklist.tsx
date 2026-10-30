@@ -18,11 +18,35 @@ import {
 } from "@/lib/backoffice-acties";
 import {
   formatSchouwWeekLabel,
+  schouwWeekFromDate,
+  schouwWeekToMondayIso,
   schouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { formatEuro } from "@/lib/format";
+
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Voorstel: maandag van de aanbevolen week om 10:00 (lokale tijd). */
+function defaultSchouwdagLocal(
+  jaar: number,
+  week: number
+): string {
+  try {
+    const monday = new Date(schouwWeekToMondayIso(jaar, week));
+    monday.setHours(10, 0, 0, 0);
+    return toDatetimeLocalValue(monday.toISOString());
+  } catch {
+    return "";
+  }
+}
 
 function WhatsAppIcon() {
   return (
@@ -59,12 +83,15 @@ export function ProjectKickoffChecklist({
   onFinancieringUpdated,
   onProjectUpdated,
   onFacturenChanged,
+  onOmzettenNaarWarmtefonds,
 }: {
   project: Project;
   facturen: Factuur[];
   onFinancieringUpdated?: (project: Project) => void;
   onProjectUpdated?: (project: Project) => void;
   onFacturenChanged?: () => void;
+  /** Eigen middelen → Warmtefonds (opent modal op ProjectPage). */
+  onOmzettenNaarWarmtefonds?: () => void;
 }) {
   const [waBusy, setWaBusy] = useState(false);
   const [afvinkBusy, setAfvinkBusy] = useState(false);
@@ -82,6 +109,9 @@ export function ProjectKickoffChecklist({
   );
   const [schouwWeek, setSchouwWeek] = useState(() =>
     schouwWeekValue(recommended.jaar, recommended.week)
+  );
+  const [schouwdagLocal, setSchouwdagLocal] = useState(() =>
+    defaultSchouwdagLocal(recommended.jaar, recommended.week)
   );
 
   if (!showProjectKickoff(project, facturen)) return null;
@@ -297,6 +327,68 @@ export function ProjectKickoffChecklist({
     }
   }
 
+  async function planSchouwdag() {
+    const parsed = new Date(schouwdagLocal);
+    if (!schouwdagLocal.trim() || Number.isNaN(parsed.getTime())) {
+      setActionError("Kies een geldige schouwdag en tijd");
+      return;
+    }
+    const derived = schouwWeekFromDate(parsed);
+    const email = lead?.email?.trim();
+    if (
+      !confirm(
+        `Schouwdag zetten${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt de schouwdag + knop naar track & trace.`
+      )
+    ) {
+      return;
+    }
+    setWeekBusy(true);
+    setActionError(null);
+    setActionHint(null);
+    try {
+      const res = await fetch(`/api/projecten/${project.id}/schouw`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schouw_at: parsed.toISOString(),
+          schouw_jaar: derived.jaar,
+          schouw_week: derived.week,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Schouwdag opslaan mislukt"
+        );
+      }
+      const updated = (data as { project?: Project }).project;
+      const base = updated || project;
+      const finalized = await finalizeKickoffIfReady(base, facturen);
+      const result = finalized || updated;
+      if (result && !finalized) onProjectUpdated?.(result);
+      const mailOk = (data as { mails?: { klant?: { ok?: boolean } } }).mails
+        ?.klant?.ok;
+      const dagLabel = parsed.toLocaleString("nl-NL", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      setActionHint(
+        mailOk
+          ? `Schouwdag gezet · ${dagLabel} — klantmail met track & trace verstuurd`
+          : `Schouwdag gezet · ${dagLabel}`
+      );
+    } catch (e) {
+      setActionError(
+        e instanceof Error ? e.message : "Schouwdag opslaan mislukt"
+      );
+    } finally {
+      setWeekBusy(false);
+    }
+  }
+
   async function planSchouwweek() {
     const opt = weekOptions.find((o) => o.value === schouwWeek);
     if (!opt) {
@@ -368,6 +460,26 @@ export function ProjectKickoffChecklist({
         Dit moet nu gebeuren
       </h2>
 
+      {!wf && onOmzettenNaarWarmtefonds ? (
+        <div className="mt-3 flex flex-col gap-2 border border-[#0D9488]/35 bg-[#F0FDFA] px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-[#115E59]">
+              Eigen middelen → Warmtefonds?
+            </p>
+            <p className="mt-0.5 text-[12px] text-[#0F766E]">
+              Zet deze order om; standaard wordt de BTW de aanbetalingsfactuur.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onOmzettenNaarWarmtefonds}
+            className="shrink-0 bg-[#0D9488] px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-[#0F766E]"
+          >
+            Omzetten naar Warmtefonds →
+          </button>
+        </div>
+      ) : null}
+
       {waHint || actionHint ? (
         <p className="mt-3 border border-[#0D9488]/25 bg-[#F0FDFA] px-3 py-2 text-[12px] text-[#115E59]">
           {actionHint || waHint}
@@ -431,6 +543,15 @@ export function ProjectKickoffChecklist({
                         ? "Verstuur factuur"
                         : "Maak & verstuur"}
                   </button>
+                  {!wf && onOmzettenNaarWarmtefonds ? (
+                    <button
+                      type="button"
+                      onClick={onOmzettenNaarWarmtefonds}
+                      className="text-[11px] font-semibold text-[#0D9488] hover:underline"
+                    >
+                      Liever Warmtefonds? Omzetten →
+                    </button>
+                  ) : null}
                   {!lead?.email ? (
                     <p className="max-w-[14rem] text-right text-[11px] text-[#C45A12]">
                       Let op: geen e-mail op de lead
@@ -488,7 +609,7 @@ export function ProjectKickoffChecklist({
                   <p className="shrink-0 text-[12px] font-medium text-muted sm:max-w-[14rem] sm:text-right">
                     Beschikbaar na 50% betaling
                   </p>
-                ) : (
+                ) : wf ? (
                   <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
                     <select
                       value={schouwWeek}
@@ -500,9 +621,7 @@ export function ProjectKickoffChecklist({
                           {o.label}
                           {o.value ===
                           schouwWeekValue(recommended.jaar, recommended.week)
-                            ? wf
-                              ? " · voorstel +5w"
-                              : " · voorstel +1w"
+                            ? " · voorstel +5w"
                             : ""}
                         </option>
                       ))}
@@ -514,6 +633,29 @@ export function ProjectKickoffChecklist({
                       className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
                     >
                       {weekBusy ? "Bezig…" : "Zet schouwweek + mail"}
+                    </button>
+                    {!lead?.email ? (
+                      <p className="max-w-[16rem] text-[11px] text-[#C45A12]">
+                        Let op: geen e-mail op de lead — track & trace-mail kan
+                        niet
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
+                    <input
+                      type="datetime-local"
+                      value={schouwdagLocal}
+                      onChange={(e) => setSchouwdagLocal(e.target.value)}
+                      className="border border-line bg-white px-3 py-2 text-[12px] font-medium text-ink outline-none focus:border-green"
+                    />
+                    <button
+                      type="button"
+                      disabled={weekBusy || !schouwdagLocal}
+                      onClick={() => void planSchouwdag()}
+                      className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
+                    >
+                      {weekBusy ? "Bezig…" : "Zet schouwdag + mail"}
                     </button>
                     {!lead?.email ? (
                       <p className="max-w-[16rem] text-[11px] text-[#C45A12]">

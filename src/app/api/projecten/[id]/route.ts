@@ -617,7 +617,7 @@ export async function PATCH(
           return NextResponse.json(
             {
               error:
-                "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
+                "Eigen middelen: schouwdag pas inplannen nadat de 50%-aanbetaling is betaald.",
             },
             { status: 400 }
           );

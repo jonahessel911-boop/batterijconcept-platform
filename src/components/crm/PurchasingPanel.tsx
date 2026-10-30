@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { formatEuro, formatSlotLabelNl } from "@/lib/format";
+import { formatDateShort, formatEuro, formatSlotLabelNl } from "@/lib/format";
 import {
   INKOOP_LEVERANCIER,
   INKOOP_LEVERANCIER_STATUS_LABEL,
@@ -232,9 +232,22 @@ function pipelineSortKey(o: PurchasingOrder): string {
   return `${pay}:2:${o.updated_at || ""}`;
 }
 
+type WfForecast5w = {
+  horizon_days: number;
+  van: string;
+  tot: string;
+  orders: number;
+  omzet_ex_btw: number;
+  omzet_inc_btw: number;
+  inkoop_ex_btw: number;
+  inkoop_te_bestellen_ex_btw: number;
+  inkoop_besteld_ex_btw: number;
+};
+
 export function PurchasingPanel() {
   const [orders, setOrders] = useState<PurchasingOrder[]>([]);
   const [leverancier, setLeverancier] = useState(INKOOP_LEVERANCIER);
+  const [wfForecast, setWfForecast] = useState<WfForecast5w | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -263,6 +276,11 @@ export function PurchasingPanel() {
         }))
       );
       setLeverancier(data.leverancier || INKOOP_LEVERANCIER);
+      setWfForecast(
+        data.wf_forecast_5w
+          ? (data.wf_forecast_5w as WfForecast5w)
+          : null
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -625,6 +643,53 @@ export function PurchasingPanel() {
           </button>
         </div>
       </div>
+
+      {wfForecast ? (
+        <div className="border-b border-line bg-[#F7FAF8] px-4 py-3.5 sm:px-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Verwacht binnen 5 weken · Warmtefonds
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Installatie {formatDateShort(`${wfForecast.van}T12:00:00`)} –{" "}
+                {formatDateShort(`${wfForecast.tot}T12:00:00`)}
+                {wfForecast.orders > 0
+                  ? ` · ${wfForecast.orders} WF-order${wfForecast.orders === 1 ? "" : "s"}`
+                  : " · geen WF-installaties gepland"}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="border border-line bg-white px-3.5 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Omzet (WF)
+              </p>
+              <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
+                {formatEuro(wfForecast.omzet_ex_btw)}
+              </p>
+              <p className="mt-0.5 text-[11px] tabular-nums text-muted">
+                {formatEuro(wfForecast.omzet_inc_btw)} incl. btw
+              </p>
+            </div>
+            <div className="border border-line bg-white px-3.5 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Uitgaand purchasing
+              </p>
+              <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
+                {formatEuro(wfForecast.inkoop_te_bestellen_ex_btw)}
+              </p>
+              <p className="mt-0.5 text-[11px] tabular-nums text-muted">
+                te bestellen · totaal inkoop{" "}
+                {formatEuro(wfForecast.inkoop_ex_btw)}
+                {wfForecast.inkoop_besteld_ex_btw > 0
+                  ? ` · al besteld ${formatEuro(wfForecast.inkoop_besteld_ex_btw)}`
+                  : ""}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap border-b border-line">
         {(

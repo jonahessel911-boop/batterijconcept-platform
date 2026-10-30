@@ -18,6 +18,34 @@ export const MAANDAG_MEETING_START_ADRES =
 export const MAANDAG_MEETING_START_LABEL = "Ochtendmeeting Daltonlaan";
 
 /**
+ * Fallback vertrekpunt voor montagepartners zonder eigen start_adres
+ * (Cabrondom 43, Utrecht).
+ */
+export const PARTNER_DEFAULT_START_ADRES =
+  "Cabrondom 43, Utrecht, Nederland";
+
+export const PARTNER_DEFAULT_START_LABEL = "Cabrondom 43 Utrecht";
+
+/** Partner-startadres of Cabrondom-fallback (altijd bruikbaar voor reistijd). */
+export function resolvePartnerStartAdres(
+  startAdres: string | null | undefined
+): { address: string; label: string | null; isFallback: boolean } {
+  const t = (startAdres || "").trim();
+  if (t && t !== "—" && isUsableStartAdres(t)) {
+    return {
+      address: ensureStartAdresCountry(t),
+      label: null,
+      isFallback: false,
+    };
+  }
+  return {
+    address: ensureStartAdresCountry(PARTNER_DEFAULT_START_ADRES, "NL"),
+    label: PARTNER_DEFAULT_START_LABEL,
+    isFallback: true,
+  };
+}
+
+/**
  * Adviseurs die maandag níet naar de ochtendmeeting komen:
  * - startadres blijft hun persoonlijke adres (geen Daltonlaan)
  * - maandag 10:00 is open (niet hard geblokkeerd)

@@ -465,12 +465,34 @@ export function orderGetekendInternEmail(opts: {
   adviseurNaam: string;
   bedragExBtw: number;
   brutoMarge: number;
+  /** Hardware-inkoop (batterij + omvormer + WF). */
+  inkoop?: number;
+  /** Standaard installatiekosten. */
+  installatie?: number;
+  /** Salescommissie adviseur. */
+  salesCommissie?: number;
+  /** Adviseur commissie % (voor label). */
+  commissiePctLabel?: number | null;
   ondertekendOp?: string | Date;
 }) {
   const when = opts.ondertekendOp
     ? formatDateTimeLongNl(opts.ondertekendOp)
     : null;
   const klant = opts.klantNaam?.trim() || "—";
+  const hasSplit =
+    opts.inkoop != null &&
+    opts.installatie != null &&
+    opts.salesCommissie != null;
+  const pctLabel =
+    opts.commissiePctLabel != null && Number.isFinite(opts.commissiePctLabel)
+      ? ` (${Math.round(opts.commissiePctLabel)}%)`
+      : "";
+  const kostenHtml = hasSplit
+    ? `<p style="margin:12px 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#666;">Kosten</p>
+         <p style="margin:0 0 6px;font-size:15px;"><strong>Inkoop hardware</strong><br />− ${formatEuro(opts.inkoop!)}</p>
+         <p style="margin:0 0 6px;font-size:15px;"><strong>Installatie</strong><br />− ${formatEuro(opts.installatie!)}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Salescommissie${pctLabel}</strong><br />− ${formatEuro(opts.salesCommissie!)}</p>`
+    : "";
   return emailLayout({
     title: `Order getekend ${opts.offerteNummer}`,
     preheader: `${opts.adviseurNaam} · ${formatEuro(opts.bedragExBtw)} ex · marge ${formatEuro(opts.brutoMarge)}`,
@@ -480,12 +502,15 @@ export function orderGetekendInternEmail(opts: {
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Adviseur</strong><br />${opts.adviseurNaam}</p>
          <p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${klant}</p>
          <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag ex btw</strong><br />${formatEuro(opts.bedragExBtw)}</p>
+         ${kostenHtml}
          <p style="margin:0;font-size:15px;"><strong>Bruto marge</strong><br />${formatEuro(opts.brutoMarge)}</p>`
       ),
       when
         ? emailP(`Ondertekend op ${when}.`)
         : "",
-      emailMuted("Interne melding · Batterijconcept CRM"),
+      emailMuted(
+        "Interne melding · Batterijconcept CRM · geen bel/ops of ad spend"
+      ),
     ]
       .filter(Boolean)
       .join(""),

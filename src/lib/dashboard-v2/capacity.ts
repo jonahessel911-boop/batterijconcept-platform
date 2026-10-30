@@ -415,21 +415,29 @@ export function capacitySteeringGoals(
 }
 
 /**
- * Tel open (niet-afgeblokte) planbare slots in een vaste Amsterdam-ymd-range.
- * Onafhankelijk van of er al een afspraak in het blok staat — alleen
- * week-uit, standaardblokkades en afblokkingen tellen mee.
+ * Tel planbare slots in een vaste Amsterdam-ymd-range.
+ * - capaciteit = alle rooster-slots (ma–za × uren), minus week-uit / startdatum /
+ *   standaard dicht (zo / ma 10). Geen persoonlijke afblokkingen.
+ * - open = capaciteit minus persoonlijke afblokkingen
+ * - afgeblokt = persoonlijk dichtgezet
+ *
+ * Onafhankelijk van of er al een afspraak in het blok staat.
  */
-export function countOpenSlotsInYmdRange(opts: {
+export function countPlanbareSlotsBreakdown(opts: {
   startYmd: string;
   endYmd: string;
   adviseurs: AdviseurIn[];
   unavailableByAdviseur: Map<string, Set<string>>;
-  afblokkingen: Set<string>;
+  afblokkingen?: Set<string>;
   vrijgaven?: Set<string>;
-}): number {
-  if (opts.startYmd > opts.endYmd) return 0;
+}): { capaciteit: number; open: number; afgeblokt: number } {
+  if (opts.startYmd > opts.endYmd) {
+    return { capaciteit: 0, open: 0, afgeblokt: 0 };
+  }
   const adviseurs = opts.adviseurs.filter((a) => isPlanbaarAdviseur(a));
+  const afblokkingen = opts.afblokkingen ?? new Set<string>();
   const vrijgaven = opts.vrijgaven ?? new Set<string>();
+  let capaciteit = 0;
   let open = 0;
 
   const [sy, sm, sd] = opts.startYmd.split("-").map(Number);
@@ -450,9 +458,17 @@ export function countOpenSlotsInYmdRange(opts: {
           continue;
         }
         for (const hour of ADVISEUR_SLOT_HOURS) {
-          if (
-            isSlotGeblokkeerd(adv.id, dag, hour, opts.afblokkingen, vrijgaven)
-          ) {
+          // Capaciteit: alleen standaard-dicht (zo/ma 10) — lege afblokkingen-set
+          const standaardDicht = isSlotGeblokkeerd(
+            adv.id,
+            dag,
+            hour,
+            new Set(),
+            vrijgaven
+          );
+          if (standaardDicht) continue;
+          capaciteit += 1;
+          if (isSlotGeblokkeerd(adv.id, dag, hour, afblokkingen, vrijgaven)) {
             continue;
           }
           open += 1;
@@ -462,7 +478,27 @@ export function countOpenSlotsInYmdRange(opts: {
     cur = addDays(cur, 1);
   }
 
-  return open;
+  return {
+    capaciteit,
+    open,
+    afgeblokt: Math.max(0, capaciteit - open),
+  };
+}
+
+/**
+ * Tel open (niet-afgeblokte) planbare slots in een vaste Amsterdam-ymd-range.
+ * Onafhankelijk van of er al een afspraak in het blok staat — alleen
+ * week-uit, standaardblokkades en afblokkingen tellen mee.
+ */
+export function countOpenSlotsInYmdRange(opts: {
+  startYmd: string;
+  endYmd: string;
+  adviseurs: AdviseurIn[];
+  unavailableByAdviseur: Map<string, Set<string>>;
+  afblokkingen: Set<string>;
+  vrijgaven?: Set<string>;
+}): number {
+  return countPlanbareSlotsBreakdown(opts).open;
 }
 
 /** Lege capaciteit (geen adviseurs / fout bij laden). */

@@ -1461,6 +1461,9 @@ export function InstellingenPanel({
                     }
                     inputClassName={inputCls}
                   />
+                  <p className="mt-1 text-[11px] text-muted">
+                    Leeg = Cabrondom 43, Utrecht (fallback voor reistijd).
+                  </p>
                 </div>
                 <Field label="Reistijd-buffer (min)">
                   <input

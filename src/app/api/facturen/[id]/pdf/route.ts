@@ -67,15 +67,16 @@ async function loadFactuur(id: string) {
   return { ...data, offertes: offerte };
 }
 
-/** GET /api/facturen/[id]/pdf — download PDF (ook concept) */
+/** GET /api/facturen/[id]/pdf — download PDF (ook concept). ?inline=1 = in browser tonen. */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireFactuurPdfAccess();
   if (auth.error) return auth.error;
 
   const { id } = await ctx.params;
+  const inline = req.nextUrl.searchParams.get("inline") === "1";
   try {
     const factuur = await loadFactuur(id);
     if (!factuur) {
@@ -114,7 +115,8 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${filename}"`,
+        "Cache-Control": "private, max-age=60",
       },
     });
   } catch (e) {

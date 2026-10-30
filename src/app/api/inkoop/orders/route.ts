@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { addDays } from "date-fns";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
@@ -7,6 +9,7 @@ import { isAdminAdviseur, isAdminEmail } from "@/lib/admin-adviseur";
 import { remapLegacyProjectStatus } from "@/lib/project-status-config";
 import { orderBetalingProgress } from "@/lib/aanbetaling";
 import { isSchouwFormulier } from "@/lib/project-documenten";
+import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   formatProjectSchouwWeek,
   isSchouwdagDefinitief,
@@ -39,6 +42,36 @@ import {
 } from "@/lib/inkoop-leverancier-betaling";
 
 export const runtime = "nodejs";
+
+/** Horizon voor WF-omzetkaart op Purchasing. */
+const WF_FORECAST_DAYS = 35; // 5 weken
+
+function firstJoin<T>(v: T | T[] | null | undefined): T | null {
+  if (v == null) return null;
+  return Array.isArray(v) ? v[0] ?? null : v;
+}
+
+function isWarmtefondsRow(p: {
+  betaalwijze?: string | null;
+  leads?:
+    | { status?: string | null }
+    | { status?: string | null }[]
+    | null;
+  offertes?:
+    | { financiering_voorbehoud?: boolean | null }
+    | { financiering_voorbehoud?: boolean | null }[]
+    | null;
+}): boolean {
+  const lead = firstJoin(p.leads);
+  const off = firstJoin(p.offertes);
+  const leadStatus = lead?.status || null;
+  if (leadStatus === "sale_eigen_middelen") return false;
+  if (leadStatus === "sale_financiering") return true;
+  if (p.betaalwijze === "eigen_middelen") return false;
+  if (p.betaalwijze === "warmtefonds") return true;
+  return Boolean(off?.financiering_voorbehoud);
+}
+
 
 /**
  * Kandidaten voor Purchasing.
@@ -133,11 +166,13 @@ export async function GET(_req: NextRequest) {
     let pErr: { message?: string; code?: string } | null = null;
 
     const selectFull =
-      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, inkoop_leverancier_status, inkoop_leverancier_betaald_op, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, inkoop_leverancier_status, inkoop_leverancier_betaald_op, offerte_id, lead_id, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, status, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud)";
     const selectNoLev =
-      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, materiaal_leverdatum, offerte_id, lead_id, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, status, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud)";
     const selectMinimal =
-      "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)";
+      "id, project_nummer, status, titel, leveradres, materiaal_checks, offerte_id, lead_id, betaalwijze, schouw_at, schouw_jaar, schouw_week, installatie_at, updated_at, created_at, leads(naam, lead_number, status, postcode, huisnummer, toevoeging, straat, plaats), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud)";
+    const selectWfForecast =
+      "id, project_nummer, status, betaalwijze, offerte_id, installatie_at, materiaal_checks, leads(status), offertes(id, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud)";
 
     {
       const first = await sb
@@ -538,15 +573,167 @@ export async function GET(_req: NextRequest) {
       }
     }
 
+    // —— WF-forecast: alle WF-orders met installatie binnen 5 weken ——
+    const now = new Date();
+    const vanYmd = formatInTimeZone(now, AMSTERDAM_TZ, "yyyy-MM-dd");
+    const totYmd = formatInTimeZone(
+      addDays(now, WF_FORECAST_DAYS - 1),
+      AMSTERDAM_TZ,
+      "yyyy-MM-dd"
+    );
+    const vanIso = fromZonedTime(
+      (() => {
+        const [y, m, d] = vanYmd.split("-").map(Number);
+        return new Date(y, m - 1, d, 0, 0, 0, 0);
+      })(),
+      AMSTERDAM_TZ
+    ).toISOString();
+    const totEndIso = fromZonedTime(
+      (() => {
+        const [y, m, d] = totYmd.split("-").map(Number);
+        return new Date(y, m - 1, d, 23, 59, 59, 999);
+      })(),
+      AMSTERDAM_TZ
+    ).toISOString();
+
+    let wfOmzetEx = 0;
+    let wfOmzetInc = 0;
+    let wfInkoopEx = 0;
+    let wfInkoopTeBestellen = 0;
+    let wfInkoopBesteld = 0;
+    let wfCount = 0;
+
+    {
+      const wfRes = await sb
+        .from("projecten")
+        .select(selectWfForecast)
+        .not("installatie_at", "is", null)
+        .gte("installatie_at", vanIso)
+        .lte("installatie_at", totEndIso)
+        .neq("status", "geannuleerd")
+        .limit(500);
+
+      // Fallback zonder betaalwijze-kolom
+      let wfRows = (wfRes.data || []) as Record<string, unknown>[];
+      if (
+        wfRes.error &&
+        (wfRes.error.code === "42703" ||
+          wfRes.error.message?.includes("betaalwijze"))
+      ) {
+        const retry = await sb
+          .from("projecten")
+          .select(
+            "id, project_nummer, status, offerte_id, installatie_at, materiaal_checks, leads(status), offertes(id, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud)"
+          )
+          .not("installatie_at", "is", null)
+          .gte("installatie_at", vanIso)
+          .lte("installatie_at", totEndIso)
+          .neq("status", "geannuleerd")
+          .limit(500);
+        if (retry.error) throw retry.error;
+        wfRows = (retry.data || []) as Record<string, unknown>[];
+      } else if (wfRes.error) {
+        throw wfRes.error;
+      }
+
+      const wfOfferteIds = [
+        ...new Set(
+          wfRows
+            .map((p) => p.offerte_id as string | null)
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      const missingOfferteIds = wfOfferteIds.filter(
+        (id) => !regelsByOfferte.has(id)
+      );
+      if (missingOfferteIds.length > 0) {
+        const extraRegels = await sb
+          .from("offerte_regels")
+          .select("id, offerte_id, omschrijving, aantal, product_id")
+          .in("offerte_id", missingOfferteIds);
+        if (extraRegels.error) throw extraRegels.error;
+        for (const r of extraRegels.data || []) {
+          const oid = r.offerte_id as string;
+          const list = regelsByOfferte.get(oid) || [];
+          list.push({
+            id: r.id as string,
+            omschrijving: String(r.omschrijving || ""),
+            aantal: Number(r.aantal) || 1,
+            product_id: (r.product_id as string | null) || null,
+          });
+          regelsByOfferte.set(oid, list);
+        }
+      }
+
+      for (const raw of wfRows) {
+        const p = raw as {
+          id: string;
+          status?: string | null;
+          betaalwijze?: string | null;
+          offerte_id?: string | null;
+          materiaal_checks?: MateriaalChecks | null;
+          leads?:
+            | { status?: string | null }
+            | { status?: string | null }[]
+            | null;
+          offertes?:
+            | {
+                subtotaal_ex_btw?: number | null;
+                totaal_inc_btw?: number | null;
+                financiering_voorbehoud?: boolean | null;
+              }
+            | {
+                subtotaal_ex_btw?: number | null;
+                totaal_inc_btw?: number | null;
+                financiering_voorbehoud?: boolean | null;
+              }[]
+            | null;
+        };
+        if (!isWarmtefondsRow(p)) continue;
+        const rawStatus = String(p.status || "");
+        if (rawStatus === "geannuleerd" || rawStatus === "afgerond") continue;
+        const status = remapLegacyProjectStatus(rawStatus);
+        if (status === "afgerond") continue;
+
+        const off = firstJoin(p.offertes);
+        const offerteId = (p.offerte_id as string | null) || null;
+        const regels = offerteId
+          ? regelsByOfferte.get(offerteId) || []
+          : [];
+        const checks = (p.materiaal_checks || {}) as MateriaalChecks;
+        const items = buildInkoopChecklist(regels, producten, checks);
+
+        wfCount += 1;
+        wfOmzetEx += Number(off?.subtotaal_ex_btw) || 0;
+        wfOmzetInc += Number(off?.totaal_inc_btw) || 0;
+        wfInkoopEx += inkoopChecklistTotaalExBtw(items, checks);
+        wfInkoopTeBestellen += inkoopTeBestellenTotaalExBtw(items, checks);
+        wfInkoopBesteld += inkoopBesteldTotaalExBtw(items, checks);
+      }
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+
     return NextResponse.json({
       leverancier: INKOOP_LEVERANCIER,
       orders,
       totals: {
-        te_bestellen_ex_btw: Math.round(teBestellenEuro * 100) / 100,
-        op_krediet_ex_btw: Math.round(opKredietEuro * 100) / 100,
+        te_bestellen_ex_btw: round2(teBestellenEuro),
+        op_krediet_ex_btw: round2(opKredietEuro),
         op_krediet_count: opKredietCount,
-        betaald_ex_btw: Math.round(betaaldEuro * 100) / 100,
+        betaald_ex_btw: round2(betaaldEuro),
         betaald_count: betaaldCount,
+      },
+      wf_forecast_5w: {
+        horizon_days: WF_FORECAST_DAYS,
+        van: vanYmd,
+        tot: totYmd,
+        orders: wfCount,
+        omzet_ex_btw: round2(wfOmzetEx),
+        omzet_inc_btw: round2(wfOmzetInc),
+        inkoop_ex_btw: round2(wfInkoopEx),
+        inkoop_te_bestellen_ex_btw: round2(wfInkoopTeBestellen),
+        inkoop_besteld_ex_btw: round2(wfInkoopBesteld),
       },
       counts: {
         te_kopen: orders.filter((o) => o.summary.overall === "te_kopen").length,

@@ -926,7 +926,10 @@ export function AfspraakDetail({
     lead: verzetLead,
     lockAdviseur: true,
     defaultAdviseurId: current.adviseur_id,
-    enabled: mode === "verzet" && Boolean(verzetLead?.id && current.adviseur_id),
+    enabled:
+      mode === "verzet" &&
+      afspraakBlokkeertAgenda(current.soort) &&
+      Boolean(verzetLead?.id && current.adviseur_id),
   });
 
   /** Huidige slot eruit — je kunt niet naar hetzelfde moment verzetten. */
@@ -2107,28 +2110,41 @@ export function AfspraakDetail({
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                 Afspraak verzetten
               </p>
-              <p className="mt-1 text-sm text-muted">
-                {magKlantMail
-                  ? "Slimme slots op reistijd in de agenda van de adviseur. De herinnering van 24 uur schuift mee."
-                  : "Slimme slots op reistijd in de agenda van de adviseur. De klant krijgt hier geen mail van."}
-              </p>
-              <p className="mt-1 text-xs text-muted">
-                {bestSlotsHelpText({ lockAdviseur: true, limit: bestSlotsLimit })}
-              </p>
+              {afspraakBlokkeertAgenda(current.soort) ? (
+                <>
+                  <p className="mt-1 text-sm text-muted">
+                    {magKlantMail
+                      ? "Slimme slots op reistijd t.o.v. fysieke huisbezoeken. De herinnering van 24 uur schuift mee."
+                      : "Slimme slots op reistijd t.o.v. fysieke huisbezoeken. De klant krijgt hier geen mail van."}
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    {bestSlotsHelpText({
+                      lockAdviseur: true,
+                      limit: bestSlotsLimit,
+                    })}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-sm text-muted">
+                  Telefonisch — geen reistijd. Kies een nieuw tijdstip.
+                </p>
+              )}
 
               <div className="mt-4 space-y-3">
-                <BestSlotsOptionsList
-                  slots={verzetBestSlots}
-                  selectedSlotId={selectedBestSlotId}
-                  onSelect={selectVerzetBestSlot}
-                  loading={bestSlotsLoading}
-                  error={bestSlotsError}
-                  mode={bestSlotsMode}
-                  limit={bestSlotsLimit}
-                  loadingMore={bestSlotsLoadingMore}
-                  onLoadMore={() => void loadMeerBestSlots()}
-                  lockAdviseur
-                />
+                {afspraakBlokkeertAgenda(current.soort) ? (
+                  <BestSlotsOptionsList
+                    slots={verzetBestSlots}
+                    selectedSlotId={selectedBestSlotId}
+                    onSelect={selectVerzetBestSlot}
+                    loading={bestSlotsLoading}
+                    error={bestSlotsError}
+                    mode={bestSlotsMode}
+                    limit={bestSlotsLimit}
+                    loadingMore={bestSlotsLoadingMore}
+                    onLoadMore={() => void loadMeerBestSlots()}
+                    lockAdviseur
+                  />
+                ) : null}
 
                 <button
                   type="button"
@@ -2145,10 +2161,13 @@ export function AfspraakDetail({
                 >
                   {showHandmatigVerzet
                     ? "Handmatig verbergen"
-                    : "Handmatig tijdstip…"}
+                    : afspraakBlokkeertAgenda(current.soort)
+                      ? "Handmatig tijdstip…"
+                      : "Kies tijdstip…"}
                 </button>
 
-                {showHandmatigVerzet ? (
+                {showHandmatigVerzet ||
+                !afspraakBlokkeertAgenda(current.soort) ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -2200,7 +2219,9 @@ export function AfspraakDetail({
                   </div>
                 ) : null}
 
-                {!useCustomTime && newStart ? (
+                {afspraakBlokkeertAgenda(current.soort) &&
+                !useCustomTime &&
+                newStart ? (
                   <ReistijdHint
                     adviseurId={current.adviseur_id || ""}
                     startAt={newStart}
@@ -2483,14 +2504,17 @@ export function AgendaPanel({
   }, [leads]);
 
   function resolveLeadStatus(a: Afspraak): string | null {
+    const joined = a.leads;
+    const joinedStatus =
+      joined && typeof joined === "object" && "status" in joined
+        ? (joined as { status?: string | null }).status || null
+        : null;
+    // Na afboek: nested leads.status is verser dan de leads-map
+    if (a.status === "voltooid" && joinedStatus) return joinedStatus;
     if (a.lead_id && leadStatusById.has(a.lead_id)) {
       return leadStatusById.get(a.lead_id) || null;
     }
-    const joined = a.leads;
-    if (joined && typeof joined === "object" && "status" in joined) {
-      return (joined as { status?: string | null }).status || null;
-    }
-    return null;
+    return joinedStatus;
   }
 
   const load = useCallback(async () => {
@@ -2794,7 +2818,12 @@ export function AgendaPanel({
 
   const planSoort: AfspraakSoort | null =
     planKeuze && planKeuze !== "vervolg" ? planKeuze : null;
+  /** Nieuw huisbezoek (klantmail + partner-vragen). */
   const isHuisbezoek = planSoort === "nieuw";
+  /** Fysiek op locatie → reistijd; telefonisch nooit. */
+  const isFysiekVoorReistijd = Boolean(
+    planSoort && afspraakBlokkeertAgenda(planSoort)
+  );
   // Telefonisch / soft: alle blokken tonen (ook fysiek bezet). Huisbezoek: alleen vrij.
   const timeOptions =
     planSoort && !afspraakBlokkeertAgenda(planSoort)
@@ -3004,7 +3033,7 @@ export function AgendaPanel({
         )}
       </div>
 
-      {isHuisbezoek && (
+      {isFysiekVoorReistijd && (
         <ReistijdHint
           adviseurId={adviseurId}
           startAt={useCustomTime ? customStart : startAt}

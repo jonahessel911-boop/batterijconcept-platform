@@ -122,7 +122,7 @@ export async function POST(
                   financieringVoorbehoud: offRaw?.financiering_voorbehoud,
                 });
 
-    // Eigen middelen: schouwweek pas ná 50% betaling (tenzij handmatig €0)
+    // Eigen middelen: schouwdag pas ná 50% betaling (tenzij handmatig €0)
     if (!warmtefondsForStatus) {
       const { data: projectFull } = await sb
         .from("projecten")
@@ -149,7 +149,7 @@ export async function POST(
           return NextResponse.json(
             {
               error:
-                "Eigen middelen: schouwweek pas inplannen nadat de 50%-aanbetaling is betaald.",
+                "Eigen middelen: schouwdag pas inplannen nadat de 50%-aanbetaling is betaald.",
             },
             { status: 400 }
           );

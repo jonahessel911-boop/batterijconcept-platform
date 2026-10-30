@@ -168,7 +168,7 @@ export function SalesManagerPanel() {
             </h2>
             <p className="mt-2 max-w-xl text-sm text-white/70">
               {t
-                ? `${t.sales} sale${t.sales === 1 ? "" : "s"} · ${fmtPct(t.conversie_ingepland_sale_pct)} ingepland→sale · aankomend ${t.afspraken_aankomende_week} huisbezoeken · ${t.blokken_aankomende_week ?? 0} nog vrij`
+                ? `${t.ingepland} ingepland · ${t.gelopen} gelopen · ${t.sales} sales · ${fmtPct(t.conversie_ingepland_sale_pct)} gelopen→sale · aankomend ${t.afspraken_aankomende_week} huisbezoeken · ${t.blokken_aankomende_week ?? 0} nog vrij`
                 : "Simpele conversieketen per adviseur"}
             </p>
           </div>
@@ -226,19 +226,23 @@ export function SalesManagerPanel() {
         </p>
       ) : null}
 
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         <KpiTile
-          label="Ingepland → gelopen"
-          value={fmtPct(t?.conversie_ingepland_gelopen_pct)}
-          hint={t ? `${t.gelopen}/${t.ingepland} gelopen` : undefined}
-          accent="green"
+          label="Ingepland"
+          value={t ? String(t.ingepland) : "—"}
+          hint={
+            period === "this_week"
+              ? "Totaal huisbezoeken deze kalenderweek (ma–zo)"
+              : "Totaal huisbezoeken in periode"
+          }
+          accent="ink"
         />
         <KpiTile
-          label="Ingepland → sale"
-          value={fmtPct(t?.conversie_ingepland_sale_pct)}
+          label="Gelopen"
+          value={t ? String(t.gelopen) : "—"}
           hint={
             t
-              ? `${t.sales} sales / ${t.ingepland} ingepland (bruto)`
+              ? `${fmtPct(t.conversie_ingepland_gelopen_pct)} van ingepland al voorbij`
               : undefined
           }
           accent="green"
@@ -246,13 +250,23 @@ export function SalesManagerPanel() {
         <KpiTile
           label="Sales"
           value={t ? String(t.sales) : "—"}
-          hint={periodLabel}
+          hint="Getekend · 1× per lead · niet geannuleerd"
+        />
+        <KpiTile
+          label="Gelopen → sale"
+          value={fmtPct(t?.conversie_ingepland_sale_pct)}
+          hint={
+            t
+              ? `${t.sales} sales / ${t.gelopen} gelopen`
+              : undefined
+          }
+          accent="green"
         />
         <KpiTile
           label="Niet afgeboekt"
           value={t ? String(t.niet_afgeboekt) : "—"}
           accent={t && t.niet_afgeboekt > 0 ? "orange" : "ink"}
-          hint="In gekozen periode"
+          hint="Gelopen zonder uitkomst"
         />
       </div>
 
@@ -275,17 +289,28 @@ export function SalesManagerPanel() {
         </div>
 
         <div className="overflow-x-auto p-3 sm:p-4">
-          <table className="w-full min-w-[900px] border-collapse border border-line text-[12px]">
+          <table className="w-full min-w-[980px] border-collapse border border-line text-[12px]">
             <thead>
               <tr>
                 <th className={headCell}>Adviseur</th>
-                <th className={`${headCell} text-right`}>Ingepland</th>
+                <th className={`${headCell} text-right`}>
+                  Ingepland
+                  <span className="mt-0.5 block font-normal normal-case text-muted">
+                    {period === "this_week" ? "kalenderweek" : "periode"}
+                  </span>
+                </th>
+                <th className={`${headCell} text-right`}>
+                  Gelopen
+                  <span className="mt-0.5 block font-normal normal-case text-muted">
+                    al voorbij
+                  </span>
+                </th>
                 <th className={`${headCell} text-right`}>Niet afgeboekt</th>
                 <th className={`${headCell} text-right`}>
                   Ingepland→gelopen
                 </th>
                 <th className={`${headCell} text-right`}>Sales</th>
-                <th className={`${headCell} text-right`}>Ingepland→sale</th>
+                <th className={`${headCell} text-right`}>Gelopen→sale</th>
                 <th className={`${headCell} text-right`}>
                   Aank. week
                   <span className="mt-0.5 block font-normal normal-case text-muted">
@@ -304,7 +329,7 @@ export function SalesManagerPanel() {
               {loading && rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className={`${cell} py-10 text-center text-muted`}
                   >
                     Laden…
@@ -313,7 +338,7 @@ export function SalesManagerPanel() {
               ) : rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className={`${cell} py-10 text-center text-muted`}
                   >
                     Geen actieve adviseurs.
@@ -330,6 +355,7 @@ export function SalesManagerPanel() {
                       {r.naam}
                     </td>
                     <td className={`${cell} text-right`}>{r.ingepland}</td>
+                    <td className={`${cell} text-right`}>{r.gelopen}</td>
                     <td
                       className={[
                         cell,
@@ -365,6 +391,7 @@ export function SalesManagerPanel() {
                 <tr>
                   <td className={`${totalCell} text-left`}>Totaal</td>
                   <td className={`${totalCell} text-right`}>{t.ingepland}</td>
+                  <td className={`${totalCell} text-right`}>{t.gelopen}</td>
                   <td
                     className={[
                       totalCell,

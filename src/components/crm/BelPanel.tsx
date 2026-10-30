@@ -21,13 +21,16 @@ import {
   MAX_BELPOGINGEN_PER_DAG,
   MIN_UREN_TUSSEN_BELPOGINGEN,
   activeBelAfspraak,
+  annuleringsNotitieFromAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
   buildGeenContactOutcomePatch,
   geenContactPogingLabel,
-  inBelQueue,
+  inAnnuleringQueueForBeller,
+  inNormaleBelQueue,
   isHerplanBelLead,
   isTerugbelDue,
+  latestCancelledVisitAfspraak,
   leadInProvincie,
   sortBelQueue,
 } from "@/lib/bel-queue";
@@ -182,13 +185,15 @@ export function BelPanel({
   onAfspraakCreated?: (afspraak: Afspraak) => void;
   onNeedReload?: () => void | Promise<void>;
 }) {
-  /** null = bak kiezen; daarna normaal of provincie. */
-  const [bakMode, setBakMode] = useState<"normaal" | "provincie" | null>(null);
+  /** null = bak kiezen; daarna normaal, provincie of annuleringen. */
+  const [bakMode, setBakMode] = useState<
+    "normaal" | "provincie" | "annuleringen" | null
+  >(null);
   const [selectedProvincie, setSelectedProvincie] =
     useState<NlProvincie | null>(null);
   /** Sync bron voor claim-requests (voorkomt stale state / race). */
   const bakFilterRef = useRef<{
-    mode: "normaal" | "provincie" | null;
+    mode: "normaal" | "provincie" | "annuleringen" | null;
     provincie: NlProvincie | null;
   }>({ mode: null, provincie: null });
   const claimGenRef = useRef(0);
@@ -303,9 +308,28 @@ export function BelPanel({
   }
 
   const allBelQueue = useMemo(
-    () => sortBelQueue(leads.filter((l) => inBelQueue(l, appointmentLeadIds))),
+    () =>
+      sortBelQueue(
+        leads.filter((l) => inNormaleBelQueue(l, appointmentLeadIds))
+      ),
     [leads, appointmentLeadIds]
   );
+
+  /** Klant-annuleringen die deze beller had ingepland → Annuleringen-bak. */
+  const annuleringQueue = useMemo(() => {
+    const bellerId = defaultAdviseurId || "";
+    if (!bellerId) return [];
+    return sortBelQueue(
+      leads.filter((l) =>
+        inAnnuleringQueueForBeller(
+          l,
+          afspraken,
+          bellerId,
+          appointmentLeadIds
+        )
+      )
+    );
+  }, [leads, afspraken, appointmentLeadIds, defaultAdviseurId]);
 
   const provincieCounts = useMemo(() => {
     const map = new Map<NlProvincie, number>();
@@ -334,11 +358,14 @@ export function BelPanel({
   }, [planAdviseurs]);
 
   const normalQueue = useMemo(() => {
+    if (bakMode === "annuleringen") {
+      return annuleringQueue;
+    }
     if (bakMode === "provincie" && selectedProvincie) {
       return allBelQueue.filter((l) => leadInProvincie(l, selectedProvincie));
     }
     return allBelQueue;
-  }, [allBelQueue, bakMode, selectedProvincie]);
+  }, [allBelQueue, annuleringQueue, bakMode, selectedProvincie]);
 
   /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld), 1× per lead. */
   const terugbelDue = useMemo(() => {
@@ -437,6 +464,7 @@ export function BelPanel({
     opts?: {
       provincie?: NlProvincie | null;
       forceNew?: boolean;
+      bak?: "normaal" | "provincie" | "annuleringen" | null;
       /** Al overgeslagen ids bij provincie-mismatch retry */
       skipIds?: string[];
     }
@@ -446,12 +474,18 @@ export function BelPanel({
     setClaimError(null);
     try {
       const filter = bakFilterRef.current;
+      const bak =
+        opts?.bak ??
+        filter.mode ??
+        (filter.provincie ? "provincie" : "normaal");
       const provincie =
-        opts && "provincie" in opts
-          ? opts.provincie || null
-          : filter.mode === "provincie"
-            ? filter.provincie
-            : null;
+        bak === "annuleringen"
+          ? null
+          : opts && "provincie" in opts
+            ? opts.provincie || null
+            : filter.mode === "provincie"
+              ? filter.provincie
+              : null;
       const res = await fetch("/api/bel/claim-next", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -459,6 +493,7 @@ export function BelPanel({
           exclude_lead_id: excludeLeadId || null,
           provincie: provincie || null,
           force_new: Boolean(opts?.forceNew),
+          bak,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as {
@@ -517,7 +552,11 @@ export function BelPanel({
     setSelectedProvincie(null);
     setClaimError(null);
     await releaseClaim();
-    await claimNext(null, { provincie: null, forceNew: true });
+    await claimNext(null, {
+      provincie: null,
+      forceNew: true,
+      bak: "normaal",
+    });
   }
 
   async function startProvincieBak(provincie: NlProvincie) {
@@ -528,7 +567,26 @@ export function BelPanel({
     setCurrentId(null);
     setClaimedLead(null);
     await releaseClaim();
-    await claimNext(null, { provincie, forceNew: true });
+    await claimNext(null, {
+      provincie,
+      forceNew: true,
+      bak: "provincie",
+    });
+  }
+
+  async function startAnnuleringenBak() {
+    bakFilterRef.current = { mode: "annuleringen", provincie: null };
+    setBakMode("annuleringen");
+    setSelectedProvincie(null);
+    setClaimError(null);
+    setCurrentId(null);
+    setClaimedLead(null);
+    await releaseClaim();
+    await claimNext(null, {
+      provincie: null,
+      forceNew: true,
+      bak: "annuleringen",
+    });
   }
 
   function resetBakKeuze() {
@@ -900,6 +958,7 @@ export function BelPanel({
         throw new Error("Beantwoord: Andere offertes al gehad?");
       }
 
+      const herplanAnnulering = bakMode === "annuleringen";
       const res = await fetch("/api/afspraken", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -911,6 +970,8 @@ export function BelPanel({
           soort: "nieuw",
           partner_aanwezig: partnerAanwezig,
           andere_offertes_gehad: andereOffertes,
+          /** Herplan na klant-annulering: geen extra netto/commissie-booking */
+          herplan: herplanAnnulering || undefined,
         }),
       });
       const data = (await res.json()) as {
@@ -1032,7 +1093,7 @@ export function BelPanel({
             Welke belbak?
           </p>
           <p className="mt-2 text-sm text-muted">
-            Kies de normale wachtrij of bel alleen leads uit één provincie.
+            Normale wachtrij, provincie, of jouw klant-annuleringen herplannen.
           </p>
         </div>
         <div className="mx-auto mt-6 grid max-w-2xl gap-3 sm:grid-cols-2">
@@ -1068,6 +1129,24 @@ export function BelPanel({
             </p>
             <p className="mt-3 text-xs font-semibold text-green-dark">
               Kies daarna een provincie →
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => void startAnnuleringenBak()}
+            className="rounded-xl border border-[#1565C0]/35 bg-[#E3F2FD]/40 px-5 py-5 text-left transition hover:border-[#1565C0]/60 hover:bg-[#E3F2FD] sm:col-span-2"
+          >
+            <p className="font-display text-base font-semibold text-ink">
+              Annuleringen
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Klant-annuleringen die jij had ingepland — herplan om je netto te
+              redden (telt niet als extra afspraak).
+            </p>
+            <p className="mt-3 text-xs font-semibold text-[#0D47A1]">
+              {annuleringQueue.length === 0
+                ? "Geen openstaande annuleringen"
+                : `${annuleringQueue.length} te herplannen`}
             </p>
           </button>
         </div>
@@ -1189,18 +1268,27 @@ export function BelPanel({
     );
   }
 
-  if (!current && queue.length === 0 && terugbelDue.length === 0) {
+  if (
+    !current &&
+    queue.length === 0 &&
+    (bakMode === "annuleringen" || terugbelDue.length === 0)
+  ) {
+    const isAnnuleringen = bakMode === "annuleringen";
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
-          {bakMode === "provincie" && selectedProvincie
-            ? `Geen leads in ${selectedProvincie}`
-            : "Bellijst is leeg"}
+          {isAnnuleringen
+            ? "Geen annuleringen meer af te boeken"
+            : bakMode === "provincie" && selectedProvincie
+              ? `Geen leads in ${selectedProvincie}`
+              : "Bellijst is leeg"}
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          {bakMode === "provincie" && selectedProvincie
-            ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
-            : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min. ${MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later terug. Na ${MAX_BELPOGINGEN} keer geen contact vallen ze eruit.`}
+          {isAnnuleringen
+            ? "Alle klant-annuleringen op jouw naam zijn afgehandeld of opnieuw ingepland."
+            : bakMode === "provincie" && selectedProvincie
+              ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
+              : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min. ${MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later terug. Na ${MAX_BELPOGINGEN} keer geen contact vallen ze eruit.`}
         </p>
         <button
           type="button"
@@ -1260,11 +1348,13 @@ export function BelPanel({
               : "Geen leads in de bellijst"}
           </p>
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-            {queue.length > 0
-              ? "Andere bellers hebben de openstaande leads nu vast. Klik op opnieuw om de volgende vrije te pakken."
-              : bakMode === "provincie" && selectedProvincie
-                ? `Geen belbare leads meer in ${selectedProvincie}. Wissel van belbak of kies een andere provincie.`
-                : "Openstaande terugbel-afspraken staan hierboven — klik om naar de lead te gaan."}
+            {bakMode === "annuleringen" && queue.length === 0
+              ? "Geen annuleringen meer af te boeken."
+              : queue.length > 0
+                ? "Andere bellers hebben de openstaande leads nu vast. Klik op opnieuw om de volgende vrije te pakken."
+                : bakMode === "provincie" && selectedProvincie
+                  ? `Geen belbare leads meer in ${selectedProvincie}. Wissel van belbak of kies een andere provincie.`
+                  : "Openstaande terugbel-afspraken staan hierboven — klik om naar de lead te gaan."}
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             {queue.length > 0 ? (
@@ -1294,17 +1384,31 @@ export function BelPanel({
   const nextPoging = Math.min(pogingen + 1, MAX_BELPOGINGEN);
   const phone = current.telefoon!.trim();
   const position = queue.findIndex((l) => l.id === current.id) + 1;
+  const cancelledVisit =
+    bakMode === "annuleringen" || isHerplanBelLead(current)
+      ? latestCancelledVisitAfspraak(afspraken, current.id)
+      : null;
+  const annuleringsReden = annuleringsNotitieFromAfspraak(cancelledVisit);
 
   return (
     <div>
-      {terugbelBanner}
+      {bakMode === "annuleringen" ? null : terugbelBanner}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-[#F7FBF8] px-4 py-2 sm:px-5">
+      <div
+        className={[
+          "flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 sm:px-5",
+          bakMode === "annuleringen"
+            ? "border-[#1565C0]/25 bg-[#E3F2FD]/50"
+            : "border-line bg-[#F7FBF8]",
+        ].join(" ")}
+      >
         <p className="text-xs text-muted">
           <span className="font-semibold text-ink">
-            {bakMode === "provincie" && selectedProvincie
-              ? `Provincie belbak · ${selectedProvincie}`
-              : "Normale belbak"}
+            {bakMode === "annuleringen"
+              ? "Annuleringen"
+              : bakMode === "provincie" && selectedProvincie
+                ? `Provincie belbak · ${selectedProvincie}`
+                : "Normale belbak"}
           </span>
           <span className="ml-1.5">
             · {queue.length} in deze wachtrij
@@ -1322,16 +1426,20 @@ export function BelPanel({
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {`${position > 0 ? position : "—"} van ${queue.length} in de bellijst`}
+          {bakMode === "annuleringen"
+            ? `${position > 0 ? position : "—"} van ${queue.length} annuleringen`
+            : `${position > 0 ? position : "—"} van ${queue.length} in de bellijst`}
           <span className="ml-2 font-normal normal-case tracking-normal">
-            · van jou (andere bellers krijgen de volgende)
+            {bakMode === "annuleringen"
+              ? "· op jouw naam (klant geannuleerd)"
+              : "· van jou (andere bellers krijgen de volgende)"}
           </span>
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {isHerplanBelLead(current) ? (
+          {bakMode === "annuleringen" || isHerplanBelLead(current) ? (
             <span className="rounded-full border border-[#1565C0]/30 bg-[#E3F2FD] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#0D47A1]">
-              Herplannen · {leadStatusLabel[current.status] || current.status}
+              Annulering · herplannen
             </span>
           ) : current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
@@ -1347,10 +1455,29 @@ export function BelPanel({
               Terugbellen
             </span>
           )}
-          <span className="rounded-full border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
-            Vandaag {pogingenVandaag}/{MAX_BELPOGINGEN_PER_DAG}
-          </span>
+          {bakMode === "annuleringen" ? null : (
+            <span className="rounded-full border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+              Vandaag {pogingenVandaag}/{MAX_BELPOGINGEN_PER_DAG}
+            </span>
+          )}
         </div>
+
+        {cancelledVisit ? (
+          <div className="mt-3 rounded-xl border border-[#1565C0]/25 bg-[#E3F2FD]/60 px-3.5 py-3 text-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-[#0D47A1]">
+              Geannuleerde afspraak
+            </p>
+            <p className="mt-1 font-semibold text-ink">
+              Was {formatDateTimeNl(cancelledVisit.start_at)}
+            </p>
+            {annuleringsReden ? (
+              <p className="mt-1 text-muted">Reden: {annuleringsReden}</p>
+            ) : null}
+            <p className="mt-1.5 text-[11px] text-[#0D47A1]">
+              Herplannen redt je netto — telt niet als extra afspraak.
+            </p>
+          </div>
+        ) : null}
 
         <h2 className="mt-3 font-display text-2xl font-semibold text-ink sm:text-3xl">
           {current.naam}
@@ -1518,13 +1645,17 @@ export function BelPanel({
               }}
               className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-14 sm:text-base"
             >
-              Volgende
+              {bakMode === "annuleringen"
+                ? "Volgende annulering"
+                : "Volgende"}
             </button>
           ) : nextMode === "status" ? (
             <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
               <p className="text-sm font-semibold text-ink">Kies de status</p>
               <p className="text-xs text-muted">
-                Daarna komt de volgende lead in de bellijst.
+                {bakMode === "annuleringen"
+                  ? "Daarna komt de volgende annulering."
+                  : "Daarna komt de volgende lead in de bellijst."}
               </p>
               {currentIsTerugbelDue && (
                 <button

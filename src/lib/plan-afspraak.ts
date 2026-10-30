@@ -50,7 +50,16 @@ export type PlanAfspraakInput = {
   soort?: string | null;
   /** Wie plant in (bel-credit). Niet de agenda-adviseur. */
   ingepland_door_id?: string | null;
+  /**
+   * Herplan na klant-annulering: vervangt geannuleerde 1e booking.
+   * Commisssie telt nog steeds max. 1 actief nieuw per lead (geen extra).
+   */
+  herplan?: boolean;
 };
+
+/** Marker in notities — herplan telt niet als tweede bruto booking. */
+export const HERPLAN_NOTITIE_MARKER =
+  "Herplan na klant-annulering (vervangt geannuleerde booking; geen extra netto)";
 
 export type PlanAfspraakSuccess = {
   ok: true;
@@ -152,6 +161,13 @@ export async function planAfspraak(
 
   const magMailen = afspraakStuurtMail(soort);
   const ingeplandDoor = (input.ingepland_door_id || "").trim() || null;
+  const noteBase = input.notities?.trim() || "";
+  const herplanNote =
+    input.herplan && isHuisbezoek
+      ? noteBase
+        ? `${noteBase}\n\n${HERPLAN_NOTITIE_MARKER}`
+        : HERPLAN_NOTITIE_MARKER
+      : noteBase || null;
   const insertRow: Record<string, unknown> = {
     lead_id: input.lead_id,
     adviseur_id: input.adviseur_id,
@@ -159,7 +175,7 @@ export async function planAfspraak(
     end_at: end.toISOString(),
     status: "bevestigd" as const,
     soort,
-    notities: input.notities?.trim() || null,
+    notities: herplanNote,
     partner_aanwezig: isHuisbezoek ? input.partner_aanwezig : null,
     andere_offertes_gehad: isHuisbezoek ? input.andere_offertes_gehad : null,
     bevestiging_verstuurd: !magMailen,
@@ -374,8 +390,8 @@ async function afterCreate(
       terugbel_notitie: afspraak.notities || null,
       laatst_gebeld_at: new Date().toISOString(),
     };
-    // Alleen sales-adviseur → lead.adviseur_id; callcenter → beller_id.
-    // Backoffice/admin: afspraak.adviseur_id is genoeg voor het bel-systeem.
+    // Telefonisch: nooit lead.adviseur_id overschrijven (dat blijft de
+    // huisbezoek-adviseur). Alleen beller_id bij callcenter.
     if (body.adviseur_id) {
       const { data: assignee } = await sb
         .from("adviseurs")
@@ -383,15 +399,15 @@ async function afterCreate(
         .eq("id", body.adviseur_id)
         .maybeSingle();
       const rol = normalizeRol(assignee?.rol);
-      if (rol === "adviseur") {
-        leadPatch.adviseur_id = body.adviseur_id;
-      } else if (rol === "beller") {
+      if (rol === "beller") {
         leadPatch.beller_id = body.adviseur_id;
         leadPatch.laatst_gebeld_door = body.adviseur_id;
       }
     }
     await sb.from("leads").update(leadPatch).eq("id", body.lead_id);
-  } else if (body.adviseur_id) {
+  } else if (body.adviseur_id && afspraakBlokkeertAgenda(soort)) {
+    // Alleen fysiek huisbezoek / vervolg op locatie → lead.adviseur_id
+    // (niet bij vervolg_tel / warmtefonds e.d.)
     await sb
       .from("leads")
       .update({ adviseur_id: body.adviseur_id })

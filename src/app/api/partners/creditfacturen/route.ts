@@ -9,13 +9,21 @@ import {
   creditWeekByYearWeek,
   previousCreditWeek,
 } from "@/lib/adviseur-creditfactuur";
-import { formatPartnerCreditFactuurNummer } from "@/lib/pdf-partner-creditfactuur";
+import {
+  encodePartnerFactuurRegels,
+  formatPartnerCreditFactuurNummer,
+} from "@/lib/pdf-partner-creditfactuur";
 import {
   RELATIE_FACTUUR_BETAALTERMIJN_DAGEN,
   bedragenMetBtw,
 } from "@/lib/pdf-relatie-factuur";
 import { verstuurPartnerCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
+import {
+  createPartnerSelfbillingFactuur,
+  normalizePartnerSelfbillingRegels,
+  type PartnerSelfbillingRegelInput,
+} from "@/lib/partner-selfbilling";
 
 export const runtime = "nodejs";
 
@@ -142,7 +150,8 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/partners/creditfacturen
- * Body: { partner_id, bedrag_ex_btw, omschrijving?, jaar?, week?, notities? }
+ * Body: { partner_id, regels?: [{omschrijving, bedrag_ex_btw}], bedrag_ex_btw?, omschrijving?, … }
+ * Met regels: multi-regel selfbilling + 21% BTW. Zonder regels: legacy 1 bedrag.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
@@ -160,6 +169,7 @@ export async function POST(req: NextRequest) {
     week?: number;
     notities?: string;
     mark_paid?: boolean;
+    regels?: PartnerSelfbillingRegelInput[];
   };
   try {
     body = await req.json();
@@ -173,16 +183,58 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const bedrag = Number(body.bedrag_ex_btw);
-  if (!Number.isFinite(bedrag) || bedrag <= 0) {
-    return NextResponse.json(
-      { error: "bedrag_ex_btw moet groter dan 0 zijn" },
-      { status: 400 }
-    );
+
+  let regels = normalizePartnerSelfbillingRegels(body.regels);
+  // Legacy: één bedrag → één regel
+  if (regels.length === 0 && body.bedrag_ex_btw != null) {
+    const bedrag = Number(body.bedrag_ex_btw);
+    if (Number.isFinite(bedrag) && bedrag > 0) {
+      regels = [
+        {
+          omschrijving:
+            body.omschrijving?.trim() || "Installatiewerkzaamheden",
+          bedrag,
+          project_nummer: body.project_nummer?.trim() || null,
+          offerte_nummer: body.offerte_nummer?.trim() || null,
+        },
+      ];
+    }
   }
 
   try {
     const sb = getSupabaseAdmin();
+
+    // Multi-regel (of legacy als 1 regel): altijd via selfbilling-helper + REGELS_JSON
+    if (regels.length > 0 && (!body.jaar || !body.week)) {
+      const result = await createPartnerSelfbillingFactuur(sb, {
+        partnerId: body.partner_id,
+        regels,
+        omschrijving: body.omschrijving,
+        notities: body.notities,
+        project_nummer: body.project_nummer,
+        offerte_nummer: body.offerte_nummer,
+        mark_paid: body.mark_paid,
+      });
+      if (!result.ok) {
+        return NextResponse.json(
+          { error: result.error },
+          { status: result.status }
+        );
+      }
+      return NextResponse.json(
+        { factuur: result.factuur, mail_sent: false },
+        { status: 201 }
+      );
+    }
+
+    if (regels.length === 0) {
+      return NextResponse.json(
+        { error: "Voeg regels toe of vul bedrag_ex_btw in" },
+        { status: 400 }
+      );
+    }
+
+    // Week-gebonden create (admin weekfactuur) met regels + 21% BTW
     const { data: partner, error: pErr } = await sb
       .from("installatie_partners")
       .select(
@@ -230,7 +282,8 @@ export async function POST(req: NextRequest) {
       jaar,
       (count || 0) + 1
     );
-    const bedragRounded = Math.round(bedrag * 100) / 100;
+    const bedragRounded =
+      Math.round(regels.reduce((s, r) => s + r.bedrag, 0) * 100) / 100;
     const withBtw = bedragenMetBtw(bedragRounded);
     const status = body.mark_paid ? "betaald" : "concept";
     const offerte_nummer = body.offerte_nummer?.trim() || null;
@@ -238,6 +291,15 @@ export async function POST(req: NextRequest) {
     const omschrijving =
       body.omschrijving?.trim() ||
       `Installatiewerkzaamheden week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot})`;
+
+    const humanNotes = [
+      body.notities?.trim() || null,
+      `Factuur van ${partner.bedrijfsnaam} aan Batterijconcept.`,
+      `Betaaltermijn ${RELATIE_FACTUUR_BETAALTERMIJN_DAGEN} dagen.`,
+      `BTW 21%. KvK ${partner.kvk_nummer}, IBAN ${partner.iban}.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
 
     const { data: created, error: insErr } = await sb
       .from("partner_creditfacturen")
@@ -257,14 +319,7 @@ export async function POST(req: NextRequest) {
         bedrag_inc_btw: withBtw.bedrag_inc_btw,
         factuurdatum: weekInfo.betaalMaandag,
         betaald_op: body.mark_paid ? weekInfo.betaalMaandag : null,
-        notities: [
-          body.notities?.trim() || null,
-          `Factuur van ${partner.bedrijfsnaam} aan Batterijconcept.`,
-          `Betaaltermijn ${RELATIE_FACTUUR_BETAALTERMIJN_DAGEN} dagen.`,
-          `BTW 21%. KvK ${partner.kvk_nummer}, IBAN ${partner.iban}.`,
-        ]
-          .filter(Boolean)
-          .join(" "),
+        notities: encodePartnerFactuurRegels(regels, humanNotes),
       })
       .select("*")
       .single();

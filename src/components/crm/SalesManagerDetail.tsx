@@ -144,7 +144,7 @@ function WeekTrendChart({ weeks }: { weeks: SalesManagerWeekPoint[] }) {
           return (
             <g key={wk.weekKey}>
               <title>
-                {`${wk.label}: ${wk.ingepland} ingepland · ${wk.niet_afgeboekt} niet afgeboekt · ${wk.sales} sales · ${fmtPct(wk.conversie_ingepland_sale_pct)} ingepland→sale`}
+                {`${wk.label}: ${wk.ingepland} ingepland · ${wk.gelopen} gelopen · ${wk.niet_afgeboekt} niet afgeboekt · ${wk.sales} sales · ${fmtPct(wk.conversie_ingepland_sale_pct)} gelopen→sale`}
               </title>
               <rect
                 x={cx - barW}
@@ -204,7 +204,7 @@ function WeekTrendChart({ weeks }: { weeks: SalesManagerWeekPoint[] }) {
           <span className="inline-block h-2 w-2 rounded-sm bg-[#0a4727]" /> Sales
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-0.5 w-3 bg-[#C45A12]" /> Ingepland→sale
+          <span className="inline-block h-0.5 w-3 bg-[#C45A12]" /> Gelopen→sale
           %
         </span>
       </div>
@@ -343,7 +343,7 @@ export function SalesManagerDetailView({
             value={fmtPct(row.conversie_ingepland_gelopen_pct)}
           />
           <MiniStat
-            label="Ingepland→sale"
+            label="Gelopen→sale"
             value={fmtPct(row.conversie_ingepland_sale_pct)}
           />
           <MiniStat label="Sales" value={String(row.sales)} />
@@ -376,7 +376,7 @@ export function SalesManagerDetailView({
           </p>
           <p className="text-[11px] text-muted">
             Vanaf week van eerste ingeplande huisbezoek t/m nu · staven =
-            volume · lijn = ingepland→sale %
+            volume · lijn = gelopen→sale %
           </p>
         </header>
         <div className="px-4 py-3">
@@ -395,7 +395,7 @@ export function SalesManagerDetailView({
                 </th>
                 <th className="px-3 py-2 font-semibold tabular-nums">Sales</th>
                 <th className="px-4 py-2 font-semibold tabular-nums">
-                  Ingepland→sale
+                  Gelopen→sale
                 </th>
               </tr>
             </thead>

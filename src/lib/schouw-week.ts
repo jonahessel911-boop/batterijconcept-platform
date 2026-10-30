@@ -191,13 +191,19 @@ export function upcomingSchouwWeekOptions(
   return out;
 }
 
-/** Weekkiezer voor agenda: `past` weken terug + `future` vooruit. */
+/**
+ * Weekkiezer: `past` weken terug t/m huidige week, plus `future` weken ná vandaag.
+ * Voorbeeld: past=26, future=2 → 26 weken terug + deze week + 2 weken vooruit.
+ */
 export function agendaWeekJumpOptions(
   past = 8,
   future = 52,
   from: Date = new Date()
 ): { value: string; label: string; jaar: number; week: number }[] {
-  return upcomingSchouwWeekOptions(past + future, addWeeks(from, -past));
+  return upcomingSchouwWeekOptions(
+    past + 1 + future,
+    addWeeks(from, -past)
+  );
 }
 
 /**

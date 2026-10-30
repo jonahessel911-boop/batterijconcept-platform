@@ -18,7 +18,10 @@ import {
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
-import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import {
+  afspraakBlokkeertAgenda,
+  afspraakTeltVoorReistijd,
+} from "@/lib/afspraak-soort";
 import {
   pickTopFastDirectionSlots,
   uniqueAddresses,
@@ -380,8 +383,10 @@ function stopsForAdviseur(
   const out: FastDirectionStop[] = [];
   for (const a of afspraken) {
     if (a.adviseur_id !== adviseurId) continue;
-    if (a.status === "geannuleerd" || a.status === "voltooid") continue;
-    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
+    // Alleen fysieke huisafspraken (nieuw / vervolg op locatie) — geen tel.
+    // Voltooid telt mee: reistijd vanaf het vorige gelopen huisbezoek.
+    if (!afspraakTeltVoorReistijd(a.soort)) continue;
     const L = Array.isArray(a.leads) ? a.leads[0] : a.leads;
     if (!L) continue;
     const address = adresRegel(L);

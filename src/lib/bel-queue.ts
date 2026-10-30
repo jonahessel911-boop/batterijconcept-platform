@@ -266,6 +266,55 @@ export function annuleringsDoorFromAfspraak(
   return door || null;
 }
 
+/** True als de notitie een klant-annulering is (`Annulering (klant): …`). */
+export function isKlantAnnuleringAfspraak(
+  afspraak: Pick<Afspraak, "notities" | "status"> | null | undefined
+): boolean {
+  if (!afspraak || afspraak.status !== "geannuleerd") return false;
+  const raw = afspraak.notities?.trim() || "";
+  if (!raw) return false;
+  const match = raw.match(ANNULERING_NOTE_RE);
+  const bron = (match?.[1] || "").trim().toLowerCase();
+  if (bron === "klant") return true;
+  // Legacy / token-route zonder exacte bron-tag
+  return /annulering\s*\(\s*klant\s*\)/i.test(raw);
+}
+
+/**
+ * Lead hoort in de Annuleringen-bak van deze beller:
+ * status afspraak_afgezegd_klant, meest recente geannuleerde nieuw-bezoek
+ * was door de klant én door deze beller ingepland (`ingepland_door_id`).
+ */
+export function inAnnuleringQueueForBeller(
+  lead: Lead,
+  afspraken: Afspraak[],
+  bellerId: string,
+  appointmentLeadIds?: Set<string>
+): boolean {
+  if (!bellerId) return false;
+  if (isSollicitatieLead(lead)) return false;
+  if (!lead.telefoon?.trim()) return false;
+  if (lead.status !== "afspraak_afgezegd_klant") return false;
+  if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
+  if (appointmentLeadIds?.has(lead.id)) return false;
+
+  const cancelled = latestCancelledVisitAfspraak(afspraken, lead.id);
+  if (!cancelled) return false;
+  if (!isKlantAnnuleringAfspraak(cancelled)) return false;
+  const door = (cancelled.ingepland_door_id || "").trim();
+  if (door !== bellerId) return false;
+  return true;
+}
+
+/** Normale/provincie-bak: herplan-statussen eruit (die gaan via Annuleringen). */
+export function inNormaleBelQueue(
+  lead: Lead,
+  appointmentLeadIds?: Set<string>
+): boolean {
+  if (isHerplanBelLead(lead)) return false;
+  return inBelQueue(lead, appointmentLeadIds);
+}
+
 export function inBelQueue(
   lead: Lead,
   appointmentLeadIds?: Set<string>,

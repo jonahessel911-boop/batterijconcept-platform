@@ -42,6 +42,8 @@ import {
   type MgmtPeriodPreset,
 } from "@/lib/management-dashboard/periods";
 import { AFSPRAAK_UITKOMSTEN, normalizeProjectStatus } from "@/lib/labels";
+import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
+import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import type { Afspraak } from "@/types/database";
 
 export type SalesManagerPeriod =
@@ -96,7 +98,7 @@ export type SalesManagerResolvedPeriod = {
 export type SalesManagerRow = {
   adviseur_id: string;
   naam: string;
-  /** Nieuwe huisbezoeken (soort nieuw) met start_at in periode — niet created_at */
+  /** Nieuwe huisbezoeken (soort nieuw) met start_at in periode — bij “deze week” hele kalenderweek ma–zo */
   ingepland: number;
   /** Afgelopen nieuwe huisbezoeken in periode (mét én zonder afboeking) */
   gelopen: number;
@@ -104,10 +106,17 @@ export type SalesManagerRow = {
   niet_afgeboekt: number;
   /** gelopen / ingepland */
   conversie_ingepland_gelopen_pct: number | null;
-  /** Bruto sales: getekende offertes in periode, zonder project-annuleringen */
+  /** Unieke leads met een sale in periode (1e getekende offerte per lead) — bruto */
   sales: number;
-  /** Bruto sales-conversie: sales / ingepland */
+  /**
+   * Netto sales: bruto sales die de bedenktijd (≥14 dagen) hebben overleefd
+   * zonder annulering, of al volledig zijn betaald.
+   */
+  sales_netto: number;
+  /** Sales-conversie bruto: sales / gelopen */
   conversie_ingepland_sale_pct: number | null;
+  /** Netto-conversie: sales_netto / gelopen */
+  conversie_gelopen_netto_pct: number | null;
   /** Fysieke huisbezoeken in aankomende kalenderweek */
   afspraken_aankomende_week: number;
   /** Nog vrije tijdblokken in aankomende kalenderweek */
@@ -121,7 +130,9 @@ export type SalesManagerTotals = {
   niet_afgeboekt: number;
   conversie_ingepland_gelopen_pct: number | null;
   sales: number;
+  sales_netto: number;
   conversie_ingepland_sale_pct: number | null;
+  conversie_gelopen_netto_pct: number | null;
   afspraken_aankomende_week: number;
   blokken_aankomende_week: number;
 };
@@ -133,7 +144,9 @@ export type SalesManagerWeekPoint = {
   gelopen: number;
   niet_afgeboekt: number;
   sales: number;
+  sales_netto: number;
   conversie_ingepland_sale_pct: number | null;
+  conversie_gelopen_netto_pct: number | null;
 };
 
 export type SalesManagerTimelineKind =
@@ -206,21 +219,55 @@ export function resolveSalesManagerPeriod(
     },
     now
   );
+  let start = resolved.start;
+  let end = resolved.end;
+
+  // Sales: "Deze week" = hele kalenderweek ma–zo (niet tot “nu”),
+  // zodat Ingepland het weektotaal is en Gelopen daar onder zit.
+  if (input.period === "this_week") {
+    const z = toZonedTime(now, AMSTERDAM_TZ);
+    const monLocal = startOfWeek(z, { weekStartsOn: 1 });
+    start = fromZonedTime(
+      new Date(
+        monLocal.getFullYear(),
+        monLocal.getMonth(),
+        monLocal.getDate(),
+        0,
+        0,
+        0,
+        0
+      ),
+      AMSTERDAM_TZ
+    );
+    end = fromZonedTime(
+      new Date(
+        monLocal.getFullYear(),
+        monLocal.getMonth(),
+        monLocal.getDate() + 6,
+        23,
+        59,
+        59,
+        999
+      ),
+      AMSTERDAM_TZ
+    );
+  }
+
   let label = SALES_MANAGER_PERIOD_LABELS[input.period];
   if (input.period === "custom" && input.customStart && input.customEnd) {
     label = `${input.customStart} – ${input.customEnd}`;
   } else if (input.period === "last_week" || input.period === "this_week") {
-    const a = formatInTimeZone(resolved.start, AMSTERDAM_TZ, "d MMM");
-    const b = formatInTimeZone(resolved.end, AMSTERDAM_TZ, "d MMM yyyy");
+    const a = formatInTimeZone(start, AMSTERDAM_TZ, "d MMM");
+    const b = formatInTimeZone(end, AMSTERDAM_TZ, "d MMM yyyy");
     label = `${SALES_MANAGER_PERIOD_LABELS[input.period]} (${a} – ${b})`;
   }
   return {
     period: input.period,
     label,
-    startIso: resolved.start.toISOString(),
-    endIso: resolved.end.toISOString(),
-    startYmd: formatInTimeZone(resolved.start, AMSTERDAM_TZ, "yyyy-MM-dd"),
-    endYmd: formatInTimeZone(resolved.end, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    startYmd: formatInTimeZone(start, AMSTERDAM_TZ, "yyyy-MM-dd"),
+    endYmd: formatInTimeZone(end, AMSTERDAM_TZ, "yyyy-MM-dd"),
   };
 }
 
@@ -459,6 +506,106 @@ async function loadGeannuleerdeOfferteIds(
   return out;
 }
 
+type SaleOfferteRow = {
+  id: string;
+  lead_id: string;
+  ondertekend_op: string;
+};
+
+/**
+ * Eén sale per lead: de chronologisch eerste getekende offerte
+ * (latere hertekeningen / bijlagen tellen niet opnieuw).
+ */
+function firstSaleOffertePerLead<T extends SaleOfferteRow>(
+  offertes: T[],
+  geannuleerdOfferteIds: Set<string>
+): T[] {
+  const byLead = new Map<string, T>();
+  const sorted = [...offertes]
+    .filter(
+      (o) =>
+        o.lead_id &&
+        o.ondertekend_op &&
+        !geannuleerdOfferteIds.has(o.id)
+    )
+    .sort((a, b) => a.ondertekend_op.localeCompare(b.ondertekend_op));
+  for (const o of sorted) {
+    if (!byLead.has(o.lead_id)) byLead.set(o.lead_id, o);
+  }
+  return [...byLead.values()];
+}
+
+/**
+ * Netto sale = bedenktijd voorbij (14 dagen) zonder annulering,
+ * of de order is al volledig betaald.
+ * Aanroep alleen voor sales die niet (meer) op annulering staan.
+ */
+export function isNettoSale(opts: {
+  ondertekendOp: string;
+  volledigBetaald: boolean;
+  now?: Date;
+}): boolean {
+  if (opts.volledigBetaald) return true;
+  const bt = bedenktijdVanOndertekening(
+    opts.ondertekendOp,
+    opts.now ?? new Date()
+  );
+  return Boolean(bt?.klaar);
+}
+
+type FactuurBetaalRow = {
+  lead_id: string | null;
+  status: string;
+  bedrag_inc_btw: number | null;
+  omschrijving?: string | null;
+  credit_van_factuur_id?: string | null;
+};
+
+async function loadVolledigBetaaldByLead(
+  sb: SupabaseClient,
+  offertes: { lead_id: string; totaal_inc_btw?: number | null }[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const leadIds = [...new Set(offertes.map((o) => o.lead_id).filter(Boolean))];
+  if (leadIds.length === 0) return out;
+
+  const orderByLead = new Map<string, number>();
+  for (const o of offertes) {
+    if (!o.lead_id) continue;
+    const inc = Number(o.totaal_inc_btw) || 0;
+    // Eerste/hoogste orderbedrag per lead (1e sale-offerte)
+    if (!orderByLead.has(o.lead_id)) orderByLead.set(o.lead_id, inc);
+  }
+
+  const { data: facturen, error } = await sb
+    .from("facturen")
+    .select(
+      "lead_id, status, bedrag_inc_btw, omschrijving, credit_van_factuur_id"
+    )
+    .in("lead_id", leadIds);
+  if (error) throw error;
+
+  const byLead = new Map<string, FactuurBetaalRow[]>();
+  for (const f of (facturen || []) as FactuurBetaalRow[]) {
+    if (!f.lead_id) continue;
+    const list = byLead.get(f.lead_id) || [];
+    list.push(f);
+    byLead.set(f.lead_id, list);
+  }
+
+  for (const [leadId, orderInc] of orderByLead) {
+    if (
+      isOrderVolledigBetaald({
+        facturen: byLead.get(leadId) || [],
+        orderIncBtw: orderInc,
+      })
+    ) {
+      out.add(leadId);
+    }
+  }
+  return out;
+}
+
 /**
  * Leads waarvan de getekende deal via offerte-actie is doorgezet naar backoffice
  * (= afgeboekt, ook als leadstatus nog niet sale_* is).
@@ -623,7 +770,9 @@ export async function buildSalesManagerDashboard(
     niet_afgeboekt: 0,
     conversie_ingepland_gelopen_pct: null,
     sales: 0,
+    sales_netto: 0,
     conversie_ingepland_sale_pct: null,
+    conversie_gelopen_netto_pct: null,
     afspraken_aankomende_week: 0,
     blokken_aankomende_week: 0,
   });
@@ -744,22 +893,69 @@ export async function buildSalesManagerDashboard(
     }
   }
 
-  const offerteIds = (offertesRaw || [])
-    .map((o) => o.id as string)
-    .filter(Boolean);
+  // Sale = eerste getekende offerte per lead. Latere hertekeningen tellen niet mee.
+  const periodLeadIdsForSales = [
+    ...new Set(
+      (offertesRaw || [])
+        .map((o) => o.lead_id as string)
+        .filter(Boolean)
+    ),
+  ];
+  let allSaleOffertes: {
+    id: string;
+    lead_id: string;
+    ondertekend_op: string;
+    totaal_inc_btw?: number | null;
+    leads?: { adviseur_id?: string | null } | { adviseur_id?: string | null }[] | null;
+  }[] = [];
+  if (periodLeadIdsForSales.length > 0) {
+    const { data: allOff } = await sb
+      .from("offertes")
+      .select("id, lead_id, ondertekend_op, totaal_inc_btw, leads(adviseur_id)")
+      .in("lead_id", periodLeadIdsForSales)
+      .eq("status", "ondertekend")
+      .not("ondertekend_op", "is", null);
+    allSaleOffertes = (allOff || []) as typeof allSaleOffertes;
+  }
   const geannuleerdOfferteIds = await loadGeannuleerdeOfferteIds(
     sb,
-    offerteIds
+    allSaleOffertes.map((o) => o.id)
+  );
+  const firstSales = firstSaleOffertePerLead(
+    allSaleOffertes.map((o) => ({
+      id: o.id,
+      lead_id: o.lead_id,
+      ondertekend_op: o.ondertekend_op || "",
+      totaal_inc_btw: o.totaal_inc_btw,
+      leads: o.leads,
+    })),
+    geannuleerdOfferteIds
+  );
+
+  const firstSalesInPeriod = firstSales.filter((o) =>
+    inRange(o.ondertekend_op, period.startIso, period.endIso)
+  );
+  const volledigBetaaldLeads = await loadVolledigBetaaldByLead(
+    sb,
+    firstSalesInPeriod
   );
 
   const salesByAdv = new Map<string, number>();
-  for (const o of offertesRaw || []) {
-    if (geannuleerdOfferteIds.has(o.id as string)) continue;
+  const salesNettoByAdv = new Map<string, number>();
+  for (const o of firstSalesInPeriod) {
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
-    const aid = (leadJoin as { adviseur_id?: string | null } | null)
-      ?.adviseur_id;
+    const aid = leadJoin?.adviseur_id;
     if (!aid || !ids.includes(aid)) continue;
     salesByAdv.set(aid, (salesByAdv.get(aid) || 0) + 1);
+    if (
+      isNettoSale({
+        ondertekendOp: o.ondertekend_op,
+        volledigBetaald: volledigBetaaldLeads.has(o.lead_id),
+        now,
+      })
+    ) {
+      salesNettoByAdv.set(aid, (salesNettoByAdv.get(aid) || 0) + 1);
+    }
   }
 
   const rows: SalesManagerRow[] = adviseurs.map((a) => {
@@ -767,6 +963,7 @@ export async function buildSalesManagerDashboard(
     const gel = gelopen.get(a.id) || 0;
     const niet = nietAfgeboekt.get(a.id) || 0;
     const sales = salesByAdv.get(a.id) || 0;
+    const salesNetto = salesNettoByAdv.get(a.id) || 0;
     return {
       adviseur_id: a.id,
       naam: a.naam,
@@ -775,7 +972,9 @@ export async function buildSalesManagerDashboard(
       niet_afgeboekt: niet,
       conversie_ingepland_gelopen_pct: pct(gel, ing),
       sales,
-      conversie_ingepland_sale_pct: pct(sales, ing),
+      sales_netto: salesNetto,
+      conversie_ingepland_sale_pct: pct(sales, gel),
+      conversie_gelopen_netto_pct: pct(salesNetto, gel),
       afspraken_aankomende_week: aankomendeAfs.get(a.id) || 0,
       blokken_aankomende_week: blokkenAankomend.get(a.id) || 0,
     };
@@ -787,6 +986,7 @@ export async function buildSalesManagerDashboard(
   const totGelopen = sum((r) => r.gelopen);
   const totNiet = sum((r) => r.niet_afgeboekt);
   const totSales = sum((r) => r.sales);
+  const totSalesNetto = sum((r) => r.sales_netto);
   const totals: SalesManagerTotals = {
     adviseurs: rows.length,
     ingepland: totIngepland,
@@ -794,7 +994,9 @@ export async function buildSalesManagerDashboard(
     niet_afgeboekt: totNiet,
     conversie_ingepland_gelopen_pct: pct(totGelopen, totIngepland),
     sales: totSales,
-    conversie_ingepland_sale_pct: pct(totSales, totIngepland),
+    sales_netto: totSalesNetto,
+    conversie_ingepland_sale_pct: pct(totSales, totGelopen),
+    conversie_gelopen_netto_pct: pct(totSalesNetto, totGelopen),
     afspraken_aankomende_week: sum((r) => r.afspraken_aankomende_week),
     blokken_aankomende_week: sum((r) => r.blokken_aankomende_week),
   };
@@ -918,17 +1120,52 @@ export async function buildSalesManagerPopup(
     });
   }
 
-  const offerteIds = (offertesRaw || [])
-    .map((o) => o.id as string)
-    .filter(Boolean);
+  const popupLeadIds = [
+    ...new Set(
+      (offertesRaw || [])
+        .map((o) => o.lead_id as string)
+        .filter(Boolean)
+    ),
+  ];
+  let popupAllOff: {
+    id: string;
+    lead_id: string;
+    ondertekend_op: string;
+    totaal_inc_btw?: number | null;
+    leads?:
+      | { id?: string; naam?: string | null; adviseur_id?: string | null }
+      | { id?: string; naam?: string | null; adviseur_id?: string | null }[]
+      | null;
+  }[] = (offertesRaw || []) as typeof popupAllOff;
+  if (popupLeadIds.length > 0) {
+    const { data: allOff } = await sb
+      .from("offertes")
+      .select(
+        "id, lead_id, ondertekend_op, totaal_inc_btw, leads(id, naam, adviseur_id)"
+      )
+      .in("lead_id", popupLeadIds)
+      .eq("status", "ondertekend")
+      .not("ondertekend_op", "is", null);
+    if (allOff) popupAllOff = allOff as typeof popupAllOff;
+  }
   const geannuleerdOfferteIds = await loadGeannuleerdeOfferteIds(
     sb,
-    offerteIds
+    popupAllOff.map((o) => o.id)
+  );
+  const firstPopupSales = firstSaleOffertePerLead(
+    popupAllOff.map((o) => ({
+      id: o.id,
+      lead_id: o.lead_id,
+      ondertekend_op: o.ondertekend_op || "",
+      totaal_inc_btw: o.totaal_inc_btw,
+      leads: o.leads,
+    })),
+    geannuleerdOfferteIds
   );
 
   const sales: SalesManagerPopupSale[] = [];
-  for (const o of offertesRaw || []) {
-    if (geannuleerdOfferteIds.has(o.id as string)) continue;
+  for (const o of firstPopupSales) {
+    if (!inRange(o.ondertekend_op, period.startIso, period.endIso)) continue;
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
     const lead = leadJoin as {
       id?: string;
@@ -936,14 +1173,12 @@ export async function buildSalesManagerPopup(
       adviseur_id?: string | null;
     } | null;
     if (!lead || lead.adviseur_id !== adviseurId) continue;
-    const at = o.ondertekend_op as string;
-    if (!at) continue;
     const bedrag = Number(o.totaal_inc_btw);
     sales.push({
-      offerte_id: o.id as string,
-      lead_id: (o.lead_id as string) || lead.id || "",
+      offerte_id: o.id,
+      lead_id: o.lead_id || lead.id || "",
       lead_naam: lead.naam?.trim() || "Lead",
-      ondertekend_op: at,
+      ondertekend_op: o.ondertekend_op,
       bedrag_inc: Number.isFinite(bedrag) && bedrag > 0 ? bedrag : null,
     });
   }
@@ -1097,7 +1332,7 @@ export async function buildSalesManagerDetail(
       .neq("status", "geannuleerd"),
     sb
       .from("offertes")
-      .select("id, lead_id, ondertekend_op, leads(adviseur_id)")
+      .select("id, lead_id, ondertekend_op, totaal_inc_btw, leads(adviseur_id)")
       .eq("status", "ondertekend")
       .not("ondertekend_op", "is", null)
       .gte("ondertekend_op", histFromMax)
@@ -1143,6 +1378,26 @@ export async function buildSalesManagerDetail(
     sb,
     histAfsRows.map((a) => a.lead_id)
   );
+  const histFirstSales = firstSaleOffertePerLead(
+    (histOff || []).map((o) => ({
+      id: o.id as string,
+      lead_id: o.lead_id as string,
+      ondertekend_op: (o.ondertekend_op as string) || "",
+      totaal_inc_btw: o.totaal_inc_btw as number | null,
+      leads: o.leads as
+        | { adviseur_id?: string | null }
+        | { adviseur_id?: string | null }[]
+        | null,
+    })),
+    histGeannuleerd
+  );
+  const histVolledigBetaald = await loadVolledigBetaaldByLead(
+    sb,
+    histFirstSales.filter((o) => {
+      const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
+      return leadJoin?.adviseur_id === adviseurId;
+    })
+  );
 
   const week_trend_raw: SalesManagerWeekPoint[] = weekWindows.map((w) => {
     let ing = 0;
@@ -1169,14 +1424,21 @@ export async function buildSalesManagerDetail(
       }
     }
     let sales = 0;
-    for (const o of histOff || []) {
-      if (histGeannuleerd.has(o.id as string)) continue;
+    let salesNetto = 0;
+    for (const o of histFirstSales) {
       const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
-      const aid = (leadJoin as { adviseur_id?: string | null } | null)
-        ?.adviseur_id;
-      if (aid !== adviseurId) continue;
-      const at = o.ondertekend_op as string;
-      if (at && inRange(at, w.startIso, w.endIso)) sales += 1;
+      if (leadJoin?.adviseur_id !== adviseurId) continue;
+      if (!inRange(o.ondertekend_op, w.startIso, w.endIso)) continue;
+      sales += 1;
+      if (
+        isNettoSale({
+          ondertekendOp: o.ondertekend_op,
+          volledigBetaald: histVolledigBetaald.has(o.lead_id),
+          now,
+        })
+      ) {
+        salesNetto += 1;
+      }
     }
     return {
       weekKey: w.weekKey,
@@ -1185,7 +1447,9 @@ export async function buildSalesManagerDetail(
       gelopen: gel,
       niet_afgeboekt: niet,
       sales,
-      conversie_ingepland_sale_pct: pct(sales, ing),
+      sales_netto: salesNetto,
+      conversie_ingepland_sale_pct: pct(sales, gel),
+      conversie_gelopen_netto_pct: pct(salesNetto, gel),
     };
   });
 
@@ -1268,8 +1532,21 @@ export async function buildSalesManagerDetail(
           : contractStatus || null,
     });
   }
+  const timelineDeals = firstSaleOffertePerLead(
+    (dealsRaw || []).map((o) => ({
+      id: o.id as string,
+      lead_id: o.lead_id as string,
+      ondertekend_op: (o.ondertekend_op as string) || "",
+      totaal_inc_btw: o.totaal_inc_btw as number | null,
+      leads: o.leads as
+        | { id?: string; naam?: string | null; adviseur_id?: string | null }
+        | { id?: string; naam?: string | null; adviseur_id?: string | null }[]
+        | null,
+    })),
+    new Set()
+  );
   let dealCount = 0;
-  for (const o of dealsRaw || []) {
+  for (const o of timelineDeals) {
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
     const lead = leadJoin as {
       id?: string;
@@ -1277,19 +1554,18 @@ export async function buildSalesManagerDetail(
       adviseur_id?: string | null;
     } | null;
     if (!lead || lead.adviseur_id !== adviseurId) continue;
-    const at = o.ondertekend_op as string;
-    if (!at) continue;
+    if (!o.ondertekend_op) continue;
     const bedrag = Number(o.totaal_inc_btw) || 0;
     timeline.push({
       kind: "deal",
-      at,
+      at: o.ondertekend_op,
       titel: `Deal · ${lead.naam?.trim() || "Lead"}`,
       detail:
         bedrag > 0
           ? `€ ${bedrag.toLocaleString("nl-NL", { maximumFractionDigits: 0 })}`
           : null,
-      lead_id: (o.lead_id as string) || lead.id || null,
-      offerte_id: o.id as string,
+      lead_id: o.lead_id || lead.id || null,
+      offerte_id: o.id,
       bedrag_inc: bedrag || null,
     });
     dealCount += 1;

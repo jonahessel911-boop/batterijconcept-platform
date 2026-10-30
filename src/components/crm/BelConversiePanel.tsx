@@ -75,7 +75,7 @@ type ViewMode = "week" | "month";
 
 /** Kleuren in de dikke gestapelde balk (hoogte = gebeld + uitval). */
 const STACK_SEGMENTS = [
-  { key: "ingepland" as const, label: "Ingepland", color: "#1a8a3e" },
+  { key: "ingepland" as const, label: "Netto ingepland", color: "#1a8a3e" },
   { key: "geenInteresse" as const, label: "Geen interesse", color: "#C62828" },
   { key: "geenContact" as const, label: "Geen contact", color: "#64748b" },
   {
@@ -852,7 +852,7 @@ export function BelConversiePanel() {
         </>
       ) : data ? (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-8">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-9">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -861,14 +861,45 @@ export function BelConversiePanel() {
                 {num(totals?.gebeld)}
               </p>
             </div>
-            <div className="rounded-2xl border border-line bg-white p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                Ingepland
-              </p>
-              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
-                {num(totals?.ingepland)}
-              </p>
-            </div>
+            {(() => {
+              const netto = Math.max(0, Math.round(totals?.ingepland ?? 0));
+              const uitval = Math.max(
+                0,
+                Math.round(totals?.geannuleerd ?? seriesSums.geannuleerd)
+              );
+              const bruto = netto + uitval;
+              return (
+                <>
+                  <div className="rounded-2xl border border-line bg-white p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                      Bruto ingepland
+                    </p>
+                    <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
+                      {num(bruto)}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-muted">
+                      Alle nieuwe huisbezoeken
+                      {uitval > 0 ? ` (incl. ${num(uitval)} uitval)` : ""}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-green/30 bg-white p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                      Netto ingepland
+                    </p>
+                    <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-green-dark">
+                      {num(netto)}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-muted">
+                      {uitval > 0
+                        ? `${num(bruto)} bruto − ${num(uitval)} uitval`
+                        : bellerId
+                          ? "Actief · deze beller"
+                          : "Actief · team"}
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
             <div
               className={[
                 "rounded-2xl border bg-white p-4",
@@ -1014,8 +1045,17 @@ export function BelConversiePanel() {
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     Totaal
                   </th>
-                  <th className="px-3 py-2.5 font-semibold tabular-nums">
-                    Ingepland
+                  <th
+                    className="px-3 py-2.5 font-semibold tabular-nums"
+                    title="Alle nieuwe huisbezoeken (incl. later geannuleerd)"
+                  >
+                    Bruto
+                  </th>
+                  <th
+                    className="px-3 py-2.5 font-semibold tabular-nums"
+                    title="Actief ingepland (bruto − uitval)"
+                  >
+                    Netto
                   </th>
                   {showTeamExtras ? (
                     <th className="px-3 py-2.5 font-semibold tabular-nums">
@@ -1043,7 +1083,7 @@ export function BelConversiePanel() {
                 {series.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={showTeamExtras ? 8 : 7}
+                      colSpan={showTeamExtras ? 9 : 8}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Geen data in deze periode.
@@ -1062,6 +1102,12 @@ export function BelConversiePanel() {
                         {num(b.gebeld)}
                       </td>
                       <td className="px-3 py-2.5 tabular-nums text-ink">
+                        {num(
+                          Math.max(0, Math.round(b.ingepland)) +
+                            Math.max(0, Math.round(b.geannuleerd || 0))
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 tabular-nums text-green-dark">
                         {num(b.ingepland)}
                       </td>
                       {showTeamExtras ? (

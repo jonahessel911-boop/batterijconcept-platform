@@ -1,7 +1,12 @@
 /**
- * Simpele aandachtspunten: 3 bars huidig vs doel (leads · geplande afspraken · sales).
- * Leads = gegenereerd 14d / nodig (slots 14d × 80% ÷ L→A 14d).
- * Afspraken = ingepland / beschikbare blokken (komende ~14d); op schema bij ≥80% vol.
+ * Simpele aandachtspunten: 3 bars vs doel voor de gekozen week/maand
+ * (leads · geplande afspraken · sales).
+ *
+ * - Leads = gegenereerd in gekozen periode / nodig (slots ÷ L→A-rate 14d)
+ * - Afspraken = ingepland in periode / slots (100% van capaciteit)
+ * - Sales = getekend in periode / doel (25% van afspraken-nodig)
+ *
+ * Toekomstige periode: actuals = 0, doelen blijven die van díe week/maand.
  */
 
 import { addDays, getDaysInMonth, getISOWeekYear } from "date-fns";
@@ -14,15 +19,11 @@ import {
   weekKeyString,
 } from "@/lib/adviseur-beschikbaarheid";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { DEFAULT_AFSPRAAK_TO_SALE_PCT } from "@/lib/admin-targets";
 import {
-  CEO_FILL_TARGET_PCT,
+  CEO_CLOSE_TARGET_PCT,
   leadsNeededForForwardHorizon,
 } from "@/lib/ceo-unit-targets";
-import {
-  buildDashboardV2Capacity,
-  countOpenSlotsInYmdRange,
-} from "@/lib/dashboard-v2/capacity";
+import { countPlanbareSlotsBreakdown } from "@/lib/dashboard-v2/capacity";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import {
   formatSchouwWeekLabel,
@@ -32,9 +33,10 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 
-/** Horizon voor leads-doel / breakdown */
-const LEADS_FORWARD_DAYS = 14;
+/** L→A lookback (conversie-rate); slots/leads zelf volgen de gekozen periode */
 const LEADS_LOOKBACK_DAYS = 14;
+/** Afspraken-doel op de key-3 balk: alle open slots volplannen */
+const AFSPRAAK_FILL_TARGET_PCT = 100;
 
 export type AandachtBarId = "leads" | "afspraken" | "sales";
 
@@ -51,28 +53,6 @@ export type AandachtBar = {
   onTrack: boolean;
 };
 
-export type AandachtLeadAdviseurRow = {
-  adviseurId: string;
-  naam: string;
-  /** Open slots komende 14 dagen */
-  slotsOpen: number;
-  /** Leads nodig komende 14d (slots×80% ÷ team L→A) */
-  leadsNodig: number;
-  /** Leads gegenereerd afgelopen 14d (op deze adviseur) */
-  leadsGegenereerd: number;
-};
-
-export type AandachtAfspraakAdviseurRow = {
-  adviseurId: string;
-  naam: string;
-  /** Beschikbare blokken in horizon */
-  slotsOpen: number;
-  /** Al ingepland */
-  ingepland: number;
-  /** Nodig = 80% van slotsOpen */
-  nodig: number;
-};
-
 export type AandachtspuntenResult = {
   mode: "week" | "month";
   periodLabel: string;
@@ -85,19 +65,23 @@ export type AandachtspuntenResult = {
     l2aPct: number;
     slotsOpen: number;
     targetAppts: number;
-    forwardDays: number;
+    /** Dagen in gekozen periode */
+    periodDays: number;
     lookbackDays: number;
+    saleClosePct: number;
   };
-  /** Agenda: ingepland vs beschikbare blokken (zelfde 14d-horizon) */
+  /** Agenda: ingepland vs alle planbare slots in gekozen periode */
   afsprakenMeta: {
+    /** Rooster-capaciteit (zonder persoonlijke afblokkingen) */
+    slotsCapaciteit: number;
+    /** Nog boekbaar na afblokkingen */
     slotsOpen: number;
+    slotsAfgeblokt: number;
     slotsGepland: number;
     slotsVrij: number;
-    forwardDays: number;
+    periodDays: number;
     fillTargetPct: number;
   };
-  leadsPerAdviseur: AandachtLeadAdviseurRow[];
-  afsprakenPerAdviseur: AandachtAfspraakAdviseurRow[];
 };
 
 function ymdAmsterdam(d: Date): string {
@@ -229,77 +213,85 @@ export async function buildAandachtspunten(
     todayYmd,
   });
 
-  // Effectieve einddatum voor tellingen t/m nu: niet voorbij vandaag
+  // Actuals t/m vandaag; toekomstige periode → 0 gegenereerd/sales
   const countEndYmd = range.endYmd > todayYmd ? todayYmd : range.endYmd;
+  const periodFullyFuture = range.startYmd > todayYmd;
   const { start: fromDate } = amsBounds(range.startYmd);
   const { end: toDate } = amsBounds(countEndYmd);
-  // Hele periode (incl. rest van de week) voor agenda-afspraken → sales-doel
   const { end: periodEndDate } = amsBounds(range.endYmd);
 
-  const yStart = getISOWeekYear(toZonedTime(noonYmd(range.startYmd), AMSTERDAM_TZ));
+  const yStart = getISOWeekYear(
+    toZonedTime(noonYmd(range.startYmd), AMSTERDAM_TZ)
+  );
   const yEnd = getISOWeekYear(toZonedTime(noonYmd(range.endYmd), AMSTERDAM_TZ));
   const jaren = [...new Set([yStart - 1, yStart, yEnd, yEnd + 1])];
 
-  const lookbackStartYmd = ymdAmsterdam(
-    addDays(noonYmd(todayYmd), -(LEADS_LOOKBACK_DAYS - 1))
-  );
-  const { start: lookbackStartDate } = amsBounds(lookbackStartYmd);
-  const { end: todayEndDate } = amsBounds(todayYmd);
-
   const [
     { data: adviseursRaw },
-    leads14d,
+    leadsInPeriod,
     afsprakenOpAgenda,
     offertes,
   ] = await Promise.all([
-      sb
-        .from("adviseurs")
-        .select("id, naam, email, rol, actief, startdatum")
-        .eq("actief", true),
-      // Leads afgelopen 14d (team actual + per-adviseur breakdown)
-      fetchAllRows<{
-        id: string;
-        created_at: string;
-        adviseur_id: string | null;
-      }>((fromIdx, toIdx) =>
-        sb
-          .from("leads")
-          .select("id, created_at, adviseur_id")
-          .gte("created_at", lookbackStartDate.toISOString())
-          .lte("created_at", todayEndDate.toISOString())
-          .order("created_at", { ascending: true })
-          .range(fromIdx, toIdx)
-      ),
-      // Sales-basis + historisch per adviseur: huisbezoeken op de agenda
-      fetchAllRows<{
-        id: string;
-        start_at: string;
-        status: string;
-        soort: string | null;
-        adviseur_id: string | null;
-      }>((fromIdx, toIdx) =>
-        sb
-          .from("afspraken")
-          .select("id, start_at, status, soort, adviseur_id")
-          .gte("start_at", fromDate.toISOString())
-          .lte("start_at", periodEndDate.toISOString())
-          .neq("status", "geannuleerd")
-          .order("start_at", { ascending: true })
-          .range(fromIdx, toIdx)
-      ),
-      fetchAllRows<{ id: string; ondertekend_op: string | null }>(
-        (fromIdx, toIdx) =>
+    sb
+      .from("adviseurs")
+      .select("id, naam, email, rol, actief, startdatum")
+      .eq("actief", true),
+    // Alleen leads met created_at in de gekozen periode (t/m vandaag)
+    periodFullyFuture
+      ? Promise.resolve(
+          [] as {
+            id: string;
+            created_at: string;
+            adviseur_id: string | null;
+          }[]
+        )
+      : fetchAllRows<{
+          id: string;
+          created_at: string;
+          adviseur_id: string | null;
+        }>((fromIdx, toIdx) =>
           sb
-            .from("offertes")
-            .select("id, ondertekend_op")
-            .eq("status", "ondertekend")
-            .not("ondertekend_op", "is", null)
-            .gte("ondertekend_op", fromDate.toISOString())
-            .lte("ondertekend_op", toDate.toISOString())
-            .order("ondertekend_op", { ascending: true })
+            .from("leads")
+            .select("id, created_at, adviseur_id")
+            .gte("created_at", fromDate.toISOString())
+            .lte("created_at", toDate.toISOString())
+            .order("created_at", { ascending: true })
             .range(fromIdx, toIdx)
-      ),
-    ]);
+        ),
+    // Huisbezoeken op de agenda in de hele periode (ook toekomst)
+    fetchAllRows<{
+      id: string;
+      start_at: string;
+      status: string;
+      soort: string | null;
+      adviseur_id: string | null;
+    }>((fromIdx, toIdx) =>
+      sb
+        .from("afspraken")
+        .select("id, start_at, status, soort, adviseur_id")
+        .gte("start_at", fromDate.toISOString())
+        .lte("start_at", periodEndDate.toISOString())
+        .neq("status", "geannuleerd")
+        .order("start_at", { ascending: true })
+        .range(fromIdx, toIdx)
+    ),
+    periodFullyFuture
+      ? Promise.resolve(
+          [] as { id: string; ondertekend_op: string | null }[]
+        )
+      : fetchAllRows<{ id: string; ondertekend_op: string | null }>(
+          (fromIdx, toIdx) =>
+            sb
+              .from("offertes")
+              .select("id, ondertekend_op")
+              .eq("status", "ondertekend")
+              .not("ondertekend_op", "is", null)
+              .gte("ondertekend_op", fromDate.toISOString())
+              .lte("ondertekend_op", toDate.toISOString())
+              .order("ondertekend_op", { ascending: true })
+              .range(fromIdx, toIdx)
+        ),
+  ]);
 
   const adviseursCap = (adviseursRaw || [])
     .filter((a) =>
@@ -320,239 +312,84 @@ export async function buildAandachtspunten(
     }));
   const adviseurIds = adviseursCap.map((a) => a.id);
 
-  // Capaciteit: geselecteerde periode + (voor actueel tempo) komende ~2 weken
-  const fwdEndYmd = ymdAmsterdam(
-    addDays(noonYmd(todayYmd), LEADS_FORWARD_DAYS - 1)
-  );
-  const horizonEndYmd = ymdAmsterdam(addDays(now, 14));
-  const capTotYmd =
-    horizonEndYmd > range.endYmd
-      ? horizonEndYmd > fwdEndYmd
-        ? horizonEndYmd
-        : fwdEndYmd
-      : range.endYmd > fwdEndYmd
-        ? range.endYmd
-        : fwdEndYmd;
+  const [unavailableByAdviseur, afblokkingen, vrijgaven] = await Promise.all([
+    loadUnavailableByAdviseur(sb, adviseurIds, jaren),
+    loadAfblokkingen(sb, {
+      adviseurIds,
+      van: range.startYmd,
+      tot: range.endYmd,
+    }),
+    loadSlotVrijgaven(sb, {
+      adviseurIds,
+      van: range.startYmd,
+      tot: range.endYmd,
+    }),
+  ]);
 
-  const [unavailableByAdviseur, afblokkingen, vrijgaven, afsprakenCapRes] =
-    await Promise.all([
-      loadUnavailableByAdviseur(sb, adviseurIds, jaren),
-      loadAfblokkingen(sb, {
-        adviseurIds,
-        van: range.startYmd < todayYmd ? range.startYmd : todayYmd,
-        tot: capTotYmd,
-      }),
-      loadSlotVrijgaven(sb, {
-        adviseurIds,
-        van: range.startYmd < todayYmd ? range.startYmd : todayYmd,
-        tot: capTotYmd,
-      }),
-      sb
-        .from("afspraken")
-        .select("adviseur_id, start_at, end_at, status, soort")
-        .in("adviseur_id", adviseurIds)
-        .gte("start_at", amsBounds(todayYmd).start.toISOString())
-        .lte("start_at", amsBounds(fwdEndYmd).end.toISOString())
-        .neq("status", "geannuleerd"),
-    ]);
-
-  const leadNeed = await leadsNeededForForwardHorizon(sb, {
+  // L→A uit recente 14d (stabiele rate); slots/doelen volgen gekozen periode
+  const leadNeedRef = await leadsNeededForForwardHorizon(sb, {
     todayYmd,
-    forwardDays: LEADS_FORWARD_DAYS,
+    forwardDays: LEADS_LOOKBACK_DAYS,
     lookbackDays: LEADS_LOOKBACK_DAYS,
     adviseursCap,
     unavailableByAdviseur,
   });
-  const targetLeads = leadNeed.targetLeads;
-  const l2aPct = leadNeed.l2aPct;
+  const l2aPct = leadNeedRef.l2aPct;
 
-  // Agenda 14d: beschikbare blokken vs al ingepland
-  const isCurrentOrFuturePeriod = range.endYmd >= todayYmd;
-  const capacityAfspraken = (afsprakenCapRes.data || []).map((a) => ({
-    adviseur_id: (a.adviseur_id as string) || null,
-    start_at: a.start_at as string,
-    end_at: (a.end_at as string | null) ?? null,
-    status: a.status as string,
-    soort: (a.soort as string | null) ?? null,
-  }));
-
-  let slotsOpenAppt = 0;
-  let slotsGeplandAppt = 0;
-  let slotsVrijAppt = 0;
-  let afsprakenPerAdviseur: AandachtAfspraakAdviseurRow[] = [];
-  if (isCurrentOrFuturePeriod) {
-    const capacity = buildDashboardV2Capacity({
-      adviseurs: adviseursCap,
-      afspraken: capacityAfspraken,
-      unavailableByAdviseur,
-      afblokkingen,
-      vrijgaven,
-      weeksAhead: 2,
-      now,
-      weekdaysOnly: false,
-      skipCurrentIsoWeek: false,
-      includeToday: true,
-    });
-    slotsOpenAppt = capacity.slotsOpen;
-    slotsGeplandAppt = capacity.slotsGepland;
-    slotsVrijAppt = capacity.slotsVrij;
-    afsprakenPerAdviseur = capacity.adviseurs
-      .map((a) => {
-        const nodig = Math.ceil(
-          Math.max(0, a.slotsOpen) * (CEO_FILL_TARGET_PCT / 100)
-        );
-        return {
-          adviseurId: a.id,
-          naam: a.naam,
-          slotsOpen: a.slotsOpen,
-          ingepland: a.slotsGepland,
-          nodig,
-        };
-      })
-      .filter((r) => r.slotsOpen > 0 || r.ingepland > 0)
-      .sort(
-        (a, b) =>
-          b.nodig - a.nodig ||
-          b.ingepland - a.ingepland ||
-          a.naam.localeCompare(b.naam, "nl")
-      );
-  } else {
-    slotsOpenAppt = countOpenSlotsInYmdRange({
-      startYmd: range.startYmd,
-      endYmd: range.endYmd,
-      adviseurs: adviseursCap,
-      unavailableByAdviseur,
-      afblokkingen,
-      vrijgaven,
-    });
-    // Historisch: huisbezoeken op de agenda in die periode
-    const histAppts = afsprakenOpAgenda.filter(
-      (a) =>
-        isNieuweHuisbezoek(a) &&
-        inYmdRange(a.start_at, range.startYmd, range.endYmd)
-    );
-    slotsGeplandAppt = histAppts.length;
-    slotsVrijAppt = Math.max(0, slotsOpenAppt - slotsGeplandAppt);
-    const geplandByAdv = new Map<string, number>();
-    for (const a of histAppts) {
-      const aid = a.adviseur_id;
-      if (!aid) continue;
-      geplandByAdv.set(aid, (geplandByAdv.get(aid) || 0) + 1);
-    }
-    afsprakenPerAdviseur = adviseursCap
-      .map((adv) => {
-        const slotsOpen = countOpenSlotsInYmdRange({
-          startYmd: range.startYmd,
-          endYmd: range.endYmd,
-          adviseurs: [adv],
-          unavailableByAdviseur,
-          afblokkingen,
-          vrijgaven,
-        });
-        const nodig = Math.ceil(
-          Math.max(0, slotsOpen) * (CEO_FILL_TARGET_PCT / 100)
-        );
-        return {
-          adviseurId: adv.id,
-          naam: adv.naam,
-          slotsOpen,
-          ingepland: geplandByAdv.get(adv.id) || 0,
-          nodig,
-        };
-      })
-      .filter((r) => r.slotsOpen > 0 || r.ingepland > 0)
-      .sort(
-        (a, b) =>
-          b.nodig - a.nodig ||
-          b.ingepland - a.ingepland ||
-          a.naam.localeCompare(b.naam, "nl")
-      );
-  }
-
-  // Zitten / nodig: ingepland vs 80% van beschikbare blokken
-  const apptActual = slotsGeplandAppt;
-  const targetAppt = Math.ceil(
-    slotsOpenAppt * (CEO_FILL_TARGET_PCT / 100)
-  );
-
-  const daysElapsed = Math.max(
-    1,
-    Math.round(
-      (noonYmd(countEndYmd).getTime() - noonYmd(range.startYmd).getTime()) /
-        86_400_000
-    ) + 1
-  );
-  const paceFrac = Math.min(1, daysElapsed / range.daysInPeriod);
-
-  // Leads: afgelopen 14d gegenereerd vs nodig voor agenda komende 14d
-  const leadsActual = leads14d.length;
-  const generatedByAdviseur = new Map<string, number>();
-  for (const l of leads14d) {
-    const aid = l.adviseur_id;
-    if (!aid) continue;
-    generatedByAdviseur.set(aid, (generatedByAdviseur.get(aid) || 0) + 1);
-  }
-
-  const leadsPerAdviseur: AandachtLeadAdviseurRow[] = adviseursCap
-    .map((adv) => {
-      const slotsOpen = countOpenSlotsInYmdRange({
-        startYmd: todayYmd,
-        endYmd: fwdEndYmd,
-        adviseurs: [adv],
-        unavailableByAdviseur,
-        afblokkingen,
-        vrijgaven,
-      });
-      const targetApptsAdv = Math.ceil(
-        Math.max(0, slotsOpen) * (CEO_FILL_TARGET_PCT / 100)
-      );
-      const leadsNodig =
-        l2aPct > 0 ? Math.ceil(targetApptsAdv / (l2aPct / 100)) : 0;
-      return {
-        adviseurId: adv.id,
-        naam: adv.naam,
-        slotsOpen,
-        leadsNodig,
-        leadsGegenereerd: generatedByAdviseur.get(adv.id) || 0,
-      };
-    })
-    .filter((r) => r.slotsOpen > 0 || r.leadsGegenereerd > 0 || r.leadsNodig > 0)
-    .sort(
-      (a, b) =>
-        b.leadsNodig - a.leadsNodig ||
-        b.leadsGegenereerd - a.leadsGegenereerd ||
-        a.naam.localeCompare(b.naam, "nl")
-    );
-
-  // Leads zonder (planbare) adviseur: tellen wel mee in teamtotaal, niet per persoon
-  const onPlanbaar = leadsPerAdviseur.reduce(
-    (s, r) => s + r.leadsGegenereerd,
-    0
-  );
-  const restGegenereerd = Math.max(0, leadsActual - onPlanbaar);
-  if (restGegenereerd > 0) {
-    leadsPerAdviseur.push({
-      adviseurId: "_unassigned",
-      naam: "Nog niet op een adviseur",
-      slotsOpen: 0,
-      leadsNodig: 0,
-      leadsGegenereerd: restGegenereerd,
-    });
-  }
-
-  // Afspraken op de agenda in deze week/maand (hele periode) → sales-doel
-  const apptOpAgenda = afsprakenOpAgenda.filter(
+  // —— Afspraken: alle planbare slots (capaciteit) + ingepland in periode ——
+  const periodAppts = afsprakenOpAgenda.filter(
     (a) =>
       isNieuweHuisbezoek(a) &&
       inYmdRange(a.start_at, range.startYmd, range.endYmd)
-  ).length;
-  // Sales-doel = 30% van de afspraken die deze periode gepland staan
+  );
+  const slotsBreak = countPlanbareSlotsBreakdown({
+    startYmd: range.startYmd,
+    endYmd: range.endYmd,
+    adviseurs: adviseursCap,
+    unavailableByAdviseur,
+    afblokkingen,
+    vrijgaven,
+  });
+  // Doel = álle rooster-slots die die week open stonden (niet “nog vrij”)
+  const slotsCapaciteit = slotsBreak.capaciteit;
+  const slotsOpenAppt = slotsBreak.open;
+  const slotsAfgebloktAppt = slotsBreak.afgeblokt;
+  const slotsGeplandAppt = periodAppts.length;
+  const slotsVrijAppt = Math.max(0, slotsOpenAppt - slotsGeplandAppt);
+  const targetAppt = Math.ceil(
+    slotsCapaciteit * (AFSPRAAK_FILL_TARGET_PCT / 100)
+  );
+
+  // —— Leads: gegenereerd in díe periode vs nodig voor capaciteit ——
+  const targetLeads =
+    l2aPct > 0 ? Math.ceil(targetAppt / (l2aPct / 100)) : 0;
+  const leadsActual = periodFullyFuture
+    ? 0
+    : leadsInPeriod.filter((l) =>
+        inYmdRange(l.created_at, range.startYmd, countEndYmd)
+      ).length;
+
+  // —— Sales: getekend vs 25% van afspraken-nodig in periode ——
   const targetSales = Math.round(
-    (apptOpAgenda * DEFAULT_AFSPRAAK_TO_SALE_PCT) / 100
+    (targetAppt * CEO_CLOSE_TARGET_PCT) / 100
   );
   const salesActual = offertes.filter((o) =>
     inYmdRange(o.ondertekend_op, range.startYmd, countEndYmd)
   ).length;
+
+  const daysElapsed = periodFullyFuture
+    ? 0
+    : Math.max(
+        1,
+        Math.round(
+          (noonYmd(countEndYmd).getTime() -
+            noonYmd(range.startYmd).getTime()) /
+            86_400_000
+        ) + 1
+      );
+  const paceFrac = periodFullyFuture
+    ? 1
+    : Math.min(1, daysElapsed / range.daysInPeriod);
 
   function bar(
     id: AandachtBarId,
@@ -563,7 +400,8 @@ export async function buildAandachtspunten(
     opts?: { paceFrac?: number; onTrack?: boolean }
   ): AandachtBar {
     const frac = opts?.paceFrac ?? paceFrac;
-    const paceTarget = Math.max(1, Math.round(target * frac));
+    const paceTarget =
+      target <= 0 ? 0 : Math.max(1, Math.round(target * frac));
     return {
       id,
       label,
@@ -571,9 +409,11 @@ export async function buildAandachtspunten(
       actual,
       target,
       paceTarget,
-      onTrack: opts?.onTrack ?? actual >= paceTarget,
+      onTrack: opts?.onTrack ?? (target <= 0 ? actual >= 0 : actual >= paceTarget),
     };
   }
+
+  const periodUnit = opts.mode === "month" ? "maand" : "week";
 
   return {
     mode: opts.mode,
@@ -583,37 +423,58 @@ export async function buildAandachtspunten(
     todayYmd,
     leadsMeta: {
       l2aPct,
-      slotsOpen: leadNeed.slotsOpen,
-      targetAppts: leadNeed.targetAppts,
-      forwardDays: LEADS_FORWARD_DAYS,
+      slotsOpen: slotsCapaciteit,
+      targetAppts: targetAppt,
+      periodDays: range.daysInPeriod,
       lookbackDays: LEADS_LOOKBACK_DAYS,
+      saleClosePct: CEO_CLOSE_TARGET_PCT,
     },
     afsprakenMeta: {
+      slotsCapaciteit,
       slotsOpen: slotsOpenAppt,
+      slotsAfgeblokt: slotsAfgebloktAppt,
       slotsGepland: slotsGeplandAppt,
       slotsVrij: slotsVrijAppt,
-      forwardDays: LEADS_FORWARD_DAYS,
-      fillTargetPct: CEO_FILL_TARGET_PCT,
+      periodDays: range.daysInPeriod,
+      fillTargetPct: AFSPRAAK_FILL_TARGET_PCT,
     },
-    leadsPerAdviseur,
-    afsprakenPerAdviseur,
     bars: [
-      bar("leads", "Leads", "14d gen. / nodig", leadsActual, targetLeads, {
-        paceFrac: 1,
-        onTrack: leadsActual >= targetLeads,
-      }),
+      bar(
+        "leads",
+        "Leads",
+        `Gen. / nodig · ${periodUnit}`,
+        leadsActual,
+        targetLeads,
+        {
+          paceFrac: 1,
+          onTrack: leadsActual >= targetLeads,
+        }
+      ),
       bar(
         "afspraken",
         "Geplande afspraken",
-        "Ingepland / nodig",
-        apptActual,
+        "Ingepland / alle slots",
+        slotsGeplandAppt,
         targetAppt,
         {
           paceFrac: 1,
-          onTrack: apptActual >= targetAppt,
+          onTrack: slotsGeplandAppt >= targetAppt,
         }
       ),
-      bar("sales", "Sales", "Sales", salesActual, targetSales),
+      bar(
+        "sales",
+        "Sales",
+        `Sales (${CEO_CLOSE_TARGET_PCT}% doel)`,
+        salesActual,
+        targetSales,
+        {
+          // Toekomstige week: doel volledig tonen; actual 0 → niet “op schema”
+          paceFrac: periodFullyFuture ? 1 : paceFrac,
+          onTrack: periodFullyFuture
+            ? salesActual >= targetSales
+            : undefined,
+        }
+      ),
     ],
   };
 }

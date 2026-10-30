@@ -261,11 +261,18 @@ export async function POST(
       );
       if (standaard > 0) installatie = standaard;
       const salesCommissie =
-        bedragExBtw * commissiePctToFraction(commissiePct);
+        Math.round(
+          bedragExBtw * commissiePctToFraction(commissiePct) * 100
+        ) / 100;
       const brutoMarge =
         Math.round(
           (bedragExBtw - inkoop - installatie - salesCommissie) * 100
         ) / 100;
+      const commissiePctLabel = (() => {
+        const n = Number(commissiePct);
+        if (!Number.isFinite(n) || n <= 0) return 10;
+        return n > 0 && n <= 1 ? Math.round(n * 100) : Math.round(n);
+      })();
 
       const internHtml = orderGetekendInternEmail({
         offerteNummer: offerte.offerte_nummer,
@@ -273,6 +280,10 @@ export async function POST(
         adviseurNaam,
         bedragExBtw,
         brutoMarge,
+        inkoop,
+        installatie,
+        salesCommissie,
+        commissiePctLabel,
         ondertekendOp,
       });
       const internSent = await sendEmail({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type {
@@ -13,11 +13,13 @@ import type {
   ProjectTaak,
 } from "@/types/database";
 import { formatDateShort, formatTimeNl } from "@/lib/format";
+import { normalizePostcode } from "@/lib/postcode";
 import {
   projectStatusLabel,
   resolveDisplayProjectStatus,
 } from "@/lib/labels";
 import {
+  backofficeInstroomMoment,
   isProjectFilterWachtExtern,
   isWarmtefondsProject,
   isWarmtefondsWachtOpExtern,
@@ -48,6 +50,54 @@ import { rememberCrmReturnUrl } from "./DetailChrome";
 import { KlantContactMailModal } from "./KlantContactMailModal";
 
 const PAGE_SIZE = 10;
+const PROJECTEN_FILTERS_KEY = "bc_bo_projecten_filters_v1";
+
+type ProjectenFiltersStored = {
+  q?: string;
+  actief?: ActiefFilter;
+  statusFilter?: ProjectStatus | "";
+  financieringFilter?: "" | "em" | "wf";
+  filterActie?: boolean;
+  filterWachtExtern?: boolean;
+  medewerkerId?: string;
+  datumFilter?:
+    | ""
+    | "afgelopen_7_dagen"
+    | "deze_week"
+    | "deze_maand"
+    | "gepland";
+  sortDir?: "asc" | "desc";
+};
+
+const ACTIEF_FILTERS: ActiefFilter[] = [
+  "alles",
+  "actief",
+  "actie_vereist",
+  "afgerond",
+  "klaar",
+  "hold_sales",
+  "annuleringen",
+];
+
+function readProjectenFilters(): ProjectenFiltersStored {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(PROJECTEN_FILTERS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ProjectenFiltersStored;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeProjectenFilters(filters: ProjectenFiltersStored) {
+  try {
+    localStorage.setItem(PROJECTEN_FILTERS_KEY, JSON.stringify(filters));
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Opgeschoonde orderstatussen (geen parallelle WF-/aanbetalings-statussen). */
 const STATUS_FILTER_OPTIONS: ProjectStatusKey[] = [
@@ -71,6 +121,125 @@ function leadAdres(p: Project): string {
     .trim();
   const plaats = [l.postcode, l.plaats].filter(Boolean).join(" ").trim();
   return [straat, plaats].filter(Boolean).join(", ");
+}
+
+/** Compact zonder spaties — voor postcode/huisnr-zoeken (1234AB12A). */
+function compactAdresKey(raw: string): string {
+  return raw.replace(/\s+/g, "").toLowerCase();
+}
+
+function leadAdresKeys(p: Project): {
+  postcode: string;
+  huisnummer: string;
+  toevoeging: string;
+  compact: string;
+  compactMetToev: string;
+} {
+  const l = p.leads;
+  const postcode = l?.postcode
+    ? normalizePostcode(l.postcode).toLowerCase()
+    : "";
+  const huisnummer = (l?.huisnummer || "").trim().toLowerCase();
+  const toevoeging = (l?.toevoeging || "").trim().toLowerCase();
+  return {
+    postcode,
+    huisnummer,
+    toevoeging,
+    compact: compactAdresKey(`${postcode}${huisnummer}`),
+    compactMetToev: compactAdresKey(`${postcode}${huisnummer}${toevoeging}`),
+  };
+}
+
+/**
+ * Parse zoekterm: optioneel NL-postcode + huisnummer + toevoeging.
+ * Voorbeelden: "1234AB 12", "1234 AB 12A", "1234ab12 bis"
+ */
+function parseAdresZoek(q: string): {
+  postcode: string | null;
+  huisnummer: string | null;
+  toevoeging: string | null;
+} {
+  const m = q
+    .trim()
+    .match(
+      /^(\d{4})\s*([A-Za-z]{2})\s*[-/]?\s*(\d+)\s*([A-Za-z0-9-]*)\s*$/i
+    );
+  if (!m) return { postcode: null, huisnummer: null, toevoeging: null };
+  return {
+    postcode: normalizePostcode(`${m[1]}${m[2]}`).toLowerCase(),
+    huisnummer: m[3].toLowerCase(),
+    toevoeging: (m[4] || "").trim().toLowerCase() || null,
+  };
+}
+
+/** 0 = geen match; hoger = relevanter (adres boven generieke tekst). */
+function projectZoekScore(p: Project, needle: string): number {
+  if (!needle) return 1;
+  const keys = leadAdresKeys(p);
+  const parsed = parseAdresZoek(needle);
+  const compactQ = compactAdresKey(needle);
+
+  if (parsed.postcode && parsed.huisnummer) {
+    if (keys.postcode === parsed.postcode && keys.huisnummer === parsed.huisnummer) {
+      if (
+        !parsed.toevoeging ||
+        keys.toevoeging === parsed.toevoeging ||
+        keys.huisnummer.endsWith(parsed.toevoeging)
+      ) {
+        return parsed.toevoeging && keys.toevoeging === parsed.toevoeging
+          ? 100
+          : 90;
+      }
+    }
+    if (keys.postcode === parsed.postcode) return 40;
+  }
+
+  if (keys.compactMetToev && compactQ && keys.compactMetToev === compactQ) {
+    return 100;
+  }
+  if (keys.compact && compactQ && keys.compact === compactQ) {
+    return 90;
+  }
+  if (
+    keys.compactMetToev &&
+    compactQ.length >= 6 &&
+    keys.compactMetToev.startsWith(compactQ)
+  ) {
+    return 80;
+  }
+  if (
+    keys.postcode &&
+    compactQ.length >= 4 &&
+    (keys.postcode.startsWith(compactQ) || compactQ.startsWith(keys.postcode))
+  ) {
+    // Alleen postcode-achtige query
+    if (/^\d{4}[a-z]{0,2}$/i.test(compactQ)) return 50;
+  }
+
+  const hay = [
+    projectNaam(p),
+    p.project_nummer,
+    p.leads?.naam,
+    leadAdres(p),
+    p.leads?.postcode,
+    p.leads?.huisnummer,
+    p.leads?.toevoeging,
+    p.leads?.straat,
+    p.leads?.plaats,
+    keys.compact,
+    keys.compactMetToev,
+    p.installatie_partners?.naam,
+    p.monteur,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (hay.includes(needle)) return 20;
+  if (compactQ.length >= 4 && compactAdresKey(hay).includes(compactQ)) {
+    return 25;
+  }
+  return 0;
 }
 
 function projectNaam(p: Project): string {
@@ -154,6 +323,8 @@ function avatarTone(naam: string): string {
 type ActiefFilter =
   | "actief"
   | "afgerond"
+  /** Alles klaar — orderstatus `afgerond`. */
+  | "klaar"
   | "alles"
   | "actie_vereist"
   | "annuleringen"
@@ -240,9 +411,10 @@ export function BackofficeTable({
   const [filterWachtExtern, setFilterWachtExtern] = useState(false);
   const [medewerkerId, setMedewerkerId] = useState("");
   const [datumFilter, setDatumFilter] = useState<
-    "" | "deze_week" | "deze_maand" | "gepland"
+    "" | "afgelopen_7_dagen" | "deze_week" | "deze_maand" | "gepland"
   >("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [contactProject, setContactProject] = useState<Project | null>(null);
   const [page, setPage] = useState(1);
@@ -251,6 +423,57 @@ export function BackofficeTable({
   const [docFlags, setDocFlags] = useState<
     Record<string, { schouw: boolean; oplevering: boolean }>
   >({});
+
+  useEffect(() => {
+    const s = readProjectenFilters();
+    if (typeof s.q === "string") setQ(s.q);
+    if (s.actief && ACTIEF_FILTERS.includes(s.actief)) setActief(s.actief);
+    if (s.statusFilter) setStatusFilter(s.statusFilter);
+    if (s.financieringFilter === "em" || s.financieringFilter === "wf") {
+      setFinancieringFilter(s.financieringFilter);
+    }
+    if (typeof s.filterActie === "boolean") setFilterActie(s.filterActie);
+    if (typeof s.filterWachtExtern === "boolean") {
+      setFilterWachtExtern(s.filterWachtExtern);
+    }
+    if (typeof s.medewerkerId === "string") setMedewerkerId(s.medewerkerId);
+    if (
+      s.datumFilter === "afgelopen_7_dagen" ||
+      s.datumFilter === "deze_week" ||
+      s.datumFilter === "deze_maand" ||
+      s.datumFilter === "gepland"
+    ) {
+      setDatumFilter(s.datumFilter);
+    }
+    if (s.sortDir === "asc" || s.sortDir === "desc") setSortDir(s.sortDir);
+    setFiltersHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
+    writeProjectenFilters({
+      q,
+      actief,
+      statusFilter,
+      financieringFilter,
+      filterActie,
+      filterWachtExtern,
+      medewerkerId,
+      datumFilter,
+      sortDir,
+    });
+  }, [
+    filtersHydrated,
+    q,
+    actief,
+    statusFilter,
+    financieringFilter,
+    filterActie,
+    filterWachtExtern,
+    medewerkerId,
+    datumFilter,
+    sortDir,
+  ]);
 
   const loadTaken = useCallback(async () => {
     try {
@@ -334,14 +557,18 @@ export function BackofficeTable({
           st === "service")
       ) {
         return false;
-      } else if (
-        actief === "afgerond" &&
-        st !== "installatie_voltooid" &&
-        st !== "review_gevraagd" &&
-        st !== "afgerond" &&
-        st !== "service"
-      ) {
-        return false;
+      } else if (actief === "afgerond") {
+        // After sale: na oplevering, nog niet volledig klaar
+        if (
+          st !== "installatie_voltooid" &&
+          st !== "review_gevraagd" &&
+          st !== "service"
+        ) {
+          return false;
+        }
+      } else if (actief === "klaar") {
+        // Afgerond: alles klaar
+        if (st !== "afgerond") return false;
       } else if (
         actief === "actie_vereist" &&
         !projectIdsWithActie.has(p.id)
@@ -377,6 +604,15 @@ export function BackofficeTable({
         ) {
           return false;
         }
+      } else if (datumFilter === "afgelopen_7_dagen") {
+        // Projecten die de afgelopen 7 dagen in de BO zijn binnengekomen
+        const d = backofficeInstroomMoment(p);
+        if (Number.isNaN(d.getTime())) return false;
+        const now = new Date();
+        const start = new Date(now);
+        start.setDate(now.getDate() - 7);
+        start.setHours(0, 0, 0, 0);
+        if (d < start || d > now) return false;
       } else if (datumFilter === "deze_maand" || datumFilter === "deze_week") {
         const ref = p.updated_at || p.created_at;
         if (!ref) return false;
@@ -400,21 +636,15 @@ export function BackofficeTable({
       }
 
       if (!needle) return true;
-      const hay = [
-        projectNaam(p),
-        p.project_nummer,
-        p.leads?.naam,
-        leadAdres(p),
-        p.installatie_partners?.naam,
-        p.monteur,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(needle);
+      return projectZoekScore(p, needle) > 0;
     });
 
     list = [...list].sort((a, b) => {
+      if (needle) {
+        const sa = projectZoekScore(a, needle);
+        const sb = projectZoekScore(b, needle);
+        if (sa !== sb) return sb - sa;
+      }
       const ta = new Date(a.created_at).getTime() || 0;
       const tb = new Date(b.created_at).getTime() || 0;
       if (ta !== tb) return sortDir === "desc" ? tb - ta : ta - tb;
@@ -436,6 +666,8 @@ export function BackofficeTable({
   ]);
 
   const filtered = useMemo(() => {
+    // Bij zoeken of verse instroom: Actie/Wacht niet toepassen
+    if (q.trim() || datumFilter === "afgelopen_7_dagen") return baseFiltered;
     if (!filterActie && !filterWachtExtern) return baseFiltered;
     return baseFiltered.filter((p) => {
       const inActie = projectIdsActie.has(p.id);
@@ -446,6 +678,8 @@ export function BackofficeTable({
     });
   }, [
     baseFiltered,
+    q,
+    datumFilter,
     filterActie,
     filterWachtExtern,
     projectIdsActie,
@@ -453,7 +687,8 @@ export function BackofficeTable({
   ]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount);
+  // Altijd clampen: state kan kort voorlopen op pageCount na filterwissel
+  const safePage = Math.min(Math.max(1, page), pageCount);
   const pageRows = useMemo(() => {
     const start = (safePage - 1) * PAGE_SIZE;
     return filtered.slice(start, start + PAGE_SIZE);
@@ -463,6 +698,18 @@ export function BackofficeTable({
     () => pageRows.map((p) => p.id).sort().join(","),
     [pageRows]
   );
+
+  const filterPageKey = [
+    q,
+    actief,
+    statusFilter,
+    financieringFilter,
+    filterActie,
+    filterWachtExtern,
+    medewerkerId,
+    datumFilter,
+    sortDir,
+  ].join("|");
 
   useEffect(() => {
     const ids = pageIdsKey ? pageIdsKey.split(",") : [];
@@ -509,23 +756,23 @@ export function BackofficeTable({
     };
   }, [pageIdsKey]);
 
+  // Alleen bij echte filterwijziging terug naar pagina 1 (niet bij mount)
+  const prevFilterPageKey = useRef<string | null>(null);
   useEffect(() => {
+    if (!filtersHydrated) return;
+    if (prevFilterPageKey.current === null) {
+      prevFilterPageKey.current = filterPageKey;
+      return;
+    }
+    if (prevFilterPageKey.current === filterPageKey) return;
+    prevFilterPageKey.current = filterPageKey;
     setPage(1);
-  }, [
-    q,
-    actief,
-    statusFilter,
-    financieringFilter,
-    filterActie,
-    filterWachtExtern,
-    medewerkerId,
-    datumFilter,
-    sortDir,
-  ]);
+  }, [filtersHydrated, filterPageKey]);
 
+  // Houd state gelijk aan wat getoond wordt (voorkomt “Vorige doet niks”)
   useEffect(() => {
-    if (page > pageCount) setPage(pageCount);
-  }, [page, pageCount]);
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   function openProject(id: string) {
     rememberCrmReturnUrl();
@@ -581,7 +828,7 @@ export function BackofficeTable({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Zoeken op naam, adres, …"
+            placeholder="Zoeken op naam, postcode, huisnr…"
             className="w-full border border-line bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-green"
           />
         </label>
@@ -595,6 +842,7 @@ export function BackofficeTable({
           <option value="actief">Actief</option>
           <option value="actie_vereist">Actie vereist</option>
           <option value="afgerond">After sale</option>
+          <option value="klaar">Afgerond</option>
           <option value="hold_sales">HOLD sales</option>
           <option value="annuleringen">Annuleringen</option>
           <option value="alles">Alles</option>
@@ -609,6 +857,7 @@ export function BackofficeTable({
           aria-label="Filter datum"
         >
           <option value="">Datum</option>
+          <option value="afgelopen_7_dagen">Afgelopen 7 dagen</option>
           <option value="deze_week">Deze week</option>
           <option value="deze_maand">Deze maand</option>
           <option value="gepland">Heeft planning</option>
@@ -987,7 +1236,7 @@ export function BackofficeTable({
                 <button
                   type="button"
                   disabled={safePage <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  onClick={() => setPage(Math.max(1, safePage - 1))}
                   className="min-h-8 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:bg-wash disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Vorige
@@ -998,7 +1247,7 @@ export function BackofficeTable({
                 <button
                   type="button"
                   disabled={safePage >= pageCount}
-                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  onClick={() => setPage(Math.min(pageCount, safePage + 1))}
                   className="min-h-8 border border-line bg-white px-2.5 text-xs font-semibold text-ink hover:bg-wash disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Volgende

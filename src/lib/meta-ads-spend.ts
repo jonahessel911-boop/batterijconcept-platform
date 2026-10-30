@@ -13,6 +13,8 @@ export const META_LEAD_CAMPAIGN_ID =
 export type MetaAdSpendDay = {
   date: string;
   spend: number;
+  /** Lead-results uit Insights actions (Instant Forms e.d.). */
+  leads?: number;
   impressions?: number;
   clicks?: number;
   campaign_id?: string | null;
@@ -82,6 +84,11 @@ export function defaultSpendRange(daysBack = 30): {
   };
 }
 
+type GraphInsightAction = {
+  action_type?: string;
+  value?: string;
+};
+
 type GraphInsightRow = {
   date_start?: string;
   date_stop?: string;
@@ -92,7 +99,41 @@ type GraphInsightRow = {
   campaign_name?: string;
   ad_id?: string;
   ad_name?: string;
+  actions?: GraphInsightAction[];
 };
+
+/**
+ * Meta lead-resultaten uit Insights `actions`.
+ * Voorkeur: `lead` (Instant Form); anders lead_grouped / pixel lead.
+ * Niet optellen — die overlapen vaak.
+ */
+export function leadsFromMetaActions(
+  actions?: GraphInsightAction[] | null
+): number {
+  if (!actions?.length) return 0;
+  let lead = 0;
+  let leadGrouped = 0;
+  let pixelLead = 0;
+  for (const a of actions) {
+    const t = (a.action_type || "").trim();
+    const v = Number(a.value || 0);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    if (t === "lead") lead += v;
+    else if (
+      t === "onsite_conversion.lead_grouped" ||
+      t === "leadgen_grouped"
+    ) {
+      leadGrouped += v;
+    } else if (
+      t === "offsite_conversion.fb_pixel_lead" ||
+      t === "onsite_web_lead"
+    ) {
+      pixelLead += v;
+    }
+  }
+  const n = lead > 0 ? lead : leadGrouped > 0 ? leadGrouped : pixelLead;
+  return Math.round(n);
+}
 
 type GraphInsightsResponse = {
   data?: GraphInsightRow[];
@@ -155,12 +196,12 @@ export async function fetchMetaAdSpend(options?: {
   const objectId = campaignId || cfg.accountId;
   const fields =
     breakdown === "ad"
-      ? "spend,impressions,clicks,campaign_id,campaign_name,ad_id,ad_name"
+      ? "spend,impressions,clicks,actions,campaign_id,campaign_name,ad_id,ad_name"
       : campaignId
-        ? "spend,impressions,clicks,campaign_id,campaign_name"
+        ? "spend,impressions,clicks,actions,campaign_id,campaign_name"
         : breakdown === "campaign"
-          ? "spend,impressions,clicks,campaign_id,campaign_name"
-          : "spend,impressions,clicks";
+          ? "spend,impressions,clicks,actions,campaign_id,campaign_name"
+          : "spend,impressions,clicks,actions";
 
   const params = new URLSearchParams({
     fields,
@@ -189,9 +230,11 @@ export async function fetchMetaAdSpend(options?: {
         if (!date) continue;
         const spend = Number(row.spend || 0);
         if (!Number.isFinite(spend)) continue;
+        const leads = leadsFromMetaActions(row.actions);
         days.push({
           date,
           spend: Math.round(spend * 100) / 100,
+          leads,
           impressions: row.impressions ? Number(row.impressions) : undefined,
           clicks: row.clicks ? Number(row.clicks) : undefined,
           campaign_id: row.campaign_id || campaignId || null,
@@ -357,6 +400,7 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
       adset_id: "",
       ad_id: "",
       spend: day.spend,
+      leads: day.leads ?? 0,
       impressions: day.impressions ?? null,
       clicks: day.clicks ?? null,
       synced_at: new Date().toISOString(),
@@ -365,7 +409,16 @@ export async function syncMetaAdSpendCampaignDetail(options?: {
     const { error } = await sb.from("meta_ad_spend").insert(row);
 
     if (error) {
-      return { upserted, error: error.message };
+      // Kolom `leads` nog niet gemigreerd → opnieuw zonder leads
+      if (/leads/i.test(error.message || "")) {
+        const { leads: _drop, ...withoutLeads } = row;
+        const retry = await sb.from("meta_ad_spend").insert(withoutLeads);
+        if (retry.error) {
+          return { upserted, error: retry.error.message };
+        }
+      } else {
+        return { upserted, error: error.message };
+      }
     }
     upserted += 1;
   }
@@ -421,6 +474,7 @@ export async function syncMetaAdSpendAdDetail(options?: {
       ad_id: adId,
       ad_name: day.ad_name || null,
       spend: day.spend,
+      leads: day.leads ?? 0,
       impressions: day.impressions ?? null,
       clicks: day.clicks ?? null,
       synced_at: new Date().toISOString(),
@@ -428,11 +482,104 @@ export async function syncMetaAdSpendAdDetail(options?: {
 
     const { error } = await sb.from("meta_ad_spend").insert(row);
     if (error) {
-      return { upserted, error: error.message };
+      if (/leads/i.test(error.message || "")) {
+        const { leads: _drop, ...withoutLeads } = row;
+        const retry = await sb.from("meta_ad_spend").insert(withoutLeads);
+        if (retry.error) {
+          return { upserted, error: retry.error.message };
+        }
+      } else {
+        return { upserted, error: error.message };
+      }
     }
     upserted += 1;
   }
   return { upserted };
+}
+
+/**
+ * Live Meta Insights → marketing-rijen (spend + leads).
+ * Gebruikt als bron voor marketing-CPL i.p.v. CRM-lead-counts.
+ */
+export async function fetchMarketingMetaRowsFromInsights(options: {
+  since: string;
+  until: string;
+}): Promise<{
+  ok: boolean;
+  rows: {
+    datum: string;
+    level: string;
+    campaign_id: string | null;
+    campaign_name: string | null;
+    ad_id: string | null;
+    ad_name: string | null;
+    spend: number;
+    leads: number;
+  }[];
+  error?: string;
+}> {
+  const [camp, ad] = await Promise.all([
+    fetchMetaAdSpend({
+      since: options.since,
+      until: options.until,
+      level: "campaign",
+      timeIncrement: "1",
+      campaignId: null,
+    }),
+    fetchMetaAdSpend({
+      since: options.since,
+      until: options.until,
+      level: "ad",
+      timeIncrement: "1",
+      campaignId: null,
+    }),
+  ]);
+
+  if (!camp.ok && !ad.ok) {
+    return {
+      ok: false,
+      rows: [],
+      error: camp.error || ad.error || "Meta Insights mislukt",
+    };
+  }
+
+  const rows: {
+    datum: string;
+    level: string;
+    campaign_id: string | null;
+    campaign_name: string | null;
+    ad_id: string | null;
+    ad_name: string | null;
+    spend: number;
+    leads: number;
+  }[] = [];
+
+  for (const d of camp.days) {
+    rows.push({
+      datum: d.date,
+      level: "campaign",
+      campaign_id: d.campaign_id || null,
+      campaign_name: d.campaign_name || null,
+      ad_id: null,
+      ad_name: null,
+      spend: d.spend,
+      leads: d.leads ?? 0,
+    });
+  }
+  for (const d of ad.days) {
+    rows.push({
+      datum: d.date,
+      level: "ad",
+      campaign_id: d.campaign_id || null,
+      campaign_name: d.campaign_name || null,
+      ad_id: d.ad_id || null,
+      ad_name: d.ad_name || null,
+      spend: d.spend,
+      leads: d.leads ?? 0,
+    });
+  }
+
+  return { ok: true, rows };
 }
 
 async function touchDashboardMetaSync(until: string) {

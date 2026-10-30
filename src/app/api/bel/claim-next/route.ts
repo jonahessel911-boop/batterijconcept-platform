@@ -3,15 +3,15 @@ import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { claimNextBelLead } from "@/lib/bel-claim";
+import { claimNextBelLead, type BelBakMode } from "@/lib/bel-claim";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/bel/claim-next
- * Body: { exclude_lead_id?: string, provincie?: string }
+ * Body: { exclude_lead_id?: string, provincie?: string, bak?: "normaal"|"provincie"|"annuleringen", force_new?: boolean }
  * Eerste vrije lead in bel-volgorde → soft claim voor de ingelogde beller.
- * Optioneel gefilterd op provincie (provincie-belbak).
+ * Annuleringen-bak: alleen klant-cancels die jij had ingepland.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -25,16 +25,25 @@ export async function POST(req: NextRequest) {
       exclude_lead_id?: string | null;
       provincie?: string | null;
       force_new?: boolean;
+      bak?: BelBakMode | null;
     };
     const exclude = body.exclude_lead_id?.trim() || null;
     const provincie = body.provincie?.trim() || null;
     const forceNew = Boolean(body.force_new);
+    const bakRaw = (body.bak || "").trim();
+    const bak: BelBakMode =
+      bakRaw === "annuleringen"
+        ? "annuleringen"
+        : bakRaw === "provincie" || provincie
+          ? "provincie"
+          : "normaal";
 
     const sb = getSupabaseAdmin();
     const result = await claimNextBelLead(sb, session.adviseurId, {
       excludeLeadIds: exclude ? [exclude] : [],
-      provincie,
+      provincie: bak === "provincie" ? provincie : null,
       forceNew,
+      bak,
     });
 
     if (result.mode === "nocolumn") {

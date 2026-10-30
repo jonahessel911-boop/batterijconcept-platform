@@ -96,13 +96,37 @@ export function nextVerkoperCommissieMoment(now = new Date()): {
 
 export async function buildToekomstigeVerkoperCreditfacturen(
   sb: SupabaseClient,
-  now = new Date()
+  now = new Date(),
+  opts?: {
+    /**
+     * `vooruit` = huidige ISO-week (aanbetalingen deze week → volgende wo).
+     * Default = eerstvolgende commissieronde (incl. late openstaande weken).
+     */
+    mode?: "default" | "vooruit";
+  }
 ): Promise<ToekomstigeCreditfacturenPreview> {
-  const moment = nextVerkoperCommissieMoment(now);
+  const vooruit = opts?.mode === "vooruit";
+  const moment = vooruit
+    ? (() => {
+        const week = creditWeekFromDate(now);
+        const today = ymdAmsterdam(now);
+        const morgen = ymdAmsterdam(addDays(toZonedTime(now, AMSTERDAM_TZ), 1));
+        return {
+          week,
+          betaalDag: week.betaalWoensdag,
+          isMorgen: week.betaalWoensdag === morgen,
+          isVandaag: week.betaalWoensdag === today,
+        };
+      })()
+    : nextVerkoperCommissieMoment(now);
   const week = moment.week;
-  // Vorige week + week daarvoor (openstaande/late aanbetalingen, bv. Manting)
+  // Default: vorige week + week daarvoor (openstaande/late). Vooruit: alleen deze week.
   const weekOlder = weekBeforePreviousCreditWeek(now);
-  const van = weekOlder.van < week.van ? weekOlder.van : week.van;
+  const van = vooruit
+    ? week.van
+    : weekOlder.van < week.van
+      ? weekOlder.van
+      : week.van;
   const tot = week.tot;
 
   const { data: facs } = await sb

@@ -18,7 +18,9 @@ async function resolvePartner(token: string) {
 
 /**
  * PATCH /api/installatie/[token]/facturen/[id]
- * Body: { action: "goedkeuren" }
+ * Body: { action: "goedkeuren" | "versturen" }
+ * - goedkeuren: BC-weekfactuur (verzonden → goedgekeurd)
+ * - versturen: eigen concept indienen → goedgekeurd (klaar voor uitbetaling)
  */
 export async function PATCH(
   req: NextRequest,
@@ -33,9 +35,9 @@ export async function PATCH(
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  if (body.action !== "goedkeuren") {
+  if (body.action !== "goedkeuren" && body.action !== "versturen") {
     return NextResponse.json(
-      { error: "action=goedkeuren is verplicht" },
+      { error: "action=goedkeuren of versturen is verplicht" },
       { status: 400 }
     );
   }
@@ -65,6 +67,38 @@ export async function PATCH(
     if (fac.partner_id !== partner.id) {
       return NextResponse.json({ error: "Geen toegang" }, { status: 403 });
     }
+
+    // Eigen concept indienen → direct goedgekeurd (BC betaalt)
+    if (body.action === "versturen") {
+      if (fac.status === "goedgekeurd" || fac.status === "betaald") {
+        return NextResponse.json({ factuur: fac, already: true });
+      }
+      if (fac.status !== "concept") {
+        return NextResponse.json(
+          { error: "Alleen concepten kunnen worden verstuurd" },
+          { status: 400 }
+        );
+      }
+      const now = new Date().toISOString();
+      const { data: updated, error: updErr } = await sb
+        .from("partner_creditfacturen")
+        .update({
+          status: "goedgekeurd",
+          verzonden_op: now,
+          goedgekeurd_op: now,
+        })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (updErr || !updated) {
+        return NextResponse.json(
+          { error: updErr?.message || "Versturen mislukt" },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json({ factuur: updated, verstuurd: true });
+    }
+
     if (fac.status === "goedgekeurd" || fac.status === "betaald") {
       return NextResponse.json({ factuur: fac, already: true });
     }

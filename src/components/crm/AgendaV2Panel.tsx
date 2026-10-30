@@ -1775,6 +1775,9 @@ export function AgendaPanel({
                             <div className="space-y-1">
                               {items.map((a) => {
                                 const ls =
+                                  (a.status === "voltooid" && a.leads?.status
+                                    ? a.leads.status
+                                    : null) ||
                                   leadStatusById.get(a.lead_id) ||
                                   a.leads?.status ||
                                   null;
@@ -1882,6 +1885,9 @@ export function AgendaPanel({
           afspraak={selected}
           allAfspraken={afspraken}
           leadStatus={
+            (selected.status === "voltooid" && selected.leads?.status
+              ? selected.leads.status
+              : null) ||
             leadStatusById.get(selected.lead_id) ||
             selected.leads?.status ||
             null
@@ -1890,6 +1896,10 @@ export function AgendaPanel({
           onUpdated={(a) => {
             setAfspraken((prev) => prev.map((x) => (x.id === a.id ? a : x)));
             setSelected(a);
+            const st = a.leads?.status;
+            if (st && a.lead_id && onStatusChange) {
+              onStatusChange(a.lead_id, st as LeadStatus);
+            }
           }}
           onRemoved={(id) => {
             setAfspraken((prev) => prev.filter((x) => x.id !== id));

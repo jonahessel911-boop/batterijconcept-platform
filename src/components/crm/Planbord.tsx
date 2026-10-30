@@ -638,6 +638,12 @@ function PlanInplannenPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** Na schouwdag: installatie-opvolg in hetzelfde paneel */
+  const [installatieFollowUp, setInstallatieFollowUp] = useState<{
+    project: Project;
+    partnerId: string;
+    schouwAt: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (!open || !dayKey) return;
@@ -653,6 +659,7 @@ function PlanInplannenPanel({
     setNotities("");
     setError(null);
     setPickerOpen(true);
+    setInstallatieFollowUp(null);
   }, [open, dayKey, defaultPartnerId]);
 
   const selected = useMemo(
@@ -769,7 +776,27 @@ function PlanInplannenPanel({
           (data as { mails?: Parameters<typeof mailSummary>[0] }).mails || {}
         );
         if (summary.warn) setError(summary.warn);
-        onSaved((data as { project: Project }).project);
+        const saved = (data as { project: Project }).project;
+        onSaved(saved);
+        // Schouwdag → meteen installatie-advies (zelfde partner, na schouw)
+        if (
+          soort === "schouwdag" &&
+          saved.schouw_at &&
+          !saved.installatie_at
+        ) {
+          setInstallatieFollowUp({
+            project: saved,
+            partnerId,
+            schouwAt: saved.schouw_at,
+          });
+          setSelectedId(saved.id);
+          setSoort("installatie");
+          setSlotIso(null);
+          setDatetimeLocal("");
+          setNotities("");
+          setPickerOpen(false);
+          return;
+        }
         onClose();
         return;
       }
@@ -865,9 +892,16 @@ function PlanInplannenPanel({
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <div>
             <h2 className="font-display text-lg font-semibold text-ink">
-              Project inplannen
+              {installatieFollowUp
+                ? "Aanbevolen installatie"
+                : "Project inplannen"}
             </h2>
-            {dayKey ? (
+            {installatieFollowUp ? (
+              <p className="mt-0.5 text-xs text-muted">
+                Schouw gezet — kies nu een installatieslot (zelfde partner
+                voorkeur, na schouwdag).
+              </p>
+            ) : dayKey ? (
               <p className="mt-0.5 text-xs text-muted">
                 {formatDateShort(dayKey + "T12:00:00")}
               </p>
@@ -1071,14 +1105,27 @@ function PlanInplannenPanel({
                         selected?.lead_id ||
                         null
                       }
+                      projectId={selected?.id || null}
                       excludeProjectId={selected?.id || null}
-                      dayKey={dayKey}
+                      dayKey={installatieFollowUp ? null : dayKey}
+                      showBest={
+                        Boolean(installatieFollowUp) ||
+                        Boolean(selected?.id && !dayKey)
+                      }
+                      lockBestToPartner={Boolean(installatieFollowUp)}
+                      afterIso={installatieFollowUp?.schouwAt || null}
                       value={slotIso}
+                      onPartnerChange={(pid) => {
+                        setPartnerId(pid);
+                        setTeamgenootId("");
+                      }}
                       onChange={(iso) => {
                         setSlotIso(iso);
                         if (!iso) {
                           setDatetimeLocal(
-                            dayKey ? defaultDatetimeForDay(dayKey, 9) : ""
+                            !installatieFollowUp && dayKey
+                              ? defaultDatetimeForDay(dayKey, 9)
+                              : ""
                           );
                           return;
                         }
@@ -1191,13 +1238,23 @@ function PlanInplannenPanel({
           </div>
 
           <div className="flex justify-end gap-2 border-t border-line px-5 py-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
-            >
-              Annuleren
-            </button>
+            {installatieFollowUp ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
+              >
+                Later kiezen
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
+              >
+                Annuleren
+              </button>
+            )}
             <button
               type="submit"
               disabled={
@@ -1207,7 +1264,11 @@ function PlanInplannenPanel({
               }
               className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
             >
-              {busy ? "Bezig…" : "Opslaan"}
+              {busy
+                ? "Bezig…"
+                : installatieFollowUp
+                  ? "Installatie opslaan"
+                  : "Opslaan"}
             </button>
           </div>
         </form>
@@ -2860,6 +2921,88 @@ function MonthEventChip({
   );
 }
 
+function AfblokVensterChip({
+  venster,
+  blocked,
+  compact,
+  interactive,
+  disabled,
+  hasWork,
+  onToggle,
+}: {
+  venster: PartnerVenster;
+  blocked: boolean;
+  compact?: boolean;
+  interactive: boolean;
+  disabled?: boolean;
+  hasWork?: boolean;
+  onToggle?: () => void;
+}) {
+  const label =
+    venster === "ochtend"
+      ? compact
+        ? "Ocht."
+        : "Ochtend 09–12"
+      : compact
+        ? "Mid."
+        : "Middag 13–17";
+  const status = blocked
+    ? compact
+      ? "Dicht"
+      : "Afgeblokt"
+    : hasWork
+      ? "Bezet"
+      : "Open";
+
+  // Buiten afblok-modus: alleen dicht tonen (anders te druk)
+  if (!interactive && !blocked) return null;
+
+  const className = [
+    "flex w-full items-center justify-between gap-1 font-bold uppercase tracking-wide disabled:opacity-50",
+    compact ? "border px-1 py-0.5 text-[9px]" : "flex-col gap-0.5 border px-2 py-2 text-left text-[11px]",
+    blocked
+      ? "border-[#B91C1C] bg-[#DC2626] text-white shadow-sm"
+      : hasWork
+        ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]"
+        : "border-dashed border-[#FECACA] bg-white text-[#B91C1C] hover:bg-[#FEF2F2]",
+    !interactive ? "cursor-default" : "",
+  ].join(" ");
+
+  const body = (
+    <>
+      <span className={compact ? "flex w-full items-center justify-between gap-1" : "flex w-full items-center justify-between gap-1"}>
+        <span>{label}</span>
+        <span className="uppercase tracking-wide">{status}</span>
+      </span>
+      {!compact ? (
+        <span className="text-[10px] font-medium opacity-90">
+          {venster === "ochtend" ? "Installatie 1" : "Installatie 2"}
+        </span>
+      ) : null}
+    </>
+  );
+
+  if (!interactive) {
+    return (
+      <div className={className} title="Afgeblokt — niet beschikbaar">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onToggle}
+      className={className}
+      title={blocked ? "Klik om weer open te zetten" : "Klik om af te blokken"}
+    >
+      {body}
+    </button>
+  );
+}
+
 const VIEW_OPTIONS: { id: AgendaView; label: string }[] = [
   { id: "week", label: "Week" },
   { id: "dag", label: "Dag" },
@@ -2948,6 +3091,11 @@ export function Planbord({
   const [planOpen, setPlanOpen] = useState(false);
   const [planDayKey, setPlanDayKey] = useState<string | null>(null);
   const [planPartnerId, setPlanPartnerId] = useState<string | null>(null);
+  /** Filter: partner + soort op het planbord */
+  const [filterPartnerId, setFilterPartnerId] = useState<string>("");
+  const [filterSoort, setFilterSoort] = useState<
+    "" | "schouw" | "installatie" | "service"
+  >("");
   const [localProjects, setLocalProjects] = useState(projecten);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [schouwDocs, setSchouwDocs] = useState<
@@ -2985,6 +3133,12 @@ export function Planbord({
     if (afblokPartnerIdProp) setAfblokPartnerId(afblokPartnerIdProp);
   }, [afblokPartnerIdProp]);
 
+  // CRM: filter-chip partner → ook afblokkingen van die partner tonen
+  useEffect(() => {
+    if (afblokPartnerIdProp || afblokMode || readOnly) return;
+    if (filterPartnerId) setAfblokPartnerId(filterPartnerId);
+  }, [filterPartnerId, afblokPartnerIdProp, afblokMode, readOnly]);
+
   useEffect(() => {
     if (!afblokMode) return;
     if (!afblokPartnerId && partners.length && !readOnly) {
@@ -2992,8 +3146,9 @@ export function Planbord({
     }
   }, [afblokMode, afblokPartnerId, partners, readOnly]);
 
+  // Teamgenoten altijd laden als we een partner hebben (ook buiten afblok-modus)
   useEffect(() => {
-    if (!afblokMode || !afblokPartnerId) {
+    if (!afblokPartnerId) {
       setAfblokTeamgenoten([]);
       setAfblokTgId("");
       return;
@@ -3025,7 +3180,7 @@ export function Planbord({
     return () => {
       cancelled = true;
     };
-  }, [afblokMode, afblokPartnerId, readOnly, portalToken]);
+  }, [afblokPartnerId, readOnly, portalToken]);
 
   const weekDays = useMemo(() => weekDaysFrom(anchor), [anchor]);
   const monthDays = useMemo(() => monthGridDays(anchor), [anchor]);
@@ -3046,8 +3201,10 @@ export function Planbord({
       ? afblokTgId || null
       : null;
 
+  // Afblokkingen altijd laden (ook buiten afblok-modus), zodat DICHT zichtbaar blijft
   useEffect(() => {
-    if (!afblokMode || !afblokPartnerId || !afblokRange.van || !afblokRange.tot) {
+    if (!afblokPartnerId || !afblokRange.van || !afblokRange.tot) {
+      setAfblokkingen(new Set());
       return;
     }
     if (afblokPerMonteur && afblokTeamgenoten.length > 0 && !afblokTgId) {
@@ -3092,7 +3249,6 @@ export function Planbord({
       cancelled = true;
     };
   }, [
-    afblokMode,
     afblokPartnerId,
     afblokRange.van,
     afblokRange.tot,
@@ -3208,10 +3364,17 @@ export function Planbord({
     })} · week ${weekInfo.week}`;
   }, [anchor, view, weekInfo.week]);
 
-  const planProjects = useMemo(
-    () => localProjects.filter(isActiefOpPlanbord),
-    [localProjects]
-  );
+  const planProjects = useMemo(() => {
+    let list = localProjects.filter(isActiefOpPlanbord);
+    if (filterPartnerId) {
+      list = list.filter(
+        (p) =>
+          p.installatie_partner_id === filterPartnerId ||
+          partnerOf(p)?.id === filterPartnerId
+      );
+    }
+    return list;
+  }, [localProjects, filterPartnerId]);
 
   const weekBars = useMemo(
     () => barsForWeek(planProjects, weekDays),
@@ -3228,7 +3391,16 @@ export function Planbord({
     [planProjects]
   );
 
-  const activeBars = view === "maand" ? monthBars : weekBars;
+  const activeBarsRaw = view === "maand" ? monthBars : weekBars;
+  const activeBars = useMemo(() => {
+    if (!filterSoort) return activeBarsRaw;
+    return activeBarsRaw.filter((b) => {
+      if (filterSoort === "schouw") {
+        return b.kind === "schouw" || b.kind === "schouwweek";
+      }
+      return b.kind === filterSoort;
+    });
+  }, [activeBarsRaw, filterSoort]);
 
   const schouwProjectIdsKey = useMemo(() => {
     const ids = new Set<string>();
@@ -3370,8 +3542,15 @@ export function Planbord({
   /** Voor dag-view: bars uit alle timed (niet alleen week) zodat maandnavigatie werkt. */
   const dayBarsResolved = useMemo(() => {
     if (view !== "dag") return [];
-    return timedAll.filter((b) => b.dayKeys[0] === dayKey);
-  }, [timedAll, dayKey, view]);
+    return timedAll.filter((b) => {
+      if (b.dayKeys[0] !== dayKey) return false;
+      if (!filterSoort) return true;
+      if (filterSoort === "schouw") {
+        return b.kind === "schouw" || b.kind === "schouwweek";
+      }
+      return b.kind === filterSoort;
+    });
+  }, [timedAll, dayKey, view, filterSoort]);
 
   const monthPrefix = useMemo(
     () => formatInTimeZone(anchor, AMSTERDAM_TZ, "yyyy-MM"),
@@ -3487,8 +3666,157 @@ export function Planbord({
     [displayDayBars]
   );
 
+  const horizonKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (let i = 0; i < 14; i++) {
+      keys.push(dayKeyAmsterdam(addDays(new Date(), i)));
+    }
+    return keys;
+  }, []);
+
+  const partnerBezetting = useMemo(() => {
+    const active = partners.filter((p) => p.actief !== false);
+    const timed = allTimedBars(localProjects);
+    const horizonSet = new Set(horizonKeys);
+    return active.map((p) => {
+      const start =
+        (p.start_adres || "").trim() || "Cabrondom 43 Utrecht";
+      const todayBars = timed.filter(
+        (b) => b.partnerId === p.id && b.dayKeys.includes(todayKey)
+      );
+      const weekBarsP = timed.filter(
+        (b) =>
+          b.partnerId === p.id &&
+          b.dayKeys.some((k) => horizonSet.has(k))
+      );
+      const schouwToday = todayBars.filter(
+        (b) => b.kind === "schouw" || b.kind === "schouwweek"
+      ).length;
+      const installatieToday = todayBars.filter(
+        (b) => b.kind === "installatie"
+      ).length;
+      const freeVenstersToday = Math.max(0, 2 - installatieToday);
+      const schouw2w = weekBarsP.filter(
+        (b) => b.kind === "schouw" || b.kind === "schouwweek"
+      ).length;
+      const installatie2w = weekBarsP.filter(
+        (b) => b.kind === "installatie"
+      ).length;
+      // Ruwe vrije installatie-vensters komende 14d (excl. zondag ≈ 12 werkdagen × 2)
+      const workDaysApprox = 12;
+      const freeVensters2w = Math.max(
+        0,
+        workDaysApprox * 2 - installatie2w
+      );
+      return {
+        id: p.id,
+        naam: p.naam,
+        start,
+        schouwToday,
+        installatieToday,
+        freeVenstersToday,
+        schouw2w,
+        installatie2w,
+        freeVensters2w,
+      };
+    });
+  }, [partners, localProjects, todayKey, horizonKeys]);
+
   return (
     <div className="flex flex-col gap-3">
+      {!readOnly && partnerBezetting.length > 0 ? (
+        <div className="border border-line bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Montagepartners · wie waar · capaciteit vandaag &amp; 2 weken
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              <select
+                value={filterPartnerId}
+                onChange={(e) => setFilterPartnerId(e.target.value)}
+                className="border border-line bg-white px-2 py-1 text-[11px] font-medium text-ink outline-none focus:border-green"
+              >
+                <option value="">Alle partners</option>
+                {partners
+                  .filter((p) => p.actief !== false)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.naam}
+                    </option>
+                  ))}
+              </select>
+              <select
+                value={filterSoort}
+                onChange={(e) =>
+                  setFilterSoort(
+                    e.target.value as "" | "schouw" | "installatie" | "service"
+                  )
+                }
+                className="border border-line bg-white px-2 py-1 text-[11px] font-medium text-ink outline-none focus:border-green"
+              >
+                <option value="">Alles</option>
+                <option value="schouw">Alleen schouw</option>
+                <option value="installatie">Alleen installatie</option>
+                <option value="service">Alleen service</option>
+              </select>
+              {filterPartnerId || filterSoort ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterPartnerId("");
+                    setFilterSoort("");
+                  }}
+                  className="text-[11px] font-semibold text-green-dark hover:underline"
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+            {partnerBezetting.map((p) => {
+              const selected = filterPartnerId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    setFilterPartnerId((cur) => (cur === p.id ? "" : p.id));
+                  }}
+                  onDoubleClick={() => openPlan(todayKey, p.id)}
+                  title="Klik = filter · dubbelklik = inplannen vandaag"
+                  className={[
+                    "min-w-[12.5rem] shrink-0 border px-3 py-2.5 text-left transition",
+                    selected
+                      ? "border-green bg-green-soft"
+                      : "border-line bg-wash hover:border-green",
+                  ].join(" ")}
+                >
+                  <span className="block truncate text-sm font-semibold text-ink">
+                    {p.naam}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted">
+                    {p.start}
+                  </span>
+                  <span className="mt-1.5 block text-[11px] font-medium text-ink">
+                    Vandaag: {p.freeVenstersToday}/2 vrij
+                    {p.schouwToday > 0
+                      ? ` · ${p.schouwToday} schouw`
+                      : ""}
+                    {p.installatieToday > 0
+                      ? ` · ${p.installatieToday} inst.`
+                      : ""}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-muted">
+                    2 wkn: ~{p.freeVensters2w} inst.-vensters vrij ·{" "}
+                    {p.schouw2w} schouw · {p.installatie2w} inst.
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
         <div>
           <h2 className="font-display text-xl font-semibold text-ink">
@@ -3705,6 +4033,29 @@ export function Planbord({
                 : `${displayDayBars.length} afspraak${displayDayBars.length === 1 ? "" : "en"}`}
             </p>
           </div>
+          {afblokPartnerId &&
+          (afblokMode ||
+            isVensterBlocked(dayKey, "ochtend") ||
+            isVensterBlocked(dayKey, "middag")) ? (
+            <div
+              className={[
+                "flex flex-wrap gap-2 border-b border-line px-4 py-2",
+                afblokMode ? "bg-[#FFF7F7]" : "bg-[#FEE2E2]/60",
+              ].join(" ")}
+            >
+              {PARTNER_VENSTERS.map((venster) => (
+                <div key={venster} className="min-w-[9rem] flex-1">
+                  <AfblokVensterChip
+                    venster={venster}
+                    blocked={isVensterBlocked(dayKey, venster)}
+                    interactive={afblokMode}
+                    disabled={blockBusy || !afblokPartnerId}
+                    onToggle={() => void toggleVensterAfblok(dayKey, venster)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div className="flex overflow-x-auto">
             <div
@@ -3815,6 +4166,13 @@ export function Planbord({
               {weekDays.map((d) => {
                 const list = barsByDay.get(d.key) || [];
                 const isToday = d.key === todayKey;
+                const ochtendDicht = Boolean(
+                  afblokPartnerId && isVensterBlocked(d.key, "ochtend")
+                );
+                const middagDicht = Boolean(
+                  afblokPartnerId && isVensterBlocked(d.key, "middag")
+                );
+                const dagAfgeblokt = ochtendDicht && middagDicht;
                 return (
                   <div
                     key={d.key}
@@ -3822,14 +4180,16 @@ export function Planbord({
                       "min-h-[280px] space-y-1.5 border-r border-line p-1.5 last:border-r-0",
                       afblokMode
                         ? "bg-[#FFF7F7]/50"
-                        : isToday
-                          ? "bg-[#F0FDFA]/35"
-                          : d.weekend
-                            ? "bg-[#F8FAFC]"
-                            : "bg-white",
+                        : dagAfgeblokt
+                          ? "bg-[#FEE2E2]/55"
+                          : isToday
+                            ? "bg-[#F0FDFA]/35"
+                            : d.weekend
+                              ? "bg-[#F8FAFC]"
+                              : "bg-white",
                     ].join(" ")}
                   >
-                    {afblokMode ? (
+                    {afblokPartnerId ? (
                       <div className="space-y-1">
                         {PARTNER_VENSTERS.map((venster) => {
                           const blocked = isVensterBlocked(d.key, venster);
@@ -3846,60 +4206,37 @@ export function Planbord({
                             return h >= 13 && h < 17;
                           });
                           return (
-                            <button
+                            <AfblokVensterChip
                               key={venster}
-                              type="button"
+                              venster={venster}
+                              blocked={blocked}
+                              interactive={afblokMode}
                               disabled={blockBusy || !afblokPartnerId}
-                              onClick={() =>
+                              hasWork={hasWork}
+                              onToggle={() =>
                                 void toggleVensterAfblok(d.key, venster)
                               }
-                              className={[
-                                "flex w-full flex-col gap-0.5 border px-2 py-2 text-left text-[11px] font-semibold disabled:opacity-50",
-                                blocked
-                                  ? "border-[#FECACA] bg-[#FEE2E2] text-[#991B1B]"
-                                  : hasWork
-                                    ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#065F46]"
-                                    : "border-dashed border-[#FECACA] bg-white text-[#B91C1C] hover:bg-[#FEF2F2]",
-                              ].join(" ")}
-                            >
-                              <span className="flex items-center justify-between gap-1">
-                                <span>
-                                  {venster === "ochtend"
-                                    ? "Ochtend 09–12"
-                                    : "Middag 13–17"}
-                                </span>
-                                <span className="uppercase tracking-wide">
-                                  {blocked
-                                    ? "Dicht"
-                                    : hasWork
-                                      ? "Bezet"
-                                      : "Open"}
-                                </span>
-                              </span>
-                              <span className="text-[10px] font-medium opacity-80">
-                                {venster === "ochtend"
-                                  ? "Installatie 1"
-                                  : "Installatie 2"}
-                              </span>
-                            </button>
+                            />
                           );
                         })}
-                        {list.length > 0 ? (
-                          <div className="space-y-1 pt-1">
-                            {list.map((bar) => (
-                              <EventCard
-                                key={bar.key}
-                                bar={bar}
-                                schouwDoc={schouwDocs[bar.project.id]}
-                                hidePartner={readOnly}
-                                compact
-                                selected={selectedBar?.key === bar.key}
-                                onSelect={() => openBar(bar)}
-                              />
-                            ))}
-                          </div>
-                        ) : null}
                       </div>
+                    ) : null}
+                    {afblokMode ? (
+                      list.length > 0 ? (
+                        <div className="space-y-1">
+                          {list.map((bar) => (
+                            <EventCard
+                              key={bar.key}
+                              bar={bar}
+                              schouwDoc={schouwDocs[bar.project.id]}
+                              hidePartner={readOnly}
+                              compact
+                              selected={selectedBar?.key === bar.key}
+                              onSelect={() => openBar(bar)}
+                            />
+                          ))}
+                        </div>
+                      ) : null
                     ) : list.length === 0 ? (
                       !readOnly ? (
                         <button
@@ -3919,9 +4256,7 @@ export function Planbord({
                         <EventCard
                           key={bar.key}
                           bar={bar}
-                          schouwDoc={
-                            schouwDocs[bar.project.id]
-                          }
+                          schouwDoc={schouwDocs[bar.project.id]}
                           hidePartner={readOnly}
                           compact
                           selected={selectedBar?.key === bar.key}
@@ -3957,15 +4292,22 @@ export function Planbord({
                 const isToday = d.key === todayKey;
                 const visible = list.slice(0, MONTH_CHIPS_VISIBLE);
                 const more = list.length - visible.length;
+                const dagAfgeblokt =
+                  Boolean(afblokPartnerId) &&
+                  inMonth &&
+                  isVensterBlocked(d.key, "ochtend") &&
+                  isVensterBlocked(d.key, "middag");
                 return (
                   <div
                     key={d.key}
                     className={[
                       "flex min-h-[7.5rem] flex-col border-b border-r border-line p-1.5 last:border-r-0",
                       inMonth
-                        ? isToday
-                          ? "bg-[#F0FDFA]"
-                          : "bg-white"
+                        ? dagAfgeblokt
+                          ? "bg-[#FEE2E2]/70"
+                          : isToday
+                            ? "bg-[#F0FDFA]"
+                            : "bg-white"
                         : "bg-[#F4F6F5]",
                     ].join(" ")}
                   >
@@ -3996,32 +4338,21 @@ export function Planbord({
                         </span>
                       ) : null}
                     </div>
-                    {afblokMode && inMonth ? (
+                    {afblokPartnerId && inMonth ? (
                       <div className="mb-1 space-y-0.5">
-                        {PARTNER_VENSTERS.map((venster) => {
-                          const blocked = isVensterBlocked(d.key, venster);
-                          return (
-                            <button
-                              key={venster}
-                              type="button"
-                              disabled={blockBusy || !afblokPartnerId}
-                              onClick={() =>
-                                void toggleVensterAfblok(d.key, venster)
-                              }
-                              className={[
-                                "flex w-full items-center justify-between border px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide disabled:opacity-50",
-                                blocked
-                                  ? "border-[#FECACA] bg-[#FEE2E2] text-[#991B1B]"
-                                  : "border-dashed border-[#FECACA] bg-white text-[#B91C1C]",
-                              ].join(" ")}
-                            >
-                              <span>
-                                {venster === "ochtend" ? "Ocht." : "Mid."}
-                              </span>
-                              <span>{blocked ? "Dicht" : "Open"}</span>
-                            </button>
-                          );
-                        })}
+                        {PARTNER_VENSTERS.map((venster) => (
+                          <AfblokVensterChip
+                            key={venster}
+                            venster={venster}
+                            blocked={isVensterBlocked(d.key, venster)}
+                            compact
+                            interactive={afblokMode}
+                            disabled={blockBusy || !afblokPartnerId}
+                            onToggle={() =>
+                              void toggleVensterAfblok(d.key, venster)
+                            }
+                          />
+                        ))}
                       </div>
                     ) : null}
                     <div className="flex min-h-0 flex-1 flex-col gap-0.5">
