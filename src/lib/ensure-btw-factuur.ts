@@ -14,6 +14,7 @@ import {
 } from "@/lib/factuur-omschrijving";
 import { formatEuro } from "@/lib/format";
 import {
+  COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_DAGEN,
   FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
   amsterdamDatePlusDays,
@@ -74,7 +75,7 @@ export async function ensureBtwDraftFactuur(
   const factuurdatum = amsterdamDatePlusDays(today, 0);
   // Concept: nog geen harde termijn; bij versturen wordt 3 dagen gezet
   const vervaldatum = amsterdamDatePlusDays(today, FACTUUR_BETAALTERMIJN_DAGEN);
-  const notities = `Betreft offerte ${opts.offerteNummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${opts.offerteNummer}.`;
+  const notities = `Betreft offerte ${opts.offerteNummer}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${opts.offerteNummer}.`;
 
   const amounts = {
     omschrijving,
@@ -244,7 +245,7 @@ export async function ensureRestantDraftFactuur(
     ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
     : FACTUUR_BETAALTERMIJN_DAGEN;
   const vervaldatum = amsterdamDatePlusDays(today, betaaltermijnDagen);
-  const notities = `Betreft offerte ${opts.offerteNummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${opts.offerteNummer}.`;
+  const notities = `Betreft offerte ${opts.offerteNummer}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${opts.offerteNummer}.`;
 
   const amounts = {
     omschrijving,

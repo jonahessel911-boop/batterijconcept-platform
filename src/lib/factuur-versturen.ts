@@ -5,10 +5,10 @@ import { factuurVerzondenEmail } from "@/lib/email/templates";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import {
   COMPANY_ACCOUNT_NAME,
-  COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
   amsterdamDatePlusDays,
   factuurBetaaltermijnDagen,
+  ibanVoorKlantfactuur,
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
@@ -159,7 +159,7 @@ export async function verstuurFactuurNaarKlant(
     bedrag: formatEuro(factuur.bedrag_inc_btw),
     vervaldatum: isCredit ? null : formatDateShort(vervaldatum),
     betaaltermijnDagen: isCredit ? null : betaaltermijnDagen,
-    iban: isCredit ? null : co.iban || COMPANY_IBAN_DISPLAY,
+    iban: isCredit ? null : ibanVoorKlantfactuur(factuur),
     accountName: co.accountName || COMPANY_ACCOUNT_NAME,
     betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
     isCredit,

@@ -7,6 +7,7 @@ import {
   primaireProductOmschrijving,
 } from "@/lib/factuur-omschrijving";
 import {
+  COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
   parseBetaaltermijnDagen,
@@ -197,7 +198,7 @@ export async function POST(
 
     const notitiesBase = creditVan
       ? `CREDIT FACTUUR (${creditVan.factuur_nummer}). Betreft ${project.project_nummer}. Er hoeft niets te worden betaald.`
-      : `Betreft ${project.project_nummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${ref}.`;
+      : `Betreft ${project.project_nummer}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${ref}.`;
     const notities = withFactuurAdresOpPdfMarker(
       notitiesBase,
       Boolean(body.adres_gegevens_op_factuur) && !creditVan

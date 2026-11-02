@@ -11,6 +11,7 @@ import {
   factuurBetaaltermijnDagen,
   factuurDisplayStatus,
   factuurIsOverdue,
+  ibanVoorKlantfactuur,
 } from "@/lib/factuur-betaling";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
@@ -46,7 +47,6 @@ const COMPANY = {
   adres: "Daltonlaan 500",
   postcodePlaats: "3584 BK Utrecht",
   kvk: "42141855",
-  iban: "NL48 BUNQ 2209 5579 33",
   email: "info@batterijconcept.nl",
   telefoon: "085 800 1645",
   website: "Batterijconcept.nl",
@@ -608,6 +608,7 @@ export function FactuurPage() {
   }
 
   const isDraft = factuur.status === "concept";
+  const factuurIban = ibanVoorKlantfactuur(factuur);
   const isPaid = factuur.status === "betaald";
   const creditVanRaw = factuur.credit_van;
   const creditVan = Array.isArray(creditVanRaw)
@@ -968,7 +969,7 @@ export function FactuurPage() {
             </p>
             <p className="mt-2 text-sm leading-relaxed text-ink">
               Gelieve te betalen op{" "}
-              <span className="font-mono font-semibold">{COMPANY.iban}</span>{" "}
+              <span className="font-mono font-semibold">{factuurIban}</span>{" "}
               t.n.v. {COMPANY.naam}, onder vermelding van{" "}
               <span className="font-mono font-semibold">
                 {factuur.factuur_nummer}

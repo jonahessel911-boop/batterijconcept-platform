@@ -9,7 +9,7 @@ import { formatDateShort, formatEuro } from "@/lib/format";
 import { errMessage } from "@/lib/errors";
 import {
   COMPANY_ACCOUNT_NAME,
-  COMPANY_IBAN_DISPLAY,
+  ibanVoorKlantfactuur,
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
@@ -260,7 +260,7 @@ async function sendWarmtefondsAanbetalingHerinnering(
     vervaldatum: factuur.vervaldatum
       ? formatDateShort(factuur.vervaldatum)
       : null,
-    iban: co.iban || COMPANY_IBAN_DISPLAY,
+    iban: ibanVoorKlantfactuur(factuur),
     accountName: co.accountName || COMPANY_ACCOUNT_NAME,
     betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
     projectNummer: project.project_nummer || null,
