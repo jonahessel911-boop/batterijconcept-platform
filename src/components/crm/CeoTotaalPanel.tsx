@@ -55,7 +55,7 @@ export function CeoTotaalPanel() {
   const range = { mode, weekKey, monthYm };
 
   return (
-    <div className="bg-wash/40">
+    <div className="min-w-0 bg-wash/40">
       <div className="sticky top-0 z-30 flex flex-wrap items-end justify-between gap-3 border-b border-line bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-5">
         <div>
           <p className="font-display text-base font-semibold text-ink">Totaal</p>
@@ -106,7 +106,7 @@ export function CeoTotaalPanel() {
               <select
                 value={weekKey}
                 onChange={(e) => setWeekKey(e.target.value)}
-                className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                className="w-full min-w-0 border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green sm:w-auto sm:min-w-[12rem]"
               >
                 {weekOptions.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -119,7 +119,7 @@ export function CeoTotaalPanel() {
         </div>
       </div>
 
-      <div className="space-y-10 px-4 py-5 sm:px-5 sm:py-6">
+      <div className="min-w-0 space-y-10 px-0 py-5 sm:px-5 sm:py-6">
         <AandachtspuntenStrip
           rangeMode={range.mode}
           rangeWeekKey={range.weekKey}

@@ -1,6 +1,9 @@
-import { Poppins } from "next/font/google";
+import { Poppins, Geist } from "next/font/google";
 import type { Metadata } from "next";
 import "./globals.css";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 /** Zelfde vibe als batterijconcept.nl — geometrisch, strak, modern */
 const poppins = Poppins({
@@ -30,7 +33,7 @@ export const viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="nl" className={`${poppins.variable} h-full`}>
+    <html lang="nl" className={cn("h-full", poppins.variable, "font-sans", geist.variable)}>
       <body className="min-h-full flex flex-col font-body antialiased bg-wash text-ink">
         {children}
       </body>

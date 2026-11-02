@@ -5,7 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Afspraak, Lead } from "@/types/database";
 import {
-  inAnnuleringQueueForBeller,
+  inAnnuleringBelQueue,
   inBelQueue,
   inNormaleBelQueue,
   isNlProvincie,
@@ -82,19 +82,6 @@ async function loadAppointmentLeadIds(
     out.add(row.lead_id);
   }
   return out;
-}
-
-async function loadFonioBusyLeadIds(
-  sb: SupabaseClient
-): Promise<Set<string>> {
-  const { data, error } = await sb
-    .from("fonio_calls")
-    .select("lead_id")
-    .in("status", ["ringing", "active"]);
-  if (error || !data) return new Set();
-  return new Set(
-    data.map((r) => r.lead_id as string).filter(Boolean)
-  );
 }
 
 /** JS-fallback als RPC nog niet gedeployed is. */
@@ -198,17 +185,20 @@ async function tryClaimLead(
 async function loadRecentAfsprakenForAnnuleringen(
   sb: SupabaseClient
 ): Promise<Afspraak[]> {
-  const from = new Date();
-  from.setDate(from.getDate() - 180);
-  const { data } = await sb
-    .from("afspraken")
-    .select(
-      "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, updated_at, created_at, ingepland_door_id"
-    )
-    .gte("start_at", from.toISOString())
-    .order("start_at", { ascending: false })
-    .limit(5000);
-  return (data || []) as Afspraak[];
+  const rows: Afspraak[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await sb
+      .from("afspraken")
+      .select(
+        "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, updated_at, created_at, ingepland_door_id"
+      )
+      .order("start_at", { ascending: false })
+      .range(from, from + 999);
+    const chunk = (data || []) as Afspraak[];
+    rows.push(...chunk);
+    if (chunk.length < 1000) break;
+  }
+  return rows;
 }
 
 /**
@@ -277,10 +267,9 @@ export async function claimNextBelLead(
     }
     if (bak === "annuleringen") {
       if (
-        !inAnnuleringQueueForBeller(
+        !inAnnuleringBelQueue(
           row,
           afsprakenForMine || [],
-          callerId,
           appointmentLeadIdsForMine || undefined
         )
       ) {
@@ -320,38 +309,39 @@ export async function claimNextBelLead(
   }
 
   // 2) Kandidaten laden en sorteren
-  const [appointmentLeadIds, fonioBusy] = await Promise.all([
-    loadAppointmentLeadIds(sb),
-    loadFonioBusyLeadIds(sb),
-  ]);
+  const appointmentLeadIds = await loadAppointmentLeadIds(sb);
 
   if (bak === "annuleringen") {
     const afspraken = afsprakenForMine || (await loadRecentAfsprakenForAnnuleringen(sb));
-    const { data: rawLeads, error: leadsErr } = await sb
-      .from("leads")
-      .select("*")
-      .eq("status", "afspraak_afgezegd_klant")
-      .order("updated_at", { ascending: false })
-      .limit(1000);
-
-    if (leadsErr) {
-      if (claimColumnsMissing(leadsErr)) {
-        return { lead: null, mode: "nocolumn" };
+    const leadIds = [
+      ...new Set(
+        afspraken
+          .filter((a) => a.status === "geannuleerd")
+          .map((a) => a.lead_id)
+          .filter(Boolean)
+      ),
+    ];
+    const rawLeads: Lead[] = [];
+    for (let i = 0; i < leadIds.length; i += 200) {
+      const slice = leadIds.slice(i, i + 200);
+      const { data: chunk, error: leadsErr } = await sb
+        .from("leads")
+        .select("*")
+        .in("id", slice);
+      if (leadsErr) {
+        if (claimColumnsMissing(leadsErr)) {
+          return { lead: null, mode: "nocolumn" };
+        }
+        throw leadsErr;
       }
-      throw leadsErr;
+      rawLeads.push(...((chunk || []) as Lead[]));
     }
 
     const candidates = sortBelQueue(
-      ((rawLeads || []) as Lead[]).filter((l) => {
+      rawLeads.filter((l) => {
         if (exclude.has(l.id)) return false;
-        if (fonioBusy.has(l.id)) return false;
         if (isBelClaimedByOther(l, callerId, now)) return false;
-        return inAnnuleringQueueForBeller(
-          l,
-          afspraken,
-          callerId,
-          appointmentLeadIds
-        );
+        return inAnnuleringBelQueue(l, afspraken, appointmentLeadIds);
       })
     );
 
@@ -363,6 +353,8 @@ export async function claimNextBelLead(
     }
     return { lead: null, mode: "empty" };
   }
+
+  const afsprakenNormaal = await loadRecentAfsprakenForAnnuleringen(sb);
 
   const { data: rawLeads, error: leadsErr } = await sb
     .from("leads")
@@ -381,8 +373,10 @@ export async function claimNextBelLead(
   const candidates = sortBelQueue(
     ((rawLeads || []) as Lead[]).filter((l) => {
       if (exclude.has(l.id)) return false;
-      if (fonioBusy.has(l.id)) return false;
       if (!inNormaleBelQueue(l, appointmentLeadIds)) return false;
+      if (inAnnuleringBelQueue(l, afsprakenNormaal, appointmentLeadIds)) {
+        return false;
+      }
       // inNormaleBelQueue excludes herplan; keep inBelQueue safety for phone etc.
       if (!inBelQueue(l, appointmentLeadIds)) return false;
       if (provincie && !leadInProvincie(l, provincie)) return false;

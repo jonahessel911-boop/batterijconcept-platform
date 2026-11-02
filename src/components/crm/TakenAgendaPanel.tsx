@@ -544,15 +544,15 @@ export function TakenAgendaPanel({
         </form>
       ) : null}
 
-      <div className="overflow-x-auto border border-line">
-        <div className="grid min-w-[720px] grid-cols-7 divide-x divide-line">
+      <div className="border border-line md:overflow-x-auto">
+        <div className="grid grid-cols-1 divide-y divide-line md:min-w-[720px] md:grid-cols-7 md:divide-x md:divide-y-0">
           {days.map((d) => {
             const chips = chipsByDay.get(d.key) || [];
             return (
               <div
                 key={d.key}
                 className={[
-                  "min-h-[220px] bg-white",
+                  "min-h-0 bg-white md:min-h-[220px]",
                   d.weekend ? "bg-[#FAFAF8]" : "",
                 ].join(" ")}
               >

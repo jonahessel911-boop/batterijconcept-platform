@@ -24,6 +24,11 @@ import {
   dedupeTimelineItems,
   stripPartnerFromTimelineDetail,
 } from "@/lib/netto-boord-detail";
+import {
+  CallRecordingPlayer,
+  recordingHrefFromMeta,
+  recordingUnavailableFromMeta,
+} from "./CallRecordingPlayer";
 
 type ActivityKind =
   | "notitie"
@@ -53,13 +58,20 @@ type ActivityItem = {
     | { type: "offerte_sign"; href: string; label: string }
     | { type: "offerte_crm"; href: string; label: string }
     | { type: "factuur_pdf"; factuurId: string; filename: string; label: string }
-    | { type: "link"; href: string; label: string };
+    | { type: "link"; href: string; label: string }
+    | {
+        type: "call_recording";
+        href?: string | null;
+        eventId: string;
+        unavailable?: boolean;
+        label: string;
+      };
 };
 
 const KIND_LABEL: Record<ActivityKind, string> = {
   notitie: "Notitie",
   status: "Status",
-  bel: "Bellen",
+  bel: "Gesprek",
   afspraak: "Afspraak",
   offerte: "Offerte",
   offerte_getekend: "Offerte getekend",
@@ -216,12 +228,32 @@ function buildFromEntities(opts: {
     if (/Schouwformulier geüpload|Schouw uitgevoerd/i.test(titel)) {
       continue;
     }
+    const meta = (ev.meta || {}) as {
+      callrecordkey?: string;
+      extension_id?: string;
+      recording_storage_path?: string;
+      recording_unavailable?: boolean;
+      recording_complete?: boolean;
+      bron?: string;
+    };
+    // Elke Unite-/bel-activiteit krijgt een opname-speler (lost key op indien nodig)
+    const recordingAction =
+      soort === "bel" || /^Gesprek\b/i.test(titel)
+        ? {
+            type: "call_recording" as const,
+            href: recordingHrefFromMeta(meta),
+            eventId: ev.id,
+            unavailable: recordingUnavailableFromMeta(meta, ev.created_at),
+            label: "Beluisteren",
+          }
+        : undefined;
     items.push({
       id: `ev-${ev.id}`,
       at: ev.created_at,
       kind,
       titel: ev.titel,
       detail: stripPartnerFromTimelineDetail(ev.detail),
+      action: recordingAction,
     });
   }
 
@@ -481,6 +513,7 @@ export function LeadActivityPanel({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -548,17 +581,24 @@ export function LeadActivityPanel({
     void load();
   }, [load, refreshKey]);
 
-  const items = useMemo(
-    () =>
-      buildFromEntities({
-        events,
-        offertes,
-        facturen,
-        projecten,
-        afspraken,
-      }),
-    [events, offertes, facturen, projecten, afspraken]
-  );
+  const items = useMemo(() => {
+    const all = buildFromEntities({
+      events,
+      offertes,
+      facturen,
+      projecten,
+      afspraken,
+    });
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((item) => {
+      const hay = [item.titel, item.detail, item.kind, item.at]
+        .filter(Boolean)
+        .join("\n")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [events, offertes, facturen, projecten, afspraken, query]);
 
   async function downloadFactuurPdf(
     factuurId: string,
@@ -592,30 +632,42 @@ export function LeadActivityPanel({
 
   return (
     <section className="mt-3 border border-line bg-white">
-      <div className="flex items-center justify-between border-b border-line px-4 py-2.5 sm:px-5">
-        <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-          <svg
-            viewBox="0 0 24 24"
-            className="h-3.5 w-3.5 text-green-dark/70"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
+      <div className="border-b border-line px-4 py-2.5 sm:px-5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-3.5 w-3.5 text-green-dark/70"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M12 8v4l2.5 2.5" />
+              <circle cx="12" cy="12" r="9" />
+            </svg>
+            Activiteit
+          </h2>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="text-xs font-semibold text-muted hover:text-ink"
           >
-            <path d="M12 8v4l2.5 2.5" />
-            <circle cx="12" cy="12" r="9" />
-          </svg>
-          Activiteit
-        </h2>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="text-xs font-semibold text-muted hover:text-ink"
-        >
-          Vernieuwen
-        </button>
+            Vernieuwen
+          </button>
+        </div>
+        <label className="mt-2 block">
+          <span className="sr-only">Zoek in activiteiten</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Zoek in notities en activiteiten…"
+            className="w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green"
+          />
+        </label>
       </div>
 
       <div className="px-4 py-3 sm:px-5">
@@ -631,8 +683,9 @@ export function LeadActivityPanel({
           </p>
         ) : items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted">
-            Nog geen activiteit. Offertes, facturen (verstuurd/betaald), schouw,
-            installatie, statuswijzigingen en notities verschijnen hier.
+            {query.trim()
+              ? "Geen resultaten voor deze zoekopdracht."
+              : "Nog geen activiteit. Offertes, facturen (verstuurd/betaald), schouw, installatie, statuswijzigingen en notities verschijnen hier."}
           </p>
         ) : (
           <ol className="relative space-y-0 border-l border-line pl-4">
@@ -657,7 +710,16 @@ export function LeadActivityPanel({
                     {item.detail}
                   </p>
                 )}
-                {item.action && !insightOnly ? (
+                {item.action?.type === "call_recording" ? (
+                  <CallRecordingPlayer
+                    href={item.action.href}
+                    eventId={item.action.eventId}
+                    unavailable={item.action.unavailable}
+                  />
+                ) : null}
+                {item.action &&
+                item.action.type !== "call_recording" &&
+                !insightOnly ? (
                   <div className="mt-2">
                     {item.action.type === "factuur_pdf" ? (
                       <button

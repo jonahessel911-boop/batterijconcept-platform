@@ -1194,11 +1194,11 @@ export function openVolgendeStapActies(
     ) {
       continue;
     }
-    // WF: installatie pas bij ≥95% betaald + schouwdag gepland
+    // WF: installatie pas nadat schouw geweest is + ≥95% betaald
     if (
       /installatiedatum inplannen|installatie inplannen/i.test(stap.titel) &&
       isWarmtefondsProject(project) &&
-      !kanWfInstallatieInplannen(project, related)
+      !kanWfInstallatieInplannen(project, related, now)
     ) {
       continue;
     }

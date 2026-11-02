@@ -4,7 +4,10 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { buildToekomstigeVerkoperCreditfacturen } from "@/lib/toekomstige-creditfacturen";
-import { ensureNettoAanbetalingCreditfactuur } from "@/lib/netto-creditfactuur";
+import {
+  ensureNettoAanbetalingCreditfactuur,
+  stripAllHoldSalesFromOpenSalesCreditfacturen,
+} from "@/lib/netto-creditfactuur";
 
 export const runtime = "nodejs";
 
@@ -49,6 +52,7 @@ export async function POST() {
     }
 
     const sb = getSupabaseAdmin();
+    await stripAllHoldSalesFromOpenSalesCreditfacturen(sb);
     const preview = await buildToekomstigeVerkoperCreditfacturen(sb);
     const targets = preview.regels.filter((r) => r.status === "nieuw");
 

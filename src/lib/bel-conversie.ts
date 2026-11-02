@@ -7,7 +7,10 @@ import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { isAdminEmail } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { isGeenInteresseStatus } from "@/lib/labels";
+import {
+  isBelAfspraakUitvalLeadStatus,
+  isGeenInteresseStatus,
+} from "@/lib/labels";
 import { round2, safeDiv } from "@/lib/management-dashboard/periods";
 import {
   PROVINCIE_ONBEKEND,
@@ -599,12 +602,18 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
   filterBellerId?: string | null;
   fallbackBellerId?: string | null;
   skipAdminIds?: ReadonlySet<string> | null;
+  /**
+   * Leadstatussen: deur_niet_open / niet_gekwalificeerd tellen niet als
+   * uitval (en ook niet als bruto) — die zijn al af van de afspraak-telling.
+   */
+  leadStatusById?: ReadonlyMap<string, string | null> | null;
 }): { geannuleerd: number; byDoor: Map<string, number> } {
   const pool = mergeAfsprakenById(opts.afspraken, opts.historie);
   const eersteAny = eersteNieuwAnyStatusIdPerLead(pool);
   const eersteActief = eersteNieuweHuisbezoekIdPerLead(pool);
   const filter = opts.filterBellerId?.trim() || null;
   const skip = opts.skipAdminIds ?? null;
+  const statuses = opts.leadStatusById ?? null;
   const byDoor = new Map<string, number>();
   let geannuleerd = 0;
 
@@ -614,6 +623,13 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
     if (eersteAny.get(a.lead_id) !== a.id) continue;
     // Herpland (actief nieuw bezoek later) → geen uitval; netto gered, geen extra
     if (eersteActief.has(a.lead_id)) continue;
+    // Kwalificatie / deur: af van bruto, niet als uitval
+    if (
+      statuses &&
+      isBelAfspraakUitvalLeadStatus(statuses.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
     const when = annuleringsMomentIso(a);
     if (!when || !inAmsterdamDayRange(when, opts.start, opts.end)) continue;
 
@@ -678,13 +694,15 @@ export function isEersteNieuweHuisbezoek(
  * Huisbezoek gezet in het Amsterdam-venster.
  * Alleen created_at telt (ingepland) — niet start_at (dat is gelopen/bezoek).
  * Alleen het eerste nieuwe huisbezoek per lead (geen bijklant / 2e bezoek).
+ * Leadstatus deur_niet_open / niet_gekwalificeerd telt niet mee (bruto af).
  */
 export function huisbezoekLeadIdsOpDag(
   afspraken: BelConversieAfspraak[],
   start: Date,
   end: Date,
   /** Volledige historie (of minstens alle nieuw-afspraken van deze leads). */
-  historieAfspraken?: BelConversieAfspraak[]
+  historieAfspraken?: BelConversieAfspraak[],
+  leadStatusById?: ReadonlyMap<string, string | null> | null
 ): Set<string> {
   const eersteIds = eersteNieuweHuisbezoekIdPerLead(
     historieAfspraken ?? afspraken
@@ -695,9 +713,23 @@ export function huisbezoekLeadIdsOpDag(
     if (!a.created_at) continue;
     if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
     if (eersteIds.get(a.lead_id) !== a.id) continue;
+    if (
+      leadStatusById &&
+      isBelAfspraakUitvalLeadStatus(leadStatusById.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
     ids.add(a.lead_id);
   }
   return ids;
+}
+
+function leadStatusMapFromLeads(
+  leads: BelConversieLead[]
+): Map<string, string | null> {
+  const map = new Map<string, string | null>();
+  for (const l of leads) map.set(l.id, l.status);
+  return map;
 }
 
 /** Nog niet gelopen: start_at in de toekomst (of nu). */
@@ -890,12 +922,14 @@ export function buildBelConversie(opts: {
   const { start } = amsDayBounds(rangeStartYmd);
   const { end } = amsDayBounds(opts.dateYmd);
   const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const leadStatuses = leadStatusMapFromLeads(opts.leads);
   const eersteIds = eersteNieuweHuisbezoekIdPerLead(historie);
   const ingeplandIds = huisbezoekLeadIdsOpDag(
     opts.afspraken,
     start,
     end,
-    historie
+    historie,
+    leadStatuses
   );
 
   // Alleen beller/backoffice krijgen bel-credit; adviseurs/admin niet.
@@ -1001,6 +1035,7 @@ export function buildBelConversie(opts: {
     filterBellerId: filterBeller,
     fallbackBellerId: orphanFallback,
     skipAdminIds: skipNonCallerIds,
+    leadStatusById: leadStatuses,
   });
   for (const [doorKey, n] of uitval.byDoor) {
     let id = doorKey;
@@ -1241,7 +1276,11 @@ function shiftAmsterdamYmdLocal(ymd: string, deltaDays: number): string {
 
 function isGeenContactStatus(status: string | null | undefined): boolean {
   const s = (status || "").trim().toLowerCase();
-  return s === "geen_contact" || s === "vervolg_geen_contact";
+  return (
+    s === "geen_contact" ||
+    s === "definitief_geen_contact" ||
+    s === "vervolg_geen_contact"
+  );
 }
 
 /**
@@ -1291,12 +1330,14 @@ export function scoreBelConversieWindow(opts: {
   const { start } = amsDayBounds(opts.startYmd);
   const { end } = amsDayBounds(opts.endYmd);
   const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const leadStatuses = leadStatusMapFromLeads(opts.leads);
   const eersteIds = eersteNieuweHuisbezoekIdPerLead(historie);
   const ingeplandIds = huisbezoekLeadIdsOpDag(
     opts.afspraken,
     start,
     end,
-    historie
+    historie,
+    leadStatuses
   );
 
   const ingeplandDoorByLead = new Map<string, string>();
@@ -1363,6 +1404,7 @@ export function scoreBelConversieWindow(opts: {
     filterBellerId: filterBeller,
     fallbackBellerId: opts.fallbackBellerId,
     skipAdminIds: opts.skipAdminIds,
+    leadStatusById: leadStatuses,
   });
 
   const gebeld = byId.size;

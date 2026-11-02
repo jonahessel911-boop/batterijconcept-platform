@@ -33,6 +33,8 @@ export async function GET(req: NextRequest) {
           `lead_number.ilike.${pattern}`,
           `telefoon.ilike.${pattern}`,
           `email.ilike.${pattern}`,
+          `postcode.ilike.${pattern}`,
+          `plaats.ilike.${pattern}`,
         ].join(",")
       )
       .order("created_at", { ascending: false })

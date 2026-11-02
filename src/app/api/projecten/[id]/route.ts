@@ -18,7 +18,10 @@ import {
 import { logLeadEvent } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
-import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
+import {
+  ensureAdviseurCommissieTrancheB,
+  stripHoldSalesFromOpenSalesCreditfacturen,
+} from "@/lib/netto-creditfactuur";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
@@ -1251,6 +1254,24 @@ export async function PATCH(
           ? body.financiering_status
           : undefined
       );
+    }
+
+    // HOLD SALES / annulering → open sales-commissieregels uit uitbetalingsconcepten
+    const nextStatus =
+      (patch.status as string | undefined) ||
+      (body.status as string | undefined) ||
+      "";
+    if (
+      (nextStatus === "hold_sales_actie" ||
+        nextStatus === "hold_sales" ||
+        nextStatus === "annulering") &&
+      before?.status !== nextStatus
+    ) {
+      try {
+        await stripHoldSalesFromOpenSalesCreditfacturen(sb, id);
+      } catch (stripErr) {
+        console.error("stripHoldSalesFromOpenSalesCreditfacturen:", stripErr);
+      }
     }
 
     // Geen automatische annuleringsmail meer — knop op projectpagina.

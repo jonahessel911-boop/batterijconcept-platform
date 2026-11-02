@@ -817,7 +817,7 @@ export function CurrentPnlPanel({
                 Kostenregels
               </p>
             </header>
-            <div className="overflow-x-auto p-3 sm:p-4">
+            <div className="min-w-0 max-w-full overflow-x-auto p-3 sm:p-4">
               {data.months.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted">
                   Geen data in deze periode.

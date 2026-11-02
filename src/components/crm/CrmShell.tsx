@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
@@ -44,9 +51,11 @@ import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
 import { InboxPanel } from "./InboxPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
+import { CallPopupHost } from "./CallPopupHost";
 import { LEAD_STATUSES, leadStatusLabel } from "@/lib/labels";
 import {
   MAX_BELPOGINGEN,
+  definitiefGeenContactDbHint,
   buildGeenContactOutcomePatch,
   inBelQueue,
   isTerugbelDue,
@@ -186,47 +195,22 @@ export function CrmShell() {
   }, [tab]);
 
   const statusFilter = parseLeadStatus(searchParams.get("status"));
-  const [leads, setLeads] = useState<Lead[]>(
-    () => readCrmBootstrapCache()?.leads ?? []
-  );
-  const [afspraken, setAfspraken] = useState<Afspraak[]>(
-    () => readCrmBootstrapCache()?.afspraken ?? []
-  );
-  const [offertes, setOffertes] = useState<Offerte[]>(
-    () => readCrmBootstrapCache()?.offertes ?? []
-  );
-  const [projecten, setProjecten] = useState<Project[]>(
-    () => readCrmBootstrapCache()?.projecten ?? []
-  );
-  const [facturen, setFacturen] = useState<Factuur[]>(
-    () => readCrmBootstrapCache()?.facturen ?? []
-  );
-  const [instroomCount, setInstroomCount] = useState(
-    () => readCrmBootstrapCache()?.instroomCount ?? 0
-  );
-  const [adviseurs, setAdviseurs] = useState<Adviseur[]>(
-    () => readCrmBootstrapCache()?.adviseurs ?? []
-  );
-  const [adviseurFilter, setAdviseurFilter] = useState(() => {
-    if (typeof window === "undefined") return "";
-    try {
-      return localStorage.getItem(ADVISEUR_FILTER_KEY) || "";
-    } catch {
-      return "";
-    }
-  });
-  const [loading, setLoading] = useState(() => !hasCrmBootstrapCache());
+  // Eerste render moet gelijk zijn aan de server. sessionStorage/localStorage
+  // pas ná hydrate, anders gooit React de boom weg en blijft o.a. de
+  // maandleaderboard op "Laden…" staan.
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
+  const [offertes, setOffertes] = useState<Offerte[]>([]);
+  const [projecten, setProjecten] = useState<Project[]>([]);
+  const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [instroomCount, setInstroomCount] = useState(0);
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
+  const [adviseurFilter, setAdviseurFilter] = useState("");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [addLeadOpen, setAddLeadOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem("bc_crm_sidebar_rail_v1") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
   const [adviseurFacturenPending, setAdviseurFacturenPending] = useState(0);
   const [sessionUser, setSessionUser] = useState<{
@@ -236,10 +220,36 @@ export function CrmShell() {
     rol: GebruikerRol;
     actief?: boolean;
     geblokkeerd?: boolean;
-  } | null>(() => readCrmSessionCache());
-  const [sessionReady, setSessionReady] = useState(
-    () => readCrmSessionCache() !== null
-  );
+  } | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
+
+  useLayoutEffect(() => {
+    const session = readCrmSessionCache();
+    if (session) {
+      setSessionUser(session);
+      setSessionReady(true);
+    }
+    const boot = readCrmBootstrapCache();
+    if (boot) {
+      setLeads(boot.leads ?? []);
+      setAfspraken(boot.afspraken ?? []);
+      setOffertes(boot.offertes ?? []);
+      setProjecten(boot.projecten ?? []);
+      setFacturen(boot.facturen ?? []);
+      setInstroomCount(boot.instroomCount ?? 0);
+      setAdviseurs(boot.adviseurs ?? []);
+      setLoading(false);
+    }
+    try {
+      const filter = localStorage.getItem(ADVISEUR_FILTER_KEY) || "";
+      if (filter) setAdviseurFilter(filter);
+      if (localStorage.getItem("bc_crm_sidebar_rail_v1") === "1") {
+        setSidebarCollapsed(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const [impersonator, setImpersonator] = useState<{
     id: string;
     naam: string;
@@ -982,16 +992,58 @@ export function CrmShell() {
           .eq("id", leadId);
         err = retry.error;
       }
-      if (err) throw err;
+      if (err) {
+        const hint = definitiefGeenContactDbHint(err.message);
+        if (hint) throw new Error(hint);
+        throw err;
+      }
 
-      if (status === "geen_contact") {
+      if (status === "niet_gekwalificeerd" || status === "deur_niet_open") {
+        try {
+          const open = await sb
+            .from("afspraken")
+            .select("id, status")
+            .eq("lead_id", leadId)
+            .eq("soort", "nieuw")
+            .in("status", ["gepland", "bevestigd", "verzet"]);
+          for (const a of open.data || []) {
+            await sb
+              .from("afspraken")
+              .update({
+                status: "geannuleerd",
+                notities:
+                  status === "deur_niet_open"
+                    ? "Annulering: deur niet open"
+                    : "Annulering: niet goed gekwalificeerd",
+              })
+              .eq("id", a.id);
+          }
+          if ((open.data || []).length > 0) {
+            setAfspraken((prev) =>
+              prev.map((a) =>
+                a.lead_id === leadId &&
+                a.soort === "nieuw" &&
+                (a.status === "gepland" ||
+                  a.status === "bevestigd" ||
+                  a.status === "verzet")
+                  ? { ...a, status: "geannuleerd" as const }
+                  : a
+              )
+            );
+          }
+        } catch {
+          /* non-blocking */
+        }
+      }
+
+      if (status === "geen_contact" && gc) {
         try {
           const res = await fetch("/api/bel/mark-called", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               lead_id: leadId,
-              status: "geen_contact",
+              status: gc.patch.status,
               eerste_gebeld: !current.eerste_gebeld_at,
             }),
           });
@@ -1015,10 +1067,14 @@ export function CrmShell() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
-          titel: `Status → ${leadStatusLabel[status] || status}`,
+          titel: `Status → ${
+            leadStatusLabel[gc?.patch.status ?? status] || status
+          }`,
           detail:
             status === "geen_contact" && gc
-              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}`
+              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}${
+                  gc.definitief ? " — definitief geen contact" : ""
+                }`
               : status === "niet_gekwalificeerd"
                 ? notities
                 : null,
@@ -1334,7 +1390,7 @@ export function CrmShell() {
     },
     inbox: {
       title: "Inbox",
-      sub: "info@ · mappen · templates · acties (IMAP/SMTP volgt)",
+      sub: "info@ · AI zet mails automatisch in de juiste map",
     },
     purchasing: {
       title: "Purchasing",
@@ -1515,12 +1571,12 @@ export function CrmShell() {
         <main
           className={[
             "flex min-h-0 min-w-0 flex-1 flex-col",
-            tab === "leaderboard" || tab === "voice_ai"
+            tab === "leaderboard" || tab === "voice_ai" || tab === "inbox"
               ? "overflow-hidden px-0 py-0"
               : "overflow-auto px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
           ].join(" ")}
         >
-        {tab !== "leaderboard" && tab !== "voice_ai" ? (
+        {tab !== "leaderboard" && tab !== "voice_ai" && tab !== "inbox" ? (
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -1878,6 +1934,7 @@ export function CrmShell() {
           setLeads((prev) => [lead, ...prev]);
         }}
       />
+      <CallPopupHost adviseurId={sessionUser?.id || null} />
     </div>
   );
 }

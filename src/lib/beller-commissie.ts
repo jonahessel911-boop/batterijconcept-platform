@@ -101,6 +101,7 @@ export async function loadBellerWeekCommissie(
   // Historie: alle nieuw-huisbezoeken van leads die in dit venster voorkomen
   const leadIds = [...new Set(afspraken.map((a) => a.lead_id).filter(Boolean))];
   let historie = afspraken;
+  const leadStatusById = new Map<string, string | null>();
   if (leadIds.length > 0) {
     const histChunks: OpsCommissieAfspraak[] = [];
     const chunkSize = 200;
@@ -116,6 +117,16 @@ export async function loadBellerWeekCommissie(
           .range(fromIdx, toIdx)
       ).catch(() => [] as OpsCommissieAfspraak[]);
       histChunks.push(...rows);
+      const { data: leadRows } = await sb
+        .from("leads")
+        .select("id, status")
+        .in("id", chunk);
+      for (const row of leadRows || []) {
+        leadStatusById.set(
+          row.id as string,
+          (row.status as string | null) ?? null
+        );
+      }
     }
     historie = histChunks.length > 0 ? histChunks : afspraken;
   }
@@ -153,6 +164,7 @@ export async function loadBellerWeekCommissie(
       endYmd: w.tot,
       tarikId: null,
       includeVast: false,
+      leadStatusById,
     });
     const row = detail.perBeller.find((b) => b.id === opts.bellerId);
     const afsprakenN = row?.afspraken ?? 0;

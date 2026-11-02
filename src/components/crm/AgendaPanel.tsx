@@ -563,6 +563,52 @@ function FooterAction({
   );
 }
 
+function BeslissersAanwezig({
+  value,
+  busy,
+  onChoose,
+}: {
+  value: boolean | null;
+  busy: boolean;
+  onChoose: (aanwezig: boolean) => void;
+}) {
+  const idle =
+    "min-h-11 border border-line bg-white px-3 py-2.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60";
+  return (
+    <div>
+      <p className="text-sm font-medium text-ink">
+        Waren alle beslissers aanwezig?
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onChoose(true)}
+          className={
+            value === true
+              ? "min-h-11 bg-[#0D5C32] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              : idle
+          }
+        >
+          Ja
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onChoose(false)}
+          className={
+            value === false
+              ? "min-h-11 bg-[#1A4A6E] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              : idle
+          }
+        >
+          Nee
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AfspraakDetail({
   afspraak,
   allAfspraken,
@@ -637,6 +683,10 @@ export function AfspraakDetail({
   const [notitieDraft, setNotitieDraft] = useState("");
   const [notitieSaving, setNotitieSaving] = useState(false);
   const [notitieSavedMsg, setNotitieSavedMsg] = useState<string | null>(null);
+  const [beslissersAanwezig, setBeslissersAanwezig] = useState<boolean | null>(
+    afspraak.partner_afwezig_gemeld_at ? false : null
+  );
+  const [beslissersBusy, setBeslissersBusy] = useState(false);
   const actionSectionRef = useRef<HTMLElement | null>(null);
   const saleFormRef = useRef<HTMLDivElement | null>(null);
   const notitieTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -714,6 +764,7 @@ export function AfspraakDetail({
     setEditingNotitie(false);
     setNotitieDraft(afspraak.notities?.trim() || "");
     setNotitieSavedMsg(null);
+    setBeslissersAanwezig(afspraak.partner_afwezig_gemeld_at ? false : null);
     setBoValues({
       aanbetalingModus: "restant",
       aanbetalingHandmatig: "",
@@ -725,6 +776,43 @@ export function AfspraakDetail({
       energieContractType: "",
       energieContractEinddatum: "",
     });
+  }, [afspraak]);
+
+  useEffect(() => {
+    if (!afspraak.lead_id) return;
+    if (!afspraakBlokkeertAgenda(afspraak.soort)) return;
+    let cancelled = false;
+    void fetch(`/api/leads/${afspraak.lead_id}/events`)
+      .then((r) => r.json())
+      .then(
+        (data: {
+          events?: {
+            meta?: {
+              beslissers_aanwezig?: boolean;
+              partner_afwezig?: boolean;
+              afspraak_id?: string;
+            };
+          }[];
+        }) => {
+          if (cancelled) return;
+          const hit = (data.events || []).find(
+            (event) =>
+              event.meta?.afspraak_id === afspraak.id &&
+              (typeof event.meta.beslissers_aanwezig === "boolean" ||
+                event.meta.partner_afwezig === true)
+          );
+          if (!hit?.meta) return;
+          if (typeof hit.meta.beslissers_aanwezig === "boolean") {
+            setBeslissersAanwezig(hit.meta.beslissers_aanwezig);
+          } else if (hit.meta.partner_afwezig === true) {
+            setBeslissersAanwezig(false);
+          }
+        }
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [afspraak]);
 
   useEffect(() => {
@@ -1108,6 +1196,32 @@ export function AfspraakDetail({
     setNotitieSavedMsg(null);
     setError(null);
     setEditingNotitie(true);
+  }
+
+  async function kiesBeslissersAanwezig(aanwezig: boolean) {
+    if (beslissersAanwezig === aanwezig || beslissersBusy) return;
+    setBeslissersBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "beslissers_aanwezig",
+          aanwezig,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Opslaan mislukt");
+      }
+      setBeslissersAanwezig(aanwezig);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setBeslissersBusy(false);
+    }
   }
 
   async function saveNotitie(nextRaw: string) {
@@ -1682,6 +1796,18 @@ export function AfspraakDetail({
               </p>
               <p className="mt-1 text-sm text-muted">{actionIntro}</p>
 
+              {afspraakBlokkeertAgenda(current.soort) ? (
+                <div className="mt-4">
+                  <BeslissersAanwezig
+                    value={beslissersAanwezig}
+                    busy={beslissersBusy || busy}
+                    onChoose={(aanwezig) =>
+                      void kiesBeslissersAanwezig(aanwezig)
+                    }
+                  />
+                </div>
+              ) : null}
+
               <form
                 onSubmit={(e) => void planVervolgPunt(e)}
                 className="mt-4 space-y-3"
@@ -1845,6 +1971,19 @@ export function AfspraakDetail({
           )}
 
           {magVoiceUpload && !needsAction ? voiceUploadPanel : null}
+
+          {!needsAction &&
+          mode === "view" &&
+          !cancelled &&
+          afspraakBlokkeertAgenda(current.soort) ? (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <BeslissersAanwezig
+                value={beslissersAanwezig}
+                busy={beslissersBusy || busy}
+                onChoose={(aanwezig) => void kiesBeslissersAanwezig(aanwezig)}
+              />
+            </section>
+          ) : null}
 
           <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">

@@ -145,6 +145,20 @@ export function isSchouwdagDefinitief(project: {
   }
 }
 
+/** Schouwafspraak is geweest: exacte dag, en die ligt niet meer in de toekomst. */
+export function isSchouwGeweest(
+  project: {
+    schouw_jaar?: number | null;
+    schouw_week?: number | null;
+    schouw_at?: string | null;
+  },
+  now: Date = new Date()
+): boolean {
+  if (!isSchouwdagDefinitief(project)) return false;
+  const t = new Date(project.schouw_at as string).getTime();
+  return Number.isFinite(t) && t <= now.getTime();
+}
+
 /** Warmtefonds: ~5 weken vooruit (tijd voor aanvraag). Eigen middelen: z.s.m. */
 export const SCHOUW_WEEK_OFFSET_WARMTEFONDS = 5;
 export const SCHOUW_WEEK_OFFSET_EIGEN = 1;

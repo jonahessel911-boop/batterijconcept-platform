@@ -18,6 +18,10 @@ import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 export const PROJECT_STATUS_LABEL_RESTFACTUUR_WF =
   "Factuur WF - Declaratie ingediend";
 
+/** Warmtefonds: declaratie betaald, installatie nog inplannen. */
+export const PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF =
+  "Declaratie WF betaald - installatie inplannen";
+
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
   afspraak: "Afspraak",
@@ -33,6 +37,7 @@ export const leadStatusLabel: Record<LeadStatus, string> = {
   geen_interesse_alleen_info: "Geen interesse — wilde alleen informatie",
   geen_interesse_vertrouwt_niet: "Geen interesse — vertrouwt niet",
   geen_contact: "Geen contact",
+  definitief_geen_contact: "Definitief geen contact",
   deal: "Deal",
   sale_financiering: "Sale met financiering",
   sale_eigen_middelen: "Sale met eigen middelen",
@@ -82,6 +87,16 @@ export function isGeenInteresseStatus(
 }
 
 /**
+ * Afspraak telt niet mee in bel bruto/netto (kwalificatie / deur).
+ * Wordt afgetrokken van ingeplande afspraken; geen aparte uitval-teller.
+ */
+export function isBelAfspraakUitvalLeadStatus(
+  status: string | null | undefined
+): boolean {
+  return status === "niet_gekwalificeerd" || status === "deur_niet_open";
+}
+
+/**
  * Alle leadstatussen gegroepeerd voor dropdowns (met scheiding).
  * Volgorde = weergavevolgorde.
  */
@@ -118,6 +133,7 @@ export const LEAD_STATUS_GROUPS: {
       "geen_interesse_vertrouwt_niet",
       "geen_interesse",
       "geen_contact",
+      "definitief_geen_contact",
       "huurwoning",
     ],
   },
@@ -194,7 +210,9 @@ export function resolveProjectStatusLabel(
 ): string {
   const st = normalizeProjectStatus(status);
   const base = projectStatusLabel[st] || status || "";
-  if (st !== "restfactuur_verstuurd") return base;
+  if (st !== "restfactuur_verstuurd" && st !== "restfactuur_betaald") {
+    return base;
+  }
 
   let bw = betaalwijzeOverride ?? null;
   if (!bw && project) {
@@ -210,8 +228,9 @@ export function resolveProjectStatusLabel(
       financieringVoorbehoud: off?.financiering_voorbehoud,
     });
   }
-  if (bw === "warmtefonds") return PROJECT_STATUS_LABEL_RESTFACTUUR_WF;
-  return base;
+  if (bw !== "warmtefonds") return base;
+  if (st === "restfactuur_verstuurd") return PROJECT_STATUS_LABEL_RESTFACTUUR_WF;
+  return PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF;
 }
 
 /** @deprecated Gebruik projectPipelineFor(betaalwijze) — warmtefonds-default. */
@@ -346,6 +365,8 @@ export function statusTone(
       geen_interesse_vertrouwt_niet:
         "border border-[#C62828]/30 bg-[#FFEBEE] text-[#C62828]",
       geen_contact: "border border-[#37474F]/30 bg-[#ECEFF1] text-[#37474F]",
+      definitief_geen_contact:
+        "border border-[#37474F]/40 bg-[#CFD8DC] text-[#263238]",
       deal: "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
       sale_financiering:
         "border border-[#1B7A3E]/30 bg-[#DFF5E7] text-[#145C2E]",
@@ -630,6 +651,7 @@ function afboekAgendaAccent(
         time: "text-[#4A3A5C]",
       };
     case "geen_contact":
+    case "definitief_geen_contact":
     case "foutief_nummer":
     case "gegevens_niet_overeen":
       return {

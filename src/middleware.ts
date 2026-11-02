@@ -9,8 +9,10 @@ function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith("/warmtefonds/")) return true;
   if (pathname.startsWith("/track/")) return true;
   if (pathname.startsWith("/api/webhook/")) return true;
+  if (pathname.startsWith("/api/unite/webhook")) return true;
   if (pathname.startsWith("/api/fonio/")) return true;
   if (pathname.startsWith("/api/cron/")) return true;
+  if (pathname.startsWith("/api/tiktok/oauth")) return true;
   if (pathname.startsWith("/api/v1")) return true;
   if (pathname.startsWith("/api/auth/login")) return true;
   if (pathname.startsWith("/api/installatie-partners/google/callback"))
@@ -50,6 +52,17 @@ function isPublicPath(pathname: string): boolean {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // TikTok Ads redirect_uri is de site-root: ?auth_code=…&state=…
+  const authCode = req.nextUrl.searchParams.get("auth_code");
+  if (
+    authCode &&
+    (pathname === "/" || pathname === "/login")
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/api/tiktok/oauth";
+    return NextResponse.redirect(url);
+  }
 
   if (isPublicPath(pathname)) {
     if (pathname === "/login") {

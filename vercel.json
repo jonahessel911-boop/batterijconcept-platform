@@ -13,16 +13,24 @@
       "schedule": "30 6 * * *"
     },
     {
+      "path": "/api/cron/tiktok-ad-spend",
+      "schedule": "45 6 * * *"
+    },
+    {
       "path": "/api/cron/bunq-payments",
       "schedule": "15 * * * *"
     },
     {
-      "path": "/api/cron/fonio-dialer",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/cron/woensdag-commissie",
       "schedule": "0 7 * * 3"
+    },
+    {
+      "path": "/api/cron/inbox-imap",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/unite-cdr-sync",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

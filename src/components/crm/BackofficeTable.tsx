@@ -219,6 +219,7 @@ function projectZoekScore(p: Project, needle: string): number {
   const hay = [
     projectNaam(p),
     p.project_nummer,
+    p.offertes?.offerte_nummer,
     p.leads?.naam,
     leadAdres(p),
     p.leads?.postcode,
@@ -801,7 +802,7 @@ export function BackofficeTable({
   ).length;
 
   return (
-    <div className="mx-5 mb-5 mt-5 space-y-4">
+    <div className="mx-3 mb-5 mt-4 space-y-4 sm:mx-5 sm:mt-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {hideTitle ? (
           <span />
@@ -828,7 +829,7 @@ export function BackofficeTable({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Zoeken op naam, postcode, huisnr…"
+            placeholder="Zoeken op naam, offerte, postcode, huisnr…"
             className="w-full border border-line bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-green"
           />
         </label>

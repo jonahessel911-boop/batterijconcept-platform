@@ -1,0 +1,181 @@
+"use client";
+
+import { useState } from "react";
+
+/**
+ * Zichtbare beluister-UI bij elk gesprek.
+ * Laadt audio pas na klik (faalt niet stil weg).
+ */
+export function CallRecordingPlayer({
+  href,
+  eventId,
+  unavailable = false,
+  className = "",
+}: {
+  href?: string | null;
+  eventId?: string | null;
+  /** Al bekend dat Unite/storage geen opname heeft — geen valse 'Terugluisteren'. */
+  unavailable?: boolean;
+  className?: string;
+}) {
+  const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "missing">(
+    unavailable ? "missing" : "idle"
+  );
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    unavailable
+      ? "Geen opname (niet opgenomen of verlopen in Unite)"
+      : null
+  );
+
+  // eventId eerst: die route kan storage + Unite gebruiken.
+  // Losse key-URL sloeg storage over → 401 van Unite.
+  const streamUrl = eventId
+    ? `/api/unite/recording?eventId=${encodeURIComponent(eventId)}`
+    : href?.trim() || null;
+
+  if (!streamUrl && !unavailable) return null;
+  if (unavailable && !streamUrl) {
+    return (
+      <div
+        className={[
+          "mt-2 rounded border border-line bg-wash px-2.5 py-2",
+          className,
+        ].join(" ")}
+      >
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Opname
+        </p>
+        <p className="mt-0.5 text-xs text-muted">
+          Geen opname (niet opgenomen of verlopen in Unite)
+        </p>
+      </div>
+    );
+  }
+
+  async function load() {
+    if (phase === "loading" || phase === "ready") return;
+    setPhase("loading");
+    setError(null);
+    try {
+      const res = await fetch(streamUrl!);
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(data.error || `Opname niet beschikbaar (${res.status})`);
+      }
+      const blob = await res.blob();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      const url = URL.createObjectURL(blob);
+      setObjectUrl(url);
+      setPhase("ready");
+    } catch (e) {
+      setPhase("missing");
+      const msg =
+        e instanceof Error ? e.message : "Geen opname beschikbaar";
+      // Kortere UI-tekst
+      setError(
+        /niet opgenomen|verlopen|niet gevonden|404|user verified|401|403|auth|token|mislukt/i.test(
+          msg
+        )
+          ? "Geen opname (niet opgenomen of verlopen in Unite)"
+          : msg
+      );
+    }
+  }
+
+  return (
+    <div
+      className={[
+        "mt-2 rounded border border-line bg-wash px-2.5 py-2",
+        className,
+      ].join(" ")}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line bg-white text-green-dark"
+          aria-hidden
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M11 5 6 9H2v6h4l5 4V5z" />
+            <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+            <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+          </svg>
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Opname
+          </p>
+          {phase === "idle" ? (
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="mt-0.5 text-xs font-semibold text-green-deeper hover:underline"
+            >
+              Terugluisteren
+            </button>
+          ) : null}
+          {phase === "loading" ? (
+            <p className="mt-0.5 text-xs text-muted">Opname laden…</p>
+          ) : null}
+          {phase === "missing" ? (
+            <p className="mt-0.5 text-xs text-muted">
+              {error || "Geen opname beschikbaar voor dit gesprek"}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      {phase === "ready" && objectUrl ? (
+        <audio
+          controls
+          autoPlay
+          src={objectUrl}
+          className="mt-2 h-9 w-full max-w-md"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+export function recordingHrefFromMeta(meta: {
+  callrecordkey?: string | null;
+  extension_id?: string | null;
+} | null): string | null {
+  const key = meta?.callrecordkey?.trim();
+  if (!key) return null;
+  const ext = meta?.extension_id?.trim();
+  return `/api/unite/recording?key=${encodeURIComponent(key)}${
+    ext ? `&extensionid=${encodeURIComponent(ext)}` : ""
+  }`;
+}
+
+/** True als we weten dat beluisteren zinloos is. */
+export function recordingUnavailableFromMeta(
+  meta: {
+    callrecordkey?: string | null;
+    recording_storage_path?: string | null;
+    recording_unavailable?: boolean;
+    recording_complete?: boolean;
+  } | null,
+  createdAt?: string | null
+): boolean {
+  if (!meta) return false;
+  if (meta.recording_unavailable) return true;
+  if (meta.recording_storage_path?.trim()) return false;
+  if (meta.callrecordkey?.trim()) return false;
+  // Geen key/storage en ouder dan ~3 dagen → Unite-retentie is voorbij
+  if (createdAt) {
+    const ageMs = Date.now() - new Date(createdAt).getTime();
+    if (Number.isFinite(ageMs) && ageMs > 3 * 24 * 3600_000) return true;
+  }
+  return false;
+}

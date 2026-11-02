@@ -29,6 +29,7 @@ import {
   schouwWeekFromDate,
   schouwWeekValue,
 } from "@/lib/schouw-week";
+import { CashflowForecastPanel } from "./CashflowForecastPanel";
 import { KpiDetailOverlay } from "./DashboardV2KpiDetail";
 import { SourceBrandMark } from "./SourceBrandMark";
 
@@ -1877,6 +1878,8 @@ export function DashboardV2() {
           ) : null}
 
           {data.forecast ? <ForecastSection forecast={data.forecast} /> : null}
+
+          <CashflowForecastPanel />
         </>
       ) : null}
 

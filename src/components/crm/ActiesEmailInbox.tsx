@@ -3,41 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { formatDateTimeNl } from "@/lib/format";
-import {
-  createDemoInboxMails,
-  type InboxMail,
-} from "@/lib/inbox";
-
-const STORAGE_KEY = "bc_inbox_demo_v3";
-
-function loadLocalMails(): InboxMail[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as InboxMail[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    /* ignore */
-  }
-  return createDemoInboxMails();
-}
-
-function matchesKlant(
-  mail: InboxMail,
-  email: string,
-  leadId?: string | null
-): boolean {
-  const e = email.trim().toLowerCase();
-  if (leadId && mail.leadId === leadId) return true;
-  if (!e) return false;
-  return (
-    mail.fromEmail.toLowerCase() === e ||
-    mail.toEmail.toLowerCase() === e ||
-    (mail.replies || []).some(() => false)
-  );
-}
+import type { InboxMail } from "@/lib/inbox";
 
 export function ActiesEmailInbox({
   email,
@@ -49,15 +15,10 @@ export function ActiesEmailInbox({
   leadNaam?: string | null;
 }) {
   const [apiMails, setApiMails] = useState<InboxMail[]>([]);
-  const [localMails, setLocalMails] = useState<InboxMail[]>([]);
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const normalizedEmail = (email || "").trim().toLowerCase();
-
-  useEffect(() => {
-    setLocalMails(loadLocalMails());
-  }, []);
 
   useEffect(() => {
     if (!normalizedEmail && !leadId) {
@@ -90,18 +51,14 @@ export function ActiesEmailInbox({
     };
   }, [normalizedEmail, leadId]);
 
-  const mails = useMemo(() => {
-    const byId = new Map<string, InboxMail>();
-    for (const m of apiMails) byId.set(m.id, m);
-    for (const m of localMails) {
-      if (!matchesKlant(m, normalizedEmail, leadId)) continue;
-      if (!byId.has(m.id)) byId.set(m.id, m);
-    }
-    return [...byId.values()].sort(
-      (a, b) =>
-        new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
-    );
-  }, [apiMails, localMails, normalizedEmail, leadId]);
+  const mails = useMemo(
+    () =>
+      [...apiMails].sort(
+        (a, b) =>
+          new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+      ),
+    [apiMails]
+  );
 
   if (!normalizedEmail) {
     return (

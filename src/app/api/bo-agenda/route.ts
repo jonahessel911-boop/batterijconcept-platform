@@ -39,6 +39,43 @@ export async function GET(req: NextRequest) {
   }
 
   const sp = req.nextUrl.searchParams;
+  const projectIdFilter = sp.get("project_id")?.trim() || "";
+  if (projectIdFilter) {
+    try {
+      const sb = getSupabaseAdmin();
+      const { data, error } = await sb
+        .from("bo_agenda")
+        .select(
+          "*, adviseur:adviseurs!adviseur_id(id, naam), created_by:adviseurs!created_by_id(id, naam)"
+        )
+        .eq("project_id", projectIdFilter)
+        .order("created_at", { ascending: true })
+        .limit(200);
+      if (error) {
+        if (
+          error.code === "42P01" ||
+          error.message?.includes("bo_agenda") ||
+          /project_id/i.test(error.message || "")
+        ) {
+          return NextResponse.json({ items: [], project_taken: [] });
+        }
+        return NextResponse.json(
+          { error: "Agenda laden mislukt", detail: error.message },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json({
+        items: data || [],
+        project_taken: [],
+      });
+    } catch (e) {
+      return NextResponse.json(
+        { error: errMessage(e, "Fout") },
+        { status: 500 }
+      );
+    }
+  }
+
   let adviseurId = sp.get("adviseur_id")?.trim() || "";
   // Backoffice ziet standaard zichzelf; admin mag iedereen
   if (!adviseurId || normalizeRol(auth.session.rol) !== "admin") {

@@ -3857,8 +3857,8 @@ export function Planbord({
             </span>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex border border-line">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <div className="flex max-w-full flex-wrap border border-line">
             {VIEW_OPTIONS.map((opt) => (
               <button
                 key={opt.id}
@@ -3875,32 +3875,34 @@ export function Planbord({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            className="flex h-9 w-9 items-center justify-center border border-line hover:bg-wash"
-            aria-label="Vorige"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const now = new Date();
-              setAnchor(now);
-            }}
-            className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
-          >
-            Vandaag
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(1)}
-            className="flex h-9 w-9 items-center justify-center border border-line hover:bg-wash"
-            aria-label="Volgende"
-          >
-            ›
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="flex h-9 w-9 items-center justify-center border border-line hover:bg-wash"
+              aria-label="Vorige"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date();
+                setAnchor(now);
+              }}
+              className="border border-line px-3 py-1.5 text-xs font-semibold hover:bg-wash"
+            >
+              Vandaag
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(1)}
+              className="flex h-9 w-9 items-center justify-center border border-line hover:bg-wash"
+              aria-label="Volgende"
+            >
+              ›
+            </button>
+          </div>
           {view === "week" ? (
             <select
               value={schouwWeekValue(weekInfo.jaar, weekInfo.week)}
@@ -4115,7 +4117,63 @@ export function Planbord({
       ) : null}
 
       {view === "week" ? (
-        <div className="overflow-x-auto border border-line bg-white">
+        <>
+        <div className="divide-y divide-line border border-line bg-white md:hidden">
+          {weekDays.map((d) => {
+            const list = barsByDay.get(d.key) || [];
+            const isToday = d.key === todayKey;
+            return (
+              <section key={d.key} className={isToday ? "bg-[#F0FDFA]/40" : ""}>
+                <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => goDay(d.key)}
+                    className="min-w-0 text-left"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      {format(d.date, "EEEE", { locale: nl })}
+                    </p>
+                    <p className="font-display text-lg font-semibold text-ink">
+                      {format(d.date, "d MMMM", { locale: nl })}
+                      {isToday ? (
+                        <span className="ml-2 text-xs font-semibold text-[#0F766E]">
+                          vandaag
+                        </span>
+                      ) : null}
+                    </p>
+                  </button>
+                  {!readOnly ? (
+                    <button
+                      type="button"
+                      onClick={() => openPlan(d.key)}
+                      className="shrink-0 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink"
+                    >
+                      + Inplannen
+                    </button>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5 p-2.5">
+                  {list.length === 0 ? (
+                    <p className="px-1 py-2 text-xs text-muted">Niets gepland</p>
+                  ) : (
+                    list.map((bar) => (
+                      <EventCard
+                        key={bar.key}
+                        bar={bar}
+                        schouwDoc={schouwDocs[bar.project.id]}
+                        hidePartner={readOnly}
+                        compact
+                        selected={selectedBar?.key === bar.key}
+                        onSelect={() => openBar(bar)}
+                      />
+                    ))
+                  )}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+        <div className="hidden overflow-x-auto border border-line bg-white md:block">
           <div className="min-w-[64rem]">
             <div className="grid grid-cols-7 border-b border-line">
               {weekDays.map((d) => {
@@ -4270,10 +4328,84 @@ export function Planbord({
             </div>
           </div>
         </div>
+        </>
       ) : null}
 
       {view === "maand" ? (
-        <div className="overflow-x-auto border border-line bg-white">
+        <>
+        <div className="border border-line bg-white md:hidden">
+          <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
+            {["ma", "di", "wo", "do", "vr", "za", "zo"].map((d) => (
+              <div
+                key={d}
+                className="px-0.5 py-1.5 text-center text-[10px] font-bold uppercase text-muted"
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {monthDays.map((d) => {
+              const inMonth = isSameMonthKey(d.key, anchor);
+              const list = timedAll.filter((b) => b.dayKeys[0] === d.key);
+              const isToday = d.key === todayKey;
+              const visible = list.slice(0, 2);
+              const more = list.length - visible.length;
+              return (
+                <div
+                  key={d.key}
+                  className={[
+                    "flex min-h-[4.25rem] flex-col border-b border-r border-line p-0.5",
+                    inMonth
+                      ? isToday
+                        ? "bg-[#F0FDFA]"
+                        : "bg-white"
+                      : "bg-[#F4F6F5]",
+                  ].join(" ")}
+                >
+                  <button
+                    type="button"
+                    onClick={() => goDay(d.key)}
+                    className={[
+                      "mx-auto inline-flex h-6 min-w-6 items-center justify-center text-xs font-semibold tabular-nums",
+                      isToday
+                        ? "bg-[#0D9488] text-white"
+                        : inMonth
+                          ? "text-ink"
+                          : "text-muted/55",
+                    ].join(" ")}
+                  >
+                    {format(d.date, "d")}
+                  </button>
+                  <div className="mt-0.5 flex min-w-0 flex-col gap-0.5">
+                    {visible.map((bar) => (
+                      <button
+                        key={bar.key}
+                        type="button"
+                        onClick={() => openBar(bar)}
+                        className="truncate text-left text-[9px] font-semibold leading-tight text-ink"
+                        title={klantNaam(bar.project)}
+                      >
+                        {bar.at ? formatTimeNl(bar.at) : ""}{" "}
+                        {klantNaam(bar.project)}
+                      </button>
+                    ))}
+                    {more > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => goDay(d.key)}
+                        className="text-left text-[9px] font-semibold text-muted"
+                      >
+                        +{more}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="hidden overflow-x-auto border border-line bg-white md:block">
           <div className="min-w-[56rem]">
             <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
               {["ma", "di", "wo", "do", "vr", "za", "zo"].map((d) => (
@@ -4393,6 +4525,7 @@ export function Planbord({
             </div>
           </div>
         </div>
+        </>
       ) : null}
 
       {view === "lijst" ? (

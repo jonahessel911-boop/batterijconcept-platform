@@ -423,6 +423,14 @@ export function capacitySteeringGoals(
  *
  * Onafhankelijk van of er al een afspraak in het blok staat.
  */
+export type PlanbareSlotsAdviseur = {
+  id: string;
+  naam: string;
+  capaciteit: number;
+  open: number;
+  afgeblokt: number;
+};
+
 export function countPlanbareSlotsBreakdown(opts: {
   startYmd: string;
   endYmd: string;
@@ -430,15 +438,24 @@ export function countPlanbareSlotsBreakdown(opts: {
   unavailableByAdviseur: Map<string, Set<string>>;
   afblokkingen?: Set<string>;
   vrijgaven?: Set<string>;
-}): { capaciteit: number; open: number; afgeblokt: number } {
+}): {
+  capaciteit: number;
+  open: number;
+  afgeblokt: number;
+  perAdviseur: PlanbareSlotsAdviseur[];
+} {
   if (opts.startYmd > opts.endYmd) {
-    return { capaciteit: 0, open: 0, afgeblokt: 0 };
+    return { capaciteit: 0, open: 0, afgeblokt: 0, perAdviseur: [] };
   }
   const adviseurs = opts.adviseurs.filter((a) => isPlanbaarAdviseur(a));
   const afblokkingen = opts.afblokkingen ?? new Set<string>();
   const vrijgaven = opts.vrijgaven ?? new Set<string>();
   let capaciteit = 0;
   let open = 0;
+  const perAdviseur = new Map<
+    string,
+    { id: string; naam: string; capaciteit: number; open: number }
+  >();
 
   const [sy, sm, sd] = opts.startYmd.split("-").map(Number);
   const [ey, em, ed] = opts.endYmd.split("-").map(Number);
@@ -468,10 +485,17 @@ export function countPlanbareSlotsBreakdown(opts: {
           );
           if (standaardDicht) continue;
           capaciteit += 1;
+          let row = perAdviseur.get(adv.id);
+          if (!row) {
+            row = { id: adv.id, naam: adv.naam, capaciteit: 0, open: 0 };
+            perAdviseur.set(adv.id, row);
+          }
+          row.capaciteit += 1;
           if (isSlotGeblokkeerd(adv.id, dag, hour, afblokkingen, vrijgaven)) {
             continue;
           }
           open += 1;
+          row.open += 1;
         }
       }
     }
@@ -482,6 +506,10 @@ export function countPlanbareSlotsBreakdown(opts: {
     capaciteit,
     open,
     afgeblokt: Math.max(0, capaciteit - open),
+    perAdviseur: [...perAdviseur.values()].map((row) => ({
+      ...row,
+      afgeblokt: Math.max(0, row.capaciteit - row.open),
+    })),
   };
 }
 

@@ -108,16 +108,16 @@ export function CrmHeader({
             </button>
           )}
 
-          <Link href="/" className="min-w-0 shrink" onClick={() => setMenuOpen(false)}>
-            <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-none sm:gap-x-2">
-              <span className="font-display text-base font-semibold tracking-tight text-white sm:text-lg">
+          <Link href="/" className="min-w-0 overflow-hidden" onClick={() => setMenuOpen(false)}>
+            <div className="flex min-w-0 items-baseline gap-x-1.5 leading-none sm:gap-x-2">
+              <span className="truncate font-display text-base font-semibold tracking-tight text-white sm:text-lg">
                 Batterij<span className="text-orange">concept</span>
               </span>
-              <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/50 sm:text-[10px] sm:tracking-[0.16em]">
+              <span className="hidden shrink-0 text-[10px] font-medium uppercase tracking-[0.16em] text-white/50 sm:inline">
                 CRM
               </span>
               <span
-                className="rounded-sm bg-white/15 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums tracking-normal text-white sm:text-[11px]"
+                className="hidden shrink-0 rounded-sm bg-white/15 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums tracking-normal text-white sm:inline"
                 title="App-versie van deze deploy"
               >
                 {appVersionLabel()}
@@ -133,7 +133,7 @@ export function CrmHeader({
               <select
                 value={selectedAdviseurId || ""}
                 onChange={(e) => onAdviseurChange(e.target.value)}
-                className="max-w-[7.5rem] min-h-9 border border-white/25 bg-white/10 px-2 py-1.5 text-xs font-medium normal-case tracking-normal text-white outline-none focus:border-white/50 sm:max-w-none sm:min-h-0"
+                className="max-w-[5.25rem] min-h-9 truncate border border-white/25 bg-white/10 px-1.5 py-1.5 text-xs font-medium normal-case tracking-normal text-white outline-none focus:border-white/50 sm:max-w-[9rem] sm:px-2 sm:min-h-0 lg:max-w-none"
                 aria-label="Bekijk als adviseur"
               >
                 <option value="" className="text-ink">

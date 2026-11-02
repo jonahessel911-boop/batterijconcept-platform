@@ -477,7 +477,7 @@ export function PartnerSlotPicker({
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                 1. Dag
               </p>
-              <div className="flex gap-1 overflow-x-auto pb-0.5">
+              <div className="flex flex-wrap gap-1">
                 {(compact ? days.slice(0, 10) : days).map((d) => {
                   const active = selectedDay === d.dayKey;
                   return (

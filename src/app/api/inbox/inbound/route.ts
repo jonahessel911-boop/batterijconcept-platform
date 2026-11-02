@@ -4,31 +4,38 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { errMessage } from "@/lib/errors";
 import { applyInboxBooking, type InboxMail } from "@/lib/inbox";
 import { bookInboxMail, openaiInboxConfigured } from "@/lib/inbox-ai";
+import {
+  insertBookedInboxMail,
+  rowToInboxMail,
+} from "@/lib/inbox-persist";
 import { normalizeRol } from "@/lib/rollen";
+import { getSupabaseAdmin } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
  * POST /api/inbox/inbound
- *
- * Nieuwe inkomende mail (straks vanuit IMAP/webhook):
- * 1) ontvang payload
- * 2) AI function call book_to_*
- * 3) geef geboekte mail terug
- *
- * Nu: session-auth (CRM). Later: shared secret voor mail-worker.
+ * Handmatige / webhook inbound: AI-boek + persist.
+ * Auth: CRM-sessie (admin/BO) of Bearer INBOX_INBOUND_SECRET.
  */
 export async function POST(req: NextRequest) {
   try {
-    const jar = await cookies();
-    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-    if (!session) {
-      return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
-    }
-    const rol = normalizeRol(session.rol);
-    if (rol !== "admin" && rol !== "backoffice") {
-      return NextResponse.json({ error: "Geen toegang" }, { status: 403 });
+    const inboundSecret = process.env.INBOX_INBOUND_SECRET?.trim();
+    const auth = req.headers.get("authorization") || "";
+    const bearerOk =
+      inboundSecret && auth === `Bearer ${inboundSecret}`;
+
+    if (!bearerOk) {
+      const jar = await cookies();
+      const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+      if (!session) {
+        return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
+      }
+      const rol = normalizeRol(session.rol);
+      if (rol !== "admin" && rol !== "backoffice") {
+        return NextResponse.json({ error: "Geen toegang" }, { status: 403 });
+      }
     }
 
     const body = (await req.json().catch(() => ({}))) as {
@@ -37,11 +44,12 @@ export async function POST(req: NextRequest) {
       toEmail?: string;
       subject?: string;
       bodyText?: string;
+      bodyHtml?: string;
       messageId?: string;
       receivedAt?: string;
     };
 
-    const fromEmail = (body.fromEmail || "").trim();
+    const fromEmail = (body.fromEmail || "").trim().toLowerCase();
     const subject = (body.subject || "").trim();
     const bodyText = (body.bodyText || "").trim();
     if (!fromEmail) {
@@ -69,6 +77,7 @@ export async function POST(req: NextRequest) {
       receivedAt: body.receivedAt || new Date().toISOString(),
       suggestedActions: [],
       aiClassifiedAt: null,
+      threadId: body.messageId?.trim() || undefined,
     };
 
     const booked = await bookInboxMail({
@@ -86,14 +95,18 @@ export async function POST(req: NextRequest) {
       effects: booked.effects,
     });
 
-    // TODO IMAP-persist: insert inbox_mails + run effects
-    // - createServiceVerzoek → POST service-verzoeken
-    // - cancelAfspraak → PATCH afspraken annuleer
-    // - leadGeenContact / leadGeenInteresse → lead status
+    const sb = getSupabaseAdmin();
+    const persisted = await insertBookedInboxMail(sb, mail, {
+      messageId: body.messageId?.trim() || null,
+      bodyHtml: body.bodyHtml || null,
+      aiFunction: booked.functionName,
+    });
 
     return NextResponse.json({
-      mail,
+      mail: persisted.row ? rowToInboxMail(persisted.row) : mail,
       booking: booked,
+      inserted: persisted.inserted,
+      skipped: Boolean(persisted.skipped),
       openai: openaiInboxConfigured(),
     });
   } catch (e) {

@@ -8,16 +8,23 @@ export async function logLeadEvent(opts: {
   titel: string;
   detail?: string | null;
   meta?: Record<string, unknown> | null;
+  /** Historische events (CDR-backfill) op call-tijd zetten. */
+  createdAt?: string | null;
 }): Promise<void> {
   try {
     const sb = getSupabaseAdmin();
-    const { error } = await sb.from("lead_events").insert({
+    const row: Record<string, unknown> = {
       lead_id: opts.leadId,
       soort: opts.soort,
       titel: opts.titel,
       detail: opts.detail?.trim() || null,
       meta: opts.meta || null,
-    });
+    };
+    if (opts.createdAt) {
+      const d = new Date(opts.createdAt);
+      if (!Number.isNaN(d.getTime())) row.created_at = d.toISOString();
+    }
+    const { error } = await sb.from("lead_events").insert(row);
     if (error) {
       // Tabel ontbreekt nog → migratie nog niet gedraaid
       if (

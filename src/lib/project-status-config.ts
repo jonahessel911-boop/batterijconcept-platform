@@ -223,13 +223,14 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   {
     key: "restfactuur_betaald",
     label: "Restfactuur betaald — installatie plannen",
+    // WF-weergave: "Declaratie WF betaald - installatie inplannen" (labels.ts)
     fase: "eindafrekening",
     scope: "beide",
     inPipeline: true,
     /**
-     * Volledig betaald + schouwformulier → installatie inplannen
-     * (deadline = volgende werkdag). Daarna Purchasing automatisch
-     * (5 werkdagen vóór installatie).
+     * WF: schouw geweest + declaratie betaald → installatie inplannen
+     * op de eerstvolgende werkdag. Daarna, zodra de installatie gepland is,
+     * Purchasing “te bestellen” met besteldatum 5 werkdagen vóór installatie.
      */
     taak: {
       autoKeySuffix: "installatie",

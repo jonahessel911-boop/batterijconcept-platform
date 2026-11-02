@@ -13,6 +13,7 @@ export type LeadStatus =
   | "geen_interesse_alleen_info"
   | "geen_interesse_vertrouwt_niet"
   | "geen_contact"
+  | "definitief_geen_contact"
   | "deal"
   | "sale_financiering"
   | "sale_eigen_middelen"
@@ -130,6 +131,13 @@ export interface Adviseur {
   naam: string;
   email: string | null;
   telefoon: string | null;
+  /**
+   * VOIPZeker DID gekoppeld aan deze medewerker (bijv. 085 800 1645).
+   * Inkomend/uitgaand op deze lijn → after-call popup.
+   */
+  unite_lijn?: string | null;
+  /** Unite softphone-extensie (bijv. 0200) voor outbound-match. */
+  unite_ext?: string | null;
   actief: boolean;
   /**
    * Volledige CRM-blokkade. Apart van `actief` (niet inplannen).
@@ -283,6 +291,9 @@ export interface Afspraak {
   titel: string | null;
   notities: string | null;
   partner_aanwezig: boolean | null;
+  /** Adviseur meldde bij afboeken dat de partner er niet was. */
+  partner_afwezig_gemeld_at?: string | null;
+  partner_afwezig_gemeld_door?: string | null;
   andere_offertes_gehad: boolean | null;
   manage_token: string | null;
   herinnering_verstuurd: boolean;
@@ -348,7 +359,7 @@ export interface Lead {
   /** Soft claim: wie heeft deze lead nu open in de Bel-tab. */
   bel_claimed_by?: string | null;
   bel_claimed_at?: string | null;
-  /** Meta CAPI events al verstuurd (QualifiedLead, Schedule, Purchase). */
+  /** Verstuurde funnel-events. Meta: QualifiedLead/Schedule/Purchase. TikTok: tt:QualifiedLead enz. */
   capi_events_sent?: string[] | null;
   meta_fbc?: string | null;
   meta_fbp?: string | null;
@@ -1064,6 +1075,11 @@ export interface WebhookLeadPayload {
   meta_fbc?: string;
   meta_fbp?: string;
   fbclid?: string;
+  /** TikTok click id uit de landings-URL (?ttclid=) */
+  ttclid?: string;
+  /** TikTok browser-cookie (_ttp) */
+  ttp?: string;
+  _ttp?: string;
   event_source_url?: string;
   page_url?: string;
   landing_url?: string;

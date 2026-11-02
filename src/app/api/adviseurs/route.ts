@@ -41,7 +41,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
+  "id, naam, email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
 /** Zonder geblokkeerd — tot migrate-adviseur-geblokkeerd.sql is gedraaid. */
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
@@ -146,7 +146,10 @@ export async function GET(req: NextRequest) {
         error.message?.includes("max_factuur_bedrag") ||
         error.message?.includes("contract_storage_path") ||
         error.message?.includes("contract_sign_token") ||
-        error.message?.includes("contract_sign_status"))
+        error.message?.includes("contract_sign_status") ||
+        error.message?.includes("unite_lijn") ||
+        error.message?.includes("unite_ext") ||
+        error.message?.includes("interne_notities"))
     ) {
       let retry = sb
         .from("adviseurs")
@@ -511,6 +514,8 @@ export async function PATCH(req: NextRequest) {
     naam?: string;
     email?: string | null;
     telefoon?: string | null;
+    unite_lijn?: string | null;
+    unite_ext?: string | null;
     actief?: boolean;
     geblokkeerd?: boolean;
     start_adres?: string | null;
@@ -637,6 +642,12 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.telefoon !== undefined) {
       patch.telefoon = body.telefoon?.trim() || null;
+    }
+    if (body.unite_lijn !== undefined) {
+      patch.unite_lijn = body.unite_lijn?.trim() || null;
+    }
+    if (body.unite_ext !== undefined) {
+      patch.unite_ext = body.unite_ext?.trim() || null;
     }
     if (typeof body.actief === "boolean") {
       patch.actief = body.actief;

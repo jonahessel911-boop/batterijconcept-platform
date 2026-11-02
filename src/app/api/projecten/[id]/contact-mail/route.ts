@@ -6,7 +6,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol, gebruikerRolLabel } from "@/lib/rollen";
 import { sendEmail } from "@/lib/email/postmark";
 import { klantContactEmail } from "@/lib/email/templates";
-import { formatReplyTo } from "@/lib/email/adviseur-reply-to";
+import { INFO_REPLY_TO } from "@/lib/email/adviseur-reply-to";
 import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
@@ -89,10 +89,7 @@ export async function POST(
       rol === "admin" ? "Backoffice" : gebruikerRolLabel[rol] || "Backoffice";
     const medewerkerNaam =
       adviseur?.naam?.trim() || session.naam || "Batterijconcept";
-    const replyTo = formatReplyTo(
-      adviseur?.email?.trim() || session.email?.trim() || null,
-      medewerkerNaam
-    );
+    const replyTo = INFO_REPLY_TO;
 
     const html = klantContactEmail({
       klantNaam,

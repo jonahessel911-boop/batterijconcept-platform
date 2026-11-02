@@ -58,7 +58,7 @@ export function BackofficePanel({
 
   if (view === "agenda") {
     return (
-      <div className="px-5 pb-5 pt-5">
+      <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
         <Planbord projecten={projecten} onProjectUpdated={onProjectUpdated} />
       </div>
     );
@@ -66,7 +66,7 @@ export function BackofficePanel({
 
   if (view === "taken_agenda") {
     return (
-      <div className="px-5 pb-5 pt-5">
+      <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
         <TakenAgendaPanel
           adviseurs={adviseurs}
           sessionAdviseurId={sessionAdviseurId}
@@ -78,7 +78,7 @@ export function BackofficePanel({
 
   if (view === "service") {
     return (
-      <div className="px-5 pb-5 pt-5">
+      <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
         <ServiceVerzoekenPanel />
       </div>
     );

@@ -21,12 +21,29 @@ function num(n: number): string {
   return n.toLocaleString("nl-NL");
 }
 
-function TargetBar({ bar }: { bar: AandachtBar }) {
+function TargetBar({
+  bar,
+  onClick,
+  active,
+}: {
+  bar: AandachtBar;
+  onClick?: () => void;
+  active?: boolean;
+}) {
   const fill = pct(bar.actual, bar.target);
   const ok = bar.onTrack;
+  const Tag = onClick ? "button" : "div";
 
   return (
-    <div className="min-w-0 flex-1">
+    <Tag
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={[
+        "min-w-0 w-full flex-1 text-left",
+        onClick ? "cursor-pointer rounded-sm px-1 py-1 hover:bg-wash" : "",
+        active ? "bg-wash" : "",
+      ].join(" ")}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -63,7 +80,7 @@ function TargetBar({ bar }: { bar: AandachtBar }) {
           style={{ width: `${fill}%` }}
         />
       </div>
-    </div>
+    </Tag>
   );
 }
 
@@ -75,6 +92,7 @@ export function AandachtspuntenStrip({
   const [data, setData] = useState<AandachtspuntenResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [afsprakenOpen, setAfsprakenOpen] = useState(false);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -122,7 +140,20 @@ export function AandachtspuntenStrip({
             Aandachtspunten
           </p>
           <p className="mt-0.5 text-xs text-muted">
-            Leads = gegenereerd in gekozen week / nodig voor die slots
+            Leads = gegenereerd in gekozen week / nodig voor resterende slots
+            {data?.afsprakenMeta
+              ? ` (${num(
+                  Math.max(
+                    0,
+                    (data.afsprakenMeta.slotsCapaciteit ??
+                      data.afsprakenMeta.slotsOpen) -
+                      data.afsprakenMeta.slotsGepland
+                  )
+                )} nog van ${num(
+                  data.afsprakenMeta.slotsCapaciteit ??
+                    data.afsprakenMeta.slotsOpen
+                )})`
+              : ""}
             {meta
               ? ` · L→A ${meta.l2aPct.toLocaleString("nl-NL", {
                   maximumFractionDigits: 1,
@@ -184,9 +215,92 @@ export function AandachtspuntenStrip({
             onTrack: true,
           },
         ]).map((bar) => (
-          <TargetBar key={bar.id} bar={bar} />
+          <TargetBar
+            key={bar.id}
+            bar={bar}
+            active={bar.id === "afspraken" && afsprakenOpen}
+            onClick={
+              bar.id === "afspraken"
+                ? () => setAfsprakenOpen((open) => !open)
+                : undefined
+            }
+          />
         ))}
       </div>
+
+      {afsprakenOpen && data ? (
+        <AfsprakenPerAdviseur
+          periodLabel={data.periodLabel}
+          conversieLabel={data.afsprakenConversieLabel}
+          rows={data.afsprakenPerAdviseur ?? []}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function AfsprakenPerAdviseur({
+  periodLabel,
+  conversieLabel,
+  rows,
+}: {
+  periodLabel: string;
+  conversieLabel?: string;
+  rows: AandachtspuntenResult["afsprakenPerAdviseur"];
+}) {
+  return (
+    <div className="mt-4 border border-line">
+      <div className="flex items-baseline justify-between gap-2 border-b border-line px-3 py-2">
+        <p className="text-sm font-semibold text-ink">Per adviseur</p>
+        <p className="text-xs text-muted">
+          {periodLabel}
+          {conversieLabel ? ` · ${conversieLabel}` : ""}
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-3 py-4 text-sm text-muted">Geen planbare adviseurs.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <th className="px-3 py-2 font-semibold">Adviseur</th>
+                <th className="px-3 py-2 text-right font-semibold">Gepland</th>
+                <th className="px-3 py-2 text-right font-semibold">Nog</th>
+                <th className="px-3 py-2 text-right font-semibold">G→S</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-b border-line/70 last:border-0">
+                  <td className="px-3 py-2 font-medium text-ink">{row.naam}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-ink">
+                    {num(row.gepland)}
+                    <span className="text-muted"> / {num(row.capaciteit)}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-ink">
+                    {num(row.nog)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-ink">
+                    <span className="font-semibold">
+                      {row.conversiePct == null
+                        ? "—"
+                        : `${row.conversiePct.toLocaleString("nl-NL", {
+                            maximumFractionDigits: 1,
+                          })}%`}
+                    </span>
+                    {row.gelopen > 0 ? (
+                      <span className="mt-0.5 block text-[10px] font-normal text-muted">
+                        {num(row.sales)} / {num(row.gelopen)}
+                      </span>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

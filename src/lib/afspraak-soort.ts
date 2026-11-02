@@ -38,6 +38,7 @@ export const VERVOLG_PUNT_VRIJGESTELD = new Set<LeadStatus>([
   "deur_niet_open",
   "afspraak_afgezegd_klant",
   "geen_contact",
+  "definitief_geen_contact",
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",

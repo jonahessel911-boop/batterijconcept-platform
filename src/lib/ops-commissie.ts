@@ -1,12 +1,13 @@
 /**
- * Commissie operationeel (bel + ops manager):
- * - Bellers: €10 per ingeplande (1e) huisbezoek-afspraak
- * - Tarik (Operationeel Manager): €3.750/mnd vast + €2,50 per
- *   ingeplande afspraak over alle bellers
+ * Commissie operationeel:
+ * - Sharath: €10 per ingeplande (1e) huisbezoek-afspraak
+ * - Tarik: vaste weekfee (€3.750/mnd) + €2,50 bonus per afspraak
+ *   die Sharath inplant (Tarik is zijn teamlead)
  */
 
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { isBelAfspraakUitvalLeadStatus } from "@/lib/labels";
 import { normalizeRol } from "@/lib/rollen";
 
 /** € per nieuw huisbezoek dat een beller inplant. */
@@ -15,7 +16,7 @@ export const BELLER_PER_INGEPLANDE_AFSPRAAK = 10;
 /** Vast maandsalaris/commissie Tarik (ops manager). */
 export const OPS_MANAGER_FIXED_PER_MONTH = 3750;
 
-/** Bonus Tarik per ingepland huisbezoek (team-breed). */
+/** Bonus Tarik per huisbezoek dat Sharath inplant. */
 export const OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK = 2.5;
 
 /** Weekdeel van het vaste maandbedrag (52 weken / jaar). */
@@ -76,6 +77,13 @@ export function eersteNieuwHuisbezoekIdPerLead(
   return out;
 }
 
+export function isSharathBeller(a: { naam?: string | null }): boolean {
+  return String(a.naam || "")
+    .trim()
+    .toLowerCase()
+    .includes("sharath");
+}
+
 export function isOpsManagerAdviseur(a: {
   id: string;
   naam?: string | null;
@@ -107,14 +115,17 @@ export function computeOpsCommissieForWindow(opts: {
   tarikId?: string | null;
   tarikNaam?: string | null;
   includeVast?: boolean;
+  /** Leadstatus: deur_niet_open / niet_gekwalificeerd tellen niet mee. */
+  leadStatusById?: ReadonlyMap<string, string | null> | null;
 }): OpsCommissieBreakdown {
   const historie = opts.historie ?? opts.afspraken;
   const eersteIds = eersteNieuwHuisbezoekIdPerLead(historie);
-  const bellerIds = new Set(
-    opts.adviseurs.filter((a) => isBellerRol(a.rol)).map((a) => a.id)
+  const sharathIds = new Set(
+    opts.adviseurs.filter((a) => isSharathBeller(a)).map((a) => a.id)
   );
   const naamById = new Map(opts.adviseurs.map((a) => [a.id, a.naam] as const));
   const tarikId = (opts.tarikId || "").trim() || null;
+  const leadStatuses = opts.leadStatusById ?? null;
 
   const perBellerCount = new Map<string, number>();
   let teamAfspraken = 0;
@@ -122,6 +133,12 @@ export function computeOpsCommissieForWindow(opts: {
   for (const a of opts.afspraken) {
     if (!isNieuwHuisbezoek(a) || !a.created_at) continue;
     if (eersteIds.get(a.lead_id) !== a.id) continue;
+    if (
+      leadStatuses &&
+      isBelAfspraakUitvalLeadStatus(leadStatuses.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
     // Amsterdam-dag (niet UTC-slice) — avondboekingen vallen in de juiste week
     const ymd = formatInTimeZone(
       new Date(a.created_at),
@@ -131,16 +148,11 @@ export function computeOpsCommissieForWindow(opts: {
     if (ymd < opts.startYmd || ymd > opts.endYmd) continue;
 
     const door = (a.ingepland_door_id || "").trim();
-    if (!door) continue;
+    if (!door || !sharathIds.has(door)) continue;
 
-    // Team-breed voor Tarik-bonus: alle door bellers (of Tarik zelf) gezette
-    if (bellerIds.has(door) || (tarikId && door === tarikId)) {
-      teamAfspraken += 1;
-    }
-
-    if (bellerIds.has(door)) {
-      perBellerCount.set(door, (perBellerCount.get(door) || 0) + 1);
-    }
+    // Alleen wat Sharath inplant: zijn €10 én Tariks €2,50 teamlead-bonus.
+    teamAfspraken += 1;
+    perBellerCount.set(door, (perBellerCount.get(door) || 0) + 1);
   }
 
   const perBeller = [...perBellerCount.entries()]
@@ -186,7 +198,7 @@ export function opsCommissieLabelVoorRol(opts: {
   isOpsManager: boolean;
 }): string | null {
   if (opts.isOpsManager) {
-    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/afspraak`;
+    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per afspraak die Sharath inplant`;
   }
   if (isBellerRol(opts.rol)) {
     return `€${BELLER_PER_INGEPLANDE_AFSPRAAK}/afspraak`;

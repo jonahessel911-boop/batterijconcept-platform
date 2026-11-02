@@ -316,22 +316,19 @@ export async function buildCeoUnitTargets(
   const { start: fromDate } = amsBounds(range.startYmd);
   const { end: toDate } = amsBounds(countEndYmd);
 
-  const [gebeldRows, aanmeldCountRes, afsRowsRaw, salesCountRes, adviseursRaw, actieEvents] =
+  const [cohortRows, afsRowsRaw, salesCountRes, adviseursRaw, actieEvents] =
     await Promise.all([
+      // Alleen leads die in deze periode zijn binnengekomen — geen oude
+      // leads die nu pas gebeld worden.
       fetchAllRows<{ id: string }>((fromIdx, toIdx) =>
         sb
           .from("leads")
           .select("id")
-          .gte("laatst_gebeld_at", fromDate.toISOString())
-          .lte("laatst_gebeld_at", toDate.toISOString())
+          .gte("created_at", fromDate.toISOString())
+          .lte("created_at", toDate.toISOString())
           .order("id")
           .range(fromIdx, toIdx)
       ),
-      sb
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .gte("created_at", fromDate.toISOString())
-        .lte("created_at", toDate.toISOString()),
       fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
         sb
           .from("afspraken")
@@ -370,7 +367,6 @@ export async function buildCeoUnitTargets(
       ).catch(() => []),
     ]);
 
-  if (aanmeldCountRes.error) throw aanmeldCountRes.error;
   if (salesCountRes.error) throw salesCountRes.error;
   if (adviseursRaw.error) throw adviseursRaw.error;
 
@@ -403,16 +399,21 @@ export async function buildCeoUnitTargets(
     toDate,
     historie
   );
-  const gebeldIds = new Set(gebeldRows.map((l) => l.id));
-  for (const id of ingeplandIds) gebeldIds.add(id);
+  const cohortIds = new Set(cohortRows.map((l) => l.id));
+  let cohortIngepland = 0;
+  for (const id of ingeplandIds) {
+    if (cohortIds.has(id)) cohortIngepland += 1;
+  }
 
-  const gebeld = gebeldIds.size;
   const ingepland = ingeplandIds.size;
-  const aanmeldingen = aanmeldCountRes.count ?? 0;
+  const aanmeldingen = cohortIds.size;
   const sales = salesCountRes.count ?? 0;
 
+  // Lead → appointment alleen over leads uit deze periode.
   const l2aPct =
-    gebeld > 0 ? Math.round((ingepland / gebeld) * 1000) / 10 : null;
+    aanmeldingen > 0
+      ? Math.round((cohortIngepland / aanmeldingen) * 1000) / 10
+      : null;
   const closePct =
     ingepland > 0 ? Math.round((sales / ingepland) * 1000) / 10 : null;
 

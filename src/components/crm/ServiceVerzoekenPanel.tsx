@@ -81,7 +81,7 @@ export function ServiceVerzoekenPanel() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex border border-line bg-white">
+        <div className="inline-flex max-w-full flex-wrap border border-line bg-white">
           {(
             [
               ["open", "Open", counts.open],
@@ -112,7 +112,7 @@ export function ServiceVerzoekenPanel() {
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           {counts.urgent > 0 ? (
             <span className="text-xs font-semibold text-[#C45A12]">
               {counts.urgent} urgent
@@ -122,7 +122,7 @@ export function ServiceVerzoekenPanel() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Zoek klant, project, plaats…"
-            className="w-full max-w-sm border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green sm:w-72"
+            className="w-full min-w-0 border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green sm:w-72"
           />
         </div>
       </div>
@@ -133,7 +133,51 @@ export function ServiceVerzoekenPanel() {
         </p>
       ) : null}
 
-      <div className="overflow-x-auto border border-line bg-white">
+      <div className="divide-y divide-line border border-line bg-white md:hidden">
+        {loading ? (
+          <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
+        ) : filtered.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-muted">
+            {filter === "open"
+              ? "Geen open tickets."
+              : "Geen tickets in deze filter."}
+          </p>
+        ) : (
+          filtered.map((v) => {
+            const status = serviceTicketDisplayStatus(v);
+            const href = `/service/${v.id}`;
+            return (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => router.push(href)}
+                className="block w-full px-3 py-3 text-left"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 font-semibold text-ink">{v.onderwerp}</p>
+                  <span
+                    className={[
+                      "shrink-0 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                      SERVICE_TICKET_STATUS_CLASS[status],
+                    ].join(" ")}
+                  >
+                    {SERVICE_TICKET_STATUS_LABEL[status]}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-ink">{v.leads?.naam || "—"}</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {v.projecten?.project_nummer || "Geen project"}
+                  {" · "}
+                  {v.projecten?.service_at
+                    ? formatDateTimeNl(v.projecten.service_at)
+                    : "geen service-afspraak"}
+                </p>
+              </button>
+            );
+          })
+        )}
+      </div>
+      <div className="hidden overflow-x-auto border border-line bg-white md:block">
         <table className="w-full min-w-[44rem] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-line bg-wash/60 text-[11px] font-semibold uppercase tracking-wide text-muted">

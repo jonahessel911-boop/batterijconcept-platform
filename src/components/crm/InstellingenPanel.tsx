@@ -102,6 +102,7 @@ export function InstellingenPanel({
   const [teamRolFilter, setTeamRolFilter] = useState<"all" | TeamRol>(
     forcedTeamRol ?? "all"
   );
+  const [zoek, setZoek] = useState("");
   const partnerWoord = monteurLabel ? "Monteur" : "Installatiepartner";
   const partnerWoordMeervoud = monteurLabel
     ? "monteurs"
@@ -268,6 +269,8 @@ export function InstellingenPanel({
       naam: a.naam,
       email: a.email,
       telefoon: a.telefoon,
+      unite_lijn: a.unite_lijn ?? "",
+      unite_ext: a.unite_ext ?? "",
       rol: normalizeRol(a.rol),
       start_adres: a.start_adres ?? null,
       startdatum: a.startdatum ?? null,
@@ -510,6 +513,8 @@ export function InstellingenPanel({
         naam: (draft.naam || "").trim(),
         email: draft.email?.toString().trim().toLowerCase() || null,
         telefoon: draft.telefoon?.toString().trim() || null,
+        unite_lijn: draft.unite_lijn?.toString().trim() || null,
+        unite_ext: draft.unite_ext?.toString().trim() || null,
         rol: normalizeRol(draft.rol),
         start_adres: draft.start_adres?.toString().trim() || null,
         actief: draft.actief !== false,
@@ -781,12 +786,20 @@ export function InstellingenPanel({
     window.open(wfPortalUrl(o), "_blank", "noopener,noreferrer");
   }
 
+  const zoekNorm = zoek.trim().toLowerCase();
+
   const rows = useMemo(() => {
     if (activeFilter === "medewerkers") {
       return [...adviseurs]
         .filter((a) => {
           if (teamRolFilter === "all") return true;
           return normalizeRol(a.rol) === teamRolFilter;
+        })
+        .filter((a) => {
+          if (!zoekNorm) return true;
+          const naam = a.naam.toLowerCase();
+          const email = (a.email || "").toLowerCase();
+          return naam.includes(zoekNorm) || email.includes(zoekNorm);
         })
         .sort((a, b) => {
           if (a.actief !== b.actief) return a.actief ? -1 : 1;
@@ -803,7 +816,7 @@ export function InstellingenPanel({
       if (a.actief !== b.actief) return a.actief ? -1 : 1;
       return a.naam.localeCompare(b.naam, "nl");
     });
-  }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators]);
+  }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators, zoekNorm]);
 
   const teamRolCounts = useMemo(() => {
     const counts: Record<TeamRol, number> = {
@@ -820,11 +833,18 @@ export function InstellingenPanel({
     return counts;
   }, [adviseurs]);
 
+  const medewerkersInRol =
+    teamRolFilter === "all"
+      ? adviseurs.length
+      : adviseurs.filter((a) => normalizeRol(a.rol) === teamRolFilter).length;
+
   const countLabel =
     activeFilter === "medewerkers"
-      ? teamRolFilter === "all"
-        ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
-        : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
+      ? zoekNorm
+        ? `${rows.length} van ${medewerkersInRol}`
+        : teamRolFilter === "all"
+          ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
+          : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
       : activeFilter === "warmtefonds"
         ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
         : `${partners.length} ${
@@ -1006,6 +1026,26 @@ export function InstellingenPanel({
                   className={inputCls}
                 />
               </Field>
+              <Field label="Unite-lijn (DID)">
+                <input
+                  value={(draft.unite_lijn as string) || ""}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, unite_lijn: e.target.value }))
+                  }
+                  placeholder="085 800 1645"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Unite-extensie">
+                <input
+                  value={(draft.unite_ext as string) || ""}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, unite_ext: e.target.value }))
+                  }
+                  placeholder="0200"
+                  className={inputCls}
+                />
+              </Field>
               <Field label="Rol">
                 <select
                   value={normalizeRol(draft.rol)}
@@ -1024,6 +1064,22 @@ export function InstellingenPanel({
                   ))}
                 </select>
               </Field>
+              <p className="sm:col-span-2 text-[11px] text-muted">
+                Unite-lijn = vast nummer waarop call-end popups voor deze
+                medewerker komen. Extensie = softphone (bijv. 0200) voor
+                uitgaande gesprekken.
+              </p>
+              <p className="sm:col-span-2 break-all rounded border border-line bg-wash px-2 py-1.5 font-mono text-[10px] text-ink">
+                {`${(typeof process !== "undefined" && process.env.NEXT_PUBLIC_APP_URL
+                  ? process.env.NEXT_PUBLIC_APP_URL
+                  : "https://batterijconcept-platform.vercel.app"
+                ).replace(/\/$/, "")}/api/unite/webhook?callid={calluniqueid}&callfrom={callfrom}&callto={callto}&status={status}&status_desc={status_desc}&direction={direction}&timestamp={timestamp}`}
+              </p>
+              <p className="sm:col-span-2 text-[11px] text-muted">
+                Plak deze URL in Unite → Provisioning → App templates
+                (Maatwerk CRM). Zonder die webhook weet Unite niet waar
+                DISCONNECTED naartoe moet.
+              </p>
             </FormSection>
 
             <FormSection
@@ -1985,6 +2041,24 @@ export function InstellingenPanel({
               </div>
             ) : null}
             <p className="text-xs text-muted">{countLabel}</p>
+            {activeFilter === "medewerkers" ? (
+              <input
+                type="search"
+                value={zoek}
+                onChange={(e) => setZoek(e.target.value)}
+                placeholder={
+                  teamRolFilter === "adviseur"
+                    ? "Zoek adviseur…"
+                    : "Zoek op naam of e-mail…"
+                }
+                className="w-full min-w-[12rem] border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green sm:w-56"
+                aria-label={
+                  teamRolFilter === "adviseur"
+                    ? "Zoek adviseur"
+                    : "Zoek medewerker"
+                }
+              />
+            ) : null}
           </div>
           <button
             type="button"
@@ -2060,6 +2134,19 @@ export function InstellingenPanel({
 
       {loading ? (
         <p className="px-5 py-14 text-center text-sm text-muted">Laden…</p>
+      ) : rows.length === 0 && zoekNorm && activeFilter === "medewerkers" ? (
+        <div className="px-5 py-14 text-center">
+          <p className="font-display text-base font-semibold text-ink">
+            Geen resultaten voor “{zoek.trim()}”
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Zoek op naam of e-mail
+            {teamRolFilter !== "all"
+              ? ` binnen ${gebruikerRolLabel[teamRolFilter].toLowerCase()}`
+              : ""}
+            .
+          </p>
+        </div>
       ) : rows.length === 0 ? (
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">

@@ -20,6 +20,7 @@ import {
   consolidateOpenSalesWeekCreditfacturen,
   ensureAdviseurCommissieTrancheB,
   ensureNettoAanbetalingCreditfactuur,
+  stripAllHoldSalesFromOpenSalesCreditfacturen,
 } from "@/lib/netto-creditfactuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
@@ -97,6 +98,9 @@ export async function GET(req: NextRequest) {
             teAnnuleren.map((f) => f.id)
           );
       }
+
+      // HOLD SALES / annulering: regels uit open concepten/verzonden CF's
+      await stripAllHoldSalesFromOpenSalesCreditfacturen(sb);
 
       // Losse AANBETALING/OFF → één weekfactuur per adviseur (portal + PDF)
       await consolidateOpenSalesWeekCreditfacturen(sb);

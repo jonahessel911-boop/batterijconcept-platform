@@ -8,11 +8,12 @@ import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { nextWeekdayAmsterdamAfter } from "@/lib/inkoop-sla";
+import { uitvoerDeadlineVolgendeWerkdag } from "@/lib/inkoop-sla";
 import {
   dueAtVoorSchouwdagInplan,
   formatSchouwWeekLabel,
   isInSchouwdagPlannenWindow,
+  isSchouwGeweest,
   isSchouwdagDefinitief,
   schouwWeekEerder,
   schouwWeekFromDate,
@@ -109,14 +110,16 @@ export function kanWfSchouwdagInplannen(
 }
 
 /**
- * WF-installatie in Acties: schouwdag definitief gepland + ≥95% van offerte betaald.
+ * WF-installatie in Acties: schouw is geweest + ≥95% van offerte betaald.
+ * Deadline = eerstvolgende werkdag daarna (zie uitvoerDeadlineVolgendeWerkdag).
  */
 export function kanWfInstallatieInplannen(
   project: Project,
-  facturen: Factuur[] = []
+  facturen: Factuur[] = [],
+  now: Date = new Date()
 ): boolean {
   if (project.installatie_at) return false;
-  if (!isSchouwdagDefinitief(project)) return false;
+  if (!isSchouwGeweest(project, now)) return false;
   return (
     orderBetalingPctTegenOfferte(project, facturen) >=
     WF_INSTALLATIE_MIN_BETAALD_PCT
@@ -247,7 +250,7 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
         : "Zonder betaling kunnen we niet veilig door naar installatie/inkoop.";
     case "restfactuur_betaald":
       return wf
-        ? "Warmtefonds: ≥95% betaald én schouwdag gepland — plan de installatiedatum. Daarna komt Purchasing automatisch (5 werkdagen vóór installatie)."
+        ? "Warmtefonds: declaratie betaald én schouw geweest — plan de installatie op de eerstvolgende werkdag. Zodra die datum staat, komt de order bij Purchasing te bestellen (5 werkdagen vóór de installatie)."
         : "Eerste factuur betaald én schouwdag gepland — plan de installatiedatum. Daarna komt Purchasing automatisch (batterij inkopen, 5 werkdagen vóór installatie).";
     case "materiaal_besteld":
       return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in (uiterlijk volgende werkdag).";
@@ -482,11 +485,20 @@ function volgendeStapVanTaak(
       }
       break;
     case "next_weekday": {
-      // Klaar-moment ≈ laatste statusupdate (betaling/schouwformulier → restfactuur_betaald)
-      const anchorRaw = project.updated_at || project.created_at;
-      const anchor = anchorRaw ? new Date(anchorRaw) : now;
-      const base = Number.isNaN(anchor.getTime()) ? now : anchor;
-      uiterlijkAt = nextWeekdayAmsterdamAfter(base).toISOString();
+      // Ná betaling én schouw: eerstvolgende werkdag. Is die al voorbij,
+      // dan schuift de actie door naar de eerstvolgende werkdag vanaf nu.
+      const updatedRaw = project.updated_at || project.created_at;
+      const updated = updatedRaw ? new Date(updatedRaw) : now;
+      const schouw = project.schouw_at ? new Date(project.schouw_at) : null;
+      let anchor = Number.isNaN(updated.getTime()) ? now : updated;
+      if (
+        schouw &&
+        !Number.isNaN(schouw.getTime()) &&
+        schouw.getTime() > anchor.getTime()
+      ) {
+        anchor = schouw;
+      }
+      uiterlijkAt = uitvoerDeadlineVolgendeWerkdag(anchor, now).toISOString();
       break;
     }
     case "none":
@@ -622,7 +634,7 @@ export function resolveProjectVolgendeStap(
     return volgendeStapNaOpstarten(project, now, facturen);
   }
 
-  // Warmtefonds: installatie-actie pas bij ≥95% betaald + schouwdag gepland.
+  // Warmtefonds: installatie-actie pas nadat schouw geweest is én ≥95% betaald.
   // Geen “betaling controleren”-actie tussendoor.
   if (betaalwijze === "warmtefonds") {
     const isInstallatieKandidaat =
@@ -632,7 +644,7 @@ export function resolveProjectVolgendeStap(
       status === "restfactuur_betaald" ||
       status === "materiaal_besteld";
     if (isInstallatieKandidaat) {
-      if (!kanWfInstallatieInplannen(project, facturen)) {
+      if (!kanWfInstallatieInplannen(project, facturen, now)) {
         return null;
       }
       // Toon installatie-stap (niet restfactuur-opvolgen / lege schouw-status)

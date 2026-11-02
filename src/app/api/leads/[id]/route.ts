@@ -2,10 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { logLeadEvent } from "@/lib/lead-events";
+import type { LeadStatus } from "@/types/database";
 
 export const runtime = "nodejs";
 
-/** PATCH /api/leads/[id] — contact + adres bijwerken */
+const LEAD_STATUS_OK = new Set<string>([
+  "nieuw",
+  "afspraak",
+  "na_afspraak",
+  "vervolg_fysiek",
+  "vervolg_tel",
+  "vervolg_geen_contact",
+  "offerte_afgewezen",
+  "niet_gekwalificeerd",
+  "geen_interesse",
+  "geen_interesse_al_batterij",
+  "geen_interesse_plugin",
+  "geen_interesse_alleen_info",
+  "geen_interesse_vertrouwt_niet",
+  "geen_contact",
+  "definitief_geen_contact",
+  "deal",
+  "sale_financiering",
+  "sale_eigen_middelen",
+  "deur_niet_open",
+  "afspraak_afgezegd_klant",
+  "huurwoning",
+  "foutief_nummer",
+  "gegevens_niet_overeen",
+]);
+
+/** PATCH /api/leads/[id] — contact + adres + optioneel status */
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
@@ -21,6 +48,8 @@ export async function PATCH(
     postcode?: string | null;
     plaats?: string | null;
     adviseur_id?: string | null;
+    status?: string | null;
+    status_reden?: string | null;
   };
   try {
     body = await req.json();
@@ -63,6 +92,16 @@ export async function PATCH(
   if (body.adviseur_id !== undefined) {
     patch.adviseur_id = body.adviseur_id?.trim() || null;
   }
+  if (body.status !== undefined && body.status !== null) {
+    const st = body.status.trim();
+    if (!LEAD_STATUS_OK.has(st)) {
+      return NextResponse.json(
+        { error: `Ongeldige status: ${st}` },
+        { status: 400 }
+      );
+    }
+    patch.status = st as LeadStatus;
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
@@ -73,7 +112,7 @@ export async function PATCH(
     const { data: before } = await sb
       .from("leads")
       .select(
-        "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, adviseur_id"
+        "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, adviseur_id, status"
       )
       .eq("id", id)
       .maybeSingle();
@@ -87,7 +126,7 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, lead_number, adviseur_id, adviseurs!adviseur_id(id, naam)"
+        "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, lead_number, status, adviseur_id, adviseurs!adviseur_id(id, naam)"
       )
       .single();
 
@@ -96,6 +135,27 @@ export async function PATCH(
         { error: "Opslaan mislukt", detail: error?.message },
         { status: 500 }
       );
+    }
+
+    if (
+      typeof patch.status === "string" &&
+      patch.status !== (before as { status?: string }).status
+    ) {
+      try {
+        await logLeadEvent({
+          leadId: id,
+          soort: "status",
+          titel: `Status → ${patch.status}`,
+          detail: body.status_reden?.trim() || "Via inbox",
+          meta: {
+            from: (before as { status?: string }).status || null,
+            to: patch.status,
+            via: "inbox",
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
     }
 
     // Openstaande afspraken meenemen naar de nieuwe adviseur-agenda

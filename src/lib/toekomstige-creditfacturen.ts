@@ -16,6 +16,7 @@ import {
   commissieTrancheA,
   NETTO_AANBETALING_COMMISSIE,
 } from "@/lib/netto-boord";
+import { isProjectHoldSales } from "@/lib/backoffice-acties";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
 import { addDays } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
@@ -177,7 +178,13 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       | null;
   };
 
-  const [{ data: already }, { data: leads }, { data: offertes }] =
+  type ProjectRow = {
+    lead_id: string | null;
+    offerte_id: string | null;
+    status: string | null;
+  };
+
+  const [{ data: already }, { data: leads }, { data: offertes }, { data: projects }] =
     await Promise.all([
       facIds.length
         ? sb
@@ -196,7 +203,25 @@ export async function buildToekomstigeVerkoperCreditfacturen(
             .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw")
             .in("id", offIds)
         : Promise.resolve({ data: [] as OfferteRow[] }),
+      leadIds.length
+        ? sb
+            .from("projecten")
+            .select("lead_id, offerte_id, status")
+            .in("lead_id", leadIds)
+        : Promise.resolve({ data: [] as ProjectRow[] }),
     ]);
+
+  /** lead_id / offerte_id → hold of annulering */
+  const blockedLeadIds = new Set<string>();
+  const blockedOfferteIds = new Set<string>();
+  for (const p of (projects || []) as ProjectRow[]) {
+    const hold = isProjectHoldSales(p);
+    const annul =
+      p.status === "annulering" || p.status === "geannuleerd";
+    if (!hold && !annul) continue;
+    if (p.lead_id) blockedLeadIds.add(p.lead_id);
+    if (p.offerte_id) blockedOfferteIds.add(p.offerte_id);
+  }
 
   const alreadyByFac = new Map<
     string,
@@ -252,10 +277,17 @@ export async function buildToekomstigeVerkoperCreditfacturen(
   const regels: ToekomstigeCfRegel[] = [];
 
   for (const fac of aanbetalingen) {
-    const lead = leadById.get(fac.lead_id as string);
-    const off = fac.offerte_id
-      ? offById.get(fac.offerte_id as string)
-      : undefined;
+    const leadId = fac.lead_id as string;
+    const offId = (fac.offerte_id as string | null) || null;
+    // HOLD SALES / annulering: niet in uitbetalingspreview
+    if (
+      (leadId && blockedLeadIds.has(leadId)) ||
+      (offId && blockedOfferteIds.has(offId))
+    ) {
+      continue;
+    }
+    const lead = leadById.get(leadId);
+    const off = offId ? offById.get(offId) : undefined;
     const existing = alreadyByFac.get(fac.id as string);
 
     let omzetEx = Number(off?.subtotaal_ex_btw) || 0;

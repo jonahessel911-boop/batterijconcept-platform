@@ -1,4 +1,5 @@
 import { ServerClient, Attachment } from "postmark";
+import { INFO_REPLY_TO } from "@/lib/email/adviseur-reply-to";
 
 const FROM = process.env.POSTMARK_FROM_EMAIL || "info@batterijconcept.nl";
 
@@ -65,6 +66,8 @@ export async function sendEmail(opts: {
   /** Blinde kopie */
   bcc?: string | null;
   attachments?: EmailAttachment[];
+  /** Extra headers, bijv. In-Reply-To en References voor een echte reply. */
+  headers?: { name: string; value: string }[];
 }): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   const pm = getClient();
   if (!pm) {
@@ -86,11 +89,21 @@ export async function sendEmail(opts: {
       return new Attachment(a.name, base64, a.contentType);
     });
 
-    const replyTo = opts.replyTo?.trim() || undefined;
+    // Antwoorden van klanten altijd naar de AI-inbox, ook als een
+    // caller nog een adviseur-adres meestuurt.
+    void opts.replyTo;
+    const replyTo = INFO_REPLY_TO;
     const cc = opts.cc?.trim() || undefined;
     const bcc = opts.bcc?.trim() || undefined;
     const text =
       opts.text?.trim() || htmlToPlainText(opts.html) || opts.subject;
+
+    const headers = (opts.headers || [])
+      .map((h) => ({
+        Name: h.name.trim(),
+        Value: h.value.trim(),
+      }))
+      .filter((h) => h.Name && h.Value);
 
     const result = await pm.sendEmail({
       From: FROM,
@@ -103,6 +116,7 @@ export async function sendEmail(opts: {
       ...(replyTo ? { ReplyTo: replyTo } : {}),
       ...(cc ? { Cc: cc } : {}),
       ...(bcc ? { Bcc: bcc } : {}),
+      ...(headers.length ? { Headers: headers } : {}),
       Attachments,
     });
     if (!result.MessageID) {

@@ -29,6 +29,7 @@ import {
   metaAdsSpendConfigured,
   syncMetaAdSpendCampaignDetail,
 } from "@/lib/meta-ads-spend";
+import { fetchTikTokCampaignRows } from "@/lib/tiktok-ads-spend";
 import {
   parseSchouwWeekValue,
   schouwWeekToMondayIso,
@@ -239,11 +240,17 @@ export async function GET(req: NextRequest) {
           .filter((r) => r.level === "campaign")
           .reduce((s, r) => s + (r.leads || 0), 0)
       : 0;
-    const metaSpendFinal: MarketingMetaRow[] =
-      liveMeta.ok && liveMeta.rows.length > 0
-        ? liveMeta.rows
-        : metaSpendDb;
+    const metaSpendFinal: MarketingMetaRow[] = (
+      liveMeta.ok && liveMeta.rows.length > 0 ? liveMeta.rows : metaSpendDb
+    ).map((row) => ({ ...row, source: "Meta" as const }));
     const metaLeadsFromApi = liveCampLeads > 0;
+
+    const tiktok = await fetchTikTokCampaignRows({ since: from, until: to });
+    const tiktokError = tiktok.configured ? tiktok.error || null : null;
+    const spendRows: MarketingMetaRow[] = [
+      ...metaSpendFinal,
+      ...tiktok.rows,
+    ];
 
     // Leads buiten created_at-range (deals/afspraken): campagne-key nog ophalen
     const leadIdsNeeded = new Set<string>([
@@ -279,12 +286,11 @@ export async function GET(req: NextRequest) {
       leads,
       offertes,
       afspraken,
-      metaSpend: metaSpendFinal,
+      metaSpend: spendRows,
       metaConfigured: cfg.ok,
       metaLeadsFromApi,
-      // TikTok Ads reporting UX klaar; spend-sync volgt tot API-keys live zijn
-      tiktokConfigured: false,
-      tiktokSpend: 0,
+      tiktokConfigured: tiktok.configured,
+      tiktokError,
       lastSyncAt:
         (syncRes.data as { meta_laatste_sync_at?: string | null } | null)
           ?.meta_laatste_sync_at || null,
@@ -407,6 +413,7 @@ export async function GET(req: NextRequest) {
             .filter(Boolean)
         ),
       ],
+      tiktokError,
     });
   } catch (e) {
     return NextResponse.json(

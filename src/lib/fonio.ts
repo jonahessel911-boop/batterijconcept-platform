@@ -23,10 +23,9 @@ export function fonioWebhookSecret(): string | null {
   return process.env.FONIO_WEBHOOK_SECRET?.trim() || null;
 }
 
-/** Auto-outbound na nieuwe lead-webhook (default uit). */
+/** Auto-outbound staat uit. Eigen mensen bellen vanuit de belbak. */
 export function fonioAutoCallOnLead(): boolean {
-  const v = (process.env.FONIO_AUTO_CALL_ON_LEAD || "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  return false;
 }
 
 /** NL/E.164 normalisatie voor Fonio (+31…). */
@@ -62,63 +61,19 @@ export type FonioOutboundResult =
   | { ok: false; status: number; error: string; data?: unknown };
 
 /**
- * Start outbound call. fromNumber selecteert de assistant (nummer-koppeling in Fonio).
+ * Fonio belt niet meer. Leads gaan naar de belbak; eigen mensen bellen.
  */
-export async function triggerFonioOutbound(opts: {
-  toNumber: string;
-  context?: Record<string, unknown>;
-}): Promise<FonioOutboundResult> {
-  const apiKey = fonioApiKey();
-  const fromNumber = fonioFromNumber();
-  const toNumber = toE164Nl(opts.toNumber);
-
-  if (!apiKey || !fromNumber) {
-    return {
-      ok: false,
-      status: 503,
-      error: "Fonio niet geconfigureerd (FONIO_API_KEY / FONIO_FROM_NUMBER)",
-    };
+export async function triggerFonioOutbound(
+  _opts: {
+    toNumber: string;
+    context?: Record<string, unknown>;
   }
-  if (!toNumber) {
-    return { ok: false, status: 400, error: "Ongeldig telefoonnummer" };
-  }
-
-  const body: Record<string, unknown> = {
-    apiKey,
-    fromNumber,
-    toNumber,
-    context: opts.context || {},
+): Promise<FonioOutboundResult> {
+  return {
+    ok: false,
+    status: 410,
+    error: "Fonio belt niet meer. Bel deze lead zelf vanuit de belbak.",
   };
-
-  try {
-    const res = await fetch("https://app.fonio.ai/api/public/v1/outbound_call", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: apiKey,
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: res.status,
-        error:
-          (data as { message?: string; error?: string }).message ||
-          (data as { error?: string }).error ||
-          `Fonio HTTP ${res.status}`,
-        data,
-      };
-    }
-    return { ok: true, status: res.status, data };
-  } catch (e) {
-    return {
-      ok: false,
-      status: 502,
-      error: e instanceof Error ? e.message : "Fonio request mislukt",
-    };
-  }
 }
 
 /** Auth voor Fonio → ons platform (webhooks). */

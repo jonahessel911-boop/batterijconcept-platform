@@ -39,7 +39,7 @@ export type PnlMetrics = {
   inkoop: number;
   installatie: number;
   sales_commissie: number;
-  /** Bellers €10 + Tarik vast/week + €2,50 bonus */
+  /** Sharath €10/afspraak + Tarik vast/week + €2,50 als Sharath inplant */
   ops_commissie: number;
   ad_spend: number;
   totale_kosten: number;
@@ -497,16 +497,34 @@ export async function buildProjectedPnl(
   const tarikNaam =
     adviseursList.find((a) => a.id === tarikId)?.naam || "Tarik";
   const afspraken = afsprakenRaw as OpsCommissieAfspraak[];
+  const leadStatusById = new Map<string, string | null>();
+  {
+    const ids = [...new Set(afspraken.map((a) => a.lead_id).filter(Boolean))];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const { data: leadRows } = await sb
+        .from("leads")
+        .select("id, status")
+        .in("id", chunk);
+      for (const row of leadRows || []) {
+        leadStatusById.set(
+          row.id as string,
+          (row.status as string | null) ?? null
+        );
+      }
+    }
+  }
   const opsDetailByWeek = new Map<string, OpsCommissieBreakdown>();
 
   const geannuleerdOfferteIds = new Set<string>();
+  const holdOfferteIds = new Set<string>();
   const projectByOfferte = new Map<string, ProjectRow>();
   for (const p of projects) {
     if (!p.offerte_id) continue;
     projectByOfferte.set(p.offerte_id, p);
-    if (normalizeProjectStatus(p.status) === "annulering") {
-      geannuleerdOfferteIds.add(p.offerte_id);
-    }
+    const status = normalizeProjectStatus(p.status);
+    if (status === "annulering") geannuleerdOfferteIds.add(p.offerte_id);
+    if (status === "hold_sales_actie") holdOfferteIds.add(p.offerte_id);
   }
 
   const weeks = listWeekWindows(startYmd, endYmd);
@@ -531,6 +549,7 @@ export async function buildProjectedPnl(
   for (const o of offertes) {
     if (!o.ondertekend_op) continue;
     if (geannuleerdOfferteIds.has(o.id)) continue;
+    if (holdOfferteIds.has(o.id)) continue;
     const ymd = ymdFromIso(o.ondertekend_op);
     if (!inYmdRange(ymd, startYmd, endYmd)) continue;
     const wa = touch(ymd);
@@ -605,6 +624,7 @@ export async function buildProjectedPnl(
       tarikId,
       tarikNaam,
       includeVast: true,
+      leadStatusById,
     });
     opsDetailByWeek.set(w.weekKey, detail);
     const wa = weekAcc.get(w.weekKey);

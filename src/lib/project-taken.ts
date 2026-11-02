@@ -15,7 +15,10 @@ import {
   REFERRAL_TAK_AUTO_KEY,
   REFERRAL_TAK_TITEL,
 } from "@/lib/sales-referral-taak";
-import { nextWeekdayAmsterdamAfter } from "@/lib/inkoop-sla";
+import {
+  nextWeekdayAmsterdamAfter,
+  uitvoerDeadlineVolgendeWerkdag,
+} from "@/lib/inkoop-sla";
 export type TaakStatus = "todo" | "doing" | "done";
 
 export type AutoTaakDef = {
@@ -165,7 +168,7 @@ export function autoTakenVoorStatus(
       break;
     case "next_weekday": {
       const anchor = ctx.schouwAt ? new Date(ctx.schouwAt) : new Date();
-      dueAt = nextWeekdayAmsterdamAfter(anchor).toISOString();
+      dueAt = uitvoerDeadlineVolgendeWerkdag(anchor).toISOString();
       break;
     }
     case "schouw_minus_days":

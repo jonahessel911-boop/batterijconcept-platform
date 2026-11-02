@@ -11,6 +11,8 @@ import { isWarmtefondsProject } from "@/lib/backoffice-acties";
 export type AnnuleringKeuze = {
   binnenBedenktijd: boolean;
   stuurMail: boolean;
+  /** Binnen bedenktijd: verstuurde facturen meteen crediteren. */
+  creditFacturen: boolean;
 };
 
 type WarmtefondsVervolg = "meewerken" | "annuleren_kosten";
@@ -46,6 +48,7 @@ export function AnnuleringBedenktijdModal({
   );
   const [wfVervolg, setWfVervolg] = useState<WarmtefondsVervolg | null>(null);
   const [stuurMail, setStuurMail] = useState(true);
+  const [creditFacturen, setCreditFacturen] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -109,6 +112,7 @@ export function AnnuleringBedenktijdModal({
     await onConfirm({
       binnenBedenktijd,
       stuurMail: mailOnly ? true : stuurMail,
+      creditFacturen: binnenBedenktijd === true && creditFacturen,
     });
   }
 
@@ -177,6 +181,7 @@ export function AnnuleringBedenktijdModal({
               disabled={busy}
               onClick={() => {
                 setBinnenBedenktijd(true);
+                setCreditFacturen(true);
                 setWfVervolg(null);
                 setError(null);
               }}
@@ -305,6 +310,27 @@ export function AnnuleringBedenktijdModal({
                 </span>
               </label>
             )
+          ) : null}
+
+          {binnenBedenktijd === true && !wilMeewerken ? (
+            <label className="flex items-start gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={creditFacturen}
+                disabled={busy}
+                onChange={(e) => setCreditFacturen(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Facturen direct crediteren
+                <span className="mt-0.5 block text-xs font-normal text-muted">
+                  Binnen de 14 dagen: elke verstuurde factuur (betaald, deels
+                  betaald of nog open) krijgt een eigen creditfactuur. Die gaat
+                  naar de klant en wordt meteen geboekt. Conceptfacturen blijven
+                  staan.
+                </span>
+              </span>
+            </label>
           ) : null}
 
           {wilMeewerken ? (

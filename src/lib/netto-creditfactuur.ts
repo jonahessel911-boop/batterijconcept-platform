@@ -21,6 +21,7 @@ import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
+import { isProjectHoldSales } from "@/lib/backoffice-acties";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 
@@ -81,6 +82,126 @@ function applyMaxFee(
     maxBedrag != null && Number(maxBedrag) > 0 ? Number(maxBedrag) : null;
   if (max != null && fee > max) return max;
   return fee;
+}
+
+/**
+ * HOLD SALES: haal openstaande sales-commissieregels (concept/verzonden) weg
+ * voor dit project, zodat ze niet in de uitbetalingslijst blijven.
+ */
+export async function stripHoldSalesFromOpenSalesCreditfacturen(
+  sb: SupabaseClient,
+  projectId: string
+): Promise<{ removedRegels: number; cancelledCfs: number }> {
+  const { data: project } = await sb
+    .from("projecten")
+    .select("id, lead_id, offerte_id, status, offertes(offerte_nummer)")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project?.lead_id) return { removedRegels: 0, cancelledCfs: 0 };
+
+  const offRaw = (project as { offertes?: unknown }).offertes;
+  const off = Array.isArray(offRaw) ? offRaw[0] : offRaw;
+  const offerteNummer =
+    (off as { offerte_nummer?: string | null } | null)?.offerte_nummer || null;
+
+  const { data: regels } = await sb
+    .from("adviseur_creditfactuur_regels")
+    .select(
+      "id, creditfactuur_id, adviseur_creditfacturen(id, status, factuur_nummer)"
+    )
+    .eq("lead_id", project.lead_id);
+
+  const toDelete: string[] = [];
+  const cfIds = new Set<string>();
+  for (const r of regels || []) {
+    const cfRaw = (r as { adviseur_creditfacturen?: unknown })
+      .adviseur_creditfacturen;
+    const cf = Array.isArray(cfRaw) ? cfRaw[0] : cfRaw;
+    const status = (cf as { status?: string } | null)?.status || "";
+    if (status !== "concept" && status !== "verzonden") continue;
+    toDelete.push(r.id as string);
+    if (r.creditfactuur_id) cfIds.add(r.creditfactuur_id as string);
+  }
+
+  let removedRegels = 0;
+  if (toDelete.length) {
+    const { error } = await sb
+      .from("adviseur_creditfactuur_regels")
+      .delete()
+      .in("id", toDelete);
+    if (!error) removedRegels = toDelete.length;
+  }
+
+  for (const cfId of cfIds) {
+    await recalcAdviseurCreditfactuurFromRegels(sb, cfId);
+    const { data: left } = await sb
+      .from("adviseur_creditfactuur_regels")
+      .select("id")
+      .eq("creditfactuur_id", cfId)
+      .limit(1);
+    if (!(left || []).length) {
+      await sb
+        .from("adviseur_creditfacturen")
+        .update({
+          status: "geannuleerd",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", cfId)
+        .in("status", ["concept", "verzonden"]);
+    }
+  }
+
+  let cancelledCfs = 0;
+  if (offerteNummer) {
+    const tag = offerteTrancheBTag(offerteNummer);
+    const { data: trancheB } = await sb
+      .from("adviseur_creditfacturen")
+      .select("id, status")
+      .neq("status", "geannuleerd")
+      .neq("status", "betaald")
+      .ilike("notities", `%${tag}%`);
+    for (const cf of trancheB || []) {
+      if (cf.status !== "concept" && cf.status !== "verzonden") continue;
+      const { error } = await sb
+        .from("adviseur_creditfacturen")
+        .update({
+          status: "geannuleerd",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", cf.id);
+      if (!error) cancelledCfs += 1;
+    }
+  }
+
+  return { removedRegels, cancelledCfs };
+}
+
+/**
+ * Strip open sales-commissieregels voor alle projecten op HOLD SALES
+ * (en annulering), zodat ze niet in de uitbetalingslijst blijven hangen.
+ */
+export async function stripAllHoldSalesFromOpenSalesCreditfacturen(
+  sb: SupabaseClient
+): Promise<{ projects: number; removedRegels: number; cancelledCfs: number }> {
+  const { data: projects } = await sb
+    .from("projecten")
+    .select("id, status")
+    .in("status", ["hold_sales_actie", "hold_sales", "annulering", "geannuleerd"])
+    .limit(2000);
+
+  let removedRegels = 0;
+  let cancelledCfs = 0;
+  let count = 0;
+  for (const p of projects || []) {
+    count += 1;
+    const r = await stripHoldSalesFromOpenSalesCreditfacturen(
+      sb,
+      p.id as string
+    );
+    removedRegels += r.removedRegels;
+    cancelledCfs += r.cancelledCfs;
+  }
+  return { projects: count, removedRegels, cancelledCfs };
 }
 
 /** Hernummer bedragen op basis van alle regels. */
@@ -446,11 +567,22 @@ export async function ensureNettoAanbetalingCreditfactuur(
 
   const { data: project } = await sb
     .from("projecten")
-    .select("project_nummer")
+    .select("id, project_nummer, status, offerte_id")
     .eq("lead_id", fac.lead_id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  // HOLD SALES / annulering: geen sales-commissie uitbetalen
+  if (project && isProjectHoldSales(project)) {
+    return { ok: true, skipped: "hold_sales" };
+  }
+  if (
+    project &&
+    (project.status === "annulering" || project.status === "geannuleerd")
+  ) {
+    return { ok: true, skipped: "annulering" };
+  }
 
   const omzetEx = await omzetExFromOfferte(sb, fac.offerte_id, off || undefined);
   const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
@@ -594,6 +726,16 @@ export async function ensureAdviseurCommissieTrancheB(
 
   if (pErr || !project) {
     return { ok: false, error: pErr?.message || "Project niet gevonden" };
+  }
+
+  if (isProjectHoldSales(project)) {
+    return { ok: true, skipped: "hold_sales" };
+  }
+  if (
+    project.status === "annulering" ||
+    project.status === "geannuleerd"
+  ) {
+    return { ok: true, skipped: "annulering" };
   }
 
   const leadRaw = project.leads as
