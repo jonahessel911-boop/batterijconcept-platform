@@ -15,6 +15,7 @@ import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
 import { TeamNotitiesSection } from "./TeamNotitiesSection";
 import { BellerCommissieWeeks } from "./BellerCommissieWeeks";
+import { AdviseurProductenSection } from "./AdviseurProductenSection";
 import { isUsableStartAdres } from "@/lib/start-adres";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
@@ -1283,6 +1284,20 @@ export function InstellingenPanel({
                     ?.scrollIntoView({ behavior: "smooth", block: "center" });
                 }}
               />
+            ) : null}
+
+            {rol === "adviseur" ? (
+              <FormSection
+                title="Producten"
+                hint="Alleen dit account. Andere adviseurs houden alleen de thuisbatterij."
+                className="lg:col-span-2"
+                wide
+              >
+                <AdviseurProductenSection
+                  adviseurId={selectedAdviseur.id}
+                  adviseurNaam={draft.naam || selectedAdviseur.naam}
+                />
+              </FormSection>
             ) : null}
 
             <FormSection

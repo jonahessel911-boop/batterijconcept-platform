@@ -8,6 +8,7 @@ import {
   isAlphaEssMetOmvormerRegel,
   omvormerOmschrijvingVoor,
 } from "@/lib/offerte-regels";
+import { productZichtbaarVoorAdviseur } from "@/lib/warmtepomp-producten";
 
 type Line = {
   key: string;
@@ -97,12 +98,14 @@ export function MaakOfferteModal({
   open,
   leadId,
   leadNaam,
+  adviseurId,
   onClose,
   onCreated,
 }: {
   open: boolean;
   leadId: string;
   leadNaam: string;
+  adviseurId?: string | null;
   onClose: () => void;
   onCreated: (offerteId: string) => void;
 }) {
@@ -134,13 +137,17 @@ export function MaakOfferteModal({
         .eq("actief", true)
         .order("naam");
       if (!cancelled) {
-        setProducten((prodRes.data as Product[]) || []);
+        setProducten(
+          ((prodRes.data as Product[]) || []).filter((p) =>
+            productZichtbaarVoorAdviseur(p, adviseurId)
+          )
+        );
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, adviseurId]);
 
   const kortingInput = Number(korting.replace(",", ".")) || 0;
 

@@ -1382,6 +1382,7 @@ export function LeadPage() {
         open={maakOfferteOpen}
         leadId={lead.id}
         leadNaam={lead.naam}
+        adviseurId={lead.adviseur_id}
         onClose={() => setMaakOfferteOpen(false)}
         onCreated={(offerteId) => {
           setMaakOfferteOpen(false);
