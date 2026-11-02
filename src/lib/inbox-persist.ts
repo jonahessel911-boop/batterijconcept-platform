@@ -46,28 +46,28 @@ function parseAttachments(
 ): InboxAttachment[] {
   const list = raw?.attachments;
   if (!Array.isArray(list)) return [];
-  return list
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const a = item as Record<string, unknown>;
-      const id = typeof a.id === "string" ? a.id : "";
-      const filename = typeof a.filename === "string" ? a.filename : "";
-      const storagePath =
-        typeof a.storagePath === "string" ? a.storagePath : "";
-      if (!id || !filename || !storagePath) return null;
-      return {
-        id,
-        filename,
-        contentType:
-          typeof a.contentType === "string"
-            ? a.contentType
-            : "application/octet-stream",
-        size: typeof a.size === "number" ? a.size : 0,
-        storagePath,
-        isImage: typeof a.isImage === "boolean" ? a.isImage : undefined,
-      } satisfies InboxAttachment;
-    })
-    .filter((x): x is InboxAttachment => Boolean(x));
+  const out: InboxAttachment[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Record<string, unknown>;
+    const id = typeof a.id === "string" ? a.id : "";
+    const filename = typeof a.filename === "string" ? a.filename : "";
+    const storagePath =
+      typeof a.storagePath === "string" ? a.storagePath : "";
+    if (!id || !filename || !storagePath) continue;
+    out.push({
+      id,
+      filename,
+      contentType:
+        typeof a.contentType === "string"
+          ? a.contentType
+          : "application/octet-stream",
+      size: typeof a.size === "number" ? a.size : 0,
+      storagePath,
+      isImage: typeof a.isImage === "boolean" ? a.isImage : undefined,
+    });
+  }
+  return out;
 }
 
 function parseImageUrls(
@@ -285,7 +285,7 @@ export async function insertBookedInboxMail(
     insertRow.raw_headers = {
       ...insertRow.raw_headers,
       intended_folder: intended,
-    };
+    } as typeof insertRow.raw_headers;
     ({ data, error } = await sb
       .from("inbox_mails")
       .insert(insertRow)

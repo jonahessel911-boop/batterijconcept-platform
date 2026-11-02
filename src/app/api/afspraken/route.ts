@@ -175,7 +175,7 @@ export async function PATCH(req: NextRequest) {
           partner_afwezig?: boolean;
           afspraak_id?: string;
         } | null;
-        if (meta?.afspraak_id !== afspraak.id) return false;
+        if (!meta || meta.afspraak_id !== afspraak.id) return false;
         if (typeof meta.beslissers_aanwezig === "boolean") {
           return meta.beslissers_aanwezig === body.aanwezig;
         }

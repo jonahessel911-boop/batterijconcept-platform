@@ -1277,12 +1277,8 @@ export function LeadPage() {
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
-                  lockAdviseur={rol === "adviseur"}
-                  defaultAdviseurId={
-                    rol === "adviseur"
-                      ? session?.id
-                      : lead.adviseur_id || undefined
-                  }
+                  lockAdviseur={false}
+                  defaultAdviseurId={lead.adviseur_id || undefined}
                   onCancel={() => {
                     setPlanOpen(false);
                     setPlanMode(null);
@@ -1310,7 +1306,6 @@ export function LeadPage() {
                     lockAdviseur={false}
                     defaultAdviseurId={
                       lead.beller_id ||
-                      (rol === "adviseur" ? session?.id : null) ||
                       lead.adviseur_id ||
                       session?.id ||
                       undefined
