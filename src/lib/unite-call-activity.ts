@@ -155,24 +155,24 @@ export function formatCallActivityText(act: UniteCallActivityInput): {
     act.direction === "in" ? act.fromNumber : act.fromNumber
   );
 
-  const titel =
-    act.durationSeconds > 0
-      ? `Gesprek · ${dirLabel} · ${durLabel}`
-      : `Gesprek · ${dirLabel}`;
+  const unanswered = act.durationSeconds <= 0;
+  const titel = unanswered
+    ? `Niet opgenomen · ${dirLabel}`
+    : `Gesprek · ${dirLabel} · ${durLabel}`;
 
   const detailParts = [
     door ? `Gebeld door: ${door}` : null,
     act.direction === "out"
       ? `Naar: ${naar}`
       : `Van: ${van || naar}`,
-    `Duur: ${durLabel} (${act.durationSeconds}s)`,
+    unanswered ? "Niet opgenomen" : `Duur: ${durLabel} (${act.durationSeconds}s)`,
   ].filter(Boolean);
 
   const notitie = [
     titel,
     door ? `Gebeld door: ${door}` : null,
     act.direction === "out" ? `Naar: ${naar}` : `Van: ${van || naar}`,
-    `Duur: ${durLabel}`,
+    unanswered ? "Niet opgenomen" : `Duur: ${durLabel}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -207,6 +207,7 @@ export async function enrichUniteCallActivity(
   }
 
   if (
+    next.durationSeconds > 0 &&
     next.agentExtensionId &&
     next.matchPhone &&
     !next.callrecordkey
@@ -340,6 +341,8 @@ export async function logUniteCallActivity(
       callrecordkey: enriched.callrecordkey || null,
       recording_storage_path: storagePath,
       recording_complete: Boolean(storagePath),
+      recording_unavailable: enriched.durationSeconds <= 0,
+      answered: enriched.durationSeconds > 0,
     },
   });
 
@@ -499,6 +502,7 @@ export async function reattachMissingRecordings(opts?: {
       extension_id?: string;
     };
     if (meta.recording_unavailable) continue;
+    if ((Number(meta.duration_seconds) || 0) <= 0) continue;
     if (meta.callrecordkey && meta.recording_storage_path) continue;
     checked += 1;
 

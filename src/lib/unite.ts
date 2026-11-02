@@ -164,6 +164,8 @@ export async function listUniteCdrLogs(opts: {
   pageLimit?: number;
   inbound?: boolean;
   outbound?: boolean;
+  /** 0 = alles, 1 = opgenomen, 2 = niet opgenomen. */
+  answered?: 0 | 1 | 2;
 }): Promise<{
   items: UniteCdrLog[];
   itemcount: number;
@@ -176,7 +178,9 @@ export async function listUniteCdrLogs(opts: {
     filter_dateend: opts.dateEnd,
     filter_inbound: opts.inbound === false ? 0 : 1,
     filter_outbound: opts.outbound === false ? 0 : 1,
-    filter_answered: 0,
+    filter_answered: opts.answered ?? 0,
+    sortkey: "calltime",
+    sorttype: 1,
     pagelimit: opts.pageLimit ?? 50,
     showpage: opts.page ?? 1,
   });

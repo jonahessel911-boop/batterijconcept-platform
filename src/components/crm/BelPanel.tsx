@@ -1108,7 +1108,7 @@ export function BelPanel({
               Normale belbak
             </p>
             <p className="mt-1 text-sm text-muted">
-              Leads van de afgelopen 10 dagen eerst, tot 3 keer. Daarna de rest. Na 3 keer geen contact: definitief afgeboekt.
+              Nieuwste aanmelding eerst (laatste 10 dagen), tot 3 keer. Daarna de rest. Na 3 keer geen contact: definitief afgeboekt.
             </p>
             <p className="mt-3 text-xs font-semibold text-green-dark">
               {allBelQueue.length} in de wachtrij

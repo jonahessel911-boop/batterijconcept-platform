@@ -2566,14 +2566,22 @@ export function ProjectPage() {
     }
 
     const isBel =
-      soort === "bel" || displayTitle.toLowerCase().startsWith("gesprek");
+      soort === "bel" ||
+      displayTitle.toLowerCase().startsWith("gesprek") ||
+      displayTitle.toLowerCase().startsWith("niet opgenomen");
     const recMeta = meta as {
       callrecordkey?: string;
       extension_id?: string;
       recording_storage_path?: string;
       recording_unavailable?: boolean;
       recording_complete?: boolean;
+      duration_seconds?: number;
+      answered?: boolean;
     };
+    const unanswered =
+      recMeta.answered === false ||
+      Number(recMeta.duration_seconds) === 0 ||
+      displayTitle.toLowerCase().startsWith("niet opgenomen");
     feed.push({
       key: `ev-${ev.id}`,
       at: ev.created_at,
@@ -2581,11 +2589,13 @@ export function ProjectPage() {
       body: displayBody,
       kind: "event",
       icon: iconForLeadEvent(ev),
-      recordingHref: isBel ? recordingHrefFromMeta(recMeta) : null,
-      recordingEventId: isBel ? ev.id : null,
-      recordingUnavailable: isBel
-        ? recordingUnavailableFromMeta(recMeta, ev.created_at)
-        : false,
+      recordingHref:
+        isBel && !unanswered ? recordingHrefFromMeta(recMeta) : null,
+      recordingEventId: isBel && !unanswered ? ev.id : null,
+      recordingUnavailable:
+        isBel && !unanswered
+          ? recordingUnavailableFromMeta(recMeta, ev.created_at)
+          : false,
     });
   }
 

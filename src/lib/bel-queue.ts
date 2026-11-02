@@ -471,8 +471,8 @@ export function belLeadLeeftijdDagen(
 
 /**
  * Vooraan de belbak: ≤ 10 dagen oud én nog geen 3 pogingen.
- * Een gemiste oproep houdt de lead in die laag, vóór de oude voorraad,
- * tot de derde poging. Daarna gaat de lead uit de bak.
+ * Binnen die laag wint de nieuwste aanmelding. Een gemiste oproep
+ * zakt niet naar de oude voorraad, maar een latere aanmelding gaat er wel voor.
  */
 export function isVersBelLead(
   lead: Pick<Lead, "created_at" | "belpogingen">,
@@ -490,27 +490,15 @@ export function sortBelQueue(leads: Lead[], now = new Date()): Lead[] {
     const bVers = isVersBelLead(b, now) ? 1 : 0;
     if (aVers !== bVers) return bVers - aVers;
 
-    const aHerplan = isHerplanBelLead(a) ? 1 : 0;
-    const bHerplan = isHerplanBelLead(b) ? 1 : 0;
-    if (aHerplan !== bHerplan) return bHerplan - aHerplan;
-
     if (aVers && bVers) {
-      const aPog = belpogingenOf(a);
-      const bPog = belpogingenOf(b);
-      if (aPog !== bPog) return bPog - aPog;
-
-      const aCalled = a.laatst_gebeld_at
-        ? new Date(a.laatst_gebeld_at).getTime()
-        : 0;
-      const bCalled = b.laatst_gebeld_at
-        ? new Date(b.laatst_gebeld_at).getTime()
-        : 0;
-      if (aCalled !== bCalled) return bCalled - aCalled;
-
       return (
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
     }
+
+    const aHerplan = isHerplanBelLead(a) ? 1 : 0;
+    const bHerplan = isHerplanBelLead(b) ? 1 : 0;
+    if (aHerplan !== bHerplan) return bHerplan - aHerplan;
 
     const aToday = belpogingenVandaagOf(a);
     const bToday = belpogingenVandaagOf(b);

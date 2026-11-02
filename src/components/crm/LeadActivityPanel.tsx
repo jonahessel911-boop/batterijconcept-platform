@@ -234,11 +234,17 @@ function buildFromEntities(opts: {
       recording_storage_path?: string;
       recording_unavailable?: boolean;
       recording_complete?: boolean;
+      duration_seconds?: number;
+      answered?: boolean;
       bron?: string;
     };
-    // Elke Unite-/bel-activiteit krijgt een opname-speler (lost key op indien nodig)
+    const unanswered =
+      meta.answered === false ||
+      Number(meta.duration_seconds) === 0 ||
+      /^niet opgenomen\b/i.test(titel);
+    // Opgenomen gesprekken krijgen een speler. Niet opgenomen: alleen de regel.
     const recordingAction =
-      soort === "bel" || /^Gesprek\b/i.test(titel)
+      !unanswered && (soort === "bel" || /^Gesprek\b/i.test(titel))
         ? {
             type: "call_recording" as const,
             href: recordingHrefFromMeta(meta),
