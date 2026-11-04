@@ -19,6 +19,7 @@ import {
   annuleringskostenIncBtw,
 } from "@/lib/av-annulering";
 import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
+import { wfWerkStatusVan } from "@/lib/warmtefonds-werkstatus";
 import {
   factuurEffectieveDeadline,
   factuurOpvolgActie,
@@ -763,6 +764,8 @@ export function openNabellenFactuurActies(
     ) {
       continue;
     }
+    // Afspraak ingepland + aanbetaling Verzonden → eigen WF-opvolgactie
+    if (linkedProject && isWfAanbetalingOpvolgen(linkedProject, f)) continue;
 
     const fase = factuurOpvolgActie({
       status: f.status,
@@ -818,8 +821,33 @@ export function openNabellenFactuurActies(
 }
 
 /**
+ * Warmtefonds, afspraak staat op Afspraak ingepland, aanbetaling nog Verzonden.
+ * Dan is de actie factuur opvolgen — niet de algemene herinnering.
+ */
+export function isWfAanbetalingOpvolgen(
+  project: Pick<
+    Project,
+    "betaalwijze" | "financiering_status" | "warmtefonds_afspraak_at" | "status"
+  > &
+    Partial<Project>,
+  factuur: { status?: string | null; omschrijving?: string | null }
+): boolean {
+  if (!isWarmtefondsProject(project as Project)) return false;
+  if (!isAanbetalingFactuurOmschrijving(factuur.omschrijving)) return false;
+  if (factuur.status !== "verzonden") return false;
+  return (
+    wfWerkStatusVan({
+      financiering_status: project.financiering_status,
+      warmtefonds_afspraak_at: project.warmtefonds_afspraak_at,
+    }) === "afspraak_ingepland"
+  );
+}
+
+/**
  * Warmtefonds: openstaande aanbetaling → vriendelijke herinneringsmail,
  * zodat we pas na betaling Warmtefonds kunnen aanvragen.
+ * Staat de afspraak op Afspraak ingepland en de factuur nog op Verzonden,
+ * dan heet de actie “Factuur opvolgen aanbetaling Warmtefonds”.
  */
 export function openWarmtefondsAanbetalingHerinneringActies(
   facturen: Factuur[],
@@ -857,8 +885,10 @@ export function openWarmtefondsAanbetalingHerinneringActies(
     if (!project) continue;
     if (isProjectBuitenActies(project)) continue;
     if (!isWarmtefondsProject(project)) continue;
-    // Na WF-aanvraag is deze herinnering niet meer de juiste actie
-    if (project.warmtefonds_aangevraagd_at) continue;
+    const opvolgen = isWfAanbetalingOpvolgen(project, f);
+    // Na WF-aanvraag is de losse herinnering niet meer de juiste actie.
+    // Opvolgen blijft zolang de afspraak ingepland is en de factuur Verzonden.
+    if (!opvolgen && project.warmtefonds_aangevraagd_at) continue;
 
     const lead = leadFromFactuur(f);
     const deadline =
@@ -876,9 +906,15 @@ export function openWarmtefondsAanbetalingHerinneringActies(
     items.push({
       id: `wf-aanbetaling-herinnering-${f.id}`,
       soort: "wf_aanbetaling_herinnering",
-      titel: "Herinneringsmail aanbetaling (Warmtefonds)",
-      detail: `Aanbetaling ${f.factuur_nummer} openstaand — nodig vóór Warmtefonds-aanvraag. Stuur vriendelijke herinnering met factuur-PDF.`,
-      reden: `Warmtefonds: aanbetaling ${f.factuur_nummer} nog niet (volledig) betaald.`,
+      titel: opvolgen
+        ? "Factuur opvolgen aanbetaling Warmtefonds"
+        : "Herinneringsmail aanbetaling (Warmtefonds)",
+      detail: opvolgen
+        ? `Afspraak staat op Afspraak ingepland. Aanbetaling ${f.factuur_nummer} is verzonden en nog niet betaald.`
+        : `Aanbetaling ${f.factuur_nummer} openstaand — nodig vóór Warmtefonds-aanvraag. Stuur vriendelijke herinnering met factuur-PDF.`,
+      reden: opvolgen
+        ? `Warmtefonds: afspraak ingepland, aanbetaling ${f.factuur_nummer} nog Verzonden.`
+        : `Warmtefonds: aanbetaling ${f.factuur_nummer} nog niet (volledig) betaald.`,
       deadlineAt: deadlineAt.toISOString(),
       overdue,
       prio,

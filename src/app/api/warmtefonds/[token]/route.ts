@@ -3,10 +3,12 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
   isMissingWfProjectColumn,
+  doorgestuurdAtVoorProjecten,
   isWarmtefondsPortalProject,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
+  withPortalBedragen,
 } from "@/lib/warmtefonds-portal";
 
 export const runtime = "nodejs";
@@ -31,6 +33,7 @@ export async function GET(
       .from("projecten")
       .select(WF_PORTAL_PROJECT_SELECT)
       .neq("status", "annulering")
+      .or("betaalwijze.eq.warmtefonds,financiering_status.not.is.null")
       .order("warmtefonds_afspraak_at", {
         ascending: true,
         nullsFirst: false,
@@ -44,6 +47,7 @@ export async function GET(
         .from("projecten")
         .select(WF_PORTAL_PROJECT_SELECT_MIN)
         .neq("status", "annulering")
+        .or("betaalwijze.eq.warmtefonds,financiering_status.not.is.null")
         .order("warmtefonds_afspraak_at", {
           ascending: true,
           nullsFirst: false,
@@ -63,6 +67,7 @@ export async function GET(
           `
           )
           .neq("status", "annulering")
+          .eq("betaalwijze", "warmtefonds")
           .order("created_at", { ascending: false });
         if (bare.error) throw bare.error;
         rows = bare.data;
@@ -77,9 +82,19 @@ export async function GET(
 
     if (error) throw error;
 
-    const orders = ((rows || []) as Parameters<
-      typeof isWarmtefondsPortalProject
-    >[0][]).filter(isWarmtefondsPortalProject);
+    type PortalListRow = Parameters<typeof isWarmtefondsPortalProject>[0] & {
+      id: string;
+      lead_id?: string | null;
+    };
+    const orders = ((rows || []) as PortalListRow[])
+      .filter(isWarmtefondsPortalProject)
+      .map((row) => withPortalBedragen(row));
+
+    const doorgestuurd = await doorgestuurdAtVoorProjecten(sb, orders);
+    const metDoorgestuurd = orders.map((row) => ({
+      ...row,
+      doorgestuurd_at: doorgestuurd.get(row.id) ?? null,
+    }));
 
     return NextResponse.json({
       operator: {
@@ -87,7 +102,7 @@ export async function GET(
         naam: operator.naam,
         email: operator.email,
       },
-      orders,
+      orders: metDoorgestuurd,
     });
   } catch (e) {
     return NextResponse.json(

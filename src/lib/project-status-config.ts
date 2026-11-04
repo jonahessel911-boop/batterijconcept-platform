@@ -314,7 +314,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     key: "hold_sales_actie",
     label: "HOLD SALES ACTIE",
     fase: "overig",
-    scope: "beide",
+    scope: "eigen_middelen",
     inPipeline: false,
     taak: null,
   },

@@ -766,6 +766,7 @@ export function CrmShell() {
     >();
     for (const p of projecten) {
       if (p.status !== "hold_sales_actie" || !p.offerte_id) continue;
+      if (p.betaalwijze === "warmtefonds") continue;
       const lead = p.leads as
         | {
             naam?: string | null;

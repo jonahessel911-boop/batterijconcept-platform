@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { adresRegel, formatDateTimeNl } from "@/lib/format";
+import { adresRegel, formatDateTimeNl, formatEuro } from "@/lib/format";
 import type { FinancieringStatus } from "@/lib/financiering-status";
 import {
   FINANCIERING_PIPELINE,
@@ -13,6 +13,7 @@ import {
   normalizeFinancieringStatus,
 } from "@/lib/financiering-status";
 import { wfPortalStatusLabel } from "@/lib/warmtefonds-portal";
+import { WarmtefondsAfspraakForm } from "@/components/warmtefonds/WarmtefondsAfspraakForm";
 
 type LeadLite = {
   id?: string;
@@ -42,6 +43,12 @@ type OrderDetail = {
     | { offerte_nummer?: string; ondertekend_op?: string | null }
     | { offerte_nummer?: string; ondertekend_op?: string | null }[]
     | null;
+  bedragen?: {
+    totaalInc: number | null;
+    aanbetalingInc: number | null;
+    warmtefondsInc: number | null;
+    offerteGetekend: boolean;
+  } | null;
 };
 
 type LeadEvent = {
@@ -55,17 +62,14 @@ type LeadEvent = {
 const inputCls =
   "mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-[#C45A12]";
 
+function euroOfStreep(amount: number | null | undefined): string {
+  if (amount == null || !Number.isFinite(amount)) return "—";
+  return formatEuro(amount);
+}
+
 function leadOf(o: OrderDetail): LeadLite | null {
   if (!o.leads) return null;
   return Array.isArray(o.leads) ? o.leads[0] || null : o.leads;
-}
-
-function toLocalInputValue(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export function WarmtefondsOrderDetailPage() {
@@ -80,12 +84,10 @@ export function WarmtefondsOrderDetailPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const [afspraakLocal, setAfspraakLocal] = useState("");
   const [wfNotities, setWfNotities] = useState("");
   const [nieuweNotitie, setNieuweNotitie] = useState("");
 
   const syncForm = useCallback((o: OrderDetail) => {
-    setAfspraakLocal(toLocalInputValue(o.warmtefonds_afspraak_at));
     setWfNotities(o.warmtefonds_notities || "");
   }, []);
 
@@ -151,27 +153,6 @@ export function WarmtefondsOrderDetailPage() {
       { financiering_status: step },
       "status",
       `Stap gezet: ${FINANCIERING_STATUS_LABEL_KORT[step]}`
-    );
-  }
-
-  async function saveAfspraak() {
-    if (!afspraakLocal) {
-      await patch(
-        { warmtefonds_afspraak_at: null },
-        "afspraak",
-        "Afspraak gewist."
-      );
-      return;
-    }
-    const d = new Date(afspraakLocal);
-    if (Number.isNaN(d.getTime())) {
-      setError("Ongeldige datum/tijd");
-      return;
-    }
-    await patch(
-      { warmtefonds_afspraak_at: d.toISOString() },
-      "afspraak",
-      "Interne afspraak opgeslagen."
     );
   }
 
@@ -313,6 +294,64 @@ export function WarmtefondsOrderDetailPage() {
                   {lead ? adresRegel(lead) || "—" : "—"}
                 </p>
               </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Order
+                </p>
+                <p className="mt-0.5 text-sm font-medium text-ink">
+                  {euroOfStreep(order.bedragen?.totaalInc)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Aanbetaling
+                </p>
+                <p className="mt-0.5 text-sm font-medium text-ink">
+                  {euroOfStreep(order.bedragen?.aanbetalingInc)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Warmtefonds-deel
+                </p>
+                <p className="mt-0.5 text-sm font-semibold text-[#C45A12]">
+                  {euroOfStreep(order.bedragen?.warmtefondsInc)}
+                </p>
+              </div>
+              <div className="flex items-end">
+                {order.bedragen?.offerteGetekend ? (
+                  <a
+                    href={`/api/warmtefonds/${token}/orders/${order.id}/offerte`}
+                    className="text-sm font-semibold text-green-dark hover:underline"
+                  >
+                    Getekende offerte (PDF)
+                  </a>
+                ) : (
+                  <p className="text-sm text-muted">Offerte nog niet getekend</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="border border-line bg-white">
+            <div className="border-b border-line px-4 py-3 sm:px-5">
+              <h2 className="font-display text-base font-semibold text-ink">
+                WF-afspraak
+              </h2>
+              <p className="mt-0.5 text-xs text-muted">
+                De klant krijgt een bevestiging per e-mail. De afspraak staat in de agenda.
+              </p>
+            </div>
+            <div className="p-4 sm:p-5">
+              <WarmtefondsAfspraakForm
+                token={token}
+                projectId={order.id}
+                huidige={order.warmtefonds_afspraak_at}
+                onKlaar={(bericht) => {
+                  setOkMsg(bericht);
+                  void load();
+                }}
+              />
             </div>
           </section>
 
@@ -388,55 +427,6 @@ export function WarmtefondsOrderDetailPage() {
               >
                 Afgewezen
               </button>
-            </div>
-          </section>
-
-          <section className="border border-line bg-white">
-            <div className="border-b border-line px-4 py-3 sm:px-5">
-              <h2 className="font-display text-base font-semibold text-ink">
-                Interne afspraak
-              </h2>
-              <p className="mt-0.5 text-xs text-muted">
-                Puur intern — geen mail naar de klant. Zichtbaar in de agenda.
-              </p>
-            </div>
-            <div className="space-y-3 p-4 sm:p-5">
-              <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Datum & tijd
-                <input
-                  type="datetime-local"
-                  value={afspraakLocal}
-                  onChange={(e) => setAfspraakLocal(e.target.value)}
-                  className={inputCls}
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={busy === "afspraak"}
-                  onClick={() => void saveAfspraak()}
-                  className="bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-60"
-                >
-                  {busy === "afspraak" ? "Bezig…" : "Afspraak opslaan"}
-                </button>
-                {afspraakLocal ? (
-                  <button
-                    type="button"
-                    disabled={busy === "afspraak"}
-                    onClick={() => {
-                      setAfspraakLocal("");
-                      void patch(
-                        { warmtefonds_afspraak_at: null },
-                        "afspraak",
-                        "Afspraak gewist."
-                      );
-                    }}
-                    className="border border-line bg-white px-4 py-2.5 text-sm font-medium hover:bg-wash"
-                  >
-                    Wissen
-                  </button>
-                ) : null}
-              </div>
             </div>
           </section>
 

@@ -479,7 +479,7 @@ function costPostLabel(key: ExpenseCostPostKey): string {
     case "sales":
       return "Sales / commissie";
     case "loon":
-      return "Loonkosten (Tarik)";
+      return "Loonkosten (Rik)";
     case "leads":
       return "Leadkosten (ads)";
     case "credit":
@@ -915,7 +915,7 @@ export function buildFreeCashflow(
       teBetalenLoon += totaal;
       buckets[payIdx].uitLoon += totaal;
       buckets[payIdx].overig.push({
-        label: `Tarik week ${getISOWeek(weekMon)} · vast €${vast}${
+        label: `Rik week ${getISOWeek(weekMon)} · vast €${vast}${
           apptCount > 0
             ? ` + ${apptCount}×€${TARIK_PER_INGEPLANDE_AFSPRAAK}`
             : ""
@@ -925,7 +925,7 @@ export function buildFreeCashflow(
       });
       expenseLines.push({
         costPost: "loon",
-        label: `Tarik · week ${getISOWeek(weekMon)}`,
+        label: `Rik · week ${getISOWeek(weekMon)}`,
         bedrag: totaal,
         betaalDatum: ymdAmsterdam(payAt),
         wanneer: `Maandag na werkweek ma–vr (week ${getISOWeek(weekMon)})`,

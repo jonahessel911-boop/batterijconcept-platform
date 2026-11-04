@@ -613,7 +613,7 @@ function eigenaarVoorActie(
   }
   if (defaultEigenaarId) {
     const a = adviseurs.find((x) => x.id === defaultEigenaarId);
-    const naam = a?.naam || "Tarik";
+    const naam = a?.naam || "Rik";
     return {
       id: defaultEigenaarId,
       naam,
@@ -5115,7 +5115,7 @@ export function BackofficeActiesList({
 
       {geenEigenaarCount > 0 ? (
         <p className="text-[11px] text-muted">
-          {geenEigenaarCount} zonder eigenaar — standaard Tarik.
+          {geenEigenaarCount} zonder eigenaar — standaard Rik.
         </p>
       ) : null}
       </div>
@@ -5646,7 +5646,10 @@ export function BackofficeActiesList({
                               ? "Bezig…"
                               : "Stuur herinneringsmail",
                           uitleg:
-                            "Vriendelijke herinnering: aanbetaling nodig voor Warmtefonds-aanvraag.",
+                            actie.titel ===
+                            "Factuur opvolgen aanbetaling Warmtefonds"
+                              ? "Afspraak is ingepland en de aanbetaling staat nog op Verzonden. Herinner de klant, of markeer betaald als het binnen is."
+                              : "Vriendelijke herinnering: aanbetaling nodig voor Warmtefonds-aanvraag.",
                           tone: "orange",
                           disabled:
                             busyId === `${actie.id}-wf-herinnering`,

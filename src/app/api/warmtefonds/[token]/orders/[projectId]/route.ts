@@ -13,6 +13,7 @@ import {
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
   wfPortalStatusLabel,
+  withPortalBedragen,
 } from "@/lib/warmtefonds-portal";
 
 export const runtime = "nodejs";
@@ -100,7 +101,7 @@ export async function GET(
 
     return NextResponse.json({
       operator: { id: operator.id, naam: operator.naam },
-      order,
+      order: withPortalBedragen(order),
       events,
     });
   } catch (e) {
@@ -183,17 +184,13 @@ export async function PATCH(
           );
         }
         patch.warmtefonds_afspraak_at = d.toISOString();
+        // Afspraak is geen pipeline-stap. Alleen als er nog geen status
+        // staat, markeer dat de aanvraag bij de operator ligt.
         if (
           body.financiering_status === undefined &&
           !(before as { financiering_status?: string | null }).financiering_status
         ) {
-          patch.financiering_status = "afspraak_ingepland";
-        } else if (
-          body.financiering_status === undefined &&
-          (before as { financiering_status?: string | null })
-            .financiering_status === "doorgestuurd_naar_edwin"
-        ) {
-          patch.financiering_status = "afspraak_ingepland";
+          patch.financiering_status = "doorgestuurd_naar_edwin";
         }
       }
     }
@@ -257,16 +254,20 @@ export async function PATCH(
     const leadId = (before as { lead_id?: string }).lead_id;
     const projectNummer = (before as { project_nummer?: string }).project_nummer;
 
+    const statusNaar =
+      "financiering_status" in patch
+        ? (patch.financiering_status as string | null)
+        : undefined;
     if (
       leadId &&
-      body.financiering_status !== undefined &&
-      body.financiering_status !==
+      statusNaar !== undefined &&
+      statusNaar !==
         (before as { financiering_status?: string | null }).financiering_status
     ) {
       await logLeadEvent({
         leadId,
         soort: "status",
-        titel: `Warmtefonds: ${wfPortalStatusLabel(body.financiering_status)}`,
+        titel: `Warmtefonds: ${wfPortalStatusLabel(statusNaar)}`,
         detail: projectNummer
           ? `Project ${projectNummer} · via Warmtefonds-portaal (${operator.naam})`
           : `Via Warmtefonds-portaal (${operator.naam})`,
@@ -275,7 +276,7 @@ export async function PATCH(
           veld: "financiering_status",
           van: (before as { financiering_status?: string | null })
             .financiering_status,
-          naar: body.financiering_status,
+          naar: statusNaar,
           bron: "warmtefonds_portaal",
           operator_id: operator.id,
         },
@@ -311,8 +312,8 @@ export async function PATCH(
       });
     }
 
-    // Sync auto-taken bij statuswijziging
-    if (body.financiering_status !== undefined) {
+    // Sync auto-taken bij statuswijziging (ook als de afspraak de eerste status zet)
+    if ("financiering_status" in patch) {
       try {
         const { syncAutoTakenVoorProject } = await import(
           "@/lib/sync-auto-taken"
@@ -325,10 +326,61 @@ export async function PATCH(
       } catch {
         /* best-effort */
       }
+      if (
+        statusNaar &&
+        statusNaar !==
+          (before as { financiering_status?: string | null }).financiering_status
+      ) {
+        try {
+          const { verstuurWarmtefondsStapFlows } = await import(
+            "@/lib/warmtefonds-automatisering"
+          );
+          const vanStatus =
+            (before as { financiering_status?: string | null })
+              .financiering_status ?? null;
+          await verstuurWarmtefondsStapFlows({
+            projectId,
+            van: vanStatus,
+            naar: statusNaar,
+          });
+          const { zorgEdergyFactuurBijStap } = await import(
+            "@/lib/edergy-factuur"
+          );
+          await zorgEdergyFactuurBijStap({
+            projectId,
+            van: vanStatus,
+            naar: statusNaar,
+          });
+        } catch {
+          /* mail mag de stap niet blokkeren */
+        }
+      }
+    }
+
+    let bevestiging: "verzonden" | "geen_email" | "mislukt" | null = null;
+    const nieuwAt = patch.warmtefonds_afspraak_at;
+    const oudAt = (before as { warmtefonds_afspraak_at?: string | null })
+      .warmtefonds_afspraak_at;
+    if (typeof nieuwAt === "string" && nieuwAt) {
+      const veranderd =
+        !oudAt || new Date(nieuwAt).getTime() !== new Date(oudAt).getTime();
+      if (veranderd) {
+        try {
+          const { verstuurWfAfspraakBevestiging } = await import(
+            "@/lib/warmtefonds-automatisering"
+          );
+          bevestiging = await verstuurWfAfspraakBevestiging(projectId);
+        } catch {
+          bevestiging = "mislukt";
+        }
+      }
     }
 
     const order = await loadOrder(sb, projectId);
-    return NextResponse.json({ order });
+    return NextResponse.json({
+      order: order ? withPortalBedragen(order) : null,
+      bevestiging,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

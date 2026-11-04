@@ -1052,6 +1052,10 @@ export function ProjectPage() {
         setOkMsg(
           "Financiering goedgekeurd — restantfactuur klaargezet (Financieel)."
         );
+      } else if (extra?.warmtefonds_afspraak_at) {
+        setOkMsg(
+          "WF-afspraak gezet. De klant krijgt een bevestiging per e-mail."
+        );
       } else {
         setOkMsg("Financieringsfase bijgewerkt.");
       }

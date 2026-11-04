@@ -543,7 +543,9 @@ export function BackofficeTable({
       if (actief === "annuleringen") {
         if (st !== "annulering") return false;
       } else if (actief === "hold_sales") {
-        if (st !== "hold_sales_actie") return false;
+        if (st !== "hold_sales_actie" || p.betaalwijze === "warmtefonds") {
+          return false;
+        }
       } else if (
         (st === "annulering" || st === "hold_sales_actie") &&
         actief !== "alles"

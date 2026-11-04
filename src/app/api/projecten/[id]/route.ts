@@ -523,7 +523,7 @@ export async function PATCH(
     let beforeQuery = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
@@ -535,7 +535,7 @@ export async function PATCH(
       beforeQuery = await sb
         .from("projecten")
         .select(
-          "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+          "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
         )
         .eq("id", id)
         .maybeSingle();
@@ -1275,6 +1275,60 @@ export async function PATCH(
     }
 
     // Geen automatische annuleringsmail meer — knop op projectpagina.
+    if (
+      body.financiering_status !== undefined &&
+      body.financiering_status !==
+        (before as { financiering_status?: string | null } | null)
+          ?.financiering_status
+    ) {
+      try {
+        const { verstuurWarmtefondsStapFlows } = await import(
+          "@/lib/warmtefonds-automatisering"
+        );
+        const vanStatus =
+          (before as { financiering_status?: string | null } | null)
+            ?.financiering_status ?? null;
+        const naarStatus =
+          typeof body.financiering_status === "string"
+            ? body.financiering_status
+            : null;
+        await verstuurWarmtefondsStapFlows({
+          projectId: id,
+          van: vanStatus,
+          naar: naarStatus,
+        });
+        const { zorgEdergyFactuurBijStap } = await import(
+          "@/lib/edergy-factuur"
+        );
+        await zorgEdergyFactuurBijStap({
+          projectId: id,
+          van: vanStatus,
+          naar: naarStatus,
+        });
+      } catch {
+        /* mail mag de status niet blokkeren */
+      }
+    }
+
+    const nieuwAfspraak = patch.warmtefonds_afspraak_at;
+    const oudAfspraak = (
+      before as { warmtefonds_afspraak_at?: string | null } | null
+    )?.warmtefonds_afspraak_at;
+    if (typeof nieuwAfspraak === "string" && nieuwAfspraak) {
+      const veranderd =
+        !oudAfspraak ||
+        new Date(nieuwAfspraak).getTime() !== new Date(oudAfspraak).getTime();
+      if (veranderd) {
+        try {
+          const { verstuurWfAfspraakBevestiging } = await import(
+            "@/lib/warmtefonds-automatisering"
+          );
+          await verstuurWfAfspraakBevestiging(id);
+        } catch {
+          /* bevestiging mag de afspraak niet blokkeren */
+        }
+      }
+    }
     return NextResponse.json({ project: data });
   } catch (e) {
     return NextResponse.json(

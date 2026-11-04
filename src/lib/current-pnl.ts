@@ -1,6 +1,6 @@
 /**
  * Current P&L op daadwerkelijk betaalde facturen (betaald_op):
- * omzet − inkoop − installatie − salescommissie − commissie ops − ad spend.
+ * omzet − inkoop − installatie − salescommissie − commissie ops − ad spend − Edergy.
  * Commissies obv ingestelde commissie_pct van de verkoper.
  */
 
@@ -28,6 +28,10 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
+import {
+  EDERGY_PER_AANVRAAG_INC,
+  EDERGY_VANAF_YMD,
+} from "@/lib/edergy-tarief";
 import {
   linesFromMetrics,
   type PnlMetrics,
@@ -62,6 +66,7 @@ type FactuurRow = {
 };
 
 type OfferteRow = {
+  ondertekend_op?: string | null;
   id: string;
   lead_id: string | null;
   subtotaal_ex_btw: number | null;
@@ -80,6 +85,8 @@ type ProjectRow = {
   offerte_id: string | null;
   status: string | null;
   projectkosten: number | null;
+  betaalwijze?: string | null;
+  financiering_status?: string | null;
 };
 
 type MetaRow = {
@@ -97,6 +104,7 @@ type Acc = {
   sales_commissie: number;
   ops_commissie: number;
   ad_spend: number;
+  edergy: number;
 };
 
 function newAcc(): Acc {
@@ -108,6 +116,7 @@ function newAcc(): Acc {
     sales_commissie: 0,
     ops_commissie: 0,
     ad_spend: 0,
+    edergy: 0,
   };
 }
 
@@ -120,6 +129,7 @@ function addAcc(a: Acc, b: Acc): Acc {
     sales_commissie: a.sales_commissie + b.sales_commissie,
     ops_commissie: a.ops_commissie + b.ops_commissie,
     ad_spend: a.ad_spend + b.ad_spend,
+    edergy: a.edergy + b.edergy,
   };
 }
 
@@ -134,8 +144,9 @@ function finalize(a: Acc): PnlMetrics {
   const sales_commissie = round2(a.sales_commissie);
   const ops_commissie = round2(a.ops_commissie);
   const ad_spend = round2(a.ad_spend);
+  const edergy = round2(a.edergy);
   const totale_kosten = round2(
-    inkoop + installatie + sales_commissie + ops_commissie + ad_spend
+    inkoop + installatie + sales_commissie + ops_commissie + ad_spend + edergy
   );
   const brutowinst = round2(omzet - totale_kosten);
   const marge_pct =
@@ -148,6 +159,7 @@ function finalize(a: Acc): PnlMetrics {
     sales_commissie,
     ops_commissie,
     ad_spend,
+    edergy,
     totale_kosten,
     brutowinst,
     marge_pct,
@@ -163,6 +175,7 @@ function metricsToAcc(m: PnlMetrics): Acc {
     sales_commissie: m.sales_commissie,
     ops_commissie: m.ops_commissie,
     ad_spend: m.ad_spend,
+    edergy: m.edergy,
   };
 }
 
@@ -313,7 +326,9 @@ export async function buildCurrentPnl(
       fetchAllRows<ProjectRow>((fromIdx, toIdx) =>
         sb
           .from("projecten")
-          .select("offerte_id, status, projectkosten")
+          .select(
+            "offerte_id, status, projectkosten, betaalwijze, financiering_status"
+          )
           .not("offerte_id", "is", null)
           .range(fromIdx, toIdx)
       ),
@@ -382,7 +397,7 @@ export async function buildCurrentPnl(
         sb
           .from("offertes")
           .select(
-            "id, lead_id, subtotaal_ex_btw, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
+            "id, lead_id, subtotaal_ex_btw, ondertekend_op, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
           )
           .in("id", chunk)
           .order("id", { ascending: true })
@@ -451,7 +466,7 @@ export async function buildCurrentPnl(
   }
   const tarikId = findDefaultBackofficeMedewerkerId(adviseursForTarik);
   const tarikNaam =
-    opsAdviseurs.find((a) => a.id === tarikId)?.naam || "Tarik";
+    opsAdviseurs.find((a) => a.id === tarikId)?.naam || "Rik";
   const afspraken = afsprakenRaw as OpsCommissieAfspraak[];
   const leadStatusById = new Map<string, string | null>();
   {
@@ -501,6 +516,8 @@ export async function buildCurrentPnl(
     if (!monthAcc.has(mk)) monthAcc.set(mk, newAcc());
     return weekAcc.get(wk)!;
   }
+
+  const edergyGeboekt = new Set<string>();
 
   for (const f of facturen) {
     const ymd = factuurBetaalYmd(f);
@@ -554,6 +571,22 @@ export async function buildCurrentPnl(
     wa.inkoop += inkoop;
     wa.installatie += installatie;
     wa.sales_commissie += commissie;
+    const getekend = asYmd(offerte?.ondertekend_op);
+    const warmtefonds =
+      proj?.betaalwijze === "warmtefonds" ||
+      Boolean((proj?.financiering_status || "").trim());
+    if (
+      !isCredit &&
+      !geannuleerd &&
+      oid &&
+      warmtefonds &&
+      getekend >= EDERGY_VANAF_YMD &&
+      !edergyGeboekt.has(oid)
+    ) {
+      edergyGeboekt.add(oid);
+      wa.edergy += EDERGY_PER_AANVRAAG_INC;
+      ma.edergy += EDERGY_PER_AANVRAAG_INC;
+    }
     ma.omzet += paid;
     ma.inkoop += inkoop;
     ma.installatie += installatie;
