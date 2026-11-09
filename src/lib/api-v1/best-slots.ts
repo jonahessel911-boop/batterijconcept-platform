@@ -28,7 +28,10 @@ import {
   type FastDirectionStop,
 } from "@/lib/fast-direction";
 import { AMSTERDAM_TZ, adresRegel, formatSlotLabelNl, formatSlotLabelSpokenNl } from "@/lib/format";
-import { generateAvailableSlots } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
 import { loadAdviseurConversieMap } from "@/lib/adviseur-conversie";
 import {
@@ -435,7 +438,10 @@ export async function loadBestSlotsForLead(
     }
   | { ok: false; status: number; error: string; detail?: string }
 > {
-  const daysAhead = Math.min(Math.max(opts.daysAhead ?? 14, 1), 60);
+  const daysAhead = Math.min(
+    Math.max(opts.daysAhead ?? HUISBEZOEK_PLAN_DAYS_AHEAD, 1),
+    HUISBEZOEK_PLAN_DAYS_AHEAD
+  );
   const limit = Math.min(Math.max(opts.limit ?? 5, 1), 20);
   const diversifyHours = Boolean(opts.diversifyHours);
   const poolSize = Math.min(
@@ -800,9 +806,9 @@ export async function loadBestSlotsForLead(
    * Reistijd is leidend. Conversie telt mee (± max ~12 min equivalent).
    * Lege/dunne agenda’s krijgen scorepunten (± max ~16 min) zodat die
    * bij het bellen naar voren worden geschoven en gevuld worden.
-   * Datum is lichte tie-breaker (~0.4 min/dag).
+   * Vroege datum krijgt sterke prio (~8 min/dag) zodat we z.s.m. inplannen.
    */
-  const DAY_PENALTY_MIN = 0.4;
+  const DAY_PENALTY_MIN = 8;
   /** 100% conversie ≈ 12 min “korting” op reistijd — niet genoeg om 20+ min rit te winnen. */
   const CONVERSIE_BONUS_MAX_MIN = 12;
   /**

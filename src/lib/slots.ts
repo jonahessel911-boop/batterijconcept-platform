@@ -12,6 +12,12 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 const SLOT_MINUTES = 120;
 
 /**
+ * Max dagen vooruit bij huisbezoek plannen (Bel + handmatig).
+ * Prio: zo vroeg mogelijk binnen dit venster.
+ */
+export const HUISBEZOEK_PLAN_DAYS_AHEAD = 16;
+
+/**
  * Vier afspraakblokken per dag (Europe/Amsterdam).
  * 2 uur afspraak + 1 uur reistijd:
  * 10:00–12:00, 13:00–15:00, 16:00–18:00, 19:00–21:00.
@@ -39,7 +45,7 @@ export function generateDayBlocks(opts: {
   /** @deprecated Alleen nog voor backwards compat; zaterdag is standaard wél beschikbaar. */
   weekdaysOnly?: boolean;
 }): DayBlock[] {
-  const daysAhead = opts.daysAhead ?? 21;
+  const daysAhead = opts.daysAhead ?? HUISBEZOEK_PLAN_DAYS_AHEAD;
   const from = opts.fromDate ?? new Date();
   const slots: DayBlock[] = [];
 

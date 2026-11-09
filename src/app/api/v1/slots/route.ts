@@ -15,7 +15,10 @@ import { toZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ, formatSlotLabelSpokenNl } from "@/lib/format";
-import { generateAvailableSlots } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   dayKeyAmsterdam,
@@ -41,8 +44,8 @@ export async function GET(req: NextRequest) {
   const leadId = pickStr(sp.get("lead_id"), sp.get("leadId"));
   const adviseurId = pickStr(sp.get("adviseur_id"), sp.get("adviseurId"));
   const daysAhead = Math.min(
-    Math.max(parseNum(sp.get("days")) || 14, 1),
-    60
+    Math.max(parseNum(sp.get("days")) || HUISBEZOEK_PLAN_DAYS_AHEAD, 1),
+    HUISBEZOEK_PLAN_DAYS_AHEAD
   );
   const limit = Math.min(
     Math.max(parseNum(sp.get("limit")) || (leadId ? 5 : 40), 1),

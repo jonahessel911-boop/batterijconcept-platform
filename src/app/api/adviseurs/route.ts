@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAvailableSlots, generateDayBlocks } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  generateDayBlocks,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   appBaseUrl,
@@ -208,19 +212,17 @@ export async function GET(req: NextRequest) {
     }
 
     const busyRows = await blockingBusySlots(sb, adviseurId);
-    // Handmatig plannen (Bel / LeadAfspraak): max 16 dagen vooruit —
-    // verder vooruit plannen vult agenda’s te ver en “valt” te veel uit.
-    const HANDMATIG_DAYS_AHEAD = 16;
+    // Handmatig plannen (Bel / LeadAfspraak): max 16 dagen vooruit.
     const rawSlots = generateAvailableSlots({
       busy: busyRows,
-      daysAhead: HANDMATIG_DAYS_AHEAD,
+      daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
     }));
     const rawBlocks = generateDayBlocks({
       busy: busyRows,
-      daysAhead: HANDMATIG_DAYS_AHEAD,
+      daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -235,7 +237,9 @@ export async function GET(req: NextRequest) {
       y + 1,
     ]);
     const van = dayKeyAmsterdam(new Date());
-    const tot = dayKeyAmsterdam(addDays(new Date(), HANDMATIG_DAYS_AHEAD));
+    const tot = dayKeyAmsterdam(
+      addDays(new Date(), HUISBEZOEK_PLAN_DAYS_AHEAD + 2)
+    );
     const [afgeblokt, vrijgaven] = await Promise.all([
       loadAfblokkingen(sb, {
         adviseurIds: [adviseurId],

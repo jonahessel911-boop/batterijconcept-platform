@@ -1,5 +1,5 @@
 /**
- * GET /api/bel/slots-compact?days=14&adviseur_id=…
+ * GET /api/bel/slots-compact?days=16&adviseur_id=…
  * Compact overzicht: open slots (vrij/bezet) per planbare adviseur.
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -26,6 +26,7 @@ import { normalizeRol } from "@/lib/rollen";
 import {
   AFSPRAAK_DUUR_MINUTEN,
   generateDayBlocks,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
   type BusySlot,
 } from "@/lib/slots";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -81,10 +82,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
     }
 
-    const daysRaw = Number(req.nextUrl.searchParams.get("days") || "14");
+    const daysRaw = Number(
+      req.nextUrl.searchParams.get("days") ||
+        String(HUISBEZOEK_PLAN_DAYS_AHEAD)
+    );
     const daysAhead = Math.min(
-      Math.max(Number.isFinite(daysRaw) ? daysRaw : 14, 1),
-      21
+      Math.max(
+        Number.isFinite(daysRaw) ? daysRaw : HUISBEZOEK_PLAN_DAYS_AHEAD,
+        1
+      ),
+      HUISBEZOEK_PLAN_DAYS_AHEAD
     );
     let lockAdviseurId =
       req.nextUrl.searchParams.get("adviseur_id")?.trim() || null;
