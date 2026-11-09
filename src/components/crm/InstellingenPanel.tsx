@@ -13,6 +13,7 @@ import {
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
+import { PartnerMonteursCrmPanel } from "./PartnerMonteursCrmPanel";
 import { TeamNotitiesSection } from "./TeamNotitiesSection";
 import { BellerCommissieWeeks } from "./BellerCommissieWeeks";
 import { AdviseurProductenSection } from "./AdviseurProductenSection";
@@ -24,6 +25,8 @@ import {
   isOpsManagerAdviseur,
   opsCommissieLabelVoorRol,
 } from "@/lib/ops-commissie";
+import { isSpareAdviseur } from "@/lib/admin-adviseur";
+import { adviseurProfielfotoPublicUrl } from "@/lib/adviseur-profielfoto";
 
 type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
@@ -70,6 +73,7 @@ const ROL_BADGE: Record<TeamRol, string> = {
   adviseur: "bg-green-soft text-green-dark",
   beller: "bg-wash text-ink",
   backoffice: "bg-[#eef2f0] text-[#3d5248]",
+  warmtefonds: "bg-[#FFF0E6] text-[#C45A12]",
 };
 
 export function InstellingenPanel({
@@ -84,7 +88,7 @@ export function InstellingenPanel({
   hideTeamRolFilter = false,
   /** Extern gestuurde teamrol (bij hideTeamRolFilter). */
   forcedTeamRol,
-  /** UI-tekst “Monteur” i.p.v. “Installatiepartner”. */
+  /** UI-tekst “Monteur” i.p.v. “Installatiepartner” (legacy). */
   monteurLabel = false,
 }: {
   onAdviseursChange?: () => void;
@@ -274,6 +278,7 @@ export function InstellingenPanel({
       unite_ext: a.unite_ext ?? "",
       rol: normalizeRol(a.rol),
       start_adres: a.start_adres ?? null,
+      start_vanaf_huis_maandag: a.start_vanaf_huis_maandag === true,
       startdatum: a.startdatum ?? null,
       commissie_pct:
         a.commissie_pct != null && Number.isFinite(Number(a.commissie_pct))
@@ -298,6 +303,7 @@ export function InstellingenPanel({
       kvk_uitreksel_bestandsnaam: a.kvk_uitreksel_bestandsnaam ?? null,
       kvk_uitreksel_uploaded_at: a.kvk_uitreksel_uploaded_at ?? null,
       interne_notities: a.interne_notities ?? null,
+      profielfoto_path: a.profielfoto_path ?? null,
     });
     setNewPassword("");
     setConfirmPassword("");
@@ -518,6 +524,7 @@ export function InstellingenPanel({
         unite_ext: draft.unite_ext?.toString().trim() || null,
         rol: normalizeRol(draft.rol),
         start_adres: draft.start_adres?.toString().trim() || null,
+        start_vanaf_huis_maandag: draft.start_vanaf_huis_maandag === true,
         actief: draft.actief !== false,
         geblokkeerd: draft.geblokkeerd === true,
       };
@@ -792,6 +799,7 @@ export function InstellingenPanel({
   const rows = useMemo(() => {
     if (activeFilter === "medewerkers") {
       return [...adviseurs]
+        .filter((a) => !isSpareAdviseur(a))
         .filter((a) => {
           if (teamRolFilter === "all") return true;
           return normalizeRol(a.rol) === teamRolFilter;
@@ -819,6 +827,11 @@ export function InstellingenPanel({
     });
   }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators, zoekNorm]);
 
+  const teamAdviseurs = useMemo(
+    () => adviseurs.filter((a) => !isSpareAdviseur(a)),
+    [adviseurs]
+  );
+
   const teamRolCounts = useMemo(() => {
     const counts: Record<TeamRol, number> = {
       admin: 0,
@@ -827,24 +840,25 @@ export function InstellingenPanel({
       beller: 0,
       backoffice: 0,
     };
-    for (const a of adviseurs) {
+    for (const a of teamAdviseurs) {
       const r = normalizeRol(a.rol);
       if (r in counts) counts[r as TeamRol] += 1;
     }
     return counts;
-  }, [adviseurs]);
+  }, [teamAdviseurs]);
 
   const medewerkersInRol =
     teamRolFilter === "all"
-      ? adviseurs.length
-      : adviseurs.filter((a) => normalizeRol(a.rol) === teamRolFilter).length;
+      ? teamAdviseurs.length
+      : teamAdviseurs.filter((a) => normalizeRol(a.rol) === teamRolFilter)
+          .length;
 
   const countLabel =
     activeFilter === "medewerkers"
       ? zoekNorm
         ? `${rows.length} van ${medewerkersInRol}`
         : teamRolFilter === "all"
-          ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
+          ? `${teamAdviseurs.length} medewerker${teamAdviseurs.length === 1 ? "" : "s"}`
           : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
       : activeFilter === "warmtefonds"
         ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
@@ -882,16 +896,81 @@ export function InstellingenPanel({
               ← Terug naar overzicht
             </button>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <span
-                className="flex h-11 w-11 shrink-0 items-center justify-center bg-green-soft text-sm font-bold tracking-wide text-green-dark"
-                aria-hidden
-              >
-                {naamInitialen(draft.naam || selectedAdviseur.naam) || "?"}
-              </span>
+              <label className="relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden bg-green-soft">
+                {adviseurProfielfotoPublicUrl(
+                  draft.profielfoto_path ?? selectedAdviseur.profielfoto_path
+                ) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={
+                      adviseurProfielfotoPublicUrl(
+                        draft.profielfoto_path ??
+                          selectedAdviseur.profielfoto_path
+                      )!
+                    }
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span
+                    className="flex h-full w-full items-center justify-center text-sm font-bold tracking-wide text-green-dark"
+                    aria-hidden
+                  >
+                    {naamInitialen(draft.naam || selectedAdviseur.naam) || "?"}
+                  </span>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file || !selectedAdviseur) return;
+                    void (async () => {
+                      setError(null);
+                      try {
+                        const fd = new FormData();
+                        fd.append("foto", file);
+                        const res = await fetch(
+                          `/api/adviseurs/${selectedAdviseur.id}/profielfoto`,
+                          { method: "POST", body: fd }
+                        );
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok)
+                          throw new Error(data.error || "Upload mislukt");
+                        const path =
+                          (data.path as string | undefined) ||
+                          selectedAdviseur.profielfoto_path;
+                        setDraft((d) =>
+                          d ? { ...d, profielfoto_path: path || null } : d
+                        );
+                        setAdviseurs((list) =>
+                          list.map((a) =>
+                            a.id === selectedAdviseur.id
+                              ? { ...a, profielfoto_path: path || null }
+                              : a
+                          )
+                        );
+                        setOkMsg("Profielfoto bijgewerkt.");
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : "Foto uploaden mislukt"
+                        );
+                      }
+                    })();
+                  }}
+                />
+              </label>
               <div className="min-w-0 flex-1">
                 <h2 className="font-display text-xl font-semibold text-ink sm:text-2xl">
                   {draft.naam || selectedAdviseur.naam}
                 </h2>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  Klik op de foto om te wijzigen
+                </p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <span
                     className={[
@@ -1087,7 +1166,7 @@ export function InstellingenPanel({
               title="Startadres"
               hint="Vertrekpunt voor reistijd bij inplannen"
             >
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2 space-y-3">
                 <StartAdresPostcodeField
                   value={draft.start_adres || ""}
                   onChange={(next) =>
@@ -1095,6 +1174,26 @@ export function InstellingenPanel({
                   }
                   inputClassName={inputCls}
                 />
+                <label className="flex items-start gap-2.5 text-sm text-ink">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-line"
+                    checked={draft.start_vanaf_huis_maandag === true}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        start_vanaf_huis_maandag: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>
+                    <span className="font-medium">Altijd vanaf huisadres</span>
+                    <span className="mt-0.5 block text-[11px] text-muted">
+                      Ook op maandag vanaf dit startadres — niet vanaf Daltonlaan
+                      (ochtendmeeting). Maandag 10:00 is dan open.
+                    </span>
+                  </span>
+                </label>
               </div>
             </FormSection>
 
@@ -1752,6 +1851,11 @@ export function InstellingenPanel({
             />
           </div>
 
+          <PartnerMonteursCrmPanel
+            partnerId={selectedPartner.id}
+            partnerNaam={partnerDraft.naam || selectedPartner.naam}
+          />
+
           <TeamNotitiesSection
             value={partnerDraft.interne_notities}
             authorNaam={session?.naam}
@@ -1773,8 +1877,9 @@ export function InstellingenPanel({
               </p>
             ) : (
               <p className="mt-1 text-sm text-muted">
-                Nog niet gekoppeld. Laat de monteur (of jij met zijn Google-account)
-                één keer inloggen — daarna synct elke planning direct.
+                Nog niet gekoppeld. Laat de partner (of jij met hun
+                Google-account) één keer inloggen — daarna synct elke planning
+                direct.
               </p>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -2039,7 +2144,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Monteurs
+                  Installatiepartners
                 </button>
                 <button
                   type="button"
@@ -2175,7 +2280,7 @@ export function InstellingenPanel({
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
-              ? "Kies een rol (Admin, Adviseur, Beller of Backoffice) en voeg een account toe."
+              ? "Kies een rol (Admin, Adviseur, Beller, Backoffice of Warmtefonds) en voeg een account toe."
               : activeFilter === "warmtefonds"
                 ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
                 : `Voeg een ${partnerWoord.toLowerCase()} toe voor schouw/installatie en portaallink.`}
@@ -2226,12 +2331,21 @@ export function InstellingenPanel({
                   >
                     <td>
                       <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          className="flex h-8 w-8 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold tracking-wide text-green-dark"
-                          aria-hidden
-                        >
-                          {naamInitialen(a.naam) || "?"}
-                        </span>
+                        {adviseurProfielfotoPublicUrl(a.profielfoto_path) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={adviseurProfielfotoPublicUrl(a.profielfoto_path)!}
+                            alt=""
+                            className="h-8 w-8 shrink-0 object-cover"
+                          />
+                        ) : (
+                          <span
+                            className="flex h-8 w-8 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold tracking-wide text-green-dark"
+                            aria-hidden
+                          >
+                            {naamInitialen(a.naam) || "?"}
+                          </span>
+                        )}
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-ink">
                             {a.naam}
@@ -2565,6 +2679,12 @@ export function InstellingenPanel({
                     ]
                   }
                 </p>
+                {rol === "warmtefonds" ? (
+                  <p className="border border-[#C45A12]/25 bg-[#FFF0E6] px-3 py-2 text-[11px] leading-relaxed text-[#C45A12]">
+                    Komt in het systeem als Warmtefonds-operator (eigen portaal),
+                    niet als sales-adviseur. Geen bel-planning of commissie.
+                  </p>
+                ) : null}
                 {rol === "adviseur" ? (
                   <>
                     <Field label="Startdatum (verplicht)">

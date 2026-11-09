@@ -29,7 +29,9 @@ import {
   inAnnuleringBelQueue,
   inNormaleBelQueue,
   isHerplanBelLead,
+  isMailPositiefBelLead,
   isTerugbelDue,
+  isTerugbelForViewer,
   latestPhysicalAfspraak,
   leadInProvincie,
   sortBelQueue,
@@ -41,6 +43,7 @@ import {
   type NlProvincie,
 } from "@/lib/postcode-provincie";
 import { leadStatusLabel } from "@/lib/labels";
+import { BellerNettoKaart } from "./BellerNettoKaart";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
@@ -168,6 +171,8 @@ export function BelPanel({
   adviseurs,
   appointmentLeadIds,
   defaultAdviseurId,
+  /** Alleen terugbels op naam van deze medewerker (Bekijk-als of ingelogde user). */
+  terugbelViewerId,
   lockAdviseur = false,
   onLeadUpdated,
   onAfspraakCreated,
@@ -178,6 +183,7 @@ export function BelPanel({
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
   defaultAdviseurId?: string;
+  terugbelViewerId?: string;
   /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
   lockAdviseur?: boolean;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
@@ -236,6 +242,13 @@ export function BelPanel({
   /** Leads die deze sessie al via Volgende zijn doorgeschoven. */
   const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
   const [timelineTick, setTimelineTick] = useState(0);
+
+  const eigenBellerId = useMemo(() => {
+    if (!defaultAdviseurId) return null;
+    const self = adviseurs.find((a) => a.id === defaultAdviseurId);
+    if (!self || normalizeRol(self.rol) !== "beller") return null;
+    return self.id;
+  }, [adviseurs, defaultAdviseurId]);
 
   const planAdviseurs = useMemo(() => {
     const list = adviseurs.filter(
@@ -297,10 +310,11 @@ export function BelPanel({
     const bellers = terugbelMedewerkers.filter(
       (a) => normalizeRol(a.rol) === "beller"
     );
-    const sharath = bellers.find((a) =>
-      a.naam.toLowerCase().includes("sharath")
-    );
-    if (sharath) return sharath.id;
+    const simon = bellers.find((a) => {
+      const first = a.naam.trim().toLowerCase().split(/\s+/)[0] || "";
+      return first === "simon" || first === "sharath" || first === "sharet";
+    });
+    if (simon) return simon.id;
     if (bellers[0]) return bellers[0].id;
 
     if (self) return self.id;
@@ -365,7 +379,11 @@ export function BelPanel({
     return allBelQueue;
   }, [allBelQueue, annuleringQueue, bakMode, selectedProvincie]);
 
-  /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld), 1× per lead. */
+  /** Viewer: Bekijk-als, anders ingelogde medewerker (defaultAdviseurId). */
+  const effectiveTerugbelViewerId =
+    terugbelViewerId || defaultAdviseurId || null;
+
+  /** Openstaande terugbel-afspraken op naam van de viewer, 1× per lead. */
   const terugbelDue = useMemo(() => {
     const byLead = new Map<
       string,
@@ -373,6 +391,7 @@ export function BelPanel({
     >();
     for (const a of afspraken) {
       if (!isTerugbelDue(a)) continue;
+      if (!isTerugbelForViewer(a, effectiveTerugbelViewerId)) continue;
       const lead = leads.find((l) => l.id === a.lead_id);
       if (!lead?.telefoon?.trim()) continue;
       const warm = normalizeAfspraakSoort(a.soort) === "warme_bel";
@@ -401,7 +420,7 @@ export function BelPanel({
         new Date(b.afspraak.start_at).getTime()
       );
     });
-  }, [afspraken, leads]);
+  }, [afspraken, leads, effectiveTerugbelViewerId]);
 
   /**
    * Alleen de normale bellijst. Openstaande terugbel-afspraken staan
@@ -426,8 +445,13 @@ export function BelPanel({
   const currentTerugbel = current
     ? activeBelAfspraak(afspraken, current.id)
     : null;
+  const currentTerugbelMine =
+    currentTerugbel &&
+    isTerugbelForViewer(currentTerugbel, effectiveTerugbelViewerId)
+      ? currentTerugbel
+      : null;
   const currentIsTerugbelDue = Boolean(
-    currentTerugbel && isTerugbelDue(currentTerugbel)
+    currentTerugbelMine && isTerugbelDue(currentTerugbelMine)
   );
 
   const slotsByDay = useMemo(() => {
@@ -1098,6 +1122,9 @@ export function BelPanel({
             Normale wachtrij, provincie, of afzeggingen opnieuw inplannen.
           </p>
         </div>
+        {eigenBellerId ? (
+          <BellerNettoKaart bellerId={eigenBellerId} />
+        ) : null}
         <div className="mx-auto mt-6 grid max-w-2xl gap-3 sm:grid-cols-2">
           <button
             type="button"
@@ -1404,7 +1431,11 @@ export function BelPanel({
             : "border-line bg-[#F7FBF8]",
         ].join(" ")}
       >
-        <p className="text-xs text-muted">
+        <div className="min-w-0">
+          {eigenBellerId ? (
+            <BellerNettoKaart bellerId={eigenBellerId} compact />
+          ) : null}
+          <p className="text-xs text-muted">
           <span className="font-semibold text-ink">
             {bakMode === "annuleringen"
               ? "Annuleringen"
@@ -1415,7 +1446,8 @@ export function BelPanel({
           <span className="ml-1.5">
             · {queue.length} in deze wachtrij
           </span>
-        </p>
+          </p>
+        </div>
         <button
           type="button"
           onClick={resetBakKeuze}
@@ -1481,13 +1513,25 @@ export function BelPanel({
           </div>
         ) : null}
 
-        <h2 className="mt-3 font-display text-2xl font-semibold text-ink sm:text-3xl">
-          {current.naam}
+        <h2 className="mt-3 flex flex-wrap items-center gap-2 font-display text-2xl font-semibold text-ink sm:text-3xl">
+          <span>{current.naam}</span>
+          {isMailPositiefBelLead(current) ? (
+            <span className="rounded-md bg-[#C45A12] px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
+              Mail +
+            </span>
+          ) : null}
         </h2>
         <p className="font-mono text-xs text-muted">{current.lead_number}</p>
         <p className="mt-1 text-sm text-muted">
           Aangemeld {formatDateTimeNl(current.created_at)}
         </p>
+        {isMailPositiefBelLead(current) &&
+        current.mail_positief_samenvatting ? (
+          <p className="mt-2 border border-[#C45A12]/30 bg-[#FFF8F3] px-3 py-2 text-sm text-[#C45A12]">
+            <span className="font-semibold">Positieve mail:</span>{" "}
+            {current.mail_positief_samenvatting}
+          </p>
+        ) : null}
 
         {editingGegevens ? (
           <div className="mt-3 space-y-4 border border-line bg-wash/40 p-3.5 sm:p-4">
@@ -1555,14 +1599,15 @@ export function BelPanel({
           </div>
         )}
 
-        {currentIsTerugbelDue && currentTerugbel && (
+        {currentIsTerugbelDue && currentTerugbelMine && (
           <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-              Gepland terugbelmoment · {formatDateTimeNl(currentTerugbel.start_at)}
+              Gepland terugbelmoment ·{" "}
+              {formatDateTimeNl(currentTerugbelMine.start_at)}
             </p>
-            {(currentTerugbel.notities || current.terugbel_notitie)?.trim() ? (
+            {(currentTerugbelMine.notities || current.terugbel_notitie)?.trim() ? (
               <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {currentTerugbel.notities || current.terugbel_notitie}
+                {currentTerugbelMine.notities || current.terugbel_notitie}
               </p>
             ) : null}
           </div>
@@ -2043,6 +2088,10 @@ export function BelPanel({
                 startAdresLabel={
                   planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
                 }
+                startVanafHuisMaandag={
+                  planAdviseurs.find((a) => a.id === adviseurId)
+                    ?.start_vanaf_huis_maandag
+                }
                 freeSlots={slots
                   .filter((s) => !s.busy)
                   .map((s) => ({
@@ -2069,6 +2118,10 @@ export function BelPanel({
               }
               startAdresLabel={
                 planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
+              }
+              startVanafHuisMaandag={
+                planAdviseurs.find((a) => a.id === adviseurId)
+                  ?.start_vanaf_huis_maandag
               }
             />
               </>

@@ -6,9 +6,30 @@ import {
   type FastDirectionSlot,
   type FastDirectionStop,
 } from "@/lib/fast-direction";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildDurationMap } from "@/lib/travel-time";
 
 export const runtime = "nodejs";
+
+async function loadStartVanafHuisMaandag(
+  adviseurId: string | null
+): Promise<boolean | null> {
+  if (!adviseurId) return null;
+  try {
+    const sb = getSupabaseAdmin();
+    const { data, error } = await sb
+      .from("adviseurs")
+      .select("start_vanaf_huis_maandag")
+      .eq("id", adviseurId)
+      .maybeSingle();
+    if (error) return null;
+    const v = (data as { start_vanaf_huis_maandag?: boolean | null } | null)
+      ?.start_vanaf_huis_maandag;
+    return typeof v === "boolean" ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * POST /api/fast-direction
@@ -24,6 +45,7 @@ export async function POST(req: NextRequest) {
       depotAddress?: string | null;
       depotLabel?: string | null;
       adviseurId?: string | null;
+      startVanafHuisMaandag?: boolean | null;
     };
 
     const targetAddress = (body.targetAddress || "").trim();
@@ -32,6 +54,10 @@ export async function POST(req: NextRequest) {
     const depotAddress = (body.depotAddress || "").trim() || null;
     const depotLabel = (body.depotLabel || "").trim() || null;
     const adviseurId = (body.adviseurId || "").trim() || null;
+    const startVanafHuisMaandag =
+      typeof body.startVanafHuisMaandag === "boolean"
+        ? body.startVanafHuisMaandag
+        : await loadStartVanafHuisMaandag(adviseurId);
 
     if (!targetAddress || targetAddress === "—") {
       return NextResponse.json(
@@ -52,7 +78,8 @@ export async function POST(req: NextRequest) {
       depotAddress,
       25,
       undefined,
-      adviseurId
+      adviseurId,
+      startVanafHuisMaandag
     );
     const { durationMap, distanceMap, provider } =
       await buildDurationMap(addresses);
@@ -76,6 +103,7 @@ export async function POST(req: NextRequest) {
         depotAddress,
         depotLabel,
         adviseurId,
+        startVanafHuisMaandag,
         durationSecBetween: (from, to) => {
           if (from === to) return 0;
           return durationMap.get(`${from}|||${to}`) ?? null;

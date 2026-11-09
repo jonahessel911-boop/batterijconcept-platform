@@ -105,6 +105,8 @@ export type PickFastDirectionOptions = {
   } | null;
   /** Voor maandag-uitzondering (geen Daltonlaan / meeting). */
   adviseurId?: string | null;
+  /** Team: altijd vanaf huis, ook maandag. */
+  startVanafHuisMaandag?: boolean | null;
   durationSecBetween: (from: string, to: string) => number | null;
   distanceMBetween?: (from: string, to: string) => number | null;
 };
@@ -144,7 +146,8 @@ export function pickTopFastDirectionSlots(
     const resolved = resolveDayStartAdres(
       homeDepot || null,
       dayKey,
-      opts.adviseurId
+      opts.adviseurId,
+      opts.startVanafHuisMaandag
     );
     if (resolved.address) {
       return {
@@ -397,7 +400,8 @@ export function uniqueAddresses(
   limit = 25,
   /** Dagen (yyyy-MM-dd) waarvan stops voorrang krijgen — bv. dagen met vrije slots. */
   preferDayKeys?: Set<string> | string[],
-  adviseurId?: string | null
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -409,8 +413,8 @@ export function uniqueAddresses(
   };
   push(target);
   if (depotAddress) push(depotAddress);
-  // Maandag-ochtendmeeting: in matrix tenzij deze adviseur de meeting overslaat
-  if (!skipsMaandagOchtendmeeting(adviseurId)) {
+  // Maandag-ochtendmeeting: in matrix tenzij vanaf huis
+  if (!skipsMaandagOchtendmeeting(adviseurId, startVanafHuisMaandag)) {
     push(MAANDAG_MEETING_START_ADRES);
   }
 

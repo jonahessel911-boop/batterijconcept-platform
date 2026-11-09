@@ -55,9 +55,10 @@ async function fetchTravel(
 }
 
 /**
- * Bij gekozen timeslot: reistijd vanaf vorige fysieke huisafspraak
- * (of startpunt) én naar de volgende fysieke diezelfde dag.
- * Telefonisch / bel telt nooit mee.
+ * Bij gekozen timeslot (handmatig of custom): reistijd vanaf vorige
+ * fysieke huisafspraak (of startpunt) én naar de volgende diezelfde dag.
+ * Is dit de laatste van de dag → reistijd terug naar huis (persoonlijk
+ * startadres, niet de maandag-meeting). Telefonisch / bel telt nooit mee.
  */
 export function ReistijdHint({
   adviseurId,
@@ -67,6 +68,7 @@ export function ReistijdHint({
   allLeads,
   startAdres,
   startAdresLabel,
+  startVanafHuisMaandag,
   /** Duur van het te boeken slot in minuten (default 120). */
   slotDurationMin = 120,
 }: {
@@ -81,6 +83,8 @@ export function ReistijdHint({
   /** Vertrekadres adviseur (Instellingen). */
   startAdres?: string | null;
   startAdresLabel?: string | null;
+  /** true = maandag ook vanaf huis (Team-checkbox). */
+  startVanafHuisMaandag?: boolean | null;
   slotDurationMin?: number;
 }) {
   const [lines, setLines] = useState<string[]>([]);
@@ -137,8 +141,13 @@ export function ReistijdHint({
           from = prevLead ? adresRegel(prevLead) : "";
           label = prevLead?.naam || "vorig huisbezoek";
         } else {
-          // Maandag → Daltonlaan (ochtendmeeting), tenzij adviseur meeting overslaat
-          const dayStart = resolveDayStartAdres(startAdres, startAt, adviseurId);
+          // Maandag → Daltonlaan, tenzij start_vanaf_huis_maandag
+          const dayStart = resolveDayStartAdres(
+            startAdres,
+            startAt,
+            adviseurId,
+            startVanafHuisMaandag
+          );
           from = (dayStart.address || startAdres || "").trim();
           label =
             dayStart.label ||
@@ -165,7 +174,7 @@ export function ReistijdHint({
         }
       }
 
-      // ── Naar volgende afspraak ────────────────────────────────────
+      // ── Naar volgende afspraak óf terug naar huis ─────────────────
       if (next) {
         const nextLead = resolveAfspraakLead(next, allLeads);
         const nextNaam = nextLead?.naam || "volgend huisbezoek";
@@ -190,13 +199,32 @@ export function ReistijdHint({
           }
         }
         out.push(nextLine);
-      } else if (dayAfspraken.length > 0 || startAt) {
-        // Alleen tonen als er een slot gekozen is: laatste van de dag
+      } else if (startAt) {
+        // Laatste (of enige) afspraak die dag → terugreis naar huis
         const laterSameDay = dayAfspraken.some(
           (a) => new Date(a.start_at).getTime() > startMs
         );
         if (!laterSameDay) {
-          out.push("Geen volgende afspraak die dag");
+          const home = (startAdres || "").trim();
+          if (to && to !== "—" && home && home !== "—") {
+            try {
+              const travel = await fetchTravel(to, home);
+              if (cancelled) return;
+              if (travel) {
+                out.push(
+                  `Naar huis: ${travel.durationText}${
+                    travel.distanceText ? ` · ${travel.distanceText}` : ""
+                  }`
+                );
+              } else {
+                out.push("Naar huis: reistijd onbekend");
+              }
+            } catch {
+              out.push("Naar huis: reistijd onbekend");
+            }
+          } else if (!home || home === "—") {
+            out.push("Geen startadres — reistijd naar huis niet te berekenen");
+          }
         }
       }
 
@@ -214,6 +242,7 @@ export function ReistijdHint({
     allLeads,
     startAdres,
     startAdresLabel,
+    startVanafHuisMaandag,
     slotDurationMin,
   ]);
 

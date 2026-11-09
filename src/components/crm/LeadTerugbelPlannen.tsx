@@ -78,10 +78,11 @@ export function LeadTerugbelPlannen({
     const bellers = medewerkers.filter(
       (a) => normalizeRol(a.rol) === "beller"
     );
-    const sharath = bellers.find((a) =>
-      a.naam.toLowerCase().includes("sharath")
-    );
-    if (sharath) return sharath.id;
+    const simon = bellers.find((a) => {
+      const first = a.naam.trim().toLowerCase().split(/\s+/)[0] || "";
+      return first === "simon" || first === "sharath" || first === "sharet";
+    });
+    if (simon) return simon.id;
     if (bellers[0]) return bellers[0].id;
 
     if (self) return self.id;

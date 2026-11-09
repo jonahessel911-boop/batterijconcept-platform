@@ -18,7 +18,7 @@ import type {
   LeadStatus,
 } from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
-import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isAdminAdviseur, isSpareAdviseur } from "@/lib/admin-adviseur";
 import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
@@ -522,9 +522,14 @@ export function AgendaPanel({
   // bel-systeem filtert hen apart op actief.
   const planAdviseurs = useMemo(
     () =>
-      adviseurs.filter(
-        (a) => !isAdminAdviseur(a) && isAgendaAdviseur(a)
-      ),
+      adviseurs
+        .filter((a) => !isAdminAdviseur(a) && isAgendaAdviseur(a))
+        .sort((a, b) => {
+          const aSpare = isSpareAdviseur(a) ? 1 : 0;
+          const bSpare = isSpareAdviseur(b) ? 1 : 0;
+          if (aSpare !== bSpare) return aSpare - bSpare;
+          return a.naam.localeCompare(b.naam, "nl");
+        }),
     [adviseurs]
   );
 
@@ -613,7 +618,10 @@ export function AgendaPanel({
               day.key,
               row.hour,
               afblokkingen,
-              vrijgaven
+              vrijgaven,
+              typeof adv.start_vanaf_huis_maandag === "boolean"
+                ? adv.start_vanaf_huis_maandag
+                : null
             )
           ) {
             continue;
@@ -966,6 +974,16 @@ export function AgendaPanel({
     return v === false;
   }
 
+  function startVanafHuisFor(adviseurId: string): boolean | null {
+    const a =
+      planAdviseurs.find((x) => x.id === adviseurId) ||
+      adviseurs.find((x) => x.id === adviseurId);
+    if (!a) return null;
+    return typeof a.start_vanaf_huis_maandag === "boolean"
+      ? a.start_vanaf_huis_maandag
+      : null;
+  }
+
   function isSlotBlocked(
     adviseurId: string,
     dayKey: string,
@@ -976,7 +994,8 @@ export function AgendaPanel({
       dayKey,
       hour,
       afblokkingen,
-      vrijgaven
+      vrijgaven,
+      startVanafHuisFor(adviseurId)
     );
   }
 
@@ -988,7 +1007,12 @@ export function AgendaPanel({
     const key = afblokKey(adviseurId, dayKey, hour);
     const currentlyBlocked = isSlotBlocked(adviseurId, dayKey, hour);
     const nextBlocked = !currentlyBlocked;
-    const viaVrijgave = magStandaardSlotOntblokken(dayKey, hour, adviseurId);
+    const viaVrijgave = magStandaardSlotOntblokken(
+      dayKey,
+      hour,
+      adviseurId,
+      startVanafHuisFor(adviseurId)
+    );
     setBlockBusy(true);
     setError(null);
     setOkMsg(null);
@@ -1148,9 +1172,10 @@ export function AgendaPanel({
     const row = SLOT_ROWS[slotIdx];
     // Over bezet slot: afblokkingen negeren — telefonisch/terugbel mag altijd
     if (!overBezet && isSlotBlocked(adviseurId, dayKey, row.hour)) {
+      const vanafHuis = startVanafHuisFor(adviseurId);
       setError(
-        magStandaardSlotOntblokken(dayKey, row.hour, adviseurId)
-          ? `${standaardBlokkadeLabel(dayKey, row.hour, adviseurId) || "Standaard geblokkeerd"} — open eerst via Afblokken`
+        magStandaardSlotOntblokken(dayKey, row.hour, adviseurId, vanafHuis)
+          ? `${standaardBlokkadeLabel(dayKey, row.hour, adviseurId, vanafHuis) || "Standaard geblokkeerd"} — open eerst via Afblokken`
           : "Dit tijdslot is afgeblokt"
       );
       return;
@@ -1733,14 +1758,22 @@ export function AgendaPanel({
                                       : magStandaardSlotOntblokken(
                                             day.key,
                                             row.hour,
-                                            adv.id
+                                            adv.id,
+                                            typeof adv.start_vanaf_huis_maandag ===
+                                              "boolean"
+                                              ? adv.start_vanaf_huis_maandag
+                                              : null
                                           ) && !afblokMode
                                         ? () =>
                                             setError(
                                               standaardBlokkadeLabel(
                                                 day.key,
                                                 row.hour,
-                                                adv.id
+                                                adv.id,
+                                                typeof adv.start_vanaf_huis_maandag ===
+                                                  "boolean"
+                                                  ? adv.start_vanaf_huis_maandag
+                                                  : null
                                               ) ||
                                                 "Standaard dicht — zet Afblokken aan om te openen"
                                             )
@@ -1752,7 +1785,11 @@ export function AgendaPanel({
                                       ? magStandaardSlotOntblokken(
                                           day.key,
                                           row.hour,
-                                          adv.id
+                                          adv.id,
+                                          typeof adv.start_vanaf_huis_maandag ===
+                                            "boolean"
+                                            ? adv.start_vanaf_huis_maandag
+                                            : null
                                         )
                                         ? "Klik om standaard-blok te openen"
                                         : "Klik om dit slot weer te openen"
@@ -1760,12 +1797,20 @@ export function AgendaPanel({
                                     : magStandaardSlotOntblokken(
                                           day.key,
                                           row.hour,
-                                          adv.id
+                                          adv.id,
+                                          typeof adv.start_vanaf_huis_maandag ===
+                                            "boolean"
+                                            ? adv.start_vanaf_huis_maandag
+                                            : null
                                         )
                                       ? standaardBlokkadeLabel(
                                           day.key,
                                           row.hour,
-                                          adv.id
+                                          adv.id,
+                                          typeof adv.start_vanaf_huis_maandag ===
+                                            "boolean"
+                                            ? adv.start_vanaf_huis_maandag
+                                            : null
                                         ) || "Standaard dicht"
                                       : undefined
                                 }
@@ -2016,6 +2061,9 @@ export function AgendaPanel({
                   startAdresLabel={
                     adviseurNaam.get(planSlot.adviseurId) || "Startadres"
                   }
+                  startVanafHuisMaandag={startVanafHuisFor(
+                    planSlot.adviseurId
+                  )}
                 />
               </>
             )}

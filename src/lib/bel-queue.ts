@@ -189,6 +189,18 @@ export function isTerugbelDue(
   return amsterdamDayKey(afspraak.start_at) <= amsterdamDayKey(now);
 }
 
+/**
+ * Terugbel alleen tonen voor de medewerker die op de afspraak staat
+ * (`adviseur_id`). Zo ziet callcenter geen warme terugbel van bv. Rik.
+ */
+export function isTerugbelForViewer(
+  afspraak: Pick<Afspraak, "adviseur_id">,
+  viewerId: string | null | undefined
+): boolean {
+  if (!viewerId) return false;
+  return afspraak.adviseur_id === viewerId;
+}
+
 /** @deprecated alias — gebruik isTerugbelDue */
 export function isTerugbelDueToday(
   afspraak: Afspraak,
@@ -484,8 +496,25 @@ export function isVersBelLead(
   return age >= 0 && age <= VERS_BEL_DAGEN;
 }
 
+/** Positieve mailintent (AI) → boven verse leads in claim-next / BelPanel. */
+export function isMailPositiefBelLead(
+  lead: Pick<Lead, "mail_positief_at">
+): boolean {
+  return Boolean(lead.mail_positief_at);
+}
+
 export function sortBelQueue(leads: Lead[], now = new Date()): Lead[] {
   return [...leads].sort((a, b) => {
+    // 0) Positieve e-mailintent — altijd eerst
+    const aMail = isMailPositiefBelLead(a) ? 1 : 0;
+    const bMail = isMailPositiefBelLead(b) ? 1 : 0;
+    if (aMail !== bMail) return bMail - aMail;
+    if (aMail && bMail) {
+      const aAt = new Date(a.mail_positief_at || 0).getTime();
+      const bAt = new Date(b.mail_positief_at || 0).getTime();
+      if (aAt !== bAt) return bAt - aAt;
+    }
+
     const aVers = isVersBelLead(a, now) ? 1 : 0;
     const bVers = isVersBelLead(b, now) ? 1 : 0;
     if (aVers !== bVers) return bVers - aVers;

@@ -103,7 +103,11 @@ export type CrmTab =
   | "inkomend"
   | "inbox"
   | "purchasing"
+  | "finance"
+  | "facturen_mailbox"
   | "rapportage"
+  | "performance"
+  | "stuur"
   | "admin"
   | "ai"
   | "voice_ai"
@@ -148,6 +152,11 @@ export interface Adviseur {
   werktijd_eind: string;
   /** Vertrekadres voor reistijd / eerste afspraak van de dag. */
   start_adres?: string | null;
+  /**
+   * true = ook maandag vanaf start_adres (huis), niet Daltonlaan-ochtendmeeting.
+   * Maandag 10:00 is dan standaard open.
+   */
+  start_vanaf_huis_maandag?: boolean | null;
   /**
    * Eerste werkdag (yyyy-MM-dd). Agenda-slots vóór deze datum worden
    * automatisch afgeblokt bij aanmaken/wijzigen.
@@ -359,6 +368,12 @@ export interface Lead {
   /** Soft claim: wie heeft deze lead nu open in de Bel-tab. */
   bel_claimed_by?: string | null;
   bel_claimed_at?: string | null;
+  /**
+   * Positieve intent uit inkomende e-mail (AI) → vooraan in bellijst.
+   * Gezet door inbox-classificatie; blijft tot lead de belbak verlaat.
+   */
+  mail_positief_at?: string | null;
+  mail_positief_samenvatting?: string | null;
   /** Verstuurde funnel-events. Meta: QualifiedLead/Schedule/Purchase. TikTok: tt:QualifiedLead enz. */
   capi_events_sent?: string[] | null;
   meta_fbc?: string | null;
@@ -503,6 +518,24 @@ export interface InstallatiePartnerTeamgenoot {
   actief: boolean;
   created_at: string;
   updated_at: string;
+  /** KvK-uittreksel monteur (verplicht voor dossier_compleet) */
+  kvk_uitreksel_storage_path?: string | null;
+  kvk_uitreksel_bestandsnaam?: string | null;
+  kvk_uitreksel_uploaded_at?: string | null;
+  /** Certificeringen (verplicht) */
+  certificaten_storage_path?: string | null;
+  certificaten_bestandsnaam?: string | null;
+  certificaten_uploaded_at?: string | null;
+  /** CV (optioneel) */
+  cv_storage_path?: string | null;
+  cv_bestandsnaam?: string | null;
+  cv_uploaded_at?: string | null;
+  /** Foto van monteur (verplicht) */
+  foto_storage_path?: string | null;
+  foto_bestandsnaam?: string | null;
+  foto_uploaded_at?: string | null;
+  /** True als KvK + certificaten + foto aanwezig */
+  dossier_compleet?: boolean;
 }
 
 export interface Offerte {
@@ -618,6 +651,8 @@ export interface Project {
   installatie_at?: string | null;
   /** Moment waarop installatie uitgevoerd / status installatie_voltooid (netto sale). */
   installatie_voltooid_at?: string | null;
+  /** Systeem SIN-nummer (opleverformulier → tab Apparaat). */
+  systeem_sin?: string | null;
   installatie_notities?: string | null;
   installatie_mail_klant_verstuurd?: boolean;
   installatie_mail_partner_verstuurd?: boolean;
@@ -671,6 +706,8 @@ export interface Project {
     | null;
   /** Interne datum/tijd Warmtefonds-afspraak (geen mail). */
   warmtefonds_afspraak_at?: string | null;
+  /** Moment waarop de Warmtefonds-declaratie is uitbetaald. */
+  warmtefonds_uitbetaald_at?: string | null;
   /** Afleveradres voor materiaalinkoop. */
   leveradres?: string | null;
   /**
@@ -757,6 +794,68 @@ export interface SollicitatieBestand {
   url?: string | null;
 }
 
+export type RecruitmentVacatureStatus = "open" | "dicht";
+
+/** Rollen in Jobs CMS / kaart-legenda. */
+export type RecruitmentRol =
+  | "adviseur_sales"
+  | "appointment_setter"
+  | "installateur"
+  | "monteur"
+  | "am_maintenance"
+  | "bezorger"
+  | "overig";
+
+/** Draft bezorg-route (batterij-aflevering vanaf HQ). */
+export type BezorgRouteStatus = "concept" | "onderweg" | "afgerond";
+
+export interface BezorgRoute {
+  id: string;
+  datum: string;
+  bezorger_naam: string;
+  bezorger_sollicitatie_id: string | null;
+  status: BezorgRouteStatus;
+  created_at: string;
+  updated_at: string;
+  stops?: BezorgRouteStop[];
+}
+
+export interface BezorgRouteStop {
+  id: string;
+  route_id: string;
+  project_id: string;
+  volgorde: number;
+  adres: string;
+  lat: number | null;
+  lng: number | null;
+  handtekening_data_url: string | null;
+  ontvanger_naam: string | null;
+  geleverd_at: string | null;
+  created_at: string;
+  project_nummer?: string | null;
+  klant_naam?: string | null;
+}
+
+export interface RecruitmentVacature {
+  id: string;
+  titel: string;
+  rol: string;
+  status: RecruitmentVacatureStatus;
+  korte_omschrijving: string | null;
+  lander_url: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Meta BANEN-campagne → vacature. */
+export interface RecruitmentCampagneKoppeling {
+  campaign_id: string;
+  campaign_name: string | null;
+  vacature_id: string | null;
+  updated_at: string;
+}
+
 export interface Sollicitatie {
   id: string;
   naam: string;
@@ -772,6 +871,24 @@ export interface Sollicitatie {
   straat?: string | null;
   plaats?: string | null;
   training_moment_id?: string | null;
+  vacature_id?: string | null;
+  /** Meta campaign id uit landings-URL / webhook (attributie BANEN). */
+  meta_campaign_id?: string | null;
+  meta_adset_id?: string | null;
+  /** Meta ad id uit landings-URL / webhook. */
+  meta_ad_id?: string | null;
+  campaign_name?: string | null;
+  adset_name?: string | null;
+  ad_name?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
+  utm_term?: string | null;
+  landing_url?: string | null;
+  meta_placement?: string | null;
+  meta_fbc?: string | null;
+  meta_fbp?: string | null;
   raw_payload?: unknown;
   created_at: string;
   updated_at: string;
@@ -785,7 +902,11 @@ export interface SollicitatieAfspraak {
   id: string;
   sollicitatie_id: string;
   start_at: string;
+  /** Einde gesprek (standaard start + 30 min). */
+  end_at?: string | null;
   soort: SollicitatieAfspraakSoort;
+  /** Wie het gesprek voert (adviseur). */
+  interviewer_id?: string | null;
   notitie: string | null;
   created_at: string;
   updated_at: string;
@@ -793,6 +914,8 @@ export interface SollicitatieAfspraak {
     Sollicitatie,
     "id" | "naam" | "email" | "telefoon" | "functie" | "status"
   > | null;
+  interviewer?: Pick<Adviseur, "id" | "naam" | "email"> | null;
+  adviseurs?: Pick<Adviseur, "id" | "naam" | "email"> | null;
 }
 
 export type SollicitatieTaakStatus = "todo" | "doing" | "done";
@@ -824,6 +947,15 @@ export interface TrainingMomentDag {
   updated_at: string;
 }
 
+export interface TrainingMomentDeelnemer {
+  id: string;
+  naam: string;
+  email: string | null;
+  telefoon: string | null;
+  functie: string | null;
+  status: SollicitatieStatus;
+}
+
 export interface TrainingMoment {
   id: string;
   naam: string;
@@ -834,6 +966,9 @@ export interface TrainingMoment {
   created_at: string;
   updated_at: string;
   dagen?: TrainingMomentDag[];
+  /** Sollicitaties gekoppeld via training_moment_id */
+  deelnemers?: TrainingMomentDeelnemer[];
+  deelnemers_count?: number;
 }
 
 export type InkomendeFactuurStatus =

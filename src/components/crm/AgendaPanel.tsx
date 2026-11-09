@@ -36,6 +36,7 @@ import {
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
@@ -660,6 +661,11 @@ export function AfspraakDetail({
   const [adviseurOptiesLoading, setAdviseurOptiesLoading] = useState(false);
   const [saleOfferte, setSaleOfferte] = useState<Offerte | null>(null);
   const [saleOfferteLoading, setSaleOfferteLoading] = useState(false);
+  /** Verse leadstatus + of order al via Offertes naar BO is. */
+  const [freshLeadStatus, setFreshLeadStatus] = useState<string | null>(
+    leadStatusProp || afspraak.leads?.status || null
+  );
+  const [alDoorgezetBo, setAlDoorgezetBo] = useState(false);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
   const [sessionAdviseurId, setSessionAdviseurId] = useState<string | null>(
     null
@@ -703,14 +709,17 @@ export function AfspraakDetail({
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
   const leadStatusNow =
-    leadStatusProp || current.leads?.status || null;
-  const needsAction = needsVervolgPunt(
+    freshLeadStatus || leadStatusProp || current.leads?.status || null;
+  const needsActionRaw = needsVervolgPunt(
     current,
     allAfspraken,
     new Date(),
     leadStatusNow
   );
-  const dealNogAfboeken = leadStatusNow === "deal" && needsAction;
+  // Al via Offertes doorgezet → geen agenda-afboek meer (voorkomt sale→vervolg).
+  const needsAction = needsActionRaw && !alDoorgezetBo;
+  const dealNogAfboeken =
+    leadStatusNow === "deal" && needsActionRaw && !alDoorgezetBo;
   const actionBadgeLabel = dealNogAfboeken
     ? "Uitkomst nodig"
     : "Vervolg punt nodig";
@@ -759,6 +768,8 @@ export function AfspraakDetail({
     setVervolgNotitie("");
     setUitkomst("");
     setSaleOfferte(null);
+    setFreshLeadStatus(leadStatusProp || afspraak.leads?.status || null);
+    setAlDoorgezetBo(false);
     setWfProjectId(null);
     setWfAangevraagdAt(null);
     setEditingNotitie(false);
@@ -884,6 +895,52 @@ export function AfspraakDetail({
       cancelled = true;
     };
   }, []);
+
+  // Verse leadstatus + of sale al via Offertes naar BO is (stale join blokkeert afboek niet genoeg).
+  useEffect(() => {
+    if (!current.lead_id) return;
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const sb = getSupabaseBrowser();
+        const [{ data: lead }, { data: offs }, { data: projs }] =
+          await Promise.all([
+            sb
+              .from("leads")
+              .select("status")
+              .eq("id", current.lead_id)
+              .maybeSingle(),
+            sb
+              .from("offertes")
+              .select("id, actie_required, status")
+              .eq("lead_id", current.lead_id)
+              .eq("status", "ondertekend")
+              .limit(5),
+            sb
+              .from("projecten")
+              .select("id, status")
+              .eq("lead_id", current.lead_id)
+              .limit(5),
+          ]);
+        if (cancelled) return;
+        const st = (lead?.status as string | null) || null;
+        setFreshLeadStatus(st);
+        const saleSt =
+          st === "sale_financiering" || st === "sale_eigen_middelen";
+        const offerteDoor =
+          (offs || []).some((o) => o.actie_required === false);
+        const heeftProject = (projs || []).some(
+          (p) => String(p.status || "") !== "annulering"
+        );
+        setAlDoorgezetBo(saleSt || offerteDoor || heeftProject);
+      } catch {
+        /* ignore — API blokkeert alsnog */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current.lead_id, current.id]);
 
   useEffect(() => {
     if (!isSaleUitkomst(uitkomst) || !current.lead_id) {
@@ -1272,8 +1329,19 @@ export function AfspraakDetail({
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         const list = ((data.adviseurs as Adviseur[]) || [])
-          .filter((a) => a.actief !== false)
-          .sort((a, b) => a.naam.localeCompare(b.naam, "nl"));
+          .filter(
+            (a) =>
+              a.actief !== false &&
+              !isAdminAdviseur(a) &&
+              isAgendaAdviseur(a)
+          )
+          .sort((a, b) => {
+            // SPARE onderaan — duidelijk als placeholder
+            const aSpare = a.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            const bSpare = b.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            if (aSpare !== bSpare) return aSpare - bSpare;
+            return a.naam.localeCompare(b.naam, "nl");
+          });
         setAdviseurOpties(list);
         if (!adviseurKeuze) {
           const other = list.find((a) => a.id !== current.adviseur_id);
@@ -1491,6 +1559,11 @@ export function AfspraakDetail({
     setError(null);
     setOkMsg(null);
     try {
+      if (alDoorgezetBo) {
+        throw new Error(
+          "Deze order is al als sale doorgezet naar de backoffice via Offertes. Afboeken vanuit de agenda kan niet meer."
+        );
+      }
       if (!uitkomst) throw new Error("Kies een uitkomst");
       const isSale = isSaleUitkomst(uitkomst);
       const noteText = vervolgNotitie.trim();
@@ -1506,6 +1579,11 @@ export function AfspraakDetail({
         if (!saleOfferte) {
           throw new Error(
             "Geen ondertekende offerte gevonden voor deze lead — rond eerst de offerte af."
+          );
+        }
+        if (saleOfferte.actie_required === false) {
+          throw new Error(
+            "Deze offerte is al doorgezet naar de backoffice. Afboeken vanuit de agenda kan niet meer."
           );
         }
         const { validateBackofficeDoorzettenForm } = await import(
@@ -1785,6 +1863,19 @@ export function AfspraakDetail({
               )}
             </section>
           )}
+
+          {alDoorgezetBo && mode === "view" && !needsAction ? (
+            <section className="rounded-2xl border border-green/30 bg-green-soft/40 p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-green-dark">
+                Sale doorgezet
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Deze order is al via Offertes als sale naar de backoffice
+                gezet. Afboeken of een vervolg plannen vanuit de agenda kan
+                niet meer.
+              </p>
+            </section>
+          ) : null}
 
           {needsAction && mode === "view" && (
             <section
@@ -2673,9 +2764,14 @@ export function AgendaPanel({
       }
       if (!adv.error) {
         setAdviseurs(adv.adviseurs || []);
-        const planAdviseurs = ((adv.adviseurs || []) as Adviseur[]).filter(
-          (x) => !isAdminAdviseur(x)
-        );
+        const planAdviseurs = ((adv.adviseurs || []) as Adviseur[])
+          .filter((x) => !isAdminAdviseur(x) && isAgendaAdviseur(x))
+          .sort((a, b) => {
+            const aSpare = a.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            const bSpare = b.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            if (aSpare !== bSpare) return aSpare - bSpare;
+            return a.naam.localeCompare(b.naam, "nl");
+          });
         setAdviseurId((prev) => {
           if (defaultAdviseurId) return defaultAdviseurId;
           if (prev && planAdviseurs.some((x) => x.id === prev)) return prev;
@@ -3120,7 +3216,12 @@ export function AgendaPanel({
         >
           <option value="">Kies adviseur…</option>
           {adviseurs
-            .filter((a) => a.actief !== false && !isAdminAdviseur(a))
+            .filter(
+              (a) =>
+                a.actief !== false &&
+                !isAdminAdviseur(a) &&
+                isAgendaAdviseur(a)
+            )
             .map((a) => (
             <option key={a.id} value={a.id}>
               {a.naam}
@@ -3183,6 +3284,10 @@ export function AgendaPanel({
           }
           startAdresLabel={
             adviseurs.find((a) => a.id === adviseurId)?.naam || null
+          }
+          startVanafHuisMaandag={
+            adviseurs.find((a) => a.id === adviseurId)
+              ?.start_vanaf_huis_maandag
           }
         />
       )}

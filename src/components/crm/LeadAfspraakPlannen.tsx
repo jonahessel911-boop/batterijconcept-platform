@@ -419,6 +419,9 @@ export function LeadAfspraakPlannen({
               allLeads={[lead]}
               startAdres={selectedAdviseur?.start_adres || null}
               startAdresLabel={selectedAdviseur?.naam || null}
+              startVanafHuisMaandag={
+                selectedAdviseur?.start_vanaf_huis_maandag
+              }
               freeSlots={slots
                 .filter((s) => !s.busy)
                 .map((s) => ({
@@ -444,6 +447,7 @@ export function LeadAfspraakPlannen({
         allLeads={[lead]}
         startAdres={selectedAdviseur?.start_adres || null}
         startAdresLabel={selectedAdviseur?.naam || null}
+        startVanafHuisMaandag={selectedAdviseur?.start_vanaf_huis_maandag}
       />
 
       <JaNeeField

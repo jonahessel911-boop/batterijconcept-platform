@@ -4,7 +4,7 @@
 
 import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
-import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isAdminAdviseur, isSpareAdviseur } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { isTerugbelPlanbaar, normalizeRol } from "@/lib/rollen";
 import { getSupabaseBrowser } from "@/lib/supabase";
@@ -61,6 +61,7 @@ export async function resolveSaleOpbelAdviseurId(opts: {
     (a) =>
       a.actief !== false &&
       !isAdminAdviseur({ naam: a.naam || "", email: null }) &&
+      !isSpareAdviseur({ naam: a.naam || "", email: null }) &&
       isTerugbelPlanbaar(a)
   );
   const sorted = [...list].sort((a, b) => {

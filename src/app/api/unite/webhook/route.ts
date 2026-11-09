@@ -103,9 +103,21 @@ async function handle(req: NextRequest) {
     if (disconnected && uniteConfigured() && callid) {
       const now = new Date();
       const start = new Date(now.getTime() - 6 * 3600_000);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const fmt = (d: Date) =>
-        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      // Unite filter = Amsterdam wall-clock (niet server-UTC op Vercel)
+      const fmt = (d: Date) => {
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Europe/Amsterdam",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).formatToParts(d);
+        const g = (t: string) => parts.find((p) => p.type === t)?.value || "00";
+        return `${g("year")}-${g("month")}-${g("day")} ${g("hour")}:${g("minute")}:${g("second")}`;
+      };
 
       try {
         const { items } = await listUniteCdrLogs({
@@ -123,7 +135,10 @@ async function handle(req: NextRequest) {
             // Webhook mist vaak callfrom/callto — CDR call_chain heeft extensie + extern nr
             callfrom = callfrom || act.fromNumber;
             callto = callto || act.toNumber;
-            const res = await logUniteCallActivity(act);
+            // Webhook: 1 gesprek — opname mag; niet de bulk-cron path
+            const res = await logUniteCallActivity(act, {
+              skipRecording: false,
+            });
             loggedLeadId = res.leadId;
           }
         }

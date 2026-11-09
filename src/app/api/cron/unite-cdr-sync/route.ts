@@ -10,7 +10,8 @@ import { syncUniteCdrToLeads } from "@/lib/unite-call-activity";
 import { uniteConfigured } from "@/lib/unite";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+/** Genoeg tijd voor ~10 CDR-pagina's + korte opname-inhaal (geen per-call recording). */
+export const maxDuration = 120;
 
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -30,13 +31,13 @@ export async function GET(req: Request) {
     });
   }
 
+  // Default 6u: vangt korte cron-uitval op; nieuwste first → verse bel-events eerst.
   const hours = Math.min(
     48,
-    Math.max(1, Number(new URL(req.url).searchParams.get("hours") || 3) || 3)
+    Math.max(1, Number(new URL(req.url).searchParams.get("hours") || 6) || 6)
   );
   const end = new Date();
   const start = new Date(end.getTime() - hours * 3600_000);
-  const pad = (n: number) => String(n).padStart(2, "0");
   // Unite filters verwachten lokale wall-clock; gebruik Amsterdam via toLocale
   const fmt = (d: Date) => {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -57,7 +58,8 @@ export async function GET(req: Request) {
     const result = await syncUniteCdrToLeads({
       dateStart: fmt(start),
       dateEnd: fmt(end),
-      maxPages: 8,
+      maxPages: 12,
+      skipRecording: true,
     });
     return NextResponse.json({ ok: true, hours, ...result });
   } catch (e) {

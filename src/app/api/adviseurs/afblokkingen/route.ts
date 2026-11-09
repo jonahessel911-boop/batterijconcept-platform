@@ -161,13 +161,35 @@ export async function POST(req: NextRequest) {
   }
 
   const geblokkeerd = body.geblokkeerd !== false;
-  const isStandaard = isStandaardGeblokkeerdSlot(dag, slot_hour, adviseur_id);
 
   try {
     const sb = getSupabaseAdmin();
 
+    let startVanafHuis: boolean | null = null;
+    {
+      const { data: advRow } = await sb
+        .from("adviseurs")
+        .select("start_vanaf_huis_maandag")
+        .eq("id", adviseur_id)
+        .maybeSingle();
+      const v = (
+        advRow as { start_vanaf_huis_maandag?: boolean | null } | null
+      )?.start_vanaf_huis_maandag;
+      if (typeof v === "boolean") startVanafHuis = v;
+    }
+
+    const isStandaard = isStandaardGeblokkeerdSlot(
+      dag,
+      slot_hour,
+      adviseur_id,
+      startVanafHuis
+    );
+
     // Standaard dicht (zondag / maandag 10 weekmeeting) → openen = vrijgave
-    if (isStandaard && magStandaardSlotOntblokken(dag, slot_hour, adviseur_id)) {
+    if (
+      isStandaard &&
+      magStandaardSlotOntblokken(dag, slot_hour, adviseur_id, startVanafHuis)
+    ) {
       const slotLabel = `${String(slot_hour).padStart(2, "0")}:00`;
       if (!geblokkeerd) {
         const { data, error } = await sb

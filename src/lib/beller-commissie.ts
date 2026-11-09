@@ -3,8 +3,7 @@
  * Factuur: maandag na de week (vorige week factureren).
  */
 
-import { subWeeks } from "date-fns";
-import { toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   creditWeekByYearWeek,
@@ -14,16 +13,23 @@ import {
   type CreditWeek,
 } from "@/lib/adviseur-creditfactuur";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { isBelAfspraakUitvalLeadStatus } from "@/lib/labels";
 import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import {
   BELLER_PER_INGEPLANDE_AFSPRAAK,
-  computeOpsCommissieForWindow,
+  eersteNieuwHuisbezoekIdPerLead,
   type OpsCommissieAfspraak,
-  type OpsCommissieAdviseur,
 } from "@/lib/ops-commissie";
 import { normalizeRol } from "@/lib/rollen";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
+
+export type BellerNettoRegel = {
+  id: string;
+  leadNaam: string;
+  geplandOp: string;
+  startAt: string | null;
+};
 
 export type BellerWeekCommissie = {
   jaar: number;
@@ -36,17 +42,71 @@ export type BellerWeekCommissie = {
   afspraken: number;
   bedragExBtw: number;
   isVorigeWeek: boolean;
+  /** Alleen gevuld voor vorige week: de afspraken achter het totaal. */
+  regels: BellerNettoRegel[];
   creditfactuurId: string | null;
   creditfactuurNummer: string | null;
   creditfactuurStatus: string | null;
 };
 
+type BellerAfspraakRow = OpsCommissieAfspraak & { start_at?: string | null };
+
+function nettoAfsprakenVoorBeller(opts: {
+  bellerId: string;
+  afspraken: BellerAfspraakRow[];
+  historie: OpsCommissieAfspraak[];
+  startYmd: string;
+  endYmd: string;
+  leadStatusById: ReadonlyMap<string, string | null>;
+  leadNaamById: ReadonlyMap<string, string>;
+}): BellerNettoRegel[] {
+  const eersteIds = eersteNieuwHuisbezoekIdPerLead(opts.historie);
+  const regels: BellerNettoRegel[] = [];
+  for (const a of opts.afspraken) {
+    if ((a.soort || "").trim() !== "nieuw" || a.status === "geannuleerd") {
+      continue;
+    }
+    if (!a.created_at) continue;
+    if (eersteIds.get(a.lead_id) !== a.id) continue;
+    if (
+      isBelAfspraakUitvalLeadStatus(opts.leadStatusById.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
+    const ymd = formatInTimeZone(
+      new Date(a.created_at),
+      AMSTERDAM_TZ,
+      "yyyy-MM-dd"
+    );
+    if (ymd < opts.startYmd || ymd > opts.endYmd) continue;
+    if ((a.ingepland_door_id || "").trim() !== opts.bellerId) continue;
+    regels.push({
+      id: a.id,
+      leadNaam: opts.leadNaamById.get(a.lead_id) || "Lead",
+      geplandOp: a.created_at,
+      startAt: a.start_at || null,
+    });
+  }
+  regels.sort(
+    (a, b) => new Date(b.geplandOp).getTime() - new Date(a.geplandOp).getTime()
+  );
+  return regels;
+}
+
+function shiftYmd(ymd: string, deltaDays: number): string {
+  const d = new Date(`${ymd}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
+}
+
 function listRecentCreditWeeks(count: number, now = new Date()): CreditWeek[] {
   const out: CreditWeek[] = [];
-  let cursor = toZonedTime(now, AMSTERDAM_TZ);
+  let ymd = formatInTimeZone(now, AMSTERDAM_TZ, "yyyy-MM-dd");
   for (let i = 0; i < count; i++) {
-    out.push(creditWeekFromDate(cursor));
-    cursor = subWeeks(cursor, 1);
+    out.push(
+      creditWeekFromDate(fromZonedTime(`${ymd}T12:00:00`, AMSTERDAM_TZ))
+    );
+    ymd = shiftYmd(ymd, -7);
   }
   return out;
 }
@@ -80,17 +140,17 @@ export async function loadBellerWeekCommissie(
   }
 
   const [afspraken, { data: cfs }] = await Promise.all([
-    fetchAllRows<OpsCommissieAfspraak>((fromIdx, toIdx) =>
+    fetchAllRows<BellerAfspraakRow>((fromIdx, toIdx) =>
       sb
         .from("afspraken")
-        .select("id, lead_id, created_at, status, soort, ingepland_door_id")
+        .select("id, lead_id, created_at, start_at, status, soort, ingepland_door_id")
         .eq("soort", "nieuw")
         .eq("ingepland_door_id", opts.bellerId)
         .gte("created_at", `${rangeStart}T00:00:00.000Z`)
         .lte("created_at", `${rangeEnd}T23:59:59.999Z`)
         .order("created_at", { ascending: true })
         .range(fromIdx, toIdx)
-    ).catch(() => [] as OpsCommissieAfspraak[]),
+    ).catch(() => [] as BellerAfspraakRow[]),
     sb
       .from("adviseur_creditfacturen")
       .select("id, factuur_nummer, status, week_jaar, week_nummer")
@@ -102,6 +162,7 @@ export async function loadBellerWeekCommissie(
   const leadIds = [...new Set(afspraken.map((a) => a.lead_id).filter(Boolean))];
   let historie = afspraken;
   const leadStatusById = new Map<string, string | null>();
+  const leadNaamById = new Map<string, string>();
   if (leadIds.length > 0) {
     const histChunks: OpsCommissieAfspraak[] = [];
     const chunkSize = 200;
@@ -119,26 +180,18 @@ export async function loadBellerWeekCommissie(
       histChunks.push(...rows);
       const { data: leadRows } = await sb
         .from("leads")
-        .select("id, status")
+        .select("id, status, naam")
         .in("id", chunk);
       for (const row of leadRows || []) {
         leadStatusById.set(
           row.id as string,
           (row.status as string | null) ?? null
         );
+        leadNaamById.set(row.id as string, (row.naam as string) || "Lead");
       }
     }
     historie = histChunks.length > 0 ? histChunks : afspraken;
   }
-
-  const adviseurs: OpsCommissieAdviseur[] = [
-    {
-      id: beller.id as string,
-      naam: (beller.naam as string) || "Beller",
-      rol: "beller",
-      actief: beller.actief !== false,
-    },
-  ];
 
   const cfByWeek = new Map<
     string,
@@ -156,20 +209,18 @@ export async function loadBellerWeekCommissie(
   }
 
   const weeks: BellerWeekCommissie[] = weekFrames.map((w) => {
-    const detail = computeOpsCommissieForWindow({
+    const isVorigeWeek = w.jaar === vorige.jaar && w.week === vorige.week;
+    const regels = nettoAfsprakenVoorBeller({
+      bellerId: opts.bellerId,
       afspraken,
       historie,
-      adviseurs,
       startYmd: w.van,
       endYmd: w.tot,
-      tarikId: null,
-      includeVast: false,
       leadStatusById,
+      leadNaamById,
     });
-    const row = detail.perBeller.find((b) => b.id === opts.bellerId);
-    const afsprakenN = row?.afspraken ?? 0;
+    const afsprakenN = regels.length;
     const bedrag =
-      row?.bedrag ??
       Math.round(afsprakenN * BELLER_PER_INGEPLANDE_AFSPRAAK * 100) / 100;
     const cf = cfByWeek.get(`${w.jaar}-W${w.week}`);
     return {
@@ -181,7 +232,8 @@ export async function loadBellerWeekCommissie(
       factuurMaandag: w.betaalMaandag,
       afspraken: afsprakenN,
       bedragExBtw: bedrag,
-      isVorigeWeek: w.jaar === vorige.jaar && w.week === vorige.week,
+      isVorigeWeek,
+      regels: isVorigeWeek ? regels : [],
       creditfactuurId: cf?.id ?? null,
       creditfactuurNummer: cf?.factuur_nummer ?? null,
       creditfactuurStatus: cf?.status ?? null,

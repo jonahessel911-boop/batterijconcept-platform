@@ -41,7 +41,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, created_at, updated_at";
+  "id, naam, email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, start_vanaf_huis_maandag, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, profielfoto_path, created_at, updated_at";
 /** Zonder geblokkeerd — tot migrate-adviseur-geblokkeerd.sql is gedraaid. */
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
@@ -96,6 +96,7 @@ function isSchemaCompatError(error: SbError): boolean {
     /could not find/i.test(msg) ||
     msg.includes("adviseurs_rol_check") ||
     msg.includes("start_adres") ||
+    msg.includes("start_vanaf_huis_maandag") ||
     msg.includes("bel_planning") ||
     msg.includes("commissie_pct") ||
     msg.includes("bedrijfsnaam") ||
@@ -136,6 +137,7 @@ export async function GET(req: NextRequest) {
       (error.code === "42703" ||
         error.code === "PGRST204" ||
         error.message?.includes("start_adres") ||
+        error.message?.includes("start_vanaf_huis_maandag") ||
         error.message?.includes("startdatum") ||
         error.message?.includes("bel_planning") ||
         error.message?.includes("geblokkeerd") ||
@@ -206,14 +208,19 @@ export async function GET(req: NextRequest) {
     }
 
     const busyRows = await blockingBusySlots(sb, adviseurId);
+    // Handmatig plannen (Bel / LeadAfspraak): max 16 dagen vooruit —
+    // verder vooruit plannen vult agenda’s te ver en “valt” te veel uit.
+    const HANDMATIG_DAYS_AHEAD = 16;
     const rawSlots = generateAvailableSlots({
       busy: busyRows,
+      daysAhead: HANDMATIG_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
     }));
     const rawBlocks = generateDayBlocks({
       busy: busyRows,
+      daysAhead: HANDMATIG_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -228,7 +235,7 @@ export async function GET(req: NextRequest) {
       y + 1,
     ]);
     const van = dayKeyAmsterdam(new Date());
-    const tot = dayKeyAmsterdam(addDays(new Date(), 40));
+    const tot = dayKeyAmsterdam(addDays(new Date(), HANDMATIG_DAYS_AHEAD));
     const [afgeblokt, vrijgaven] = await Promise.all([
       loadAfblokkingen(sb, {
         adviseurIds: [adviseurId],
@@ -382,6 +389,9 @@ export async function POST(req: NextRequest) {
       actief: true,
       rol,
       ...(commissiePct != null ? { commissie_pct: commissiePct } : {}),
+      ...(rol === "warmtefonds"
+        ? { bel_planning: false, commissie_pct: 0 }
+        : {}),
       ...kvkFields,
     };
     if (startdatum !== undefined) baseRow.startdatum = startdatum;
@@ -456,6 +466,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (insert.error || !insert.data) {
+      if (insert.error && isRolCheckViolation(insert.error)) {
+        return NextResponse.json(
+          {
+            error:
+              "Deze rol is nog niet toegestaan in de database. Voer supabase/migrate-warmtefonds-rol.sql uit in Supabase.",
+            detail: insert.error.message,
+          },
+          { status: 503 }
+        );
+      }
       return NextResponse.json(
         { error: insert.error?.message || "Opslaan mislukt" },
         { status: 500 }
@@ -476,19 +496,42 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const loginUrl = `${appBaseUrl()}/login`;
-    const html = teamWelkomEmail({
-      naam,
-      email,
-      password,
-      loginUrl,
-    });
-    const sent = await sendEmail({
-      to: email,
-      subject: `Welkom bij het team, ${naam}`,
-      html,
-      tag: "team-welkom",
-    });
+    let portalUrl: string | null = null;
+    if (rol === "warmtefonds") {
+      try {
+        const { ensureWarmtefondsOperatorForPerson } = await import(
+          "@/lib/warmtefonds-portal"
+        );
+        const op = await ensureWarmtefondsOperatorForPerson(sb, {
+          naam,
+          email,
+          telefoon: body.telefoon?.trim() || null,
+        });
+        if (op?.portal_token) {
+          portalUrl = `${appBaseUrl()}/warmtefonds/${op.portal_token}`;
+        }
+      } catch (wfErr) {
+        console.error("warmtefonds-operator aanmaken mislukt:", wfErr);
+      }
+    }
+
+    // WF werkt via portaal — geen CRM-loginmail met wachtwoord.
+    let sent: { ok: boolean; error?: string } = { ok: true };
+    if (rol !== "warmtefonds") {
+      const loginUrl = `${appBaseUrl()}/login`;
+      const html = teamWelkomEmail({
+        naam,
+        email,
+        password,
+        loginUrl,
+      });
+      sent = await sendEmail({
+        to: email,
+        subject: `Welkom bij het team, ${naam}`,
+        html,
+        tag: "team-welkom",
+      });
+    }
 
     return NextResponse.json(
       {
@@ -496,6 +539,7 @@ export async function POST(req: NextRequest) {
         mail_sent: sent.ok,
         mail_error: sent.error,
         agenda_blocked: agendaBlocked,
+        portal_url: portalUrl,
       },
       { status: 201 }
     );
@@ -519,6 +563,7 @@ export async function PATCH(req: NextRequest) {
     actief?: boolean;
     geblokkeerd?: boolean;
     start_adres?: string | null;
+    start_vanaf_huis_maandag?: boolean;
     startdatum?: string | null;
     bel_planning?: boolean;
     rol?: string;
@@ -658,6 +703,9 @@ export async function PATCH(req: NextRequest) {
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;
     }
+    if (typeof body.start_vanaf_huis_maandag === "boolean") {
+      patch.start_vanaf_huis_maandag = body.start_vanaf_huis_maandag;
+    }
     if (body.startdatum !== undefined) {
       const sd = parseStartdatum(body.startdatum);
       if (sd === undefined) {
@@ -677,6 +725,10 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: "Ongeldige rol" }, { status: 400 });
       }
       patch.rol = r;
+      if (r === "warmtefonds") {
+        patch.bel_planning = false;
+        if (patch.commissie_pct === undefined) patch.commissie_pct = 0;
+      }
     }
     if (body.commissie_pct !== undefined) {
       const pct = Number(body.commissie_pct) || 0;
@@ -741,7 +793,7 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "Deze rol is nog niet toegestaan in de database. Voer supabase/migrate-beller-rol.sql uit (of opnieuw migrate-rollen.sql).",
+              "Deze rol is nog niet toegestaan in de database. Voer supabase/migrate-warmtefonds-rol.sql uit in Supabase.",
             detail: error.message,
           },
           { status: 503 }
@@ -840,6 +892,20 @@ export async function PATCH(req: NextRequest) {
       }
 
       if (
+        patch.start_vanaf_huis_maandag !== undefined &&
+        isMissingColumn(error, "start_vanaf_huis_maandag")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-adviseur-start-vanaf-huis-maandag.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (
         patch.bel_planning !== undefined &&
         isMissingColumn(error, "bel_planning")
       ) {
@@ -876,6 +942,9 @@ export async function PATCH(req: NextRequest) {
       }
       if (isMissingColumn(error, "start_adres")) {
         delete slimPatch.start_adres;
+      }
+      if (isMissingColumn(error, "start_vanaf_huis_maandag")) {
+        delete slimPatch.start_vanaf_huis_maandag;
       }
       if (isMissingColumn(error, "bel_planning")) {
         delete slimPatch.bel_planning;
@@ -953,9 +1022,37 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
+    let portalUrl: string | null = null;
+    const nextRol = normalizeRol(
+      (data as { rol?: string | null }).rol ?? (patch.rol as string | undefined)
+    );
+    if (nextRol === "warmtefonds") {
+      try {
+        const { ensureWarmtefondsOperatorForPerson } = await import(
+          "@/lib/warmtefonds-portal"
+        );
+        const row = data as {
+          naam?: string;
+          email?: string | null;
+          telefoon?: string | null;
+        };
+        const op = await ensureWarmtefondsOperatorForPerson(sb, {
+          naam: row.naam || "Warmtefonds",
+          email: (row.email || "").trim().toLowerCase(),
+          telefoon: row.telefoon ?? null,
+        });
+        if (op?.portal_token) {
+          portalUrl = `${appBaseUrl()}/warmtefonds/${op.portal_token}`;
+        }
+      } catch (wfErr) {
+        console.error("warmtefonds-operator sync mislukt:", wfErr);
+      }
+    }
+
     return NextResponse.json({
       adviseur: data,
       agenda_blocked: agendaBlocked,
+      portal_url: portalUrl,
     });
   } catch (e) {
     return NextResponse.json(

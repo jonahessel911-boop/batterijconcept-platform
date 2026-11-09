@@ -99,11 +99,26 @@ export async function GET(req: NextRequest) {
     const tot = dayKeyAmsterdam(addDays(now, daysAhead + 2));
     const y = getISOWeekYear(toZonedTime(now, AMSTERDAM_TZ));
 
-    const { data: adviseursRaw, error: advErr } = await sb
+    let { data: adviseursRaw, error: advErr } = await sb
       .from("adviseurs")
-      .select("id, naam, email, rol, actief, startdatum")
+      .select(
+        "id, naam, email, rol, actief, startdatum, start_vanaf_huis_maandag"
+      )
       .eq("actief", true)
       .order("naam");
+    if (
+      advErr &&
+      (advErr.message?.includes("start_vanaf_huis_maandag") ||
+        advErr.code === "42703")
+    ) {
+      const fb = await sb
+        .from("adviseurs")
+        .select("id, naam, email, rol, actief, startdatum")
+        .eq("actief", true)
+        .order("naam");
+      adviseursRaw = fb.data;
+      advErr = fb.error;
+    }
     if (advErr) throw advErr;
 
     let adviseurs = (adviseursRaw || []).filter((a) =>
@@ -198,7 +213,9 @@ export async function GET(req: NextRequest) {
           dag,
           hour,
           afblokkingen,
-          vrijgaven
+          vrijgaven,
+          (adv as { start_vanaf_huis_maandag?: boolean | null })
+            .start_vanaf_huis_maandag
         );
         if (blocked) continue;
 

@@ -128,9 +128,20 @@ export function CallRecordingPlayer({
             <p className="mt-0.5 text-xs text-muted">Opname laden…</p>
           ) : null}
           {phase === "missing" ? (
-            <p className="mt-0.5 text-xs text-muted">
-              {error || "Geen opname beschikbaar voor dit gesprek"}
-            </p>
+            <div className="mt-0.5">
+              <p className="text-xs text-muted">
+                {error || "Geen opname beschikbaar voor dit gesprek"}
+              </p>
+              {streamUrl ? (
+                <button
+                  type="button"
+                  onClick={() => void load()}
+                  className="mt-1 text-xs font-semibold text-green-deeper hover:underline"
+                >
+                  Opnieuw proberen
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
@@ -158,24 +169,40 @@ export function recordingHrefFromMeta(meta: {
   }`;
 }
 
-/** True als we weten dat beluisteren zinloos is. */
+const UNITE_RECORDING_RETENTION_MS = 14 * 24 * 3600_000;
+
+/** True als we weten dat beluisteren zinloos is (niet: tijdelijk nog niet gekoppeld). */
 export function recordingUnavailableFromMeta(
   meta: {
     callrecordkey?: string | null;
     recording_storage_path?: string | null;
     recording_unavailable?: boolean;
     recording_complete?: boolean;
+    duration_seconds?: number | null;
+    answered?: boolean;
   } | null,
   createdAt?: string | null
 ): boolean {
   if (!meta) return false;
-  if (meta.recording_unavailable) return true;
   if (meta.recording_storage_path?.trim()) return false;
   if (meta.callrecordkey?.trim()) return false;
-  // Geen key/storage en ouder dan ~3 dagen → Unite-retentie is voorbij
-  if (createdAt) {
-    const ageMs = Date.now() - new Date(createdAt).getTime();
-    if (Number.isFinite(ageMs) && ageMs > 3 * 24 * 3600_000) return true;
-  }
+
+  const duration = Number(meta.duration_seconds);
+  const unanswered =
+    meta.answered === false ||
+    (Number.isFinite(duration) && duration <= 0);
+  // Niet-opgenomen gesprekken hebben nooit audio
+  if (unanswered) return true;
+
+  const ageMs = createdAt
+    ? Date.now() - new Date(createdAt).getTime()
+    : NaN;
+  const pastRetention =
+    Number.isFinite(ageMs) && ageMs > UNITE_RECORDING_RETENTION_MS;
+
+  // Oude permanente miss-flag alleen respecteren ná retentievenster
+  if (meta.recording_unavailable && pastRetention) return true;
+  // Zonder key/storage: pas definitief “geen opname” ná retentie
+  if (pastRetention) return true;
   return false;
 }

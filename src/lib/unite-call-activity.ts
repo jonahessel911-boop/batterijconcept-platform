@@ -187,7 +187,8 @@ export function formatCallActivityText(act: UniteCallActivityInput): {
 
 /** Vul agent DID + eventuele opname bij (best-effort). */
 export async function enrichUniteCallActivity(
-  act: UniteCallActivityInput
+  act: UniteCallActivityInput,
+  opts?: { skipRecording?: boolean }
 ): Promise<UniteCallActivityInput> {
   const next = { ...act };
   const extRaw =
@@ -206,7 +207,10 @@ export async function enrichUniteCallActivity(
     /* ignore */
   }
 
+  // Opname-lookup is traag (Unite rate-limit). Cron-sync slaat dit over;
+  // reattachMissingRecordings haalt opnames later bij.
   if (
+    !opts?.skipRecording &&
     next.durationSeconds > 0 &&
     next.agentExtensionId &&
     next.matchPhone &&
@@ -289,7 +293,7 @@ async function alreadyLogged(
 /** Schrijf één Unite-gesprek naar lead_events + lead.notities (idempotent op uniqueid). */
 export async function logUniteCallActivity(
   act: UniteCallActivityInput,
-  opts?: { leadId?: string | null }
+  opts?: { leadId?: string | null; skipRecording?: boolean }
 ): Promise<{ ok: boolean; leadId: string | null; skipped?: string }> {
   const leadId =
     opts?.leadId ||
@@ -301,7 +305,9 @@ export async function logUniteCallActivity(
     return { ok: true, leadId, skipped: "dubbel" };
   }
 
-  const enriched = await enrichUniteCallActivity(act);
+  const enriched = await enrichUniteCallActivity(act, {
+    skipRecording: opts?.skipRecording,
+  });
   const formatted = formatCallActivityText(enriched);
 
   let storagePath: string | null = null;
@@ -374,6 +380,13 @@ export async function syncUniteCdrToLeads(opts: {
   dateEnd: string;
   maxPages?: number;
   onlyPhones?: string[] | null;
+  /**
+   * true (default bij cron): geen Unite-opname-API per gesprek.
+   * Voorkomt Vercel-timeout / rate-limit waardoor bel-events uitblijven.
+   */
+  skipRecording?: boolean;
+  /** Alleen popups voor gesprekken jonger dan dit (ms). Default 45 min. */
+  popupMaxAgeMs?: number;
 }): Promise<{
   scanned: number;
   logged: number;
@@ -389,6 +402,9 @@ export async function syncUniteCdrToLeads(opts: {
       .map((p) => toE164Nl(p)?.replace(/\D/g, ""))
       .filter(Boolean) as string[]
   );
+  const skipRecording = opts.skipRecording !== false;
+  const popupMaxAgeMs = opts.popupMaxAgeMs ?? 45 * 60_000;
+  const nowMs = Date.now();
 
   let scanned = 0;
   let logged = 0;
@@ -426,14 +442,19 @@ export async function syncUniteCdrToLeads(opts: {
         const dig = act.matchPhone.replace(/\D/g, "");
         if (!phoneSet.has(dig)) continue;
       }
-      const res = await logUniteCallActivity(act);
+      const res = await logUniteCallActivity(act, { skipRecording });
       if (res.skipped === "dubbel") skipped += 1;
       else if (res.skipped === "geen_lead") unmatched += 1;
       else if (res.ok) logged += 1;
       else unmatched += 1;
 
-      // Nagesprek-popup voor gekoppelde medewerker (alleen verse gesprekken)
-      if (res.skipped !== "dubbel") {
+      // Nagesprek-popup alleen voor verse gesprekken (niet bij backfill)
+      const ageMs = nowMs - act.callAt.getTime();
+      if (
+        res.skipped !== "dubbel" &&
+        ageMs >= 0 &&
+        ageMs <= popupMaxAgeMs
+      ) {
         try {
           const { emitEndedPopupFromActivity } = await import(
             "@/lib/call-popups"
@@ -457,10 +478,9 @@ export async function syncUniteCdrToLeads(opts: {
     }
   }
 
-  // Tweede pass: recente bel-events zonder callrecordkey opnieuw koppelen + opslaan
-  // (opnames verschijnen soms pas minuten na de CDR)
+  // Tweede pass: opname-inhaal voor recente beantwoorde gesprekken
   try {
-    await reattachMissingRecordings({ hours: 48, limit: 40 });
+    await reattachMissingRecordings({ hours: 48, limit: 30 });
   } catch (e) {
     console.warn("reattachMissingRecordings:", e);
   }
@@ -501,9 +521,12 @@ export async function reattachMissingRecordings(opts?: {
       duration_seconds?: number;
       extension_id?: string;
     };
-    if (meta.recording_unavailable) continue;
-    if ((Number(meta.duration_seconds) || 0) <= 0) continue;
+    const duration = Number(meta.duration_seconds) || 0;
+    if (duration <= 0) continue;
     if (meta.callrecordkey && meta.recording_storage_path) continue;
+    // Premature unavailable-flags wél opnieuw proberen binnen retentie
+    const ageMs = Date.now() - new Date(ev.created_at).getTime();
+    if (meta.recording_unavailable && ageMs > 14 * 24 * 3600_000) continue;
     checked += 1;
 
     const dir = (meta.direction || "out").toLowerCase();

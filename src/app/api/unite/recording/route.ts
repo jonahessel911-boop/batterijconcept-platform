@@ -19,6 +19,7 @@ import {
   findUniteExtension,
   findUniteRecordingForCall,
   listUniteCallRecords,
+  listUniteExtensions,
   UNITE_RECORDING_PART_SIZE,
   uniteConfigured,
 } from "@/lib/unite";
@@ -63,7 +64,11 @@ async function resolveFromEvent(
     recordingComplete: meta.recording_complete === true,
   };
 
-  if (meta.recording_unavailable) {
+  const durationSec = Number(meta.duration_seconds) || 0;
+  const ageMs = Date.now() - new Date(ev.created_at).getTime();
+  const pastRetention = ageMs > 14 * 24 * 3600_000;
+  // Te vroeg gemarkeerd als unavailable → opnieuw proberen binnen retentie
+  if (meta.recording_unavailable && (durationSec <= 0 || pastRetention)) {
     return {
       ...base,
       key: null,
@@ -113,9 +118,21 @@ async function resolveFromEvent(
   }
   const tryIds: string[] = [];
   if (extensionId) tryIds.push(extensionId);
-  for (const hint of ["0200", "0201"]) {
+  for (const hint of ["0200", "0201", "0202", "0203"]) {
     const e = await findUniteExtension(hint);
     if (e?.id && !tryIds.includes(e.id)) tryIds.push(e.id);
+  }
+  // DID/agent niet gevonden → alle extensies proberen (max 8, rate-limit)
+  if (tryIds.length <= 1) {
+    try {
+      const all = await listUniteExtensions();
+      for (const e of all) {
+        if (e?.id && !tryIds.includes(e.id)) tryIds.push(e.id);
+        if (tryIds.length >= 8) break;
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   for (const eid of tryIds) {
@@ -143,6 +160,7 @@ async function resolveFromEvent(
             extension_id: eid,
             recording_storage_path: storagePath,
             recording_complete: Boolean(storagePath),
+            recording_unavailable: false,
           },
         })
         .eq("id", eventId);
@@ -156,15 +174,25 @@ async function resolveFromEvent(
     }
   }
 
-  // Permanent miss: markeer zodat UI geen valse 'Terugluisteren' toont
-  const ageMs = Date.now() - new Date(ev.created_at).getTime();
-  if (ageMs > 2 * 3600_000) {
+  // Pas na Unite-retentie (~14d) permanent markeren — niet na 2 uur
+  if (pastRetention || durationSec <= 0) {
     await sb
       .from("lead_events")
       .update({
         meta: {
           ...meta,
           recording_unavailable: true,
+        },
+      })
+      .eq("id", eventId);
+  } else if (meta.recording_unavailable) {
+    // Wis premature flag zodat volgende poging opnieuw mag
+    await sb
+      .from("lead_events")
+      .update({
+        meta: {
+          ...meta,
+          recording_unavailable: false,
         },
       })
       .eq("id", eventId);

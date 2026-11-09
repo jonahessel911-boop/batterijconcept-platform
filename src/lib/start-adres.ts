@@ -46,17 +46,25 @@ export function resolvePartnerStartAdres(
 }
 
 /**
- * Adviseurs die maandag níet naar de ochtendmeeting komen:
- * - startadres blijft hun persoonlijke adres (geen Daltonlaan)
- * - maandag 10:00 is open (niet hard geblokkeerd)
+ * Fallback zolang `start_vanaf_huis_maandag` nog niet geladen is
+ * (oude selects / pre-migratie). Bron van waarheid: DB-kolom via Team.
  */
 export const SKIP_MAANDAG_OCHTENDMEETING_ADVISEUR_IDS = new Set<string>([
   "1925468e-5645-44a0-a6fc-962b95d0f46c", // Marcel Klaasman (Sluis)
+  "79645a96-6684-4265-94c8-d9c623ec4bad", // Charafeddine Kaddouri (Stein)
 ]);
 
+/**
+ * true = altijd vanaf huis, ook maandag (geen Daltonlaan / ma 10 meeting).
+ * `startVanafHuisMaandag` uit DB wint; anders fallback-ID-set.
+ */
 export function skipsMaandagOchtendmeeting(
-  adviseurId: string | null | undefined
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): boolean {
+  if (typeof startVanafHuisMaandag === "boolean") {
+    return startVanafHuisMaandag;
+  }
   return Boolean(
     adviseurId && SKIP_MAANDAG_OCHTENDMEETING_ADVISEUR_IDS.has(adviseurId)
   );
@@ -154,19 +162,23 @@ export function ensureStartAdresCountry(
 
 /**
  * Vertrekpunt voor de eerste afspraak die dag.
- * Maandag → Daltonlaan 500 (ochtendmeeting), tenzij adviseur de meeting overslaat;
+ * Maandag → Daltonlaan 500 (ochtendmeeting), tenzij start_vanaf_huis_maandag;
  * anders persoonlijk startadres. Terugreis eind van de dag blijft persoonlijk.
  */
 export function resolveDayStartAdres(
   homeStartAdres: string | null | undefined,
   day: Date | string,
-  adviseurId?: string | null
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): {
   address: string | null;
   label: string | null;
   isMondayMeeting: boolean;
 } {
-  if (isAmsterdamMonday(day) && !skipsMaandagOchtendmeeting(adviseurId)) {
+  if (
+    isAmsterdamMonday(day) &&
+    !skipsMaandagOchtendmeeting(adviseurId, startVanafHuisMaandag)
+  ) {
     return {
       address: ensureStartAdresCountry(MAANDAG_MEETING_START_ADRES, "NL"),
       label: MAANDAG_MEETING_START_LABEL,

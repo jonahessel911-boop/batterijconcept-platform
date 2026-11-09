@@ -7,17 +7,19 @@ export const GEBRUIKER_ROLLEN = [
   "sales_manager",
   "admin",
   "installateur",
+  "warmtefonds",
 ] as const;
 
 export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
 
-/** Login-accounts in Team (geen monteur-/portaalrol). */
+/** Login-accounts in Team (geen monteur-/partnerportaal). */
 export const TEAM_ROLLEN = [
   "admin",
   "sales_manager",
   "adviseur",
   "beller",
   "backoffice",
+  "warmtefonds",
 ] as const;
 
 export type TeamRol = (typeof TEAM_ROLLEN)[number];
@@ -29,6 +31,7 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   sales_manager: "Sales manager",
   admin: "Admin",
   installateur: "Installateur",
+  warmtefonds: "Warmtefonds",
 };
 
 export const teamRolUitleg: Record<TeamRol, string> = {
@@ -41,6 +44,8 @@ export const teamRolUitleg: Record<TeamRol, string> = {
     "Callcenter: leads, bellen, agenda alle adviseurs, eigen bel-rapportage",
   backoffice:
     "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing, adviseurs-contact",
+  warmtefonds:
+    "Warmtefonds/Edergy: werkt via het WF-portaal (aanvragen, agenda, creditfacturen) — geen sales-CRM",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -50,18 +55,22 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
     value === "backoffice" ||
     value === "sales_manager" ||
     value === "admin" ||
-    value === "installateur"
+    value === "installateur" ||
+    value === "warmtefonds"
   ) {
     return value;
   }
   return "adviseur";
 }
 
-/** Geen sales-commissie (admins, Huub, enz.). */
+/** Geen sales-commissie (admins, Huub, Warmtefonds-team, SPARE, enz.). */
 export function isUitgeslotenVanSalesCommissie(person: {
   naam?: string | null;
+  email?: string | null;
   rol?: string | null;
 }): boolean {
+  if (isWarmtefondsTeamAdviseur(person)) return true;
+  if (isSpareAdviseur(person)) return true;
   const naam = (person.naam || "").trim().toLowerCase();
   if (naam.includes("huub") && naam.includes("veldman")) return true;
   return normalizeRol(person.rol) !== "adviseur";
@@ -94,9 +103,11 @@ export function tabsVoorRol(
         "bellen",
         "agenda",
         "projecten",
+        "stuur",
         "inbox",
         "facturen",
         "purchasing",
+        "finance",
         "adviseurs",
       ];
       break;
@@ -107,17 +118,22 @@ export function tabsVoorRol(
         "leads",
         "offertes",
         "netto",
+        "projecten",
+        "finance",
+        "stuur",
         "rapportage",
         "voice_ai",
         "adviseurs",
       ];
       break;
     case "installateur":
+    case "warmtefonds":
       tabs = [];
       break;
     case "admin":
     default:
       tabs = [
+        "today",
         "taken",
         "weekmeeting",
         "leads",
@@ -131,17 +147,22 @@ export function tabsVoorRol(
         "inbox",
         "facturen",
         "purchasing",
+        "finance",
+        "facturen_mailbox",
+        "stuur",
         "rapportage",
+        "performance",
         "voice_ai",
         "adviseurs",
         "partners",
       ];
       break;
   }
-  // Today: jona@ of sales_manager-rol
+  // Today staat bij admin en sales manager; jona@ ook als de rol anders is.
   if (
     opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
-    rol === "sales_manager"
+    rol === "sales_manager" ||
+    rol === "admin"
   ) {
     tabs = ["today", ...tabs.filter((t) => t !== "today")];
   }
@@ -196,6 +217,48 @@ export function magInkomend(rol: GebruikerRol): boolean {
   return rol === "admin" || rol === "backoffice";
 }
 
+/**
+ * Warmtefonds/Edergy-team (o.a. Edwin) — geen sales-adviseur, niet in
+ * bel-/plan-agenda. Sync met isPlanbaarAdviseur in admin-adviseur.ts.
+ * Primair via rol=`warmtefonds`; e-mail/naam blijft als legacy-fallback.
+ */
+export function isWarmtefondsTeamAdviseur(a: {
+  naam?: string | null;
+  email?: string | null;
+  rol?: string | null;
+}): boolean {
+  if (normalizeRol(a.rol) === "warmtefonds") return true;
+  // Legacy: rol nog niet gezet, herken aan Edergy-mail / Edwin Veenendaal
+  if (a.rol != null && a.rol !== "" && normalizeRol(a.rol) !== "adviseur") {
+    return false;
+  }
+  const email = a.email?.trim().toLowerCase() || "";
+  if (email === "edwin@edergy.nl" || email.endsWith("@edergy.nl")) return true;
+  const naam = (a.naam || "").trim().toLowerCase();
+  return /edwin/.test(naam) && /veenendaal/.test(naam);
+}
+
+/** Placeholder-agenda e-mail (geen login). Override via SPARE_ADVISEUR_EMAIL. */
+export const SPARE_ADVISEUR_EMAIL = "spare@batterijconcept.nl";
+
+/**
+ * SPARE — tijdelijke placeholder-agenda. Wel in backoffice-agenda /
+ * overzetten; niet in bel, rapportage of Team.
+ */
+export function isSpareAdviseur(a: {
+  naam?: string | null;
+  email?: string | null;
+}): boolean {
+  const naam = (a.naam || "").trim().toLowerCase();
+  if (naam === "spare") return true;
+  const email = (a.email || "").trim().toLowerCase();
+  const spare =
+    (typeof process !== "undefined" &&
+      process.env?.SPARE_ADVISEUR_EMAIL?.trim().toLowerCase()) ||
+    SPARE_ADVISEUR_EMAIL;
+  return Boolean(email && email === spare);
+}
+
 /** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */
 export function isPlanbareAdviseur(a: {
   actief?: boolean | null;
@@ -204,12 +267,15 @@ export function isPlanbareAdviseur(a: {
   email?: string | null;
 }): boolean {
   if (a.actief === false) return false;
+  if (isWarmtefondsTeamAdviseur(a)) return false;
+  if (isSpareAdviseur(a)) return false;
   return normalizeRol(a.rol) === "adviseur";
 }
 
 /**
  * Zichtbaar in Agenda (eigen rooster, afblokken).
  * Inactief mag wél — alleen bel/auto-planning sluit hen uit.
+ * SPARE hoort hier wél bij (placeholder-kolom in backoffice-agenda).
  */
 export function isAgendaAdviseur(a: {
   actief?: boolean | null;
@@ -217,6 +283,7 @@ export function isAgendaAdviseur(a: {
   naam: string;
   email?: string | null;
 }): boolean {
+  if (isWarmtefondsTeamAdviseur(a)) return false;
   return normalizeRol(a.rol) === "adviseur";
 }
 
@@ -252,8 +319,11 @@ export function isBelPlanAdviseur(a: {
 export function isTerugbelPlanbaar(a: {
   actief?: boolean;
   rol?: string | null;
+  naam?: string | null;
+  email?: string | null;
 }): boolean {
   if (a.actief === false) return false;
+  if (isSpareAdviseur(a)) return false;
   const rol = normalizeRol(a.rol);
   return (
     rol === "adviseur" ||

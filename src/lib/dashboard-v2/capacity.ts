@@ -95,6 +95,8 @@ type AdviseurIn = {
   email?: string | null;
   /** Eerste planbare Amsterdam-dag; slots vóór deze datum tellen niet mee. */
   startdatum?: string | null;
+  /** Team: ook maandag vanaf huis (geen Daltonlaan / ma 10). */
+  start_vanaf_huis_maandag?: boolean | null;
 };
 
 type AfspraakIn = {
@@ -301,7 +303,8 @@ export function buildDashboardV2Capacity(opts: {
         dag,
         hour,
         opts.afblokkingen,
-        opts.vrijgaven ?? new Set()
+        opts.vrijgaven ?? new Set(),
+        adv.start_vanaf_huis_maandag
       );
 
       if (blocked) {
@@ -481,7 +484,8 @@ export function countPlanbareSlotsBreakdown(opts: {
             dag,
             hour,
             new Set(),
-            vrijgaven
+            vrijgaven,
+            adv.start_vanaf_huis_maandag
           );
           if (standaardDicht) continue;
           capaciteit += 1;
@@ -491,7 +495,16 @@ export function countPlanbareSlotsBreakdown(opts: {
             perAdviseur.set(adv.id, row);
           }
           row.capaciteit += 1;
-          if (isSlotGeblokkeerd(adv.id, dag, hour, afblokkingen, vrijgaven)) {
+          if (
+            isSlotGeblokkeerd(
+              adv.id,
+              dag,
+              hour,
+              afblokkingen,
+              vrijgaven,
+              adv.start_vanaf_huis_maandag
+            )
+          ) {
             continue;
           }
           open += 1;

@@ -260,18 +260,48 @@ export async function listUniteExtensions(): Promise<UniteExtension[]> {
   return items;
 }
 
-/** Zoek extensie op 0200 / 200 / id. */
+/** Digit-varianten voor NL-nummers (06… / 31… / zonder leading 0). */
+export function unitePhoneDigitVariants(phone: string): string[] {
+  const dig = String(phone || "").replace(/\D/g, "");
+  if (!dig) return [];
+  const out = new Set<string>([dig]);
+  if (dig.startsWith("31") && dig.length >= 11) {
+    out.add(dig.slice(2));
+    out.add(`0${dig.slice(2)}`);
+  }
+  if (dig.startsWith("0") && dig.length >= 9) {
+    out.add(dig.slice(1));
+    out.add(`31${dig.slice(1)}`);
+  }
+  const stripped = dig.replace(/^0+/, "");
+  if (stripped) out.add(stripped);
+  return [...out];
+}
+
+function digitsLoose(raw: string | null | undefined): string {
+  return String(raw || "").replace(/\D/g, "");
+}
+
+/** Zoek extensie op 0200 / 200 / id / callerid (DID). */
 export async function findUniteExtension(
   extOrId: string | null | undefined
 ): Promise<UniteExtension | null> {
   if (!extOrId) return null;
   const raw = String(extOrId).trim();
   const dig = raw.replace(/\D/g, "").replace(/^0+/, "") || raw.replace(/\D/g, "");
+  const variants = new Set(unitePhoneDigitVariants(raw));
   const items = await listUniteExtensions();
   return (
     items.find((e) => e.id === raw) ||
     items.find((e) => (e.extno_format || "").replace(/\D/g, "").replace(/^0+/, "") === dig) ||
     items.find((e) => (e.username || "").endsWith(`*${dig}`) || (e.username || "").endsWith(raw)) ||
+    items.find((e) => {
+      const cid = digitsLoose(e.callerid);
+      if (!cid) return false;
+      return [...variants].some(
+        (v) => cid === v || cid.endsWith(v) || v.endsWith(cid)
+      );
+    }) ||
     null
   );
 }
@@ -420,38 +450,74 @@ export async function downloadUniteCallRecordFull(opts: {
   return { bytes: out.buffer, contentType };
 }
 
-/** Match opname op extern nummer + tijdstip (±3 min) + duur. */
+/** Match opname op extern nummer + tijdstip (±15 min) + duur. */
 export async function findUniteRecordingForCall(opts: {
   extensionId: string;
   externalPhone: string;
   callAt: Date;
   durationSeconds?: number;
 }): Promise<UniteCallRecord | null> {
-  const dig = opts.externalPhone.replace(/\D/g, "");
-  const local = dig.startsWith("31") ? dig.slice(2) : dig;
-  const { items } = await listUniteCallRecords({
-    extensionId: opts.extensionId,
-    pageLimit: 40,
-    page: 1,
-  });
+  const variants = unitePhoneDigitVariants(opts.externalPhone);
+  if (variants.length === 0) return null;
+  // Kortste bruikbare needle voor Unite stext (vaak lokale 9–10 digits)
+  const stext =
+    variants.find((v) => v.startsWith("0") && v.length >= 10) ||
+    variants.find((v) => v.length >= 9) ||
+    variants[0];
+
+  const pages = [1, 2, 3];
   const target = opts.callAt.getTime();
   let best: { rec: UniteCallRecord; score: number } | null = null;
-  for (const rec of items) {
-    const blob = `${rec.to_number || ""} ${rec.from_number || ""}`;
-    if (!blob.includes(dig) && !blob.includes(local)) continue;
-    const rt = rec.recordtime
-      ? parseUniteCalltime(rec.recordtime.replace(/\+\d+$/, "").trim())
-      : null;
-    if (!rt) continue;
-    const dt = Math.abs(rt.getTime() - target);
-    if (dt > 5 * 60_000) continue;
-    const dur = Number(rec.duration || 0) || 0;
-    const durDiff =
-      opts.durationSeconds != null
-        ? Math.abs(dur - opts.durationSeconds)
-        : 0;
-    const score = dt + durDiff * 1000;
-    if (!best || score < best.score) best = { rec, score };
+
+  for (const page of pages) {
+    let items: UniteCallRecord[] = [];
+    try {
+      const res = await listUniteCallRecords({
+        extensionId: opts.extensionId,
+        pageLimit: 50,
+        page,
+        stext: page === 1 ? stext : undefined,
+      });
+      items = res.items;
+      // Zonder stext-hit: ook brede pagina 1 nog eens zonder filter
+      if (page === 1 && items.length === 0 && stext) {
+        const broad = await listUniteCallRecords({
+          extensionId: opts.extensionId,
+          pageLimit: 50,
+          page: 1,
+        });
+        items = broad.items;
+      }
+    } catch {
+      break;
+    }
+    if (items.length === 0) break;
+
+    for (const rec of items) {
+      const blobDigits = digitsLoose(
+        `${rec.to_number || ""} ${rec.from_number || ""}`
+      );
+      const phoneHit = variants.some(
+        (v) => v.length >= 8 && blobDigits.includes(v)
+      );
+      if (!phoneHit) continue;
+      const rt = rec.recordtime
+        ? parseUniteCalltime(rec.recordtime.replace(/\+\d+$/, "").trim())
+        : null;
+      if (!rt) continue;
+      const dt = Math.abs(rt.getTime() - target);
+      if (dt > 15 * 60_000) continue;
+      const dur = Number(rec.duration || 0) || 0;
+      const durDiff =
+        opts.durationSeconds != null
+          ? Math.abs(dur - opts.durationSeconds)
+          : 0;
+      const score = dt + durDiff * 1000;
+      if (!best || score < best.score) best = { rec, score };
+    }
+    // Goede match gevonden → stop pagineren
+    if (best && best.score < 60_000) break;
+    await new Promise((r) => setTimeout(r, 350));
   }
   return best?.rec || null;
 }

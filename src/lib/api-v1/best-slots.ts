@@ -265,6 +265,7 @@ type AdviseurRow = {
   email: string | null;
   actief: boolean | null;
   start_adres: string | null;
+  start_vanaf_huis_maandag?: boolean | null;
   startdatum?: string | null;
   factuur_adres?: string | null;
   factuur_postcode?: string | null;
@@ -308,7 +309,8 @@ async function freeSlotsForAdviseur(
   sb: SupabaseClient,
   adviseurId: string,
   daysAhead: number,
-  startdatum?: string | null
+  startdatum?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): Promise<{ start_at: string; end_at: string }[]> {
   const busyRows = await blockingBusySlots(sb, adviseurId);
   const rawSlots = generateAvailableSlots({
@@ -346,7 +348,8 @@ async function freeSlotsForAdviseur(
       filterSlotsByBeschikbaarheid(rawSlots, unavailable),
       adviseurId,
       afgeblokt,
-      vrijgaven
+      vrijgaven,
+      startVanafHuisMaandag
     ),
     startdatum
   );
@@ -474,7 +477,7 @@ export async function loadBestSlotsForLead(
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, email, actief, start_adres, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
+      "id, naam, email, actief, start_adres, start_vanaf_huis_maandag, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
     )
     .eq("actief", true)
     .order("naam");
@@ -483,6 +486,7 @@ export async function loadBestSlotsForLead(
   if (advErr) {
     const missingCol =
       advErr.message?.includes("start_adres") ||
+      advErr.message?.includes("start_vanaf_huis_maandag") ||
       advErr.message?.includes("startdatum") ||
       advErr.message?.includes("factuur_") ||
       advErr.message?.includes("rol") ||
@@ -616,7 +620,13 @@ export async function loadBestSlotsForLead(
     // eerste 40 chronologische — anders mis je dichte route-fits later.
     const freeCap = diversifyHours ? 100 : 90;
     const free = (
-      await freeSlotsForAdviseur(sb, adv.id, daysAhead, adv.startdatum)
+      await freeSlotsForAdviseur(
+        sb,
+        adv.id,
+        daysAhead,
+        adv.startdatum,
+        adv.start_vanaf_huis_maandag
+      )
     ).slice(0, freeCap);
     if (free.length === 0) continue;
 
@@ -644,7 +654,8 @@ export async function loadBestSlotsForLead(
         depotAddress,
         40,
         freeDayKeys,
-        adv.id
+        adv.id,
+        adv.start_vanaf_huis_maandag
       );
       if (addresses.length >= 1) {
         const { durationMap, distanceMap } = await buildDurationMap(addresses);
@@ -658,6 +669,7 @@ export async function loadBestSlotsForLead(
             depotAddress,
             depotLabel: adv.naam,
             adviseurId: adv.id,
+            startVanafHuisMaandag: adv.start_vanaf_huis_maandag,
             durationSecBetween: (from, to) => {
               if (from === to) return 0;
               return durationMap.get(`${from}|||${to}`) ?? null;

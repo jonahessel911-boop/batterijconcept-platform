@@ -81,6 +81,60 @@ export async function lookupPostcode(
   };
 }
 
+/**
+ * Alleen postcode → plaats (+ straat als die uniek is voor de PC).
+ * Via PDOK Locatieserver (geen token).
+ */
+export async function lookupPlaatsByPostcode(
+  postcode: string
+): Promise<{ plaats: string; straat: string | null; postcode: string } | null> {
+  const pc = normalizePostcode(postcode);
+  if (!/^\d{4}[A-Z]{2}$/.test(pc)) return null;
+
+  const url = new URL(
+    "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free"
+  );
+  url.searchParams.set("q", pc);
+  url.searchParams.set("fq", "type:postcode");
+  url.searchParams.set("rows", "5");
+
+  const res = await fetch(url.toString(), {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as {
+    response?: {
+      docs?: Array<{
+        woonplaatsnaam?: string;
+        straatnaam?: string;
+        postcode?: string;
+        type?: string;
+      }>;
+    };
+  };
+  const docs = data.response?.docs || [];
+  const hit =
+    docs.find((d) => normalizePostcode(d.postcode || "") === pc) || docs[0];
+  const plaats = hit?.woonplaatsnaam?.trim();
+  if (!plaats) return null;
+
+  const streets = Array.from(
+    new Set(
+      docs
+        .map((d) => d.straatnaam?.trim())
+        .filter((s): s is string => Boolean(s))
+    )
+  );
+
+  return {
+    plaats,
+    straat: streets.length === 1 ? streets[0]! : null,
+    postcode: hit?.postcode ? normalizePostcode(hit.postcode) : pc,
+  };
+}
+
 /** Vul straat/plaats als die leeg zijn */
 export async function enrichAddressFields(opts: {
   postcode?: string | null;
@@ -94,20 +148,33 @@ export async function enrichAddressFields(opts: {
   if (straat && plaats) {
     return { straat, plaats };
   }
-  if (!opts.postcode?.trim() || !opts.huisnummer?.trim()) {
+  if (!opts.postcode?.trim()) {
     return { straat, plaats };
   }
 
+  if (opts.huisnummer?.trim()) {
+    try {
+      const hit = await lookupPostcode(
+        opts.postcode,
+        opts.huisnummer,
+        opts.toevoeging
+      );
+      if (!hit) return { straat, plaats };
+      return {
+        straat: straat || hit.street,
+        plaats: plaats || hit.city,
+      };
+    } catch {
+      return { straat, plaats };
+    }
+  }
+
   try {
-    const hit = await lookupPostcode(
-      opts.postcode,
-      opts.huisnummer,
-      opts.toevoeging
-    );
+    const hit = await lookupPlaatsByPostcode(opts.postcode);
     if (!hit) return { straat, plaats };
     return {
-      straat: straat || hit.street,
-      plaats: plaats || hit.city,
+      straat: straat || hit.straat,
+      plaats: plaats || hit.plaats,
     };
   } catch {
     return { straat, plaats };

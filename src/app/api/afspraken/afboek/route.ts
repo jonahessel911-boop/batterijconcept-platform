@@ -7,6 +7,7 @@ import {
   soortVoorVervolgUitkomst,
   uitkomstVereistVervolgPunt,
 } from "@/lib/afspraak-soort";
+import { checkDoorgezetteSale } from "@/lib/offerte-doorzet";
 import { planAfspraak } from "@/lib/plan-afspraak";
 import { leadStatusLabel } from "@/lib/labels";
 import { logLeadEvent } from "@/lib/lead-events";
@@ -97,6 +98,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "Geen adviseur op deze afspraak" },
         { status: 400 }
+      );
+    }
+
+    // Al via Offertes doorgezet naar backoffice → niet opnieuw afboeken
+    // (voorkomt sale overschrijven met bijv. vervolg_tel).
+    const doorzet = await checkDoorgezetteSale(sb, current.lead_id);
+    if (doorzet.doorgezet) {
+      return NextResponse.json(
+        {
+          error:
+            "Deze order is al als sale doorgezet naar de backoffice via Offertes. Afboeken vanuit de agenda kan niet meer.",
+          reden: doorzet.reden,
+        },
+        { status: 409 }
       );
     }
 

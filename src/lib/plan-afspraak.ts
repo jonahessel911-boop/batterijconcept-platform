@@ -544,6 +544,21 @@ async function markWarmtefondsAfspraakIngepland(
 
   if (error) return;
 
+  if (patch.financiering_status === "doorgestuurd_naar_edwin") {
+    try {
+      const { zorgWarmtefondsDoorgestuurdKoppeling } = await import(
+        "@/lib/warmtefonds-koppeling"
+      );
+      await zorgWarmtefondsDoorgestuurdKoppeling({
+        projectId: project.id,
+        van: prevFs,
+        naar: "doorgestuurd_naar_edwin",
+      });
+    } catch {
+      /* koppeling mag afspraak niet blokkeren */
+    }
+  }
+
   await logLeadEvent({
     leadId,
     soort: "status",

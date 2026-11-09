@@ -7,6 +7,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const INFO_REPLY_TO = "info@batterijconcept.nl";
 
+/** Reply-To voor Warmtefonds-klantmails → Edwin. */
+export const WARMTEFONDS_REPLY_TO = "edwin@batterijconcept.nl";
+
 export function normalizeReplyToEmail(
   email: string | null | undefined
 ): string | null {
