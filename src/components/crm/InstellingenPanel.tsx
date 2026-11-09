@@ -839,6 +839,7 @@ export function InstellingenPanel({
       adviseur: 0,
       beller: 0,
       backoffice: 0,
+      warmtefonds: 0,
     };
     for (const a of teamAdviseurs) {
       const r = normalizeRol(a.rol);

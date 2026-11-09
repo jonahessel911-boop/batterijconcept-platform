@@ -128,7 +128,8 @@ export type GebruikerRol =
   | "sales_manager"
   | "admin"
   | "installateur"
-  | "beller";
+  | "beller"
+  | "warmtefonds";
 
 export interface Adviseur {
   id: string;

@@ -31,7 +31,9 @@ export const viewport = {
   viewportFit: "cover" as const,
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="nl" className={cn("h-full", poppins.variable, "font-sans", geist.variable)}>
       <body className="min-h-full flex flex-col font-body antialiased bg-wash text-ink">

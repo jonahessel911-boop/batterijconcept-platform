@@ -116,7 +116,10 @@ export async function GET(req: NextRequest) {
         .select("id, naam, email, rol, actief, startdatum")
         .eq("actief", true)
         .order("naam");
-      adviseursRaw = fb.data;
+      adviseursRaw = (fb.data || []).map((a) => ({
+        ...a,
+        start_vanaf_huis_maandag: null as boolean | null,
+      }));
       advErr = fb.error;
     }
     if (advErr) throw advErr;

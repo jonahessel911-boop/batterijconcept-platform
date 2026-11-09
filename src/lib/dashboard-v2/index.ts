@@ -65,7 +65,12 @@ export {
 } from "./finance";
 export {
   buildDashboardV2Vandaag,
+  parseVandaagDagen,
+  parseVandaagPeriode,
+  resolveVandaagRange,
   type DashboardV2Vandaag,
+  type VandaagPeriode,
+  type VandaagDagen,
   type VandaagAfspraakRow,
   type VandaagSaleRoute,
   type VandaagVerkoperRow,

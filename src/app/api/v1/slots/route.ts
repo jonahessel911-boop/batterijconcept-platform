@@ -119,7 +119,9 @@ export async function GET(req: NextRequest) {
         .select("id, naam, email, actief, startdatum")
         .eq("id", adviseurId)
         .maybeSingle();
-      adviseur = fb.data;
+      adviseur = fb.data
+        ? { ...fb.data, start_vanaf_huis_maandag: null as boolean | null }
+        : null;
       aErr = fb.error;
     }
 

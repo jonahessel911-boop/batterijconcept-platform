@@ -107,7 +107,11 @@ const VALID_TABS: CrmTab[] = [
   "inkomend",
   "inbox",
   "purchasing",
+  "finance",
+  "facturen_mailbox",
   "rapportage",
+  "performance",
+  "stuur",
   "ai",
   "voice_ai",
   "adviseurs",
@@ -1396,9 +1400,25 @@ export function CrmShell() {
       title: "Purchasing",
       sub: "Materiaal inkopen · schouw · betaling · Apex",
     },
+    finance: {
+      title: "Finance",
+      sub: "Uitbetalingen en kaspositie",
+    },
+    facturen_mailbox: {
+      title: "Facturen mailbox",
+      sub: "Inkomende factuurmails",
+    },
     rapportage: {
       title: "Rapportage",
       sub: "Dashboard · Bellen · Leads · Financieel · Kaart",
+    },
+    performance: {
+      title: "Performance",
+      sub: "Marketing performance",
+    },
+    stuur: {
+      title: "Stuur",
+      sub: "Actieboard en sturing",
     },
     admin: {
       title: "Admin",
