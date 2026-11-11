@@ -379,9 +379,47 @@ export function heeftVervangendHuisbezoek(
 }
 
 /**
- * Annuleringen-bak: klant of wij heeft het huisbezoek afgezegd,
+ * Meest recente *klant*-annulering van een huisbezoek (niet CRM-door-ons).
+ */
+export function latestKlantAnnuleringAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) =>
+        a.lead_id === leadId &&
+        a.status === "geannuleerd" &&
+        afspraakBlokkeertAgenda(a.soort) &&
+        isKlantAnnuleringAfspraak(a)
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.updated_at || b.start_at).getTime() -
+        new Date(a.updated_at || a.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+/**
+ * Moment waarop de klant annuleerde (updated_at van klant-cancel).
+ * CRM-annuleringen tellen hier niet mee.
+ */
+export function annuleringMomentMs(
+  afspraken: Afspraak[],
+  leadId: string
+): number {
+  const latest = latestKlantAnnuleringAfspraak(afspraken, leadId);
+  if (!latest) return 0;
+  const raw = latest.updated_at || latest.start_at;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Annuleringen-bak: alleen als de *klant* het huisbezoek afzegde,
  * en er is daarna geen nieuw huisbezoek ingepland.
- * Gedeelde wachtrij — niet beperkt tot wie de afspraak had ingepland.
+ * Zelfde belplafond als normale bak: max 3 pogingen totaal, 1× per dag.
  */
 export function inAnnuleringBelQueue(
   lead: Lead,
@@ -393,14 +431,41 @@ export function inAnnuleringBelQueue(
   if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
   if (lead.status === "deur_niet_open") return false;
   if (appointmentLeadIds?.has(lead.id)) return false;
+  if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
+  if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+  if (inBelCooldown(lead)) return false;
 
-  const latest = latestPhysicalAfspraak(afspraken, lead.id);
-  if (!latest || latest.status !== "geannuleerd") return false;
+  const latest = latestKlantAnnuleringAfspraak(afspraken, lead.id);
+  if (!latest) return false;
   if (heeftVervangendHuisbezoek(afspraken, latest)) return false;
+  return true;
+}
 
-  if (isAfzeggingAfspraak(latest)) return true;
-  // Status staat al op afgezegd, ook als de notitie de bron niet vermeldt.
-  return lead.status === "afspraak_afgezegd_klant";
+/**
+ * Annuleringen: recentste *klant*-annulering eerst.
+ * Na 1× bellen/afboeken valt de lead er vandaag uit → volgende nieuwste komt vooraan.
+ */
+export function sortAnnuleringBelQueue(
+  leads: Lead[],
+  afspraken: Afspraak[]
+): Lead[] {
+  return [...leads].sort((a, b) => {
+    const aMs = annuleringMomentMs(afspraken, a.id);
+    const bMs = annuleringMomentMs(afspraken, b.id);
+    if (aMs !== bMs) return bMs - aMs;
+
+    const aToday = belpogingenVandaagOf(a);
+    const bToday = belpogingenVandaagOf(b);
+    if (aToday !== bToday) return aToday - bToday;
+
+    const aPog = belpogingenOf(a);
+    const bPog = belpogingenOf(b);
+    if (aPog !== bPog) return aPog - bPog;
+
+    return (
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  });
 }
 
 /**
