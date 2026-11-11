@@ -32,8 +32,10 @@ import {
   isMailPositiefBelLead,
   isTerugbelDue,
   isTerugbelForViewer,
+  latestKlantAnnuleringAfspraak,
   latestPhysicalAfspraak,
   leadInProvincie,
+  sortAnnuleringBelQueue,
   sortBelQueue,
 } from "@/lib/bel-queue";
 import {
@@ -323,13 +325,14 @@ export function BelPanel({
 
   /**
    * Afzegging door de klant of door ons, zonder nieuw huisbezoek erna.
-   * Verplaatste afspraken zitten hier niet in.
+   * Nieuwste annulering eerst · max 3 pogingen · 1× per dag (daarna volgende).
    */
   const annuleringQueue = useMemo(() => {
-    return sortBelQueue(
+    return sortAnnuleringBelQueue(
       leads.filter((l) =>
         inAnnuleringBelQueue(l, afspraken, appointmentLeadIds)
-      )
+      ),
+      afspraken
     );
   }, [leads, afspraken, appointmentLeadIds]);
 
@@ -1169,8 +1172,8 @@ export function BelPanel({
               Annuleringen
             </p>
             <p className="mt-1 text-sm text-muted">
-              Klant of wij heeft afgezegd, en er is nog geen nieuwe afspraak.
-              Verplaatste afspraken staan hier niet bij.
+              Recentste klant-annulering eerst · 1× bellen/afboeken · max 3
+              pogingen. Alleen als de klant zelf afzegde.
             </p>
             <p className="mt-3 text-xs font-semibold text-[#0D47A1]">
               {annuleringQueue.length === 0
@@ -1414,10 +1417,14 @@ export function BelPanel({
   const phone = current.telefoon!.trim();
   const position = queue.findIndex((l) => l.id === current.id) + 1;
   const cancelledVisit =
-    bakMode === "annuleringen" || isHerplanBelLead(current)
-      ? latestPhysicalAfspraak(afspraken, current.id)
-      : null;
+    bakMode === "annuleringen"
+      ? latestKlantAnnuleringAfspraak(afspraken, current.id)
+      : isHerplanBelLead(current)
+        ? latestPhysicalAfspraak(afspraken, current.id)
+        : null;
   const annuleringsReden = annuleringsNotitieFromAfspraak(cancelledVisit);
+  const geannuleerdOp =
+    cancelledVisit?.updated_at || cancelledVisit?.created_at || null;
 
   return (
     <div>
@@ -1504,6 +1511,11 @@ export function BelPanel({
             <p className="mt-1 font-semibold text-ink">
               Was {formatDateTimeNl(cancelledVisit.start_at)}
             </p>
+            {geannuleerdOp ? (
+              <p className="mt-1 text-sm font-semibold text-[#C62828]">
+                Geannuleerd op {formatDateTimeNl(geannuleerdOp)}
+              </p>
+            ) : null}
             {annuleringsReden ? (
               <p className="mt-1 text-muted">Reden: {annuleringsReden}</p>
             ) : null}

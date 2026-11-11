@@ -10,6 +10,7 @@ import {
   inNormaleBelQueue,
   isNlProvincie,
   leadInProvincie,
+  sortAnnuleringBelQueue,
   sortBelQueue,
 } from "@/lib/bel-queue";
 import { isTerugbelSoort } from "@/lib/afspraak-soort";
@@ -337,12 +338,13 @@ export async function claimNextBelLead(
       rawLeads.push(...((chunk || []) as Lead[]));
     }
 
-    const candidates = sortBelQueue(
+    const candidates = sortAnnuleringBelQueue(
       rawLeads.filter((l) => {
         if (exclude.has(l.id)) return false;
         if (isBelClaimedByOther(l, callerId, now)) return false;
         return inAnnuleringBelQueue(l, afspraken, appointmentLeadIds);
-      })
+      }),
+      afspraken
     );
 
     for (const candidate of candidates) {
