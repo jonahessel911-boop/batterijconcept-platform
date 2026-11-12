@@ -108,7 +108,7 @@ const STATUS_FILTER_OPTIONS: ProjectStatusKey[] = [
 ];
 
 function statusFilterLabel(st: ProjectStatusKey): string {
-  if (st === "restfactuur_verstuurd") return "Factuur WF / Restfactuur";
+  if (st === "restfactuur_verstuurd") return "WF declaratie / Restfactuur";
   return projectStatusLabel[st] || st;
 }
 
@@ -521,6 +521,7 @@ export function BackofficeTable({
         if (
           n === "doorgestuurd_naar_edwin" ||
           n === "documenten_aanleveren" ||
+          n === "contact_verstuurd" ||
           raw === "afspraak_ingepland"
         ) {
           actieIds.add(p.id);
@@ -543,7 +544,7 @@ export function BackofficeTable({
       if (actief === "annuleringen") {
         if (st !== "annulering") return false;
       } else if (actief === "hold_sales") {
-        if (st !== "hold_sales_actie" || p.betaalwijze === "warmtefonds") {
+        if (st !== "hold_sales_actie") {
           return false;
         }
       } else if (

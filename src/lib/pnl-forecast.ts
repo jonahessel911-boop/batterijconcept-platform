@@ -20,7 +20,7 @@ import { countPlanbareSlotsBreakdown } from "@/lib/dashboard-v2/capacity";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
 import { commissiePctToFraction } from "@/lib/netto-boord";
-import { EDERGY_PER_AANVRAAG_INC } from "@/lib/edergy-tarief";
+import { leesEdergyTarief } from "@/lib/edergy-tarief";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
   BELLER_PER_INGEPLANDE_AFSPRAAK,
@@ -418,19 +418,22 @@ export async function buildPnlMonthForecast(
   const cpl = histLeads > 0 ? adSpend / histLeads : 0;
 
   const ids = adviseurs.map((a) => a.id);
-  const [unavailable, afblokkingen, vrijgaven] = await Promise.all([
-    loadUnavailable(sb, ids, jaren),
-    loadAfblokkingen(sb, {
-      adviseurIds: ids,
-      van: month.startYmd,
-      tot: month.endYmd,
-    }),
-    loadSlotVrijgaven(sb, {
-      adviseurIds: ids,
-      van: month.startYmd,
-      tot: month.endYmd,
-    }),
-  ]);
+  const [unavailable, afblokkingen, vrijgaven, edergyTarief] =
+    await Promise.all([
+      loadUnavailable(sb, ids, jaren),
+      loadAfblokkingen(sb, {
+        adviseurIds: ids,
+        van: month.startYmd,
+        tot: month.endYmd,
+      }),
+      loadSlotVrijgaven(sb, {
+        adviseurIds: ids,
+        van: month.startYmd,
+        tot: month.endYmd,
+      }),
+      leesEdergyTarief(),
+    ]);
+  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
 
   const planned = new Map<string, number>();
   for (const a of afspraken) {
@@ -486,7 +489,7 @@ export async function buildPnlMonthForecast(
     }
     acc.inkoop = acc.omzet * inkoopRatio;
     acc.ad_spend = leads * cpl;
-    acc.edergy = acc.orders * warmtefondsAandeel * EDERGY_PER_AANVRAAG_INC;
+    acc.edergy = acc.orders * warmtefondsAandeel * edergyPerAanvraag;
     // Nog te vullen slots plant Sharath in: €10 voor hem, €2,50 bonus voor Tarik.
     acc.ops_commissie +=
       slotsVrij *

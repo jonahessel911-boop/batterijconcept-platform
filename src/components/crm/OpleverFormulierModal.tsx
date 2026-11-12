@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { Lead, Project } from "@/types/database";
+import type {
+  InstallatiePartnerTeamgenoot,
+  Lead,
+  Project,
+} from "@/types/database";
 import { SignaturePadField } from "@/components/offerte/SignaturePadField";
 import {
   emptyOpleverFormulier,
@@ -12,6 +16,10 @@ import {
   type OpleverPuntId,
   validateOpleverFormulier,
 } from "@/lib/oplever-formulier";
+import {
+  medewerkerNaamVanProject,
+  teamgenootVanProject,
+} from "@/lib/project-medewerker";
 
 type PrefillLead = Pick<
   Lead,
@@ -23,22 +31,15 @@ type PrefillLead = Pick<
   | "plaats"
 >;
 
+type TeamOptie = Pick<
+  InstallatiePartnerTeamgenoot,
+  "id" | "naam" | "email" | "telefoon"
+>;
+
 function leadFromProject(project: Project): PrefillLead | null {
   const raw = Array.isArray(project.leads) ? project.leads[0] : project.leads;
   if (!raw || typeof raw !== "object") return null;
   return raw as PrefillLead;
-}
-
-function monteurDefault(project: Project, override?: string | null): string {
-  if (override?.trim()) return override.trim();
-  const raw = Array.isArray(project.installatie_partners)
-    ? project.installatie_partners[0]
-    : project.installatie_partners;
-  const partnerNaam =
-    raw && typeof raw === "object" && "naam" in raw
-      ? String((raw as { naam?: string }).naam || "")
-      : "";
-  return partnerNaam || project.monteur || "";
 }
 
 function installatieDatumYmd(project: Project): string {
@@ -67,7 +68,7 @@ function buildPrefill(
     adres: lead ? formatOpleverAdres(lead) : "",
     datum: installatieDatumYmd(project),
     projectNummer: project.project_nummer || "",
-    monteurNaam: monteurDefault(project, monteurOverride),
+    monteurNaam: medewerkerNaamVanProject(project, monteurOverride),
   });
 }
 
@@ -76,6 +77,7 @@ export function OpleverFormulierModal({
   project,
   submitUrl,
   monteurDefault: monteurOverride,
+  teamgenoten = [],
   onClose,
   onCreated,
 }: {
@@ -84,6 +86,8 @@ export function OpleverFormulierModal({
   /** POST endpoint that accepts { form } */
   submitUrl: string;
   monteurDefault?: string | null;
+  /** Medewerkers van de installatiepartner — selecteerbaar als uitvoerder. */
+  teamgenoten?: TeamOptie[];
   onClose: () => void;
   onCreated: (result: {
     foto: { url?: string | null; bestandsnaam?: string | null };
@@ -94,8 +98,12 @@ export function OpleverFormulierModal({
     project?: Project | null;
   }) => void;
 }) {
+  const gekoppeld = teamgenootVanProject(project);
   const [form, setForm] = useState<OpleverFormulierData>(() =>
     buildPrefill(project, monteurOverride)
+  );
+  const [teamgenootId, setTeamgenootId] = useState(
+    () => gekoppeld?.id || ""
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +111,7 @@ export function OpleverFormulierModal({
   useEffect(() => {
     if (!open) return;
     setForm(buildPrefill(project, monteurOverride));
+    setTeamgenootId(teamgenootVanProject(project)?.id || "");
     setError(null);
     setBusy(false);
   }, [open, project.id, monteurOverride]);
@@ -128,7 +137,19 @@ export function OpleverFormulierModal({
     });
   }
 
+  function kiesMedewerker(id: string) {
+    setTeamgenootId(id);
+    const tg = teamgenoten.find((t) => t.id === id);
+    if (tg?.naam) {
+      setForm((p) => ({ ...p, monteurNaam: tg.naam }));
+    }
+  }
+
   async function submit() {
+    if (teamgenoten.length > 0 && !teamgenootId) {
+      setError("Kies wie de installatie heeft uitgevoerd.");
+      return;
+    }
     const invalid = validateOpleverFormulier(form);
     if (invalid) {
       setError(invalid);
@@ -140,7 +161,10 @@ export function OpleverFormulierModal({
       const res = await fetch(submitUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ form }),
+        body: JSON.stringify({
+          form,
+          teamgenootId: teamgenootId || null,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -180,7 +204,8 @@ export function OpleverFormulierModal({
               Opleverformulier
             </p>
             <p className="mt-0.5 text-xs text-muted">
-              Vink alle punten af en zet je handtekening als installateur.
+              Vink alle punten af en zet je handtekening. Upload daarnaast de
+              foto batterij op de order — beide zijn verplicht.
             </p>
           </div>
           <button
@@ -232,17 +257,65 @@ export function OpleverFormulierModal({
                 className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
               />
             </label>
-            <label className="block space-y-1">
+            <label className="block space-y-1 sm:col-span-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
-                Installateur
+                Uitvoerend monteur *
+              </span>
+              {teamgenoten.length > 0 ? (
+                <select
+                  value={teamgenootId}
+                  onChange={(e) => kiesMedewerker(e.target.value)}
+                  className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                >
+                  <option value="">Kies medewerker…</option>
+                  {teamgenoten.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.naam}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={form.monteurNaam}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, monteurNaam: e.target.value }))
+                  }
+                  placeholder="Voor- en achternaam"
+                  className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                />
+              )}
+              {teamgenoten.length > 0 && form.monteurNaam ? (
+                <span className="mt-1 block text-[11px] text-muted">
+                  Op formulier: {form.monteurNaam}
+                </span>
+              ) : null}
+            </label>
+            <label className="block space-y-1 sm:col-span-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                SIN * · precies 15 tekens (AlphaESS, bijv. ALD…)
               </span>
               <input
-                value={form.monteurNaam}
+                required
+                value={form.sin}
                 onChange={(e) =>
-                  setForm((p) => ({ ...p, monteurNaam: e.target.value }))
+                  setForm((p) => ({
+                    ...p,
+                    sin: e.target.value
+                      .replace(/\s+/g, "")
+                      .toUpperCase()
+                      .slice(0, 15),
+                  }))
                 }
-                className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                placeholder="ALDXXXXXXXXXXXX"
+                maxLength={15}
+                minLength={15}
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full border border-line bg-white px-2.5 py-1.5 font-mono text-sm tracking-wide text-ink outline-none focus:border-[#0D9488]"
               />
+              <span className="mt-1 block text-[11px] text-muted">
+                {form.sin.length}/15 · uniek per systeem · start met AL
+              </span>
             </label>
           </div>
 

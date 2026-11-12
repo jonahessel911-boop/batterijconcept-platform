@@ -105,7 +105,7 @@ export function WarmtefondsContactMail({
     <div
       role="dialog"
       aria-label="Contact"
-      className="fixed inset-0 z-[70] flex flex-col bg-white"
+      className="fixed inset-0 z-[70] flex max-w-[100vw] flex-col overflow-x-hidden overscroll-none bg-white"
     >
         <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div>

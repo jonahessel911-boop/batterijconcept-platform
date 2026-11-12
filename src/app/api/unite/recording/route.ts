@@ -189,6 +189,13 @@ export async function GET(req: NextRequest) {
     let recordingComplete = false;
     const eventId = req.nextUrl.searchParams.get("eventId")?.trim() || null;
     const part = Number(req.nextUrl.searchParams.get("part") || 1) || 1;
+    const asDownload =
+      req.nextUrl.searchParams.get("download") === "1" ||
+      req.nextUrl.searchParams.get("download") === "true";
+    const dispositionName = (label: string) =>
+      asDownload
+        ? `attachment; filename="${label}"`
+        : `inline; filename="${label}"`;
 
     if (eventId) {
       const resolved = await resolveFromEvent(eventId);
@@ -236,6 +243,11 @@ export async function GET(req: NextRequest) {
         Boolean(key) &&
         uniteConfigured();
       if (stored && stored.bytes.byteLength > 0 && !incomplete) {
+        const fileLabel = key
+          ? `gesprek-${key.slice(0, 12)}.mp3`
+          : eventId
+            ? `gesprek-${eventId.slice(0, 8)}.mp3`
+            : "gesprek-opname.mp3";
         return new NextResponse(stored.bytes, {
           status: 200,
           headers: {
@@ -244,6 +256,7 @@ export async function GET(req: NextRequest) {
               : "audio/mpeg",
             "Content-Length": String(stored.bytes.byteLength),
             "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": dispositionName(fileLabel),
           },
         });
       }
@@ -331,7 +344,9 @@ export async function GET(req: NextRequest) {
           : "audio/mpeg",
         "Content-Length": String(bytes.byteLength),
         "Cache-Control": "private, max-age=3600",
-        "Content-Disposition": `inline; filename="gesprek-${key.slice(0, 8)}.mp3"`,
+        "Content-Disposition": dispositionName(
+          `gesprek-${key.slice(0, 12)}.mp3`
+        ),
       },
     });
   } catch (e) {

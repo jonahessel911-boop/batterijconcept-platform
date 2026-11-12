@@ -1,8 +1,31 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProjectStatus } from "@/types/database";
-import { isOpleveringsrapport } from "@/lib/project-documenten";
+import {
+  isFotoBatterij,
+  isOpleveringsrapport,
+  isVideoInstallatie,
+} from "@/lib/project-documenten";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
+
+/**
+ * Eindafrekening: na oplevering moet het hele offertebedrag gefactureerd zijn.
+ * Bij Warmtefonds dekt de restantfactuur maar max € 8.500 — het stuk daarboven
+ * bleef anders ongefactureerd staan. Zet alleen een CONCEPT klaar.
+ */
+async function ensureEindafrekening(
+  sb: SupabaseClient,
+  projectId: string
+): Promise<void> {
+  try {
+    const { ensureEindafrekeningVoorProject } = await import(
+      "@/lib/ensure-btw-factuur"
+    );
+    await ensureEindafrekeningVoorProject(sb, projectId);
+  } catch (e) {
+    console.error("ensureEindafrekeningVoorProject:", e);
+  }
+}
 
 async function ensureOpleveringAfrondTaken(
   sb: SupabaseClient,
@@ -55,13 +78,21 @@ export async function maybeAdvanceProjectNaOplevering(
   const hasRapport = (fotos || []).some((f) =>
     isOpleveringsrapport(f.omschrijving)
   );
-  if (!hasRapport) {
+  const hasFotoBatterij = (fotos || []).some((f) =>
+    isFotoBatterij(f.omschrijving)
+  );
+  const hasVideoInstallatie = (fotos || []).some((f) =>
+    isVideoInstallatie(f.omschrijving)
+  );
+  // Oplevering pas afronden als formulier, foto batterij én installatievideo er zijn.
+  if (!hasRapport || !hasFotoBatterij || !hasVideoInstallatie) {
     return { advanced: false, from: current, to: null };
   }
 
   // Al op installatie_voltooid: afrond-taken + concept-CF alsnog zekerstellen
   if (current === "installatie_voltooid") {
     await ensureOpleveringAfrondTaken(sb, projectId, current);
+    await ensureEindafrekening(sb, projectId);
     let creditfactuur_id: string | null = null;
     try {
       const cf = await ensurePartnerInstallatieCreditfactuur(sb, projectId);
@@ -206,6 +237,10 @@ export async function maybeAdvanceProjectNaOplevering(
   } catch (e) {
     console.error("ensureRestantDraftFactuur (eigen middelen):", e);
   }
+
+  // Ná de restantfactuur: wat dan nog ongefactureerd is (WF-plafond, geen
+  // aanbetaling) als concept-eindafrekening klaarzetten.
+  await ensureEindafrekening(sb, projectId);
 
   await ensureOpleveringAfrondTaken(sb, projectId, to);
 

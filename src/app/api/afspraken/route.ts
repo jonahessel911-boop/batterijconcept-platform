@@ -20,6 +20,7 @@ import { planAfspraak } from "@/lib/plan-afspraak";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { appendVerzetNotitie } from "@/lib/format";
+import { fetchAllRows } from "@/lib/supabase-fetch-all";
 
 export const runtime = "nodejs";
 
@@ -33,18 +34,21 @@ function resolveIngeplandDoorId(
   return session?.adviseurId?.trim() || null;
 }
 
-/** GET — lijst afspraken */
+/** GET — lijst afspraken (paginated — PostgREST cap is ~1000) */
 export async function GET() {
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
-      .from("afspraken")
-      .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
-      )
-      .order("start_at", { ascending: true });
-    if (error) throw error;
-    return NextResponse.json({ afspraken: data || [] });
+    const select =
+      "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)";
+    const afspraken = await fetchAllRows((from, to) =>
+      sb
+        .from("afspraken")
+        .select(select)
+        .order("start_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+    return NextResponse.json({ afspraken });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Fout";
     return NextResponse.json({ error: message }, { status: 500 });

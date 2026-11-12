@@ -4,6 +4,10 @@ import {
   type RelatieFactuurIssuer,
   type RelatieFactuurRegel,
 } from "@/lib/pdf-relatie-factuur";
+import {
+  isBelcommissieCreditfactuur,
+  isOpsCommissieCreditfactuur,
+} from "@/lib/callcenter-creditfactuur";
 
 type Regel = {
   lead_naam: string | null;
@@ -33,6 +37,29 @@ type Input = {
   regels: Regel[];
 };
 
+const REGELS_JSON_PREFIX = "REGELS_JSON:";
+
+function parseEmbeddedRegels(
+  notities: string | null | undefined
+): RelatieFactuurRegel[] | null {
+  if (!notities) return null;
+  const line = notities
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith(REGELS_JSON_PREFIX));
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line.slice(REGELS_JSON_PREFIX.length));
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return parsed.map((r: { omschrijving?: string; bedrag?: number }) => ({
+      omschrijving: String(r.omschrijving || "Regel"),
+      bedrag: Number(r.bedrag) || 0,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 function isRestCommissie(
   factuurNummer: string,
   notities: string | null,
@@ -50,6 +77,29 @@ function commissieTitel(opts: {
   omschrijving?: string | null;
   leadNaam?: string | null;
 }): string {
+  if (opts.omschrijving?.trim()) return opts.omschrijving.trim();
+  if (
+    isOpsCommissieCreditfactuur({
+      factuur_nummer: opts.factuurNummer,
+      notities: opts.notities,
+    })
+  ) {
+    return "Opscommissie";
+  }
+  if (
+    isBelcommissieCreditfactuur({
+      factuur_nummer: opts.factuurNummer,
+      notities: opts.notities,
+    })
+  ) {
+    const match = (opts.notities || "").match(
+      /(\d+)\s*×\s*€?\s*10[^\n.]*netto/i
+    );
+    if (match) {
+      return `${match[1]}× €10 netto huisbezoeken`;
+    }
+    return "Belcommissie · netto huisbezoeken";
+  }
   const rest = isRestCommissie(
     opts.factuurNummer,
     opts.notities,
@@ -63,28 +113,31 @@ function commissieTitel(opts: {
 export async function buildAdviseurCreditfactuurPdf(
   input: Input
 ): Promise<Blob> {
+  const embedded = parseEmbeddedRegels(input.factuur.notities);
   const regels: RelatieFactuurRegel[] =
-    input.regels.length > 0
-      ? input.regels.map((r) => ({
-          omschrijving: commissieTitel({
-            factuurNummer: input.factuur.factuur_nummer,
-            notities: input.factuur.notities,
-            omschrijving: r.omschrijving,
-            leadNaam: r.lead_naam,
-          }),
-          bedrag: r.fee,
-          offerte_nummer: r.offerte_nummer,
-          project_nummer: r.project_nummer,
-        }))
-      : [
-          {
+    embedded && embedded.length > 0
+      ? embedded
+      : input.regels.length > 0
+        ? input.regels.map((r) => ({
             omschrijving: commissieTitel({
               factuurNummer: input.factuur.factuur_nummer,
               notities: input.factuur.notities,
+              omschrijving: r.omschrijving,
+              leadNaam: r.lead_naam,
             }),
-            bedrag: input.factuur.bedrag_ex_btw,
-          },
-        ];
+            bedrag: r.fee,
+            offerte_nummer: r.offerte_nummer,
+            project_nummer: r.project_nummer,
+          }))
+        : [
+            {
+              omschrijving: commissieTitel({
+                factuurNummer: input.factuur.factuur_nummer,
+                notities: input.factuur.notities,
+              }),
+              bedrag: input.factuur.bedrag_ex_btw,
+            },
+          ];
 
   return buildRelatieFactuurPdf({
     factuur: {

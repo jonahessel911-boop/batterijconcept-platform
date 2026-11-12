@@ -18,6 +18,10 @@ export type EdergyFactuurPdfInput = {
   /** 03-november-2026 */
   datumLabel: string;
   regels: EdergyFactuurRegel[];
+  /** Per regel; default = ingesteld Edergy-tarief. */
+  bedragExcl?: number;
+  bedragBtw?: number;
+  bedragInc?: number;
 };
 
 const WERK =
@@ -173,9 +177,21 @@ export function buildEdergyFactuurPdf(input: EdergyFactuurPdfInput): Uint8Array 
 
   doc.setFont("Carlito", "normal");
   doc.setFontSize(10);
-  const excl = euroPunt(EDERGY_PER_AANVRAAG_EXCL);
-  const btw = euroPunt(EDERGY_PER_AANVRAAG_BTW);
-  const incl = euroPunt(EDERGY_PER_AANVRAAG_INC);
+  const bedragEx =
+    input.bedragExcl != null && Number.isFinite(input.bedragExcl)
+      ? input.bedragExcl
+      : EDERGY_PER_AANVRAAG_EXCL;
+  const bedragBtw =
+    input.bedragBtw != null && Number.isFinite(input.bedragBtw)
+      ? input.bedragBtw
+      : EDERGY_PER_AANVRAAG_BTW;
+  const bedragInc =
+    input.bedragInc != null && Number.isFinite(input.bedragInc)
+      ? input.bedragInc
+      : EDERGY_PER_AANVRAAG_INC;
+  const excl = euroPunt(bedragEx);
+  const btw = euroPunt(bedragBtw);
+  const incl = euroPunt(bedragInc);
   const rightExcl = 445.4 - 8;
   const rightBtw = 510.8 - 8;
   const rightIncl = 565 - 8;
@@ -190,7 +206,7 @@ export function buildEdergyFactuurPdf(input: EdergyFactuurPdfInput): Uint8Array 
     doc.text(incl, rightIncl - doc.getTextWidth(incl), y);
   });
 
-  const totaal = euroPunt(EDERGY_PER_AANVRAAG_INC * input.regels.length);
+  const totaal = euroPunt(bedragInc * input.regels.length);
   doc.setFont("Carlito", "bold");
   doc.setFontSize(10);
   const totaalLabel = "Totaal bedrag";

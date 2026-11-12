@@ -60,10 +60,6 @@ export function OmzettenNaarEigenMiddelenModal({
       setError("Geen getekende offerte gekoppeld.");
       return;
     }
-    if (modus === "handmatig" && preview.bedragIncBtw <= 0) {
-      setError("Vul een geldig aanbetalingsbedrag in.");
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -113,18 +109,18 @@ export function OmzettenNaarEigenMiddelenModal({
           .eq("id", leadId);
       }
 
-      // Concept-aanbetalingsfactuur → 50% (standaard EM)
+      // €0 aanbetaling → geen factuur. Anders concept-aanbetalingsfactuur.
       if (!hasVerstuurdeAanbetaling) {
         const facRes = await fetch(`/api/offertes/${offerte.id}/factuur`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ soort: "aanbetaling" }),
         });
-        if (!facRes.ok) {
-          const facData = await facRes.json().catch(() => ({}));
+        const facData = await facRes.json().catch(() => ({}));
+        if (!facRes.ok && !(facData as { skipped?: boolean }).skipped) {
           throw new Error(
             (facData as { error?: string }).error ||
-              "50%-aanbetalingsfactuur bijwerken mislukt"
+              "Aanbetalingsfactuur bijwerken mislukt"
           );
         }
       }

@@ -3,10 +3,12 @@
 import type { Adviseur, Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { type BoView, backofficeHref, parseBoView } from "@/lib/bo-view";
 import { useBoViewStore } from "@/lib/bo-view-store";
+import { ClientOnly } from "@/components/ClientOnly";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
 import { BelConversiePanel } from "./BelConversiePanel";
 import { Planbord } from "./Planbord";
+import { ProjectKanban } from "./ProjectKanban";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
 import { TakenAgendaPanel } from "./TakenAgendaPanel";
 
@@ -52,6 +54,24 @@ export function BackofficePanel({
           onProjectUpdated={onProjectUpdated}
           hideTitle
         />
+      </div>
+    );
+  }
+
+  if (view === "kanban") {
+    return (
+      <div className="pt-4">
+        <ClientOnly
+          fallback={
+            <p className="px-5 py-8 text-sm text-muted">Kanban laden…</p>
+          }
+        >
+          <ProjectKanban
+            projecten={projecten}
+            facturen={facturen}
+            onProjectUpdated={onProjectUpdated}
+          />
+        </ClientOnly>
       </div>
     );
   }

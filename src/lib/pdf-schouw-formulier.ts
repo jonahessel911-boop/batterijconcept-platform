@@ -252,7 +252,7 @@ export async function buildSchouwFormulierPdf(
   y = fieldRow(
     y,
     { label: "Telefoon", value: data.telefoon },
-    { label: "Opnemer", value: data.opnemer },
+    { label: "Uitvoerend monteur", value: data.opnemer },
     { zebra: true }
   );
   y = fieldRow(

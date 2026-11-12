@@ -19,6 +19,8 @@ export type WarmtefondsOperator = {
   telefoon: string | null;
   actief: boolean;
   portal_token: string;
+  /** Vergoeding per aanvraag incl. btw. Null = globaal Edergy-tarief. */
+  tarief_inc?: number | null;
 };
 
 export const WF_PORTAL_STATUSES: FinancieringStatus[] = [
@@ -69,20 +71,37 @@ export async function resolveWarmtefondsOperator(
   token: string
 ): Promise<WarmtefondsOperator | null> {
   if (!token || token.length < 16) return null;
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from("warmtefonds_operators")
-    .select("id, naam, email, telefoon, actief, portal_token")
+    .select("id, naam, email, telefoon, actief, portal_token, tarief_inc")
     .eq("portal_token", token)
     .maybeSingle();
+  if (
+    error &&
+    (error.message?.includes("tarief_inc") || error.code === "42703")
+  ) {
+    ({ data, error } = await sb
+      .from("warmtefonds_operators")
+      .select("id, naam, email, telefoon, actief, portal_token")
+      .eq("portal_token", token)
+      .maybeSingle());
+  }
   if (error || !data || !data.actief) return null;
-  return data as WarmtefondsOperator;
+  const row = data as WarmtefondsOperator;
+  return {
+    ...row,
+    tarief_inc:
+      row.tarief_inc != null && Number.isFinite(Number(row.tarief_inc))
+        ? Number(row.tarief_inc)
+        : null,
+  };
 }
 
 /** Projecten die in het Warmtefonds-portaal horen. */
 export const WF_PORTAL_PROJECT_SELECT = `
   id, project_nummer, titel, status, betaalwijze, lead_id, offerte_id,
   financiering_status, warmtefonds_afspraak_at, warmtefonds_aangevraagd_at,
-  warmtefonds_notities, notities, created_at, updated_at,
+  warmtefonds_contact_pogingen, warmtefonds_notities, notities, created_at, updated_at,
   leads(
     id, naam, email, telefoon, lead_number,
     postcode, huisnummer, toevoeging, straat, plaats, notities
@@ -233,6 +252,7 @@ export function isMissingWfProjectColumn(error: {
     /warmtefonds_aangevraagd_at/i.test(msg) ||
     /warmtefonds_notities/i.test(msg) ||
     /warmtefonds_afspraak_at/i.test(msg) ||
+    /warmtefonds_contact_pogingen/i.test(msg) ||
     /financiering_status/i.test(msg) ||
     /schema cache/i.test(msg) ||
     /does not exist/i.test(msg)
@@ -244,8 +264,113 @@ export function isWarmtefondsPortalProject(row: {
   financiering_status?: string | null;
   status?: string | null;
 }): boolean {
-  if (row.status === "annulering") return false;
+  const st = (row.status || "").toLowerCase();
+  if (st === "annulering" || st === "geannuleerd" || st === "hold_sales_actie" || st === "hold_sales") {
+    return false;
+  }
   if (row.betaalwijze === "warmtefonds") return true;
   if (row.financiering_status) return true;
   return false;
+}
+
+export type PortalBetalingKey =
+  | "betaald"
+  | "open"
+  | "deels"
+  | "geen"
+  | "overig";
+
+export type PortalBetalingSamenvatting = {
+  key: PortalBetalingKey;
+  label: string;
+};
+
+/** Samenvatting van factuurstatussen voor één project (geen credit/concept). */
+export function betalingSamenvattingVanStatussen(
+  statuses: Array<{ status?: string | null; isCredit?: boolean }>
+): PortalBetalingSamenvatting {
+  const relevant = statuses.filter(
+    (f) => !f.isCredit && (f.status || "") !== "concept"
+  );
+  if (relevant.length === 0) {
+    return { key: "geen", label: "Nog geen factuur" };
+  }
+  const open = relevant.filter(
+    (f) => f.status === "verzonden" || f.status === "deels_betaald"
+  );
+  const betaald = relevant.filter((f) => f.status === "betaald");
+  if (open.length === 0 && betaald.length === relevant.length) {
+    return { key: "betaald", label: "Alles betaald" };
+  }
+  if (betaald.length > 0 && open.length > 0) {
+    return {
+      key: "deels",
+      label: `${betaald.length} betaald · ${open.length} open`,
+    };
+  }
+  if (open.length > 0) {
+    return {
+      key: "open",
+      label:
+        open.length === 1 ? "Factuur openstaand" : `${open.length} openstaand`,
+    };
+  }
+  return { key: "overig", label: "Facturen aanwezig" };
+}
+
+/** Batch: betalingssamenvatting per project_id. */
+export async function betalingVoorProjecten(
+  sb: SupabaseClient,
+  projectIds: string[]
+): Promise<Map<string, PortalBetalingSamenvatting>> {
+  const out = new Map<string, PortalBetalingSamenvatting>();
+  const ids = [...new Set(projectIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+
+  type FacLite = {
+    project_id?: string | null;
+    status?: string | null;
+    credit_van_factuur_id?: string | null;
+  };
+  const rows: FacLite[] = [];
+
+  for (let i = 0; i < ids.length; i += 80) {
+    const slice = ids.slice(i, i + 80);
+    const res = await sb
+      .from("facturen")
+      .select("project_id, status, credit_van_factuur_id")
+      .in("project_id", slice);
+    if (res.error) {
+      if (res.error.message?.includes("credit_van_factuur_id")) {
+        const plain = await sb
+          .from("facturen")
+          .select("project_id, status")
+          .in("project_id", slice);
+        if (plain.error) continue;
+        rows.push(...((plain.data || []) as FacLite[]));
+        continue;
+      }
+      continue;
+    }
+    rows.push(...((res.data || []) as FacLite[]));
+  }
+
+  const byProject = new Map<
+    string,
+    Array<{ status?: string | null; isCredit?: boolean }>
+  >();
+  for (const id of ids) byProject.set(id, []);
+  for (const f of rows) {
+    const pid = f.project_id;
+    if (!pid || !byProject.has(pid)) continue;
+    byProject.get(pid)!.push({
+      status: f.status,
+      isCredit: Boolean(f.credit_van_factuur_id),
+    });
+  }
+
+  for (const [pid, list] of byProject) {
+    out.set(pid, betalingSamenvattingVanStatussen(list));
+  }
+  return out;
 }

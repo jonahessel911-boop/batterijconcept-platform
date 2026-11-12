@@ -3,9 +3,11 @@ import type { SollicitatieStatus } from "@/types/database";
 export const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
   "nieuw",
   "geen_contact",
+  "definitief_geen_contact",
   "diskwalificatie",
   "gesprek_gepland",
   "gesprek_gehad",
+  "gesprek_gehad_diskwalificatie",
   "aangenomen_training_gepland",
   "aangenomen_actief",
 ];
@@ -13,9 +15,11 @@ export const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
 export const SOLLICITATIE_STATUS_LABEL: Record<SollicitatieStatus, string> = {
   nieuw: "Nieuw",
   geen_contact: "Geen contact",
+  definitief_geen_contact: "Definitief geen contact",
   diskwalificatie: "Diskwalificatie",
   gesprek_gepland: "Gesprek gepland",
   gesprek_gehad: "Gesprek gehad - in beoordeling",
+  gesprek_gehad_diskwalificatie: "Gesprek gehad - diskwalificatie",
   aangenomen_training_gepland: "Aangenomen - training gepland",
   aangenomen_actief: "Aangenomen - actief",
 };
@@ -29,7 +33,11 @@ export const SOLLICITATIE_STATUS_MET_TRAINING: SollicitatieStatus =
   "aangenomen_training_gepland";
 
 /** Locatie + bel-info voor bevestigingsmail sollicitatiegesprek. */
-export const RECRUITMENT_GESPREK_LOCATIE = "Daltonlaan 500, 3584 BK Utrecht";
+export const RECRUITMENT_GESPREK_LOCATIE = "Daltonlaan 500, Utrecht";
+export const RECRUITMENT_GESPREK_LOCATIE_OPTIES = [
+  "Daltonlaan 500, Utrecht",
+  "Daltonlaan 500, 3584 BK Utrecht",
+] as const;
 export const RECRUITMENT_GESPREK_TEL = "+31 6 12 20 45 25";
 export const RECRUITMENT_GESPREK_CONTACT = "Huub";
 

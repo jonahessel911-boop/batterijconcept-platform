@@ -14,6 +14,11 @@ function clip(text: string, max = 1600): string {
   return `${t.slice(0, max).trim()}…`;
 }
 
+/** Inbound: volledige mailtekst (geen clip). */
+function fullBody(text: string): string {
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
 function who(name: string | null | undefined, email: string): string {
   const n = (name || "").trim();
   const e = email.trim();
@@ -33,11 +38,15 @@ export function formatInboxNotitie(opts: {
   if (opts.direction === "inbound") {
     const atRaw = opts.at ? new Date(opts.at) : new Date();
     const at = Number.isNaN(atRaw.getTime()) ? new Date() : atRaw;
+    const body = fullBody(opts.bodyText || "");
     return [
       "Email ontvangen",
       formatDateTimeNl(at),
       `Onderwerp: ${opts.subject || "(geen onderwerp)"}`,
-    ].join("\n");
+      body || null,
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   const titel = "E-mail verstuurd";
   const party = `Naar: ${who(null, opts.toEmail)}`;
@@ -193,6 +202,10 @@ export async function logInboxMailNotitie(
       from: opts.fromEmail,
       to: opts.toEmail,
       subject: opts.subject,
+      body:
+        opts.direction === "inbound"
+          ? fullBody(opts.bodyText || "").slice(0, 50_000) || null
+          : null,
     },
   });
 

@@ -4,6 +4,11 @@ import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
+const SELECT_FULL =
+  "id, partner_id, naam, email, telefoon, actief, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, foto_storage_path, dossier_compleet, created_at, updated_at";
+const SELECT_MIN =
+  "id, partner_id, naam, email, telefoon, actief, created_at, updated_at";
+
 /** GET /api/installatie-partners/teamgenoten?partner_id= */
 export async function GET(req: NextRequest) {
   const partnerId = req.nextUrl.searchParams.get("partner_id")?.trim();
@@ -15,13 +20,30 @@ export async function GET(req: NextRequest) {
   }
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const full = await sb
       .from("installatie_partner_teamgenoten")
-      .select(
-        "id, partner_id, naam, email, telefoon, actief, created_at, updated_at"
-      )
+      .select(SELECT_FULL)
       .eq("partner_id", partnerId)
       .order("naam");
+
+    let rows = full.data as Record<string, unknown>[] | null;
+    let error = full.error;
+
+    if (
+      error &&
+      (error.code === "42703" ||
+        error.message?.includes("kan_schouw") ||
+        error.message?.includes("rol") ||
+        error.message?.includes("merken_ervaring"))
+    ) {
+      const soft = await sb
+        .from("installatie_partner_teamgenoten")
+        .select(SELECT_MIN)
+        .eq("partner_id", partnerId)
+        .order("naam");
+      rows = soft.data as Record<string, unknown>[] | null;
+      error = soft.error;
+    }
 
     if (error) {
       if (
@@ -34,7 +56,7 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
-      teamgenoten: (data || []).filter((t) => t.actief !== false),
+      teamgenoten: (rows || []).filter((t) => t.actief !== false),
     });
   } catch (e) {
     return NextResponse.json(

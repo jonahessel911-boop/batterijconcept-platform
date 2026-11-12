@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useSearchParams } from "next/navigation";
 import type { Adviseur, InstallatiePartner } from "@/types/database";
 import type { WarmtefondsOperator } from "@/lib/warmtefonds-portal";
+import { PartnerTeamgenotenPanel } from "@/components/installatie/PartnerTeamgenotenPanel";
 import {
   TEAM_ROLLEN,
   gebruikerRolLabel,
@@ -15,8 +23,10 @@ import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
 import { TeamNotitiesSection } from "./TeamNotitiesSection";
 import { BellerCommissieWeeks } from "./BellerCommissieWeeks";
+import { OpsManagerCommissieWeeks } from "./OpsManagerCommissieWeeks";
 import { AdviseurProductenSection } from "./AdviseurProductenSection";
 import { isUsableStartAdres } from "@/lib/start-adres";
+import { formatEuro } from "@/lib/format";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import { useCrmSession } from "@/hooks/useCrmSession";
@@ -24,11 +34,30 @@ import {
   isOpsManagerAdviseur,
   opsCommissieLabelVoorRol,
 } from "@/lib/ops-commissie";
+import { EdergyTariefInstelling } from "./EdergyTariefInstelling";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
 function isSalesRol(rol: string | null | undefined): boolean {
   return normalizeRol(rol) === "adviseur";
+}
+
+/** ZZP/factuurvelden: sales + iedereen met bel-/opscommissie-uitbetaling. */
+function needsFactuurgegevens(opts: {
+  rol: string | null | undefined;
+  id: string;
+  naam?: string | null;
+  email?: string | null;
+}): boolean {
+  if (isSalesRol(opts.rol)) return true;
+  if (normalizeRol(opts.rol) === "beller") return true;
+  return isOpsManagerAdviseur({
+    id: opts.id,
+    naam: opts.naam,
+    email: opts.email,
+    rol: opts.rol,
+  });
 }
 
 function portalBase(): string {
@@ -70,6 +99,7 @@ const ROL_BADGE: Record<TeamRol, string> = {
   adviseur: "bg-green-soft text-green-dark",
   beller: "bg-wash text-ink",
   backoffice: "bg-[#eef2f0] text-[#3d5248]",
+  recruiter: "bg-[#E7F0EC] text-[#1F4D3A]",
 };
 
 export function InstellingenPanel({
@@ -84,8 +114,6 @@ export function InstellingenPanel({
   hideTeamRolFilter = false,
   /** Extern gestuurde teamrol (bij hideTeamRolFilter). */
   forcedTeamRol,
-  /** UI-tekst “Monteur” i.p.v. “Installatiepartner”. */
-  monteurLabel = false,
 }: {
   onAdviseursChange?: () => void;
   teamOnly?: boolean;
@@ -93,9 +121,12 @@ export function InstellingenPanel({
   hideListTabs?: boolean;
   hideTeamRolFilter?: boolean;
   forcedTeamRol?: "all" | TeamRol;
+  /** @deprecated altijd Installatiepartner */
   monteurLabel?: boolean;
 }) {
   const { session } = useCrmSession();
+  const searchParams = useSearchParams();
+  const teamgenootFromUrl = searchParams.get("teamgenoot");
   const [filter, setFilter] = useState<ListFilter>(
     listFilter ?? "medewerkers"
   );
@@ -104,16 +135,49 @@ export function InstellingenPanel({
     forcedTeamRol ?? "all"
   );
   const [zoek, setZoek] = useState("");
-  const partnerWoord = monteurLabel ? "Monteur" : "Installatiepartner";
-  const partnerWoordMeervoud = monteurLabel
-    ? "monteurs"
-    : "installatiepartners";
+  const partnerWoord = "Installatiepartner";
+  const partnerWoordMeervoud = "installatiepartners";
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [wfOperators, setWfOperators] = useState<WarmtefondsOperator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [expandedPartnerId, setExpandedPartnerId] = useState<string | null>(
+    null
+  );
+  const [focusTeamgenootId, setFocusTeamgenootId] = useState<string | null>(
+    teamgenootFromUrl
+  );
+
+  useEffect(() => {
+    setFocusTeamgenootId(teamgenootFromUrl);
+  }, [teamgenootFromUrl]);
+
+  useEffect(() => {
+    if (!focusTeamgenootId || partners.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/installatie-partners/teamgenoten/${encodeURIComponent(focusTeamgenootId)}/installaties`
+        );
+        const data = await res.json().catch(() => ({}));
+        const partnerId =
+          (data.teamgenoot as { partner_id?: string } | null)?.partner_id ||
+          null;
+        if (!cancelled && partnerId) {
+          setExpandedPartnerId(partnerId);
+          if (!listFilter) setFilter("partners");
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [focusTeamgenootId, partners.length, listFilter]);
 
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -526,6 +590,15 @@ export function InstellingenPanel({
         if (pct < 0 || pct > 100) throw new Error("Commissie moet tussen 0 en 100% zijn");
         patch.commissie_pct = Math.round(pct * 100) / 100;
         patch.startdatum = draft.startdatum?.toString().trim() || null;
+      }
+      if (
+        needsFactuurgegevens({
+          rol: draft.rol,
+          id: selectedAdviseur.id,
+          naam: draft.naam ?? selectedAdviseur.naam,
+          email: draft.email ?? selectedAdviseur.email,
+        })
+      ) {
         patch.bedrijfsnaam = draft.bedrijfsnaam?.toString().trim() || null;
         patch.kvk_nummer = draft.kvk_nummer?.toString().trim() || null;
         patch.btw_nummer = draft.btw_nummer?.toString().trim() || null;
@@ -623,6 +696,12 @@ export function InstellingenPanel({
           email: wfDraft.email?.toString().trim().toLowerCase() || null,
           telefoon: wfDraft.telefoon?.toString().trim() || null,
           actief: wfDraft.actief !== false,
+          tarief_inc:
+            wfDraft.tarief_inc === null ||
+            wfDraft.tarief_inc === undefined ||
+            wfDraft.tarief_inc === ("" as unknown)
+              ? null
+              : Number(wfDraft.tarief_inc),
         }),
       });
       const data = await res.json();
@@ -738,12 +817,31 @@ export function InstellingenPanel({
     }
   }
 
+  function installatiePortalUrl(p: InstallatiePartner): string | null {
+    const token = p.portal_token?.trim();
+    if (!token) return null;
+    return `${portalBase()}/installatie/${encodeURIComponent(token)}`;
+  }
+
   function copyPortalLink(p: InstallatiePartner) {
-    const url = `${portalBase()}/installatie/${p.portal_token}`;
+    const url = installatiePortalUrl(p);
+    if (!url) {
+      setError("Geen portaallink voor deze partner.");
+      return;
+    }
     void navigator.clipboard.writeText(url).then(
       () => setOkMsg(`Portaallink gekopieerd voor ${p.naam}.`),
       () => setError("Kopiëren mislukt")
     );
+  }
+
+  function openInstallatiePortal(p: InstallatiePartner) {
+    const url = installatiePortalUrl(p);
+    if (!url) {
+      setError("Geen portaallink voor deze partner.");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function disconnectGoogle(partnerId: string) {
@@ -800,7 +898,12 @@ export function InstellingenPanel({
           if (!zoekNorm) return true;
           const naam = a.naam.toLowerCase();
           const email = (a.email || "").toLowerCase();
-          return naam.includes(zoekNorm) || email.includes(zoekNorm);
+          const telefoon = (a.telefoon || "").toLowerCase();
+          return (
+            naam.includes(zoekNorm) ||
+            email.includes(zoekNorm) ||
+            telefoon.includes(zoekNorm)
+          );
         })
         .sort((a, b) => {
           if (a.actief !== b.actief) return a.actief ? -1 : 1;
@@ -808,15 +911,34 @@ export function InstellingenPanel({
         });
     }
     if (activeFilter === "warmtefonds") {
-      return [...wfOperators].sort((a, b) => {
+      return [...wfOperators]
+        .filter((o) => {
+          if (!zoekNorm) return true;
+          return (
+            o.naam.toLowerCase().includes(zoekNorm) ||
+            (o.email || "").toLowerCase().includes(zoekNorm) ||
+            (o.telefoon || "").toLowerCase().includes(zoekNorm)
+          );
+        })
+        .sort((a, b) => {
+          if (a.actief !== b.actief) return a.actief ? -1 : 1;
+          return a.naam.localeCompare(b.naam, "nl");
+        });
+    }
+    return [...partners]
+      .filter((p) => {
+        if (!zoekNorm) return true;
+        return (
+          p.naam.toLowerCase().includes(zoekNorm) ||
+          (p.email || "").toLowerCase().includes(zoekNorm) ||
+          (p.telefoon || "").toLowerCase().includes(zoekNorm) ||
+          (p.kvk_nummer || "").toLowerCase().includes(zoekNorm)
+        );
+      })
+      .sort((a, b) => {
         if (a.actief !== b.actief) return a.actief ? -1 : 1;
         return a.naam.localeCompare(b.naam, "nl");
       });
-    }
-    return [...partners].sort((a, b) => {
-      if (a.actief !== b.actief) return a.actief ? -1 : 1;
-      return a.naam.localeCompare(b.naam, "nl");
-    });
   }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators, zoekNorm]);
 
   const teamRolCounts = useMemo(() => {
@@ -826,6 +948,7 @@ export function InstellingenPanel({
       adviseur: 0,
       beller: 0,
       backoffice: 0,
+      recruiter: 0,
     };
     for (const a of adviseurs) {
       const r = normalizeRol(a.rol);
@@ -858,6 +981,12 @@ export function InstellingenPanel({
   if (selectedAdviseur && draft) {
     const rol = normalizeRol(draft.rol) as TeamRol;
     const sales = isSalesRol(draft.rol);
+    const toonFactuurgegevens = needsFactuurgegevens({
+      rol: draft.rol,
+      id: selectedAdviseur.id,
+      naam: draft.naam ?? selectedAdviseur.naam,
+      email: draft.email ?? selectedAdviseur.email,
+    });
     const actief = draft.actief !== false;
     const geblokkeerd = draft.geblokkeerd === true;
     const opsCommissieLabel = opsCommissieLabelVoorRol({
@@ -1099,46 +1228,48 @@ export function InstellingenPanel({
             </FormSection>
 
             {sales ? (
-              <>
-                <FormSection
-                  title="Planning & commissie"
-                  hint="Eerste werkdag: agenda + lead-targets vanaf die dag"
-                >
-                  <Field label="Startdatum">
-                    <input
-                      type="date"
-                      value={
-                        draft.startdatum
-                          ? String(draft.startdatum).slice(0, 10)
-                          : ""
-                      }
-                      onChange={(e) =>
-                        setDraft((d) => ({
-                          ...d,
-                          startdatum: e.target.value || null,
-                        }))
-                      }
-                      className={inputCls}
-                    />
-                  </Field>
-                  <Field label="Commissie (%)">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={0.5}
-                      value={draft.commissie_pct ?? 10}
-                      onChange={(e) =>
-                        setDraft((d) => ({
-                          ...d,
-                          commissie_pct: parseFloat(e.target.value) || 0,
-                        }))
-                      }
-                      className={inputCls}
-                    />
-                  </Field>
-                </FormSection>
+              <FormSection
+                title="Planning & commissie"
+                hint="Eerste werkdag: agenda + lead-targets vanaf die dag"
+              >
+                <Field label="Startdatum">
+                  <input
+                    type="date"
+                    value={
+                      draft.startdatum
+                        ? String(draft.startdatum).slice(0, 10)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        startdatum: e.target.value || null,
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Commissie (%)">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    value={draft.commissie_pct ?? 10}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        commissie_pct: parseFloat(e.target.value) || 0,
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </Field>
+              </FormSection>
+            ) : null}
 
+            {toonFactuurgegevens ? (
+              <>
                 <FormSection
                   title="Factuurgegevens"
                   className="lg:col-span-2"
@@ -1250,7 +1381,7 @@ export function InstellingenPanel({
               </>
             ) : null}
 
-            {sales ? (
+            {toonFactuurgegevens ? (
               <TeamRelatieOnboarding
                 kind="adviseur"
                 id={selectedAdviseur.id}
@@ -1349,6 +1480,22 @@ export function InstellingenPanel({
                   <BellerCommissieWeeks
                     bellerId={selectedAdviseur.id}
                     bellerNaam={draft.naam || selectedAdviseur.naam}
+                  />
+                </div>
+              </FormSection>
+            ) : null}
+
+            {isOpsManagerAdviseur({
+              id: selectedAdviseur.id,
+              naam: draft.naam || selectedAdviseur.naam,
+              email: draft.email || selectedAdviseur.email,
+              rol,
+            }) ? (
+              <FormSection title="Opscommissie" className="lg:col-span-2">
+                <div className="sm:col-span-2">
+                  <OpsManagerCommissieWeeks
+                    opsManagerId={selectedAdviseur.id}
+                    opsManagerNaam={draft.naam || selectedAdviseur.naam}
                   />
                 </div>
               </FormSection>
@@ -1759,6 +1906,18 @@ export function InstellingenPanel({
             onSave={savePartnerNotities}
           />
 
+          {selectedPartner.portal_token ? (
+            <div className="border border-line p-4">
+              <PartnerTeamgenotenPanel
+                portalToken={selectedPartner.portal_token}
+                compact
+                adminBeoordeling
+                authorNaam={session?.naam || null}
+                initialTeamgenootId={focusTeamgenootId}
+              />
+            </div>
+          ) : null}
+
           <div className="border border-line bg-wash px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               Google Calendar
@@ -1773,8 +1932,9 @@ export function InstellingenPanel({
               </p>
             ) : (
               <p className="mt-1 text-sm text-muted">
-                Nog niet gekoppeld. Laat de monteur (of jij met zijn Google-account)
-                één keer inloggen — daarna synct elke planning direct.
+                Nog niet gekoppeld. Laat de installatiepartner (of jij met hun
+                Google-account) één keer inloggen — daarna synct elke planning
+                direct.
               </p>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -1799,6 +1959,13 @@ export function InstellingenPanel({
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => openInstallatiePortal(selectedPartner)}
+              className="border border-green/40 bg-green-soft px-4 py-2 text-sm font-semibold text-green-dark hover:bg-green hover:text-white"
+            >
+              Open portaal
+            </button>
             <button
               type="button"
               onClick={() => copyPortalLink(selectedPartner)}
@@ -1913,6 +2080,32 @@ export function InstellingenPanel({
                 className={inputCls}
               />
             </Field>
+            <Field label="Vergoeding per aanvraag (€ incl. btw)">
+              <input
+                type="number"
+                min={1}
+                step={0.01}
+                value={
+                  wfDraft.tarief_inc != null && wfDraft.tarief_inc !== undefined
+                    ? String(wfDraft.tarief_inc)
+                    : ""
+                }
+                onChange={(e) =>
+                  setWfDraft((d) => ({
+                    ...d,
+                    tarief_inc: e.target.value
+                      ? Number(e.target.value.replace(",", "."))
+                      : null,
+                  }))
+                }
+                placeholder="Leeg = standaardtarief"
+                className={inputCls}
+              />
+              <p className="mt-1 text-[11px] text-muted">
+                Eigen tarief van deze persoon voor creditfacturen. Leeg laten
+                voor het globale standaardtarief.
+              </p>
+            </Field>
             <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
                 Status
@@ -2009,12 +2202,31 @@ export function InstellingenPanel({
 
   // ── List view ────────────────────────────────────────────────────────────
   const showListTabs = !teamOnly && !hideListTabs;
+  const embedded = hideListTabs;
 
   return (
-    <div className="border border-line bg-white">
-      <div className="space-y-3 border-b border-line px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+    <div
+      className={
+        embedded
+          ? "flex h-full min-h-0 flex-col bg-white"
+          : "border border-line bg-white"
+      }
+    >
+      <div
+        className={
+          embedded
+            ? "flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-center sm:px-4"
+            : "space-y-3 border-b border-line px-4 py-3 sm:px-5"
+        }
+      >
+        <div
+          className={
+            embedded
+              ? "flex w-full min-w-0 flex-1 flex-wrap items-center gap-2"
+              : "flex flex-wrap items-center justify-between gap-3"
+          }
+        >
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {showListTabs ? (
               <div className="flex border border-line p-0.5">
                 <button
@@ -2027,7 +2239,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Team
+                  Mensen
                 </button>
                 <button
                   type="button"
@@ -2039,7 +2251,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Monteurs
+                  Installatie partners
                 </button>
                 <button
                   type="button"
@@ -2055,8 +2267,21 @@ export function InstellingenPanel({
                 </button>
               </div>
             ) : null}
-            <p className="text-xs text-muted">{countLabel}</p>
-            {activeFilter === "medewerkers" ? (
+            {embedded ? (
+              <div className="relative w-full min-w-0 flex-1 sm:max-w-md">
+                <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-muted">
+                  ⌕
+                </span>
+                <input
+                  type="search"
+                  value={zoek}
+                  onChange={(e) => setZoek(e.target.value)}
+                  placeholder="Zoek naam, e-mail, telefoon…"
+                  className="h-9 w-full rounded-md border border-line bg-white py-2 pr-3 pl-8 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green"
+                  aria-label="Zoeken"
+                />
+              </div>
+            ) : activeFilter === "medewerkers" ? (
               <input
                 type="search"
                 value={zoek}
@@ -2074,6 +2299,7 @@ export function InstellingenPanel({
                 }
               />
             ) : null}
+            <p className="text-xs text-muted">{countLabel}</p>
           </div>
           <button
             type="button"
@@ -2084,17 +2310,27 @@ export function InstellingenPanel({
               setAddOpen(true);
               setError(null);
             }}
-            className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+            className={
+              embedded
+                ? "shrink-0 rounded-lg bg-green px-3 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+                : "bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+            }
           >
             {activeFilter === "medewerkers"
               ? teamRolFilter !== "all"
                 ? `+ ${gebruikerRolLabel[teamRolFilter]}`
-                : "+ Medewerker"
+                : "+ Nieuw"
               : activeFilter === "warmtefonds"
                 ? "+ Warmtefondspartner"
                 : `+ ${partnerWoord}`}
           </button>
         </div>
+
+        {activeFilter === "warmtefonds" ? (
+          <div className={embedded ? "" : "mt-3"}>
+            <EdergyTariefInstelling />
+          </div>
+        ) : null}
 
         {activeFilter === "medewerkers" && !hideTeamRolFilter ? (
           <div className="flex flex-wrap border border-line p-0.5">
@@ -2133,30 +2369,31 @@ export function InstellingenPanel({
       </div>
 
       {(error || okMsg) && (
-        <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
+        <div className="shrink-0 space-y-2 border-b border-line px-3 py-2 sm:px-4">
           {error && (
-            <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+            <p className="rounded-md border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
               {error}
             </p>
           )}
           {okMsg && (
-            <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+            <p className="rounded-md border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
               {okMsg}
             </p>
           )}
         </div>
       )}
 
+      <div className={embedded ? "min-h-0 flex-1 overflow-auto" : undefined}>
       {loading ? (
         <p className="px-5 py-14 text-center text-sm text-muted">Laden…</p>
-      ) : rows.length === 0 && zoekNorm && activeFilter === "medewerkers" ? (
+      ) : rows.length === 0 && zoekNorm ? (
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
             Geen resultaten voor “{zoek.trim()}”
           </p>
           <p className="mt-1 text-sm text-muted">
             Zoek op naam of e-mail
-            {teamRolFilter !== "all"
+            {teamRolFilter !== "all" && activeFilter === "medewerkers"
               ? ` binnen ${gebruikerRolLabel[teamRolFilter].toLowerCase()}`
               : ""}
             .
@@ -2175,308 +2412,295 @@ export function InstellingenPanel({
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
-              ? "Kies een rol (Admin, Adviseur, Beller of Backoffice) en voeg een account toe."
+              ? "Kies een rol en voeg een account toe."
               : activeFilter === "warmtefonds"
-                ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
+                ? "Voeg een Warmtefondspartner toe voor portaallink."
                 : `Voeg een ${partnerWoord.toLowerCase()} toe voor schouw/installatie en portaallink.`}
           </p>
         </div>
       ) : activeFilter === "medewerkers" ? (
-        <div className="overflow-x-auto">
-          <table className="crm-table crm-table--compact w-full min-w-[720px]">
-            <thead>
-              <tr>
-                <th>Medewerker</th>
-                <th>Rol</th>
-                <th>Commissie</th>
-                <th>Start adres</th>
-                <th>Contract</th>
-                <th>Status</th>
-                <th className="w-36 text-right">Actie</th>
+        <table className="crm-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>Rol</th>
+              <th>Telefoon</th>
+              <th>Status</th>
+              <th>Commissie</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as Adviseur[]).map((a) => {
+              const sales = isSalesRol(a.rol);
+              const rol = normalizeRol(a.rol) as TeamRol;
+              const actief = a.actief !== false;
+              const commissie =
+                a.commissie_pct != null &&
+                Number.isFinite(Number(a.commissie_pct))
+                  ? Number(a.commissie_pct)
+                  : 10;
+              const opsCommissieLabel = opsCommissieLabelVoorRol({
+                rol: a.rol,
+                isOpsManager: isOpsManagerAdviseur(a),
+              });
+              return (
+                <tr
+                  key={a.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openMedewerker(a)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openMedewerker(a);
+                    }
+                  }}
+                >
+                  <td>
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <Avatar size="sm" className="size-8">
+                        <AvatarFallback className="text-[11px]">
+                          {naamInitialen(a.naam) || "?"}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <span className="block truncate font-medium text-ink">
+                          {a.naam}
+                        </span>
+                        <span className="block truncate text-[11px] text-muted">
+                          {a.email || "Geen e-mail"}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap text-muted">
+                    {gebruikerRolLabel[rol]}
+                  </td>
+                  <td className="whitespace-nowrap text-muted">
+                    {a.telefoon || "—"}
+                  </td>
+                  <td>
+                    <span
+                      className={[
+                        "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                        a.geblokkeerd === true
+                          ? "bg-[#FDECEA] text-[#C62828]"
+                          : actief
+                            ? "bg-green-soft text-green-dark"
+                            : "bg-[#FFF0E6] text-[#C45A12]",
+                      ].join(" ")}
+                    >
+                      {a.geblokkeerd === true
+                        ? "Geblokkeerd"
+                        : actief
+                          ? "Actief"
+                          : "Inactief"}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap tabular-nums text-muted">
+                    {sales
+                      ? `${commissie.toLocaleString("nl-NL", {
+                          maximumFractionDigits: 1,
+                        })}%`
+                      : opsCommissieLabel || "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : activeFilter === "warmtefonds" ? (
+        <table className="crm-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>E-mail</th>
+              <th>Telefoon</th>
+              <th>Vergoeding</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as WarmtefondsOperator[]).map((o) => (
+              <tr
+                key={o.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openWarmtefonds(o)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openWarmtefonds(o);
+                  }
+                }}
+              >
+                <td>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Avatar size="sm" className="size-8">
+                      <AvatarFallback className="text-[11px]">
+                        {naamInitialen(o.naam) || "?"}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="truncate font-medium text-ink">
+                      {o.naam}
+                    </span>
+                  </div>
+                </td>
+                <td className="text-muted">{o.email || "—"}</td>
+                <td className="whitespace-nowrap text-muted">
+                  {o.telefoon || "—"}
+                </td>
+                <td className="tabular-nums text-muted">
+                  {o.tarief_inc != null && Number(o.tarief_inc) > 0
+                    ? formatEuro(Number(o.tarief_inc))
+                    : "Standaard"}
+                </td>
+                <td>
+                  <span
+                    className={[
+                      "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                      o.actief !== false
+                        ? "bg-green-soft text-green-dark"
+                        : "bg-[#FFF0E6] text-[#C45A12]",
+                    ].join(" ")}
+                  >
+                    {o.actief !== false ? "Actief" : "Inactief"}
+                  </span>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {(rows as Adviseur[]).map((a) => {
-                const sales = isSalesRol(a.rol);
-                const rol = normalizeRol(a.rol) as TeamRol;
-                const canLoginAls = Boolean(a.email?.trim());
-                const actief = a.actief !== false;
-                const startAdres = (a.start_adres || "").trim();
-                const heeftStartAdres = isUsableStartAdres(startAdres);
-                const startAdresIngevuld =
-                  Boolean(startAdres) && startAdres !== "—";
-                const heeftContract = Boolean(
-                  a.contract_bestandsnaam ||
-                    a.contract_sign_status === "ondertekend"
-                );
-                const commissie =
-                  a.commissie_pct != null &&
-                  Number.isFinite(Number(a.commissie_pct))
-                    ? Number(a.commissie_pct)
-                    : 10;
-                const opsCommissieLabel = opsCommissieLabelVoorRol({
-                  rol: a.rol,
-                  isOpsManager: isOpsManagerAdviseur(a),
-                });
-                return (
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <table className="crm-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>E-mail</th>
+              <th>KvK</th>
+              <th>Agenda</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as InstallatiePartner[]).map((p) => {
+              const open = expandedPartnerId === p.id;
+              return (
+                <Fragment key={p.id}>
                   <tr
-                    key={a.id}
-                    onClick={() => openMedewerker(a)}
-                    className="cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      setExpandedPartnerId((cur) =>
+                        cur === p.id ? null : p.id
+                      )
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedPartnerId((cur) =>
+                          cur === p.id ? null : p.id
+                        );
+                      }
+                    }}
                   >
                     <td>
                       <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          className="flex h-8 w-8 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold tracking-wide text-green-dark"
-                          aria-hidden
-                        >
-                          {naamInitialen(a.naam) || "?"}
-                        </span>
+                        <Avatar size="sm" className="size-8">
+                          <AvatarFallback className="text-[11px]">
+                            {naamInitialen(p.naam) || "?"}
+                          </AvatarFallback>
+                        </Avatar>
                         <div className="min-w-0">
-                          <p className="truncate font-semibold text-ink">
-                            {a.naam}
-                          </p>
-                          <p className="truncate text-[11px] text-muted">
-                            {a.email || "Geen e-mail"}
-                          </p>
+                          <span className="block truncate font-medium text-ink">
+                            {p.naam}
+                          </span>
+                          <span className="block truncate text-[11px] text-muted">
+                            {open ? "Team verbergen" : "Team tonen · klik"}
+                          </span>
                         </div>
                       </div>
                     </td>
-                    <td>
-                      <span
-                        className={[
-                          "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          ROL_BADGE[rol] || ROL_BADGE.adviseur,
-                        ].join(" ")}
-                      >
-                        {gebruikerRolLabel[rol]}
-                      </span>
+                    <td className="text-muted">{p.email || "—"}</td>
+                    <td className="whitespace-nowrap text-muted">
+                      {p.kvk_nummer || "—"}
                     </td>
-                    <td className="tabular-nums text-muted">
-                      {sales ? (
-                        <span className="font-semibold text-ink">
-                          {commissie.toLocaleString("nl-NL", {
-                            maximumFractionDigits: 1,
-                          })}
-                          %
-                        </span>
-                      ) : opsCommissieLabel ? (
-                        <span className="text-[11px] font-semibold text-ink">
-                          {opsCommissieLabel}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      {heeftStartAdres ? (
-                        <span
-                          className="inline-flex items-center gap-1 bg-green-soft px-2 py-0.5 text-[10px] font-semibold text-green-dark"
-                          title={startAdres}
-                        >
-                          <span aria-hidden>✓</span>
-                          Ja
-                        </span>
-                      ) : sales && startAdresIngevuld ? (
-                        <span
-                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
-                          title={`${startAdres} — huisnummer + postcode nodig`}
-                        >
-                          Onvolledig
-                        </span>
-                      ) : sales ? (
-                        <span
-                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
-                          title="Nodig voor reistijd bij inplannen"
-                        >
-                          Ontbreekt
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {heeftContract ? (
-                        <span className="inline-block bg-green-soft px-2 py-0.5 text-[10px] font-semibold text-green-dark">
-                          Ja
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted">—</span>
-                      )}
+                    <td className="whitespace-nowrap text-muted">
+                      {p.google_connected_email ? "Gekoppeld" : "—"}
                     </td>
                     <td>
                       <span
                         className={[
-                          "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          a.geblokkeerd === true
-                            ? "bg-[#FDECEA] text-[#C62828]"
-                            : actief
-                              ? "bg-green-soft text-green-dark"
-                              : "bg-[#FFF0E6] text-[#C45A12]",
+                          "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                          p.actief !== false
+                            ? "bg-green-soft text-green-dark"
+                            : "bg-[#FFF0E6] text-[#C45A12]",
                         ].join(" ")}
                       >
-                        {a.geblokkeerd === true
-                          ? "Geblokkeerd"
-                          : actief
-                            ? "Actief"
-                            : "Inactief"}
+                        {p.actief !== false ? "Actief" : "Inactief"}
                       </span>
-                    </td>
-                    <td
-                      className="text-right"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          disabled={!canLoginAls || loginAlsId === a.id}
-                          onClick={() => void loginAls(a)}
-                          className="bg-green px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-40"
-                          title={
-                            !canLoginAls
-                              ? "Geen e-mailadres"
-                              : `Login als ${a.naam}`
-                          }
-                        >
-                          {loginAlsId === a.id ? "…" : "Login als"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openMedewerker(a)}
-                          className="border border-line bg-white p-1.5 text-muted hover:border-green hover:text-green-dark"
-                          aria-label={`${a.naam} bewerken`}
-                        >
-                          <PencilIcon />
-                        </button>
-                      </div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : activeFilter === "warmtefonds" ? (
-        <div className="overflow-x-auto">
-          <table className="crm-table w-full">
-            <thead>
-              <tr>
-                <th>Naam</th>
-                <th>E-mail</th>
-                <th>Telefoon</th>
-                <th>Status</th>
-                <th className="w-36" />
-              </tr>
-            </thead>
-            <tbody>
-              {(rows as WarmtefondsOperator[]).map((o) => (
-                <tr
-                  key={o.id}
-                  onClick={() => openWarmtefonds(o)}
-                  className="cursor-pointer hover:bg-[#f7faf8]"
-                >
-                  <td className="font-medium text-ink">{o.naam}</td>
-                  <td className="text-muted">{o.email || "—"}</td>
-                  <td className="text-muted">{o.telefoon || "—"}</td>
-                  <td>
-                    <span
-                      className={
-                        o.actief !== false
-                          ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
-                      }
-                    >
-                      {o.actief !== false ? "Actief" : "Inactief"}
-                    </span>
-                  </td>
-                  <td
-                    className="text-right"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openWfPortal(o)}
-                        className="border border-green/40 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:bg-green hover:text-white"
-                        title="Open Warmtefonds-portaal"
-                      >
-                        Open account
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openWarmtefonds(o)}
-                        className="text-muted hover:text-ink"
-                        aria-label={`${o.naam} bewerken`}
-                      >
-                        <PencilIcon />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="crm-table w-full">
-            <thead>
-              <tr>
-                <th>Naam</th>
-                <th>E-mail</th>
-                <th>Google Calendar</th>
-                <th>KvK</th>
-                <th>Contract</th>
-                <th>Status</th>
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {(rows as InstallatiePartner[]).map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => openPartner(p)}
-                  className="cursor-pointer hover:bg-[#f7faf8]"
-                >
-                  <td className="font-medium text-ink">{p.naam}</td>
-                  <td className="text-muted">{p.email || "—"}</td>
-                  <td className="text-muted text-xs">
-                    {p.google_connected_email ? (
-                      <span className="font-medium text-green-dark">
-                        Gekoppeld
-                      </span>
-                    ) : (
-                      <span className="text-[#C45A12]">Niet gekoppeld</span>
-                    )}
-                  </td>
-                  <td className="text-muted text-xs">
-                    {p.kvk_nummer || (
-                      <span className="text-[#C45A12]">Ontbreekt</span>
-                    )}
-                  </td>
-                  <td className="text-muted text-xs">
-                    {p.contract_bestandsnaam ? "Ja" : "—"}
-                  </td>
-                  <td>
-                    <span
-                      className={
-                        p.actief !== false
-                          ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
-                      }
-                    >
-                      {p.actief !== false ? "Actief" : "Inactief"}
-                    </span>
-                  </td>
-                  <td className="text-muted">
-                    <PencilIcon />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  {open ? (
+                    <tr className="!cursor-default hover:!bg-transparent">
+                      <td colSpan={5} className="!bg-[#FAFBFA] !p-0">
+                        <div className="border-t border-line px-4 py-4 sm:px-5">
+                          <div className="mb-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openPartner(p)}
+                              className="rounded-md border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                            >
+                              Bewerken
+                            </button>
+                            {p.portal_token ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openInstallatiePortal(p)}
+                                  className="rounded-md border border-green/40 bg-green-soft px-3 py-1.5 text-xs font-semibold text-green-dark hover:bg-green hover:text-white"
+                                >
+                                  Open portaal
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => copyPortalLink(p)}
+                                  className="rounded-md border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                                >
+                                  Kopieer link
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                          {p.portal_token ? (
+                            <PartnerTeamgenotenPanel
+                              portalToken={p.portal_token}
+                              compact
+                              adminBeoordeling
+                              authorNaam={session?.naam || null}
+                              initialTeamgenootId={
+                                expandedPartnerId === p.id
+                                  ? focusTeamgenootId
+                                  : null
+                              }
+                            />
+                          ) : (
+                            <p className="text-sm text-muted">
+                              Geen portaallink — teamleden kunnen niet geladen
+                              worden.
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
       )}
+      </div>
 
       {addOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-4 sm:items-center">

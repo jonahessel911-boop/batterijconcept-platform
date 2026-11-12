@@ -1,22 +1,26 @@
 /**
  * Commissie operationeel:
- * - Sharath: €10 per ingeplande (1e) huisbezoek-afspraak
- * - Tarik: vaste weekfee (€3.750/mnd) + €2,50 bonus per afspraak
- *   die Sharath inplant (Tarik is zijn teamlead)
+ * - Simon (voorheen Sharath): €10 per ingeplande (1e) huisbezoek-afspraak
+ * - Rik/Tarik: vaste weekfee (€3.750/mnd) + €2,50 bonus per afspraak
+ *   die Simon inplant (teamlead)
  */
 
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { isBelAfspraakUitvalLeadStatus } from "@/lib/labels";
+import {
+  isOpsManagerAdviseur as isOpsManagerNaam,
+  isSimonBeller,
+} from "@/lib/ops-namen";
 import { normalizeRol } from "@/lib/rollen";
 
 /** € per nieuw huisbezoek dat een beller inplant. */
 export const BELLER_PER_INGEPLANDE_AFSPRAAK = 10;
 
-/** Vast maandsalaris/commissie Tarik (ops manager). */
+/** Vast maandsalaris/commissie ops-manager (Rik/Tarik). */
 export const OPS_MANAGER_FIXED_PER_MONTH = 3750;
 
-/** Bonus Tarik per huisbezoek dat Sharath inplant. */
+/** Bonus ops-manager per huisbezoek dat Simon inplant. */
 export const OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK = 2.5;
 
 /** Weekdeel van het vaste maandbedrag (52 weken / jaar). */
@@ -40,7 +44,7 @@ export type OpsCommissieAdviseur = {
 };
 
 export type OpsCommissieBreakdown = {
-  /** Totaal ops-commissie (bellers + Tarik vast + Tarik bonus) */
+  /** Totaal ops-commissie (bellers + ops-manager vast + bonus) */
   totaal: number;
   bellersBedrag: number;
   bellersAfspraken: number;
@@ -78,10 +82,7 @@ export function eersteNieuwHuisbezoekIdPerLead(
 }
 
 export function isSharathBeller(a: { naam?: string | null }): boolean {
-  return String(a.naam || "")
-    .trim()
-    .toLowerCase()
-    .includes("sharath");
+  return isSimonBeller(a);
 }
 
 export function isOpsManagerAdviseur(a: {
@@ -90,10 +91,7 @@ export function isOpsManagerAdviseur(a: {
   email?: string | null;
   rol?: string | null;
 }): boolean {
-  const n = String(a.naam || "")
-    .trim()
-    .toLowerCase();
-  return n === "tarik" || n.startsWith("tarik ");
+  return isOpsManagerNaam(a);
 }
 
 export function isBellerRol(rol: string | null | undefined): boolean {
@@ -111,7 +109,7 @@ export function computeOpsCommissieForWindow(opts: {
   adviseurs: OpsCommissieAdviseur[];
   startYmd: string;
   endYmd: string;
-  /** Tarik / ops-manager id (null = geen vast/bonus). */
+  /** Ops-manager (Rik/Tarik) id (null = geen vast/bonus). */
   tarikId?: string | null;
   tarikNaam?: string | null;
   includeVast?: boolean;
@@ -120,8 +118,8 @@ export function computeOpsCommissieForWindow(opts: {
 }): OpsCommissieBreakdown {
   const historie = opts.historie ?? opts.afspraken;
   const eersteIds = eersteNieuwHuisbezoekIdPerLead(historie);
-  const sharathIds = new Set(
-    opts.adviseurs.filter((a) => isSharathBeller(a)).map((a) => a.id)
+  const simonIds = new Set(
+    opts.adviseurs.filter((a) => isSimonBeller(a)).map((a) => a.id)
   );
   const naamById = new Map(opts.adviseurs.map((a) => [a.id, a.naam] as const));
   const tarikId = (opts.tarikId || "").trim() || null;
@@ -148,9 +146,9 @@ export function computeOpsCommissieForWindow(opts: {
     if (ymd < opts.startYmd || ymd > opts.endYmd) continue;
 
     const door = (a.ingepland_door_id || "").trim();
-    if (!door || !sharathIds.has(door)) continue;
+    if (!door || !simonIds.has(door)) continue;
 
-    // Alleen wat Sharath inplant: zijn €10 én Tariks €2,50 teamlead-bonus.
+    // Alleen wat Simon inplant: zijn €10 én ops-manager €2,50 teamlead-bonus.
     teamAfspraken += 1;
     perBellerCount.set(door, (perBellerCount.get(door) || 0) + 1);
   }
@@ -188,7 +186,7 @@ export function computeOpsCommissieForWindow(opts: {
     tarikVast,
     tarikBonus,
     tarikAfspraken: teamAfspraken,
-    tarikNaam: opts.tarikNaam?.trim() || "Tarik",
+    tarikNaam: opts.tarikNaam?.trim() || "Rik",
   };
 }
 
@@ -198,7 +196,7 @@ export function opsCommissieLabelVoorRol(opts: {
   isOpsManager: boolean;
 }): string | null {
   if (opts.isOpsManager) {
-    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per afspraak die Sharath inplant`;
+    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per afspraak die Simon inplant (zelfde netto als Simon)`
   }
   if (isBellerRol(opts.rol)) {
     return `€${BELLER_PER_INGEPLANDE_AFSPRAAK}/afspraak`;

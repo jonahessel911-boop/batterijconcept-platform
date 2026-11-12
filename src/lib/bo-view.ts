@@ -1,5 +1,6 @@
 export type BoView =
   | "orders"
+  | "kanban"
   | "agenda"
   | "taken_agenda"
   | "acties"
@@ -11,6 +12,7 @@ export function parseBoView(raw: string | null | undefined): BoView {
   if (raw === "taken_agenda" || raw === "taken-agenda") return "taken_agenda";
   if (raw === "acties") return "acties";
   if (raw === "service") return "service";
+  if (raw === "kanban" || raw === "bord") return "kanban";
   if (raw === "bel_rapportage" || raw === "bel-rapportage") {
     return "bel_rapportage";
   }
@@ -28,6 +30,7 @@ export function backofficeHref(view: BoView = "orders"): string {
 
 export const BO_VIEWS: { id: BoView; label: string }[] = [
   { id: "orders", label: "Projecten" },
+  { id: "kanban", label: "Kanban" },
   { id: "acties", label: "Acties" },
   { id: "agenda", label: "Planbord" },
   { id: "taken_agenda", label: "Taken agenda" },

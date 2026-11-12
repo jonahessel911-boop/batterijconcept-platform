@@ -78,9 +78,25 @@ function normalizeMessageId(raw: string | undefined | null): string | null {
   return s.replace(/^<|>$/g, "").trim() || null;
 }
 
+function firstHeaderId(
+  value: string | string[] | undefined | null
+): string | null {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const id = normalizeMessageId(item);
+      if (id) return id;
+    }
+    return null;
+  }
+  const first = String(value).split(/\s+/)[0] || "";
+  return normalizeMessageId(first);
+}
+
 /**
  * Sync UNSEEN mails via IMAP → AI book → inbox_mails.
  * maxMessages begrensd voor cron (default 25).
+ * recent=true: nieuwste mails + UNSEEN samen (catch-up).
  */
 export async function syncInboxFromImap(
   sb: SupabaseClient,
@@ -131,13 +147,30 @@ export async function syncInboxFromImap(
     await client.connect();
     const lock = await client.getMailboxLock(mailbox);
     try {
-      const found = opts?.recent
+      const unseenRaw = await client.search({ seen: false }, { uid: true });
+      const recentRaw = opts?.recent
         ? await client.search({ all: true }, { uid: true })
-        : await client.search({ seen: false }, { uid: true });
-      const uidList = (Array.isArray(found) ? found : [])
-        .map((u) => Number(u))
-        .filter((u) => Number.isFinite(u) && u > 0)
-        .sort((a, b) => b - a)
+        : [];
+      const uidSet = new Set<number>();
+      for (const raw of [unseenRaw, recentRaw]) {
+        for (const u of Array.isArray(raw) ? raw : []) {
+          const n = Number(u);
+          if (Number.isFinite(n) && n > 0) uidSet.add(n);
+        }
+      }
+      // UNSEEN eerst, daarna nieuwste; limiet blijft gelden.
+      const unseenSet = new Set(
+        (Array.isArray(unseenRaw) ? unseenRaw : [])
+          .map((u) => Number(u))
+          .filter((u) => Number.isFinite(u) && u > 0)
+      );
+      const uidList = Array.from(uidSet)
+        .sort((a, b) => {
+          const au = unseenSet.has(a) ? 1 : 0;
+          const bu = unseenSet.has(b) ? 1 : 0;
+          if (au !== bu) return bu - au;
+          return b - a;
+        })
         .slice(0, maxMessages);
 
       if (uidList.length > 0) {
@@ -158,6 +191,13 @@ export async function syncInboxFromImap(
             const messageId =
               normalizeMessageId(parsed.messageId) ||
               (msg.uid ? `imap-${mailbox}-${msg.uid}` : null);
+            const inReplyTo =
+              firstHeaderId(
+                (parsed as { inReplyTo?: string | string[] }).inReplyTo
+              ) ||
+              firstHeaderId(
+                (parsed as { references?: string | string[] }).references
+              );
             const subject =
               (parsed.subject || "").trim() || "(geen onderwerp)";
             const bodyText =
@@ -225,18 +265,33 @@ export async function syncInboxFromImap(
               bodyText: bodyText.slice(0, 50_000),
               receivedAt,
               suggestedActions: [],
-              threadId: messageId || undefined,
+              threadId: inReplyTo || messageId || undefined,
               attachments,
               imageUrls,
             };
 
-            // AI boekt automatisch de map obv onderwerp + tekst
-            const booked = await bookInboxMail({
-              subject: draft.subject,
-              bodyText: draft.bodyText,
-              fromName: draft.fromName,
-              fromEmail: draft.fromEmail,
-            });
+            // AI boekt map; bij fout → heuristic zodat sync niet stilvalt.
+            let booked;
+            try {
+              booked = await bookInboxMail({
+                subject: draft.subject,
+                bodyText: draft.bodyText,
+                fromName: draft.fromName,
+                fromEmail: draft.fromEmail,
+              });
+            } catch (bookErr) {
+              const { bookInboxMailHeuristic } = await import("@/lib/inbox-ai");
+              booked = bookInboxMailHeuristic({
+                subject: draft.subject,
+                bodyText: draft.bodyText,
+                fromEmail: draft.fromEmail,
+              });
+              errors.push(
+                `uid ${msg.uid}: AI-boek faalde (${
+                  bookErr instanceof Error ? bookErr.message : "fout"
+                }) → heuristic`
+              );
+            }
 
             const mail = applyInboxBooking(draft, {
               folder: booked.folder,
@@ -248,6 +303,7 @@ export async function syncInboxFromImap(
 
             const result = await insertBookedInboxMail(sb, mail, {
               messageId,
+              inReplyTo,
               bodyHtml: bodyHtml?.slice(0, 100_000) || null,
               aiFunction: booked.functionName,
               attachments,

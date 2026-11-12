@@ -50,7 +50,7 @@ export async function POST(
     const { data: project, error } = await sb
       .from("projecten")
       .select(
-        "id, project_nummer, titel, status, betaalwijze, financiering_status, lead_id, warmtefonds_afspraak_at, leads(id, naam, email, straat, huisnummer, toevoeging, postcode, plaats)"
+        "id, project_nummer, titel, status, betaalwijze, financiering_status, lead_id, warmtefonds_afspraak_at, warmtefonds_contact_pogingen, leads(id, naam, email, straat, huisnummer, toevoeging, postcode, plaats)"
       )
       .eq("id", projectId)
       .maybeSingle();
@@ -123,6 +123,48 @@ export async function POST(
       );
     }
 
+    // Mail verstuurd → markeer contact (status + teller als Contact-knop dat nog niet deed)
+    const curFs = project.financiering_status as string | null;
+    const early =
+      !curFs ||
+      curFs === "doorgestuurd_naar_edwin" ||
+      curFs === "documenten_aanleveren" ||
+      curFs === "contact_verstuurd" ||
+      curFs === "afspraak_ingepland";
+    const prevPogingen = Number(
+      (project as { warmtefonds_contact_pogingen?: number | null })
+        .warmtefonds_contact_pogingen || 0
+    );
+    const projectPatch: Record<string, unknown> = {};
+    if (early) projectPatch.financiering_status = "contact_verstuurd";
+    // Alleen +1 als nog geen poging geregistreerd (anders deed Contact-knop dat al)
+    if (!Number.isFinite(prevPogingen) || prevPogingen < 1) {
+      projectPatch.warmtefonds_contact_pogingen = 1;
+    }
+    if (Object.keys(projectPatch).length > 0) {
+      const { error: patchErr } = await sb
+        .from("projecten")
+        .update(projectPatch)
+        .eq("id", projectId);
+      if (
+        patchErr &&
+        !(
+          patchErr.code === "42703" ||
+          /warmtefonds_contact_pogingen/i.test(patchErr.message || "")
+        )
+      ) {
+        console.error("WF contact status patch:", patchErr);
+      } else if (patchErr) {
+        // Kolom ontbreekt: alleen status zetten
+        if (early) {
+          await sb
+            .from("projecten")
+            .update({ financiering_status: "contact_verstuurd" })
+            .eq("id", projectId);
+        }
+      }
+    }
+
     const leadId = lead?.id || (project.lead_id as string | null);
     if (leadId) {
       await logLeadEvent({
@@ -137,11 +179,17 @@ export async function POST(
           by: operator.naam,
           bron: "warmtefonds_portaal",
           ok: true,
+          wf_contact: true,
         },
       });
     }
 
-    return NextResponse.json({ ok: true, sent: true, to });
+    return NextResponse.json({
+      ok: true,
+      sent: true,
+      to,
+      financiering_status: early ? "contact_verstuurd" : curFs,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
+  betalingVoorProjecten,
   isMissingWfProjectColumn,
   doorgestuurdAtVoorProjecten,
   isWarmtefondsPortalProject,
@@ -91,9 +92,17 @@ export async function GET(
       .map((row) => withPortalBedragen(row));
 
     const doorgestuurd = await doorgestuurdAtVoorProjecten(sb, orders);
+    const betaling = await betalingVoorProjecten(
+      sb,
+      orders.map((row) => row.id)
+    );
     const metDoorgestuurd = orders.map((row) => ({
       ...row,
       doorgestuurd_at: doorgestuurd.get(row.id) ?? null,
+      betaling: betaling.get(row.id) ?? {
+        key: "geen" as const,
+        label: "Nog geen factuur",
+      },
     }));
 
     return NextResponse.json({

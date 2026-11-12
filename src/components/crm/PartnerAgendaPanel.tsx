@@ -865,7 +865,8 @@ export function PartnerAgendaPanel({
         </p>
       ) : partnerId && !isPortal ? (
         <p className="text-[10px] text-muted">
-          Geen startadres — stel in bij Team → Monteurs voor reistijd.
+          Geen startadres — stel in bij Team → Installatie partners voor
+          reistijd.
         </p>
       ) : null}
     </div>

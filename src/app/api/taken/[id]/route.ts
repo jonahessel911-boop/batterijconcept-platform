@@ -2,8 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { isProjectAfdeling, PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
+import {
+  heeftWarmtefondsAfspraak,
+  isWfVoorInBehandeling,
+  resolveFinancieringStatus,
+  WF_AFSPRAAK_VOLTOOIEN_AUTO_KEY,
+} from "@/lib/financiering-status";
+import { isTaakCategorie } from "@/lib/taak-categorie";
 import { sendEmail, appBaseUrl } from "@/lib/email/postmark";
 import { backofficeActieVoltooidEmail } from "@/lib/email/templates";
+import { syncAutoTakenVoorProject } from "@/lib/sync-auto-taken";
 
 export const runtime = "nodejs";
 
@@ -54,6 +62,7 @@ export async function PATCH(
     titel?: string;
     status?: "todo" | "doing" | "done";
     afdeling?: string;
+    categorie?: string | null;
     verantwoordelijke_id?: string | null;
     due_at?: string | null;
     notities?: string | null;
@@ -88,6 +97,15 @@ export async function PATCH(
       );
     }
     patch.afdeling = body.afdeling;
+  }
+  if (body.categorie !== undefined) {
+    if (!isTaakCategorie(body.categorie)) {
+      return NextResponse.json(
+        { error: "Ongeldige categorie" },
+        { status: 400 }
+      );
+    }
+    patch.categorie = body.categorie;
   }
   if (body.verantwoordelijke_id !== undefined) {
     patch.verantwoordelijke_id = body.verantwoordelijke_id || null;
@@ -162,7 +180,47 @@ export async function PATCH(
       );
     }
 
-    return NextResponse.json({ taak: data, mail });
+    /** WF-afspraak voltooien → financiering naar in behandeling. */
+    let projectOut: unknown = undefined;
+    if (becameDone) {
+      const autoKey = (before.data as { auto_key?: string | null }).auto_key;
+      const projectId = (before.data as { project_id?: string }).project_id;
+      if (autoKey === WF_AFSPRAAK_VOLTOOIEN_AUTO_KEY && projectId) {
+        const { data: proj } = await sb
+          .from("projecten")
+          .select(
+            "id, status, financiering_status, warmtefonds_afspraak_at, betaalwijze"
+          )
+          .eq("id", projectId)
+          .maybeSingle();
+        if (
+          proj &&
+          heeftWarmtefondsAfspraak(proj) &&
+          isWfVoorInBehandeling(resolveFinancieringStatus(proj))
+        ) {
+          const { data: updatedProj } = await sb
+            .from("projecten")
+            .update({
+              financiering_status: "in_behandeling",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", projectId)
+            .select("*")
+            .single();
+          if (updatedProj) {
+            projectOut = updatedProj;
+            await syncAutoTakenVoorProject(
+              sb,
+              projectId,
+              String(updatedProj.status || proj.status),
+              "in_behandeling"
+            ).catch(() => null);
+          }
+        }
+      }
+    }
+
+    return NextResponse.json({ taak: data, mail, project: projectOut });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Fout") },

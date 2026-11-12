@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,11 @@ const SELECT =
 
 /** GET /api/instroom/taken — open acties (optioneel ?sollicitatie_id=&open=0) */
 export async function GET(req: NextRequest) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const sollicitatieId = req.nextUrl.searchParams.get("sollicitatie_id");
   const openOnly = req.nextUrl.searchParams.get("open") !== "0";
 

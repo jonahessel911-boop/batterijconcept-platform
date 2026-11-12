@@ -14,16 +14,24 @@ import {
   type CreditWeek,
 } from "@/lib/adviseur-creditfactuur";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import {
   BELLER_PER_INGEPLANDE_AFSPRAAK,
   computeOpsCommissieForWindow,
   type OpsCommissieAfspraak,
   type OpsCommissieAdviseur,
 } from "@/lib/ops-commissie";
+import { bedragenMetBtw } from "@/lib/relatie-btw";
 import { normalizeRol } from "@/lib/rollen";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
+
+export { isBelcommissieCreditfactuur } from "@/lib/callcenter-creditfactuur";
+
+function encodeBelRegelsJson(
+  regels: { omschrijving: string; bedrag: number }[]
+) {
+  return `REGELS_JSON:${JSON.stringify(regels)}`;
+}
 
 export type BellerWeekCommissie = {
   jaar: number;
@@ -145,6 +153,7 @@ export async function loadBellerWeekCommissie(
     { id: string; factuur_nummer: string; status: string }
   >();
   for (const cf of cfs || []) {
+    if (cf.status === "geannuleerd") continue;
     const key = `${cf.week_jaar}-W${cf.week_nummer}`;
     if (!cfByWeek.has(key)) {
       cfByWeek.set(key, {
@@ -262,13 +271,15 @@ export async function createBellerWeekCreditfactuur(
     };
   }
 
-  const { data: existing } = await sb
+  const { data: existingRows } = await sb
     .from("adviseur_creditfacturen")
     .select("id, factuur_nummer, status, bedrag_ex_btw")
     .eq("adviseur_id", opts.bellerId)
     .eq("week_jaar", weekInfo.jaar)
-    .eq("week_nummer", weekInfo.week)
-    .maybeSingle();
+    .eq("week_nummer", weekInfo.week);
+  const existing = (existingRows || []).find(
+    (f) => f.status !== "geannuleerd"
+  );
   if (existing) {
     return {
       created: false,
@@ -320,6 +331,21 @@ export async function createBellerWeekCreditfactuur(
     (count || 0) + 1
   );
 
+  const regels = [
+    {
+      omschrijving: `${afsprakenN}× €${BELLER_PER_INGEPLANDE_AFSPRAAK} netto huisbezoeken (${weekInfo.van} t/m ${weekInfo.tot}, 1e huisbezoek, niet geannuleerd)`,
+      bedrag: row!.bedragExBtw,
+    },
+  ];
+  const humanNotes = [
+    `Belcommissie ${adviseur.naam}.`,
+    `Week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot}).`,
+    `${afsprakenN}× €${BELLER_PER_INGEPLANDE_AFSPRAAK} netto huisbezoeken (1e huisbezoek, niet geannuleerd).`,
+    `Factuurdatum maandag ${weekInfo.betaalMaandag}.`,
+    `KvK ${adviseur.kvk_nummer}, IBAN ${adviseur.iban}.`,
+    `BTW 21%.`,
+  ].join(" ");
+
   const { data: created, error: insErr } = await sb
     .from("adviseur_creditfacturen")
     .insert({
@@ -336,14 +362,7 @@ export async function createBellerWeekCreditfactuur(
       bedrag_inc_btw: withBtw.bedrag_inc_btw,
       max_bedrag_toegepast: max != null && row!.bedragExBtw > max ? max : null,
       factuurdatum: weekInfo.betaalMaandag,
-      notities: [
-        `Belcommissie ${adviseur.naam}.`,
-        `Week ${weekInfo.week} (${weekInfo.van} t/m ${weekInfo.tot}).`,
-        `${afsprakenN}× €${BELLER_PER_INGEPLANDE_AFSPRAAK} netto ingepland (1e huisbezoek, niet geannuleerd).`,
-        `Factuurdatum maandag ${weekInfo.betaalMaandag}.`,
-        `KvK ${adviseur.kvk_nummer}, IBAN ${adviseur.iban}.`,
-        `BTW 21%.`,
-      ].join(" "),
+      notities: `${encodeBelRegelsJson(regels)}\n${humanNotes}`,
     })
     .select("*")
     .single();

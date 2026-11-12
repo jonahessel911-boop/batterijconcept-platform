@@ -88,7 +88,9 @@ export function parsePostcodeDigits(
   postcode: string | null | undefined
 ): number | null {
   if (!postcode) return null;
-  const m = String(postcode).replace(/\s+/g, "").match(/^(\d{4})/);
+  // Spaties, streepjes, nbsp, etc. eruit — pak eerste 4 cijfers.
+  const cleaned = String(postcode).replace(/[^0-9A-Za-z]/g, "");
+  const m = cleaned.match(/(\d{4})/);
   if (!m) return null;
   const n = Number(m[1]);
   return n >= 1000 && n <= 9999 ? n : null;
@@ -103,6 +105,21 @@ export function provincieVanPostcode(
     if (pc >= r.from && pc <= r.to) return r.provincie;
   }
   return GEEN_PROVINCIE;
+}
+
+const PROVINCIE_SET = new Set<string>(NL_PROVINCIES);
+
+/** Normaliseer monteur-regio's naar bekende NL-provincies. */
+export function normalizeMonteurRegios(raw: unknown): NlProvincie[] {
+  if (!Array.isArray(raw)) return [];
+  const out: NlProvincie[] = [];
+  for (const item of raw) {
+    const s = String(item || "").trim();
+    if (PROVINCIE_SET.has(s) && !out.includes(s as NlProvincie)) {
+      out.push(s as NlProvincie);
+    }
+  }
+  return out;
 }
 
 /** Eerste NL-postcode (4 cijfers) uit een adresregel. */

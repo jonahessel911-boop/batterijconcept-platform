@@ -65,3 +65,34 @@ export function KlantDocumenten({ docs }: { docs: KlantDocument[] }) {
     </ul>
   );
 }
+
+/** Compacte chips voor tabel/kanban: soort + status, klik opent PDF. */
+export function KlantDocumentenCompact({ docs }: { docs: KlantDocument[] }) {
+  if (docs.length === 0) return null;
+  return (
+    <ul
+      className="mt-1 flex flex-wrap gap-1"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {docs.map((d) => (
+        <li key={d.id}>
+          <a
+            href={`${d.pdf}${d.pdf.includes("?") ? "&" : "?"}inline=1`}
+            target="_blank"
+            rel="noreferrer"
+            title={`${d.naam}${d.toelichting ? ` · ${d.toelichting}` : ""}`}
+            className={[
+              "inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] font-semibold hover:border-green-dark/40",
+              statusTone(d.status),
+            ].join(" ")}
+          >
+            <span className="uppercase tracking-wide opacity-70">
+              {d.soort === "offerte" ? "Off" : "Fac"}
+            </span>
+            {d.statusLabel}
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}

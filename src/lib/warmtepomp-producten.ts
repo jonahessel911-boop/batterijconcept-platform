@@ -2,10 +2,15 @@
  * TC Swiss-warmtepompen per adviseur.
  * Sku begint met WP:{adviseurId}: zodat ze alleen in dat account in de offerte staan.
  * Thuisbatterijen (sku zonder dat voorvoegsel) blijven voor iedereen.
+ *
+ * Adviesprijzen zo gezet dat bruto €-marge ≈ 9,3 kWh-batterij (~€4.942 excl.),
+ * naast de vaste opslag WARMTEPOMP_OPSLAAG_INCL.
  */
 
 export const WARMTEPOMP_MERK = "TC Swiss";
 export const WARMTEPOMP_OPSLAAG_INCL = 1500;
+/** Doel-brutomarge excl. btw — gelijk aan Alpha ESS 9,3 pakket. */
+export const WARMTEPOMP_DOEL_MARGE_EXCL = 4942.15;
 
 export type WarmtepompCatalogusItem = {
   code: string;
@@ -21,37 +26,37 @@ export const WARMTEPOMP_CATALOGUS: WarmtepompCatalogusItem[] = [
     code: "TC-GT08-FE",
     naam: "TC Swiss Full electric GT08 – 8 kW",
     inkoopExcl: 8275,
-    adviesIncl: 13500,
+    adviesIncl: 14493,
   },
   {
     code: "TC-GT14-FE",
     naam: "TC Swiss Full electric GT14 – 14 kW",
     inkoopExcl: 9350,
-    adviesIncl: 14600,
+    adviesIncl: 15794,
   },
   {
     code: "TC-GT08-FER",
     naam: "TC Swiss Full electric ready GT08 – 8 kW",
     inkoopExcl: 7150,
-    adviesIncl: 11500,
+    adviesIncl: 13132,
   },
   {
     code: "TC-GT14-FER",
     naam: "TC Swiss Full electric ready GT14 – 12 kW",
     inkoopExcl: 8350,
-    adviesIncl: 12900,
+    adviesIncl: 14584,
   },
   {
     code: "TC-GT08-CAS",
     naam: "TC Swiss GT08 cascade",
     inkoopExcl: 3500,
-    adviesIncl: 4950,
+    adviesIncl: 8715,
   },
   {
     code: "TC-GT14-CAS",
     naam: "TC Swiss GT14 cascade",
     inkoopExcl: 4500,
-    adviesIncl: 5950,
+    adviesIncl: 9925,
   },
 ];
 

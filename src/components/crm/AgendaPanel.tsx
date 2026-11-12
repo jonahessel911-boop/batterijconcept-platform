@@ -651,6 +651,7 @@ export function AfspraakDetail({
   const [annuleerNotitie, setAnnuleerNotitie] = useState("");
   const [vervolgAt, setVervolgAt] = useState("");
   const [vervolgNotitie, setVervolgNotitie] = useState("");
+  const [vervolgHerinneringMail, setVervolgHerinneringMail] = useState(false);
   const [uitkomst, setUitkomst] = useState<LeadStatus | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -757,6 +758,7 @@ export function AfspraakDetail({
     setAnnuleerNotitie("");
     setVervolgAt("");
     setVervolgNotitie("");
+    setVervolgHerinneringMail(false);
     setUitkomst("");
     setSaleOfferte(null);
     setWfProjectId(null);
@@ -1599,6 +1601,11 @@ export function AfspraakDetail({
             notitie: noteText,
             // datetime-local als Amsterdam-lokaal (niet via Date→ISO offset)
             ...(needsVervolg && vervolgAt ? { vervolg_at: vervolgAt } : {}),
+            ...((uitkomst === "vervolg_fysiek" ||
+              uitkomst === "vervolg_tel") &&
+            vervolgHerinneringMail
+              ? { herinnering_mail: true }
+              : {}),
           }),
         });
         const data = (await res.json().catch(() => ({}))) as {
@@ -1623,6 +1630,7 @@ export function AfspraakDetail({
 
       setVervolgAt("");
       setVervolgNotitie("");
+      setVervolgHerinneringMail(false);
       setUitkomst("");
       setSaleOfferte(null);
       const plannedOpbel = isSale ? boValues.opbelMoment : null;
@@ -1821,6 +1829,12 @@ export function AfspraakDetail({
                     onChange={(e) => {
                       const next = (e.target.value as LeadStatus) || "";
                       setUitkomst(next);
+                      if (
+                        next !== "vervolg_fysiek" &&
+                        next !== "vervolg_tel"
+                      ) {
+                        setVervolgHerinneringMail(false);
+                      }
                       if (next === "sale_eigen_middelen") {
                         setBoValues((prev) => ({
                           ...prev,
@@ -1927,6 +1941,29 @@ export function AfspraakDetail({
                           onChange={(e) => setVervolgAt(e.target.value)}
                           className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
                         />
+                      </label>
+                    )}
+                    {(uitkomst === "vervolg_fysiek" ||
+                      uitkomst === "vervolg_tel") && (
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line bg-[#FAFBFA] px-3 py-2.5 text-sm text-ink">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={vervolgHerinneringMail}
+                          onChange={(e) =>
+                            setVervolgHerinneringMail(e.target.checked)
+                          }
+                          disabled={busy}
+                        />
+                        <span>
+                          <span className="font-semibold">
+                            Herinneringsmail 1 dag van tevoren
+                          </span>
+                          <span className="mt-0.5 block text-[12px] text-muted">
+                            Alleen als je dit aanzet krijgt de klant een mail
+                            ~24 uur vóór het vervolg. Geen bevestigingsmail.
+                          </span>
+                        </span>
                       </label>
                     )}
                     <label className="block text-xs font-semibold uppercase tracking-wide text-muted">

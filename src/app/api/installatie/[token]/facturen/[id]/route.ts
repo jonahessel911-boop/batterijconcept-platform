@@ -2,18 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { mailGoedgekeurdePartnerCreditfactuur } from "@/lib/creditfactuur-verstuur";
+import { requirePartnerPortal } from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
-async function resolvePartner(token: string) {
-  const sb = getSupabaseAdmin();
-  const { data, error } = await sb
-    .from("installatie_partners")
-    .select("id, naam, email, actief, portal_token")
-    .eq("portal_token", token)
-    .single();
-  if (error || !data || !data.actief) return null;
-  return data;
+async function resolvePartner(token: string, req: NextRequest) {
+  return requirePartnerPortal(token, req);
 }
 
 /**
@@ -43,7 +37,7 @@ export async function PATCH(
   }
 
   try {
-    const partner = await resolvePartner(token);
+    const partner = await resolvePartner(token, req);
     if (!partner) {
       return NextResponse.json(
         { error: "Portaal niet gevonden" },

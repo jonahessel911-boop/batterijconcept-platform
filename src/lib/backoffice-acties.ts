@@ -18,13 +18,21 @@ import {
   AV_ANNULERING_PCT,
   annuleringskostenIncBtw,
 } from "@/lib/av-annulering";
-import { AMSTERDAM_TZ, formatDateNl } from "@/lib/format";
+import { AMSTERDAM_TZ, formatDateNl, formatEuro } from "@/lib/format";
+import {
+  dekkendeFacturen,
+  eindafrekeningStand,
+  EINDAFREKENING_MIN_INC,
+  isEindafrekeningFactuurOmschrijving,
+  isProjectOpgeleverd,
+} from "@/lib/eindafrekening";
 import { wfWerkStatusVan } from "@/lib/warmtefonds-werkstatus";
 import {
   factuurEffectieveDeadline,
   factuurOpvolgActie,
   vervaldatumEndOfDay,
 } from "@/lib/factuur-betaling";
+import { isAnnuleringsFactuur } from "@/lib/factuur-soort";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import {
   annuleringsDoorFromAfspraak,
@@ -32,9 +40,7 @@ import {
 } from "@/lib/bel-queue";
 import {
   defaultSchouwWeekAfterSale,
-  dueAtVoorSchouwdagInplan,
   formatSchouwWeekLabel,
-  isInSchouwdagPlannenWindow,
   isSchouwdagDefinitief,
   isSchouwweekGepland,
   schouwWeekOffsetVoorSale,
@@ -77,8 +83,10 @@ export type BackofficeActieSoort =
   | "bestel_materiaal"
   | "aangetekende_brief"
   | "annulering_keuze_controle"
+  | "hold_sales_verlopen"
   | "schouw_inplannen"
-  | "wacht_warmtefonds";
+  | "wacht_warmtefonds"
+  | "eindafrekening";
 
 export type HerplanBron = "klant" | "adviseur" | "deur_niet_open";
 
@@ -253,7 +261,7 @@ export function isProjectGeannuleerd(
   return s === "annulering" || s === "geannuleerd";
 }
 
-/** HOLD SALES: geen Acties tot sales HOLD opheft. */
+/** HOLD SALES: geen Acties tot sales HOLD opheft (behalve verlopen-deadline). */
 export function isProjectHoldSales(
   project: Pick<Project, "status"> | { status?: string | null }
 ): boolean {
@@ -266,6 +274,22 @@ export function isProjectBuitenActies(
   project: Pick<Project, "status"> | { status?: string | null }
 ): boolean {
   return isProjectGeannuleerd(project) || isProjectHoldSales(project);
+}
+
+/**
+ * HOLD sales-deadline verlopen → BO mag wél één escalatie-actie zien.
+ * Overige workflow-acties blijven geblokkeerd via isProjectBuitenActies.
+ */
+export function isHoldSalesVerlopenActieOpen(
+  project: Pick<Project, "status" | "hold_sales_deadline_at">,
+  now = new Date()
+): boolean {
+  if (!isProjectHoldSales(project)) return false;
+  const deadline = project.hold_sales_deadline_at;
+  if (!deadline) return false;
+  const d = new Date(deadline);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() <= now.getTime();
 }
 
 /** Opstart open: aanbetalingsfactuur / Edwin / schouwweek nog niet af. */
@@ -387,11 +411,11 @@ export function isAangetekendeBriefActieOpen(
   return true;
 }
 
-/** Factuur met annuleringskosten (20% AV) herkennen. */
+/** Factuur met annuleringskosten / annulering herkennen. */
 export function isAnnuleringskostenFactuur(f: {
   omschrijving?: string | null;
 }): boolean {
-  return /annuleringskosten/i.test(f.omschrijving || "");
+  return isAnnuleringsFactuur(f);
 }
 
 export function heeftAnnuleringskostenFactuur(
@@ -654,6 +678,48 @@ export function openAangetekendeBriefActies(
       deadlineAt: deadlineAt.toISOString(),
       saleAt: saleAt.toISOString(),
       overdue: now.getTime() > deadlineAt.getTime(),
+      prio: true,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
+export function openHoldSalesVerlopenActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isHoldSalesVerlopenActieOpen(project, now)) continue;
+    const deadlineRaw = project.hold_sales_deadline_at!;
+    const deadlineAt = new Date(deadlineRaw);
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const notitie = project.backoffice_notitie?.trim();
+    const detailParts = [
+      "Sales heeft de HOLD niet binnen 4 dagen afgehandeld.",
+      "Kies: verlengen (+5 dagen), afwachten bedenktijd, of annuleringsfactuur sturen.",
+    ];
+    if (notitie) detailParts.unshift(`Sales-actie: ${notitie}`);
+    items.push({
+      id: `hold-sales-verlopen-${project.id}`,
+      soort: "hold_sales_verlopen",
+      titel: "HOLD sales verlopen",
+      detail: detailParts.join(" "),
+      reden: "Sales-deadline HOLD verlopen — BO moet vervolg kiezen.",
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue: true,
       prio: true,
       leadId: project.lead_id,
       leadNaam: lead?.naam || project.titel || "—",
@@ -1660,42 +1726,16 @@ export function openSchouwInplannenActies(
         (project.offerte_id != null && f.offerte_id === project.offerte_id)
     );
 
-    // WF: geen schouwdag-actie tot financiering goedgekeurd is
-    if (warmtefonds && !wfGoedgekeurd) continue;
-    // WF: exacte schouwdag pas bij ≥95% t.o.v. volledig offertebedrag
-    if (warmtefonds && !kanWfSchouwdagInplannen(project, related)) continue;
+    // EM-schouwdag zit in kickoff/opstarten — hier alleen WF ná goedkeuring.
+    // Schouwweek is geen trigger, alleen klant-indicatie.
+    if (!warmtefonds) continue;
+    if (!wfGoedgekeurd) continue;
+    if (!kanWfSchouwdagInplannen(project, related)) continue;
 
-    let deadlineAt: Date | null = null;
-    let detail = "";
-    let reden: string | null = null;
-
-    if (jaar && week) {
-      const dueIso = dueAtVoorSchouwdagInplan(jaar, week);
-      const due = new Date(dueIso);
-      const overdue = due.getTime() < nowMs;
-      const inWindow = isInSchouwdagPlannenWindow(jaar, week, now);
-      if (warmtefonds || inWindow || overdue) {
-        deadlineAt = due;
-        const weekLabel = formatSchouwWeekLabel(jaar, week);
-        detail = warmtefonds
-          ? `≥95% offerte betaald · schouwweek ${weekLabel} — plan de exacte schouwdag`
-          : `Schouwweek ${weekLabel} — plan de exacte schouwdag`;
-        reden = warmtefonds
-          ? "Offerte grotendeels betaald; plan nu de schouwdag."
-          : overdue
-            ? `Schouwdag had uiterlijk 1 week vóór schouwweek ${weekLabel} gepland moeten zijn.`
-            : `Plan de schouwdag in (window: 1 week vóór schouwweek ${weekLabel}).`;
-      }
-    }
-
-    if (!deadlineAt && wfGoedgekeurd && kanWfSchouwdagInplannen(project, related)) {
-      deadlineAt = softDueOverWerkdagen(now, 2);
-      detail = "≥95% offerte betaald — schouwdag inplannen";
-      reden =
-        "Offerte grotendeels betaald; plan zo snel mogelijk de schouwdag.";
-    }
-
-    if (!deadlineAt) continue;
+    const deadlineAt = softDueOverWerkdagen(now, 2);
+    const detail = "WF goedgekeurd — declaratie + exacte schouwdag";
+    const reden =
+      "Warmtefonds is goedgekeurd; stuur de declaratie door en plan de schouwdag. Schouwweek was alleen een indicatie.";
 
     const lead = leadFromProject(project);
     const offerte = projectOfferte(project);
@@ -1737,6 +1777,102 @@ export function openSchouwInplannenActies(
       Number(b.overdue) - Number(a.overdue) ||
       a.deadlineAt.localeCompare(b.deadlineAt)
   );
+}
+
+/**
+ * Eindafrekening: de batterij staat, maar het offertebedrag is niet volledig
+ * betaald. Twee gevallen:
+ *  - er staat nog een bedrag op géén enkele factuur (WF-plafond € 8.500,
+ *    of een order zonder aanbetaling) → conceptfactuur staat klaar, versturen;
+ *  - alles is gefactureerd maar nog niet ontvangen → betaling opvolgen.
+ * Verdwijnt vanzelf zodra de order volledig betaald is.
+ */
+export function openEindafrekeningActies(
+  projecten: Project[],
+  facturen: Factuur[] = [],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  const nowMs = now.getTime();
+
+  for (const project of projecten) {
+    if (isProjectBuitenActies(project)) continue;
+    if (!isProjectOpgeleverd(project.status)) continue;
+
+    const offerte = projectOfferte(project);
+    const orderIncBtw = Number(offerte?.totaal_inc_btw ?? 0) || 0;
+    if (orderIncBtw <= 0) continue;
+
+    const offerteId = offerte?.id || project.offerte_id || null;
+    const related = facturen.filter(
+      (f) =>
+        f.project_id === project.id ||
+        (offerteId != null && f.offerte_id === offerteId)
+    );
+    if (related.length === 0) continue;
+
+    const stand = eindafrekeningStand({ orderIncBtw, facturen: related });
+    if (stand.compleet) continue;
+
+    const moetFactureren = stand.teFacturerenInc >= EINDAFREKENING_MIN_INC;
+    const concept = dekkendeFacturen(related).find(
+      (f) =>
+        isEindafrekeningFactuurOmschrijving(f.omschrijving) &&
+        f.status === "concept"
+    );
+
+    const opgeleverdAt =
+      project.installatie_voltooid_at ||
+      project.opleverdatum ||
+      project.installatie_at ||
+      project.updated_at ||
+      project.created_at;
+    const deadlineAt = belSchouwDeadline(opgeleverdAt);
+    const overdue = deadlineAt.getTime() < nowMs;
+    const lead = leadFromProject(project);
+    const pn = project.project_nummer?.trim();
+
+    const titel = moetFactureren
+      ? concept
+        ? "Eindafrekening versturen"
+        : "Eindafrekening aanmaken"
+      : "Betaling eindafrekening controleren";
+
+    const reden = moetFactureren
+      ? `De installatie is opgeleverd, maar ${formatEuro(stand.teFacturerenInc)} van de order staat op geen enkele factuur. ${
+          concept
+            ? `Conceptfactuur ${concept.factuur_nummer} staat klaar — controleer en verstuur.`
+            : "Maak de conceptfactuur aan en verstuur die."
+        }`
+      : `De order is volledig gefactureerd, maar ${formatEuro(stand.openInc)} is nog niet ontvangen. Bel de klant na of controleer de bijschrijving.`;
+
+    items.push({
+      id: `eindafrekening-${project.id}`,
+      soort: "eindafrekening",
+      titel,
+      detail: `Nog open ${formatEuro(stand.openInc)} van ${formatEuro(stand.orderIncBtw)}${pn ? ` · ${pn}` : ""}`,
+      reden,
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue,
+      prio: isPrioDeadline(deadlineAt, now),
+      vastgelopen: isVastgelopen(deadlineAt, overdue, now),
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      factuurId: concept?.id,
+      factuurNummer: concept?.factuur_nummer || null,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+
+  return items;
 }
 
 export function openBackofficeActies(
@@ -1786,10 +1922,12 @@ export function openBackofficeActies(
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
     ...openAnnuleringKeuzeControleActies(projecten, facturen, now),
+    ...openHoldSalesVerlopenActies(projecten, now),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, facturen, now),
     ...openNabellenFactuurActies(facturen, now, projecten),
     ...openWarmtefondsAanbetalingHerinneringActies(facturen, now, projecten),
+    ...openEindafrekeningActies(projecten, facturen, now),
     ...volgende,
   ].sort(
     (a, b) =>
@@ -1811,11 +1949,13 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "volgende_stap",
   "aangetekende_brief",
   "annulering_keuze_controle",
+  "hold_sales_verlopen",
   "schakel_financiering",
   "wacht_warmtefonds",
   "nabellen_factuur",
   "wf_aanbetaling_herinnering",
   "herplan_afspraak",
+  "eindafrekening",
 ]);
 
 export type ActiesTabId =
@@ -1833,6 +1973,7 @@ export function actieTabVoorSoort(
   if (
     soort === "aangetekende_brief" ||
     soort === "annulering_keuze_controle" ||
+    soort === "hold_sales_verlopen" ||
     soort === "schakel_financiering" ||
     soort === "wacht_warmtefonds"
   ) {
@@ -1848,6 +1989,7 @@ export function actieTabVoorSoort(
   if (soort === "schouw_inplannen" || soort === "bel_schouw_aanbetaling") {
     return "projecten";
   }
+  if (soort === "eindafrekening") return "nazorg";
   if (
     soort === "nabellen_factuur" ||
     soort === "wf_aanbetaling_herinnering" ||
@@ -1870,7 +2012,11 @@ export function openActiesVoorProject(
   facturen: Factuur[] = [],
   now = new Date()
 ): BackofficeActie[] {
-  if (isProjectBuitenActies(project)) return [];
+  // HOLD: alleen de verlopen-escalatie; annulering: niets.
+  if (isProjectGeannuleerd(project)) return [];
+  if (isProjectHoldSales(project)) {
+    return openHoldSalesVerlopenActies([project], now);
+  }
   const relatedFacturen = facturen.filter((f) => f.lead_id === project.lead_id);
   return openBackofficeActies([project], relatedFacturen, now).filter(
     (a) => a.projectId === project.id || a.leadId === project.lead_id

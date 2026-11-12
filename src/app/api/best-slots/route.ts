@@ -5,12 +5,14 @@ import { errMessage } from "@/lib/errors";
 import { loadBestSlotsForLead } from "@/lib/api-v1/best-slots";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
+import { HUISBEZOEK_PLAN_DAYS_AHEAD } from "@/lib/slots";
 
 export const runtime = "nodejs";
 
 /**
  * GET /api/best-slots?lead_id=…&limit=5&adviseur_id=…
  * Top momenten: reistijd zwaar (lange rit extra), daarna zo vroeg mogelijk.
+ * Horizon: max 16 dagen; prio zo vroeg mogelijk.
  * Adviseur-rol: altijd alleen eigen agenda (adviseur_id genegeerd/overschreven).
  */
 export async function GET(req: NextRequest) {
@@ -24,11 +26,16 @@ export async function GET(req: NextRequest) {
 
   const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "5");
   const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 5, 1), 10);
-  // Horizon: komende 2 weken vullen heeft prio (niet verder vooruit aanbieden)
-  const daysRaw = Number(req.nextUrl.searchParams.get("days") || "14");
+  // Horizon: max 16 dagen; vroegste slots hebben prio
+  const daysRaw = Number(
+    req.nextUrl.searchParams.get("days") || String(HUISBEZOEK_PLAN_DAYS_AHEAD)
+  );
   const daysAhead = Math.min(
-    Math.max(Number.isFinite(daysRaw) ? daysRaw : 14, 1),
-    60
+    Math.max(
+      Number.isFinite(daysRaw) ? daysRaw : HUISBEZOEK_PLAN_DAYS_AHEAD,
+      1
+    ),
+    HUISBEZOEK_PLAN_DAYS_AHEAD
   );
 
   let adviseurId =

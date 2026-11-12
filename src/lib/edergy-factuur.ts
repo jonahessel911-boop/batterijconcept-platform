@@ -70,9 +70,18 @@ function normaliseer(raw: unknown): Store {
         project_nummer:
           typeof x.project_nummer === "string" ? x.project_nummer : "",
         klant: x.klant,
-        bedrag_ex: EDERGY_PER_AANVRAAG_EXCL,
-        btw: EDERGY_PER_AANVRAAG_BTW,
-        bedrag_inc: EDERGY_PER_AANVRAAG_INC,
+        bedrag_ex:
+          typeof x.bedrag_ex === "number" && Number.isFinite(x.bedrag_ex)
+            ? x.bedrag_ex
+            : EDERGY_PER_AANVRAAG_EXCL,
+        btw:
+          typeof x.btw === "number" && Number.isFinite(x.btw)
+            ? x.btw
+            : EDERGY_PER_AANVRAAG_BTW,
+        bedrag_inc:
+          typeof x.bedrag_inc === "number" && Number.isFinite(x.bedrag_inc)
+            ? x.bedrag_inc
+            : EDERGY_PER_AANVRAAG_INC,
         created_at:
           typeof x.created_at === "string"
             ? x.created_at
@@ -142,6 +151,9 @@ export async function edergyFactuurPdf(
       nummer: factuur.nummer,
       datumLabel: factuur.datum_label,
       regels: [regel],
+      bedragExcl: factuur.bedrag_ex,
+      bedragBtw: factuur.btw,
+      bedragInc: factuur.bedrag_inc,
     }),
     nummer: factuur.nummer,
   };
@@ -156,6 +168,8 @@ export async function zorgEdergyFactuurBijStap(opts: {
   projectId: string;
   van: string | null;
   naar: string | null;
+  /** Eigen tarief van de WF-operator (incl. btw). Null/undefined = globaal. */
+  operatorTariefInc?: number | null;
 }): Promise<void> {
   const vanRank = stapRank(opts.van);
   const naarRank = stapRank(opts.naar);
@@ -214,6 +228,8 @@ export async function zorgEdergyFactuurBijStap(opts: {
   const store = await lees();
   if (store.facturen.some((f) => f.project_id === opts.projectId)) return;
 
+  const { leesEdergyTariefVoorOperator } = await import("@/lib/edergy-tarief");
+  const tarief = await leesEdergyTariefVoorOperator(opts.operatorTariefInc);
   const now = new Date();
   const jaar = formatInTimeZone(now, TZ, "yyyy");
   const nummer = `${jaar}.${String(store.volgende).padStart(4, "0")}`;
@@ -229,9 +245,9 @@ export async function zorgEdergyFactuurBijStap(opts: {
       plaats: lead?.plaats,
       adviseur,
     }),
-    bedrag_ex: EDERGY_PER_AANVRAAG_EXCL,
-    btw: EDERGY_PER_AANVRAAG_BTW,
-    bedrag_inc: EDERGY_PER_AANVRAAG_INC,
+    bedrag_ex: tarief.perAanvraagExcl,
+    btw: tarief.perAanvraagBtw,
+    bedrag_inc: tarief.perAanvraagInc,
     created_at: now.toISOString(),
   };
   store.facturen.push(factuur);

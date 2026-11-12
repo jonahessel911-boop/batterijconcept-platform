@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { generateAvailableSlots, generateDayBlocks } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  generateDayBlocks,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   appBaseUrl,
@@ -208,12 +212,14 @@ export async function GET(req: NextRequest) {
     const busyRows = await blockingBusySlots(sb, adviseurId);
     const rawSlots = generateAvailableSlots({
       busy: busyRows,
+      daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
     }));
     const rawBlocks = generateDayBlocks({
       busy: busyRows,
+      daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -228,7 +234,9 @@ export async function GET(req: NextRequest) {
       y + 1,
     ]);
     const van = dayKeyAmsterdam(new Date());
-    const tot = dayKeyAmsterdam(addDays(new Date(), 40));
+    const tot = dayKeyAmsterdam(
+      addDays(new Date(), HUISBEZOEK_PLAN_DAYS_AHEAD + 2)
+    );
     const [afgeblokt, vrijgaven] = await Promise.all([
       loadAfblokkingen(sb, {
         adviseurIds: [adviseurId],

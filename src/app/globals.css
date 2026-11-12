@@ -119,6 +119,15 @@ body {
   font-family: var(--font-poppins), system-ui, sans-serif;
 }
 
+/* Warmtefonds-portaal: geen horizontale body-swipe op mobiel */
+.wf-portal-shell {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
+}
+
 .crm-bg {
   background: var(--wash);
 }
@@ -264,6 +273,17 @@ body {
   from {
     opacity: 0;
     transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes werkenbij-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
   }
   to {
     opacity: 1;

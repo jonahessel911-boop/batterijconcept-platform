@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { INSTALLATIE_VIDEO_MAX_BYTES } from "@/lib/installatie-video";
 
 export {
   SCHOUW_FORMULIER_OMSCHRIJVING,
@@ -12,8 +13,18 @@ export {
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_DOC_BYTES = 15 * 1024 * 1024;
 
-function isAllowedFile(file: File, allowPdf: boolean): boolean {
+function isVideoFile(file: File): boolean {
+  if (file.type.startsWith("video/")) return true;
+  return /\.(mp4|mov|webm|m4v)$/i.test(file.name);
+}
+
+function isAllowedFile(
+  file: File,
+  allowPdf: boolean,
+  allowVideo: boolean
+): boolean {
   if (file.type.startsWith("image/")) return true;
+  if (allowVideo && isVideoFile(file)) return true;
   if (allowPdf && (file.type === "application/pdf" || /\.pdf$/i.test(file.name))) {
     return true;
   }
@@ -25,7 +36,7 @@ export async function uploadProjectFotoFile(
   projectId: string,
   file: File,
   omschrijving?: string | null,
-  opts?: { allowPdf?: boolean }
+  opts?: { allowPdf?: boolean; allowVideo?: boolean }
 ): Promise<{
   foto: {
     id: string;
@@ -38,18 +49,26 @@ export async function uploadProjectFotoFile(
   };
 } | { error: string; status: number; detail?: string }> {
   const allowPdf = Boolean(opts?.allowPdf);
-  if (!isAllowedFile(file, allowPdf)) {
+  const allowVideo = Boolean(opts?.allowVideo);
+  if (!isAllowedFile(file, allowPdf, allowVideo)) {
     return {
-      error: allowPdf
-        ? "Alleen afbeeldingen of PDF zijn toegestaan"
-        : "Alleen afbeeldingen zijn toegestaan",
+      error: allowVideo
+        ? "Alleen video (mp4/mov/webm) is toegestaan"
+        : allowPdf
+          ? "Alleen afbeeldingen of PDF zijn toegestaan"
+          : "Alleen afbeeldingen zijn toegestaan",
       status: 400,
     };
   }
 
   const isPdf =
     file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-  const maxBytes = isPdf ? MAX_DOC_BYTES : MAX_IMAGE_BYTES;
+  const isVideo = allowVideo && isVideoFile(file);
+  const maxBytes = isVideo
+    ? INSTALLATIE_VIDEO_MAX_BYTES
+    : isPdf
+      ? MAX_DOC_BYTES
+      : MAX_IMAGE_BYTES;
   if (file.size > maxBytes) {
     return {
       error: `Bestand mag max. ${Math.round(maxBytes / (1024 * 1024))} MB zijn`,
@@ -59,11 +78,16 @@ export async function uploadProjectFotoFile(
 
   const ext =
     file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
-    (isPdf ? "pdf" : "jpg");
+    (isVideo ? "mp4" : isPdf ? "pdf" : "jpg");
   const storage_path = `${projectId}/${Date.now()}-${randomBytes(4).toString("hex")}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
   const contentType =
-    file.type || (isPdf ? "application/pdf" : "application/octet-stream");
+    file.type ||
+    (isVideo
+      ? "video/mp4"
+      : isPdf
+        ? "application/pdf"
+        : "application/octet-stream");
 
   const { error: uploadErr } = await sb.storage
     .from("project-fotos")

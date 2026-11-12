@@ -3,11 +3,13 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 
 function isPublicPath(pathname: string): boolean {
   if (pathname === "/login") return true;
+  if (pathname.startsWith("/werkenbij")) return true;
   if (pathname.startsWith("/offerte/")) return true;
   if (pathname.startsWith("/afspraak/")) return true;
   if (pathname.startsWith("/installatie/")) return true;
   if (pathname.startsWith("/warmtefonds/")) return true;
   if (pathname.startsWith("/track/")) return true;
+  if (pathname.startsWith("/api/werkenbij")) return true;
   if (pathname.startsWith("/api/webhook/")) return true;
   if (pathname.startsWith("/api/unite/webhook")) return true;
   if (pathname.startsWith("/api/fonio/")) return true;

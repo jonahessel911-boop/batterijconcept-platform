@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { buildOffertePdfForId } from "@/lib/offerte-pdf-build";
+import { assertPortalOrderAccess } from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
@@ -10,36 +11,25 @@ export const runtime = "nodejs";
  * Download getekende offerte-PDF voor gekoppelde order (via portaal-token).
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; projectId: string }> }
 ) {
   const { token, projectId } = await ctx.params;
   try {
-    const sb = getSupabaseAdmin();
-    const { data: partner, error: pErr } = await sb
-      .from("installatie_partners")
-      .select("id, actief")
-      .eq("portal_token", token)
-      .single();
-    if (pErr || !partner || !partner.actief) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
-
-    const { data: order, error: oErr } = await sb
-      .from("projecten")
-      .select("id, offerte_id")
-      .eq("id", projectId)
-      .eq("installatie_partner_id", partner.id)
-      .single();
-    if (oErr || !order) {
+    const access = await assertPortalOrderAccess(
+      token,
+      projectId,
+      "id, offerte_id",
+      req
+    );
+    if (!access) {
       return NextResponse.json(
         { error: "Order niet gevonden" },
         { status: 404 }
       );
     }
+    const sb = getSupabaseAdmin();
+    const order = access.order as { id: string; offerte_id: string | null };
     if (!order.offerte_id) {
       return NextResponse.json(
         { error: "Geen offerte gekoppeld aan deze order" },

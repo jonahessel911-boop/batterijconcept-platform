@@ -184,7 +184,7 @@ export function CrmShell() {
       ai: "AI",
       voice_ai: "Voice AI",
       adviseurs: "Adviseurs",
-      partners: "Team",
+      partners: "Business",
       instellingen: "Instellingen",
     };
     const name = pageNames[tab] || "CRM";
@@ -762,11 +762,11 @@ export function CrmShell() {
         klantNaam: string | null;
         adviseurId: string | null;
         adviseurNaam: string | null;
+        deadlineAt: string | null;
       }
     >();
     for (const p of projecten) {
       if (p.status !== "hold_sales_actie" || !p.offerte_id) continue;
-      if (p.betaalwijze === "warmtefonds") continue;
       const lead = p.leads as
         | {
             naam?: string | null;
@@ -790,6 +790,7 @@ export function CrmShell() {
         klantNaam: lead?.naam || null,
         adviseurId,
         adviseurNaam,
+        deadlineAt: p.hold_sales_deadline_at || null,
       });
     }
     return m;
@@ -1383,7 +1384,7 @@ export function CrmShell() {
     },
     creditfacturen: {
       title: "Creditfacturen",
-      sub: "Adviseurs en monteurs · versturen en goedkeuring",
+      sub: "Adviseurs en installatiepartners · versturen en goedkeuring",
     },
     inkomend: {
       title: "Inkomend",
@@ -1421,8 +1422,8 @@ export function CrmShell() {
           : "Dekking op de kaart · 1u-rijden straal · leads per maand",
     },
     partners: {
-      title: "Team",
-      sub: "Medewerkers · monteurs · Warmtefonds · overeenkomsten · uitbetalingen",
+      title: "Business",
+      sub: "Mensen · overeenkomsten · kosten · uitbetalingen",
     },
     instellingen: {
       title: "Instellingen",
@@ -1466,7 +1467,7 @@ export function CrmShell() {
     <div
       className={[
         "crm-bg flex flex-col",
-        tab === "voice_ai"
+        tab === "voice_ai" || tab === "instroom" || tab === "partners"
           ? "h-dvh max-h-dvh overflow-hidden"
           : "min-h-screen",
       ].join(" ")}
@@ -1572,12 +1573,20 @@ export function CrmShell() {
         <main
           className={[
             "flex min-h-0 min-w-0 flex-1 flex-col",
-            tab === "leaderboard" || tab === "voice_ai" || tab === "inbox"
+            tab === "leaderboard" ||
+            tab === "voice_ai" ||
+            tab === "inbox" ||
+            tab === "instroom" ||
+            tab === "partners"
               ? "overflow-hidden px-0 py-0"
               : "overflow-auto px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
           ].join(" ")}
         >
-        {tab !== "leaderboard" && tab !== "voice_ai" && tab !== "inbox" ? (
+        {tab !== "leaderboard" &&
+        tab !== "voice_ai" &&
+        tab !== "inbox" &&
+        tab !== "instroom" &&
+        tab !== "partners" ? (
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -1626,7 +1635,9 @@ export function CrmShell() {
               ? "border-0 bg-black"
               : tab === "voice_ai"
                 ? "border-0 bg-wash"
-                : "border border-line bg-white",
+                : tab === "instroom" || tab === "partners"
+                  ? "border-0 bg-white"
+                  : "border border-line bg-white",
           ].join(" ")}
         >
           {userRol === "installateur" ? (
@@ -1636,15 +1647,18 @@ export function CrmShell() {
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm text-muted">
                 Installateurs werken via het installatieportaal (aparte link per
-                partner). Beheer monteurs onder Team als admin.
+                partner). Beheer installatiepartners onder Business als admin.
               </p>
             </div>
           ) : (
             <>
           <div
             className={[
-              "min-h-0 min-w-0 flex-1",
-              tab === "voice_ai" || tab === "leaderboard"
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              tab === "voice_ai" ||
+              tab === "leaderboard" ||
+              tab === "instroom" ||
+              tab === "partners"
                 ? "overflow-hidden"
                 : "overflow-auto",
             ].join(" ")}
@@ -1854,7 +1868,21 @@ export function CrmShell() {
                   ) : (
                     <SalesLeaderboardPanel />
                   ))}
-                {tab === "instroom" && <RecruitmentPanel />}
+                {tab === "instroom" && (
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
+                      <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
+                        {titles.instroom.title}
+                      </h1>
+                      <p className="mt-0.5 text-sm text-muted">
+                        {titles.instroom.sub}
+                      </p>
+                    </div>
+                    <div className="min-h-0 flex-1">
+                      <RecruitmentPanel />
+                    </div>
+                  </div>
+                )}
                 {tab === "projecten" && (
                   <BackofficePanel
                     projecten={scopedProjecten}
@@ -1912,7 +1940,19 @@ export function CrmShell() {
                     <AdviseursKaartPanel />
                   ))}
                 {tab === "partners" && (
-                  <PartnersPanel onAdviseursChange={loadAdviseurs} />
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
+                      <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
+                        {titles.partners.title}
+                      </h1>
+                      <p className="mt-0.5 text-sm text-muted">
+                        {titles.partners.sub}
+                      </p>
+                    </div>
+                    <div className="min-h-0 flex-1">
+                      <PartnersPanel onAdviseursChange={loadAdviseurs} />
+                    </div>
+                  </div>
                 )}
               </>
             )}

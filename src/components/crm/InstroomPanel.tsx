@@ -7,9 +7,14 @@ import { formatDateTimeNl } from "@/lib/format";
 const STATUS_OPTIONS: Array<{ value: SollicitatieStatus; label: string }> = [
   { value: "nieuw", label: "Nieuw" },
   { value: "geen_contact", label: "Geen contact" },
+  { value: "definitief_geen_contact", label: "Definitief geen contact" },
   { value: "diskwalificatie", label: "Diskwalificatie" },
   { value: "gesprek_gepland", label: "Gesprek gepland" },
   { value: "gesprek_gehad", label: "Gesprek gehad - in beoordeling" },
+  {
+    value: "gesprek_gehad_diskwalificatie",
+    label: "Gesprek gehad - diskwalificatie",
+  },
   { value: "aangenomen_training_gepland", label: "Aangenomen - training gepland" },
   { value: "aangenomen_actief", label: "Aangenomen - actief" },
 ];

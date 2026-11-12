@@ -1,6 +1,7 @@
 /** Opleverformulier installatie — checklist + handtekening monteur. */
 
 import { formatSchouwAdres } from "@/lib/schouw-formulier";
+import { validateSysteemSin } from "@/lib/systeem-sin";
 
 export { formatSchouwAdres as formatOpleverAdres };
 
@@ -51,6 +52,8 @@ export type OpleverFormulierData = {
   datum: string; // yyyy-MM-dd
   projectNummer: string;
   monteurNaam: string;
+  /** Serienummer / SIN van de batterij. */
+  sin: string;
   /** Afgevinkte opleverpunten (alle ids uit OPLEVER_PUNTEN verplicht). */
   afgevinkt: OpleverPuntId[];
   akkoord: boolean;
@@ -71,6 +74,7 @@ export function emptyOpleverFormulier(
     datum: today,
     projectNummer: "",
     monteurNaam: "",
+    sin: "",
     afgevinkt: [],
     akkoord: false,
     handtekeningDataUrl: "",
@@ -91,6 +95,8 @@ export function validateOpleverFormulier(
 ): string | null {
   if (!data.klantNaam.trim()) return "Klantnaam is verplicht";
   if (!data.monteurNaam.trim()) return "Naam van de installateur is verplicht";
+  const sinErr = validateSysteemSin(data.sin);
+  if (sinErr) return sinErr;
   if (!alleOpleverPuntenAfgevinkt(data.afgevinkt)) {
     return "Vink alle opleverpunten af";
   }

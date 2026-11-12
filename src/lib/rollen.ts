@@ -7,6 +7,7 @@ export const GEBRUIKER_ROLLEN = [
   "sales_manager",
   "admin",
   "installateur",
+  "recruiter",
 ] as const;
 
 export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
@@ -18,6 +19,7 @@ export const TEAM_ROLLEN = [
   "adviseur",
   "beller",
   "backoffice",
+  "recruiter",
 ] as const;
 
 export type TeamRol = (typeof TEAM_ROLLEN)[number];
@@ -29,6 +31,7 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   sales_manager: "Sales manager",
   admin: "Admin",
   installateur: "Installateur",
+  recruiter: "Recruiter",
 };
 
 export const teamRolUitleg: Record<TeamRol, string> = {
@@ -41,6 +44,7 @@ export const teamRolUitleg: Record<TeamRol, string> = {
     "Callcenter: leads, bellen, agenda alle adviseurs, eigen bel-rapportage",
   backoffice:
     "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing, adviseurs-contact",
+  recruiter: "Alleen Recruitment: sollicitaties, vacatures, trainingen, KPI’s",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -50,7 +54,8 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
     value === "backoffice" ||
     value === "sales_manager" ||
     value === "admin" ||
-    value === "installateur"
+    value === "installateur" ||
+    value === "recruiter"
   ) {
     return value;
   }
@@ -115,6 +120,9 @@ export function tabsVoorRol(
     case "installateur":
       tabs = [];
       break;
+    case "recruiter":
+      tabs = ["instroom"];
+      break;
     case "admin":
     default:
       tabs = [
@@ -138,10 +146,11 @@ export function tabsVoorRol(
       ];
       break;
   }
-  // Today: jona@ of sales_manager-rol
+  // Today: jona@ of sales_manager-rol (niet voor recruiter-only)
   if (
-    opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
-    rol === "sales_manager"
+    rol !== "recruiter" &&
+    (opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
+      rol === "sales_manager")
   ) {
     tabs = ["today", ...tabs.filter((t) => t !== "today")];
   }
@@ -194,6 +203,12 @@ export function agendaIsInstallatie(_rol: GebruikerRol): boolean {
 /** Mag inkomende facturen bekijken/bewerken. */
 export function magInkomend(rol: GebruikerRol): boolean {
   return rol === "admin" || rol === "backoffice";
+}
+
+/** Mag Recruitment (instroom) bekijken/bewerken. */
+export function magRecruitment(rol: GebruikerRol | string | null | undefined): boolean {
+  const r = normalizeRol(rol);
+  return r === "admin" || r === "recruiter";
 }
 
 /** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */

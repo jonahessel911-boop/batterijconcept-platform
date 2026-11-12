@@ -2225,7 +2225,7 @@ export function buildManagementDashboard(
         { id: "opstarten_voltooid_afwachten_wf", label: "Afwachten WF" },
         { id: "schouwdag_ingepland", label: "Schouw gepland" },
         { id: "schouw_voltooid", label: "Schouw voltooid" },
-        { id: "restfactuur_verstuurd", label: "Factuur WF / Restfactuur" },
+        { id: "restfactuur_verstuurd", label: "WF declaratie / Restfactuur" },
         { id: "restfactuur_betaald", label: "Restfactuur betaald" },
         { id: "materiaal_besteld", label: "Materiaal besteld" },
         { id: "installatie_ingepland", label: "Installatie ingepland" },

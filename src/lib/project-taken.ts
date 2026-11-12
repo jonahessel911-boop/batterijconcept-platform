@@ -77,12 +77,13 @@ function kickoffAutoTaken(
       dueInDays: 1,
     });
   }
-  // WF: schouwweek parallel. EM: schouwdag pas ná 50% betaling (of geen aanbetaling).
+  // WF: schouwweek = klant-indicatie (± wanneer), geen echte planning-actie.
+  // EM: wel meteen de exacte schouwdag.
   if (warmtefonds || opts.aanbetalingBetaald || opts.geenAanbetalingNodig) {
     taken.push({
       autoKey: "kickoff:schouwweek",
       titel: warmtefonds
-        ? "Schouwweek inplannen + track & trace (±5 weken)"
+        ? "Schouwweek-indicatie zetten + track & trace (±5 weken)"
         : "Schouwdag inplannen + track & trace",
       afdeling: "Planning",
       dueInDays: 1,

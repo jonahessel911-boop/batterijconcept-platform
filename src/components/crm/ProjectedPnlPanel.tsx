@@ -189,8 +189,9 @@ function ForecastSection({ forecast }: { forecast: PnlForecast }) {
           {fmtPct(forecast.inkoopPct)} van omzet en ads {formatEuro(forecast.cpl)}{" "}
           per lead uit de laatste 90 dagen. Installatie{" "}
           {formatEuro(forecast.installatiePerOrder)} per order. Salescommissie
-          volgt het commissiepercentage van de adviseur. Edergy is €375 × het
-          aandeel Warmtefonds-orders van de laatste 90 dagen. Commissie ops is de
+          volgt het commissiepercentage van de adviseur. Edergy is de
+          admin-vergoeding × het aandeel Warmtefonds-orders van de laatste 90
+          dagen. Commissie ops is de
           vaste weekfee van Rik, €10 per afspraak voor Simon en €2,50
           bonus voor Rik per afspraak die Simon inplant.
         </p>

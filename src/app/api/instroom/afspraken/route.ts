@@ -10,7 +10,9 @@ import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { sendEmail } from "@/lib/email/postmark";
 import { sollicitatieGesprekBevestigingEmail } from "@/lib/email/templates";
+import { RECRUITMENT_GESPREK_LOCATIE } from "@/lib/sollicitatie";
 import type { SollicitatieAfspraakSoort } from "@/types/database";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -51,6 +53,11 @@ function parseStartAt(raw: string): Date | null {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const sp = req.nextUrl.searchParams;
     const from = pickStr(sp.get("from"));
@@ -93,12 +100,26 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const sollicitatieId = pickStr(body.sollicitatie_id);
     const startRaw = pickStr(body.start_at);
+    const endRaw = pickStr(body.end_at);
+    const interviewerId = pickStr(body.interviewer_id);
     const soort = parseSoort(body.soort) || "telefonisch";
     const notitie = pickStr(body.notitie);
+    const locatie =
+      soort === "fysiek"
+        ? pickStr(body.locatie) || RECRUITMENT_GESPREK_LOCATIE
+        : null;
+    const duurMinRaw = Number(body.duur_min);
+    const duurMin =
+      Number.isFinite(duurMinRaw) && duurMinRaw > 0 ? duurMinRaw : 30;
 
     if (!sollicitatieId || !startRaw) {
       return NextResponse.json(
@@ -111,6 +132,9 @@ export async function POST(req: NextRequest) {
     if (!start) {
       return NextResponse.json({ error: "Ongeldige start_at" }, { status: 400 });
     }
+    const end =
+      (endRaw ? parseStartAt(endRaw) : null) ||
+      new Date(start.getTime() + duurMin * 60_000);
 
     const sb = getSupabaseAdmin();
 
@@ -127,16 +151,76 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { data, error } = await sb
-      .from("sollicitatie_afspraken")
-      .insert({
-        sollicitatie_id: sollicitatieId,
-        start_at: start.toISOString(),
-        soort,
-        notitie,
-      })
-      .select("*, sollicitaties(id, naam, email, telefoon, functie, status)")
-      .single();
+    const insertBase = {
+      sollicitatie_id: sollicitatieId,
+      start_at: start.toISOString(),
+      soort,
+      notitie,
+      ...(locatie ? { locatie } : {}),
+    };
+
+    let data: Record<string, unknown> | null = null;
+    let error: { code?: string; message?: string } | null = null;
+
+    {
+      const full = await sb
+        .from("sollicitatie_afspraken")
+        .insert({
+          ...insertBase,
+          end_at: end.toISOString(),
+          interviewer_id: interviewerId,
+        })
+        .select("*, sollicitaties(id, naam, email, telefoon, functie, status)")
+        .single();
+      data = full.data as Record<string, unknown> | null;
+      error = full.error;
+    }
+
+    if (
+      error &&
+      (error.code === "42703" ||
+        error.message?.includes("locatie") ||
+        error.message?.includes("interviewer_id") ||
+        error.message?.includes("end_at"))
+    ) {
+      const { locatie: _loc, ...withoutLocatie } = insertBase;
+      const softPayload =
+        error.message?.includes("locatie") || error.code === "42703"
+          ? withoutLocatie
+          : insertBase;
+      const soft = await sb
+        .from("sollicitatie_afspraken")
+        .insert(
+          error.message?.includes("interviewer_id") ||
+            error.message?.includes("end_at")
+            ? softPayload
+            : {
+                ...softPayload,
+                end_at: end.toISOString(),
+                interviewer_id: interviewerId,
+              }
+        )
+        .select("*, sollicitaties(id, naam, email, telefoon, functie, status)")
+        .single();
+      data = soft.data as Record<string, unknown> | null;
+      error = soft.error;
+      if (
+        error &&
+        (error.code === "42703" ||
+          error.message?.includes("interviewer_id") ||
+          error.message?.includes("end_at"))
+      ) {
+        const bare = await sb
+          .from("sollicitatie_afspraken")
+          .insert(withoutLocatie)
+          .select(
+            "*, sollicitaties(id, naam, email, telefoon, functie, status)"
+          )
+          .single();
+        data = bare.data as Record<string, unknown> | null;
+        error = bare.error;
+      }
+    }
 
     if (error) {
       if (error.code === "42P01") {
@@ -173,11 +257,23 @@ export async function POST(req: NextRequest) {
     const to = sol.email?.trim() || null;
     if (to) {
       try {
+        let interviewerNaam: string | null = null;
+        if (interviewerId) {
+          const { data: adv } = await sb
+            .from("adviseurs")
+            .select("naam")
+            .eq("id", interviewerId)
+            .maybeSingle();
+          interviewerNaam = (adv?.naam as string | null) || null;
+        }
         const html = sollicitatieGesprekBevestigingEmail({
           naam: sol.naam,
           startAt: start,
           soort,
           functie: sol.functie,
+          interviewerNaam,
+          duurMin,
+          locatie,
         });
         const sent = await sendEmail({
           to,

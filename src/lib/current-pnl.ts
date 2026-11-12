@@ -29,8 +29,8 @@ import {
 } from "@/lib/schouw-week";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import {
-  EDERGY_PER_AANVRAAG_INC,
   EDERGY_VANAF_YMD,
+  leesEdergyTarief,
 } from "@/lib/edergy-tarief";
 import {
   linesFromMetrics,
@@ -307,6 +307,7 @@ export async function buildCurrentPnl(
     adviseursRes,
     instRes,
     afsprakenRaw,
+    edergyTarief,
   ] = await Promise.all([
       // Breed ophalen op factuurdatum/betaald_op-prefix; exacte betaal-ymd filteren we in JS
       fetchAllRows<FactuurRow>((fromIdx, toIdx) =>
@@ -372,7 +373,9 @@ export async function buildCurrentPnl(
           .order("created_at", { ascending: true })
           .range(fromIdx, toIdx)
       ).catch(() => [] as OpsCommissieAfspraak[]),
+      leesEdergyTarief(),
     ]);
+  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
 
   const facturen = facturenRaw.filter((f) => {
     const ymd = factuurBetaalYmd(f);
@@ -584,8 +587,8 @@ export async function buildCurrentPnl(
       !edergyGeboekt.has(oid)
     ) {
       edergyGeboekt.add(oid);
-      wa.edergy += EDERGY_PER_AANVRAAG_INC;
-      ma.edergy += EDERGY_PER_AANVRAAG_INC;
+      wa.edergy += edergyPerAanvraag;
+      ma.edergy += edergyPerAanvraag;
     }
     ma.omzet += paid;
     ma.inkoop += inkoop;
@@ -653,7 +656,7 @@ export async function buildCurrentPnl(
       endYmd: w.endYmd,
       ...m,
       opsDetail,
-      lines: linesFromMetrics(m, opsDetail),
+      lines: linesFromMetrics(m, opsDetail, edergyPerAanvraag),
     };
   });
 

@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/warmtefonds/[token]/orders/[projectId]/offerte
- * Getekende offerte-PDF voor de operator (via portaal-token).
+ * Offerte-PDF (concept of ondertekend) voor de operator via portaal-token.
  */
 export async function GET(
   _req: NextRequest,
@@ -59,14 +59,13 @@ export async function GET(
         { status: 404 }
       );
     }
-    if (offerte.status !== "ondertekend") {
-      return NextResponse.json(
-        { error: "Offerte is nog niet ondertekend" },
-        { status: 404 }
-      );
-    }
+
+    const getekend =
+      offerte.status === "ondertekend" ||
+      Boolean(offerte.ondertekend_op && offerte.ondertekend_handtekening);
 
     const sign =
+      getekend &&
       offerte.ondertekend_naam &&
       offerte.ondertekend_op &&
       offerte.ondertekend_handtekening

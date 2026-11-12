@@ -8,7 +8,7 @@ import {
 } from "@/lib/labels";
 import {
   PROJECT_STATUS_BY_KEY,
-  PROJECT_STATUS_FASE_LABEL,
+  faseLabelFor,
   projectPipelineFor,
   toOperationalStatus,
   type Betaalwijze,
@@ -135,7 +135,7 @@ export function ProjectStatusPath({
                   </svg>
                 </span>
                 <span className="font-medium">
-                  {PROJECT_STATUS_FASE_LABEL[group.fase]}
+                  {faseLabelFor(group.fase, betaalwijze)}
                 </span>
               </div>
             );
@@ -149,7 +149,7 @@ export function ProjectStatusPath({
                   groupActive ? "text-[#0F766E]" : "text-muted",
                 ].join(" ")}
               >
-                {PROJECT_STATUS_FASE_LABEL[group.fase]}
+                {faseLabelFor(group.fase, betaalwijze)}
               </p>
               <ol className="space-y-0.5">
                 {group.steps.map((step) => {

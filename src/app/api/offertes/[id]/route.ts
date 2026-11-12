@@ -308,7 +308,8 @@ export async function PATCH(
           .in("soort", ["nieuw", "vervolg_fysiek"]);
       }
 
-      // Concept-aanbetalingsfactuur pas hier: doorgezet naar BO met juiste bedrag
+      // Concept-aanbetalingsfactuur pas hier: doorgezet naar BO met juiste bedrag.
+      // Handmatig / te_innen €0 → géén factuur (WF én EM).
       await ensureBtwDraftFactuur(sb, {
         offerteId: offerte.id,
         leadId: offerte.lead_id,
@@ -322,6 +323,10 @@ export async function PATCH(
         aanbetalingBedragInc:
           offerte.aanbetaling_bedrag_inc != null
             ? Number(offerte.aanbetaling_bedrag_inc)
+            : null,
+        aanbetalingTeInnenInc:
+          offerte.aanbetaling_te_innen_inc != null
+            ? Number(offerte.aanbetaling_te_innen_inc)
             : null,
       });
     }

@@ -79,11 +79,38 @@ export type ServiceVerzoekStatus = "open" | "afgehandeld";
 export type SollicitatieStatus =
   | "nieuw"
   | "geen_contact"
+  | "definitief_geen_contact"
   | "diskwalificatie"
   | "gesprek_gepland"
   | "gesprek_gehad"
+  | "gesprek_gehad_diskwalificatie"
   | "aangenomen_training_gepland"
   | "aangenomen_actief";
+
+export type RecruitmentRol =
+  | "adviseur_sales"
+  | "appointment_setter"
+  | "installateur"
+  | "monteur"
+  | "am_maintenance"
+  | "bezorger"
+  | "overig";
+
+export type RecruitmentVacatureStatus = "open" | "dicht";
+
+export interface RecruitmentVacature {
+  id: string;
+  titel: string;
+  rol: RecruitmentRol | string;
+  status: RecruitmentVacatureStatus;
+  korte_omschrijving: string | null;
+  lander_url: string | null;
+  /** Multi-step Werkenbij-formulier (JSON). */
+  form?: unknown | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
 
 export type CrmTab =
   | "today"
@@ -124,7 +151,8 @@ export type GebruikerRol =
   | "sales_manager"
   | "admin"
   | "installateur"
-  | "beller";
+  | "beller"
+  | "recruiter";
 
 export interface Adviseur {
   id: string;
@@ -233,6 +261,28 @@ export interface AdviseurCreditFactuurRegel {
   omschrijving: string | null;
   factuur_nummer?: string | null;
   lead_naam?: string | null;
+}
+
+export type AdviseurKostenSoort = "voorschot" | "kosten" | "correctie";
+export type AdviseurKostenStatus = "open" | "ingedekt" | "geannuleerd";
+
+/** Voorschot/kosten per medewerker — aftrekbaar op wekelijkse creditfactuur. */
+export interface AdviseurKosten {
+  id: string;
+  adviseur_id: string;
+  soort: AdviseurKostenSoort;
+  omschrijving: string;
+  bedrag_ex_btw: number;
+  status: AdviseurKostenStatus;
+  kosten_datum: string;
+  creditfactuur_id: string | null;
+  ingedekt_op: string | null;
+  aangemaakt_door: string | null;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
+  adviseur_naam?: string | null;
+  factuur_nummer?: string | null;
 }
 
 export interface PartnerCreditFactuur {
@@ -501,8 +551,46 @@ export interface InstallatiePartnerTeamgenoot {
   email: string | null;
   telefoon: string | null;
   actief: boolean;
+  /** Legacy portal-token (deep link); login gaat via e-mail + wachtwoord. */
+  portal_token?: string | null;
+  invite_sent_at?: string | null;
+  /** beheerder = team+facturen; monteur = alleen agenda */
+  rol?: "beheerder" | "monteur" | null;
+  kan_schouw?: boolean | null;
+  kan_installatie?: boolean | null;
+  leeftijd?: number | null;
+  /** JSON array merknamen, bijv. ["Tesla","BYD"] */
+  merken_ervaring?: string[] | null;
+  /** JSON array NL-provincies waar monteur inzetbaar is. */
+  regios?: string[] | null;
+  foto_storage_path?: string | null;
+  foto_bestandsnaam?: string | null;
+  foto_uploaded_at?: string | null;
+  dossier_compleet?: boolean | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Installatiekoppel: 2 monteurs + gedeelde beoordeling */
+export interface InstallatiePartnerKoppel {
+  id: string;
+  partner_id: string;
+  naam: string;
+  monteur_1_id?: string | null;
+  monteur_2_id?: string | null;
+  beoordeling_sterren?: number | null;
+  beoordeling_notitie?: string | null;
+  actief?: boolean | null;
+  created_at: string;
+  updated_at: string;
+  monteur_1?: Pick<
+    InstallatiePartnerTeamgenoot,
+    "id" | "naam" | "email" | "regios" | "actief" | "kan_installatie"
+  > | null;
+  monteur_2?: Pick<
+    InstallatiePartnerTeamgenoot,
+    "id" | "naam" | "email" | "regios" | "actief" | "kan_installatie"
+  > | null;
 }
 
 export interface Offerte {
@@ -594,6 +682,19 @@ export interface Project {
   monteur: string | null;
   /** Gekoppelde monteur (teamgenoot) van de installatiepartner. */
   installatie_teamgenoot_id?: string | null;
+  /** AlphaESS systeem SIN (15 tekens, start met AL) — via oplevering. */
+  systeem_sin?: string | null;
+  /** Admin-beoordeling 0–5 sterren voor de monteur op deze klus. */
+  monteur_beoordeling_sterren?: number | null;
+  /** Interne notitie bij monteur-beoordeling. */
+  monteur_beoordeling_notitie?: string | null;
+  monteur_beoordeling_op?: string | null;
+  monteur_beoordeling_door?: string | null;
+  /** CRM: klantvriendelijkheid installateur (zichtbaar voor partner). */
+  klantvriendelijkheid_sterren?: number | null;
+  klantvriendelijkheid_notitie?: string | null;
+  klantvriendelijkheid_op?: string | null;
+  klantvriendelijkheid_door?: string | null;
   notities: string | null;
   projectkosten: number;
   /** Warmtefonds of eigen middelen — bepaalt beschikbare statussen. */
@@ -659,6 +760,7 @@ export interface Project {
   financiering_status?:
     | "doorgestuurd_naar_edwin"
     | "documenten_aanleveren"
+    | "contact_verstuurd"
     | "in_behandeling"
     | "aanbod_ondertekenen"
     | "declaratie_indienen"
@@ -671,6 +773,8 @@ export interface Project {
     | null;
   /** Interne datum/tijd Warmtefonds-afspraak (geen mail). */
   warmtefonds_afspraak_at?: string | null;
+  /** Aantal contactpogingen vanuit WF-portaal (Contact-knop). */
+  warmtefonds_contact_pogingen?: number | null;
   /** Afleveradres voor materiaalinkoop. */
   leveradres?: string | null;
   /**
@@ -700,6 +804,11 @@ export interface Project {
    * annuleringsfactuur verstuurd / gecontroleerd.
    */
   annulering_keuze_gecontroleerd_at?: string | null;
+  /**
+   * Uiterlijk moment waarop sales HOLD moet afhandelen.
+   * Na verlopen → BO-actie HOLD sales verlopen.
+   */
+  hold_sales_deadline_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -772,6 +881,11 @@ export interface Sollicitatie {
   straat?: string | null;
   plaats?: string | null;
   training_moment_id?: string | null;
+  vacature_id?: string | null;
+  /** Belpogingen (geen contact) — max 3. */
+  belpogingen?: number | null;
+  belpogingen_vandaag?: number | null;
+  laatst_gebeld_at?: string | null;
   raw_payload?: unknown;
   created_at: string;
   updated_at: string;
@@ -785,14 +899,22 @@ export interface SollicitatieAfspraak {
   id: string;
   sollicitatie_id: string;
   start_at: string;
+  end_at?: string | null;
+  interviewer_id?: string | null;
   soort: SollicitatieAfspraakSoort;
+  /** Adres bij fysiek gesprek (standaard Daltonlaan 500, Utrecht). */
+  locatie?: string | null;
   notitie: string | null;
+  /** Herinneringsmail ~2 dagen voor start. */
+  herinnering_verstuurd?: boolean | null;
   created_at: string;
   updated_at: string;
   sollicitaties?: Pick<
     Sollicitatie,
     "id" | "naam" | "email" | "telefoon" | "functie" | "status"
   > | null;
+  interviewer?: Pick<Adviseur, "id" | "naam" | "email"> | null;
+  adviseurs?: Pick<Adviseur, "id" | "naam" | "email"> | null;
 }
 
 export type SollicitatieTaakStatus = "todo" | "doing" | "done";
@@ -893,12 +1015,22 @@ export interface ProjectFoto {
 
 export type ProjectTaakStatus = "todo" | "doing" | "done";
 
+export type TaakCategorie =
+  | "project"
+  | "facturatie"
+  | "bellen"
+  | "email"
+  | "kantoor"
+  | "overig";
+
 export interface ProjectTaak {
   id: string;
   project_id: string;
   titel: string;
   status: ProjectTaakStatus;
   afdeling: string;
+  /** Handmatige categorie (default project). */
+  categorie?: TaakCategorie | null;
   verantwoordelijke_id: string | null;
   due_at: string | null;
   auto_key: string | null;
@@ -924,7 +1056,8 @@ export type BackofficeActieEventSoort =
   | "nabellen_factuur"
   | "herplan_afspraak"
   | "aangetekende_brief"
-  | "annulering_keuze_controle";
+  | "annulering_keuze_controle"
+  | "hold_sales_verlopen";
 
 export interface BackofficeActieEvent {
   id: string;

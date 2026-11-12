@@ -13,8 +13,8 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
 import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import {
-  EDERGY_PER_AANVRAAG_INC,
   EDERGY_VANAF_YMD,
+  leesEdergyTarief,
 } from "@/lib/edergy-tarief";
 import { commissiePctToFraction } from "@/lib/netto-boord";
 import { normalizeProjectStatus } from "@/lib/labels";
@@ -248,7 +248,8 @@ function opsChildrenFromDetail(
 
 export function linesFromMetrics(
   m: PnlMetrics,
-  opsDetail?: OpsCommissieBreakdown | null
+  opsDetail?: OpsCommissieBreakdown | null,
+  edergyPerAanvraag = 375
 ): PnlLine[] {
   const opsKids = opsChildrenFromDetail(opsDetail);
   return [
@@ -276,7 +277,7 @@ export function linesFromMetrics(
     { key: "ads", label: "Ad spend", bedrag: -m.ad_spend, tone: "neg" },
     {
       key: "edergy",
-      label: "Edergy (€375 / aanvraag)",
+      label: `Edergy (€${Math.round(edergyPerAanvraag)} / aanvraag)`,
       bedrag: -m.edergy,
       tone: "neg",
     },
@@ -415,6 +416,7 @@ export async function buildProjectedPnl(
     adviseursRes,
     instRes,
     afsprakenRaw,
+    edergyTarief,
   ] = await Promise.all([
       fetchAllRows<OfferteRow>((fromIdx, toIdx) =>
         sb
@@ -479,7 +481,9 @@ export async function buildProjectedPnl(
           .order("created_at", { ascending: true })
           .range(fromIdx, toIdx)
       ).catch(() => [] as OpsCommissieAfspraak[]),
+      leesEdergyTarief(),
     ]);
+  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
 
   // P&L = totale adkosten: alle campagnes (niet alleen lead-campagne).
   // Fallback: account-level als campaign-rijen leeg/0 zijn.
@@ -604,8 +608,8 @@ export async function buildProjectedPnl(
     wa.installatie += installatie;
     wa.sales_commissie += commissie;
     if (isWarmtefondsOrder(proj) && ymd >= EDERGY_VANAF_YMD) {
-      wa.edergy += EDERGY_PER_AANVRAAG_INC;
-      ma.edergy += EDERGY_PER_AANVRAAG_INC;
+      wa.edergy += edergyPerAanvraag;
+      ma.edergy += edergyPerAanvraag;
     }
     ma.orders += 1;
     ma.omzet += omzet;
@@ -676,7 +680,7 @@ export async function buildProjectedPnl(
       endYmd: w.endYmd,
       ...m,
       opsDetail,
-      lines: linesFromMetrics(m, opsDetail),
+      lines: linesFromMetrics(m, opsDetail, edergyPerAanvraag),
     };
   });
 
