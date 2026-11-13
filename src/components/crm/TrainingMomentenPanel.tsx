@@ -4,6 +4,19 @@ import { useCallback, useEffect, useState } from "react";
 import type { TrainingMoment, TrainingMomentDag } from "@/types/database";
 import { RECRUITMENT_TRAINING_LOCATIE } from "@/lib/sollicitatie";
 import { formatDateShort } from "@/lib/format";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 type DagDraft = {
   key: string;
@@ -36,30 +49,6 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
     <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
       {children}
     </span>
-  );
-}
-
-function SoftInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={[
-        "w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none transition focus:border-green",
-        props.className || "",
-      ].join(" ")}
-    />
-  );
-}
-
-function SoftTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={[
-        "w-full resize-y border border-line bg-white px-3.5 py-3 text-sm leading-relaxed text-ink outline-none transition focus:border-green disabled:opacity-50",
-        props.className || "",
-      ].join(" ")}
-    />
   );
 }
 
@@ -110,8 +99,6 @@ export function TrainingMomentFormModal({
     setError(null);
   }, [open, initial]);
 
-  if (!open) return null;
-
   function updateDag(key: string, patch: Partial<DagDraft>) {
     setDagen((list) =>
       list.map((d) => (d.key === key ? { ...d, ...patch } : d))
@@ -134,7 +121,7 @@ export function TrainingMomentFormModal({
     }
     for (let i = 0; i < dagen.length; i++) {
       const d = dagen[i];
-      if (!d.datum || !d.start_tijd || !d.eind_tijd) {
+      if (!d?.datum || !d.start_tijd || !d.eind_tijd) {
         setError(`Dag ${i + 1}: vul datum en tijden in`);
         return;
       }
@@ -180,166 +167,167 @@ export function TrainingMomentFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
-      <button
-        type="button"
-        className="absolute inset-0 cursor-default"
-        aria-label="Sluiten"
-        onClick={onClose}
-      />
-      <form
-        onSubmit={submit}
-        className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto border border-line bg-white p-6 shadow-lg"
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto sm:max-w-lg"
+        showCloseButton
       >
-        <h2 className="font-display text-xl tracking-tight text-ink">
-          {initial ? "Training bewerken" : "Trainingmoment aanmaken"}
-        </h2>
-        <p className="mt-1 text-sm text-muted">
-          Voeg dagen toe met datum, tijden en planning per dag.
-        </p>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>
+              {initial ? "Training bewerken" : "Training maken"}
+            </DialogTitle>
+            <DialogDescription>
+              Voeg dagen toe met datum, tijden en planning per dag.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="mt-5 flex flex-col gap-3.5">
-          <label className="block">
-            <FieldLabel>Naam *</FieldLabel>
-            <SoftInput
-              value={naam}
-              onChange={(e) => setNaam(e.target.value)}
-              placeholder="Bijv. Onboarding maart 2026"
-              autoFocus
-              required
-            />
-          </label>
-          <label className="block">
-            <FieldLabel>Adres</FieldLabel>
-            <SoftInput
-              value={adres}
-              onChange={(e) => setAdres(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <FieldLabel>Wat gaan we doen? *</FieldLabel>
-            <SoftTextarea
-              value={inhoud}
-              onChange={(e) => setInhoud(e.target.value)}
-              rows={4}
-              required
-              placeholder="Productkennis, salespitch, schaduwdag, systemen…"
-            />
-          </label>
-
-          <div className="border border-line">
-            <div className="flex items-center justify-between border-b border-line bg-wash/60 px-3 py-2.5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Dagen
-              </p>
-              <button
-                type="button"
-                onClick={() => setDagen((list) => [...list, emptyDag()])}
-                className="text-xs font-semibold text-green-deeper hover:underline"
-              >
-                + Dag toevoegen
-              </button>
+          <div className="grid gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="tm-naam">Naam *</Label>
+              <Input
+                id="tm-naam"
+                value={naam}
+                onChange={(e) => setNaam(e.target.value)}
+                placeholder="Bijv. Onboarding maart 2026"
+                autoFocus
+                required
+              />
             </div>
-            <div className="flex flex-col gap-4 p-3">
-              {dagen.map((d, idx) => (
-                <div
-                  key={d.key}
-                  className="border border-line bg-wash/30 p-3"
+            <div className="space-y-1.5">
+              <Label htmlFor="tm-adres">Adres</Label>
+              <Input
+                id="tm-adres"
+                value={adres}
+                onChange={(e) => setAdres(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="tm-inhoud">Wat gaan we doen? *</Label>
+              <Textarea
+                id="tm-inhoud"
+                value={inhoud}
+                onChange={(e) => setInhoud(e.target.value)}
+                rows={4}
+                required
+                placeholder="Productkennis, salespitch, schaduwdag, systemen…"
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-lg ring-1 ring-line">
+              <div className="flex items-center justify-between border-b border-line bg-wash/60 px-3 py-2.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Dagen
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDagen((list) => [...list, emptyDag()])}
                 >
-                  <div className="mb-2 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-ink">
-                      Dag {idx + 1}
-                    </p>
-                    {dagen.length > 1 ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDagen((list) =>
-                            list.filter((x) => x.key !== d.key)
-                          )
+                  + Dag toevoegen
+                </Button>
+              </div>
+              <div className="flex flex-col gap-3 p-3">
+                {dagen.map((d, idx) => (
+                  <div
+                    key={d.key}
+                    className="rounded-lg bg-wash/30 p-3 ring-1 ring-line"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-ink">
+                        Dag {idx + 1}
+                      </p>
+                      {dagen.length > 1 ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() =>
+                            setDagen((list) =>
+                              list.filter((x) => x.key !== d.key)
+                            )
+                          }
+                        >
+                          Verwijderen
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <Label>Datum *</Label>
+                        <Input
+                          type="date"
+                          value={d.datum}
+                          onChange={(e) =>
+                            updateDag(d.key, { datum: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Start *</Label>
+                        <Input
+                          type="time"
+                          value={d.start_tijd}
+                          onChange={(e) =>
+                            updateDag(d.key, { start_tijd: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Eind *</Label>
+                        <Input
+                          type="time"
+                          value={d.eind_tijd}
+                          onChange={(e) =>
+                            updateDag(d.key, { eind_tijd: e.target.value })
+                          }
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-2 space-y-1.5">
+                      <Label>Planning die dag</Label>
+                      <Textarea
+                        value={d.planning}
+                        onChange={(e) =>
+                          updateDag(d.key, { planning: e.target.value })
                         }
-                        className="text-xs font-medium text-muted hover:text-[#9B2C2C]"
-                      >
-                        Verwijderen
-                      </button>
-                    ) : null}
+                        rows={3}
+                        placeholder="Bijv. 09:00 intro, 11:00 productdemo…"
+                      />
+                    </div>
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    <label className="block sm:col-span-1">
-                      <FieldLabel>Datum *</FieldLabel>
-                      <SoftInput
-                        type="date"
-                        value={d.datum}
-                        onChange={(e) =>
-                          updateDag(d.key, { datum: e.target.value })
-                        }
-                        required
-                      />
-                    </label>
-                    <label className="block">
-                      <FieldLabel>Start *</FieldLabel>
-                      <SoftInput
-                        type="time"
-                        value={d.start_tijd}
-                        onChange={(e) =>
-                          updateDag(d.key, { start_tijd: e.target.value })
-                        }
-                        required
-                      />
-                    </label>
-                    <label className="block">
-                      <FieldLabel>Eind *</FieldLabel>
-                      <SoftInput
-                        type="time"
-                        value={d.eind_tijd}
-                        onChange={(e) =>
-                          updateDag(d.key, { eind_tijd: e.target.value })
-                        }
-                        required
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-2 block">
-                    <FieldLabel>Planning die dag</FieldLabel>
-                    <SoftTextarea
-                      value={d.planning}
-                      onChange={(e) =>
-                        updateDag(d.key, { planning: e.target.value })
-                      }
-                      rows={3}
-                      placeholder="Bijv. 09:00 intro, 11:00 productdemo…"
-                    />
-                  </label>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
-        </div>
 
-        {error && (
-          <p className="mt-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-            {error}
-          </p>
-        )}
+          {error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
 
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="border border-line px-4 py-2.5 text-sm font-medium text-muted hover:bg-wash"
-          >
-            Annuleren
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-green px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-60"
-          >
-            {saving ? "Bezig…" : initial ? "Opslaan" : "Aanmaken"}
-          </button>
-        </div>
-      </form>
-    </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Annuleren
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Bezig…" : initial ? "Opslaan" : "Aanmaken"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

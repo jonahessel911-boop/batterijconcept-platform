@@ -150,6 +150,9 @@ function MetricsCells({
         {formatEuro(m.ad_spend)}
       </td>
       <td className={`${base} whitespace-nowrap text-right text-muted`}>
+        {formatEuro(m.edergy)}
+      </td>
+      <td className={`${base} whitespace-nowrap text-right text-muted`}>
         {formatEuro(m.totale_kosten)}
       </td>
       <td
@@ -186,9 +189,11 @@ function ForecastSection({ forecast }: { forecast: PnlForecast }) {
           {fmtPct(forecast.inkoopPct)} van omzet en ads {formatEuro(forecast.cpl)}{" "}
           per lead uit de laatste 90 dagen. Installatie{" "}
           {formatEuro(forecast.installatiePerOrder)} per order. Salescommissie
-          volgt het commissiepercentage van de adviseur. Commissie ops is de
-          vaste weekfee van Tarik, €10 per afspraak voor Sharath en €2,50
-          bonus voor Tarik per afspraak die Sharath inplant.
+          volgt het commissiepercentage van de adviseur. Edergy is de
+          admin-vergoeding × het aandeel Warmtefonds-orders van de laatste 90
+          dagen. Commissie ops is de
+          vaste weekfee van Rik, €10 per afspraak voor Simon en €2,50
+          bonus voor Rik per afspraak die Simon inplant.
         </p>
       </header>
       <div className="min-w-0 max-w-full overflow-x-auto p-3 sm:p-4">
@@ -256,6 +261,7 @@ const METRIC_HEADERS = (
     <th className={sheetHead}>Sales com.</th>
     <th className={sheetHead}>Com. ops</th>
     <th className={sheetHead}>Ads</th>
+    <th className={sheetHead}>Edergy</th>
     <th className={sheetHead}>Kosten</th>
     <th className={sheetHead}>Winst</th>
     <th className={sheetHead}>Marge</th>
@@ -401,6 +407,11 @@ function TrendChart({
           label: "Ads",
           value: formatEuro(tip.ad_spend),
           delta: tipDeltas?.ads ?? null,
+        },
+        {
+          label: "Edergy",
+          value: formatEuro(tip.edergy),
+          delta: null,
         },
         {
           label: "Winst",

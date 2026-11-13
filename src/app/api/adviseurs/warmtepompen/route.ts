@@ -7,6 +7,7 @@ import { normalizeRol } from "@/lib/rollen";
 import {
   WARMTEPOMP_CATALOGUS,
   WARMTEPOMP_MERK,
+  WARMTEPOMP_OPSLAAG_INCL,
   warmtepompSku,
   warmtepompSkusVoorAdviseur,
   warmtepompVerkoopExcl,
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
     const rows = WARMTEPOMP_CATALOGUS.map((item) => ({
       sku: warmtepompSku(adviseurId, item.code),
       naam: item.naam,
-      omschrijving: `Merk ${WARMTEPOMP_MERK}. Verkoopprijs €${warmtepompVerkoopIncl(item.adviesIncl).toLocaleString("nl-NL")} incl. btw (adviesprijs + €1.500).`,
+      omschrijving: `Merk ${WARMTEPOMP_MERK}. Verkoopprijs €${warmtepompVerkoopIncl(item.adviesIncl).toLocaleString("nl-NL")} incl. btw (adviesprijs + €${WARMTEPOMP_OPSLAAG_INCL.toLocaleString("nl-NL")}; €-marge ≈ 9,3 kWh-batterij).`,
       prijs_ex_btw: warmtepompVerkoopExcl(item.adviesIncl),
       btw_percentage: 21,
       eenheid: "stuk",

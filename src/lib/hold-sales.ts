@@ -1,6 +1,14 @@
+import { addDays, differenceInCalendarDays } from "date-fns";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { ProjectStatus } from "@/types/database";
+import { AMSTERDAM_TZ } from "@/lib/format";
 import { normalizeProjectStatus } from "@/lib/labels";
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
+
+/** Standaard sales-termijn na zetten HOLD. */
+export const HOLD_SALES_DEADLINE_DAGEN = 4;
+/** Extra termijn bij BO-verlenging. */
+export const HOLD_SALES_VERLENG_DAGEN = 5;
 
 type ResumeProject = {
   status: string;
@@ -82,4 +90,107 @@ export function isUsableResumeStatus(
   if (!status) return false;
   const n = normalizeProjectStatus(status);
   return n !== "hold_sales_actie" && n !== "annulering";
+}
+
+/** Zoek vorige status uit lead-activiteit (meta.van bij HOLD). */
+export function resumeStatusFromHoldEvents(
+  events: Array<{ meta?: unknown } | null> | null | undefined,
+  projectId: string
+): ProjectStatus | null {
+  for (const ev of events || []) {
+    const meta = (ev?.meta || {}) as {
+      project_id?: string;
+      naar?: string;
+      van?: string;
+    };
+    if (meta.project_id && meta.project_id !== projectId) continue;
+    if (meta.naar === "hold_sales_actie" && isUsableResumeStatus(meta.van)) {
+      return meta.van;
+    }
+  }
+  return null;
+}
+
+/** Einde van kalenderdag + N dagen in Europe/Amsterdam. */
+export function holdSalesDeadlineAt(
+  from: Date = new Date(),
+  days: number = HOLD_SALES_DEADLINE_DAGEN
+): string {
+  const local = toZonedTime(from, AMSTERDAM_TZ);
+  const target = addDays(local, days);
+  target.setHours(23, 59, 59, 999);
+  return fromZonedTime(target, AMSTERDAM_TZ).toISOString();
+}
+
+/**
+ * Verleng vanaf max(nu, huidige deadline) met N kalenderdagen (EOD Amsterdam).
+ */
+export function extendHoldSalesDeadlineAt(
+  currentDeadline: string | null | undefined,
+  days: number = HOLD_SALES_VERLENG_DAGEN,
+  now: Date = new Date()
+): string {
+  const current = currentDeadline ? new Date(currentDeadline) : null;
+  const base =
+    current && !Number.isNaN(current.getTime()) && current.getTime() > now.getTime()
+      ? current
+      : now;
+  return holdSalesDeadlineAt(base, days);
+}
+
+export function isHoldSalesDeadlineVerlopen(
+  deadlineAt: string | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (!deadlineAt) return false;
+  const d = new Date(deadlineAt);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() <= now.getTime();
+}
+
+/** Korte countdown-tekst voor Offertes-banner (altijd een label). */
+export function holdSalesDeadlineLabel(
+  deadlineAt: string | null | undefined,
+  now: Date = new Date()
+): string {
+  if (!deadlineAt) return "Geen deadline gezet";
+  const d = new Date(deadlineAt);
+  if (Number.isNaN(d.getTime())) return "Geen deadline gezet";
+  const days = differenceInCalendarDays(
+    toZonedTime(d, AMSTERDAM_TZ),
+    toZonedTime(now, AMSTERDAM_TZ)
+  );
+  if (days < 0 || d.getTime() <= now.getTime()) {
+    return "Verlopen — backoffice volgt ook op";
+  }
+  if (days === 0) return "Deadline vandaag";
+  if (days === 1) return "Nog 1 dag";
+  return `Nog ${days} dagen`;
+}
+
+/**
+ * Cron/rapportage: lijst HOLD's waarvan sales-deadline verlopen is.
+ * Geen auto-statuswijziging — BO kiest via Acties (verlengen / bedenktijd / annulering).
+ */
+export async function verwerkVerlopenHoldSales(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sb: { from: (table: string) => any }
+): Promise<{
+  verwerkt: Array<{ id: string; project_nummer?: string | null }>;
+}> {
+  const { data, error } = await sb
+    .from("projecten")
+    .select("id, project_nummer, hold_sales_deadline_at")
+    .eq("status", "hold_sales_actie");
+  if (error) throw new Error(error.message || "HOLD-query mislukt");
+  const now = new Date();
+  const rows = (data || []) as Array<{
+    id: string;
+    project_nummer?: string | null;
+    hold_sales_deadline_at?: string | null;
+  }>;
+  const verwerkt = rows
+    .filter((p) => isHoldSalesDeadlineVerlopen(p.hold_sales_deadline_at, now))
+    .map((p) => ({ id: p.id, project_nummer: p.project_nummer }));
+  return { verwerkt };
 }

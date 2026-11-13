@@ -148,6 +148,9 @@ function MetricsCells({
         {formatEuro(m.ad_spend)}
       </td>
       <td className={`${base} whitespace-nowrap text-right text-muted`}>
+        {formatEuro(m.edergy)}
+      </td>
+      <td className={`${base} whitespace-nowrap text-right text-muted`}>
         {formatEuro(m.totale_kosten)}
       </td>
       <td
@@ -173,6 +176,7 @@ const METRIC_HEADERS = (
     <th className={sheetHead}>Sales com.</th>
     <th className={sheetHead}>Com. ops</th>
     <th className={sheetHead}>Ads</th>
+    <th className={sheetHead}>Edergy</th>
     <th className={sheetHead}>Kosten</th>
     <th className={sheetHead}>Winst</th>
     <th className={sheetHead}>Marge</th>
@@ -318,6 +322,11 @@ function TrendChart({
           label: "Ads",
           value: formatEuro(tip.ad_spend),
           delta: tipDeltas?.ads ?? null,
+        },
+        {
+          label: "Edergy",
+          value: formatEuro(tip.edergy),
+          delta: null,
         },
         {
           label: "Winst",

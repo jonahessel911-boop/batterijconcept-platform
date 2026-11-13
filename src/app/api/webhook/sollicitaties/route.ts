@@ -11,7 +11,9 @@ import {
   sanitizeSollicitatiePayload,
 } from "@/lib/sollicitatie";
 import {
+  extractAdresFromNotitie,
   formatSollicitatieAdres,
+  mergeSollicitatieAdres,
   pickAdresFromPayload,
   resolveSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
@@ -120,7 +122,12 @@ export async function POST(req: NextRequest) {
 
   const status = parseSollicitatieStatus(body.status);
   const notitie = buildNotitie(body, uploadFiles);
-  const adres = await resolveSollicitatieAdres(pickAdresFromPayload(body));
+  const adres = await resolveSollicitatieAdres(
+    mergeSollicitatieAdres(
+      pickAdresFromPayload(body),
+      extractAdresFromNotitie(notitie)
+    )
+  );
 
   try {
     const sb = getSupabaseAdmin();

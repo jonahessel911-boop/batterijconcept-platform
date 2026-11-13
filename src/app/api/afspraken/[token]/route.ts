@@ -273,23 +273,13 @@ export async function POST(
             "niet_gekwalificeerd",
           ]);
           if (leadRow && !protectedStatus.has(leadRow.status)) {
-            const upd = await sb
-              .from("leads")
-              .update({
-                status: "afspraak_afgezegd_klant",
-                terugbellen: false,
-                terugbel_notitie: null,
-              })
-              .eq("id", afspraak.lead_id);
-            if (
-              upd.error &&
-              (upd.error.message?.includes("terugbel") ||
-                upd.error.code === "42703")
-            ) {
-              await sb
-                .from("leads")
-                .update({ status: "afspraak_afgezegd_klant" })
-                .eq("id", afspraak.lead_id);
+            try {
+              const { activeerHerplanVoorBellen } = await import(
+                "@/lib/email/herplan-mail"
+              );
+              await activeerHerplanVoorBellen(sb, afspraak.lead_id as string);
+            } catch {
+              /* non-blocking */
             }
             try {
               const { queueLeadMetaCapi } = await import("@/lib/meta-capi");

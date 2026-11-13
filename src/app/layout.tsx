@@ -35,8 +35,15 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="nl" className={cn("h-full", poppins.variable, "font-sans", geist.variable)}>
-      <body className="min-h-full flex flex-col font-body antialiased bg-wash text-ink">
+    <html
+      lang="nl"
+      suppressHydrationWarning
+      className={cn("h-full", poppins.variable, "font-sans", geist.variable)}
+    >
+      <body
+        suppressHydrationWarning
+        className="min-h-full flex flex-col font-body antialiased bg-wash text-ink"
+      >
         {children}
       </body>
     </html>

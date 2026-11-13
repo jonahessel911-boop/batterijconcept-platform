@@ -37,10 +37,17 @@ export async function POST(
       );
     }
 
+    const teamgenootId =
+      body && typeof body === "object" && "teamgenootId" in body
+        ? String((body as { teamgenootId?: unknown }).teamgenootId || "").trim() ||
+          null
+        : null;
+
     const result = await generateAndUploadOpleverFormulier(
       sb,
       id,
-      parsed.data
+      parsed.data,
+      { teamgenootId }
     );
     if ("error" in result) {
       return NextResponse.json(

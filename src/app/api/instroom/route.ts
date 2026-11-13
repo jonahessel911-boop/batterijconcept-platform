@@ -3,9 +3,13 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { parseSollicitatieStatus } from "@/lib/sollicitatie";
 import {
+  extractAdresFromNotitie,
+  mergeSollicitatieAdres,
   pickAdresFromPayload,
   resolveSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
+import { normalizePostcode } from "@/lib/postcode";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -16,6 +20,11 @@ function pickStr(v: unknown) {
 }
 
 export async function GET() {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const sb = getSupabaseAdmin();
     const { data, error } = await sb
@@ -35,6 +44,7 @@ export async function GET() {
 
     type Row = {
       id: string;
+      notitie?: string | null;
       postcode?: string | null;
       huisnummer?: string | null;
       toevoeging?: string | null;
@@ -46,51 +56,44 @@ export async function GET() {
       }>;
     };
 
-    const sollicitaties = (data || []) as Row[];
+    // Read-only list: geen N+1 updates / PDOK op GET (dat maakte Recruitment traag).
+    // Adres-normalisatie gebeurt bij create/PATCH; response normaliseert postcode in-memory.
+    const sollicitaties = ((data || []) as Row[]).map((row) => {
+      let postcode = row.postcode || null;
+      let huisnummer = row.huisnummer || null;
+      let toevoeging = row.toevoeging || null;
+      let straat = row.straat || null;
+      let plaats = row.plaats || null;
 
-    // Bestaande rijen met PC+nr maar zonder straat/plaats → postcode-API (max 15/request)
-    const needsEnrich = sollicitaties.filter(
-      (s) =>
-        s.postcode?.trim() &&
-        s.huisnummer?.trim() &&
-        (!s.straat?.trim() || !s.plaats?.trim())
-    );
-    for (const row of needsEnrich.slice(0, 15)) {
-      try {
-        const resolved = await resolveSollicitatieAdres({
-          postcode: row.postcode || null,
-          huisnummer: row.huisnummer || null,
-          toevoeging: row.toevoeging || null,
-          straat: row.straat || null,
-          plaats: row.plaats || null,
-        });
-        if (
-          resolved.straat === (row.straat || null) &&
-          resolved.plaats === (row.plaats || null)
-        ) {
-          continue;
+      if (!postcode?.trim() || !huisnummer?.trim()) {
+        const fromNote = extractAdresFromNotitie(row.notitie);
+        if (fromNote.postcode || fromNote.huisnummer) {
+          const merged = mergeSollicitatieAdres(
+            { postcode, huisnummer, toevoeging, straat, plaats },
+            fromNote
+          );
+          postcode = merged.postcode;
+          huisnummer = merged.huisnummer;
+          toevoeging = merged.toevoeging || toevoeging;
+          straat = merged.straat || straat;
+          plaats = merged.plaats || plaats;
         }
-        const { error: upErr } = await sb
-          .from("sollicitaties")
-          .update({
-            postcode: resolved.postcode,
-            huisnummer: resolved.huisnummer,
-            toevoeging: resolved.toevoeging,
-            straat: resolved.straat,
-            plaats: resolved.plaats,
-          })
-          .eq("id", row.id);
-        if (!upErr) {
-          row.postcode = resolved.postcode;
-          row.huisnummer = resolved.huisnummer;
-          row.toevoeging = resolved.toevoeging;
-          row.straat = resolved.straat;
-          row.plaats = resolved.plaats;
-        }
-      } catch {
-        /* lookup optioneel */
       }
-    }
+
+      const fixed = postcode?.trim()
+        ? normalizePostcode(postcode.trim())
+        : null;
+      if (fixed) postcode = fixed;
+
+      return {
+        ...row,
+        postcode,
+        huisnummer,
+        toevoeging,
+        straat,
+        plaats,
+      };
+    });
 
     const paths = sollicitaties.flatMap((s) =>
       (s.sollicitatie_bestanden || []).map((b) => b.storage_path)
@@ -123,6 +126,11 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const naam = pickStr(body.naam);
@@ -130,7 +138,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Naam is verplicht" }, { status: 400 });
     }
     const status = parseSollicitatieStatus(body.status);
-    const adres = await resolveSollicitatieAdres(pickAdresFromPayload(body));
+    const notitie = pickStr(body.notitie);
+    const adres = await resolveSollicitatieAdres(
+      mergeSollicitatieAdres(
+        pickAdresFromPayload(body),
+        extractAdresFromNotitie(notitie)
+      )
+    );
 
     const sb = getSupabaseAdmin();
     const insertRow: Record<string, unknown> = {
@@ -140,7 +154,7 @@ export async function POST(req: NextRequest) {
       functie: pickStr(body.functie),
       bron: pickStr(body.bron) || "crm",
       status,
-      notitie: pickStr(body.notitie),
+      notitie,
       postcode: adres.postcode,
       huisnummer: adres.huisnummer,
       toevoeging: adres.toevoeging,

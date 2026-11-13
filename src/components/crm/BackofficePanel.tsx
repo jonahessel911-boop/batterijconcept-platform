@@ -3,10 +3,13 @@
 import type { Adviseur, Afspraak, Factuur, Lead, Project } from "@/types/database";
 import { type BoView, backofficeHref, parseBoView } from "@/lib/bo-view";
 import { useBoViewStore } from "@/lib/bo-view-store";
+import { ClientOnly } from "@/components/ClientOnly";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
 import { BelConversiePanel } from "./BelConversiePanel";
+import { LiveRapportagePanel } from "./LiveRapportagePanel";
 import { Planbord } from "./Planbord";
+import { ProjectKanban } from "./ProjectKanban";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
 import { TakenAgendaPanel } from "./TakenAgendaPanel";
 
@@ -56,6 +59,24 @@ export function BackofficePanel({
     );
   }
 
+  if (view === "kanban") {
+    return (
+      <div className="pt-4">
+        <ClientOnly
+          fallback={
+            <p className="px-5 py-8 text-sm text-muted">Kanban laden…</p>
+          }
+        >
+          <ProjectKanban
+            projecten={projecten}
+            facturen={facturen}
+            onProjectUpdated={onProjectUpdated}
+          />
+        </ClientOnly>
+      </div>
+    );
+  }
+
   if (view === "agenda") {
     return (
       <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
@@ -80,6 +101,14 @@ export function BackofficePanel({
     return (
       <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
         <ServiceVerzoekenPanel />
+      </div>
+    );
+  }
+
+  if (view === "live") {
+    return (
+      <div className="bg-wash/40 px-4 py-5 sm:px-5">
+        <LiveRapportagePanel />
       </div>
     );
   }

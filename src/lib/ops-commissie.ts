@@ -1,8 +1,8 @@
 /**
  * Commissie operationeel:
- * - Sharath: €10 per ingeplande (1e) huisbezoek-afspraak
- * - Tarik: vaste weekfee (€3.750/mnd) + €2,50 bonus per afspraak
- *   die Sharath inplant (Tarik is zijn teamlead)
+ * - Simon (voorheen Sharath): €10 per ingeplande (1e) huisbezoek-afspraak
+ * - Rik/Tarik: vaste weekfee (€3.750/mnd) + €2,50 bonus per afspraak
+ *   die Simon inplant (teamlead)
  */
 
 import { formatInTimeZone } from "date-fns-tz";
@@ -22,10 +22,10 @@ export {
 /** € per nieuw huisbezoek dat een beller inplant. */
 export const BELLER_PER_INGEPLANDE_AFSPRAAK = 10;
 
-/** Vast maandsalaris/commissie Tarik (ops manager). */
+/** Vast maandsalaris/commissie ops-manager (Rik/Tarik). */
 export const OPS_MANAGER_FIXED_PER_MONTH = 3750;
 
-/** Bonus Tarik per huisbezoek dat Sharath inplant. */
+/** Bonus ops-manager per huisbezoek dat Simon inplant. */
 export const OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK = 2.5;
 
 /** Weekdeel van het vaste maandbedrag (52 weken / jaar). */
@@ -49,7 +49,7 @@ export type OpsCommissieAdviseur = {
 };
 
 export type OpsCommissieBreakdown = {
-  /** Totaal ops-commissie (bellers + Tarik vast + Tarik bonus) */
+  /** Totaal ops-commissie (bellers + ops-manager vast + bonus) */
   totaal: number;
   bellersBedrag: number;
   bellersAfspraken: number;
@@ -101,7 +101,7 @@ export function computeOpsCommissieForWindow(opts: {
   adviseurs: OpsCommissieAdviseur[];
   startYmd: string;
   endYmd: string;
-  /** Tarik / ops-manager id (null = geen vast/bonus). */
+  /** Ops-manager (Rik/Tarik) id (null = geen vast/bonus). */
   tarikId?: string | null;
   tarikNaam?: string | null;
   includeVast?: boolean;
@@ -168,7 +168,7 @@ export function opsCommissieLabelVoorRol(opts: {
   isOpsManager: boolean;
 }): string | null {
   if (opts.isOpsManager) {
-    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per afspraak die Simon inplant`;
+    return `€${OPS_MANAGER_FIXED_PER_MONTH.toLocaleString("nl-NL")}/mnd + €${OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per afspraak die Simon inplant (zelfde netto als Simon)`;
   }
   if (isBellerRol(opts.rol)) {
     return `€${BELLER_PER_INGEPLANDE_AFSPRAAK}/afspraak`;

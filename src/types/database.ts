@@ -79,11 +79,38 @@ export type ServiceVerzoekStatus = "open" | "afgehandeld";
 export type SollicitatieStatus =
   | "nieuw"
   | "geen_contact"
+  | "definitief_geen_contact"
   | "diskwalificatie"
   | "gesprek_gepland"
   | "gesprek_gehad"
+  | "gesprek_gehad_diskwalificatie"
   | "aangenomen_training_gepland"
   | "aangenomen_actief";
+
+export type RecruitmentRol =
+  | "adviseur_sales"
+  | "appointment_setter"
+  | "installateur"
+  | "monteur"
+  | "am_maintenance"
+  | "bezorger"
+  | "overig";
+
+export type RecruitmentVacatureStatus = "open" | "dicht";
+
+export interface RecruitmentVacature {
+  id: string;
+  titel: string;
+  rol: RecruitmentRol | string;
+  status: RecruitmentVacatureStatus;
+  korte_omschrijving: string | null;
+  lander_url: string | null;
+  /** Multi-step Werkenbij-formulier (JSON). */
+  form?: unknown | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
 
 export type CrmTab =
   | "today"
@@ -129,7 +156,8 @@ export type GebruikerRol =
   | "admin"
   | "installateur"
   | "beller"
-  | "warmtefonds";
+  | "warmtefonds"
+  | "recruiter";
 
 export interface Adviseur {
   id: string;
@@ -243,6 +271,28 @@ export interface AdviseurCreditFactuurRegel {
   omschrijving: string | null;
   factuur_nummer?: string | null;
   lead_naam?: string | null;
+}
+
+export type AdviseurKostenSoort = "voorschot" | "kosten" | "correctie";
+export type AdviseurKostenStatus = "open" | "ingedekt" | "geannuleerd";
+
+/** Voorschot/kosten per medewerker — aftrekbaar op wekelijkse creditfactuur. */
+export interface AdviseurKosten {
+  id: string;
+  adviseur_id: string;
+  soort: AdviseurKostenSoort;
+  omschrijving: string;
+  bedrag_ex_btw: number;
+  status: AdviseurKostenStatus;
+  kosten_datum: string;
+  creditfactuur_id: string | null;
+  ingedekt_op: string | null;
+  aangemaakt_door: string | null;
+  notities: string | null;
+  created_at: string;
+  updated_at: string;
+  adviseur_naam?: string | null;
+  factuur_nummer?: string | null;
 }
 
 export interface PartnerCreditFactuur {
@@ -517,26 +567,55 @@ export interface InstallatiePartnerTeamgenoot {
   email: string | null;
   telefoon: string | null;
   actief: boolean;
-  created_at: string;
-  updated_at: string;
-  /** KvK-uittreksel monteur (verplicht voor dossier_compleet) */
-  kvk_uitreksel_storage_path?: string | null;
-  kvk_uitreksel_bestandsnaam?: string | null;
-  kvk_uitreksel_uploaded_at?: string | null;
-  /** Certificeringen (verplicht) */
-  certificaten_storage_path?: string | null;
-  certificaten_bestandsnaam?: string | null;
-  certificaten_uploaded_at?: string | null;
-  /** CV (optioneel) */
-  cv_storage_path?: string | null;
-  cv_bestandsnaam?: string | null;
-  cv_uploaded_at?: string | null;
-  /** Foto van monteur (verplicht) */
+  /** Legacy portal-token (deep link); login gaat via e-mail + wachtwoord. */
+  portal_token?: string | null;
+  invite_sent_at?: string | null;
+  /** beheerder = team+facturen; monteur = alleen agenda */
+  rol?: "beheerder" | "monteur" | null;
+  kan_schouw?: boolean | null;
+  kan_installatie?: boolean | null;
+  leeftijd?: number | null;
+  /** JSON array merknamen, bijv. ["Tesla","BYD"] */
+  merken_ervaring?: string[] | null;
+  /** JSON array NL-provincies waar monteur inzetbaar is. */
+  regios?: string[] | null;
   foto_storage_path?: string | null;
   foto_bestandsnaam?: string | null;
   foto_uploaded_at?: string | null;
-  /** True als KvK + certificaten + foto aanwezig */
-  dossier_compleet?: boolean;
+  kvk_uitreksel_storage_path?: string | null;
+  kvk_uitreksel_bestandsnaam?: string | null;
+  kvk_uitreksel_uploaded_at?: string | null;
+  certificaten_storage_path?: string | null;
+  certificaten_bestandsnaam?: string | null;
+  certificaten_uploaded_at?: string | null;
+  cv_storage_path?: string | null;
+  cv_bestandsnaam?: string | null;
+  cv_uploaded_at?: string | null;
+  dossier_compleet?: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Installatiekoppel: 2 monteurs + gedeelde beoordeling */
+export interface InstallatiePartnerKoppel {
+  id: string;
+  partner_id: string;
+  naam: string;
+  monteur_1_id?: string | null;
+  monteur_2_id?: string | null;
+  beoordeling_sterren?: number | null;
+  beoordeling_notitie?: string | null;
+  actief?: boolean | null;
+  created_at: string;
+  updated_at: string;
+  monteur_1?: Pick<
+    InstallatiePartnerTeamgenoot,
+    "id" | "naam" | "email" | "regios" | "actief" | "kan_installatie"
+  > | null;
+  monteur_2?: Pick<
+    InstallatiePartnerTeamgenoot,
+    "id" | "naam" | "email" | "regios" | "actief" | "kan_installatie"
+  > | null;
 }
 
 export interface Offerte {
@@ -628,6 +707,19 @@ export interface Project {
   monteur: string | null;
   /** Gekoppelde monteur (teamgenoot) van de installatiepartner. */
   installatie_teamgenoot_id?: string | null;
+  /** AlphaESS systeem SIN (15 tekens, start met AL) — via oplevering. */
+  systeem_sin?: string | null;
+  /** Admin-beoordeling 0–5 sterren voor de monteur op deze klus. */
+  monteur_beoordeling_sterren?: number | null;
+  /** Interne notitie bij monteur-beoordeling. */
+  monteur_beoordeling_notitie?: string | null;
+  monteur_beoordeling_op?: string | null;
+  monteur_beoordeling_door?: string | null;
+  /** CRM: klantvriendelijkheid installateur (zichtbaar voor partner). */
+  klantvriendelijkheid_sterren?: number | null;
+  klantvriendelijkheid_notitie?: string | null;
+  klantvriendelijkheid_op?: string | null;
+  klantvriendelijkheid_door?: string | null;
   notities: string | null;
   projectkosten: number;
   /** Warmtefonds of eigen middelen — bepaalt beschikbare statussen. */
@@ -652,8 +744,6 @@ export interface Project {
   installatie_at?: string | null;
   /** Moment waarop installatie uitgevoerd / status installatie_voltooid (netto sale). */
   installatie_voltooid_at?: string | null;
-  /** Systeem SIN-nummer (opleverformulier → tab Apparaat). */
-  systeem_sin?: string | null;
   installatie_notities?: string | null;
   installatie_mail_klant_verstuurd?: boolean;
   installatie_mail_partner_verstuurd?: boolean;
@@ -695,6 +785,7 @@ export interface Project {
   financiering_status?:
     | "doorgestuurd_naar_edwin"
     | "documenten_aanleveren"
+    | "contact_verstuurd"
     | "in_behandeling"
     | "aanbod_ondertekenen"
     | "declaratie_indienen"
@@ -709,6 +800,8 @@ export interface Project {
   warmtefonds_afspraak_at?: string | null;
   /** Moment waarop de Warmtefonds-declaratie is uitbetaald. */
   warmtefonds_uitbetaald_at?: string | null;
+  /** Aantal contactpogingen vanuit WF-portaal (Contact-knop). */
+  warmtefonds_contact_pogingen?: number | null;
   /** Afleveradres voor materiaalinkoop. */
   leveradres?: string | null;
   /**
@@ -738,6 +831,11 @@ export interface Project {
    * annuleringsfactuur verstuurd / gecontroleerd.
    */
   annulering_keuze_gecontroleerd_at?: string | null;
+  /**
+   * Uiterlijk moment waarop sales HOLD moet afhandelen.
+   * Na verlopen → BO-actie HOLD sales verlopen.
+   */
+  hold_sales_deadline_at?: string | null;
   created_at: string;
   updated_at: string;
   leads?: (Pick<
@@ -795,60 +893,6 @@ export interface SollicitatieBestand {
   url?: string | null;
 }
 
-export type RecruitmentVacatureStatus = "open" | "dicht";
-
-/** Rollen in Jobs CMS / kaart-legenda. */
-export type RecruitmentRol =
-  | "adviseur_sales"
-  | "appointment_setter"
-  | "installateur"
-  | "monteur"
-  | "am_maintenance"
-  | "bezorger"
-  | "overig";
-
-/** Draft bezorg-route (batterij-aflevering vanaf HQ). */
-export type BezorgRouteStatus = "concept" | "onderweg" | "afgerond";
-
-export interface BezorgRoute {
-  id: string;
-  datum: string;
-  bezorger_naam: string;
-  bezorger_sollicitatie_id: string | null;
-  status: BezorgRouteStatus;
-  created_at: string;
-  updated_at: string;
-  stops?: BezorgRouteStop[];
-}
-
-export interface BezorgRouteStop {
-  id: string;
-  route_id: string;
-  project_id: string;
-  volgorde: number;
-  adres: string;
-  lat: number | null;
-  lng: number | null;
-  handtekening_data_url: string | null;
-  ontvanger_naam: string | null;
-  geleverd_at: string | null;
-  created_at: string;
-  project_nummer?: string | null;
-  klant_naam?: string | null;
-}
-
-export interface RecruitmentVacature {
-  id: string;
-  titel: string;
-  rol: string;
-  status: RecruitmentVacatureStatus;
-  korte_omschrijving: string | null;
-  lander_url: string | null;
-  sort_order: number;
-  created_at: string;
-  updated_at: string;
-}
-
 /** Meta BANEN-campagne → vacature. */
 export interface RecruitmentCampagneKoppeling {
   campaign_id: string;
@@ -873,10 +917,13 @@ export interface Sollicitatie {
   plaats?: string | null;
   training_moment_id?: string | null;
   vacature_id?: string | null;
-  /** Meta campaign id uit landings-URL / webhook (attributie BANEN). */
+  /** Belpogingen (geen contact) — max 3. */
+  belpogingen?: number | null;
+  belpogingen_vandaag?: number | null;
+  laatst_gebeld_at?: string | null;
+  /** Meta / UTM attributie (recruitment ads, attributie BANEN). */
   meta_campaign_id?: string | null;
   meta_adset_id?: string | null;
-  /** Meta ad id uit landings-URL / webhook. */
   meta_ad_id?: string | null;
   campaign_name?: string | null;
   adset_name?: string | null;
@@ -908,7 +955,11 @@ export interface SollicitatieAfspraak {
   soort: SollicitatieAfspraakSoort;
   /** Wie het gesprek voert (adviseur). */
   interviewer_id?: string | null;
+  /** Adres bij fysiek gesprek (standaard Daltonlaan 500, Utrecht). */
+  locatie?: string | null;
   notitie: string | null;
+  /** Herinneringsmail ~2 dagen voor start. */
+  herinnering_verstuurd?: boolean | null;
   created_at: string;
   updated_at: string;
   sollicitaties?: Pick<
@@ -1029,12 +1080,22 @@ export interface ProjectFoto {
 
 export type ProjectTaakStatus = "todo" | "doing" | "done";
 
+export type TaakCategorie =
+  | "project"
+  | "facturatie"
+  | "bellen"
+  | "email"
+  | "kantoor"
+  | "overig";
+
 export interface ProjectTaak {
   id: string;
   project_id: string;
   titel: string;
   status: ProjectTaakStatus;
   afdeling: string;
+  /** Handmatige categorie (default project). */
+  categorie?: TaakCategorie | null;
   verantwoordelijke_id: string | null;
   due_at: string | null;
   auto_key: string | null;
@@ -1060,7 +1121,8 @@ export type BackofficeActieEventSoort =
   | "nabellen_factuur"
   | "herplan_afspraak"
   | "aangetekende_brief"
-  | "annulering_keuze_controle";
+  | "annulering_keuze_controle"
+  | "hold_sales_verlopen";
 
 export interface BackofficeActieEvent {
   id: string;
@@ -1239,3 +1301,34 @@ export const BEDRIJFSWAARDEN = [
     tekst: "Eerst kijken, dan kiezen. Onze scan en adviesbezoek zijn vrijblijvend.",
   },
 ] as const;
+
+export type BezorgRouteStatus = "concept" | "onderweg" | "afgerond";
+
+/** Draft bezorgroute: batterijen afleveren vanaf HQ. */
+export interface BezorgRoute {
+  id: string;
+  datum: string;
+  bezorger_naam: string;
+  bezorger_sollicitatie_id?: string | null;
+  status: BezorgRouteStatus | string;
+  created_at: string;
+  updated_at: string;
+  stops?: BezorgRouteStop[];
+}
+
+export interface BezorgRouteStop {
+  id: string;
+  route_id: string;
+  project_id: string;
+  volgorde: number;
+  adres: string;
+  lat?: number | null;
+  lng?: number | null;
+  handtekening_data_url?: string | null;
+  ontvanger_naam?: string | null;
+  geleverd_at?: string | null;
+  created_at?: string;
+  /** Joined / display fields from API */
+  project_nummer?: string | null;
+  klant_naam?: string | null;
+}

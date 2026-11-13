@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { Lead, Project } from "@/types/database";
+import type {
+  InstallatiePartnerTeamgenoot,
+  Lead,
+  Project,
+} from "@/types/database";
 import { SignaturePadField } from "@/components/offerte/SignaturePadField";
 import {
   emptySchouwFormulier,
@@ -26,6 +30,10 @@ import {
   type SchouwFormulierData,
   type SchouwJaNee,
 } from "@/lib/schouw-formulier";
+import {
+  medewerkerNaamVanProject,
+  teamgenootVanProject,
+} from "@/lib/project-medewerker";
 
 type PrefillLead = Pick<
   Lead,
@@ -40,19 +48,15 @@ type PrefillLead = Pick<
   | "lead_number"
 >;
 
+type TeamOptie = Pick<
+  InstallatiePartnerTeamgenoot,
+  "id" | "naam" | "email" | "telefoon"
+>;
+
 function leadFromProject(project: Project): PrefillLead | null {
   const raw = Array.isArray(project.leads) ? project.leads[0] : project.leads;
   if (!raw || typeof raw !== "object") return null;
   return raw as PrefillLead;
-}
-
-function partnerNaamFromProject(project: Project): string {
-  const raw = Array.isArray(project.installatie_partners)
-    ? project.installatie_partners[0]
-    : project.installatie_partners;
-  return (raw && typeof raw === "object" && "naam" in raw
-    ? String((raw as { naam?: string }).naam || "")
-    : "") || project.monteur || "";
 }
 
 function schouwDatumYmd(project: Project): string {
@@ -76,7 +80,7 @@ function buildPrefill(
   opnemerOverride?: string | null
 ): SchouwFormulierData {
   const lead = leadFromProject(project);
-  const opnemer = (opnemerOverride || partnerNaamFromProject(project)).trim();
+  const opnemer = medewerkerNaamVanProject(project, opnemerOverride);
   const klant = lead?.naam?.trim() || project.titel || "";
   return emptySchouwFormulier({
     klantNaam: klant,
@@ -168,6 +172,7 @@ export function SchouwFormulierModal({
   submitUrl,
   notitie,
   opnemerDefault,
+  teamgenoten = [],
   onClose,
   onCreated,
 }: {
@@ -177,6 +182,8 @@ export function SchouwFormulierModal({
   submitUrl: string;
   notitie?: string;
   opnemerDefault?: string | null;
+  /** Medewerkers van de installatiepartner — selecteerbaar als opnemer. */
+  teamgenoten?: TeamOptie[];
   onClose: () => void;
   onCreated: (result: {
     foto: { url?: string | null; bestandsnaam?: string | null };
@@ -188,8 +195,12 @@ export function SchouwFormulierModal({
     project?: Project | null;
   }) => void;
 }) {
+  const gekoppeld = teamgenootVanProject(project);
   const [form, setForm] = useState<SchouwFormulierData>(() =>
     buildPrefill(project, opnemerDefault)
+  );
+  const [teamgenootId, setTeamgenootId] = useState(
+    () => gekoppeld?.id || ""
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +208,7 @@ export function SchouwFormulierModal({
   useEffect(() => {
     if (!open) return;
     setForm(buildPrefill(project, opnemerDefault));
+    setTeamgenootId(teamgenootVanProject(project)?.id || "");
     setError(null);
     setBusy(false);
   }, [open, project.id, opnemerDefault]);
@@ -229,9 +241,25 @@ export function SchouwFormulierModal({
     });
   }
 
+  function kiesMedewerker(id: string) {
+    setTeamgenootId(id);
+    const tg = teamgenoten.find((t) => t.id === id);
+    if (tg?.naam) {
+      setForm((prev) => ({
+        ...prev,
+        opnemer: tg.naam,
+        handtekeningOpnemerNaam: tg.naam,
+      }));
+    }
+  }
+
   async function submit() {
     if (!form.klantNaam.trim()) {
       setError("Klantnaam is verplicht");
+      return;
+    }
+    if (teamgenoten.length > 0 && !teamgenootId) {
+      setError("Kies wie de schouw heeft uitgevoerd.");
       return;
     }
     const handtekeningErr = validateSchouwFormulierHandtekening(form);
@@ -247,6 +275,7 @@ export function SchouwFormulierModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           form,
+          teamgenootId: teamgenootId || null,
           notitie:
             (notitie || "").trim() ||
             form.aanvullendeOpmerkingen ||
@@ -360,15 +389,31 @@ export function SchouwFormulierModal({
                   onChange={(e) => patch("klusNr", e.target.value)}
                 />
               </Field>
-              <Field label="Opnemer" className="sm:col-span-2">
-                <input
-                  className={inputCls}
-                  value={form.opnemer}
-                  onChange={(e) => {
-                    patch("opnemer", e.target.value);
-                    patch("handtekeningOpnemerNaam", e.target.value);
-                  }}
-                />
+              <Field label="Uitvoerend monteur *" className="sm:col-span-2">
+                {teamgenoten.length > 0 ? (
+                  <select
+                    className={selectCls}
+                    value={teamgenootId}
+                    onChange={(e) => kiesMedewerker(e.target.value)}
+                  >
+                    <option value="">Kies medewerker…</option>
+                    {teamgenoten.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.naam}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className={inputCls}
+                    value={form.opnemer}
+                    onChange={(e) => {
+                      patch("opnemer", e.target.value);
+                      patch("handtekeningOpnemerNaam", e.target.value);
+                    }}
+                    placeholder="Voor- en achternaam"
+                  />
+                )}
               </Field>
             </div>
           </section>
@@ -464,11 +509,15 @@ export function SchouwFormulierModal({
                   onChange={(v) => patch("ctKlemPlaatsbaar", v)}
                 />
               </Field>
-              <Field label="Foto meterkast gemaakt">
+              <Field label="Foto meterkast gemaakt *">
                 <JaNeeSelect
                   value={form.fotoMeterkast}
                   onChange={(v) => patch("fotoMeterkast", v)}
                 />
+                <p className="mt-1 text-[11px] text-muted">
+                  Upload ook echt de foto via “Foto meterkast” op de order —
+                  verplicht om de schouw af te ronden.
+                </p>
               </Field>
             </div>
           </section>
@@ -739,7 +788,7 @@ export function SchouwFormulierModal({
                 }
               />
             </Field>
-            <Field label="Naam monteur / opnemer *">
+            <Field label="Naam uitvoerend monteur *">
               <input
                 className={inputCls}
                 value={form.handtekeningOpnemerNaam}

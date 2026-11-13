@@ -8,6 +8,7 @@ export const GEBRUIKER_ROLLEN = [
   "admin",
   "installateur",
   "warmtefonds",
+  "recruiter",
 ] as const;
 
 export type GebruikerRol = (typeof GEBRUIKER_ROLLEN)[number];
@@ -20,6 +21,7 @@ export const TEAM_ROLLEN = [
   "beller",
   "backoffice",
   "warmtefonds",
+  "recruiter",
 ] as const;
 
 export type TeamRol = (typeof TEAM_ROLLEN)[number];
@@ -32,6 +34,7 @@ export const gebruikerRolLabel: Record<GebruikerRol, string> = {
   admin: "Admin",
   installateur: "Installateur",
   warmtefonds: "Warmtefonds",
+  recruiter: "Recruiter",
 };
 
 export const teamRolUitleg: Record<TeamRol, string> = {
@@ -46,6 +49,7 @@ export const teamRolUitleg: Record<TeamRol, string> = {
     "Leads, bellen (terugbel), agenda adviseurs, projecten, facturen, purchasing, adviseurs-contact",
   warmtefonds:
     "Warmtefonds/Edergy: werkt via het WF-portaal (aanvragen, agenda, creditfacturen) — geen sales-CRM",
+  recruiter: "Alleen Recruitment: sollicitaties, vacatures, trainingen, KPI’s",
 };
 
 export function normalizeRol(value: string | null | undefined): GebruikerRol {
@@ -56,7 +60,8 @@ export function normalizeRol(value: string | null | undefined): GebruikerRol {
     value === "sales_manager" ||
     value === "admin" ||
     value === "installateur" ||
-    value === "warmtefonds"
+    value === "warmtefonds" ||
+    value === "recruiter"
   ) {
     return value;
   }
@@ -130,6 +135,9 @@ export function tabsVoorRol(
     case "warmtefonds":
       tabs = [];
       break;
+    case "recruiter":
+      tabs = ["instroom"];
+      break;
     case "admin":
     default:
       tabs = [
@@ -158,11 +166,12 @@ export function tabsVoorRol(
       ];
       break;
   }
-  // Today staat bij admin en sales manager; jona@ ook als de rol anders is.
+  // Today: admin, sales manager of jona@ (niet voor recruiter-only)
   if (
-    opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
-    rol === "sales_manager" ||
-    rol === "admin"
+    rol !== "recruiter" &&
+    (opts?.email?.trim().toLowerCase() === "jona@batterijconcept.nl" ||
+      rol === "sales_manager" ||
+      rol === "admin")
   ) {
     tabs = ["today", ...tabs.filter((t) => t !== "today")];
   }
@@ -257,6 +266,12 @@ export function isSpareAdviseur(a: {
       process.env?.SPARE_ADVISEUR_EMAIL?.trim().toLowerCase()) ||
     SPARE_ADVISEUR_EMAIL;
   return Boolean(email && email === spare);
+}
+
+/** Mag Recruitment (instroom) bekijken/bewerken. */
+export function magRecruitment(rol: GebruikerRol | string | null | undefined): boolean {
+  const r = normalizeRol(rol);
+  return r === "admin" || r === "recruiter";
 }
 
 /** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */

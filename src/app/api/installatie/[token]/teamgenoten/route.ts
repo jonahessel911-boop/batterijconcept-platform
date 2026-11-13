@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
+import { generatePassword, hashPassword } from "@/lib/auth-password";
+import { normalizeMerkenErvaring } from "@/lib/installatie-merken";
+import { normalizeMonteurRegios } from "@/lib/postcode-provincie";
+import {
+  parseMonteurDocType,
+  uploadMonteurDocument,
+} from "@/lib/monteur-dossier";
+import {
+  installatieLoginUrl,
+  newInstallatiePortalToken,
+  requirePartnerPortal,
+  verstuurTeamgenootPortaalInvite,
+} from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
@@ -12,20 +25,12 @@ function isMissingTable(error: { code?: string; message?: string } | null) {
     error.code === "42P01" ||
     error.code === "PGRST205" ||
     msg.includes("installatie_partner_teamgenoten") ||
+    msg.includes("portal_token") ||
+    msg.includes("password_hash") ||
+    msg.includes("regios") ||
     msg.includes("schema cache") ||
     msg.includes("does not exist")
   );
-}
-
-async function resolvePartner(token: string) {
-  const sb = getSupabaseAdmin();
-  const { data, error } = await sb
-    .from("installatie_partners")
-    .select("id, naam, actief, portal_token")
-    .eq("portal_token", token)
-    .single();
-  if (error || !data || !data.actief) return null;
-  return data;
 }
 
 function pickStr(v: unknown) {
@@ -34,45 +39,93 @@ function pickStr(v: unknown) {
   return t || null;
 }
 
-const SELECT =
-  "id, partner_id, naam, email, telefoon, actief, created_at, updated_at";
+function normalizeRol(raw: unknown): "beheerder" | "monteur" {
+  return raw === "beheerder" ? "beheerder" : "monteur";
+}
 
-/** GET /api/installatie/[token]/teamgenoten */
+const SELECT =
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, cv_storage_path, cv_bestandsnaam, cv_uploaded_at, dossier_compleet, created_at, updated_at";
+const SELECT_MIN =
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, created_at, updated_at";
+const SELECT_NO_DOSSIER =
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
+const SELECT_NO_REGIOS =
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
+
+function publicTeamgenoot(row: Record<string, unknown>) {
+  const { password_hash: _ph, ...rest } = row as {
+    password_hash?: unknown;
+  } & Record<string, unknown>;
+  void _ph;
+  return rest;
+}
+
+/** GET /api/installatie/[token]/teamgenoten — alleen beheerder */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
+    const partner = await requirePartnerPortal(token, req);
     if (!partner) {
       return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
+        { error: "Geen toegang — alleen beheerders beheren het team." },
+        { status: 403 }
       );
     }
 
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const full = await sb
       .from("installatie_partner_teamgenoten")
       .select(SELECT)
       .eq("partner_id", partner.id)
       .order("naam");
 
-    if (error) {
-      if (isMissingTable(error)) {
+    let rows = full.data as Record<string, unknown>[] | null;
+    let error = full.error;
+
+    if (error && isMissingTable(error)) {
+      const mid = await sb
+        .from("installatie_partner_teamgenoten")
+        .select(SELECT_NO_DOSSIER)
+        .eq("partner_id", partner.id)
+        .order("naam");
+      rows = mid.data as Record<string, unknown>[] | null;
+      error = mid.error;
+    }
+
+    if (error && isMissingTable(error)) {
+      const mid = await sb
+        .from("installatie_partner_teamgenoten")
+        .select(SELECT_NO_REGIOS)
+        .eq("partner_id", partner.id)
+        .order("naam");
+      rows = mid.data as Record<string, unknown>[] | null;
+      error = mid.error;
+    }
+
+    if (error && isMissingTable(error)) {
+      const soft = await sb
+        .from("installatie_partner_teamgenoten")
+        .select(SELECT_MIN)
+        .eq("partner_id", partner.id)
+        .order("naam");
+      rows = soft.data as Record<string, unknown>[] | null;
+      error = soft.error;
+      if (error && isMissingTable(error)) {
         return NextResponse.json({
           teamgenoten: [],
           migration_required: true,
-          hint: "Voer supabase/migrate-partner-teamgenoten.sql uit in Supabase.",
+          hint: "Voer supabase/migrate-partner-teamgenoten.sql, migrate-installatie-portal-auth.sql, migrate-teamgenoot-regios.sql en migrate-partner-monteur-dossier.sql uit.",
         });
       }
-      throw error;
     }
+    if (error) throw error;
 
     return NextResponse.json({
       partner: { id: partner.id, naam: partner.naam },
-      teamgenoten: data || [],
+      teamgenoten: (rows || []).map((r) => publicTeamgenoot(r)),
     });
   } catch (e) {
     return NextResponse.json(
@@ -82,22 +135,32 @@ export async function GET(
   }
 }
 
-/** POST /api/installatie/[token]/teamgenoten — nieuwe teamgenoot */
+/** POST — nieuwe medewerker + welkomstmail met wachtwoord */
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
+    const partner = await requirePartnerPortal(token, req);
     if (!partner) {
       return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
+        { error: "Geen toegang — alleen beheerders beheren het team." },
+        { status: 403 }
       );
     }
 
-    let body: { naam?: string; email?: string; telefoon?: string };
+    let body: {
+      naam?: string;
+      email?: string;
+      telefoon?: string;
+      rol?: string;
+      kan_schouw?: boolean;
+      kan_installatie?: boolean;
+      leeftijd?: number | string | null;
+      merken_ervaring?: unknown;
+      regios?: unknown;
+    };
     try {
       body = await req.json();
     } catch {
@@ -105,38 +168,135 @@ export async function POST(
     }
 
     const naam = pickStr(body.naam);
+    const email = pickStr(body.email)?.toLowerCase() || null;
     if (!naam) {
       return NextResponse.json({ error: "Naam is verplicht" }, { status: 400 });
     }
+    if (!email) {
+      return NextResponse.json(
+        { error: "E-mail is verplicht — hiernaar gaat de inlogmail." },
+        { status: 400 }
+      );
+    }
 
+    const rol = normalizeRol(body.rol);
+    const kan_schouw = body.kan_schouw === true;
+    const kan_installatie =
+      body.kan_installatie === undefined ? true : body.kan_installatie === true;
+    const leeftijdRaw =
+      body.leeftijd === null || body.leeftijd === undefined || body.leeftijd === ""
+        ? null
+        : Number(body.leeftijd);
+    const leeftijd =
+      leeftijdRaw != null && Number.isFinite(leeftijdRaw)
+        ? Math.round(leeftijdRaw)
+        : null;
+    if (leeftijd != null && (leeftijd < 16 || leeftijd > 99)) {
+      return NextResponse.json(
+        { error: "Leeftijd moet tussen 16 en 99 liggen" },
+        { status: 400 }
+      );
+    }
+    const merken_ervaring = normalizeMerkenErvaring(body.merken_ervaring);
+    const regios = normalizeMonteurRegios(body.regios);
+
+    const portal_token = newInstallatiePortalToken();
+    const plainPassword = generatePassword(12);
+    const password_hash = hashPassword(plainPassword);
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+
+    const insertFull = {
+      partner_id: partner.id,
+      naam,
+      email,
+      telefoon: pickStr(body.telefoon),
+      actief: true,
+      portal_token,
+      password_hash,
+      rol,
+      kan_schouw,
+      kan_installatie,
+      leeftijd,
+      merken_ervaring,
+      regios,
+    };
+
+    let { data, error } = await sb
       .from("installatie_partner_teamgenoten")
-      .insert({
-        partner_id: partner.id,
-        naam,
-        email: pickStr(body.email),
-        telefoon: pickStr(body.telefoon),
-        actief: true,
-      })
+      .insert(insertFull)
       .select(SELECT)
       .single();
 
-    if (error) {
-      if (isMissingTable(error)) {
+    if (error && isMissingTable(error)) {
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .insert(insertFull)
+        .select(SELECT_NO_DOSSIER)
+        .single());
+    }
+
+    if (error && isMissingTable(error)) {
+      const { regios: _r, ...withoutRegios } = insertFull;
+      void _r;
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .insert(withoutRegios)
+        .select(SELECT_NO_REGIOS)
+        .single());
+    }
+
+    if (error && isMissingTable(error)) {
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .insert({
+          partner_id: partner.id,
+          naam,
+          email,
+          telefoon: pickStr(body.telefoon),
+          actief: true,
+          portal_token,
+        })
+        .select(SELECT_MIN)
+        .single());
+      if (error && isMissingTable(error)) {
         return NextResponse.json(
           {
             error:
-              "Voer supabase/migrate-partner-teamgenoten.sql uit in Supabase.",
+              "Voer supabase/migrate-partner-teamgenoten.sql, migrate-installatie-portal-auth.sql en migrate-teamgenoot-regios.sql uit in Supabase.",
             migration_required: true,
           },
           { status: 503 }
         );
       }
-      throw error;
+    }
+    if (error) throw error;
+    if (!data) {
+      return NextResponse.json({ error: "Opslaan mislukt" }, { status: 500 });
     }
 
-    return NextResponse.json({ teamgenoot: data }, { status: 201 });
+    const tgToken =
+      (data as { portal_token?: string }).portal_token || portal_token;
+
+    const invite = await verstuurTeamgenootPortaalInvite({
+      teamgenoot: {
+        id: data.id,
+        naam: data.naam,
+        email,
+        portal_token: tgToken,
+      },
+      partnerNaam: partner.naam,
+      password: plainPassword,
+    });
+
+    return NextResponse.json(
+      {
+        teamgenoot: publicTeamgenoot(data as Record<string, unknown>),
+        invite_sent: invite.ok,
+        invite_error: invite.ok ? null : invite.error || null,
+        login_url: installatieLoginUrl(),
+      },
+      { status: 201 }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Teamgenoot toevoegen mislukt") },
@@ -145,19 +305,59 @@ export async function POST(
   }
 }
 
-/** PATCH /api/installatie/[token]/teamgenoten — update of deactiveren */
+/** PATCH — update, deactiveren, of resend_invite */
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
+    const partner = await requirePartnerPortal(token, req);
     if (!partner) {
       return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
+        { error: "Geen toegang — alleen beheerders beheren het team." },
+        { status: 403 }
       );
+    }
+
+    const contentType = req.headers.get("content-type") || "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const id = pickStr(form.get("id"));
+      const file = form.get("file");
+      const docType =
+        parseMonteurDocType(pickStr(form.get("type"))) || "foto";
+      if (!id) {
+        return NextResponse.json({ error: "id is verplicht" }, { status: 400 });
+      }
+      if (!(file instanceof File)) {
+        return NextResponse.json(
+          { error: "Bestand (file) is verplicht" },
+          { status: 400 }
+        );
+      }
+      const sb = getSupabaseAdmin();
+      const result = await uploadMonteurDocument(
+        sb,
+        partner.id,
+        id,
+        docType,
+        file
+      );
+      if ("error" in result) {
+        return NextResponse.json(
+          { error: result.error },
+          { status: result.status }
+        );
+      }
+      return NextResponse.json({
+        teamgenoot: publicTeamgenoot(
+          result.teamgenoot as unknown as Record<string, unknown>
+        ),
+        url: result.url,
+        foto_url: docType === "foto" ? result.url : undefined,
+        type: docType,
+      });
     }
 
     let body: {
@@ -166,6 +366,13 @@ export async function PATCH(
       email?: string | null;
       telefoon?: string | null;
       actief?: boolean;
+      rol?: string;
+      kan_schouw?: boolean;
+      kan_installatie?: boolean;
+      leeftijd?: number | string | null;
+      merken_ervaring?: unknown;
+      regios?: unknown;
+      resend_invite?: boolean;
     };
     try {
       body = await req.json();
@@ -176,6 +383,78 @@ export async function PATCH(
     const id = pickStr(body.id);
     if (!id) {
       return NextResponse.json({ error: "id is verplicht" }, { status: 400 });
+    }
+
+    const sb = getSupabaseAdmin();
+
+    if (body.resend_invite === true) {
+      let { data: tg, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .select(SELECT)
+        .eq("id", id)
+        .eq("partner_id", partner.id)
+        .maybeSingle();
+
+      if (error && isMissingTable(error)) {
+        ({ data: tg, error } = await sb
+          .from("installatie_partner_teamgenoten")
+          .select(SELECT_MIN)
+          .eq("id", id)
+          .eq("partner_id", partner.id)
+          .maybeSingle());
+      }
+      if (error) throw error;
+      if (!tg) {
+        return NextResponse.json(
+          { error: "Teamgenoot niet gevonden" },
+          { status: 404 }
+        );
+      }
+
+      let portalToken = (tg as { portal_token?: string | null }).portal_token;
+      if (!portalToken) {
+        portalToken = newInstallatiePortalToken();
+        await sb
+          .from("installatie_partner_teamgenoten")
+          .update({ portal_token: portalToken })
+          .eq("id", id);
+      }
+
+      const email = (tg.email || "").trim().toLowerCase();
+      if (!email) {
+        return NextResponse.json(
+          { error: "Geen e-mailadres — vul eerst e-mail in." },
+          { status: 400 }
+        );
+      }
+
+      const plainPassword = generatePassword(12);
+      const password_hash = hashPassword(plainPassword);
+      await sb
+        .from("installatie_partner_teamgenoten")
+        .update({ password_hash })
+        .eq("id", id);
+
+      const invite = await verstuurTeamgenootPortaalInvite({
+        teamgenoot: {
+          id: tg.id,
+          naam: tg.naam,
+          email,
+          portal_token: portalToken,
+        },
+        partnerNaam: partner.naam,
+        password: plainPassword,
+      });
+
+      return NextResponse.json({
+        teamgenoot: publicTeamgenoot({
+          ...(tg as Record<string, unknown>),
+          portal_token: portalToken,
+        }),
+        invite_sent: invite.ok,
+        invite_error: invite.ok ? null : invite.error || null,
+        login_url: installatieLoginUrl(),
+      });
     }
 
     const patch: Record<string, unknown> = {
@@ -191,12 +470,41 @@ export async function PATCH(
       }
       patch.naam = naam;
     }
-    if ("email" in body) patch.email = pickStr(body.email);
+    if ("email" in body) patch.email = pickStr(body.email)?.toLowerCase() || null;
     if ("telefoon" in body) patch.telefoon = pickStr(body.telefoon);
     if (typeof body.actief === "boolean") patch.actief = body.actief;
+    if (body.rol !== undefined) patch.rol = normalizeRol(body.rol);
+    if (typeof body.kan_schouw === "boolean") patch.kan_schouw = body.kan_schouw;
+    if (typeof body.kan_installatie === "boolean") {
+      patch.kan_installatie = body.kan_installatie;
+    }
+    if ("leeftijd" in body) {
+      const leeftijdRaw =
+        body.leeftijd === null ||
+        body.leeftijd === undefined ||
+        body.leeftijd === ""
+          ? null
+          : Number(body.leeftijd);
+      const leeftijd =
+        leeftijdRaw != null && Number.isFinite(leeftijdRaw)
+          ? Math.round(leeftijdRaw)
+          : null;
+      if (leeftijd != null && (leeftijd < 16 || leeftijd > 99)) {
+        return NextResponse.json(
+          { error: "Leeftijd moet tussen 16 en 99 liggen" },
+          { status: 400 }
+        );
+      }
+      patch.leeftijd = leeftijd;
+    }
+    if ("merken_ervaring" in body) {
+      patch.merken_ervaring = normalizeMerkenErvaring(body.merken_ervaring);
+    }
+    if ("regios" in body) {
+      patch.regios = normalizeMonteurRegios(body.regios);
+    }
 
-    const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    let { data, error } = await sb
       .from("installatie_partner_teamgenoten")
       .update(patch)
       .eq("id", id)
@@ -204,12 +512,51 @@ export async function PATCH(
       .select(SELECT)
       .single();
 
+    if (error && isMissingTable(error)) {
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .update(patch)
+        .eq("id", id)
+        .eq("partner_id", partner.id)
+        .select(SELECT_NO_DOSSIER)
+        .single());
+    }
+
+    if (error && isMissingTable(error)) {
+      const fallbackPatch = { ...patch };
+      delete fallbackPatch.regios;
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .eq("partner_id", partner.id)
+        .select(SELECT_NO_REGIOS)
+        .single());
+    }
+
+    if (error && isMissingTable(error)) {
+      const fallbackPatch = { ...patch };
+      delete fallbackPatch.rol;
+      delete fallbackPatch.kan_schouw;
+      delete fallbackPatch.kan_installatie;
+      delete fallbackPatch.leeftijd;
+      delete fallbackPatch.merken_ervaring;
+      delete fallbackPatch.regios;
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .eq("partner_id", partner.id)
+        .select(SELECT_MIN)
+        .single());
+    }
+
     if (error) {
       if (isMissingTable(error)) {
         return NextResponse.json(
           {
             error:
-              "Voer supabase/migrate-partner-teamgenoten.sql uit in Supabase.",
+              "Voer migrate-installatie-portal-auth.sql en migrate-teamgenoot-regios.sql uit in Supabase.",
             migration_required: true,
           },
           { status: 503 }
@@ -218,7 +565,9 @@ export async function PATCH(
       throw error;
     }
 
-    return NextResponse.json({ teamgenoot: data });
+    return NextResponse.json({
+      teamgenoot: publicTeamgenoot(data as Record<string, unknown>),
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Teamgenoot bijwerken mislukt") },
@@ -234,11 +583,11 @@ export async function DELETE(
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
+    const partner = await requirePartnerPortal(token, req);
     if (!partner) {
       return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
+        { error: "Geen toegang — alleen beheerders beheren het team." },
+        { status: 403 }
       );
     }
 

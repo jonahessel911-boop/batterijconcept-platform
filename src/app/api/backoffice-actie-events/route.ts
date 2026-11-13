@@ -14,6 +14,7 @@ const SOORTEN: BackofficeActieEventSoort[] = [
   "herplan_afspraak",
   "aangetekende_brief",
   "annulering_keuze_controle",
+  "hold_sales_verlopen",
 ];
 
 /** POST /api/backoffice-actie-events — log voltooide actie */

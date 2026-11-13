@@ -1,28 +1,34 @@
 /**
  * “Volgende stap” op de projectpagina: wat, waarom, en uiterlijk wanneer.
  *
- * Warmtefonds: schouwweek ±5 weken vooruit; één week eerder (maandag
- * belweek) bel je voor de definitieve schouwdag.
+ * Warmtefonds: schouwweek is alleen een klant-indicatie (± wanneer).
+ * Exacte schouwdag + declaratie volgen ná WF-goedkeuring — niet op de week.
  */
 import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import { AMSTERDAM_TZ } from "@/lib/format";
-import { uitvoerDeadlineVolgendeWerkdag } from "@/lib/inkoop-sla";
+import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
 import {
-  dueAtVoorSchouwdagInplan,
+  bestelDeadlineVoorInstallatie,
+  INKOOP_DAGEN_VOOR_INSTALLATIE,
+  materiaalNogTeBestellen,
+  uitvoerDeadlineVolgendeWerkdag,
+} from "@/lib/inkoop-sla";
+import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
+import {
   formatSchouwWeekLabel,
-  isInSchouwdagPlannenWindow,
   isSchouwGeweest,
   isSchouwdagDefinitief,
-  schouwWeekEerder,
   schouwWeekFromDate,
-  schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import {
   FINANCIERING_PIPELINE,
+  FINANCIERING_STATUS_LABEL_KORT,
+  heeftWarmtefondsAfspraak,
+  isWfVoorInBehandeling,
   normalizeFinancieringStatus,
   resolveFinancieringStatus,
+  type FinancieringStatus,
 } from "@/lib/financiering-status";
 import {
   heeftGeenAanbetalingNodig,
@@ -95,18 +101,15 @@ export function orderBetalingPctTegenOfferte(
 }
 
 /**
- * WF: exacte schouwdag in Acties pas bij ≥95% van het offertebedrag betaald.
- * (Alleen “aanbetaling betaald” / verstuurde facturen is niet genoeg.)
+ * WF: exacte schouwdag plannen zodra Warmtefonds is goedgekeurd.
+ * Schouwweek-indicatie en ≥95% betaling sturen dit niet; 95% geldt voor installatie.
  */
 export function kanWfSchouwdagInplannen(
   project: Project,
-  facturen: Factuur[] = []
+  _facturen: Factuur[] = []
 ): boolean {
   if (isSchouwdagDefinitief(project)) return false;
-  return (
-    orderBetalingPctTegenOfferte(project, facturen) >=
-    WF_INSTALLATIE_MIN_BETAALD_PCT
-  );
+  return isWarmtefondsGoedgekeurdVoorSchouw(project);
 }
 
 /**
@@ -173,7 +176,55 @@ function isWarmtefondsGoedgekeurdVoorSchouw(project: Project): boolean {
 
 export type VolgendeStapActie =
   | { kind: "anchor"; label: string; href: string; openSoort?: "schouwdag" }
-  | { kind: "status"; label: string; status: ProjectStatusKey };
+  | { kind: "status"; label: string; status: ProjectStatusKey }
+  | {
+      kind: "financiering";
+      label: string;
+      financiering_status: FinancieringStatus;
+    };
+
+/** WF-afspraak staat: volgende actie = voltooien → in behandeling. */
+function wfAfspraakVoltooienStap(
+  project: Project
+): ProjectVolgendeStapInfo | null {
+  if (!heeftWarmtefondsAfspraak(project)) return null;
+  const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
+  if (!isWfVoorInBehandeling(n)) return null;
+
+  const wanneer = project.warmtefonds_afspraak_at
+    ? formatDateTimeNl(project.warmtefonds_afspraak_at)
+    : null;
+
+  return {
+    eyebrow: "Volgende stap",
+    titel: "Voltooi WF-afspraak",
+    reden: wanneer
+      ? `WF-afspraak staat op ${wanneer}. Na de afspraak: markeer als voltooid — dan gaat de fase naar in behandeling.`
+      : "WF-afspraak staat gepland. Na de afspraak: markeer als voltooid — dan gaat de fase naar in behandeling.",
+    uiterlijkLabel: wanneer || "Op/na de WF-afspraak",
+    uiterlijkAt: project.warmtefonds_afspraak_at || null,
+    urgent: true,
+    overdue: false,
+    actie: {
+      kind: "financiering",
+      label: "Zet in behandeling",
+      financiering_status: "in_behandeling",
+    },
+    wachtOp: null,
+    volgendeDaarna: "WF in behandeling (wacht op beoordeling)",
+    voorwaarden: [
+      {
+        label: "WF-afspraak gepland",
+        ok: true,
+      },
+    ],
+  };
+}
+
+export type ProjectVolgendeStapVoorwaarde = {
+  label: string;
+  ok: boolean;
+};
 
 export type ProjectVolgendeStapInfo = {
   eyebrow: string;
@@ -184,7 +235,252 @@ export type ProjectVolgendeStapInfo = {
   urgent: boolean;
   overdue: boolean;
   actie: VolgendeStapActie | null;
+  /**
+   * Wacht-modus: wat er nog moet gebeuren vóór de volgende orderstap.
+   * Leeg/undefined = actieve BO-stap (niet wachten).
+   */
+  wachtOp?: string | null;
+  /** Wat de volgende orderstap wordt zodra de wachtconditie klaar is. */
+  volgendeDaarna?: string | null;
+  /** Parallel spoor (bijv. WF-declaratie naast schouwdag). */
+  parallel?: ProjectVolgendeStapVoorwaarde[];
+  /** Voorwaarden om deze actie te mogen doen / door te gaan. */
+  voorwaarden?: ProjectVolgendeStapVoorwaarde[];
 };
+
+function wachtStap(opts: {
+  titel: string;
+  wachtOp: string;
+  volgendeDaarna: string;
+  reden: string;
+  uiterlijkLabel?: string;
+  uiterlijkAt?: string | null;
+  actie?: VolgendeStapActie | null;
+}): ProjectVolgendeStapInfo {
+  return {
+    eyebrow: "Wachten",
+    titel: opts.titel,
+    reden: opts.reden,
+    uiterlijkLabel: opts.uiterlijkLabel ?? "Zodra voorwaarde klaar is",
+    uiterlijkAt: opts.uiterlijkAt ?? null,
+    urgent: false,
+    overdue: false,
+    actie: opts.actie ?? null,
+    wachtOp: opts.wachtOp,
+    volgendeDaarna: opts.volgendeDaarna,
+  };
+}
+
+function wfFinancieringWachtLabel(project: Project): string | null {
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  if (!n || n === "uitbetaald" || n === "afgewezen") return null;
+  switch (n) {
+    case "doorgestuurd_naar_edwin":
+    case "documenten_aanleveren":
+      return "Warmtefonds-documenten compleet";
+    case "contact_verstuurd":
+      return "Reactie klant / doorzetten naar in behandeling";
+    case "in_behandeling":
+      return "Goedkeuring Warmtefonds";
+    case "aanbod_ondertekenen":
+      return "Ondertekening Warmtefonds-aanbod";
+    case "declaratie_indienen":
+      return "Declaratie Warmtefonds indienen";
+    case "wacht_op_betaling":
+      return "Uitbetaling Warmtefonds";
+    default:
+      return FINANCIERING_STATUS_LABEL_KORT[n] || null;
+  }
+}
+
+/**
+ * Schouw (gepland of geweest) vóór WF-goedkeuring — komt voor bij vroege planning.
+ * Order staat al verder; toon wat BO nog met WF moet doen (geen dubbele “status”).
+ */
+function wfSchouwEerderDanGoedkeuring(
+  project: Project,
+  now: Date
+): ProjectVolgendeStapInfo | null {
+  if (isWarmtefondsGoedgekeurdVoorSchouw(project)) return null;
+  const gepland = isSchouwdagDefinitief(project);
+  const geweest = isSchouwGeweest(project, now);
+  if (!gepland && !geweest) return null;
+
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  const fsKort =
+    (n && FINANCIERING_STATUS_LABEL_KORT[n]) ||
+    wfFinancieringWachtLabel(project) ||
+    "Warmtefonds";
+  const schouwLabel = project.schouw_at
+    ? formatUiterlijkAt(project.schouw_at)
+    : null;
+
+  // Afspraak gepland → eerst voltooien, daarna in behandeling
+  const afspraakVoltooien = wfAfspraakVoltooienStap(project);
+  if (afspraakVoltooien) return afspraakVoltooien;
+
+  // BO moet nog documenten / doorzetten — echte actie, geen “afwachten”
+  if (
+    n === "doorgestuurd_naar_edwin" ||
+    n === "documenten_aanleveren" ||
+    !n
+  ) {
+    return {
+      eyebrow: "Volgende stap",
+      titel: "Rond WF af: documenten / doorzetten",
+      reden: geweest
+        ? `Schouw is al geweest; WF staat nog op “${fsKort}”. Rond documenten af (open taak) en zet door naar in behandeling.`
+        : `Schouwdag staat al${schouwLabel ? ` (${schouwLabel})` : ""}; WF is nog “${fsKort}”. Jouw actie: documenten afronden en doorzetten. Daarna wacht je op beoordeling Warmtefonds.`,
+      uiterlijkLabel: "Nu",
+      uiterlijkAt: null,
+      urgent: true,
+      overdue: false,
+      actie: null,
+    };
+  }
+
+  // In behandeling e.d.: echt wachten op Warmtefonds
+  const fsWacht =
+    wfFinancieringWachtLabel(project) || "Goedkeuring Warmtefonds";
+
+  if (geweest) {
+    return wachtStap({
+      titel: "Schouw geweest — wacht op WF-goedkeuring",
+      wachtOp: fsWacht,
+      volgendeDaarna: "Declaratie / installatie na goedkeuring",
+      reden: `Schouw is uitgevoerd; WF staat op “${fsKort}”. Geen interne actie tot Warmtefonds beslist — opvolgen via open WF-taken indien nodig.`,
+      uiterlijkLabel: "Zodra Warmtefonds beslist",
+    });
+  }
+
+  return wachtStap({
+    titel: "Schouw staat — wacht op WF-goedkeuring",
+    wachtOp: fsWacht,
+    volgendeDaarna: "Na goedkeuring: declaratie + verdere stappen",
+    reden: schouwLabel
+      ? `Schouwdag staat op ${schouwLabel}; WF is “${fsKort}”. Order blijft hier tot goedkeuring — jij hoeft nu niets te plannen.`
+      : `Schouwdag staat; WF is “${fsKort}”. Wacht op goedkeuring Warmtefonds.`,
+    uiterlijkLabel: schouwLabel || "Op de geplande schouwdag",
+    uiterlijkAt: project.schouw_at || null,
+  });
+}
+
+/**
+ * WF na schouw / richting installatie: toon altijd wat we afwachten + wat daarna komt.
+ */
+function wfWachtTotInstallatie(
+  project: Project,
+  facturen: Factuur[],
+  now: Date
+): ProjectVolgendeStapInfo {
+  const vroeg = wfSchouwEerderDanGoedkeuring(project, now);
+  if (vroeg) return vroeg;
+
+  const schouwOk = isSchouwGeweest(project, now);
+  const pct = orderBetalingPctTegenOfferte(project, facturen);
+  const betaaldOk = pct >= WF_INSTALLATIE_MIN_BETAALD_PCT;
+  const fsWacht = wfFinancieringWachtLabel(project);
+
+  // Schouwdag nog niet gezet: na WF-goedkeuring is dat een actie, geen wacht.
+  if (!schouwOk && !isSchouwdagDefinitief(project)) {
+    if (isWarmtefondsGoedgekeurdVoorSchouw(project)) {
+      const due = dueEndOfDayInDays(2, now);
+      const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
+      const declaratieOk =
+        !!n &&
+        (n === "declaratie_indienen" ||
+          n === "wacht_op_betaling" ||
+          n === "uitbetaald" ||
+          FINANCIERING_PIPELINE.indexOf(n) >=
+            FINANCIERING_PIPELINE.indexOf("declaratie_indienen"));
+      return {
+        eyebrow: "Volgende stap",
+        titel: "Schouwdag inplannen + WF-declaratie",
+        reden:
+          "Warmtefonds is goedgekeurd. Stuur de declaratie door en plan de exacte schouwdag met de klant. De schouwweek was alleen een indicatie.",
+        uiterlijkLabel: formatUiterlijkAt(due),
+        uiterlijkAt: due,
+        urgent: true,
+        overdue: false,
+        actie: {
+          kind: "anchor",
+          label: "Plan schouwdag",
+          href: "#project-afspraken",
+          openSoort: "schouwdag",
+        },
+        wachtOp: null,
+        volgendeDaarna: "Installatiedatum inplannen (na schouw + ≥95%)",
+        parallel: [
+          { label: "WF declaratie", ok: declaratieOk },
+          {
+            label: "Schouwdag inplannen",
+            ok: isSchouwdagDefinitief(project),
+          },
+        ],
+        voorwaarden: [
+          {
+            label: "Warmtefonds goedgekeurd",
+            ok: true,
+          },
+        ],
+      };
+    }
+    return wachtStap({
+      titel: `Wachten: ${fsWacht || "Goedkeuring Warmtefonds"}`,
+      wachtOp: fsWacht || "Goedkeuring Warmtefonds",
+      volgendeDaarna: "WF-declaratie + schouwdag inplannen",
+      reden:
+        "Na goedkeuring: declaratie doorsturen en exacte schouwdag plannen. Schouwweek-indicatie stuurt dit niet.",
+    });
+  }
+
+  const nodig: string[] = [];
+  if (!schouwOk) {
+    nodig.push("Schouwdag laten plaatsvinden");
+  } else {
+    // Schouw geweest: formulier is de operationele gate vóór doorpakken
+    nodig.push("Schouwformulier binnen");
+  }
+  if (!betaaldOk) {
+    nodig.push(
+      fsWacht
+        ? `${fsWacht} (≥${WF_INSTALLATIE_MIN_BETAALD_PCT}% betaald)`
+        : `≥${WF_INSTALLATIE_MIN_BETAALD_PCT}% van offerte betaald (nu ${Math.round(pct)}%)`
+    );
+  }
+
+  const titel =
+    !schouwOk
+      ? "Wachten tot schouw geweest is"
+      : fsWacht && !betaaldOk
+        ? `Wachten: ${fsWacht}`
+        : !betaaldOk
+          ? "Wachten op uitbetaling Warmtefonds"
+          : "Wachten tot schouwformulier er is";
+
+  return {
+    ...wachtStap({
+      titel,
+      wachtOp: nodig.join(" · "),
+      volgendeDaarna: "Installatiedatum inplannen",
+      reden: `Order staat klaar voor installatie zodra dit binnen is. Nu nodig: ${nodig.join("; ")}.`,
+      uiterlijkLabel: "Geen BO-deadline — parallel opvolgen via open taken / WF",
+      actie: null,
+    }),
+    voorwaarden: [
+      {
+        label: "Schouw geweest",
+        ok: schouwOk,
+      },
+      {
+        label: "Warmtefonds uitbetaald",
+        ok: betaaldOk,
+      },
+    ],
+  };
+}
 
 function schouwWeekOf(project: Project): { jaar: number; week: number } | null {
   if (project.schouw_jaar && project.schouw_week) {
@@ -201,17 +497,6 @@ function formatUiterlijkAt(iso: string): string {
     "EEEE d MMMM yyyy · HH:mm",
     { locale: nl }
   );
-}
-
-function formatMaandagWeek(jaar: number, week: number): string {
-  const mondayIso = schouwWeekToMondayIso(jaar, week);
-  const dag = formatInTimeZone(
-    new Date(mondayIso),
-    AMSTERDAM_TZ,
-    "d MMMM yyyy",
-    { locale: nl }
-  );
-  return `Maandag week ${week} · ${dag}`;
 }
 
 function isPast(iso: string, now: Date): boolean {
@@ -350,21 +635,19 @@ function volgendeStapNaOpstarten(
       };
     }
 
-    return {
-      eyebrow: "Volgende stap",
-      titel: "Schouwweek inplannen",
+    // Schouwweek is geen BO-actie — alleen indicatie in kickoff/track & trace.
+    return wachtStap({
+      titel: "Wachten: opstarten / Warmtefonds",
+      wachtOp: "Kickoff afronden (indicatie-schouwweek optioneel) · WF-traject",
+      volgendeDaarna: "Na WF-goedkeuring: declaratie + schouwdag inplannen",
       reden:
-        "Warmtefonds duurt ±5 weken — daarom plannen we de schouwweek ongeveer 5 weken vooruit.",
-      uiterlijkLabel: formatUiterlijkAt(due),
-      uiterlijkAt: due,
-      urgent: true,
-      overdue: false,
+        "De schouwweek is alleen een inschatting voor de klant, geen planning-actie. Exacte schouwdag volgt ná WF-goedkeuring, samen met de declaratie.",
       actie: {
         kind: "anchor",
-        label: "Plan schouwweek",
-        href: "#project-afspraken",
+        label: "Naar opstarten",
+        href: "#project-kickoff",
       },
-    };
+    });
   }
 
   if (isSchouwdagDefinitief(project)) {
@@ -384,70 +667,72 @@ function volgendeStapNaOpstarten(
     };
   }
 
-  // Warmtefonds: schouwdag pas ná goedkeuring (wacht-actie dekt de tussentijd)
+  // Warmtefonds: schouwdag pas ná goedkeuring (niet op schouwweek-indicatie)
   if (wf && !isWarmtefondsGoedgekeurdVoorSchouw(project)) {
-    return null;
+    const fsWacht =
+      wfFinancieringWachtLabel(project) || "Goedkeuring Warmtefonds";
+    const indicatie = week
+      ? ` Indicatie voor de klant: ${formatSchouwWeekLabel(week.jaar, week.week) || `week ${week.week}`}.`
+      : "";
+    return wachtStap({
+      titel: `Wachten: ${fsWacht}`,
+      wachtOp: fsWacht,
+      volgendeDaarna: "WF-declaratie doorsturen + schouwdag inplannen",
+      reden: `Exacte schouwdag en declaratie volgen ná WF-goedkeuring.${indicatie}`,
+    });
   }
-
-  // WF: exacte schouwdag pas bij ≥95% van het offertebedrag (niet alleen verstuurde facturen)
-  if (wf && !kanWfSchouwdagInplannen(project, facturen)) {
-    return null;
-  }
-
-  const belweek = schouwWeekEerder(week.jaar, week.week);
-  const dueAt = dueAtVoorSchouwdagInplan(week.jaar, week.week);
-  const inWindow = isInSchouwdagPlannenWindow(week.jaar, week.week, now);
-  const overdue = isPast(dueAt, now);
-  const schouwLabel =
-    formatSchouwWeekLabel(week.jaar, week.week) || `Week ${week.week}`;
 
   if (wf) {
+    const due = dueEndOfDayInDays(2, now);
+    const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
+    const declaratieOk =
+      !!n &&
+      (n === "declaratie_indienen" ||
+        n === "wacht_op_betaling" ||
+        n === "uitbetaald" ||
+        FINANCIERING_PIPELINE.indexOf(n) >=
+          FINANCIERING_PIPELINE.indexOf("declaratie_indienen"));
     return {
-      eyebrow: overdue ? "Volgende stap — te laat" : "Volgende stap",
-      titel: "Schouwdag inplannen met de klant",
-      reden: `≥95% van de offerte betaald · schouwweek ${schouwLabel} — plan nu de exacte schouwdag.`,
-      uiterlijkLabel: formatUiterlijkAt(dueAt),
-      uiterlijkAt: dueAt,
+      eyebrow: "Volgende stap",
+      titel: "Schouwdag inplannen + WF-declaratie",
+      reden:
+        "Warmtefonds is goedgekeurd — stuur de declaratie door en plan de exacte schouwdag met de klant.",
+      uiterlijkLabel: formatUiterlijkAt(due),
+      uiterlijkAt: due,
       urgent: true,
-      overdue,
-      actie: {
-        kind: "anchor",
-        label: "Actie afronden — plan schouwdag",
-        href: "#project-afspraken",
-        openSoort: "schouwdag",
-      },
-    };
-  }
-
-  if (!inWindow && !overdue) {
-    return {
-      eyebrow: "Volgende stap (later)",
-      titel: `Schouwdag inplannen vanaf ${formatMaandagWeek(belweek.jaar, belweek.week)}`,
-      reden: `Schouwweek staat op ${schouwLabel}. Eén week van tevoren bel je voor de exacte schouwdag.`,
-      uiterlijkLabel: `${formatMaandagWeek(belweek.jaar, belweek.week)} (uiterlijk 17:00)`,
-      uiterlijkAt: dueAt,
-      urgent: false,
       overdue: false,
       actie: {
         kind: "anchor",
-        label: "Actie afronden — plan schouwdag",
+        label: "Plan schouwdag",
         href: "#project-afspraken",
         openSoort: "schouwdag",
       },
+      parallel: [
+        { label: "WF declaratie", ok: declaratieOk },
+        {
+          label: "Schouwdag inplannen",
+          ok: isSchouwdagDefinitief(project),
+        },
+      ],
+      voorwaarden: [
+        { label: "Warmtefonds goedgekeurd", ok: true },
+      ],
     };
   }
 
+  // Eigen middelen: schouwdag zodra betaling rond is — niet gekoppeld aan schouwweek
+  const dueEm = dueEndOfDayInDays(1, now);
   return {
-    eyebrow: overdue ? "Volgende stap — te laat" : "Volgende stap",
+    eyebrow: "Volgende stap",
     titel: "Schouwdag inplannen met de klant",
-    reden: "Want de week erop is de schouwweek gepland.",
-    uiterlijkLabel: `${formatUiterlijkAt(dueAt)} · belweek ${belweek.week}`,
-    uiterlijkAt: dueAt,
+    reden: "Plan de exacte schouwdag (de eventuele schouwweek was alleen een inschatting).",
+    uiterlijkLabel: formatUiterlijkAt(dueEm),
+    uiterlijkAt: dueEm,
     urgent: true,
-    overdue,
+    overdue: false,
     actie: {
       kind: "anchor",
-      label: "Actie afronden — plan schouwdag",
+      label: "Plan schouwdag",
       href: "#project-afspraken",
       openSoort: "schouwdag",
     },
@@ -634,9 +919,16 @@ export function resolveProjectVolgendeStap(
     return volgendeStapNaOpstarten(project, now, facturen);
   }
 
-  // Warmtefonds: installatie-actie pas nadat schouw geweest is én ≥95% betaald.
-  // Geen “betaling controleren”-actie tussendoor.
+  // Warmtefonds: installatie pas na schouw + ≥95%. Anders: toon wacht + volgende.
   if (betaalwijze === "warmtefonds") {
+    // Afspraak gepland → voltooien = naar in behandeling (vóór wacht/goedkeuring)
+    const afspraakVoltooien = wfAfspraakVoltooienStap(project);
+    if (afspraakVoltooien) return afspraakVoltooien;
+
+    // Vroege schouw t.o.v. WF-goedkeuring (planning) — altijd expliciet maken
+    const vroegSchouw = wfSchouwEerderDanGoedkeuring(project, now);
+    if (vroegSchouw) return vroegSchouw;
+
     const isInstallatieKandidaat =
       status === "schouwdag_ingepland" ||
       status === "schouw_voltooid" ||
@@ -645,9 +937,27 @@ export function resolveProjectVolgendeStap(
       status === "materiaal_besteld";
     if (isInstallatieKandidaat) {
       if (!kanWfInstallatieInplannen(project, facturen, now)) {
-        return null;
+        // Schouw gepland maar nog niet geweest (WF al wel goedgekeurd)
+        if (
+          status === "schouwdag_ingepland" &&
+          isSchouwdagDefinitief(project) &&
+          !isSchouwGeweest(project, now)
+        ) {
+          return wachtStap({
+            titel: "Wachten tot schouw geweest is",
+            wachtOp: "Schouwdag laten plaatsvinden",
+            volgendeDaarna: "Schouwformulier uploaden → daarna installatie plannen",
+            reden: project.schouw_at
+              ? `Schouw staat op ${formatUiterlijkAt(project.schouw_at)}. Daarna: formulier + WF-betaling → installatie.`
+              : "Schouwdag staat gepland. Na de schouw volgt formulier en (na betaling) installatie.",
+            uiterlijkLabel: project.schouw_at
+              ? formatUiterlijkAt(project.schouw_at)
+              : "Op de geplande schouwdag",
+            uiterlijkAt: project.schouw_at || null,
+          });
+        }
+        return wfWachtTotInstallatie(project, facturen, now);
       }
-      // Toon installatie-stap (niet restfactuur-opvolgen / lege schouw-status)
       return volgendeStapVanTaak(
         "restfactuur_betaald",
         betaalwijze,
@@ -655,10 +965,25 @@ export function resolveProjectVolgendeStap(
         now
       );
     }
+
+    // Afwachten WF (nog geen dag) — schouwweek-indicatie stuurt geen actie
+    if (status === "opstarten_voltooid_afwachten_wf") {
+      const week = schouwWeekOf(project);
+      const fsWacht =
+        wfFinancieringWachtLabel(project) || "Goedkeuring Warmtefonds";
+      const indicatie = week
+        ? ` Klant-indicatie: ${formatSchouwWeekLabel(week.jaar, week.week) || `week ${week.week}`}.`
+        : "";
+      return wachtStap({
+        titel: `Wachten: ${fsWacht}`,
+        wachtOp: fsWacht,
+        volgendeDaarna: "WF-declaratie + schouwdag inplannen",
+        reden: `Opstarten klaar — na goedkeuring declaratie doorsturen en exacte schouwdag plannen.${indicatie}`,
+      });
+    }
   }
 
-  // Eigen middelen: installatie pas ná schouw + eerste factuur betaald.
-  // Eerste factuur betaald zonder schouw → schouw-actie (via opstarten-pad).
+  // Eigen middelen: installatie pas ná schouw + betaling.
   if (betaalwijze === "eigen_middelen") {
     const isInstallatieKandidaat =
       status === "schouw_voltooid" ||
@@ -673,7 +998,12 @@ export function resolveProjectVolgendeStap(
         ) {
           return volgendeStapNaOpstarten(project, now, facturen);
         }
-        return null;
+        return wachtStap({
+          titel: "Wachten op betaling",
+          wachtOp: "Eerste / restfactuur betaald",
+          volgendeDaarna: "Installatiedatum inplannen",
+          reden: "Zonder betaling gaan we niet door naar installatie/inkoop.",
+        });
       }
       return volgendeStapVanTaak(
         "restfactuur_betaald",
@@ -682,7 +1012,85 @@ export function resolveProjectVolgendeStap(
         now
       );
     }
+
+    if (
+      status === "schouwdag_ingepland" &&
+      isSchouwdagDefinitief(project) &&
+      !isSchouwGeweest(project, now)
+    ) {
+      return wachtStap({
+        titel: "Wachten tot schouw geweest is",
+        wachtOp: "Schouwdag laten plaatsvinden",
+        volgendeDaarna: "Schouwformulier uploaden",
+        reden: project.schouw_at
+          ? `Schouw staat op ${formatUiterlijkAt(project.schouw_at)}.`
+          : "Schouwdag staat gepland.",
+        uiterlijkLabel: project.schouw_at
+          ? formatUiterlijkAt(project.schouw_at)
+          : "Op de geplande schouwdag",
+        uiterlijkAt: project.schouw_at || null,
+      });
+    }
   }
 
-  return volgendeStapVanTaak(status, betaalwijze, project, now);
+  const vanTaak = volgendeStapVanTaak(status, betaalwijze, project, now);
+  if (vanTaak) return vanTaak;
+
+  // Fallback: nooit stilzwijgend leeg als er nog pipeline is
+  if (status === "schouwdag_ingepland") {
+    return wachtStap({
+      titel: "Wachten tot schouw geweest is",
+      wachtOp: "Schouwdag",
+      volgendeDaarna: "Schouwformulier / volgende orderstap",
+      reden: redenVoorStatus(status, betaalwijze === "warmtefonds"),
+      uiterlijkAt: project.schouw_at || null,
+      uiterlijkLabel: project.schouw_at
+        ? formatUiterlijkAt(project.schouw_at)
+        : "Op de geplande schouwdag",
+    });
+  }
+
+  if (status === "installatie_ingepland" || status === "materiaal_besteld") {
+    const batterij = batterijPurchasingStatus(project.materiaal_checks);
+    if (materiaalNogTeBestellen(project) || !batterij.besteld) {
+      const due = project.installatie_at
+        ? bestelDeadlineVoorInstallatie(project.installatie_at).toISOString()
+        : null;
+      const overdue = due ? isPast(due, now) : false;
+      return {
+        eyebrow: overdue ? "Volgende stap — te laat" : "Volgende stap",
+        titel: "Batterij / materiaal bestellen",
+        reden: project.installatie_at
+          ? `Installatie staat gepland — bestel uiterlijk ${INKOOP_DAGEN_VOOR_INSTALLATIE} werkdagen van tevoren (Purchasing).`
+          : "Materiaal nog open — afhandelen in Purchasing.",
+        uiterlijkLabel: due
+          ? formatUiterlijkAt(due)
+          : "Zo snel mogelijk",
+        uiterlijkAt: due,
+        urgent: true,
+        overdue,
+        actie: {
+          kind: "anchor",
+          label: "Open Purchasing",
+          href: "/?tab=purchasing",
+        },
+        wachtOp: null,
+        volgendeDaarna: "Installatie laten uitvoeren",
+      };
+    }
+    return wachtStap({
+      titel: "Wachten tot installatie geweest is",
+      wachtOp: "Installatiedag",
+      volgendeDaarna: "Opleverformulier / after sale",
+      reden: project.installatie_at
+        ? `Installatie staat op ${formatUiterlijkAt(project.installatie_at)}. Materiaal is besteld.`
+        : "Installatie is ingepland.",
+      uiterlijkLabel: project.installatie_at
+        ? formatUiterlijkAt(project.installatie_at)
+        : "Op de geplande installatiedag",
+      uiterlijkAt: project.installatie_at || null,
+    });
+  }
+
+  return null;
 }

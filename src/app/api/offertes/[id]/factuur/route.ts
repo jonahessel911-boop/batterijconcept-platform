@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import {
   ensureBtwDraftFactuur,
+  ensureEindafrekeningDraftFactuur,
   ensureRestantDraftFactuur,
 } from "@/lib/ensure-btw-factuur";
 import { magWarmtefondsRestantFactuur } from "@/lib/aanbetaling";
@@ -12,9 +13,10 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/offertes/[id]/factuur
- * { soort?: 'aanbetaling' | 'restant' } — conceptfactuur aanmaken/bijwerken.
- * Default: aanbetaling (BTW / Warmtefonds-aanbetaling).
+ * { soort?: 'aanbetaling' | 'restant' | 'eindafrekening' } — conceptfactuur
+ * aanmaken/bijwerken. Default: aanbetaling (BTW / Warmtefonds-aanbetaling).
  * Restant bij Warmtefonds: pas na aanvraag_goedgekeurd.
+ * Eindafrekening: alles wat na oplevering op geen enkele factuur staat.
  */
 export async function POST(
   req: NextRequest,
@@ -27,14 +29,19 @@ export async function POST(
   } catch {
     /* empty ok */
   }
-  const soort = body.soort === "restant" ? "restant" : "aanbetaling";
+  const soort =
+    body.soort === "restant"
+      ? "restant"
+      : body.soort === "eindafrekening"
+        ? "eindafrekening"
+        : "aanbetaling";
 
   try {
     const sb = getSupabaseAdmin();
     const { data: offerte, error } = await sb
       .from("offertes")
       .select(
-        "id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc"
+        "id, lead_id, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc"
       )
       .eq("id", id)
       .single();
@@ -54,6 +61,25 @@ export async function POST(
       .select("id, status, financiering_status")
       .eq("offerte_id", id)
       .maybeSingle();
+
+    if (soort === "eindafrekening") {
+      const factuur = await ensureEindafrekeningDraftFactuur(sb, {
+        offerteId: offerte.id,
+        leadId: offerte.lead_id,
+        projectId: project?.id || null,
+        offerteNummer: offerte.offerte_nummer,
+        orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
+      });
+
+      if (!factuur) {
+        return NextResponse.json({
+          skipped: true,
+          reason: "Order is volledig gefactureerd",
+        });
+      }
+
+      return NextResponse.json({ factuur, soort: "eindafrekening" });
+    }
 
     if (soort === "restant") {
       const isWf = Boolean(offerte.financiering_voorbehoud);
@@ -106,12 +132,16 @@ export async function POST(
         offerte.aanbetaling_bedrag_inc != null
           ? Number(offerte.aanbetaling_bedrag_inc)
           : null,
+      aanbetalingTeInnenInc:
+        offerte.aanbetaling_te_innen_inc != null
+          ? Number(offerte.aanbetaling_te_innen_inc)
+          : null,
     });
 
     if (!factuur) {
       return NextResponse.json({
         skipped: true,
-        reason: "Geen aanbetaling voor deze offerte",
+        reason: "Geen aanbetaling (€0) — geen factuur aangemaakt",
       });
     }
 

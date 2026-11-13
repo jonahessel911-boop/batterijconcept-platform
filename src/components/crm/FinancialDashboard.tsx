@@ -152,7 +152,7 @@ function StandDashboard({ fc }: { fc: FreeCashflowSnapshot }) {
           : "Geen geplande installatie-betaling in 14d",
     },
     {
-      metric: "Loonkosten Tarik",
+      metric: "Loonkosten Rik",
       waarde: loon?.bedrag ?? 0,
       berekening: `€${TARIK_FIXED_PER_WEEK}/week vast + €${TARIK_PER_INGEPLANDE_AFSPRAAK}/ingeplande afspraak · maandag na ma–vr`,
     },

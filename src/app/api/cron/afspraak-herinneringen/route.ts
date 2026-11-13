@@ -11,7 +11,10 @@ import {
   shouldSendOpwarmNow,
   shouldSendReminderNow,
 } from "@/lib/email/afspraak-sequence";
-import { afspraakStuurtMail } from "@/lib/afspraak-soort";
+import {
+  afspraakStuurtMail,
+  isVervolgMetHerinneringOptIn,
+} from "@/lib/afspraak-soort";
 
 export const runtime = "nodejs";
 
@@ -124,7 +127,13 @@ async function processBatch(
   let herinnering = 0;
 
   for (const a of afspraken) {
-    if (!afspraakStuurtMail(a.soort)) continue;
+    const fullSequence = afspraakStuurtMail(a.soort);
+    const reminderOnly =
+      !fullSequence &&
+      isVervolgMetHerinneringOptIn(a.soort) &&
+      !a.herinnering_verstuurd;
+    if (!fullSequence && !reminderOnly) continue;
+
     const lead = Array.isArray(a.leads) ? a.leads[0] : a.leads;
     const adviseur = Array.isArray(a.adviseurs)
       ? a.adviseurs[0]
@@ -148,8 +157,9 @@ async function processBatch(
       lead,
     });
 
-    // 1. Bevestiging
+    // 1. Bevestiging — alleen nieuw huisbezoek
     if (
+      fullSequence &&
       shouldSendBevestigingNow({
         now,
         createdAt,
@@ -174,8 +184,9 @@ async function processBatch(
       }
     }
 
-    // 2. Opwarm saldering
+    // 2. Opwarm saldering — alleen nieuw huisbezoek
     if (
+      fullSequence &&
       shouldSendOpwarmNow({
         now,
         createdAt,
@@ -203,7 +214,7 @@ async function processBatch(
       }
     }
 
-    // 3. 24u reminder
+    // 3. 24u reminder — nieuw altijd; vervolg alleen bij opt-in
     if (
       shouldSendReminderNow({
         now,

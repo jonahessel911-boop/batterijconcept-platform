@@ -1729,17 +1729,81 @@ export function AgendaPanel({
                         day.key,
                         slotIdx
                       );
+                      // Geannuleerde afspraken mogen afblokken niet blokkeren
+                      const activeItems = items.filter(
+                        (a) => a.status !== "geannuleerd"
+                      );
+                      const cancelledItems = items.filter(
+                        (a) => a.status === "geannuleerd"
+                      );
+                      const slotVrijVoorAfblok = activeItems.length === 0;
+
+                      const renderStickers = (
+                        list: Afspraak[],
+                        opts?: { afblokAllowed?: boolean }
+                      ) =>
+                        list.map((a) => {
+                          const ls =
+                            (a.status === "voltooid" && a.leads?.status
+                              ? a.leads.status
+                              : null) ||
+                            leadStatusById.get(a.lead_id) ||
+                            a.leads?.status ||
+                            null;
+                          const needsCheckout = needsVervolgPunt(
+                            a,
+                            afspraken,
+                            new Date(),
+                            ls
+                          );
+                          return (
+                            <StickerCard
+                              key={a.id}
+                              a={a}
+                              leadStatus={ls}
+                              needsCheckout={needsCheckout}
+                              vervolgIndex={
+                                vervolgIndexByAfspraak.get(a.id) || 1
+                              }
+                              onClick={() => {
+                                if (afblokMode) {
+                                  if (opts?.afblokAllowed && !blockBusy) {
+                                    if (weekBlocked) {
+                                      setError(
+                                        "Hele week is geblokkeerd — slot-afblokken kan dan niet"
+                                      );
+                                      return;
+                                    }
+                                    void toggleSlotAfblok(
+                                      adv.id,
+                                      day.key,
+                                      row.hour
+                                    );
+                                    return;
+                                  }
+                                  setError(
+                                    "Dit slot heeft al een afspraak — kies een leeg tijdslot"
+                                  );
+                                  return;
+                                }
+                                setSelected(a);
+                                setPlanOpen(false);
+                              }}
+                            />
+                          );
+                        });
+
                       return (
                         <div
                           key={`${adv.id}-${day.key}-${slotIdx}`}
                           className={[
                             "min-h-[2.75rem] min-w-0 border-r border-line p-0.5",
-                            afblokMode && items.length === 0
+                            afblokMode && slotVrijVoorAfblok
                               ? "bg-[#FFF7F7]/60"
                               : "",
                           ].join(" ")}
                         >
-                          {blocked && items.length === 0 ? (
+                          {blocked && slotVrijVoorAfblok ? (
                             <div className="space-y-1">
                               <GeblokkeerdCell
                                 onClick={
@@ -1815,45 +1879,55 @@ export function AgendaPanel({
                                       : undefined
                                 }
                               />
+                              {cancelledItems.length > 0
+                                ? renderStickers(cancelledItems, {
+                                    afblokAllowed: true,
+                                  })
+                                : null}
                             </div>
-                          ) : items.length > 0 ? (
+                          ) : activeItems.length > 0 ? (
                             <div className="space-y-1">
-                              {items.map((a) => {
-                                const ls =
-                                  (a.status === "voltooid" && a.leads?.status
-                                    ? a.leads.status
-                                    : null) ||
-                                  leadStatusById.get(a.lead_id) ||
-                                  a.leads?.status ||
-                                  null;
-                                const needsCheckout = needsVervolgPunt(
-                                  a,
-                                  afspraken,
-                                  new Date(),
-                                  ls
-                                );
-                                return (
-                                  <StickerCard
-                                    key={a.id}
-                                    a={a}
-                                    leadStatus={ls}
-                                    needsCheckout={needsCheckout}
-                                    vervolgIndex={
-                                      vervolgIndexByAfspraak.get(a.id) || 1
-                                    }
-                                    onClick={() => {
-                                      if (afblokMode) {
-                                        setError(
-                                          "Dit slot heeft al een afspraak — kies een leeg tijdslot"
-                                        );
-                                        return;
-                                      }
-                                      setSelected(a);
-                                      setPlanOpen(false);
-                                    }}
-                                  />
-                                );
+                              {renderStickers(items)}
+                            </div>
+                          ) : cancelledItems.length > 0 ? (
+                            <div className="space-y-1">
+                              {afblokMode ? (
+                                <button
+                                  type="button"
+                                  disabled={blockBusy}
+                                  onClick={() =>
+                                    handleEmptySlotClick(
+                                      adv.id,
+                                      day.key,
+                                      slotIdx
+                                    )
+                                  }
+                                  className="flex h-full min-h-[2.25rem] w-full items-center justify-center rounded border border-dashed border-[#FECACA] text-[11px] text-[#B91C1C] hover:bg-[#FEF2F2] disabled:opacity-50"
+                                  title="Slot afblokken (geannuleerde afspraak telt niet)"
+                                >
+                                  Blokkeer
+                                </button>
+                              ) : null}
+                              {renderStickers(cancelledItems, {
+                                afblokAllowed: true,
                               })}
+                              {!afblokMode ? (
+                                <button
+                                  type="button"
+                                  disabled={blockBusy}
+                                  onClick={() =>
+                                    handleEmptySlotClick(
+                                      adv.id,
+                                      day.key,
+                                      slotIdx
+                                    )
+                                  }
+                                  className="flex h-full min-h-[2.25rem] w-full items-center justify-center rounded text-[11px] text-transparent hover:bg-[#F0FDF4] hover:text-green-dark disabled:opacity-50"
+                                  title="Afspraak plannen"
+                                >
+                                  +
+                                </button>
+                              ) : null}
                             </div>
                           ) : (
                             <button

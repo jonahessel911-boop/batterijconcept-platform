@@ -59,6 +59,7 @@ import { ProjectInkoopSection } from "./ProjectInkoopSection";
 import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
 import { ProjectAgendaAfspraakSection } from "./ProjectAgendaAfspraakSection";
 import { ProjectServiceSection } from "./ProjectServiceSection";
+import { ProjectInstallatiesTab } from "./ProjectInstallatiesTab";
 import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 import { StatusBadge } from "./StatusBadge";
@@ -90,6 +91,7 @@ import {
   type AnnuleringKeuze,
 } from "./AnnuleringBedenktijdModal";
 import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
+import { HOLD_SALES_VERLENG_DAGEN } from "@/lib/hold-sales";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -432,7 +434,7 @@ export function ProjectPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadingSchouw, setUploadingSchouw] = useState(false);
   const [mainTab, setMainTab] = useState<
-    "overzicht" | "financieel" | "medewerkers" | "service"
+    "overzicht" | "financieel" | "medewerkers" | "installaties" | "service"
   >("overzicht");
   const [docsTab, setDocsTab] = useState<
     "documenten" | "rapporten" | "bestanden"
@@ -759,6 +761,57 @@ export function ProjectPage() {
     };
   }, [project, facturen]);
 
+  async function escalateHoldSalesFromProject(
+    action: "extend" | "await_bedenktijd"
+  ) {
+    if (!project) return;
+    if (action === "extend") {
+      if (
+        !confirm(
+          `HOLD sales-actie verlengen met ${HOLD_SALES_VERLENG_DAGEN} dagen? Sales blijft eigenaar.`
+        )
+      ) {
+        return;
+      }
+    } else if (
+      !confirm(
+        "Afwachten bedenktijd — HOLD opheffen? Order gaat terug in het normale pad."
+      )
+    ) {
+      return;
+    }
+    setCompletingId(`hold-${action}-${project.id}`);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/hold-sales/escalate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            author_naam: session?.naam || null,
+          }),
+        }
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        project?: Project;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "HOLD-escalatie mislukt");
+      if (data.project) {
+        setProject((p) => (p ? { ...p, ...data.project } : data.project!));
+      }
+      setOkMsg(data.message || "HOLD bijgewerkt.");
+      void refreshLeadEvents(project.lead_id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "HOLD-escalatie mislukt");
+    } finally {
+      setCompletingId(null);
+    }
+  }
+
   async function verstuurAnnuleringsfactuurVanProject() {
     if (!project) return;
     if (
@@ -788,6 +841,7 @@ export function ProjectPage() {
               ...p,
               status: "annulering",
               annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+              hold_sales_deadline_at: null,
               schouw_at: null,
               schouw_jaar: null,
               schouw_week: null,
@@ -1051,6 +1105,10 @@ export function ProjectPage() {
         }
         setOkMsg(
           "Financiering goedgekeurd — restantfactuur klaargezet (Financieel)."
+        );
+      } else if (extra?.warmtefonds_afspraak_at) {
+        setOkMsg(
+          "WF-afspraak gezet. De klant krijgt een bevestiging per e-mail."
         );
       } else {
         setOkMsg("Financieringsfase bijgewerkt.");
@@ -1511,6 +1569,7 @@ export function ProjectPage() {
                 .join(" · ") ||
               null,
             soort: "afspraak",
+            categorie: "project",
             start_at: newStartLocal,
             end_at: newEndLocal || null,
             adviseur_id: newPersonId,
@@ -2116,7 +2175,10 @@ export function ProjectPage() {
 
   const openBoActies = openActiesVoorProject(project, facturen).filter(
     (a) =>
-      a.soort === "schakel_financiering" || a.soort === "aangetekende_brief"
+      a.soort === "schakel_financiering" ||
+      a.soort === "aangetekende_brief" ||
+      a.soort === "annulering_keuze_controle" ||
+      a.soort === "hold_sales_verlopen"
   );
   const openTerugbel = afspraken
     .filter(isActieveTerugbel)
@@ -2502,7 +2564,25 @@ export function ProjectPage() {
 
     let displayTitle = titel;
     let displayBody = ev.detail || undefined;
-    if (titel.toLowerCase().startsWith("projectstatus:")) {
+    // HOLD-terug: gestempelde projectnotitie is de primaire regel; status-event
+    // niet dubbel tonen (detail staat daar al).
+    if (meta.hold_released === true) {
+      continue;
+    }
+    if (/^HOLD teruggestuurd\b/i.test(titel)) {
+      displayTitle = "HOLD teruggestuurd door sales";
+      const author =
+        typeof meta.author === "string" && meta.author.trim()
+          ? meta.author.trim()
+          : null;
+      const reply =
+        typeof meta.reply === "string" && meta.reply.trim()
+          ? meta.reply.trim()
+          : null;
+      displayBody = [reply || ev.detail || null, author ? `Door ${author}` : null]
+        .filter(Boolean)
+        .join("\n");
+    } else if (titel.toLowerCase().startsWith("projectstatus:")) {
       const rest = titel.slice("Projectstatus:".length).trim();
       if (
         rest.toLowerCase().includes("materiaal") ||
@@ -2530,12 +2610,21 @@ export function ProjectPage() {
       });
       if (coveredByNote) continue;
       displayTitle = "Email ontvangen";
-      displayBody = [
-        formatDateTimeNl(ev.created_at),
-        subject ? `Onderwerp: ${subject}` : null,
-      ]
-        .filter(Boolean)
-        .join("\n");
+      // detail bevat datum + onderwerp + volledige body (nieuwe mails)
+      const detailLines = (ev.detail || "")
+        .split("\n")
+        .map((l) => l.trimEnd());
+      const withoutTitle = detailLines[0]?.match(/^e-?mail ontvangen\b/i)
+        ? detailLines.slice(1)
+        : detailLines;
+      displayBody =
+        withoutTitle.join("\n").trim() ||
+        [
+          formatDateTimeNl(ev.created_at),
+          subject ? `Onderwerp: ${subject}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
     } else if (
       (soort === "email" || /klantmail|contactmail/i.test(titel)) &&
       meta.bron !== "inbox"
@@ -2608,7 +2697,10 @@ export function ProjectPage() {
     project.backoffice_afgerond_at || project.created_at;
 
   const boNotitie = project.backoffice_notitie?.trim();
-  if (boNotitie) {
+  const boNotitieIsHoldTerug =
+    !!boNotitie && /^HOLD teruggestuurd\b/i.test(boNotitie);
+  // HOLD-terug staat al via gestempelde notitie / status-event met juiste tijd.
+  if (boNotitie && !boNotitieIsHoldTerug) {
     feed.push({
       key: "note-backoffice",
       at: handoverAt,
@@ -2642,27 +2734,49 @@ export function ProjectPage() {
     ) {
       return;
     }
-    // Zelfde tekst staat al in de statusregel "terug naar backoffice · Sales: …".
-    if (/^HOLD afgehandeld\b/i.test(n.text.trim())) return;
+    // HOLD door sales teruggestuurd — duidelijk in de tijdlijn tonen.
+    if (
+      /^HOLD teruggestuurd\b/i.test(n.text.trim()) ||
+      /^HOLD afgehandeld\b/i.test(n.text.trim())
+    ) {
+      const lines = n.text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const replyText = lines.slice(1).join("\n").trim();
+      feed.push({
+        key: `note-hold-release-${n.at}-${i}`,
+        at: n.at,
+        title: "HOLD teruggestuurd door sales",
+        body: [replyText || null, n.author ? `Door ${n.author}` : null]
+          .filter(Boolean)
+          .join("\n"),
+        kind: "note",
+        author: n.author,
+        icon: "note",
+      });
+      return;
+    }
     const inbound = n.text.trim().match(/^e-?mail ontvangen\b/i);
     if (inbound) {
-      const subjectLine = n.text
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => /^onderwerp:/i.test(line));
-      const subject = subjectLine
-        ? subjectLine.replace(/^onderwerp:\s*/i, "").trim()
-        : "";
+      // Volledige mail: alles na de titelregel (datum, onderwerp, body)
+      const lines = n.text.replace(/\r\n/g, "\n").split("\n");
+      const body = lines
+        .slice(1)
+        .join("\n")
+        .replace(/^\s+/, "")
+        .trim();
       feed.push({
         key: `note-${n.at}-${i}`,
         at: n.at,
         title: "Email ontvangen",
-        body: [
-          formatDateTimeNl(n.at),
-          subject ? `Onderwerp: ${subject}` : null,
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        body:
+          body ||
+          [
+            formatDateTimeNl(n.at),
+          ]
+            .filter(Boolean)
+            .join("\n"),
         kind: "note",
         author: n.author,
         icon: "note",
@@ -2780,6 +2894,24 @@ export function ProjectPage() {
       {error ? (
         <div className="mb-4 border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
           {error}
+        </div>
+      ) : null}
+
+      {boNotitieIsHoldTerug ? (
+        <div className="mb-4 border border-[#5A4A6E]/30 bg-[#F0ECF5] px-4 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#4A3A5C]">
+            HOLD teruggestuurd door sales
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
+            {boNotitie
+              .replace(/^HOLD teruggestuurd door [^:\n]+:\s*/i, "")
+              .trim() || boNotitie}
+          </p>
+          {project.backoffice_notitie_door?.trim() ? (
+            <p className="mt-1 text-xs text-[#4A3A5C]">
+              Door {project.backoffice_notitie_door.trim()}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -2949,6 +3081,7 @@ export function ProjectPage() {
                     ["overzicht", "Overzicht"],
                     ["financieel", "Financieel"],
                     ["medewerkers", "Medewerkers"],
+                    ["installaties", "Installaties"],
                     ["service", "Service"],
                   ] as const
                 ).map(([id, label]) => {
@@ -3358,6 +3491,9 @@ export function ProjectPage() {
                     facturen={facturen}
                     disabled={statusSaving}
                     onStatusChange={(s) => void updateStatus(s)}
+                    onFinancieringChange={(s) =>
+                      void updateFinancieringStatus(s)
+                    }
                     onPlanSchouwdag={() => {
                       setMainTab("overzicht");
                       setAfspraakOpenRequest({
@@ -3814,7 +3950,46 @@ export function ProjectPage() {
                               </button>
                             </>
                           ) : null}
-                          {a.soort !== "annulering_keuze_controle" ? (
+                          {a.soort === "hold_sales_verlopen" ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={completingId === `${a.id}-extend`}
+                                onClick={() =>
+                                  void escalateHoldSalesFromProject("extend")
+                                }
+                                className="border border-[#5A4A6E]/40 bg-[#5A4A6E] px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-[#4A3A5C] disabled:opacity-50"
+                              >
+                                HOLD verlengen (+{HOLD_SALES_VERLENG_DAGEN}d)
+                              </button>
+                              <button
+                                type="button"
+                                disabled={
+                                  completingId === `${a.id}-await_bedenktijd`
+                                }
+                                onClick={() =>
+                                  void escalateHoldSalesFromProject(
+                                    "await_bedenktijd"
+                                  )
+                                }
+                                className="border border-line bg-white px-2.5 py-1.5 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                              >
+                                Afwachten bedenktijd
+                              </button>
+                              <button
+                                type="button"
+                                disabled={completingId === a.id}
+                                onClick={() =>
+                                  void verstuurAnnuleringsfactuurVanProject()
+                                }
+                                className="border border-[#9A3B1A]/40 bg-[#9A3B1A] px-2.5 py-1.5 text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                              >
+                                Annuleringsfactuur
+                              </button>
+                            </>
+                          ) : null}
+                          {a.soort !== "annulering_keuze_controle" &&
+                          a.soort !== "hold_sales_verlopen" ? (
                           <button
                             type="button"
                             disabled={completingId === a.id}
@@ -4208,6 +4383,16 @@ export function ProjectPage() {
               verzoeken={serviceVerzoeken}
               onChanged={() => void load()}
             />
+          ) : mainTab === "installaties" ? (
+            <ProjectInstallatiesTab
+              project={project}
+              fotos={fotos}
+              authorNaam={session?.naam || null}
+              onUpdated={(p) => {
+                setProject((prev) => (prev ? { ...prev, ...p } : p));
+                setOkMsg("Beoordeling opgeslagen");
+              }}
+            />
           ) : (
             <section className="border border-line bg-white px-4 py-5 sm:px-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -4308,40 +4493,64 @@ export function ProjectPage() {
                   </select>
                 </label>
                 {project.installatie_partner_id ? (
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                    Medewerker
-                    <select
-                      value={
-                        project.installatie_teamgenoot_id ||
-                        (Array.isArray(project.installatie_teamgenoot)
-                          ? project.installatie_teamgenoot[0]?.id
-                          : project.installatie_teamgenoot?.id) ||
-                        ""
-                      }
-                      disabled={
-                        medewerkerBusy || partnerTeamgenotenLoading
-                      }
-                      onChange={(e) =>
-                        void savePartnerMedewerker(
-                          e.target.value ? e.target.value : null
-                        )
-                      }
-                      className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green disabled:opacity-60"
-                    >
-                      <option value="">
-                        {partnerTeamgenotenLoading
-                          ? "Laden…"
-                          : partnerTeamgenoten.length === 0
-                            ? "Geen medewerkers — partner voegt toe in Team"
-                            : "Nog niet gekoppeld…"}
-                      </option>
-                      {partnerTeamgenoten.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.naam}
+                  <>
+                    <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                      Medewerker op dit project *
+                      <select
+                        value={
+                          project.installatie_teamgenoot_id ||
+                          (Array.isArray(project.installatie_teamgenoot)
+                            ? project.installatie_teamgenoot[0]?.id
+                            : project.installatie_teamgenoot?.id) ||
+                          ""
+                        }
+                        disabled={
+                          medewerkerBusy || partnerTeamgenotenLoading
+                        }
+                        onChange={(e) =>
+                          void savePartnerMedewerker(
+                            e.target.value ? e.target.value : null
+                          )
+                        }
+                        className={[
+                          "mt-1.5 w-full border bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green disabled:opacity-60",
+                          project.installatie_teamgenoot_id ||
+                          (Array.isArray(project.installatie_teamgenoot)
+                            ? project.installatie_teamgenoot[0]?.id
+                            : project.installatie_teamgenoot?.id)
+                            ? "border-line"
+                            : partnerTeamgenoten.length > 0
+                              ? "border-[#C45A12]"
+                              : "border-line",
+                        ].join(" ")}
+                      >
+                        <option value="">
+                          {partnerTeamgenotenLoading
+                            ? "Laden…"
+                            : partnerTeamgenoten.length === 0
+                              ? "Geen medewerkers — partner voegt toe in Team"
+                              : "Nog niet gekoppeld…"}
                         </option>
-                      ))}
-                    </select>
-                  </label>
+                        {partnerTeamgenoten.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.naam}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {partnerTeamgenoten.length > 0 &&
+                    !(
+                      project.installatie_teamgenoot_id ||
+                      (Array.isArray(project.installatie_teamgenoot)
+                        ? project.installatie_teamgenoot[0]?.id
+                        : project.installatie_teamgenoot?.id)
+                    ) ? (
+                      <p className="text-[11px] font-medium text-[#C45A12]">
+                        Koppel wie de schouw/installatie doet — komt op de
+                        formulieren.
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             </section>
@@ -4429,6 +4638,7 @@ export function ProjectPage() {
                               href={item.recordingHref}
                               eventId={item.recordingEventId}
                               unavailable={item.recordingUnavailable}
+                              fileName={`gesprek-${formatDateTimeNl(item.at).replace(/[^\d]+/g, "-")}.mp3`}
                             />
                           </div>
                         ) : null}

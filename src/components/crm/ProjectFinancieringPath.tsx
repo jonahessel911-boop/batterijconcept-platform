@@ -41,7 +41,8 @@ export function ProjectFinancieringPath({
   onOpenFinancieel?: () => void;
 }) {
   const [editAfspraak, setEditAfspraak] = useState(false);
-  const [afspraakLocal, setAfspraakLocal] = useState("");
+  const [afspraakDatum, setAfspraakDatum] = useState("");
+  const [afspraakTijd, setAfspraakTijd] = useState("10:00");
 
   const pipelineStatus = normalizeFinancieringStatus(status);
   const currentIdx =
@@ -51,12 +52,15 @@ export function ProjectFinancieringPath({
   const clickable = Boolean(onChange) && !disabled;
   const isAfgewezen = status === "afgewezen";
 
-  function toDatetimeLocalValue(iso: string | null | undefined): string {
-    if (!iso) return "";
+  function delenVan(iso: string | null | undefined): { datum: string; tijd: string } {
+    if (!iso) return { datum: "", tijd: "10:00" };
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
+    if (Number.isNaN(d.getTime())) return { datum: "", tijd: "10:00" };
     const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return {
+      datum: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      tijd: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    };
   }
 
   function selectStep(step: FinancieringStatus) {
@@ -65,13 +69,15 @@ export function ProjectFinancieringPath({
   }
 
   function openAfspraakEditor() {
-    setAfspraakLocal(toDatetimeLocalValue(afspraakAt) || "");
+    const delen = delenVan(afspraakAt);
+    setAfspraakDatum(delen.datum);
+    setAfspraakTijd(delen.tijd);
     setEditAfspraak(true);
   }
 
   function confirmAfspraak() {
-    if (!onChange || !afspraakLocal) return;
-    const d = new Date(afspraakLocal);
+    if (!onChange || !afspraakDatum || !afspraakTijd) return;
+    const d = new Date(`${afspraakDatum}T${afspraakTijd}`);
     if (Number.isNaN(d.getTime())) return;
     setEditAfspraak(false);
     onChange(status || "doorgestuurd_naar_edwin", {
@@ -169,7 +175,7 @@ export function ProjectFinancieringPath({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                Interne afspraak
+                WF-afspraak
               </p>
               <p className="mt-0.5 text-[12px] text-ink">
                 {afspraakAt
@@ -181,31 +187,42 @@ export function ProjectFinancieringPath({
               type="button"
               disabled={disabled}
               onClick={openAfspraakEditor}
-              className="text-[12px] font-semibold text-[#C45A12] hover:underline"
+              className="bg-green px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-green-dark"
             >
-              {afspraakAt ? "Wijzigen" : "Plannen"}
+              Maak WF Afspraak
             </button>
           </div>
           {editAfspraak ? (
             <div className="mt-2 space-y-2 border-t border-line pt-2">
               <p className="text-[11px] text-muted">
-                Alleen intern — geen mail naar de klant.
+                De klant krijgt een bevestiging per e-mail.
               </p>
-              <input
-                type="datetime-local"
-                value={afspraakLocal}
-                onChange={(e) => setAfspraakLocal(e.target.value)}
-                disabled={disabled}
-                className="w-full border border-line bg-white px-2.5 py-2 text-sm text-ink outline-none focus:border-[#C45A12]"
-              />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  type="date"
+                  value={afspraakDatum}
+                  onChange={(e) => setAfspraakDatum(e.target.value)}
+                  disabled={disabled}
+                  aria-label="Datum"
+                  className="w-full border border-line bg-white px-2.5 py-2 text-sm text-ink outline-none focus:border-green-dark"
+                />
+                <input
+                  type="time"
+                  value={afspraakTijd}
+                  onChange={(e) => setAfspraakTijd(e.target.value)}
+                  disabled={disabled}
+                  aria-label="Tijd"
+                  className="w-full border border-line bg-white px-2.5 py-2 text-sm text-ink outline-none focus:border-green-dark"
+                />
+              </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={disabled || !afspraakLocal}
+                  disabled={disabled || !afspraakDatum || !afspraakTijd}
                   onClick={confirmAfspraak}
-                  className="bg-[#C45A12] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-50"
+                  className="bg-green px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
                 >
-                  Opslaan
+                  Maak WF Afspraak
                 </button>
                 <button
                   type="button"

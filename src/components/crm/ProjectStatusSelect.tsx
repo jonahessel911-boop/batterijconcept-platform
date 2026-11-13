@@ -13,7 +13,8 @@ import {
   BETAALWIJZE_LABEL,
   PROJECT_STATUS_BY_KEY,
   PROJECT_STATUS_DEFS,
-  PROJECT_STATUS_FASE_LABEL,
+  faseLabelFor,
+  faseOrderFor,
   projectStatusesFor,
   resolveBetaalwijze,
   toOperationalStatus,
@@ -302,16 +303,6 @@ export function ProjectStatusSelect({
   }
 
   const grouped = (() => {
-    const order: ProjectStatusFase[] = [
-      "voorbereiding",
-      "financiering",
-      "schouw",
-      "eindafrekening",
-      "uitvoering",
-      "afronding",
-      "nazorg",
-      "overig",
-    ];
     const byFase = new Map<ProjectStatusFase, ProjectStatusKey[]>();
     for (const key of allowed) {
       const fase = PROJECT_STATUS_BY_KEY[key].fase;
@@ -319,7 +310,7 @@ export function ProjectStatusSelect({
       list.push(key);
       byFase.set(fase, list);
     }
-    return order
+    return faseOrderFor(betaalwijze)
       .filter((f) => byFase.has(f))
       .map((f) => ({ fase: f, keys: byFase.get(f)! }));
   })();
@@ -349,7 +340,7 @@ export function ProjectStatusSelect({
             {grouped.map(({ fase, keys }) => (
               <div key={fase}>
                 <p className="border-t border-line px-2.5 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  {PROJECT_STATUS_FASE_LABEL[fase]}
+                  {faseLabelFor(fase, betaalwijze)}
                 </p>
                 {keys.map((st) => {
                   const active = st === displayStatus;

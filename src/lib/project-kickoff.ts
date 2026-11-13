@@ -205,7 +205,7 @@ export function projectKickoffItems(
 
   items.push({
     id: "schouwweek",
-    label: wf ? "Schouwweek inplannen" : "Schouwdag inplannen",
+    label: wf ? "Schouwweek-indicatie zetten" : "Schouwdag inplannen",
     done: schouwDone,
     blocked: schouwBlocked || undefined,
     blockedReason: schouwBlocked
@@ -216,7 +216,7 @@ export function projectKickoffItems(
       : schouwBlocked
         ? "Eerst eerste factuur als betaald markeren"
         : wf
-          ? "Incl. track & trace-mail · meestal ±5 weken vooruit"
+          ? "Alleen inschatting voor de klant (±5 weken) + track & trace — geen echte planningsactie"
           : "Incl. track & trace-mail · zo snel mogelijk een vaste dag",
   });
 

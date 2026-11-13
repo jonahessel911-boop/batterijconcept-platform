@@ -34,11 +34,17 @@ export async function POST(
       return NextResponse.json({ error: "Project niet gevonden" }, { status: 404 });
     }
 
+    const teamgenootId =
+      body && typeof body === "object" && "teamgenootId" in body
+        ? String((body as { teamgenootId?: unknown }).teamgenootId || "").trim() ||
+          null
+        : null;
+
     const result = await generateAndUploadSchouwFormulier(
       sb,
       id,
       parsed.data,
-      { notitie: parsed.notitie }
+      { notitie: parsed.notitie, teamgenootId }
     );
     if ("error" in result) {
       return NextResponse.json(

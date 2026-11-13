@@ -1030,7 +1030,7 @@ export function ManagementDashboard() {
 
           {tab === "orders" && (
             <>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {data.orders.kpis.map((k) => (
                   <KpiCard key={k.key} kpi={k} onOpen={openDrill} />
                 ))}
@@ -1123,9 +1123,23 @@ export function ManagementDashboard() {
                 </table>
               </section>
               <section className="rounded-xl border border-line p-4">
-                <h3 className="font-display text-lg font-semibold">
-                  Installatiecapaciteit 8 weken
-                </h3>
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h3 className="font-display text-lg font-semibold">
+                      Installatiecapaciteit 8 weken
+                    </h3>
+                    <p className="mt-1 text-xs text-muted">
+                      {data.orders.montageCapaciteit.live
+                        ? `${data.orders.montageCapaciteit.koppels} koppels` +
+                          (data.orders.montageCapaciteit.monteurs > 0
+                            ? ` · ${data.orders.montageCapaciteit.monteurs} solo-monteurs`
+                            : "") +
+                          ` · ${data.orders.montageCapaciteit.capPerWeek}/week` +
+                          (filters.regio ? ` · regio ${filters.regio}` : "")
+                        : "Fallback op instelling installaties/week (geen live koppels)"}
+                    </p>
+                  </div>
+                </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4 lg:grid-cols-8">
                   {data.orders.capacity8Weken.map((w) => (
                     <div
@@ -1147,6 +1161,49 @@ export function ManagementDashboard() {
                     </div>
                   ))}
                 </div>
+                {data.orders.montageCapaciteit.perRegio.length > 0 ? (
+                  <div className="mt-4 overflow-x-auto">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Capaciteit per regio (koppels + solo)
+                    </p>
+                    <table className="w-full min-w-[28rem] text-left text-xs">
+                      <thead className="text-muted">
+                        <tr className="border-b border-line">
+                          <th className="py-1.5 pr-3 font-semibold">Regio</th>
+                          <th className="py-1.5 pr-3 font-semibold">Koppels</th>
+                          <th className="py-1.5 pr-3 font-semibold">Solo</th>
+                          <th className="py-1.5 font-semibold">Cap / week</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.orders.montageCapaciteit.perRegio.map((r) => (
+                          <tr
+                            key={r.regio}
+                            className="border-b border-line/60 last:border-0"
+                          >
+                            <td className="py-1.5 pr-3 font-medium text-ink">
+                              {r.regio}
+                            </td>
+                            <td className="py-1.5 pr-3 tabular-nums">
+                              {r.koppels}
+                            </td>
+                            <td className="py-1.5 pr-3 tabular-nums">
+                              {r.monteurs}
+                            </td>
+                            <td className="py-1.5 tabular-nums font-semibold">
+                              {r.capPerWeek}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : data.orders.montageCapaciteit.live ? (
+                  <p className="mt-3 text-xs text-muted">
+                    Geen regiocapaciteit: zet bij teamleden de regio’s waarin ze
+                    kunnen werken.
+                  </p>
+                ) : null}
               </section>
             </>
           )}

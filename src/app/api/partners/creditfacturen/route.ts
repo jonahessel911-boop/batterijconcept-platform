@@ -369,7 +369,14 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  let body: { id?: string; status?: string; betaald_op?: string };
+  let body: {
+    id?: string;
+    status?: string;
+    betaald_op?: string;
+    aftrek_ex_btw?: number | string | null;
+    aftrek_omschrijving?: string | null;
+    regels?: { omschrijving?: string; bedrag?: number | string }[] | null;
+  };
   try {
     body = await req.json();
   } catch {
@@ -396,6 +403,119 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
+
+    if (Array.isArray(body.regels)) {
+      const { replaceCreditRegels } = await import(
+        "@/lib/creditfactuur-aftrek"
+      );
+      const { data: current, error: curErr } = await sb
+        .from("partner_creditfacturen")
+        .select("id, status, notities, factuur_nummer")
+        .eq("id", body.id)
+        .maybeSingle();
+      if (curErr || !current) {
+        return NextResponse.json(
+          { error: curErr?.message || "Factuur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (current.status !== "concept" && current.status !== "verzonden") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen zijn te bewerken" },
+          { status: 400 }
+        );
+      }
+      try {
+        const next = replaceCreditRegels({
+          notities: current.notities,
+          regels: body.regels.map((r) => ({
+            omschrijving: String(r.omschrijving || ""),
+            bedrag: Number(r.bedrag) || 0,
+          })),
+        });
+        const { data, error } = await sb
+          .from("partner_creditfacturen")
+          .update({
+            bedrag_ex_btw: next.bedrag_ex_btw,
+            btw_bedrag: next.btw_bedrag,
+            bedrag_inc_btw: next.bedrag_inc_btw,
+            notities: next.notities,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", body.id)
+          .select("*")
+          .single();
+        if (error || !data) {
+          return NextResponse.json(
+            { error: error?.message || "Bijwerken mislukt" },
+            { status: 500 }
+          );
+        }
+        return NextResponse.json({ factuur: data });
+      } catch (e) {
+        return NextResponse.json(
+          { error: errMessage(e, "Regels opslaan mislukt") },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (body.aftrek_ex_btw != null && body.aftrek_ex_btw !== "") {
+      const { applyAftrekToCreditfactuur } = await import(
+        "@/lib/creditfactuur-aftrek"
+      );
+      const { errMessage } = await import("@/lib/errors");
+      const { data: current, error: curErr } = await sb
+        .from("partner_creditfacturen")
+        .select("id, status, bedrag_ex_btw, notities, factuur_nummer")
+        .eq("id", body.id)
+        .maybeSingle();
+      if (curErr || !current) {
+        return NextResponse.json(
+          { error: curErr?.message || "Factuur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (current.status !== "concept" && current.status !== "verzonden") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen zijn te bewerken" },
+          { status: 400 }
+        );
+      }
+      try {
+        const next = applyAftrekToCreditfactuur({
+          notities: current.notities,
+          currentEx: Number(current.bedrag_ex_btw) || 0,
+          aftrekEx: Number(body.aftrek_ex_btw),
+          omschrijving: body.aftrek_omschrijving,
+          basisOmschrijving: `Vergoeding ${current.factuur_nummer}`,
+        });
+        const { data, error } = await sb
+          .from("partner_creditfacturen")
+          .update({
+            bedrag_ex_btw: next.bedrag_ex_btw,
+            btw_bedrag: next.btw_bedrag,
+            bedrag_inc_btw: next.bedrag_inc_btw,
+            notities: next.notities,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", body.id)
+          .select("*")
+          .single();
+        if (error || !data) {
+          return NextResponse.json(
+            { error: error?.message || "Bijwerken mislukt" },
+            { status: 500 }
+          );
+        }
+        return NextResponse.json({ factuur: data });
+      } catch (e) {
+        return NextResponse.json(
+          { error: errMessage(e, "Aftrek mislukt") },
+          { status: 400 }
+        );
+      }
+    }
 
     if (body.status === "verzonden") {
       const result = await verstuurPartnerCreditfactuur(sb, body.id);

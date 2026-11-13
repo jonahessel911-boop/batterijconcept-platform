@@ -15,12 +15,11 @@ import {
 import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 /** Warmtefonds: restantfactuur = declaratie ingediend. */
-export const PROJECT_STATUS_LABEL_RESTFACTUUR_WF =
-  "Factuur WF - Declaratie ingediend";
+export const PROJECT_STATUS_LABEL_RESTFACTUUR_WF = "WF declaratie ingediend";
 
 /** Warmtefonds: declaratie betaald, installatie nog inplannen. */
 export const PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF =
-  "Declaratie WF betaald - installatie inplannen";
+  "WF declaratie betaald — installatie inplannen";
 
 export const leadStatusLabel: Record<LeadStatus, string> = {
   nieuw: "Nieuw",
@@ -201,7 +200,7 @@ type ProjectStatusLabelContext = {
 
 /**
  * Weergavelabel voor projectstatus.
- * Warmtefonds + restfactuur_verstuurd → "Factuur WF - Declaratie ingediend".
+ * Warmtefonds + restfactuur_verstuurd → "WF declaratie ingediend".
  */
 export function resolveProjectStatusLabel(
   status: string | null | undefined,
@@ -231,6 +230,36 @@ export function resolveProjectStatusLabel(
   if (bw !== "warmtefonds") return base;
   if (st === "restfactuur_verstuurd") return PROJECT_STATUS_LABEL_RESTFACTUUR_WF;
   return PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF;
+}
+
+/**
+ * Statuslabels voor installateur/monteur-portaal.
+ * Geen after-sale pipeline: alleen Installatie gepland / voltooid
+ * (plus schouw-labels als die nog relevant zijn).
+ */
+export function resolveInstallateurStatusLabel(
+  status: string | null | undefined,
+  project?: {
+    installatie_at?: string | null;
+    installatie_voltooid_at?: string | null;
+  } | null
+): string {
+  const st = normalizeProjectStatus(status);
+  if (
+    st === "installatie_voltooid" ||
+    st === "review_gevraagd" ||
+    st === "afgerond" ||
+    st === "service" ||
+    !!project?.installatie_voltooid_at
+  ) {
+    return "Installatie voltooid";
+  }
+  if (st === "installatie_ingepland" || !!project?.installatie_at) {
+    return "Installatie gepland";
+  }
+  if (st === "schouw_voltooid") return "Schouw voltooid";
+  if (st === "schouwdag_ingepland") return "Schouw gepland";
+  return "Installatie gepland";
 }
 
 /** @deprecated Gebruik projectPipelineFor(betaalwijze) — warmtefonds-default. */

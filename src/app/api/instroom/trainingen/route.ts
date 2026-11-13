@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { RECRUITMENT_TRAINING_LOCATIE } from "@/lib/sollicitatie";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -70,6 +71,11 @@ function parseDagen(raw: unknown): DagInput[] | { error: string } {
 
 /** GET /api/instroom/trainingen */
 export async function GET() {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const sb = getSupabaseAdmin();
     const { data, error } = await sb
@@ -108,6 +114,11 @@ export async function GET() {
 
 /** POST /api/instroom/trainingen */
 export async function POST(req: NextRequest) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await req.json();

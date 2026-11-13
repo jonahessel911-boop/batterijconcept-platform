@@ -20,6 +20,7 @@ import { countPlanbareSlotsBreakdown } from "@/lib/dashboard-v2/capacity";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
 import { commissiePctToFraction } from "@/lib/netto-boord";
+import { leesEdergyTarief } from "@/lib/edergy-tarief";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
   BELLER_PER_INGEPLANDE_AFSPRAAK,
@@ -103,6 +104,7 @@ function finalize(a: {
   sales_commissie: number;
   ops_commissie: number;
   ad_spend: number;
+  edergy: number;
 }): PnlMetrics {
   const omzet = round2(a.omzet);
   const inkoop = round2(a.inkoop);
@@ -110,8 +112,9 @@ function finalize(a: {
   const sales_commissie = round2(a.sales_commissie);
   const ops_commissie = round2(a.ops_commissie);
   const ad_spend = round2(a.ad_spend);
+  const edergy = round2(a.edergy);
   const totale_kosten = round2(
-    inkoop + installatie + sales_commissie + ops_commissie + ad_spend
+    inkoop + installatie + sales_commissie + ops_commissie + ad_spend + edergy
   );
   const brutowinst = round2(omzet - totale_kosten);
   const marge_pct =
@@ -124,6 +127,7 @@ function finalize(a: {
     sales_commissie,
     ops_commissie,
     ad_spend,
+    edergy,
     totale_kosten,
     brutowinst,
     marge_pct,
@@ -139,6 +143,7 @@ function emptyAcc() {
     sales_commissie: 0,
     ops_commissie: 0,
     ad_spend: 0,
+    edergy: 0,
   };
 }
 
@@ -304,10 +309,14 @@ export async function buildPnlMonthForecast(
         offerte_id: string | null;
         status: string | null;
         projectkosten: number | null;
+        betaalwijze?: string | null;
+        financiering_status?: string | null;
       }>((from, to) =>
         sb
           .from("projecten")
-          .select("offerte_id, status, projectkosten")
+          .select(
+            "offerte_id, status, projectkosten, betaalwijze, financiering_status"
+          )
           .not("offerte_id", "is", null)
           .range(from, to)
       ),
@@ -353,7 +362,11 @@ export async function buildPnlMonthForecast(
   const skipOfferte = new Set<string>();
   const projectByOfferte = new Map<
     string,
-    { projectkosten: number | null }
+    {
+      projectkosten: number | null;
+      betaalwijze?: string | null;
+      financiering_status?: string | null;
+    }
   >();
   for (const p of projects) {
     if (!p.offerte_id) continue;
@@ -368,14 +381,21 @@ export async function buildPnlMonthForecast(
   let histInkoop = 0;
   let histInstallatie = 0;
   let histOrders = 0;
+  let histWarmtefonds = 0;
   for (const o of offertes) {
     if (skipOfferte.has(o.id)) continue;
     const omzet = Number(o.subtotaal_ex_btw) || 0;
     if (omzet <= 0) continue;
     histOrders += 1;
+    const proj = projectByOfferte.get(o.id);
+    if (
+      proj?.betaalwijze === "warmtefonds" ||
+      Boolean((proj?.financiering_status || "").trim())
+    ) {
+      histWarmtefonds += 1;
+    }
     histOmzet += omzet;
     histInkoop += hardwareKostenVoorRegels(o.offerte_regels || []).totaal;
-    const proj = projectByOfferte.get(o.id);
     histInstallatie +=
       proj && Number(proj.projectkosten) > 0
         ? Number(proj.projectkosten)
@@ -384,6 +404,8 @@ export async function buildPnlMonthForecast(
   const inkoopRatio = histOmzet > 0 ? histInkoop / histOmzet : 0;
   const installatiePerOrder =
     histOrders > 0 ? histInstallatie / histOrders : standaardInstallatie;
+  const warmtefondsAandeel =
+    histOrders > 0 ? histWarmtefonds / histOrders : 0;
 
   const campSpend = metaRaw
     .filter((r) => r.level === "campaign")
@@ -396,19 +418,22 @@ export async function buildPnlMonthForecast(
   const cpl = histLeads > 0 ? adSpend / histLeads : 0;
 
   const ids = adviseurs.map((a) => a.id);
-  const [unavailable, afblokkingen, vrijgaven] = await Promise.all([
-    loadUnavailable(sb, ids, jaren),
-    loadAfblokkingen(sb, {
-      adviseurIds: ids,
-      van: month.startYmd,
-      tot: month.endYmd,
-    }),
-    loadSlotVrijgaven(sb, {
-      adviseurIds: ids,
-      van: month.startYmd,
-      tot: month.endYmd,
-    }),
-  ]);
+  const [unavailable, afblokkingen, vrijgaven, edergyTarief] =
+    await Promise.all([
+      loadUnavailable(sb, ids, jaren),
+      loadAfblokkingen(sb, {
+        adviseurIds: ids,
+        van: month.startYmd,
+        tot: month.endYmd,
+      }),
+      loadSlotVrijgaven(sb, {
+        adviseurIds: ids,
+        van: month.startYmd,
+        tot: month.endYmd,
+      }),
+      leesEdergyTarief(),
+    ]);
+  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
 
   const planned = new Map<string, number>();
   for (const a of afspraken) {
@@ -464,6 +489,7 @@ export async function buildPnlMonthForecast(
     }
     acc.inkoop = acc.omzet * inkoopRatio;
     acc.ad_spend = leads * cpl;
+    acc.edergy = acc.orders * warmtefondsAandeel * edergyPerAanvraag;
     // Nog te vullen slots plant Sharath in: €10 voor hem, €2,50 bonus voor Tarik.
     acc.ops_commissie +=
       slotsVrij *
@@ -496,6 +522,7 @@ export async function buildPnlMonthForecast(
     sum.sales_commissie += w.sales_commissie;
     sum.ops_commissie += w.ops_commissie;
     sum.ad_spend += w.ad_spend;
+    sum.edergy += w.edergy;
   }
 
   return {

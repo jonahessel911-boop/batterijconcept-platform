@@ -23,6 +23,7 @@ import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import type {
   InstallatiePartner,
+  InstallatiePartnerKoppel,
   InstallatiePartnerTeamgenoot,
   Project,
   ServiceVerzoek,
@@ -36,17 +37,27 @@ import {
 } from "@/lib/format";
 import {
   normalizeProjectStatus,
+  resolveInstallateurStatusLabel,
   resolveProjectStatusLabel,
 } from "@/lib/labels";
 import { isOrderVolledigBetaald } from "@/lib/aanbetaling";
 import {
+  FOTO_BATTERIJ_OMSCHRIJVING,
+  FOTO_METERKAST_OMSCHRIJVING,
+  isFotoBatterij,
+  isFotoMeterkast,
   isOpleveringsrapport,
   isSchouwFormulier,
   isServiceFoto,
+  isVideoInstallatie,
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
   SERVICE_FOTO_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
+  VIDEO_INSTALLATIE_OMSCHRIJVING,
 } from "@/lib/project-documenten";
+import { validateInstallatieVideoDuration } from "@/lib/installatie-video";
+import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
+import { medewerkerNaamVanProject } from "@/lib/project-medewerker";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import {
   duurMinutenVoorKind,
@@ -56,6 +67,18 @@ import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
 import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import { PartnerSlotPicker } from "@/components/crm/PartnerSlotPicker";
 import { SchouwFormulierModal } from "@/components/crm/SchouwFormulierModal";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+import { Check, Copy, Phone, UserRound, Users, X } from "lucide-react";
 import {
   agendaWeekJumpOptions,
   isSchouwdagDefinitief,
@@ -445,29 +468,29 @@ const KIND_STYLE: Record<
     accent: "bg-[#CA8A04]",
     muted: "text-[#854D0E]/80",
   },
-  /** Installatie = donkergroen */
+  /** Installatie = zacht groen (zelfde stijl als schouw) */
   installatie: {
-    bg: "bg-[#047857]",
-    text: "text-white",
-    border: "border-[#065F46]",
-    accent: "bg-[#022C22]",
-    muted: "text-white/85",
+    bg: "bg-[#ECFDF5]",
+    text: "text-[#047857]",
+    border: "border-[#A7F3D0]",
+    accent: "bg-[#059669]",
+    muted: "text-[#047857]/80",
   },
-  /** Service = terracotta */
+  /** Service = zacht terracotta */
   service: {
-    bg: "bg-[#C45A12]",
-    text: "text-white",
-    border: "border-[#9A4510]",
-    accent: "bg-[#7C3A0D]",
-    muted: "text-white/85",
+    bg: "bg-[#FFF7ED]",
+    text: "text-[#C2410C]",
+    border: "border-[#FED7AA]",
+    accent: "bg-[#EA580C]",
+    muted: "text-[#C2410C]/80",
   },
-  /** Levering inkoop = oranje */
+  /** Levering inkoop = zacht oranje */
   levering: {
-    bg: "bg-[#EA580C]",
-    text: "text-white",
-    border: "border-[#C2410C]",
-    accent: "bg-[#9A3412]",
-    muted: "text-white/85",
+    bg: "bg-[#FFF7ED]",
+    text: "text-[#9A3412]",
+    border: "border-[#FDBA74]",
+    accent: "bg-[#F97316]",
+    muted: "text-[#9A3412]/80",
   },
 };
 
@@ -542,9 +565,11 @@ function PhoneCopyIcon({
 }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       title={copied ? "Gekopieerd" : `Kopieer ${telefoon}`}
+      className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line bg-white text-ink hover:bg-wash"
       onClick={async (e) => {
         if (stopPropagation) e.stopPropagation();
         try {
@@ -555,22 +580,20 @@ function PhoneCopyIcon({
           /* ignore */
         }
       }}
-      className="inline-flex h-7 w-7 shrink-0 items-center justify-center border border-line bg-white text-ink hover:bg-wash"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement).click();
+        }
+      }}
       aria-label="Telefoonnummer kopiëren"
     >
       {copied ? (
-        <span className="text-xs font-bold text-[#0D9488]">✓</span>
+        <Check className="size-3.5 text-[#0D9488]" />
       ) : (
-        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" aria-hidden>
-          <path
-            d="M8 4h3.5L13 8l-2 1.5a11 11 0 005.5 5.5L18 13l4 1.5V18a2 2 0 01-2 2A16 16 0 016 6a2 2 0 012-2z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <Copy className="size-3.5" />
       )}
-    </button>
+    </span>
   );
 }
 
@@ -690,6 +713,26 @@ function PlanInplannenPanel({
     }
   }, [selected, partnerId, teamgenootId]);
 
+  const teamgenotenVoorSoort = useMemo(() => {
+    return teamgenoten.filter((t) => {
+      if (soort === "schouwdag" || soort === "schouwweek") {
+        return t.kan_schouw === true;
+      }
+      if (soort === "installatie" || soort === "service") {
+        // Default: installatie mag als kan_installatie niet expliciet false is
+        return t.kan_installatie !== false;
+      }
+      return true;
+    });
+  }, [teamgenoten, soort]);
+
+  useEffect(() => {
+    if (!teamgenootId) return;
+    if (!teamgenotenVoorSoort.some((t) => t.id === teamgenootId)) {
+      setTeamgenootId("");
+    }
+  }, [teamgenotenVoorSoort, teamgenootId]);
+
   useEffect(() => {
     if (!partnerId) {
       setTeamgenoten([]);
@@ -749,7 +792,7 @@ function PlanInplannenPanel({
               ? new Date(datetimeLocal)
               : null;
           if (!parsed || Number.isNaN(parsed.getTime())) {
-            throw new Error("Kies een open schouw-slot");
+            throw new Error("Kies een schouw-slot");
           }
           payload.schouw_at = parsed.toISOString();
           const derived = schouwWeekFromDate(parsed);
@@ -811,8 +854,8 @@ function PlanInplannenPanel({
           soort === "service"
             ? "Kies servicedatum + tijd"
             : soort === "installatie"
-              ? "Kies een open installatie-slot"
-              : "Kies een open schouw-slot"
+              ? "Kies een installatie-slot"
+              : "Kies een schouw-slot"
         );
       }
       if (soort === "service") {
@@ -997,9 +1040,9 @@ function PlanInplannenPanel({
                         "border px-2 py-2 text-xs font-semibold",
                         soort === id
                           ? id === "installatie"
-                            ? "border-[#065F46] bg-[#047857] text-white"
+                            ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857]"
                             : id === "service"
-                              ? "border-[#9A4510] bg-[#C45A12] text-white"
+                              ? "border-[#FED7AA] bg-[#FFF7ED] text-[#C2410C]"
                               : "border-[#CA8A04] bg-[#FEF9C3] text-[#854D0E]"
                           : "border-line text-muted hover:bg-wash",
                       ].join(" ")}
@@ -1049,11 +1092,13 @@ function PlanInplannenPanel({
                     <option value="">
                       {teamgenotenLoading
                         ? "Laden…"
-                        : teamgenoten.length === 0
-                          ? "Geen medewerkers — partner voegt toe in Team"
+                        : teamgenotenVoorSoort.length === 0
+                          ? soort === "schouwdag" || soort === "schouwweek"
+                            ? "Geen monteurs met schouw-ervaring"
+                            : "Geen monteurs voor installatie"
                           : "Nog niet gekoppeld…"}
                     </option>
-                    {teamgenoten.map((t) => (
+                    {teamgenotenVoorSoort.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.naam}
                       </option>
@@ -1318,124 +1363,90 @@ function EventCard({
   const tel = lead?.telefoon?.trim() || null;
   const duurLabel =
     bar.duurMinuten > 0 ? formatDuurLabel(bar.duurMinuten) : null;
-  const isSolid =
-    bar.kind === "installatie" ||
-    bar.kind === "service" ||
-    bar.kind === "levering";
-  const titleCls = isSolid ? "text-white" : "text-ink";
-  const mutedCls = isSolid ? "text-white/85" : "text-muted";
-
-  const hasIcons =
-    Boolean(tel) ||
-    (isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url);
+  const missingSchouw =
+    isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url;
+  const monteurLabel = hidePartner
+    ? bar.project.monteur || null
+    : partner?.naam &&
+        bar.project.monteur &&
+        bar.project.monteur !== partner.naam
+      ? `${partner.naam} · ${bar.project.monteur}`
+      : partner?.naam || bar.project.monteur || null;
+  const subLine = [plaats, !compact ? adresLines[0] : null, monteurLabel]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <button
       type="button"
       onClick={onSelect}
       className={[
-        "group relative w-full overflow-hidden border text-left transition-shadow",
+        "group flex w-full items-stretch overflow-hidden rounded border text-left transition-shadow",
         style.bg,
         style.border,
-        compact ? "px-2 py-1.5 pr-9" : "px-3 py-2.5",
-        past ? "opacity-45 grayscale-[0.35]" : "",
-        selected ? "ring-2 ring-[#0D9488]/40" : "hover:shadow-sm",
+        past ? "opacity-50 grayscale-[0.3]" : "",
+        selected
+          ? "ring-2 ring-[#0D9488]/35 ring-offset-1"
+          : "hover:shadow-xs",
       ].join(" ")}
     >
-      <span
-        className={`absolute inset-y-0 left-0 w-1 ${style.accent}`}
-        aria-hidden
-      />
-      <div className={["min-w-0 pl-2", hasIcons && compact ? "pr-0" : ""].join(" ")}>
-        <p
-          className={[
-            "text-[10px] font-bold uppercase tracking-[0.04em]",
-            style.text,
-          ].join(" ")}
-        >
-          {kindLabel}
-          {timeRange ? (
+      <span className={`w-0.5 shrink-0 ${style.accent}`} aria-hidden />
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0">
             <span
               className={[
-                "ml-1.5 text-xs font-bold tabular-nums normal-case tracking-normal",
-                past ? "line-through decoration-2 opacity-80" : "",
+                "text-[8px] font-bold uppercase tracking-[0.05em]",
+                style.text,
               ].join(" ")}
             >
-              {compact && bar.at ? formatTimeNl(bar.at) : timeRange}
-              {!compact && duurLabel ? (
-                <span className="ml-1.5 font-semibold opacity-80">
-                  · {duurLabel}
-                </span>
-              ) : null}
+              {kindLabel}
             </span>
-          ) : null}
-          {past ? (
-            <span
-              className={[
-                "ml-1.5 rounded-sm px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide normal-case",
-                isSolid ? "bg-white/20 text-white/90" : "bg-black/10 text-ink/70",
-              ].join(" ")}
-            >
-              Geweest
-            </span>
-          ) : null}
-        </p>
-        <p
-          className={[
-            "mt-0.5 truncate font-semibold leading-snug",
-            titleCls,
-            compact ? "text-[13px]" : "text-base",
-            past ? "opacity-80" : "",
-          ].join(" ")}
-          title={naam}
-        >
-          {naam}
-        </p>
-        {plaats ? (
-          <p
-            className={[
-              "mt-0.5 truncate font-medium leading-snug",
-              mutedCls,
-              compact ? "text-[11px]" : "text-sm",
-            ].join(" ")}
-          >
-            {plaats}
-          </p>
-        ) : null}
-        {!compact && adresLines.length > 0 ? (
-          <div className="mt-1 space-y-0.5">
-            {adresLines
-              .filter((line) => !plaats || !line.includes(plaats))
-              .map((line) => (
-                <p key={line} className={`truncate text-sm ${mutedCls}`}>
-                  {line}
-                </p>
-              ))}
+            {timeRange ? (
+              <span
+                className={[
+                  "text-[10px] font-semibold tabular-nums text-ink",
+                  past ? "line-through opacity-70" : "",
+                ].join(" ")}
+              >
+                {compact && bar.at ? formatTimeNl(bar.at) : timeRange}
+                {!compact && duurLabel ? (
+                  <span className="font-medium text-muted"> · {duurLabel}</span>
+                ) : null}
+              </span>
+            ) : null}
+            {past ? (
+              <span className="rounded bg-black/5 px-1 py-px text-[8px] font-semibold text-muted">
+                Geweest
+              </span>
+            ) : null}
           </div>
-        ) : null}
-        {!compact && (partner?.naam || bar.project.monteur) ? (
-          <p className={`mt-1 truncate text-sm ${mutedCls}`}>
-            {partner?.naam &&
-            bar.project.monteur &&
-            bar.project.monteur !== partner.naam
-              ? `${partner.naam} · ${bar.project.monteur}`
-              : partner?.naam || bar.project.monteur}
+          <p
+            className="truncate text-xs font-semibold leading-tight text-ink"
+            title={naam}
+          >
+            {naam}
           </p>
-        ) : null}
-      </div>
-      {hasIcons ? (
-        <div className="absolute right-1 top-1 flex flex-col items-end gap-0.5">
-          {tel ? <PhoneCopyIcon telefoon={tel} /> : null}
-          {isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url ? (
-            <span
-              className="inline-flex h-6 w-6 items-center justify-center border border-[#FDBA74] bg-[#FFF7ED] text-[10px] font-bold text-[#C45A12]"
-              title="Schouwformulier ontbreekt"
-            >
-              !
-            </span>
+          {subLine ? (
+            <p className="truncate text-[10px] leading-tight text-muted">
+              {subLine}
+            </p>
           ) : null}
         </div>
-      ) : null}
+        {(tel || missingSchouw) && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {tel ? <PhoneCopyIcon telefoon={tel} /> : null}
+            {missingSchouw ? (
+              <span
+                className="inline-flex size-5 items-center justify-center rounded border border-[#FDBA74] bg-[#FFF7ED] text-[9px] font-bold text-[#C45A12]"
+                title="Schouwformulier ontbreekt"
+              >
+                !
+              </span>
+            ) : null}
+          </div>
+        )}
+      </div>
     </button>
   );
 }
@@ -1448,11 +1459,11 @@ function DetailRow({
   children: ReactNode;
 }) {
   return (
-    <div className="border-b border-line/70 py-3 last:border-b-0">
-      <dt className="text-xs font-semibold uppercase tracking-[0.06em] text-muted">
+    <div className="space-y-1.5 border-b border-line/70 py-3.5 last:border-b-0">
+      <dt className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
         {label}
       </dt>
-      <dd className="mt-1 text-base text-ink">{children}</dd>
+      <dd className="text-sm text-ink sm:text-[15px]">{children}</dd>
     </div>
   );
 }
@@ -1478,25 +1489,29 @@ function StatusCheckRow({
   loading?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2.5 text-sm">
       {loading ? (
         <span
-          className="inline-flex h-5 w-5 items-center justify-center text-xs text-muted"
+          className="inline-flex size-5 items-center justify-center rounded-full border border-line text-[10px] text-muted"
           aria-hidden
         >
           …
         </span>
       ) : ok ? (
         <span
-          className="inline-flex h-5 w-5 items-center justify-center bg-[#0D9488] text-xs font-bold text-white"
+          className="inline-flex size-5 items-center justify-center rounded-full bg-[#0D9488] text-white"
           title="Ja"
           aria-label="Ja"
         >
-          ✓
+          <Check className="size-3" strokeWidth={3} />
         </span>
       ) : (
-        <span className="text-[15px] leading-none" title="Nee" aria-label="Nee">
-          ❌
+        <span
+          className="inline-flex size-5 items-center justify-center rounded-full bg-[#FDECEA] text-[#C62828]"
+          title="Nee"
+          aria-label="Nee"
+        >
+          <X className="size-3" strokeWidth={3} />
         </span>
       )}
       <span className={ok && !loading ? "font-medium text-ink" : "text-muted"}>
@@ -1509,8 +1524,10 @@ function StatusCheckRow({
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="xs"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(value);
@@ -1520,10 +1537,10 @@ function CopyButton({ value }: { value: string }) {
           /* ignore */
         }
       }}
-      className="shrink-0 border border-line px-2 py-0.5 text-xs font-semibold text-muted hover:bg-wash hover:text-ink"
     >
+      <Copy data-icon="inline-start" />
       {copied ? "Gekopieerd" : "Kopieer"}
-    </button>
+    </Button>
   );
 }
 
@@ -1539,6 +1556,8 @@ function RequiredDocUploadBlock({
   uploadError,
   onUpload,
   onMaakFormulier,
+  accept = "image/*,application/pdf,.pdf",
+  capture,
   noteDraft,
   onNoteChange,
   noteBusy,
@@ -1547,6 +1566,7 @@ function RequiredDocUploadBlock({
   notePlaceholder,
   noteTitle,
   fallbackNotities,
+  mediaKind = "file",
 }: {
   label: string;
   missingLabel: string;
@@ -1560,6 +1580,8 @@ function RequiredDocUploadBlock({
   onUpload: (file: File) => void;
   /** Optioneel: digitaal formulier → PDF (schouw). */
   onMaakFormulier?: (() => void) | null;
+  accept?: string;
+  capture?: boolean | "user" | "environment";
   noteDraft: string;
   onNoteChange: (v: string) => void;
   noteBusy: boolean;
@@ -1568,27 +1590,45 @@ function RequiredDocUploadBlock({
   notePlaceholder: string;
   noteTitle: string;
   fallbackNotities: string | null;
+  mediaKind?: "file" | "video";
 }) {
+  const captureAttr =
+    capture === true ? "environment" : capture === false ? undefined : capture;
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted">{label}</p>
       {doc?.url ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2">
+          {mediaKind === "video" ? (
+            <video
+              src={doc.url}
+              controls
+              playsInline
+              className="max-h-56 w-full rounded-md border border-line bg-black"
+            />
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
           <a
             href={doc.url}
             target="_blank"
             rel="noreferrer"
             download={doc.bestandsnaam || defaultFilename}
-            className="inline-flex border border-line bg-wash px-3 py-1.5 text-sm font-semibold text-ink hover:bg-white"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             {doc.bestandsnaam || "Openen / downloaden"}
           </a>
           {allowUpload ? (
-            <label className="cursor-pointer border border-line px-3 py-1.5 text-sm font-semibold text-[#0F766E] hover:bg-wash">
+            <label
+              className={cn(
+                buttonVariants({ variant: "outline", size: "sm" }),
+                "cursor-pointer"
+              )}
+            >
               {uploading ? "Uploaden…" : "Vervangen"}
               <input
                 type="file"
-                accept="image/*,application/pdf,.pdf"
+                accept={accept}
+                {...(captureAttr ? { capture: captureAttr } : {})}
                 className="hidden"
                 disabled={uploading}
                 onChange={(e) => {
@@ -1600,36 +1640,47 @@ function RequiredDocUploadBlock({
             </label>
           ) : null}
           {allowUpload && onMaakFormulier ? (
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               disabled={uploading}
               onClick={onMaakFormulier}
-              className="border border-[#0D5C32] px-3 py-1.5 text-sm font-semibold text-[#0D5C32] hover:bg-wash disabled:opacity-50"
             >
               Nieuw formulier
-            </button>
+            </Button>
           ) : null}
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="font-medium text-[#C45A12]">{missingLabel}</p>
+          <Alert className="border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]">
+            <AlertDescription>{missingLabel}</AlertDescription>
+          </Alert>
           {allowUpload ? (
             <div className="flex flex-col gap-2">
               {onMaakFormulier ? (
-                <button
+                <Button
                   type="button"
+                  className="w-full"
+                  size="lg"
                   disabled={uploading}
                   onClick={onMaakFormulier}
-                  className="w-full bg-[#0D5C32] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#0A4A28] disabled:opacity-50"
                 >
                   Maak formulier
-                </button>
+                </Button>
               ) : null}
-              <label className="inline-flex w-full cursor-pointer justify-center border border-line bg-white px-3 py-2.5 text-sm font-semibold text-ink hover:bg-wash">
+              <label
+                className={cn(
+                  buttonVariants({ variant: "outline", size: "lg" }),
+                  "w-full cursor-pointer justify-center"
+                )}
+              >
                 {uploading ? "Uploaden…" : uploadLabel}
                 <input
                   type="file"
-                  accept="image/*,application/pdf,.pdf"
+                  accept={accept}
+                  {...(captureAttr ? { capture: captureAttr } : {})}
                   className="hidden"
                   disabled={uploading}
                   onChange={(e) => {
@@ -1644,54 +1695,65 @@ function RequiredDocUploadBlock({
         </div>
       )}
       {uploadOk ? (
-        <p className="text-sm text-green-dark">{uploadOk}</p>
+        <Alert className="border-green/30 bg-green-soft text-green-dark">
+          <AlertDescription>{uploadOk}</AlertDescription>
+        </Alert>
       ) : null}
       {uploadError ? (
-        <p className="text-sm text-[#C45A12]">{uploadError}</p>
+        <Alert variant="destructive">
+          <AlertDescription>{uploadError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {onSaveNote ? (
         <div className="space-y-2 border-t border-line pt-3">
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
-            {noteTitle} *
-            <textarea
+          <div className="space-y-1.5">
+            <Label htmlFor="planbord-note">{noteTitle} *</Label>
+            <Textarea
+              id="planbord-note"
               value={noteDraft}
               onChange={(e) => onNoteChange(e.target.value)}
               rows={3}
               required
               placeholder={notePlaceholder}
-              className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-[#0D9488]"
             />
-          </label>
+          </div>
           <p className="text-[11px] text-muted">
             Notitie is verplicht bij afronden.
           </p>
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             disabled={noteBusy || !noteDraft.trim()}
             onClick={onSaveNote}
-            className="border border-line px-3 py-1.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
             {noteBusy ? "Opslaan…" : "Notitie opslaan"}
-          </button>
+          </Button>
           {noteMsg ? (
-            <p
-              className={[
-                "text-sm",
+            <Alert
+              className={
                 noteMsg.includes("mislukt") ||
                 noteMsg.includes("Fout") ||
                 noteMsg.includes("verplicht")
-                  ? "text-[#C45A12]"
-                  : "text-green-dark",
-              ].join(" ")}
+                  ? undefined
+                  : "border-green/30 bg-green-soft text-green-dark"
+              }
+              variant={
+                noteMsg.includes("mislukt") ||
+                noteMsg.includes("Fout") ||
+                noteMsg.includes("verplicht")
+                  ? "destructive"
+                  : "default"
+              }
             >
-              {noteMsg}
-            </p>
+              <AlertDescription>{noteMsg}</AlertDescription>
+            </Alert>
           ) : null}
         </div>
       ) : fallbackNotities ? (
         <div className="border-t border-line pt-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
             Notitie
           </p>
           <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">
@@ -1710,6 +1772,7 @@ function AgendaItemSidebar({
   partners,
   projectHref,
   hidePartner = false,
+  portalMode = false,
   allowSchouwUpload = false,
   allowOpleveringUpload = false,
   allowServiceComplete = false,
@@ -1726,6 +1789,8 @@ function AgendaItemSidebar({
   partners: InstallatiePartner[];
   projectHref: (projectId: string) => string;
   hidePartner?: boolean;
+  /** Installatiepartner-portaal: andere checklist, geen betaalstatus. */
+  portalMode?: boolean;
   allowSchouwUpload?: boolean;
   allowOpleveringUpload?: boolean;
   /** Service afvinken + optionele foto’s. */
@@ -1792,6 +1857,15 @@ function AgendaItemSidebar({
   const [localOplevering, setLocalOplevering] = useState<
     SchouwDocInfo | null | undefined
   >(opleveringDoc);
+  const [localMeterkast, setLocalMeterkast] = useState<
+    SchouwDocInfo | null | undefined
+  >(undefined);
+  const [localBatterij, setLocalBatterij] = useState<
+    SchouwDocInfo | null | undefined
+  >(undefined);
+  const [localVideo, setLocalVideo] = useState<
+    SchouwDocInfo | null | undefined
+  >(undefined);
   const [serviceFotos, setServiceFotos] = useState<SchouwDocInfo[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1806,6 +1880,9 @@ function AgendaItemSidebar({
   const [serviceDoneLocal, setServiceDoneLocal] = useState(false);
   const [schouwFormOpen, setSchouwFormOpen] = useState(false);
   const [opleverFormOpen, setOpleverFormOpen] = useState(false);
+  const [formTeamgenoten, setFormTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
   const [serviceVerzoeken, setServiceVerzoeken] = useState<
     Pick<
       ServiceVerzoek,
@@ -1820,6 +1897,103 @@ function AgendaItemSidebar({
   useEffect(() => {
     setLocalOplevering(opleveringDoc);
   }, [opleveringDoc, bar.key]);
+
+  // Foto’s + documenten voor schouw/installatie sidebar.
+  useEffect(() => {
+    if (bar.kind !== "installatie" && bar.kind !== "schouw" && bar.kind !== "schouwweek") {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url =
+          fotosUploadUrl || `/api/projecten/${project.id}/fotos`;
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) {
+          if (!cancelled) {
+            if (schouwDoc === undefined) setLocalDoc(null);
+            setLocalMeterkast(null);
+            setLocalBatterij(null);
+            setLocalVideo(null);
+          }
+          return;
+        }
+        const fotos = (data.fotos || []) as Array<{
+          omschrijving: string | null;
+          url: string | null;
+          bestandsnaam: string | null;
+          created_at: string;
+        }>;
+        const pick = (
+          pred: (o: string | null) => boolean
+        ): SchouwDocInfo | null => {
+          const docs = fotos
+            .filter((f) => pred(f.omschrijving) && f.url)
+            .sort((a, b) => a.created_at.localeCompare(b.created_at));
+          const last = docs[docs.length - 1];
+          return last?.url
+            ? { url: last.url, bestandsnaam: last.bestandsnaam }
+            : null;
+        };
+        if (!cancelled) {
+          if (schouwDoc === undefined) {
+            setLocalDoc(pick((o) => isSchouwFormulier(o)));
+          }
+          setLocalMeterkast(pick((o) => isFotoMeterkast(o)));
+          setLocalBatterij(pick((o) => isFotoBatterij(o)));
+          setLocalVideo(pick((o) => isVideoInstallatie(o)));
+          if (opleveringDoc === undefined && bar.kind === "installatie") {
+            setLocalOplevering(pick((o) => isOpleveringsrapport(o)));
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          if (schouwDoc === undefined) setLocalDoc(null);
+          setLocalMeterkast(null);
+          setLocalBatterij(null);
+          setLocalVideo(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bar.kind,
+    bar.key,
+    schouwDoc,
+    opleveringDoc,
+    fotosUploadUrl,
+    project.id,
+  ]);
+
+  const partnerIdForTeam =
+    partner?.id || project.installatie_partner_id || null;
+  useEffect(() => {
+    if (!partnerIdForTeam) {
+      setFormTeamgenoten([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerIdForTeam)}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        setFormTeamgenoten(
+          (data.teamgenoten as InstallatiePartnerTeamgenoot[]) || []
+        );
+      } catch {
+        if (!cancelled) setFormTeamgenoten([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partnerIdForTeam, bar.key]);
 
   useEffect(() => {
     setNoteDraft(
@@ -1895,6 +2069,11 @@ function AgendaItemSidebar({
   }, [showService, project.id, fotosUploadUrl, bar.key]);
 
   useEffect(() => {
+    if (portalMode) {
+      setBetaaldLoading(false);
+      setOrderBetaald(null);
+      return;
+    }
     let cancelled = false;
     setBetaaldLoading(true);
     setOrderBetaald(null);
@@ -1949,13 +2128,19 @@ function AgendaItemSidebar({
     return () => {
       cancelled = true;
     };
-  }, [project]);
+  }, [project, portalMode]);
 
   const opStatus = toOperationalStatus(status);
+  const meterkastOk = Boolean(localMeterkast?.url);
+  const batterijFotoOk = Boolean(localBatterij?.url);
+  const videoInstallatieOk = Boolean(localVideo?.url);
   const schouwVoltooid =
-    Boolean(localDoc?.url) || SCHOUW_DONE_STATUSES.has(opStatus);
+    (Boolean(localDoc?.url) && meterkastOk) ||
+    SCHOUW_DONE_STATUSES.has(opStatus);
   const opleveringOk =
-    Boolean(localOplevering?.url) ||
+    (Boolean(localOplevering?.url) &&
+      batterijFotoOk &&
+      videoInstallatieOk) ||
     opStatus === "installatie_voltooid" ||
     opStatus === "review_gevraagd" ||
     opStatus === "service";
@@ -1966,6 +2151,10 @@ function AgendaItemSidebar({
         (Boolean(project.service_notities?.trim()) &&
           opStatus !== "service")));
   const orderVolledigBetaald = orderBetaald === true;
+  const batterijBijKlant = batterijPurchasingStatus(
+    project.materiaal_checks
+  ).geleverd;
+  const schouwMedewerker = medewerkerNaamVanProject(project);
   const notesEndpoint =
     notesPatchUrl ||
     (allowSchouwUpload || allowOpleveringUpload || allowServiceComplete
@@ -1974,29 +2163,47 @@ function AgendaItemSidebar({
 
   async function uploadRequiredDoc(
     file: File,
-    kind: "schouw" | "oplevering"
+    kind: "schouw" | "oplevering" | "meterkast" | "batterij" | "video"
   ) {
-    if (!noteDraft.trim()) {
+    const needsNote = kind === "schouw" || kind === "oplevering";
+    if (needsNote && !noteDraft.trim()) {
       setUploadError("Notitie is verplicht bij afronden.");
       setNoteMsg("Notitie is verplicht bij afronden.");
       return;
+    }
+    if (kind === "video") {
+      const check = await validateInstallatieVideoDuration(file);
+      if (!check.ok) {
+        setUploadError(check.error);
+        return;
+      }
     }
     setUploading(true);
     setUploadError(null);
     setUploadOk(null);
     try {
-      if (notesEndpoint) {
+      if (needsNote && notesEndpoint) {
         await saveSidebarNotitie(false);
       }
       const form = new FormData();
       form.append("file", file);
-      form.append(
-        "omschrijving",
+      const omschrijving =
         kind === "schouw"
           ? SCHOUW_FORMULIER_OMSCHRIJVING
-          : OPLEVERINGSRAPPORT_OMSCHRIJVING
-      );
-      form.append("allow_pdf", "1");
+          : kind === "oplevering"
+            ? OPLEVERINGSRAPPORT_OMSCHRIJVING
+            : kind === "meterkast"
+              ? FOTO_METERKAST_OMSCHRIJVING
+              : kind === "video"
+                ? VIDEO_INSTALLATIE_OMSCHRIJVING
+                : FOTO_BATTERIJ_OMSCHRIJVING;
+      form.append("omschrijving", omschrijving);
+      if (kind === "schouw" || kind === "oplevering") {
+        form.append("allow_pdf", "1");
+      }
+      if (kind === "video") {
+        form.append("allow_video", "1");
+      }
       const url =
         fotosUploadUrl || `/api/projecten/${project.id}/fotos`;
       const res = await fetch(url, {
@@ -2016,9 +2223,15 @@ function AgendaItemSidebar({
       if (kind === "schouw") {
         setLocalDoc(nextDoc);
         onSchouwDocChange?.(project.id, nextDoc);
-      } else {
+      } else if (kind === "oplevering") {
         setLocalOplevering(nextDoc);
         onOpleveringDocChange?.(project.id, nextDoc);
+      } else if (kind === "meterkast") {
+        setLocalMeterkast(nextDoc);
+      } else if (kind === "video") {
+        setLocalVideo(nextDoc);
+      } else {
+        setLocalBatterij(nextDoc);
       }
       const adv = data.status_advance as
         | { advanced?: boolean; klaarVoorMateriaal?: boolean; to?: string }
@@ -2026,11 +2239,15 @@ function AgendaItemSidebar({
       if (data.project && typeof data.project === "object") {
         onProjectUpdated?.(data.project as Project);
       }
-      if (kind === "oplevering") {
+      if (kind === "oplevering" || kind === "batterij" || kind === "video") {
         setUploadOk(
           adv?.advanced
-            ? "Opleveringsrapport geüpload · installatie voltooid."
-            : "Opleveringsrapport geüpload."
+            ? "Geüpload · installatie voltooid."
+            : kind === "batterij"
+              ? "Foto batterij geüpload."
+              : kind === "video"
+                ? "Installatievideo geüpload."
+                : "Opleveringsrapport geüpload."
         );
       } else if (adv?.advanced && adv.klaarVoorMateriaal) {
         setUploadOk(
@@ -2038,6 +2255,8 @@ function AgendaItemSidebar({
         );
       } else if (adv?.advanced) {
         setUploadOk("Geüpload · schouw voltooid.");
+      } else if (kind === "meterkast") {
+        setUploadOk("Foto meterkast geüpload.");
       } else {
         setUploadOk("Schouwformulier geüpload.");
       }
@@ -2167,7 +2386,7 @@ function AgendaItemSidebar({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30">
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/40">
       <button
         type="button"
         className="absolute inset-0 cursor-default"
@@ -2175,28 +2394,32 @@ function AgendaItemSidebar({
         onClick={onClose}
       />
       <aside className="relative z-10 flex h-full w-full max-w-md flex-col border-l border-line bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-4 sm:px-5">
           <div className="min-w-0">
-            <p
-              className={[
-                "text-xs font-semibold uppercase tracking-[0.08em]",
-                bar.kind === "installatie"
-                  ? "text-[#047857]"
-                  : bar.kind === "levering"
-                    ? "text-[#EA580C]"
-                    : bar.kind === "service"
-                      ? "text-[#C45A12]"
-                      : "text-[#854D0E]",
-              ].join(" ")}
+            <Badge
+              variant="secondary"
+              className={cn(
+                "rounded-full text-[10px] font-semibold uppercase tracking-[0.06em]",
+                bar.kind === "installatie" &&
+                  "border border-[#047857]/25 bg-[#E8F6EC] text-[#047857]",
+                bar.kind === "levering" &&
+                  "border border-[#EA580C]/25 bg-[#FFF0E6] text-[#EA580C]",
+                bar.kind === "service" &&
+                  "border border-[#C45A12]/25 bg-[#FFF0E6] text-[#C45A12]",
+                bar.kind !== "installatie" &&
+                  bar.kind !== "levering" &&
+                  bar.kind !== "service" &&
+                  "border border-[#854D0E]/25 bg-[#FFF8D6] text-[#854D0E]"
+              )}
             >
               {kindLabel}
               {when
                 ? ` · ${formatTimeRangeNl(when, bar.duurMinuten) || formatTimeNl(when)}`
-                : null}
-              {duurLabel ? ` · ${duurLabel}` : null}
-              {isBarPast(bar) ? " · geweest" : null}
-            </p>
-            <h2 className="mt-1 font-display text-xl font-semibold text-ink">
+                : ""}
+              {duurLabel ? ` · ${duurLabel}` : ""}
+              {isBarPast(bar) ? " · geweest" : ""}
+            </Badge>
+            <h2 className="mt-2 font-display text-xl font-semibold tracking-tight text-ink">
               {lead?.naam || projectTitle(project)}
             </h2>
             {project.project_nummer ? (
@@ -2205,16 +2428,18 @@ function AgendaItemSidebar({
               </p>
             ) : null}
           </div>
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={onClose}
-            className="shrink-0 border border-line px-2.5 py-1.5 text-sm text-muted hover:bg-wash"
+            className="shrink-0"
           >
             Sluiten
-          </button>
+          </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-2">
+        <div className="flex-1 overflow-y-auto px-4 py-1 sm:px-5">
           <dl>
             {when ? (
               <DetailRow label="Wanneer">
@@ -2237,36 +2462,95 @@ function AgendaItemSidebar({
 
             <DetailRow label="Status">
               <div className="space-y-2.5">
-                <p>{resolveProjectStatusLabel(status, project) || status}</p>
-                <div className="space-y-1.5 border border-line bg-[#FAFBFA] px-3 py-2.5">
-                  <StatusCheckRow
-                    ok={orderVolledigBetaald}
-                    loading={betaaldLoading}
-                    label="Order volledig betaald"
-                  />
-                  <StatusCheckRow
-                    ok={schouwVoltooid}
-                    loading={
-                      showSchouwForm &&
-                      localDoc === undefined &&
-                      !SCHOUW_DONE_STATUSES.has(opStatus)
-                    }
-                    label="Schouw voltooid"
-                  />
-                  {showOplevering ? (
-                    <StatusCheckRow
-                      ok={opleveringOk}
-                      loading={localOplevering === undefined && !opleveringOk}
-                      label="Opleveringsrapport (handtekening)"
-                    />
-                  ) : null}
-                  {showService ? (
-                    <StatusCheckRow
-                      ok={serviceAfgerond}
-                      loading={false}
-                      label="Service afgevinkt"
-                    />
-                  ) : null}
+                <Badge
+                  variant="secondary"
+                  className="rounded-full border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[11px] font-semibold text-[#1A4A6E]"
+                >
+                  {portalMode
+                    ? resolveInstallateurStatusLabel(status, project)
+                    : resolveProjectStatusLabel(status, project) || status}
+                </Badge>
+                <div className="space-y-2 rounded-lg border border-line bg-wash/60 px-3 py-2.5">
+                  {portalMode ? (
+                    <>
+                      {showSchouwForm ? (
+                        <>
+                          <StatusCheckRow
+                            ok={Boolean(localDoc?.url)}
+                            loading={localDoc === undefined}
+                            label="Schouwformulier"
+                          />
+                          <StatusCheckRow
+                            ok={meterkastOk}
+                            loading={localMeterkast === undefined}
+                            label="Foto meterkast"
+                          />
+                        </>
+                      ) : null}
+                      {showOplevering ? (
+                        <>
+                          <StatusCheckRow
+                            ok={Boolean(localOplevering?.url)}
+                            loading={localOplevering === undefined}
+                            label="Opleverformulier"
+                          />
+                          <StatusCheckRow
+                            ok={batterijFotoOk}
+                            loading={localBatterij === undefined}
+                            label="Foto batterij"
+                          />
+                          <StatusCheckRow
+                            ok={videoInstallatieOk}
+                            loading={localVideo === undefined}
+                            label="Video installatie"
+                          />
+                          <StatusCheckRow
+                            ok={batterijBijKlant}
+                            label="Batterij is bij klant geleverd"
+                          />
+                        </>
+                      ) : null}
+                      {!showSchouwForm && !showOplevering ? (
+                        <StatusCheckRow
+                          ok={batterijBijKlant}
+                          label="Batterij is bij klant geleverd"
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <StatusCheckRow
+                        ok={orderVolledigBetaald}
+                        loading={betaaldLoading}
+                        label="Order volledig betaald"
+                      />
+                      <StatusCheckRow
+                        ok={schouwVoltooid}
+                        loading={
+                          showSchouwForm &&
+                          localDoc === undefined &&
+                          !SCHOUW_DONE_STATUSES.has(opStatus)
+                        }
+                        label="Schouw voltooid"
+                      />
+                      {showOplevering ? (
+                        <StatusCheckRow
+                          ok={opleveringOk}
+                          loading={
+                            localOplevering === undefined && !opleveringOk
+                          }
+                          label="Opleveringsrapport (handtekening)"
+                        />
+                      ) : null}
+                      {showService ? (
+                        <StatusCheckRow
+                          ok={serviceAfgerond}
+                          loading={false}
+                          label="Service afgevinkt"
+                        />
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
             </DetailRow>
@@ -2327,13 +2611,14 @@ function AgendaItemSidebar({
                     </p>
                     {project.monteur &&
                     project.monteur !== partner?.naam ? (
-                      <p className="text-sm text-ink">
+                      <p className="text-sm font-semibold text-ink">
                         Medewerker: {project.monteur}
                       </p>
                     ) : project.installatie_partner_id &&
                       !project.monteur ? (
-                      <p className="text-sm text-muted">
-                        Medewerker nog niet gekoppeld
+                      <p className="text-sm font-semibold text-[#C45A12]">
+                        Medewerker nog niet gekoppeld — koppel vóór
+                        schouw/oplevering
                       </p>
                     ) : null}
                     {partner?.telefoon ? (
@@ -2376,90 +2661,215 @@ function AgendaItemSidebar({
               )}
             </DetailRow>
 
-            <DetailRow label="Notitie voor backoffice">
-              {project.backoffice_notitie?.trim() ? (
-                <div className="space-y-1">
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                    {project.backoffice_notitie.trim()}
-                  </p>
-                  {project.backoffice_notitie_door?.trim() ? (
-                    <p className="text-[11px] text-muted">
-                      — {project.backoffice_notitie_door.trim()}
+            {!portalMode ? (
+              <DetailRow label="Notitie voor backoffice">
+                {project.backoffice_notitie?.trim() ? (
+                  <div className="space-y-1">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
+                      {project.backoffice_notitie.trim()}
                     </p>
-                  ) : null}
-                </div>
-              ) : (
-                <span className="text-muted">Geen notitie</span>
-              )}
-            </DetailRow>
+                    {project.backoffice_notitie_door?.trim() ? (
+                      <p className="text-[11px] text-muted">
+                        — {project.backoffice_notitie_door.trim()}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <span className="text-muted">Geen notitie</span>
+                )}
+              </DetailRow>
+            ) : null}
 
             {showSchouwForm && (allowSchouwUpload || localDoc !== undefined) ? (
-              <DetailRow label="Schouwformulier *">
-                <RequiredDocUploadBlock
-                  label="Verplicht · digitaal formulier of upload PDF/foto"
-                  missingLabel="Nog niet geüpload — verplicht voor schouw voltooid"
-                  uploadLabel="Of upload PDF / foto"
-                  defaultFilename="schouwformulier.pdf"
-                  doc={localDoc}
-                  allowUpload={allowSchouwUpload}
-                  uploading={uploading}
-                  uploadOk={uploadOk}
-                  uploadError={uploadError}
-                  onUpload={(file) => void uploadRequiredDoc(file, "schouw")}
-                  onMaakFormulier={
-                    allowSchouwUpload
-                      ? () => setSchouwFormOpen(true)
-                      : null
-                  }
-                  noteDraft={noteDraft}
-                  onNoteChange={setNoteDraft}
-                  noteBusy={noteBusy}
-                  noteMsg={noteMsg}
-                  onSaveNote={
-                    allowSchouwUpload && notesEndpoint
-                      ? () => void saveSidebarNotitie().catch(() => undefined)
-                      : null
-                  }
-                  notePlaceholder="Bijv. meterkast, kabelroute, bijzonderheden…"
-                  noteTitle="Notitie bij schouw"
-                  fallbackNotities={notities || null}
-                />
-              </DetailRow>
+              <>
+                <DetailRow label="Foto meterkast *">
+                  <RequiredDocUploadBlock
+                    label="Verplicht · maak een foto van de meterkast"
+                    missingLabel="Nog geen foto — verplicht voor schouw voltooid"
+                    uploadLabel="Upload foto meterkast"
+                    defaultFilename="foto-meterkast.jpg"
+                    doc={localMeterkast}
+                    allowUpload={allowSchouwUpload}
+                    uploading={uploading}
+                    uploadOk={uploadOk}
+                    uploadError={uploadError}
+                    onUpload={(file) =>
+                      void uploadRequiredDoc(file, "meterkast")
+                    }
+                    accept="image/*"
+                    capture="environment"
+                    noteDraft={noteDraft}
+                    onNoteChange={setNoteDraft}
+                    noteBusy={noteBusy}
+                    noteMsg={null}
+                    onSaveNote={null}
+                    notePlaceholder=""
+                    noteTitle=""
+                    fallbackNotities={null}
+                  />
+                </DetailRow>
+                <DetailRow label="Schouwformulier *">
+                  <RequiredDocUploadBlock
+                    label="Verplicht · digitaal formulier of upload PDF/foto"
+                    missingLabel="Nog niet geüpload — verplicht voor schouw voltooid"
+                    uploadLabel="Of upload PDF / foto"
+                    defaultFilename="schouwformulier.pdf"
+                    doc={localDoc}
+                    allowUpload={allowSchouwUpload}
+                    uploading={uploading}
+                    uploadOk={uploadOk}
+                    uploadError={uploadError}
+                    onUpload={(file) => void uploadRequiredDoc(file, "schouw")}
+                    onMaakFormulier={
+                      allowSchouwUpload
+                        ? () => setSchouwFormOpen(true)
+                        : null
+                    }
+                    noteDraft={noteDraft}
+                    onNoteChange={setNoteDraft}
+                    noteBusy={noteBusy}
+                    noteMsg={noteMsg}
+                    onSaveNote={
+                      allowSchouwUpload && notesEndpoint
+                        ? () =>
+                            void saveSidebarNotitie().catch(() => undefined)
+                        : null
+                    }
+                    notePlaceholder="Bijv. meterkast, kabelroute, bijzonderheden…"
+                    noteTitle="Notitie bij schouw"
+                    fallbackNotities={notities || null}
+                  />
+                </DetailRow>
+              </>
             ) : showOplevering &&
               (allowOpleveringUpload || localOplevering !== undefined) ? (
-              <DetailRow label="Opleveringsrapport">
-                <RequiredDocUploadBlock
-                  label="Optioneel · opleverformulier met checklist + handtekening installateur"
-                  missingLabel="Nog niet ingevuld"
-                  uploadLabel="Of upload PDF / foto"
-                  defaultFilename="opleveringsrapport.pdf"
-                  doc={localOplevering}
-                  allowUpload={allowOpleveringUpload}
-                  uploading={uploading}
-                  uploadOk={uploadOk}
-                  uploadError={uploadError}
-                  onUpload={(file) =>
-                    void uploadRequiredDoc(file, "oplevering")
-                  }
-                  onMaakFormulier={
-                    allowOpleveringUpload
-                      ? () => setOpleverFormOpen(true)
-                      : null
-                  }
-                  noteDraft={noteDraft}
-                  onNoteChange={setNoteDraft}
-                  noteBusy={noteBusy}
-                  noteMsg={noteMsg}
-                  onSaveNote={
-                    allowOpleveringUpload && notesEndpoint
-                      ? () => void saveSidebarNotitie().catch(() => undefined)
-                      : null
-                  }
-                  notePlaceholder="Bijv. kabels door klant, bijzonderheden oplevering…"
-                  noteTitle="Notitie bij installatie"
-                  fallbackNotities={notities || null}
-                />
-              </DetailRow>
+              <>
+                {(schouwVoltooid ||
+                  localDoc?.url ||
+                  localDoc === undefined) && (
+                  <DetailRow label="Schouwformulier">
+                    {localDoc === undefined ? (
+                      <p className="text-sm text-muted">Laden…</p>
+                    ) : localDoc?.url ? (
+                      <div className="space-y-1">
+                        <a
+                          href={localDoc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={
+                            localDoc.bestandsnaam || "Schouwformulier.pdf"
+                          }
+                          className="inline-flex border border-line bg-wash px-3 py-1.5 text-sm font-semibold text-ink hover:bg-white"
+                        >
+                          Schouwformulier
+                          {localDoc.bestandsnaam
+                            ? ` · ${localDoc.bestandsnaam}`
+                            : ""}
+                        </a>
+                        {schouwMedewerker ? (
+                          <p className="text-[11px] text-muted">
+                            Uitgevoerd door {schouwMedewerker}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : schouwVoltooid ? (
+                      <p className="text-sm text-[#C45A12]">
+                        Schouw is geweest, maar formulier ontbreekt
+                      </p>
+                    ) : (
+                      <p className="text-sm text-muted">
+                        Nog geen schouwformulier
+                      </p>
+                    )}
+                  </DetailRow>
+                )}
+                <DetailRow label="Foto batterij *">
+                  <RequiredDocUploadBlock
+                    label="Verplicht · maak een foto van de geïnstalleerde batterij"
+                    missingLabel="Nog geen foto — verplicht voor oplevering"
+                    uploadLabel="Upload foto batterij"
+                    defaultFilename="foto-batterij.jpg"
+                    doc={localBatterij}
+                    allowUpload={allowOpleveringUpload}
+                    uploading={uploading}
+                    uploadOk={uploadOk}
+                    uploadError={uploadError}
+                    onUpload={(file) =>
+                      void uploadRequiredDoc(file, "batterij")
+                    }
+                    accept="image/*"
+                    capture="environment"
+                    noteDraft={noteDraft}
+                    onNoteChange={setNoteDraft}
+                    noteBusy={noteBusy}
+                    noteMsg={null}
+                    onSaveNote={null}
+                    notePlaceholder=""
+                    noteTitle=""
+                    fallbackNotities={null}
+                  />
+                </DetailRow>
+                <DetailRow label="Video van installatie *">
+                  <RequiredDocUploadBlock
+                    label="Verplicht · video van installatie (min. 30 sec, max. 1 min)"
+                    missingLabel="Nog geen video — verplicht voor oplevering"
+                    uploadLabel="Upload video (30s–1m)"
+                    defaultFilename="video-installatie.mp4"
+                    doc={localVideo}
+                    allowUpload={allowOpleveringUpload}
+                    uploading={uploading}
+                    uploadOk={uploadOk}
+                    uploadError={uploadError}
+                    onUpload={(file) =>
+                      void uploadRequiredDoc(file, "video")
+                    }
+                    accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                    noteDraft={noteDraft}
+                    onNoteChange={setNoteDraft}
+                    noteBusy={noteBusy}
+                    noteMsg={null}
+                    onSaveNote={null}
+                    notePlaceholder=""
+                    noteTitle=""
+                    fallbackNotities={null}
+                    mediaKind="video"
+                  />
+                </DetailRow>
+                <DetailRow label="Opleverformulier *">
+                  <RequiredDocUploadBlock
+                    label="Verplicht · opleverformulier met checklist + handtekening"
+                    missingLabel="Nog niet ingevuld — verplicht voor oplevering"
+                    uploadLabel="Of upload PDF / foto"
+                    defaultFilename="opleveringsrapport.pdf"
+                    doc={localOplevering}
+                    allowUpload={allowOpleveringUpload}
+                    uploading={uploading}
+                    uploadOk={uploadOk}
+                    uploadError={uploadError}
+                    onUpload={(file) =>
+                      void uploadRequiredDoc(file, "oplevering")
+                    }
+                    onMaakFormulier={
+                      allowOpleveringUpload
+                        ? () => setOpleverFormOpen(true)
+                        : null
+                    }
+                    noteDraft={noteDraft}
+                    onNoteChange={setNoteDraft}
+                    noteBusy={noteBusy}
+                    noteMsg={noteMsg}
+                    onSaveNote={
+                      allowOpleveringUpload && notesEndpoint
+                        ? () =>
+                            void saveSidebarNotitie().catch(() => undefined)
+                        : null
+                    }
+                    notePlaceholder="Bijv. kabels door klant, bijzonderheden oplevering…"
+                    noteTitle="Notitie bij installatie"
+                    fallbackNotities={notities || null}
+                  />
+                </DetailRow>
+              </>
             ) : showService ? (
               <DetailRow label="Service afronden">
                 <div className="space-y-3">
@@ -2510,20 +2920,20 @@ function AgendaItemSidebar({
                     </p>
                   )}
 
-                  <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
-                    Notitie bij afronden *
-                    <textarea
+                  <div className="space-y-1.5">
+                    <Label htmlFor="service-note">Notitie bij afronden *</Label>
+                    <Textarea
+                      id="service-note"
                       value={noteDraft}
                       onChange={(e) => setNoteDraft(e.target.value)}
                       rows={3}
                       disabled={serviceAfgerond}
                       placeholder="Wat is gedaan / bevindingen…"
-                      className="mt-1.5 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-[#0D9488] disabled:bg-wash"
                     />
-                  </label>
+                  </div>
 
                   <div className="space-y-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">
                       Foto’s (optioneel)
                     </p>
                     {serviceFotos.length > 0 ? (
@@ -2545,7 +2955,12 @@ function AgendaItemSidebar({
                       <p className="text-xs text-muted">Nog geen foto’s.</p>
                     )}
                     {allowServiceComplete && !serviceAfgerond ? (
-                      <label className="inline-flex cursor-pointer border border-line px-3 py-2 text-sm font-semibold text-[#0F766E] hover:bg-wash">
+                      <label
+                        className={cn(
+                          buttonVariants({ variant: "outline", size: "sm" }),
+                          "cursor-pointer"
+                        )}
+                      >
                         {uploading ? "Uploaden…" : "Foto uploaden"}
                         <input
                           type="file"
@@ -2563,35 +2978,46 @@ function AgendaItemSidebar({
                   </div>
 
                   {uploadOk ? (
-                    <p className="text-sm text-green-dark">{uploadOk}</p>
+                    <Alert className="border-green/30 bg-green-soft text-green-dark">
+                      <AlertDescription>{uploadOk}</AlertDescription>
+                    </Alert>
                   ) : null}
                   {uploadError ? (
-                    <p className="text-sm text-[#C45A12]">{uploadError}</p>
+                    <Alert variant="destructive">
+                      <AlertDescription>{uploadError}</AlertDescription>
+                    </Alert>
                   ) : null}
                   {noteMsg ? (
-                    <p
-                      className={[
-                        "text-sm",
+                    <Alert
+                      variant={
                         noteMsg.includes("mislukt") ||
                         noteMsg.includes("Fout") ||
                         noteMsg.includes("verplicht")
-                          ? "text-[#C45A12]"
-                          : "text-green-dark",
-                      ].join(" ")}
+                          ? "destructive"
+                          : "default"
+                      }
+                      className={
+                        noteMsg.includes("mislukt") ||
+                        noteMsg.includes("Fout") ||
+                        noteMsg.includes("verplicht")
+                          ? undefined
+                          : "border-green/30 bg-green-soft text-green-dark"
+                      }
                     >
-                      {noteMsg}
-                    </p>
+                      <AlertDescription>{noteMsg}</AlertDescription>
+                    </Alert>
                   ) : null}
 
                   {allowServiceComplete && !serviceAfgerond ? (
-                    <button
+                    <Button
                       type="button"
+                      className="w-full bg-[#C45A12] hover:bg-[#9A4510]"
+                      size="lg"
                       disabled={noteBusy || !noteDraft.trim()}
                       onClick={() => void afrondService()}
-                      className="w-full bg-[#C45A12] px-3 py-2.5 text-sm font-semibold text-white hover:bg-[#9A4510] disabled:opacity-50"
                     >
                       {noteBusy ? "Bezig…" : "Service afvinken"}
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </DetailRow>
@@ -2605,18 +3031,25 @@ function AgendaItemSidebar({
           </dl>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-t border-line px-5 py-4">
+        <div className="flex flex-wrap gap-2 border-t border-line px-4 py-4 sm:px-5">
           {tel ? (
             <a
               href={`tel:${tel}`}
-              className="flex-1 bg-[#0D9488] px-3 py-2.5 text-center text-sm font-semibold text-white hover:bg-[#0F766E]"
+              className={cn(
+                buttonVariants({ size: "lg" }),
+                "h-11 flex-1 bg-[#0D9488] hover:bg-[#0F766E]"
+              )}
             >
+              <Phone data-icon="inline-start" />
               Bel klant
             </a>
           ) : null}
           <Link
             href={projectHref(project.id)}
-            className="flex-1 border border-line px-3 py-2.5 text-center text-sm font-semibold text-ink hover:bg-wash"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "lg" }),
+              "h-11 flex-1"
+            )}
           >
             Open order
           </Link>
@@ -2633,7 +3066,8 @@ function AgendaItemSidebar({
               : `/api/projecten/${project.id}/schouw-formulier`
           }
           notitie={noteDraft}
-          opnemerDefault={project.monteur || partner?.naam || null}
+          opnemerDefault={medewerkerNaamVanProject(project) || null}
+          teamgenoten={formTeamgenoten}
           onClose={() => setSchouwFormOpen(false)}
           onCreated={(result) => {
             const foto = result.foto;
@@ -2675,7 +3109,8 @@ function AgendaItemSidebar({
               ? fotosUploadUrl.replace(/\/fotos\/?$/, "/oplever-formulier")
               : `/api/projecten/${project.id}/oplever-formulier`
           }
-          monteurDefault={project.monteur || partner?.naam || null}
+          monteurDefault={medewerkerNaamVanProject(project) || null}
+          teamgenoten={formTeamgenoten}
           onClose={() => setOpleverFormOpen(false)}
           onCreated={(result) => {
             const foto = result.foto;
@@ -2734,12 +3169,8 @@ function TimedDayBlock({
   const naam = klantNaam(bar.project);
   const plaats = klantPlaats(bar.project);
   const tel = lead?.telefoon?.trim() || null;
-  const isSolid =
-    bar.kind === "installatie" ||
-    bar.kind === "service" ||
-    bar.kind === "levering";
-  const titleCls = isSolid ? "text-white" : "text-ink";
-  const mutedCls = isSolid ? "text-white/85" : "text-muted";
+  const titleCls = "text-ink";
+  const mutedCls = "text-muted";
   const cols = Math.max(1, colCount);
   const gapPx = 4;
   const sidePad = 8;
@@ -2751,7 +3182,7 @@ function TimedDayBlock({
       type="button"
       onClick={onSelect}
       className={[
-        "absolute z-[1] overflow-hidden border text-left",
+        "absolute z-[1] overflow-hidden rounded-md border text-left",
         style.bg,
         style.border,
         past ? "opacity-45 grayscale-[0.35]" : "",
@@ -2770,8 +3201,8 @@ function TimedDayBlock({
       />
       <div
         className={[
-          "flex h-full items-start justify-between gap-2 pl-2.5",
-          compact ? "px-2 py-1" : "px-2.5 py-1.5",
+          "flex h-full items-start justify-between gap-1.5 pl-2",
+          compact ? "px-1.5 py-0.5" : "px-2 py-1",
         ].join(" ")}
       >
         <div className="min-w-0 overflow-hidden">
@@ -2779,14 +3210,14 @@ function TimedDayBlock({
             className={[
               "font-bold uppercase tracking-[0.04em]",
               style.text,
-              compact ? "text-[10px] leading-tight" : "text-xs",
+              compact ? "text-[9px] leading-tight" : "text-[10px]",
             ].join(" ")}
           >
             {kindLabel}
             {timeRange ? (
               <span
                 className={[
-                  "ml-1.5 tabular-nums normal-case tracking-normal",
+                  "ml-1 tabular-nums normal-case tracking-normal",
                   past ? "line-through decoration-2 opacity-80" : "",
                 ].join(" ")}
               >
@@ -2794,7 +3225,7 @@ function TimedDayBlock({
               </span>
             ) : null}
             {past && !compact ? (
-              <span className="ml-1.5 text-[10px] font-bold normal-case tracking-wide opacity-70">
+              <span className="ml-1 text-[9px] font-bold normal-case tracking-wide opacity-70">
                 · geweest
               </span>
             ) : null}
@@ -2803,25 +3234,23 @@ function TimedDayBlock({
             className={[
               "truncate font-semibold",
               titleCls,
-              compact ? "text-xs leading-tight" : "mt-0.5 text-sm",
+              compact ? "text-[11px] leading-tight" : "text-xs",
             ].join(" ")}
             title={naam}
           >
             {naam}
           </p>
-          {plaats ? (
+          {plaats && !compact ? (
             <p
-              className={[
-                "truncate font-medium",
-                mutedCls,
-                compact ? "text-[10px] leading-tight" : "mt-0.5 text-xs",
-              ].join(" ")}
+              className={["truncate font-medium text-[10px] leading-tight", mutedCls].join(
+                " "
+              )}
             >
               {plaats}
             </p>
           ) : null}
         </div>
-        {tel ? <PhoneCopyIcon telefoon={tel} /> : null}
+        {tel && !compact ? <PhoneCopyIcon telefoon={tel} /> : null}
       </div>
     </button>
   );
@@ -2875,10 +3304,6 @@ function MonthEventChip({
   const time = bar.at ? formatTimeNl(bar.at) : "";
   const kindShort = planbordKindLabel(bar.kind, true);
   const naam = klantNaam(bar.project);
-  const isSolid =
-    bar.kind === "installatie" ||
-    bar.kind === "service" ||
-    bar.kind === "levering";
 
   return (
     <button
@@ -2889,7 +3314,7 @@ function MonthEventChip({
       }}
       title={`${time} ${kindShort} · ${naam}`}
       className={[
-        "flex w-full min-w-0 items-baseline gap-1 border px-1.5 py-0.5 text-left leading-tight hover:opacity-90",
+        "flex w-full min-w-0 items-baseline gap-1 rounded-md border px-1.5 py-0.5 text-left leading-tight hover:opacity-90",
         s.bg,
         s.border,
         s.text,
@@ -2910,8 +3335,7 @@ function MonthEventChip({
       </span>
       <span
         className={[
-          "min-w-0 truncate text-[11px] font-semibold",
-          isSolid ? "text-white" : "text-ink",
+          "min-w-0 truncate text-[11px] font-semibold text-ink",
           past ? "line-through opacity-80" : "",
         ].join(" ")}
       >
@@ -3019,6 +3443,11 @@ function parseAgendaView(raw: string | null | undefined): AgendaView | null {
   return null;
 }
 
+type AgendaTeamFilter =
+  | { kind: "all" }
+  | { kind: "person"; id: string }
+  | { kind: "koppel"; id: string };
+
 export function Planbord({
   projecten,
   onProjectUpdated,
@@ -3027,6 +3456,7 @@ export function Planbord({
   title,
   projectHref,
   afblokPartnerId: afblokPartnerIdProp,
+  showTeamAgendaFilters = false,
 }: {
   projecten: Project[];
   onProjectUpdated?: (project: Project) => void;
@@ -3038,6 +3468,8 @@ export function Planbord({
   projectHref?: (projectId: string) => string;
   /** Partner voor afblokmodus (portaal of CRM) */
   afblokPartnerId?: string | null;
+  /** Beheerder: filter agenda per monteur / koppel */
+  showTeamAgendaFilters?: boolean;
 }) {
   const readOnly = variant === "portal";
   const resolveProjectHref =
@@ -3096,6 +3528,12 @@ export function Planbord({
   const [filterSoort, setFilterSoort] = useState<
     "" | "schouw" | "installatie" | "service"
   >("");
+  const [agendaTeamFilter, setAgendaTeamFilter] = useState<AgendaTeamFilter>({
+    kind: "all",
+  });
+  const [agendaKoppels, setAgendaKoppels] = useState<InstallatiePartnerKoppel[]>(
+    []
+  );
   const [localProjects, setLocalProjects] = useState(projecten);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [schouwDocs, setSchouwDocs] = useState<
@@ -3181,6 +3619,33 @@ export function Planbord({
       cancelled = true;
     };
   }, [afblokPartnerId, readOnly, portalToken]);
+
+  useEffect(() => {
+    if (!showTeamAgendaFilters || !portalToken) {
+      setAgendaKoppels([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/installatie/${encodeURIComponent(portalToken)}/koppels`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        setAgendaKoppels(
+          ((data.koppels || []) as InstallatiePartnerKoppel[]).filter(
+            (k) => k.actief !== false
+          )
+        );
+      } catch {
+        if (!cancelled) setAgendaKoppels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showTeamAgendaFilters, portalToken]);
 
   const weekDays = useMemo(() => weekDaysFrom(anchor), [anchor]);
   const monthDays = useMemo(() => monthGridDays(anchor), [anchor]);
@@ -3373,8 +3838,42 @@ export function Planbord({
           partnerOf(p)?.id === filterPartnerId
       );
     }
+    if (showTeamAgendaFilters && agendaTeamFilter.kind === "person") {
+      const id = agendaTeamFilter.id;
+      list = list.filter((p) => p.installatie_teamgenoot_id === id);
+    } else if (showTeamAgendaFilters && agendaTeamFilter.kind === "koppel") {
+      const koppel = agendaKoppels.find((k) => k.id === agendaTeamFilter.id);
+      const ids = new Set(
+        [koppel?.monteur_1_id, koppel?.monteur_2_id].filter(Boolean) as string[]
+      );
+      list = list.filter(
+        (p) =>
+          !!p.installatie_teamgenoot_id && ids.has(p.installatie_teamgenoot_id)
+      );
+    }
     return list;
-  }, [localProjects, filterPartnerId]);
+  }, [
+    localProjects,
+    filterPartnerId,
+    showTeamAgendaFilters,
+    agendaTeamFilter,
+    agendaKoppels,
+  ]);
+
+  const setAgendaPersonFilter = useCallback((id: string) => {
+    setAgendaTeamFilter({ kind: "person", id });
+    setAfblokTgId(id);
+  }, []);
+
+  const setAgendaKoppelFilter = useCallback(
+    (id: string) => {
+      const koppel = agendaKoppels.find((k) => k.id === id);
+      const first = koppel?.monteur_1_id || koppel?.monteur_2_id || "";
+      if (first) setAfblokTgId(first);
+      setAgendaTeamFilter({ kind: "koppel", id });
+    },
+    [agendaKoppels]
+  );
 
   const weekBars = useMemo(
     () => barsForWeek(planProjects, weekDays),
@@ -3405,7 +3904,12 @@ export function Planbord({
   const schouwProjectIdsKey = useMemo(() => {
     const ids = new Set<string>();
     for (const bar of [...weekBars, ...monthBars, ...timedAll]) {
-      if (bar.kind === "schouw" || bar.kind === "schouwweek") {
+      // Ook bij installatie: schouwformulier downloadbaar in de sidebar.
+      if (
+        bar.kind === "schouw" ||
+        bar.kind === "schouwweek" ||
+        bar.kind === "installatie"
+      ) {
         ids.add(bar.project.id);
       }
     }
@@ -3447,11 +3951,11 @@ export function Planbord({
             const docs = fotos
               .filter((f) => isSchouwFormulier(f.omschrijving) && f.url)
               .sort((a, b) => a.created_at.localeCompare(b.created_at));
-            const first = docs[0];
+            const last = docs[docs.length - 1];
             return [
               id,
-              first?.url
-                ? { url: first.url, bestandsnaam: first.bestandsnaam }
+              last?.url
+                ? { url: last.url, bestandsnaam: last.bestandsnaam }
                 : null,
             ] as const;
           } catch {
@@ -3834,47 +4338,33 @@ export function Planbord({
               {monthStats.levering ? ` · ${monthStats.levering} levering` : ""}
             </p>
           ) : null}
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs font-semibold">
-            <span className="inline-flex items-center gap-1.5 text-[#854D0E]">
-              <span className="h-2.5 w-2.5 bg-[#FACC15]" aria-hidden />
-              Schouw
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-[#047857]">
-              <span className="h-2.5 w-2.5 bg-[#047857]" aria-hidden />
-              Installatie
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-[#C45A12]">
-              <span className="h-2.5 w-2.5 bg-[#C45A12]" aria-hidden />
-              Service
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-[#EA580C]">
-              <span className="h-2.5 w-2.5 bg-[#EA580C]" aria-hidden />
-              Levering
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-muted">
-              <span className="h-2.5 w-2.5 bg-line opacity-60" aria-hidden />
-              Geweest = grijs / doorgestreept
-            </span>
-          </div>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          <div className="flex max-w-full flex-wrap border border-line">
-            {VIEW_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => changeView(opt.id)}
-                className={[
-                  "px-3 py-1.5 text-xs font-semibold",
-                  view === opt.id
-                    ? "bg-[#0D9488] text-white"
-                    : "bg-white text-ink hover:bg-wash",
-                ].join(" ")}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            value={view}
+            onValueChange={(v) => {
+              if (
+                v === "week" ||
+                v === "dag" ||
+                v === "maand" ||
+                v === "lijst"
+              ) {
+                changeView(v);
+              }
+            }}
+          >
+            <TabsList variant="default" className="h-9">
+              {VIEW_OPTIONS.map((opt) => (
+                <TabsTrigger
+                  key={opt.id}
+                  value={opt.id}
+                  className="px-3 text-xs font-semibold"
+                >
+                  {opt.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -3954,6 +4444,149 @@ export function Planbord({
           ) : null}
         </div>
       </div>
+
+      {showTeamAgendaFilters &&
+      (afblokTeamgenoten.length > 0 || agendaKoppels.length > 0) ? (
+        <div className="flex flex-col gap-3 bg-white px-1 py-1 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Agenda van
+            </p>
+            <p className="mt-0.5 truncate text-sm font-semibold text-ink">
+              {agendaTeamFilter.kind === "all"
+                ? "Heel team"
+                : agendaTeamFilter.kind === "person"
+                  ? afblokTeamgenoten.find(
+                      (t) => t.id === agendaTeamFilter.id
+                    )?.naam || "Monteur"
+                  : (() => {
+                      const k = agendaKoppels.find(
+                        (x) => x.id === agendaTeamFilter.id
+                      );
+                      if (!k) return "Koppel";
+                      const m1 =
+                        k.monteur_1?.naam ||
+                        afblokTeamgenoten.find((t) => t.id === k.monteur_1_id)
+                          ?.naam;
+                      const m2 =
+                        k.monteur_2?.naam ||
+                        afblokTeamgenoten.find((t) => t.id === k.monteur_2_id)
+                          ?.naam;
+                      const duo = [m1, m2].filter(Boolean).join(" + ");
+                      return duo ? `${k.naam} · ${duo}` : k.naam;
+                    })()}
+            </p>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Tabs
+              value={
+                agendaTeamFilter.kind === "all"
+                  ? "all"
+                  : agendaTeamFilter.kind === "person"
+                    ? "person"
+                    : "koppel"
+              }
+              onValueChange={(v) => {
+                if (v === "all") {
+                  setAgendaTeamFilter({ kind: "all" });
+                  return;
+                }
+                if (v === "person") {
+                  const id =
+                    (agendaTeamFilter.kind === "person"
+                      ? agendaTeamFilter.id
+                      : null) ||
+                    afblokTgId ||
+                    afblokTeamgenoten[0]?.id ||
+                    "";
+                  if (id) setAgendaPersonFilter(id);
+                  return;
+                }
+                if (v === "koppel") {
+                  const id =
+                    (agendaTeamFilter.kind === "koppel"
+                      ? agendaTeamFilter.id
+                      : null) ||
+                    agendaKoppels[0]?.id ||
+                    "";
+                  if (id) setAgendaKoppelFilter(id);
+                }
+              }}
+            >
+              <TabsList variant="default" className="h-9">
+                <TabsTrigger
+                  value="all"
+                  className="gap-1.5 px-3 text-xs font-semibold"
+                >
+                  <Users className="size-3.5 opacity-70" aria-hidden />
+                  Team
+                </TabsTrigger>
+                {afblokTeamgenoten.length > 0 ? (
+                  <TabsTrigger
+                    value="person"
+                    className="gap-1.5 px-3 text-xs font-semibold"
+                  >
+                    <UserRound className="size-3.5 opacity-70" aria-hidden />
+                    Monteur
+                  </TabsTrigger>
+                ) : null}
+                {agendaKoppels.length > 0 ? (
+                  <TabsTrigger
+                    value="koppel"
+                    className="gap-1.5 px-3 text-xs font-semibold"
+                  >
+                    <Users className="size-3.5 opacity-70" aria-hidden />
+                    Koppel
+                  </TabsTrigger>
+                ) : null}
+              </TabsList>
+            </Tabs>
+
+            {agendaTeamFilter.kind === "person" ? (
+              <NativeSelect
+                size="default"
+                aria-label="Monteur kiezen"
+                className="min-w-[12rem] flex-1 sm:flex-none"
+                value={agendaTeamFilter.id}
+                onChange={(e) => setAgendaPersonFilter(e.target.value)}
+              >
+                {afblokTeamgenoten.map((t) => (
+                  <NativeSelectOption key={t.id} value={t.id}>
+                    {t.naam}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            ) : null}
+
+            {agendaTeamFilter.kind === "koppel" ? (
+              <NativeSelect
+                size="default"
+                aria-label="Koppel kiezen"
+                className="min-w-[14rem] flex-1 sm:flex-none"
+                value={agendaTeamFilter.id}
+                onChange={(e) => setAgendaKoppelFilter(e.target.value)}
+              >
+                {agendaKoppels.map((k) => {
+                  const m1 =
+                    k.monteur_1?.naam ||
+                    afblokTeamgenoten.find((t) => t.id === k.monteur_1_id)
+                      ?.naam;
+                  const m2 =
+                    k.monteur_2?.naam ||
+                    afblokTeamgenoten.find((t) => t.id === k.monteur_2_id)
+                      ?.naam;
+                  const duo = [m1, m2].filter(Boolean).join(" + ");
+                  return (
+                    <NativeSelectOption key={k.id} value={k.id}>
+                      {duo ? `${k.naam} — ${duo}` : k.naam}
+                    </NativeSelectOption>
+                  );
+                })}
+              </NativeSelect>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {afblokMode ? (
         <div className="space-y-2 border border-[#B91C1C]/25 bg-[#FEF2F2] px-4 py-3">
@@ -4152,9 +4785,11 @@ export function Planbord({
                     </button>
                   ) : null}
                 </div>
-                <div className="space-y-1.5 p-2.5">
+                <div className="space-y-1 p-2">
                   {list.length === 0 ? (
-                    <p className="px-1 py-2 text-xs text-muted">Niets gepland</p>
+                    <p className="px-1 py-1.5 text-[11px] text-muted">
+                      Niets gepland
+                    </p>
                   ) : (
                     list.map((bar) => (
                       <EventCard
@@ -4235,7 +4870,7 @@ export function Planbord({
                   <div
                     key={d.key}
                     className={[
-                      "min-h-[280px] space-y-1.5 border-r border-line p-1.5 last:border-r-0",
+                      "min-h-[280px] space-y-1 border-r border-line p-1 last:border-r-0",
                       afblokMode
                         ? "bg-[#FFF7F7]/50"
                         : dagAfgeblokt
@@ -4529,7 +5164,7 @@ export function Planbord({
       ) : null}
 
       {view === "lijst" ? (
-        <div className="border border-line bg-white">
+        <div className="overflow-hidden rounded-xl border border-line bg-white shadow-xs">
           {listGroups.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-muted">
               Geen geplande schouwen of installaties.
@@ -4539,43 +5174,46 @@ export function Planbord({
               {listGroups.map((group) => {
                 const groupPast = group.bars.every((b) => isBarPast(b));
                 return (
-                <section
-                  key={group.dayKey}
-                  className={groupPast ? "opacity-70" : ""}
-                >
-                  <div className="sticky top-0 z-[1] flex items-center justify-between border-b border-line bg-[#FAFBFA] px-4 py-2.5">
-                    <button
-                      type="button"
-                      onClick={() => goDay(group.dayKey)}
-                      className={[
-                        "font-display text-base font-semibold capitalize hover:text-[#0F766E]",
-                        groupPast ? "text-muted line-through decoration-1" : "text-ink",
-                      ].join(" ")}
-                    >
-                      {group.label}
-                      {groupPast ? (
-                        <span className="ml-2 text-xs font-bold no-underline">
-                          · geweest
-                        </span>
-                      ) : null}
-                    </button>
-                    <span className="text-xs font-medium text-muted">
-                      {group.bars.length}×
-                    </span>
-                  </div>
-                  <div className="space-y-2 p-3">
-                    {group.bars.map((bar) => (
-                      <EventCard
-                        key={bar.key}
-                        bar={bar}
-                        schouwDoc={schouwDocs[bar.project.id]}
-                        hidePartner={readOnly}
-                        selected={selectedBar?.key === bar.key}
-                        onSelect={() => openBar(bar)}
-                      />
-                    ))}
-                  </div>
-                </section>
+                  <section
+                    key={group.dayKey}
+                    className={groupPast ? "opacity-70" : ""}
+                  >
+                    <div className="sticky top-0 z-[1] flex items-center justify-between bg-wash/80 px-4 py-2.5 backdrop-blur-sm">
+                      <button
+                        type="button"
+                        onClick={() => goDay(group.dayKey)}
+                        className={[
+                          "font-display text-base font-semibold capitalize hover:text-[#0F766E]",
+                          groupPast
+                            ? "text-muted line-through decoration-1"
+                            : "text-ink",
+                        ].join(" ")}
+                      >
+                        {group.label}
+                        {groupPast ? (
+                          <span className="ml-2 text-xs font-bold no-underline">
+                            · geweest
+                          </span>
+                        ) : null}
+                      </button>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-muted ring-1 ring-line">
+                        {group.bars.length}×
+                      </span>
+                    </div>
+                    <div className="space-y-1 p-2.5 sm:p-3">
+                      {group.bars.map((bar) => (
+                        <EventCard
+                          key={bar.key}
+                          bar={bar}
+                          schouwDoc={schouwDocs[bar.project.id]}
+                          hidePartner={readOnly}
+                          compact
+                          selected={selectedBar?.key === bar.key}
+                          onSelect={() => openBar(bar)}
+                        />
+                      ))}
+                    </div>
+                  </section>
                 );
               })}
             </div>
@@ -4591,6 +5229,7 @@ export function Planbord({
           partners={partners}
           projectHref={resolveProjectHref}
           hidePartner={readOnly}
+          portalMode={readOnly}
           allowSchouwUpload={
             !readOnly ||
             (Boolean(portalToken) &&

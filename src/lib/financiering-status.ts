@@ -4,11 +4,12 @@
  * Pipeline (portaal + CRM):
  * 1. Doorgestuurd (offerte getekend → BO)
  * 2. Documenten aanleveren
- * 3. Warmtefonds in behandeling
- * 4. Aanbod ondertekenen (goedgekeurd)
- * 5. Declaratie indienen
- * 6. Afgehandeld — wachten op betaling
- * 7. Afgehandeld — betaald
+ * 3. Contact verstuurd (WF-collega heeft klant benaderd)
+ * 4. Warmtefonds in behandeling
+ * 5. Aanbod ondertekenen (goedgekeurd)
+ * 6. Declaratie indienen
+ * 7. Afgehandeld — wachten op betaling
+ * 8. Afgehandeld — betaald
  *
  * Legacy statuses blijven geldig en worden genormaliseerd voor de pipeline-UI.
  * Interne afspraak (warmtefonds_afspraak_at) is geen pipeline-stap.
@@ -18,6 +19,7 @@ import type { ProjectAfdeling } from "@/lib/project-afdeling";
 export type FinancieringStatus =
   | "doorgestuurd_naar_edwin"
   | "documenten_aanleveren"
+  | "contact_verstuurd"
   | "in_behandeling"
   | "aanbod_ondertekenen"
   | "declaratie_indienen"
@@ -35,6 +37,7 @@ export type FinancieringStatus =
 export const FINANCIERING_PIPELINE: FinancieringStatus[] = [
   "doorgestuurd_naar_edwin",
   "documenten_aanleveren",
+  "contact_verstuurd",
   "in_behandeling",
   "aanbod_ondertekenen",
   "declaratie_indienen",
@@ -45,6 +48,7 @@ export const FINANCIERING_PIPELINE: FinancieringStatus[] = [
 export const FINANCIERING_STATUS_LABEL: Record<FinancieringStatus, string> = {
   doorgestuurd_naar_edwin: "Doorgestuurd naar Warmtefonds",
   documenten_aanleveren: "Documenten aanleveren",
+  contact_verstuurd: "WF — Contact verstuurd",
   in_behandeling: "Warmtefonds in behandeling",
   aanbod_ondertekenen: "Aanbod ondertekenen",
   declaratie_indienen: "Declaratie indienen",
@@ -62,6 +66,7 @@ export const FINANCIERING_STATUS_LABEL_KORT: Record<
 > = {
   doorgestuurd_naar_edwin: "Doorgestuurd",
   documenten_aanleveren: "Documenten aanleveren",
+  contact_verstuurd: "Contact verstuurd",
   in_behandeling: "In behandeling",
   aanbod_ondertekenen: "Aanbod ondertekenen",
   declaratie_indienen: "Declaratie indienen",
@@ -73,7 +78,7 @@ export const FINANCIERING_STATUS_LABEL_KORT: Record<
   aanvraag_goedgekeurd: "Aanvraag goedgekeurd",
 };
 
-/** Stapnummer in UI (1…7) voor pipeline-statuses. */
+/** Stapnummer in UI (1…8) voor pipeline-statuses. */
 export function financieringStapNummer(
   status: FinancieringStatus | null | undefined
 ): number | null {
@@ -121,6 +126,12 @@ export const FINANCIERING_STATUS_TAAK: Partial<
     afdeling: "Backoffice",
     dueDays: 3,
   },
+  contact_verstuurd: {
+    autoKeySuffix: "contact",
+    titel: "Warmtefonds: contact met klant verstuurd / geprobeerd",
+    afdeling: "Backoffice",
+    dueDays: 2,
+  },
   in_behandeling: {
     autoKeySuffix: "opvolgen",
     titel: "Opvolgen bij Warmtefonds (in behandeling)",
@@ -148,7 +159,7 @@ export const FINANCIERING_STATUS_TAAK: Partial<
   // Legacy keys (als status nog zo in DB staat)
   afspraak_ingepland: {
     autoKeySuffix: "aanvraag",
-    titel: "Warmtefonds-aanvraag indienen tijdens/na afspraak",
+    titel: "Warmtefonds: afspraak voltooien → in behandeling",
     afdeling: "Backoffice",
     dueDays: 1,
   },
@@ -229,3 +240,42 @@ export function financieringMagRestantFactuur(
   const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
   return idx >= from;
 }
+
+export function heeftWarmtefondsAfspraak(project: {
+  warmtefonds_afspraak_at?: string | null;
+}): boolean {
+  return Boolean(project.warmtefonds_afspraak_at);
+}
+
+/** Nog vóór “in behandeling” in de WF-pipeline. */
+export function isWfVoorInBehandeling(
+  status: FinancieringStatus | string | null | undefined
+): boolean {
+  const n = normalizeFinancieringStatus(status);
+  if (!n || n === "afgewezen") return true;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  const from = FINANCIERING_PIPELINE.indexOf("in_behandeling");
+  if (idx < 0 || from < 0) return true;
+  return idx < from;
+}
+
+/**
+ * Auto-taken: bij geplande WF-afspraak (nog niet in behandeling)
+ * → taak “afspraak voltooien”, niet meer “documenten / afspraak plannen”.
+ */
+export function financieringStatusVoorAutoTaken(project: {
+  financiering_status?: string | null;
+  status?: string | null;
+  warmtefonds_afspraak_at?: string | null;
+}): FinancieringStatus | null {
+  const raw = resolveFinancieringStatus(project);
+  const n = normalizeFinancieringStatus(raw);
+  if (n === "afgewezen" || n === "uitbetaald") return n;
+  if (heeftWarmtefondsAfspraak(project) && isWfVoorInBehandeling(n)) {
+    return "afspraak_ingepland";
+  }
+  return raw;
+}
+
+export const WF_AFSPRAAK_VOLTOOIEN_AUTO_KEY =
+  "financiering:afspraak_ingepland:aanvraag";

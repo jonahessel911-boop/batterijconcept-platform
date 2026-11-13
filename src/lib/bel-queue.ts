@@ -14,6 +14,8 @@ import {
 } from "@/lib/postcode-provincie";
 
 export const MAX_BELPOGINGEN = 3;
+/** Herplannen (annuleringen-bak): zelfde plafond als normale bak (max 3 pogingen). */
+export const MAX_HERPLAN_BELPOGINGEN = MAX_BELPOGINGEN;
 export const MAX_BELPOGINGEN_PER_DAG = 1;
 /** Verse bel-prio: aangemaakt in deze kalenderdagen (Amsterdam). */
 export const VERS_BEL_DAGEN = 10;
@@ -108,21 +110,34 @@ export function definitiefGeenContactDbHint(
   return null;
 }
 
-export function geenContactPogingLabel(pogingen: number): string {
-  const n = Math.min(Math.max(pogingen, 0), MAX_BELPOGINGEN);
-  return `Geen contact ${n}/${MAX_BELPOGINGEN}`;
+export function maxBelpogingenVoor(opts?: { herplan?: boolean }): number {
+  return opts?.herplan ? MAX_HERPLAN_BELPOGINGEN : MAX_BELPOGINGEN;
+}
+
+export function geenContactPogingLabel(
+  pogingen: number,
+  opts?: { herplan?: boolean }
+): string {
+  const max = maxBelpogingenVoor(opts);
+  const n = Math.min(Math.max(pogingen, 0), max);
+  return `Geen contact ${n}/${max}`;
 }
 
 /**
  * Patch + mailvlag bij status «geen contact» (BelPanel én Leads-tab).
- * Elke keer dat je op geen contact zet = +1 belpoging; mail bij poging 1 en 3.
- * De 3e poging boekt de lead af als definitief geen contact.
+ * Elke keer dat je op geen contact zet = +1 belpoging.
+ * Normaal: mail bij poging 1 en 3; 3e = definitief geen contact.
+ * Herplan: mail bij elke poging; 5e = definitief geen contact.
  */
 export function buildGeenContactOutcomePatch(
-  lead: Pick<Lead, "belpogingen" | "belpogingen_vandaag" | "laatst_gebeld_at">
+  lead: Pick<Lead, "belpogingen" | "belpogingen_vandaag" | "laatst_gebeld_at">,
+  opts?: { herplan?: boolean }
 ): {
   patch: {
-    status: "geen_contact" | "definitief_geen_contact";
+    status:
+      | "geen_contact"
+      | "definitief_geen_contact"
+      | "afspraak_afgezegd_klant";
     belpogingen: number;
     belpogingen_vandaag: number;
     terugbellen: false;
@@ -131,16 +146,23 @@ export function buildGeenContactOutcomePatch(
   pogingen: number;
   definitief: boolean;
   sendGeenContactMail: boolean;
+  herplan: boolean;
 } {
-  const pogingen = Math.min(belpogingenOf(lead) + 1, MAX_BELPOGINGEN);
+  const herplan = Boolean(opts?.herplan);
+  const max = maxBelpogingenVoor({ herplan });
+  const pogingen = Math.min(belpogingenOf(lead) + 1, max);
   const vandaag = Math.min(
     belpogingenVandaagOf(lead) + 1,
     MAX_BELPOGINGEN_PER_DAG
   );
-  const definitief = pogingen >= MAX_BELPOGINGEN;
+  const definitief = pogingen >= max;
   return {
     patch: {
-      status: definitief ? "definitief_geen_contact" : "geen_contact",
+      status: definitief
+        ? "definitief_geen_contact"
+        : herplan
+          ? "afspraak_afgezegd_klant"
+          : "geen_contact",
       belpogingen: pogingen,
       belpogingen_vandaag: vandaag,
       terugbellen: false,
@@ -148,7 +170,10 @@ export function buildGeenContactOutcomePatch(
     },
     pogingen,
     definitief,
-    sendGeenContactMail: pogingen === 1 || pogingen === 3,
+    sendGeenContactMail: herplan
+      ? true
+      : pogingen === 1 || pogingen === 3,
+    herplan,
   };
 }
 
@@ -629,7 +654,7 @@ export function leadPostcodeDigits(
 ): string | null {
   const direct = (lead.postcode || "").trim();
   if (direct) {
-    const m = direct.replace(/\s+/g, "").match(/^(\d{4})/);
+    const m = direct.replace(/[^0-9A-Za-z]/g, "").match(/(\d{4})/);
     if (m) return m[1];
   }
   for (const raw of [lead.plaats, lead.straat]) {

@@ -3,44 +3,39 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { uploadProjectFotoFile } from "@/lib/project-fotos";
 import {
+  isFotoBatterij,
+  isFotoMeterkast,
   isOpleveringsrapport,
   isProjectDocumentUpload,
   isSchouwFormulier,
+  isVideoInstallatie,
 } from "@/lib/project-documenten";
 import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
 import { maybeAdvanceProjectNaOplevering } from "@/lib/project-na-oplevering";
+import { assertPortalOrderAccess } from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
-async function resolveOrder(token: string, projectId: string) {
-  const sb = getSupabaseAdmin();
-  const { data: partner, error: pErr } = await sb
-    .from("installatie_partners")
-    .select("id, actief")
-    .eq("portal_token", token)
-    .single();
-  if (pErr || !partner || !partner.actief) return null;
-
-  const { data: order, error: oErr } = await sb
-    .from("projecten")
-    .select("id")
-    .eq("id", projectId)
-    .eq("installatie_partner_id", partner.id)
-    .single();
-  if (oErr || !order) return null;
-  return { sb, order };
+async function resolveOrder(
+  token: string,
+  projectId: string,
+  req: NextRequest
+) {
+  const access = await assertPortalOrderAccess(token, projectId, "id", req);
+  if (!access) return null;
+  return { sb: getSupabaseAdmin(), order: access.order };
 }
 
 /**
  * GET /api/installatie/[token]/orders/[projectId]/fotos
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; projectId: string }> }
 ) {
   const { token, projectId } = await ctx.params;
   try {
-    const resolved = await resolveOrder(token, projectId);
+    const resolved = await resolveOrder(token, projectId, req);
     if (!resolved) {
       return NextResponse.json({ error: "Order niet gevonden" }, { status: 404 });
     }
@@ -91,7 +86,7 @@ export async function POST(
 ) {
   const { token, projectId } = await ctx.params;
   try {
-    const resolved = await resolveOrder(token, projectId);
+    const resolved = await resolveOrder(token, projectId, req);
     if (!resolved) {
       return NextResponse.json({ error: "Order niet gevonden" }, { status: 404 });
     }
@@ -103,6 +98,10 @@ export async function POST(
       form.get("allow_pdf") === "1" ||
       form.get("allow_pdf") === "true" ||
       isProjectDocumentUpload(omschrijving);
+    const allowVideo =
+      form.get("allow_video") === "1" ||
+      form.get("allow_video") === "true" ||
+      isVideoInstallatie(omschrijving);
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -116,7 +115,7 @@ export async function POST(
       projectId,
       file,
       omschrijving,
-      { allowPdf }
+      { allowPdf, allowVideo }
     );
     if ("error" in result) {
       return NextResponse.json(
@@ -133,12 +132,16 @@ export async function POST(
       project?: Record<string, unknown> | null;
     } | null = null;
 
-    if (isSchouwFormulier(omschrijving)) {
+    if (isSchouwFormulier(omschrijving) || isFotoMeterkast(omschrijving)) {
       statusAdvance = await maybeAdvanceProjectNaSchouw(
         resolved.sb,
         projectId
       );
-    } else if (isOpleveringsrapport(omschrijving)) {
+    } else if (
+      isOpleveringsrapport(omschrijving) ||
+      isFotoBatterij(omschrijving) ||
+      isVideoInstallatie(omschrijving)
+    ) {
       statusAdvance = await maybeAdvanceProjectNaOplevering(
         resolved.sb,
         projectId

@@ -205,12 +205,41 @@ export async function findLeadIdByEmail(
   return (data as { id?: string } | null)?.id || null;
 }
 
+function angleBareId(raw: string | null | undefined): string | null {
+  const s = (raw || "").trim().replace(/^<|>$/g, "").trim();
+  return s || null;
+}
+
+/** Zoek thread via In-Reply-To / parent message_id. */
+export async function resolveInboxThreadId(
+  sb: SupabaseClient,
+  opts: {
+    messageId?: string | null;
+    inReplyTo?: string | null;
+    fallbackThreadId?: string | null;
+  }
+): Promise<string | null> {
+  const parentId = angleBareId(opts.inReplyTo);
+  if (parentId) {
+    const parent = await findInboxMailByMessageId(sb, parentId);
+    if (parent) {
+      return parent.thread_id || parent.message_id || parent.id;
+    }
+  }
+  return (
+    angleBareId(opts.fallbackThreadId) ||
+    angleBareId(opts.messageId) ||
+    null
+  );
+}
+
 /** Insert geboekte inbound mail. Skip als message_id al bestaat. */
 export async function insertBookedInboxMail(
   sb: SupabaseClient,
   mail: InboxMail,
   opts?: {
     messageId?: string | null;
+    inReplyTo?: string | null;
     bodyHtml?: string | null;
     aiFunction?: string | null;
     attachments?: InboxAttachment[] | null;
@@ -230,6 +259,13 @@ export async function insertBookedInboxMail(
     leadId = await findLeadIdByEmail(sb, mail.fromEmail);
   }
 
+  const inReplyTo = angleBareId(opts?.inReplyTo) || null;
+  const threadId = await resolveInboxThreadId(sb, {
+    messageId,
+    inReplyTo,
+    fallbackThreadId: mail.threadId || null,
+  });
+
   const insertRow = {
     folder: normalizeInboxFolder(
       mail.folder === "inbox" ? "algemeen" : mail.folder
@@ -237,7 +273,8 @@ export async function insertBookedInboxMail(
     status: mail.status || "nieuw",
     direction: "inbound" as const,
     message_id: messageId,
-    thread_id: mail.threadId || messageId,
+    in_reply_to: inReplyTo ? `<${inReplyTo}>` : null,
+    thread_id: threadId || messageId,
     from_name: mail.fromName || null,
     from_email: mail.fromEmail,
     to_email: mail.toEmail || "info@batterijconcept.nl",

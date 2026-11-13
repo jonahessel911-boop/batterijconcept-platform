@@ -19,6 +19,7 @@ import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/
 import {
   MAX_BELPOGINGEN,
   MAX_BELPOGINGEN_PER_DAG,
+  MAX_HERPLAN_BELPOGINGEN,
   activeBelAfspraak,
   annuleringsNotitieFromAfspraak,
   belpogingenOf,
@@ -35,9 +36,11 @@ import {
   latestKlantAnnuleringAfspraak,
   latestPhysicalAfspraak,
   leadInProvincie,
+  maxBelpogingenVoor,
   sortAnnuleringBelQueue,
   sortBelQueue,
 } from "@/lib/bel-queue";
+import { BATTERIJCONCEPT_BEL_TEL_DISPLAY } from "@/lib/email/bel-telefoon";
 import {
   NL_PROVINCIES,
   adviseurVoorProvincie,
@@ -873,9 +876,12 @@ export function BelPanel({
     setBusy(true);
     setError(null);
     try {
+      const herplan =
+        bakMode === "annuleringen" || isHerplanBelLead(current);
+      const maxPogingen = maxBelpogingenVoor({ herplan });
       const gc =
         status === "geen_contact"
-          ? buildGeenContactOutcomePatch(current)
+          ? buildGeenContactOutcomePatch(current, { herplan })
           : null;
       const pogingen = gc?.pogingen ?? belpogingenOf(current);
       const patch: Partial<Lead> = gc
@@ -931,16 +937,16 @@ export function BelPanel({
         titel: `Status → ${leadStatusLabel[gc?.patch.status ?? status] || status}`,
         detail:
           status === "geen_contact"
-            ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}${
-                gc?.definitief ? " — definitief geen contact" : ""
-              }`
+            ? `Belpoging ${pogingen}/${maxPogingen}${
+                herplan ? " (herplan)" : ""
+              }${gc?.definitief ? " — definitief geen contact" : ""}`
             : null,
       });
       if (gc?.sendGeenContactMail && current.email?.trim()) {
         void fetch(`/api/leads/${current.id}/geen-contact-mail`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ poging: pogingen }),
+          body: JSON.stringify({ poging: pogingen, herplan }),
         }).catch(() => {
           /* non-blocking */
         });
@@ -1138,7 +1144,7 @@ export function BelPanel({
               Normale belbak
             </p>
             <p className="mt-1 text-sm text-muted">
-              Nieuwste aanmelding eerst (laatste 10 dagen), tot 3 keer. Daarna de rest. Na 3 keer geen contact: definitief afgeboekt.
+              Nieuwste aanmelding eerst (laatste 10 dagen), tot 3 keer. Daarna de rest. Na 3 keer geen contact: definitief afgeboekt. Herplannen: max {MAX_HERPLAN_BELPOGINGEN}× · bel {BATTERIJCONCEPT_BEL_TEL_DISPLAY}.
             </p>
             <p className="mt-3 text-xs font-semibold text-green-dark">
               {allBelQueue.length} in de wachtrij
@@ -1320,7 +1326,9 @@ export function BelPanel({
             ? "Alle afzeggingen zijn afgehandeld of opnieuw ingepland."
             : bakMode === "provincie" && selectedProvincie
               ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
-              : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpoging per lead per dag. Na ${MAX_BELPOGINGEN} keer geen contact worden ze afgeboekt als definitief geen contact.`}
+              : isAnnuleringen
+                ? `Klant-annuleringen om te herplannen. Max ${MAX_BELPOGINGEN_PER_DAG}× per dag, na ${MAX_HERPLAN_BELPOGINGEN}× geen contact: definitief. Belnummer in mails: ${BATTERIJCONCEPT_BEL_TEL_DISPLAY}.`
+                : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpoging per lead per dag. Na ${MAX_BELPOGINGEN} keer geen contact worden ze afgeboekt als definitief geen contact.`}
         </p>
         <button
           type="button"
@@ -1411,9 +1419,12 @@ export function BelPanel({
     );
   }
 
+  const herplanHuidige =
+    bakMode === "annuleringen" || isHerplanBelLead(current);
+  const maxPogingenHuidige = maxBelpogingenVoor({ herplan: herplanHuidige });
   const pogingen = belpogingenOf(current);
   const pogingenVandaag = belpogingenVandaagOf(current);
-  const nextPoging = Math.min(pogingen + 1, MAX_BELPOGINGEN);
+  const nextPoging = Math.min(pogingen + 1, maxPogingenHuidige);
   const phone = current.telefoon!.trim();
   const position = queue.findIndex((l) => l.id === current.id) + 1;
   const cancelledVisit =
@@ -1484,7 +1495,9 @@ export function BelPanel({
             </span>
           ) : current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
-              {geenContactPogingLabel(pogingen)}
+              {geenContactPogingLabel(pogingen, {
+                herplan: herplanHuidige,
+              })}
             </span>
           ) : (
             <span className="rounded-full bg-green-soft px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-green-dark">
@@ -1732,8 +1745,10 @@ export function BelPanel({
                 onClick={() => void saveOutcome("geen_contact")}
                 className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
               >
-                {geenContactPogingLabel(nextPoging)}
-                {nextPoging >= MAX_BELPOGINGEN
+                {geenContactPogingLabel(nextPoging, {
+                  herplan: herplanHuidige,
+                })}
+                {nextPoging >= maxPogingenHuidige
                   ? " — definitief geen contact"
                   : ""}
               </button>

@@ -1,8 +1,17 @@
 /** Vaste omschrijving voor schouwformulier-uploads (client + server). */
 export const SCHOUW_FORMULIER_OMSCHRIJVING = "Schouw formulier";
 
+/** Verplichte foto bij schouw. */
+export const FOTO_METERKAST_OMSCHRIJVING = "Foto meterkast";
+
 /** Vaste omschrijving voor opleveringsrapport (formulier + handtekening monteur). */
 export const OPLEVERINGSRAPPORT_OMSCHRIJVING = "Opleveringsrapport";
+
+/** Verplichte foto bij oplevering. */
+export const FOTO_BATTERIJ_OMSCHRIJVING = "Foto batterij";
+
+/** Verplichte video bij oplevering (30s–60s). */
+export const VIDEO_INSTALLATIE_OMSCHRIJVING = "Video installatie";
 
 /** Optionele foto’s bij service-afspraak (niet verplicht). */
 export const SERVICE_FOTO_OMSCHRIJVING = "Service foto";
@@ -50,6 +59,33 @@ export function isOpleveringsrapport(
   return (
     (omschrijving || "").trim().toLowerCase() ===
     OPLEVERINGSRAPPORT_OMSCHRIJVING.toLowerCase()
+  );
+}
+
+export function isFotoMeterkast(
+  omschrijving: string | null | undefined
+): boolean {
+  return (
+    (omschrijving || "").trim().toLowerCase() ===
+    FOTO_METERKAST_OMSCHRIJVING.toLowerCase()
+  );
+}
+
+export function isFotoBatterij(
+  omschrijving: string | null | undefined
+): boolean {
+  return (
+    (omschrijving || "").trim().toLowerCase() ===
+    FOTO_BATTERIJ_OMSCHRIJVING.toLowerCase()
+  );
+}
+
+export function isVideoInstallatie(
+  omschrijving: string | null | undefined
+): boolean {
+  return (
+    (omschrijving || "").trim().toLowerCase() ===
+    VIDEO_INSTALLATIE_OMSCHRIJVING.toLowerCase()
   );
 }
 

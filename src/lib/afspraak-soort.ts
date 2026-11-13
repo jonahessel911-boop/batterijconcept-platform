@@ -137,6 +137,14 @@ export function afspraakStuurtMail(soort: string | null | undefined): boolean {
   return normalizeAfspraakSoort(soort) === "nieuw";
 }
 
+/** Vervolg fysiek/tel: herinneringsmail alleen bij expliciete opt-in. */
+export function isVervolgMetHerinneringOptIn(
+  soort: string | null | undefined
+): boolean {
+  const s = normalizeAfspraakSoort(soort);
+  return s === "vervolg_fysiek" || s === "vervolg_tel";
+}
+
 /** Interne soorten: geen klantmail, geen leadstatus-wijziging naar afspraak. */
 export function isInterneAfspraakSoort(
   soort: string | null | undefined

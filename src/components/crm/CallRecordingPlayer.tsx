@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { Download } from "lucide-react";
 
 /**
- * Zichtbare beluister-UI bij elk gesprek.
+ * Beluister + download UI bij elk gesprek.
  * Laadt audio pas na klik (faalt niet stil weg).
  */
 export function CallRecordingPlayer({
@@ -11,17 +12,22 @@ export function CallRecordingPlayer({
   eventId,
   unavailable = false,
   className = "",
+  fileName,
 }: {
   href?: string | null;
   eventId?: string | null;
   /** Al bekend dat Unite/storage geen opname heeft — geen valse 'Terugluisteren'. */
   unavailable?: boolean;
   className?: string;
+  /** Bestandsnaam bij download (zonder pad). */
+  fileName?: string | null;
 }) {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "missing">(
     unavailable ? "missing" : "idle"
   );
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [blobCache, setBlobCache] = useState<Blob | null>(null);
+  const [busyDownload, setBusyDownload] = useState(false);
   const [error, setError] = useState<string | null>(
     unavailable
       ? "Geen opname (niet opgenomen of verlopen in Unite)"
@@ -33,6 +39,10 @@ export function CallRecordingPlayer({
   const streamUrl = eventId
     ? `/api/unite/recording?eventId=${encodeURIComponent(eventId)}`
     : href?.trim() || null;
+
+  const downloadName =
+    (fileName || "").trim() ||
+    (eventId ? `gesprek-${eventId.slice(0, 8)}.mp3` : "gesprek-opname.mp3");
 
   if (!streamUrl && !unavailable) return null;
   if (unavailable && !streamUrl) {
@@ -53,28 +63,45 @@ export function CallRecordingPlayer({
     );
   }
 
+  async function fetchRecordingBlob(): Promise<Blob> {
+    const res = await fetch(streamUrl!);
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(data.error || `Opname niet beschikbaar (${res.status})`);
+    }
+    return res.blob();
+  }
+
+  function triggerBrowserDownload(blob: Blob, name: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name.endsWith(".mp3") ? name : `${name}.mp3`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Object-URL even laten staan voor de download
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+
   async function load() {
     if (phase === "loading" || phase === "ready") return;
     setPhase("loading");
     setError(null);
     try {
-      const res = await fetch(streamUrl!);
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(data.error || `Opname niet beschikbaar (${res.status})`);
-      }
-      const blob = await res.blob();
+      const blob = await fetchRecordingBlob();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       const url = URL.createObjectURL(blob);
+      setBlobCache(blob);
       setObjectUrl(url);
       setPhase("ready");
     } catch (e) {
       setPhase("missing");
       const msg =
         e instanceof Error ? e.message : "Geen opname beschikbaar";
-      // Kortere UI-tekst
       setError(
         /niet opgenomen|verlopen|niet gevonden|404|user verified|401|403|auth|token|mislukt/i.test(
           msg
@@ -82,6 +109,38 @@ export function CallRecordingPlayer({
           ? "Geen opname (niet opgenomen of verlopen in Unite)"
           : msg
       );
+    }
+  }
+
+  async function download() {
+    if (!streamUrl || busyDownload) return;
+    setBusyDownload(true);
+    setError(null);
+    try {
+      let blob = blobCache;
+      if (!blob) {
+        blob = await fetchRecordingBlob();
+        setBlobCache(blob);
+        if (phase !== "ready") {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          setObjectUrl(URL.createObjectURL(blob));
+          setPhase("ready");
+        }
+      }
+      triggerBrowserDownload(blob, downloadName);
+    } catch (e) {
+      setPhase("missing");
+      const msg =
+        e instanceof Error ? e.message : "Download mislukt";
+      setError(
+        /niet opgenomen|verlopen|niet gevonden|404|user verified|401|403|auth|token|mislukt/i.test(
+          msg
+        )
+          ? "Geen opname (niet opgenomen of verlopen in Unite)"
+          : msg
+      );
+    } finally {
+      setBusyDownload(false);
     }
   }
 
@@ -116,13 +175,24 @@ export function CallRecordingPlayer({
             Opname
           </p>
           {phase === "idle" ? (
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="mt-0.5 text-xs font-semibold text-green-deeper hover:underline"
-            >
-              Terugluisteren
-            </button>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="text-xs font-semibold text-green-deeper hover:underline"
+              >
+                Terugluisteren
+              </button>
+              <button
+                type="button"
+                onClick={() => void download()}
+                disabled={busyDownload}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A4A6E] hover:underline disabled:opacity-50"
+              >
+                <Download className="h-3 w-3" aria-hidden />
+                {busyDownload ? "Downloaden…" : "Downloaden"}
+              </button>
+            </div>
           ) : null}
           {phase === "loading" ? (
             <p className="mt-0.5 text-xs text-muted">Opname laden…</p>
@@ -142,6 +212,17 @@ export function CallRecordingPlayer({
                 </button>
               ) : null}
             </div>
+          ) : null}
+          {phase === "ready" ? (
+            <button
+              type="button"
+              onClick={() => void download()}
+              disabled={busyDownload}
+              className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-[#1A4A6E] hover:underline disabled:opacity-50"
+            >
+              <Download className="h-3 w-3" aria-hidden />
+              {busyDownload ? "Downloaden…" : "Downloaden (.mp3)"}
+            </button>
           ) : null}
         </div>
       </div>

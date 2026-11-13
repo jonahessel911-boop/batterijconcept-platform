@@ -20,6 +20,10 @@ import {
 import { bedragenMetBtw } from "@/lib/pdf-relatie-factuur";
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  isBelcommissieCreditfactuur,
+  isOpsCommissieCreditfactuur,
+} from "@/lib/callcenter-creditfactuur";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
 import { isProjectHoldSales } from "@/lib/backoffice-acties";
 import { fromZonedTime } from "date-fns-tz";
@@ -363,6 +367,9 @@ export async function consolidateAdviseurWeekSalesCreditfacturen(
     .order("created_at", { ascending: true });
 
   const sales = (open || []).filter((f) => {
+    if (isBelcommissieCreditfactuur(f) || isOpsCommissieCreditfactuur(f)) {
+      return false;
+    }
     const nr = String(f.factuur_nummer || "");
     if (isSalesWeekFactuurNummer(nr)) return true;
     if (/\/AANBETALING\//i.test(nr)) return true;
@@ -684,9 +691,17 @@ async function tryVerstuur(
 /** Mag deze concept-CF woensdag worden gemaild? */
 export function magWoensdagVersturen(cf: {
   factuur_nummer?: string | null;
+  notities?: string | null;
   aantal_aanbetalingen?: number | null;
   has_regels?: boolean;
 }): boolean {
+  // Bel-/opscommissie: alleen via Uitbetalingen-tab, niet in woensdag-mailbatch
+  if (
+    isBelcommissieCreditfactuur(cf) ||
+    isOpsCommissieCreditfactuur(cf)
+  ) {
+    return false;
+  }
   const nr = String(cf.factuur_nummer || "");
   if (/\/RESTBETALING\//i.test(nr)) return true;
   if (/\/AANBETALING\//i.test(nr) || isSalesWeekFactuurNummer(nr)) {
@@ -696,6 +711,21 @@ export function magWoensdagVersturen(cf: {
   }
   // Weekfactuur / handmatig: alleen met regels of expliciet aantal
   return Number(cf.aantal_aanbetalingen) > 0 || Boolean(cf.has_regels);
+}
+
+/** Tranche B pas ná echte installatie-voltooid (of latere afrondstatus). */
+export function isProjectKlaarVoorTrancheB(project: {
+  status?: string | null;
+  installatie_voltooid_at?: string | null;
+}): boolean {
+  if (project.installatie_voltooid_at) return true;
+  const s = String(project.status || "");
+  return (
+    s === "installatie_voltooid" ||
+    s === "review_gevraagd" ||
+    s === "afgerond" ||
+    s === "service"
+  );
 }
 
 /**
@@ -736,6 +766,9 @@ export async function ensureAdviseurCommissieTrancheB(
     project.status === "geannuleerd"
   ) {
     return { ok: true, skipped: "annulering" };
+  }
+  if (!isProjectKlaarVoorTrancheB(project)) {
+    return { ok: true, skipped: "installatie_niet_voltooid" };
   }
 
   const leadRaw = project.leads as
@@ -966,7 +999,7 @@ export async function runWoensdagCommissieBatch(
     }
   }
 
-  // 2) Netto sales = installatie uitgevoerd in vorige week
+  // 2) Netto sales = installatie voltooid in vorige week (alleen dan tranche B)
   const weekStartIso = fromZonedTime(
     `${week.van}T00:00:00`,
     AMSTERDAM_TZ
@@ -976,7 +1009,7 @@ export async function runWoensdagCommissieBatch(
     AMSTERDAM_TZ
   ).toISOString();
 
-  let { data: nettoProjects, error: nettoErr } = await sb
+  const { data: nettoProjects, error: nettoErr } = await sb
     .from("projecten")
     .select("id, project_nummer, status, installatie_voltooid_at")
     .not("installatie_voltooid_at", "is", null)
@@ -984,27 +1017,12 @@ export async function runWoensdagCommissieBatch(
     .lte("installatie_voltooid_at", weekEndIso)
     .limit(2000);
 
-  if (
-    nettoErr &&
-    (nettoErr.message?.includes("installatie_voltooid_at") ||
-      nettoErr.code === "42703")
-  ) {
-    const retry = await sb
-      .from("projecten")
-      .select("id, project_nummer, status, updated_at")
-      .in("status", ["installatie_voltooid", "review_gevraagd", "afgerond", "service"])
-      .gte("updated_at", weekStartIso)
-      .lte("updated_at", weekEndIso)
-      .limit(2000);
-    nettoProjects = retry.data as typeof nettoProjects;
-    nettoErr = retry.error;
-  }
-
   if (nettoErr) {
     result.ok = false;
     result.netto.errors.push(nettoErr.message);
   } else {
     for (const p of nettoProjects || []) {
+      if (!isProjectKlaarVoorTrancheB(p)) continue;
       result.netto.checked += 1;
       const r = await ensureAdviseurCommissieTrancheB(sb, p.id as string, {
         autoVerstuur: false,
@@ -1023,10 +1041,25 @@ export async function runWoensdagCommissieBatch(
     }
   }
 
+  // 2b) Bel- + opscommissie-concepten voor vorige week
+  try {
+    const { ensureBelEnOpsUitbetalingConcepten } = await import(
+      "@/lib/callcenter-uitbetalingen"
+    );
+    await ensureBelEnOpsUitbetalingConcepten(sb, now);
+  } catch (e) {
+    result.ok = false;
+    result.verstuurd.errors.push(
+      e instanceof Error
+        ? `Bel/ops concepten: ${e.message}`
+        : "Bel/ops concepten mislukt"
+    );
+  }
+
   // 3) Rijpe concepten van die week → versturen
   const { data: concepts, error: cfErr } = await sb
     .from("adviseur_creditfacturen")
-    .select("id, factuur_nummer, status, aantal_aanbetalingen")
+    .select("id, factuur_nummer, status, aantal_aanbetalingen, notities")
     .eq("status", "concept")
     .eq("week_jaar", week.jaar)
     .eq("week_nummer", week.week)
@@ -1046,6 +1079,7 @@ export async function runWoensdagCommissieBatch(
 
     const ready = magWoensdagVersturen({
       factuur_nummer: cf.factuur_nummer as string,
+      notities: cf.notities as string | null,
       aantal_aanbetalingen: cf.aantal_aanbetalingen as number,
       has_regels: (regelCount || 0) > 0,
     });

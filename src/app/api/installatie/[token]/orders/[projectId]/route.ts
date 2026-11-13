@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import type { ProjectStatus } from "@/types/database";
+import {
+  resolveInstallatiePortal,
+  scopesToOwnJobsOnly,
+} from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
@@ -12,22 +16,20 @@ const INSTALLATEUR_STATUSES = new Set<ProjectStatus>([
   "installatie_ingepland",
 ]);
 
-async function resolvePartner(token: string) {
-  const sb = getSupabaseAdmin();
-  const { data, error } = await sb
-    .from("installatie_partners")
-    .select("id, naam, email, telefoon, actief, portal_token")
-    .eq("portal_token", token)
-    .single();
-  if (error || !data || !data.actief) return null;
-  return data;
+async function resolvePartner(token: string, req: NextRequest) {
+  const session = await resolveInstallatiePortal(token, req);
+  if (!session) return null;
+  return {
+    ...session.partner,
+    _session: session,
+  };
 }
 
 const ORDER_SELECT = `id, project_nummer, titel, status, offerte_id, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities,
          service_at, service_notities,
          installateur_notitie, installateur_notitie_door,
          backoffice_notitie, backoffice_notitie_door,
-         monteur, installatie_teamgenoot_id, startdatum, opleverdatum, created_at,
+         monteur, installatie_teamgenoot_id, materiaal_checks, startdatum, opleverdatum, created_at,
          leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
          offertes(id, offerte_nummer, status, ondertekend_op),
          installatie_teamgenoot:installatie_partner_teamgenoten!installatie_teamgenoot_id(id, naam, email, telefoon)`;
@@ -40,44 +42,51 @@ const ORDER_SELECT_NO_TG_JOIN = `id, project_nummer, titel, status, offerte_id, 
          service_at, service_notities,
          installateur_notitie, installateur_notitie_door,
          backoffice_notitie, backoffice_notitie_door,
-         monteur, installatie_teamgenoot_id, startdatum, opleverdatum, created_at,
+         monteur, installatie_teamgenoot_id, materiaal_checks, startdatum, opleverdatum, created_at,
          leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats),
          offertes(id, offerte_nummer, status, ondertekend_op)`;
 
 /** GET /api/installatie/[token]/orders/[projectId] */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; projectId: string }> }
 ) {
   const { token, projectId } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
+    const partner = await resolvePartner(token, req);
     if (!partner) {
       return NextResponse.json(
         { error: "Portaal niet gevonden" },
         { status: 404 }
       );
     }
+    const session = partner._session;
 
     const sb = getSupabaseAdmin();
-    let { data: order, error } = await sb
+    let q = sb
       .from("projecten")
       .select(ORDER_SELECT)
       .eq("id", projectId)
-      .eq("installatie_partner_id", partner.id)
-      .single();
+      .eq("installatie_partner_id", partner.id);
+    if (scopesToOwnJobsOnly(session)) {
+      q = q.eq("installatie_teamgenoot_id", session.teamgenoot!.id);
+    }
+    let { data: order, error } = await q.single();
 
     if (
       error &&
       (error.message?.includes("installatie_teamgenoot") ||
         error.message?.includes("installatie_partner_teamgenoten"))
     ) {
-      ({ data: order, error } = await sb
+      let q2 = sb
         .from("projecten")
         .select(ORDER_SELECT_NO_TG_JOIN)
         .eq("id", projectId)
-        .eq("installatie_partner_id", partner.id)
-        .single());
+        .eq("installatie_partner_id", partner.id);
+      if (scopesToOwnJobsOnly(session)) {
+        q2 = q2.eq("installatie_teamgenoot_id", session.teamgenoot!.id);
+      }
+      ({ data: order, error } = await q2.single());
     }
 
     if (
@@ -88,12 +97,15 @@ export async function GET(
         error.code === "42703" ||
         error.code === "PGRST200")
     ) {
-      ({ data: order, error } = await sb
+      let q3 = sb
         .from("projecten")
         .select(ORDER_SELECT_FALLBACK)
         .eq("id", projectId)
-        .eq("installatie_partner_id", partner.id)
-        .single());
+        .eq("installatie_partner_id", partner.id);
+      if (scopesToOwnJobsOnly(session)) {
+        q3 = q3.eq("installatie_teamgenoot_id", session.teamgenoot!.id);
+      }
+      ({ data: order, error } = await q3.single());
     }
 
     if (error || !order) {
@@ -197,6 +209,9 @@ export async function PATCH(
     installatie_notities?: string | null;
     service_notities?: string | null;
     installatie_teamgenoot_id?: string | null;
+    monteur_beoordeling_sterren?: number | string | null;
+    monteur_beoordeling_notitie?: string | null;
+    monteur_beoordeling_door?: string | null;
   };
   try {
     body = await req.json();
@@ -205,21 +220,28 @@ export async function PATCH(
   }
 
   try {
-    const partner = await resolvePartner(token);
+    const partner = await resolvePartner(token, req);
     if (!partner) {
       return NextResponse.json(
         { error: "Portaal niet gevonden" },
         { status: 404 }
       );
     }
+    const session = partner._session;
 
     const sb = getSupabaseAdmin();
-    const { data: existing, error: existErr } = await sb
+    let existQ = sb
       .from("projecten")
       .select("id")
       .eq("id", projectId)
-      .eq("installatie_partner_id", partner.id)
-      .single();
+      .eq("installatie_partner_id", partner.id);
+    if (scopesToOwnJobsOnly(session)) {
+      existQ = existQ.eq(
+        "installatie_teamgenoot_id",
+        session.teamgenoot!.id
+      );
+    }
+    const { data: existing, error: existErr } = await existQ.single();
     if (existErr || !existing) {
       return NextResponse.json(
         { error: "Order niet gevonden" },
@@ -250,6 +272,12 @@ export async function PATCH(
     }
 
     if (body.installatie_teamgenoot_id !== undefined) {
+      if (session.kind === "teamgenoot") {
+        return NextResponse.json(
+          { error: "Je kunt de medewerker-koppeling niet wijzigen" },
+          { status: 403 }
+        );
+      }
       const tgId = body.installatie_teamgenoot_id?.trim() || null;
       if (tgId) {
         const { data: tg } = await sb
@@ -272,6 +300,56 @@ export async function PATCH(
       }
     }
 
+    // Beoordeling: alleen beheerder/partner (niet solo monteur-scope)
+    if (
+      body.monteur_beoordeling_sterren !== undefined ||
+      body.monteur_beoordeling_notitie !== undefined
+    ) {
+      if (session.kind === "teamgenoot" && session.authRol !== "beheerder") {
+        return NextResponse.json(
+          { error: "Alleen beheerders mogen beoordelen" },
+          { status: 403 }
+        );
+      }
+      if (body.monteur_beoordeling_sterren !== undefined) {
+        const raw = body.monteur_beoordeling_sterren;
+        if (raw === null || raw === "") {
+          patch.monteur_beoordeling_sterren = null;
+          patch.monteur_beoordeling_op = null;
+          patch.monteur_beoordeling_door = null;
+        } else {
+          const n = Number(raw);
+          if (!Number.isFinite(n) || n < 0 || n > 5) {
+            return NextResponse.json(
+              { error: "Beoordeling moet 0 t/m 5 sterren zijn" },
+              { status: 400 }
+            );
+          }
+          patch.monteur_beoordeling_sterren = Math.round(n);
+          patch.monteur_beoordeling_op = new Date().toISOString();
+          const door =
+            typeof body.monteur_beoordeling_door === "string"
+              ? body.monteur_beoordeling_door.trim() || null
+              : session.kind === "partner"
+                ? partner.naam
+                : session.teamgenoot?.naam || partner.naam;
+          patch.monteur_beoordeling_door = door;
+        }
+      }
+      if (body.monteur_beoordeling_notitie !== undefined) {
+        patch.monteur_beoordeling_notitie =
+          typeof body.monteur_beoordeling_notitie === "string"
+            ? body.monteur_beoordeling_notitie.trim() || null
+            : null;
+        if (
+          body.monteur_beoordeling_sterren === undefined &&
+          patch.monteur_beoordeling_notitie
+        ) {
+          patch.monteur_beoordeling_op = new Date().toISOString();
+        }
+      }
+    }
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
         { error: "Niets om bij te werken" },
@@ -280,13 +358,15 @@ export async function PATCH(
     }
 
     async function doUpdate(select: string, usePatch: Record<string, unknown>) {
-      return sb
+      let q = sb
         .from("projecten")
         .update(usePatch)
         .eq("id", projectId)
-        .eq("installatie_partner_id", partner!.id)
-        .select(select)
-        .single();
+        .eq("installatie_partner_id", partner!.id);
+      if (scopesToOwnJobsOnly(session)) {
+        q = q.eq("installatie_teamgenoot_id", session.teamgenoot!.id);
+      }
+      return q.select(select).single();
     }
 
     let { data: order, error } = await doUpdate(ORDER_SELECT, patch);

@@ -159,6 +159,7 @@ export async function POST(
         service_at: null,
         materiaal_leverdatum: null,
         annulering_keuze_gecontroleerd_at: nowIso,
+        hold_sales_deadline_at: null,
       })
       .eq("id", id);
 

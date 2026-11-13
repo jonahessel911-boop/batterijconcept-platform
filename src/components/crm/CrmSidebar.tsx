@@ -174,7 +174,7 @@ const GROUPS: SidebarGroup[] = [
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
       { id: "voice_ai", label: "Voice AI", icon: ICONS.bellen },
       { id: "adviseurs", label: "Adviseurs", icon: ICONS.partners },
-      { id: "partners", label: "Team", icon: ICONS.partners },
+      { id: "partners", label: "Business", icon: ICONS.partners },
       { id: "instellingen", label: "Instellingen", icon: ICONS.instellingen },
     ],
   },

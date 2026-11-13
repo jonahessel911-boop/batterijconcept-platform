@@ -5,6 +5,7 @@ import { requireBackofficeSession } from "@/lib/auth-require-backoffice";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { normalizeRol } from "@/lib/rollen";
+import { isTaakCategorie } from "@/lib/taak-categorie";
 
 export const runtime = "nodejs";
 
@@ -64,6 +65,7 @@ export async function PATCH(
       end_at?: string | null;
       soort?: string;
       status?: string;
+      categorie?: string | null;
     };
 
     const patch: Record<string, unknown> = {
@@ -102,6 +104,15 @@ export async function PATCH(
       patch.status = body.status;
       patch.completed_at =
         body.status === "done" ? new Date().toISOString() : null;
+    }
+    if (body.categorie !== undefined) {
+      if (!isTaakCategorie(body.categorie)) {
+        return NextResponse.json(
+          { error: "Ongeldige categorie" },
+          { status: 400 }
+        );
+      }
+      patch.categorie = body.categorie;
     }
 
     const sb = getSupabaseAdmin();

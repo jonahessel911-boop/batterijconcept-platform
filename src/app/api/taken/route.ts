@@ -195,20 +195,34 @@ export async function POST(req: NextRequest) {
 
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
+    const row = {
+      project_id: body.project_id,
+      titel,
+      status: "todo",
+      afdeling: body.afdeling,
+      categorie: "project",
+      verantwoordelijke_id: body.verantwoordelijke_id,
+      due_at: dueAt,
+      notities: body.notities?.trim() || null,
+      auto_key: null,
+    };
+    let { data, error } = await sb
       .from("project_taken")
-      .insert({
-        project_id: body.project_id,
-        titel,
-        status: "todo",
-        afdeling: body.afdeling,
-        verantwoordelijke_id: body.verantwoordelijke_id,
-        due_at: dueAt,
-        notities: body.notities?.trim() || null,
-        auto_key: null,
-      })
+      .insert(row)
       .select(SELECT)
       .single();
+
+    if (error && /categorie/i.test(error.message || "")) {
+      const { categorie: _c, ...without } = row;
+      void _c;
+      const retry = await sb
+        .from("project_taken")
+        .insert(without)
+        .select(SELECT)
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error || !data) {
       return NextResponse.json(

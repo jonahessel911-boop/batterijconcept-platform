@@ -5,6 +5,10 @@
       "schedule": "0 * * * *"
     },
     {
+      "path": "/api/cron/sollicitatie-gesprek-herinneringen",
+      "schedule": "15 * * * *"
+    },
+    {
       "path": "/api/cron/project-herinneringen",
       "schedule": "0 8 * * *"
     },
@@ -29,8 +33,16 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/warmtefonds-automatisering",
+      "schedule": "30 6 * * *"
+    },
+    {
       "path": "/api/cron/unite-cdr-sync",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/eindafrekening",
+      "schedule": "0 7 * * *"
     }
   ]
 }

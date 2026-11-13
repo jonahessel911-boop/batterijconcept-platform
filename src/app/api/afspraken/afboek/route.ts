@@ -28,6 +28,8 @@ export async function POST(req: NextRequest) {
     notitie?: string;
     /** Amsterdam-lokaal `YYYY-MM-DDTHH:mm` of ISO */
     vervolg_at?: string;
+    /** Opt-in: 24u-herinneringsmail bij vervolg fysiek/tel */
+    herinnering_mail?: boolean;
   };
   try {
     body = await req.json();
@@ -125,6 +127,7 @@ export async function POST(req: NextRequest) {
         notities: noteText,
         soort: soortVoorVervolgUitkomst(uitkomst),
         ingepland_door_id: session.adviseurId,
+        herinnering_mail: Boolean(body.herinnering_mail),
       });
       if (!plan.ok) {
         return NextResponse.json(
