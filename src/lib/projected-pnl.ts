@@ -249,7 +249,7 @@ function opsChildrenFromDetail(
 export function linesFromMetrics(
   m: PnlMetrics,
   opsDetail?: OpsCommissieBreakdown | null,
-  edergyPerAanvraag = 375
+  edergyPerAanvraag = 150
 ): PnlLine[] {
   const opsKids = opsChildrenFromDetail(opsDetail);
   return [

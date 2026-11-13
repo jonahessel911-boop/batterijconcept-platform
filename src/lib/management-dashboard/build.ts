@@ -16,6 +16,7 @@ import {
   hardwareKostenVoorRegels,
 } from "@/lib/project-kosten";
 import { provincieVanPostcode } from "@/lib/postcode-provincie";
+import { summarizeMontageCapaciteit } from "@/lib/installatie-verwachting";
 import { schouwWeekFromDate } from "@/lib/schouw-week";
 import type {
   MgmtAdviseurCapacityWeek,
@@ -158,6 +159,33 @@ export type MgmtRaw = {
     rol?: string | null;
   }[];
   installateurs: { id: string; naam: string }[];
+  /** Monteurs + koppels voor montagecapaciteit. */
+  teamgenoten?: {
+    id: string;
+    partner_id: string;
+    actief?: boolean | null;
+    kan_installatie?: boolean | null;
+    regios?: unknown;
+  }[];
+  koppels?: {
+    id: string;
+    partner_id: string;
+    actief?: boolean | null;
+    monteur_1_id?: string | null;
+    monteur_2_id?: string | null;
+    monteur_1?: {
+      id?: string;
+      actief?: boolean | null;
+      kan_installatie?: boolean | null;
+      regios?: unknown;
+    } | null;
+    monteur_2?: {
+      id?: string;
+      actief?: boolean | null;
+      kan_installatie?: boolean | null;
+      regios?: unknown;
+    } | null;
+  }[];
 };
 
 function factuurBetaalIso(f: MgmtFactuur): string | null {
@@ -1458,15 +1486,36 @@ function buildOrders(
     ],
   };
 
+  const montage = summarizeMontageCapaciteit(
+    raw.teamgenoten || [],
+    raw.koppels || [],
+    {
+      regio: filters.regio,
+      partnerId: filters.installateurId,
+    }
+  );
+  const heeftLiveCap =
+    (raw.koppels?.length || 0) > 0 || (raw.teamgenoten?.length || 0) > 0;
+  const beschikbaarPerWeek = heeftLiveCap
+    ? montage.capPerWeek
+    : instellingen.installaties_per_week;
+
   const capacity8Weken = Array.from({ length: 8 }, (_, i) => {
     const d = addDays(new Date(), i * 7);
     const info = schouwWeekFromDate(d);
     const weekStart = d;
     const weekEnd = addDays(d, 6);
-    const gepland = projects.filter(
-      (p) => p.installatie_at && inIsoRange(p.installatie_at, weekStart, weekEnd)
-    ).length;
-    const beschikbaar = instellingen.installaties_per_week;
+    const gepland = projects.filter((p) => {
+      if (!p.installatie_at) return false;
+      if (!inIsoRange(p.installatie_at, weekStart, weekEnd)) return false;
+      if (
+        filters.installateurId &&
+        p.installatie_partner_id !== filters.installateurId
+      ) {
+        return false;
+      }
+      return true;
+    }).length;
     const verwachtNieuw = Math.round(
       raw.offertes.filter((o) => {
         const at = dealAt(o);
@@ -1475,15 +1524,46 @@ function buildOrders(
     );
     return {
       weekLabel: `${info.jaar}-W${String(info.week).padStart(2, "0")}`,
-      beschikbaar,
+      beschikbaar: beschikbaarPerWeek,
       gepland,
       verwachtNieuw,
-      overOnder: beschikbaar - gepland - verwachtNieuw,
+      overOnder: beschikbaarPerWeek - gepland - verwachtNieuw,
       omzetCapaciteit: null,
     };
   });
 
   const kpis: MgmtKpi[] = [
+    kpi({
+      key: "montage_koppels",
+      label: "Actieve installatiekoppels",
+      value: montage.koppels,
+      format: "number",
+      target: null,
+      deltaPct: null,
+      definition: filters.regio
+        ? `Actieve koppels met regio ${filters.regio} geselecteerd.`
+        : "Actieve koppels onder installatiepartners (2 monteurs = 1 koppel).",
+      drilldown: emptyDrill("Installatiekoppels"),
+      missing: heeftLiveCap
+        ? null
+        : "Nog geen koppels/teamgenoten geladen — check migratie installatie_partner_koppels.",
+    }),
+    kpi({
+      key: "montage_capaciteit",
+      label: "Montagecapaciteit / week",
+      value: beschikbaarPerWeek,
+      format: "number",
+      target: null,
+      deltaPct: null,
+      definition: heeftLiveCap
+        ? `${montage.koppels} koppels × ${montage.installsPerKoppelWeek}/week` +
+          (montage.monteurs > 0
+            ? ` + ${montage.monteurs} solo-monteurs × ${montage.installsPerMonteurWeek}/week`
+            : "") +
+          (filters.regio ? ` · regio ${filters.regio}` : "")
+        : "Fallback: instelling installaties_per_week (geen live koppels).",
+      drilldown: emptyDrill("Montagecapaciteit"),
+    }),
     kpi({
       key: "zonder_schouw",
       label: "Orders zonder schouwdatum",
@@ -1526,7 +1606,19 @@ function buildOrders(
     }),
   ];
 
-  return { kpis, pipeline, risico, capacity8Weken };
+  return {
+    kpis,
+    pipeline,
+    risico,
+    capacity8Weken,
+    montageCapaciteit: {
+      koppels: montage.koppels,
+      monteurs: montage.monteurs,
+      capPerWeek: beschikbaarPerWeek,
+      live: heeftLiveCap,
+      perRegio: montage.perRegio,
+    },
+  };
 }
 
 function buildFinance(

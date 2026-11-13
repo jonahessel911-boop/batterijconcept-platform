@@ -40,6 +40,61 @@ import { PartnerKoppelsPanel } from "@/components/installatie/PartnerKoppelsPane
 import { normalizeMerkenErvaring } from "@/lib/installatie-merken";
 import { normalizeMonteurRegios } from "@/lib/postcode-provincie";
 
+type DocKey = "kvk_uitreksel" | "certificaten" | "cv" | "foto";
+
+const TEAM_DOC_FIELDS: {
+  key: DocKey;
+  label: string;
+  required: boolean;
+  accept: string;
+  hint?: string;
+}[] = [
+  {
+    key: "kvk_uitreksel",
+    label: "KvK-uittreksel",
+    required: true,
+    accept: ".pdf,image/*",
+  },
+  {
+    key: "certificaten",
+    label: "Certificeringen",
+    required: true,
+    accept: ".pdf,image/*",
+  },
+  {
+    key: "cv",
+    label: "CV",
+    required: false,
+    accept: ".pdf,image/*",
+  },
+  {
+    key: "foto",
+    label: "Foto",
+    required: true,
+    accept: "image/*",
+    hint: "Mag ook door het teamlid zelf via Profiel.",
+  },
+];
+
+function docStatus(t: InstallatiePartnerTeamgenoot, key: DocKey) {
+  if (key === "kvk_uitreksel") {
+    return {
+      path: t.kvk_uitreksel_storage_path,
+      name: t.kvk_uitreksel_bestandsnaam,
+    };
+  }
+  if (key === "certificaten") {
+    return {
+      path: t.certificaten_storage_path,
+      name: t.certificaten_bestandsnaam,
+    };
+  }
+  if (key === "cv") {
+    return { path: t.cv_storage_path, name: t.cv_bestandsnaam };
+  }
+  return { path: t.foto_storage_path, name: t.foto_bestandsnaam };
+}
+
 type Props = {
   portalToken: string;
   /** Compacte CRM-variant (onder uitgeklapte partner). */
@@ -115,6 +170,7 @@ export function PartnerTeamgenotenPanel({
   const [editNaam, setEditNaam] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editTelefoon, setEditTelefoon] = useState("");
+  const [uploadBusy, setUploadBusy] = useState<DocKey | null>(null);
 
   const [showNieuw, setShowNieuw] = useState(false);
 
@@ -200,7 +256,7 @@ export function PartnerTeamgenotenPanel({
           }),
         }
       );
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       setItems((list) =>
         list.map((t) =>
@@ -215,6 +271,41 @@ export function PartnerTeamgenotenPanel({
       setError(err instanceof Error ? err.message : "Opslaan mislukt");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function uploadDoc(id: string, type: DocKey, file: File) {
+    setUploadBusy(type);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("id", id);
+      fd.append("type", type);
+      fd.append("file", file);
+      const res = await fetch(
+        `/api/installatie/${encodeURIComponent(portalToken)}/teamgenoten`,
+        { method: "PATCH", body: fd }
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        teamgenoot?: InstallatiePartnerTeamgenoot;
+        url?: string | null;
+      };
+      if (!res.ok) throw new Error(data.error || "Upload mislukt");
+      if (data.teamgenoot) {
+        setItems((list) =>
+          list.map((t) => (t.id === id ? { ...t, ...data.teamgenoot } : t))
+        );
+      }
+      const label =
+        TEAM_DOC_FIELDS.find((d) => d.key === type)?.label || "Document";
+      setOkMsg(`${label} geüpload`);
+      if (data.url) window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload mislukt");
+    } finally {
+      setUploadBusy(null);
     }
   }
 
@@ -398,8 +489,8 @@ export function PartnerTeamgenotenPanel({
               Teamlid · {editing.naam}
             </CardTitle>
             <CardDescription className="text-muted">
-              Leeftijd, merkenervaring en foto vult dit teamlid zelf in via
-              Profiel in het portaal.
+              Leeftijd en merkenervaring vult dit teamlid zelf in via Profiel.
+              Documenten kun je hier uploaden.
             </CardDescription>
           </CardHeader>
           <CardContent className="p-4 sm:p-5">
@@ -442,8 +533,85 @@ export function PartnerTeamgenotenPanel({
                   mode="partner"
                 />
               </div>
+              <div className="sm:col-span-2 space-y-3 border-t border-line pt-4">
+                <div>
+                  <p className="text-sm font-semibold text-ink">Documenten</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    PDF of afbeelding, max. 20 MB. Verplicht voor een compleet
+                    dossier: KvK, certificeringen en foto.
+                  </p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {TEAM_DOC_FIELDS.map((doc) => {
+                    const status = docStatus(editing, doc.key);
+                    const hasFile = Boolean(status.path?.trim());
+                    const busy = uploadBusy === doc.key;
+                    return (
+                      <div
+                        key={doc.key}
+                        className="rounded-lg border border-line bg-wash/60 p-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-ink">
+                              {doc.label}
+                              {doc.required ? (
+                                <span className="text-muted"> *</span>
+                              ) : null}
+                            </p>
+                            {hasFile ? (
+                              <p className="mt-0.5 truncate text-xs text-green-dark">
+                                {status.name || "Geüpload"}
+                              </p>
+                            ) : (
+                              <p className="mt-0.5 text-xs text-muted">
+                                Nog niet geüpload
+                              </p>
+                            )}
+                            {doc.hint ? (
+                              <p className="mt-1 text-[11px] text-muted">
+                                {doc.hint}
+                              </p>
+                            ) : null}
+                          </div>
+                          <Badge
+                            variant="secondary"
+                            className={
+                              hasFile
+                                ? "bg-green-soft text-green-dark"
+                                : "text-muted"
+                            }
+                          >
+                            {hasFile ? "OK" : "Ontbreekt"}
+                          </Badge>
+                        </div>
+                        <label className="mt-3 inline-flex cursor-pointer">
+                          <span className="inline-flex h-7 items-center rounded-lg border border-border bg-background px-2.5 text-[0.8rem] font-medium hover:bg-wash">
+                            {busy
+                              ? "Uploaden…"
+                              : hasFile
+                                ? "Vervangen"
+                                : "Uploaden"}
+                          </span>
+                          <input
+                            type="file"
+                            accept={doc.accept}
+                            disabled={busy || saving || Boolean(uploadBusy)}
+                            className="sr-only"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) void uploadDoc(editing.id, doc.key, file);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="sm:col-span-2">
-                <Button type="submit" disabled={saving}>
+                <Button type="submit" disabled={saving || Boolean(uploadBusy)}>
                   {saving ? "Opslaan…" : "Opslaan"}
                 </Button>
               </div>

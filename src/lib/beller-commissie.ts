@@ -47,6 +47,13 @@ export type BellerWeekCommissie = {
   creditfactuurId: string | null;
   creditfactuurNummer: string | null;
   creditfactuurStatus: string | null;
+  /** Netto afspraken in deze week (voor detail-UI). */
+  regels: {
+    id: string;
+    leadNaam: string;
+    geplandOp: string;
+    startAt: string | null;
+  }[];
 };
 
 function listRecentCreditWeeks(count: number, now = new Date()): CreditWeek[] {
@@ -194,6 +201,7 @@ export async function loadBellerWeekCommissie(
       creditfactuurId: cf?.id ?? null,
       creditfactuurNummer: cf?.factuur_nummer ?? null,
       creditfactuurStatus: cf?.status ?? null,
+      regels: [],
     };
   });
 

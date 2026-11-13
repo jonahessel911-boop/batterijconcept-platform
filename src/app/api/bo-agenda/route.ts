@@ -177,7 +177,7 @@ export async function GET(req: NextRequest) {
       if (from) retryQ = retryQ.gte("due_at", from);
       if (to) retryQ = retryQ.lte("due_at", to);
       const plain = await retryQ;
-      projectTaken = plain.data;
+      projectTaken = plain.data as typeof projectTaken;
     }
 
     return NextResponse.json({

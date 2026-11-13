@@ -4,7 +4,10 @@ import { errMessage } from "@/lib/errors";
 import { generatePassword, hashPassword } from "@/lib/auth-password";
 import { normalizeMerkenErvaring } from "@/lib/installatie-merken";
 import { normalizeMonteurRegios } from "@/lib/postcode-provincie";
-import { uploadMonteurDocument } from "@/lib/monteur-dossier";
+import {
+  parseMonteurDocType,
+  uploadMonteurDocument,
+} from "@/lib/monteur-dossier";
 import {
   installatieLoginUrl,
   newInstallatiePortalToken,
@@ -41,9 +44,11 @@ function normalizeRol(raw: unknown): "beheerder" | "monteur" {
 }
 
 const SELECT =
-  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, cv_storage_path, cv_bestandsnaam, cv_uploaded_at, dossier_compleet, created_at, updated_at";
 const SELECT_MIN =
   "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, created_at, updated_at";
+const SELECT_NO_DOSSIER =
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
 const SELECT_NO_REGIOS =
   "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
 
@@ -83,6 +88,16 @@ export async function GET(
     if (error && isMissingTable(error)) {
       const mid = await sb
         .from("installatie_partner_teamgenoten")
+        .select(SELECT_NO_DOSSIER)
+        .eq("partner_id", partner.id)
+        .order("naam");
+      rows = mid.data as Record<string, unknown>[] | null;
+      error = mid.error;
+    }
+
+    if (error && isMissingTable(error)) {
+      const mid = await sb
+        .from("installatie_partner_teamgenoten")
         .select(SELECT_NO_REGIOS)
         .eq("partner_id", partner.id)
         .order("naam");
@@ -102,7 +117,7 @@ export async function GET(
         return NextResponse.json({
           teamgenoten: [],
           migration_required: true,
-          hint: "Voer supabase/migrate-partner-teamgenoten.sql, migrate-installatie-portal-auth.sql en migrate-teamgenoot-regios.sql uit.",
+          hint: "Voer supabase/migrate-partner-teamgenoten.sql, migrate-installatie-portal-auth.sql, migrate-teamgenoot-regios.sql en migrate-partner-monteur-dossier.sql uit.",
         });
       }
     }
@@ -213,6 +228,14 @@ export async function POST(
       .single();
 
     if (error && isMissingTable(error)) {
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .insert(insertFull)
+        .select(SELECT_NO_DOSSIER)
+        .single());
+    }
+
+    if (error && isMissingTable(error)) {
       const { regios: _r, ...withoutRegios } = insertFull;
       void _r;
       ({ data, error } = await sb
@@ -302,6 +325,8 @@ export async function PATCH(
       const form = await req.formData();
       const id = pickStr(form.get("id"));
       const file = form.get("file");
+      const docType =
+        parseMonteurDocType(pickStr(form.get("type"))) || "foto";
       if (!id) {
         return NextResponse.json({ error: "id is verplicht" }, { status: 400 });
       }
@@ -316,7 +341,7 @@ export async function PATCH(
         sb,
         partner.id,
         id,
-        "foto",
+        docType,
         file
       );
       if ("error" in result) {
@@ -329,7 +354,9 @@ export async function PATCH(
         teamgenoot: publicTeamgenoot(
           result.teamgenoot as unknown as Record<string, unknown>
         ),
-        foto_url: result.url,
+        url: result.url,
+        foto_url: docType === "foto" ? result.url : undefined,
+        type: docType,
       });
     }
 
@@ -484,6 +511,16 @@ export async function PATCH(
       .eq("partner_id", partner.id)
       .select(SELECT)
       .single();
+
+    if (error && isMissingTable(error)) {
+      ({ data, error } = await sb
+        .from("installatie_partner_teamgenoten")
+        .update(patch)
+        .eq("id", id)
+        .eq("partner_id", partner.id)
+        .select(SELECT_NO_DOSSIER)
+        .single());
+    }
 
     if (error && isMissingTable(error)) {
       const fallbackPatch = { ...patch };

@@ -127,15 +127,17 @@ function inRange(iso: string, startYmd: string, endYmd: string): boolean {
 
 /** Annulering of HOLD SALES telt als uitval (voor nu). */
 export function isSalesUitvalStatus(status: string | null | undefined): boolean {
+  const raw = (status || "").trim().toLowerCase();
+  // Legacy DB-waarde vóór remap; ProjectStatus kent alleen hold_sales_actie.
+  if (raw === "hold_sales") return true;
   const st = normalizeProjectStatus(status || "");
-  return (
-    st === "annulering" || st === "hold_sales_actie" || st === "hold_sales"
-  );
+  return st === "annulering" || st === "hold_sales_actie";
 }
 
 export function isHoldSalesStatus(status: string | null | undefined): boolean {
-  const st = normalizeProjectStatus(status || "");
-  return st === "hold_sales_actie" || st === "hold_sales";
+  const raw = (status || "").trim().toLowerCase();
+  if (raw === "hold_sales") return true;
+  return normalizeProjectStatus(status || "") === "hold_sales_actie";
 }
 
 export function isAnnuleringStatus(status: string | null | undefined): boolean {

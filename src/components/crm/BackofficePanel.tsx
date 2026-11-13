@@ -7,6 +7,7 @@ import { ClientOnly } from "@/components/ClientOnly";
 import { BackofficeActiesList } from "./BackofficeActiesList";
 import { BackofficeTable } from "./BackofficeTable";
 import { BelConversiePanel } from "./BelConversiePanel";
+import { LiveRapportagePanel } from "./LiveRapportagePanel";
 import { Planbord } from "./Planbord";
 import { ProjectKanban } from "./ProjectKanban";
 import { ServiceVerzoekenPanel } from "./ServiceVerzoekenPanel";
@@ -100,6 +101,14 @@ export function BackofficePanel({
     return (
       <div className="px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
         <ServiceVerzoekenPanel />
+      </div>
+    );
+  }
+
+  if (view === "live") {
+    return (
+      <div className="bg-wash/40 px-4 py-5 sm:px-5">
+        <LiveRapportagePanel />
       </div>
     );
   }

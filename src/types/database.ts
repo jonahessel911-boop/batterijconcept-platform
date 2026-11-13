@@ -566,6 +566,15 @@ export interface InstallatiePartnerTeamgenoot {
   foto_storage_path?: string | null;
   foto_bestandsnaam?: string | null;
   foto_uploaded_at?: string | null;
+  kvk_uitreksel_storage_path?: string | null;
+  kvk_uitreksel_bestandsnaam?: string | null;
+  kvk_uitreksel_uploaded_at?: string | null;
+  certificaten_storage_path?: string | null;
+  certificaten_bestandsnaam?: string | null;
+  certificaten_uploaded_at?: string | null;
+  cv_storage_path?: string | null;
+  cv_bestandsnaam?: string | null;
+  cv_uploaded_at?: string | null;
   dossier_compleet?: boolean | null;
   created_at: string;
   updated_at: string;
@@ -886,6 +895,16 @@ export interface Sollicitatie {
   belpogingen?: number | null;
   belpogingen_vandaag?: number | null;
   laatst_gebeld_at?: string | null;
+  /** Meta / UTM attributie (recruitment ads). */
+  campaign_name?: string | null;
+  adset_name?: string | null;
+  ad_name?: string | null;
+  meta_campaign_id?: string | null;
+  meta_adset_id?: string | null;
+  meta_ad_id?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
   raw_payload?: unknown;
   created_at: string;
   updated_at: string;
@@ -1236,3 +1255,33 @@ export const BEDRIJFSWAARDEN = [
     tekst: "Eerst kijken, dan kiezen. Onze scan en adviesbezoek zijn vrijblijvend.",
   },
 ] as const;
+
+export type BezorgRouteStatus = "concept" | "onderweg" | "afgerond";
+
+/** Draft bezorgroute: batterijen afleveren vanaf HQ. */
+export interface BezorgRoute {
+  id: string;
+  datum: string;
+  bezorger_naam: string;
+  bezorger_sollicitatie_id?: string | null;
+  status: BezorgRouteStatus | string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BezorgRouteStop {
+  id: string;
+  route_id: string;
+  project_id: string;
+  volgorde: number;
+  adres: string;
+  lat?: number | null;
+  lng?: number | null;
+  handtekening_data_url?: string | null;
+  ontvanger_naam?: string | null;
+  geleverd_at?: string | null;
+  created_at?: string;
+  /** Joined / display fields from API */
+  project_nummer?: string | null;
+  klant_naam?: string | null;
+}

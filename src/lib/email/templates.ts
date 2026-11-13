@@ -645,6 +645,38 @@ export function teamWelkomEmail(opts: {
   });
 }
 
+/** Warmtefonds-adviseur: account met e-mail + wachtwoord. */
+export function warmtefondsWelkomEmail(opts: {
+  naam: string;
+  email: string;
+  password: string;
+  loginUrl: string;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  return emailLayout({
+    title: `Welkom in het Warmtefonds-portaal`,
+    preheader: "Je Warmtefonds-account is klaar — log in met e-mail en wachtwoord.",
+    bodyHtml: [
+      emailH1("Welkom in het Warmtefonds-portaal"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je hebt een account gekregen voor het Warmtefonds-portaal van Batterijconcept. Log in met onderstaande gegevens."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${opts.email}</p>
+         <p style="margin:0;font-size:15px;"><strong>Wachtwoord</strong><br /><span style="font-family:ui-monospace,monospace;letter-spacing:0.04em;">${opts.password}</span></p>`
+      ),
+      emailP(
+        "Bewaar dit wachtwoord veilig. Bij vragen: mail info@batterijconcept.nl."
+      ),
+      emailButton("Naar Warmtefonds inloggen", opts.loginUrl),
+      emailMuted(
+        "Dit is een mail van Batterijconcept voor Warmtefonds-adviseurs. Niet doorsturen."
+      ),
+    ].join(""),
+  });
+}
+
 /** Kickoff Opstarten: intro track & trace met knop naar portaal */
 export function trackAndTraceIntroEmail(opts: {
   naam: string;

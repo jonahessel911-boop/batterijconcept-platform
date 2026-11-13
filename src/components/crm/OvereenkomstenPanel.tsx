@@ -32,16 +32,16 @@ const STATUS_UI: Record<
   { label: string; className: string }
 > = {
   geen: {
-    label: "Nog niet verstuurd",
-    className: "bg-wash text-muted",
+    label: "Niet verstuurd",
+    className: "text-muted",
   },
   verzonden: {
     label: "Wacht op handtekening",
-    className: "bg-[#FFF0E6] text-[#C45A12]",
+    className: "text-[#C45A12]",
   },
   ondertekend: {
     label: "Ondertekend",
-    className: "bg-green-soft text-green-dark",
+    className: "text-green-dark",
   },
 };
 
@@ -166,8 +166,8 @@ export function OvereenkomstenPanel({
         </div>
       ) : null}
 
-      <div className="flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-center sm:px-4">
-        <div className="relative w-full min-w-0 flex-1 sm:max-w-md">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+        <div className="relative min-w-0 flex-1 sm:max-w-xs">
           <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-muted">
             ⌕
           </span>
@@ -176,11 +176,11 @@ export function OvereenkomstenPanel({
             value={zoek}
             onChange={(e) => setZoek(e.target.value)}
             placeholder="Zoek naam, e-mail, bedrijf…"
-            className="h-9 w-full rounded-md border border-line bg-white py-2 pr-3 pl-8 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green"
+            className="h-8 w-full border border-line bg-white py-1.5 pr-3 pl-8 text-[13px] text-ink outline-none placeholder:text-muted/70 focus:border-green"
             aria-label="Zoeken"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-0.5 border border-line p-0.5">
           {FILTER_NAV.map((item) => {
             const active = statusFilter === item.key;
             const count =
@@ -195,10 +195,10 @@ export function OvereenkomstenPanel({
                 type="button"
                 onClick={() => setStatusFilter(item.key)}
                 className={cn(
-                  "rounded-md px-2.5 py-1.5 text-[12px] font-semibold transition",
+                  "px-2.5 py-1 text-[11px] font-semibold transition",
                   active
-                    ? "bg-wash text-ink ring-1 ring-line"
-                    : "text-muted hover:bg-wash/70 hover:text-ink"
+                    ? "bg-green text-white"
+                    : "bg-white text-muted hover:bg-wash hover:text-ink"
                 )}
               >
                 {item.label}
@@ -211,7 +211,7 @@ export function OvereenkomstenPanel({
 
       {error ? (
         <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4">
-          <p className="rounded-md border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+          <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
             {error}
           </p>
         </div>
@@ -229,19 +229,29 @@ export function OvereenkomstenPanel({
             Geen overeenkomsten voor dit filter.
           </p>
         ) : (
-          <table className="crm-table">
+          <table className="crm-table crm-table--compact w-full table-fixed">
+            <colgroup>
+              <col className="w-[42%]" />
+              <col className="w-[22%]" />
+              <col className="w-[36%]" />
+            </colgroup>
             <thead>
               <tr>
-                <th>Persoon / bedrijf</th>
-                <th>E-mail</th>
+                <th>Persoon</th>
                 <th>Status</th>
-                <th>Actie</th>
+                <th className="!text-right">Actie</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((a) => {
                 const st = statusOf(a);
                 const ui = STATUS_UI[st];
+                const datum =
+                  st === "ondertekend" && a.contract_uploaded_at
+                    ? new Date(a.contract_uploaded_at).toLocaleDateString(
+                        "nl-NL"
+                      )
+                    : null;
                 return (
                   <tr
                     key={a.id}
@@ -256,67 +266,68 @@ export function OvereenkomstenPanel({
                     }}
                   >
                     <td>
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <Avatar size="sm" className="size-8">
-                          <AvatarFallback className="text-[11px]">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Avatar size="sm" className="size-7 shrink-0">
+                          <AvatarFallback className="text-[10px]">
                             {initials(a.naam)}
                           </AvatarFallback>
                         </Avatar>
                         <div className="min-w-0">
-                          <span className="block truncate font-medium text-ink">
+                          <p className="truncate text-[13px] font-semibold leading-tight text-ink">
                             {a.naam}
-                          </span>
-                          {a.bedrijfsnaam ? (
-                            <span className="block truncate text-[11px] text-muted">
-                              {a.bedrijfsnaam}
-                            </span>
-                          ) : null}
+                            {a.bedrijfsnaam ? (
+                              <span className="font-normal text-muted">
+                                {" "}
+                                · {a.bedrijfsnaam}
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="truncate text-[11px] leading-tight text-muted">
+                            {a.email || "—"}
+                          </p>
                         </div>
                       </div>
                     </td>
-                    <td className="text-muted">{a.email || "—"}</td>
                     <td>
-                      <span
+                      <p
                         className={cn(
-                          "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                          "text-[12px] font-semibold leading-tight",
                           ui.className
                         )}
                       >
                         {ui.label}
-                      </span>
-                      {st === "ondertekend" && a.contract_uploaded_at ? (
-                        <span className="mt-1 block text-[11px] text-muted">
-                          {new Date(a.contract_uploaded_at).toLocaleDateString(
-                            "nl-NL"
-                          )}
-                        </span>
+                      </p>
+                      {datum ? (
+                        <p className="text-[11px] leading-tight text-muted">
+                          {datum}
+                        </p>
                       ) : null}
                     </td>
                     <td onClick={stopBtn}>
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex flex-wrap items-center justify-end gap-1">
                         <button
                           type="button"
                           onClick={() => setSelected(a)}
                           className={cn(
-                            "rounded-md px-3 py-1.5 text-[11px] font-semibold",
+                            "h-7 px-2.5 text-[11px] font-semibold",
                             st === "ondertekend"
                               ? "border border-line text-ink hover:bg-wash"
                               : "bg-green text-white hover:bg-green-dark"
                           )}
                         >
                           {st === "geen"
-                            ? "Verstuur overeenkomst"
+                            ? "Verstuur"
                             : st === "verzonden"
-                              ? "Open / opnieuw"
-                              : "Bekijk PDF"}
+                              ? "Open"
+                              : "PDF"}
                         </button>
                         {st !== "geen" ? (
                           <button
                             type="button"
                             onClick={() => void deleteRow(a)}
-                            className="rounded-md border border-[#C62828]/40 px-3 py-1.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE]"
+                            className="h-7 border border-[#C62828]/35 px-2.5 text-[11px] font-semibold text-[#C62828] hover:bg-[#FFEBEE]"
                           >
-                            Verwijderen
+                            Verwijder
                           </button>
                         ) : null}
                       </div>

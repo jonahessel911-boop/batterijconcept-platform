@@ -151,7 +151,9 @@ export async function GET(req: NextRequest) {
               12_000,
               {
                 ok: false as const,
-                rows: [] as MarketingMetaRow[],
+                rows: [] as Awaited<
+                  ReturnType<typeof fetchMarketingMetaRowsFromInsights>
+                >["rows"],
                 error: "timeout",
               }
             )

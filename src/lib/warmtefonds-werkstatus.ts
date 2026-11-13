@@ -209,6 +209,130 @@ export function wfWerkStatusVan(row: WerkBron): WfWerkStatus | null {
   return "afwachten_contact";
 }
 
+/**
+ * Filters op het WF-overzicht (chips).
+ * Declaratie splitst op factuurstatus: ingediend vs uitbetaald.
+ */
+export const WF_PORTAL_FILTERS = [
+  "nieuw",
+  "contact_opnemen",
+  "afspraak_ingepland",
+  "in_behandeling",
+  "aanbod_ondertekenen",
+  "declaratie_ingediend",
+  "declaratie_uitbetaald",
+] as const;
+
+export type WfPortalFilter = (typeof WF_PORTAL_FILTERS)[number];
+
+export const WF_PORTAL_FILTER_LABEL: Record<WfPortalFilter, string> = {
+  nieuw: "Nieuw",
+  contact_opnemen: "Contact opnemen",
+  afspraak_ingepland: "Afspraak ingepland",
+  in_behandeling: "In behandeling",
+  aanbod_ondertekenen: "Aanbod ondertekenen",
+  declaratie_ingediend: "Declaratie ingediend",
+  declaratie_uitbetaald: "Declaratie uitbetaald",
+};
+
+type PortalFilterBron = WerkBron & {
+  /** Status van de WF-restant/declaratiefactuur. */
+  declaratie_factuur_status?: string | null;
+};
+
+function isDeclaratieUitbetaald(
+  row: PortalFilterBron,
+  n: FinancieringStatus | null
+): boolean {
+  if (n === "uitbetaald") return true;
+  return (row.declaratie_factuur_status || "") === "betaald";
+}
+
+function isDeclaratieIngediend(
+  row: PortalFilterBron,
+  n: FinancieringStatus | null
+): boolean {
+  if (isDeclaratieUitbetaald(row, n)) return false;
+  if (n === "wacht_op_betaling") return true;
+  const st = row.declaratie_factuur_status || "";
+  return st === "verzonden" || st === "deels_betaald";
+}
+
+/** Overzichtsfilter voor één aanvraag (bron van waarheid voor chips). */
+export function wfPortalFilterVan(row: PortalFilterBron): WfPortalFilter | null {
+  const n = normalizeFinancieringStatus(row.financiering_status);
+  if (n === "afgewezen") return null;
+
+  if (isDeclaratieUitbetaald(row, n)) return "declaratie_uitbetaald";
+  if (isDeclaratieIngediend(row, n)) return "declaratie_ingediend";
+
+  const werk = wfWerkStatusVan(row);
+  if (!werk) return null;
+
+  switch (werk) {
+    case "afwachten_contact":
+      return "nieuw";
+    case "afspraak_inplannen":
+      return "contact_opnemen";
+    case "afspraak_ingepland":
+      return "afspraak_ingepland";
+    case "in_behandeling":
+      return "in_behandeling";
+    case "goedgekeurd":
+      return "aanbod_ondertekenen";
+    case "declaratie":
+      // Aanbod getekend, declaratiefactuur nog niet (goed) ingediend.
+      return "aanbod_ondertekenen";
+    case "afgerond":
+      return "declaratie_uitbetaald";
+  }
+}
+
+
+/** Archief-soorten in het WF-portaal. */
+export const WF_ARCHIEF_SOORTEN = [
+  "hold_sales",
+  "annulering",
+  "declaratie_ingediend",
+  "declaratie_uitbetaald",
+] as const;
+
+export type WfArchiefSoort = (typeof WF_ARCHIEF_SOORTEN)[number];
+
+export const WF_ARCHIEF_LABEL: Record<WfArchiefSoort, string> = {
+  hold_sales: "Hold sales",
+  annulering: "Annulering",
+  declaratie_ingediend: "Declaratie ingediend",
+  declaratie_uitbetaald: "Declaratie uitbetaald",
+};
+
+/** Open werkfilters (declaraties zitten in archief). */
+export const WF_OPEN_FILTERS: WfPortalFilter[] = WF_PORTAL_FILTERS.filter(
+  (f) => f !== "declaratie_ingediend" && f !== "declaratie_uitbetaald"
+);
+
+type ArchiefBron = PortalFilterBron & {
+  status?: string | null;
+};
+
+/**
+ * Archief: hold sales, annuleringen, en afgeronde declaraties (ingediend/uitbetaald).
+ * Null = nog open werk.
+ */
+export function wfArchiefSoortVan(row: ArchiefBron): WfArchiefSoort | null {
+  const st = (row.status || "").toLowerCase();
+  if (st === "hold_sales_actie" || st === "hold_sales") return "hold_sales";
+  if (st === "annulering" || st === "geannuleerd") return "annulering";
+
+  const n = normalizeFinancieringStatus(row.financiering_status);
+  if (n === "afgewezen") return null;
+  if (isDeclaratieUitbetaald(row, n)) return "declaratie_uitbetaald";
+  if (isDeclaratieIngediend(row, n)) return "declaratie_ingediend";
+  // Werkstatus afgerond zonder factuur-signaal
+  if (wfWerkStatusVan(row) === "afgerond") return "declaratie_uitbetaald";
+  return null;
+}
+
 /** Wat het portaal wegschrijft als iemand een werkstatus kiest. */
 export function patchVoorWerkStatus(status: WfWerkStatus): {
   financiering_status: FinancieringStatus | null;

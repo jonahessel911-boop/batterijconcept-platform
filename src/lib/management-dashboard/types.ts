@@ -333,6 +333,19 @@ export type ManagementDashboardData = {
       overOnder: number;
       omzetCapaciteit: number | null;
     }[];
+    /** Live montagecapaciteit o.b.v. koppels + regio’s. */
+    montageCapaciteit: {
+      koppels: number;
+      monteurs: number;
+      capPerWeek: number;
+      live: boolean;
+      perRegio: {
+        regio: string;
+        monteurs: number;
+        koppels: number;
+        capPerWeek: number;
+      }[];
+    };
   };
   finance: MgmtFinanceOverview;
   filterOptions: {

@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     const limit = Number(req.nextUrl.searchParams.get("limit") || 150) || 150;
     const sb = getSupabaseAdmin();
     const rows = await listInboxMails(sb, {
-      mailbox: "facturen",
+      email: FACTUREN_MAILBOX_EMAIL,
       limit,
     });
     return NextResponse.json({

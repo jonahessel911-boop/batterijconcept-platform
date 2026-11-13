@@ -120,7 +120,16 @@ export function PartnerVerwachtingPanel({ portalToken }: Props) {
       const res = await fetch(
         `/api/installatie/${encodeURIComponent(portalToken)}/verwachting`
       );
-      const json = await res.json();
+      const json = (await res.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!json || typeof json !== "object") {
+        throw new Error(
+          res.ok
+            ? "Pipeline-antwoord ongeldig"
+            : `Pipeline laden mislukt (${res.status})`
+        );
+      }
       if (!res.ok) throw new Error(json.error || "Laden mislukt");
       setData(json as ForecastPayload);
     } catch (e) {
@@ -187,6 +196,33 @@ export function PartnerVerwachtingPanel({ portalToken }: Props) {
   );
   const totaalConcept = totaal - totaalDef;
   const maxOrders = Math.max(...weeks.map((w) => w.orders.length), 1);
+
+  const capRows = useMemo(() => {
+    const rows = data?.capaciteitPerRegio || [];
+    if (regioFilter === "alle") return rows;
+    return rows.filter((r) => r.regio === regioFilter);
+  }, [data?.capaciteitPerRegio, regioFilter]);
+
+  const capKoppels = useMemo(() => {
+    if (regioFilter === "alle") {
+      return data?.montageCapaciteit?.koppels ?? 0;
+    }
+    return capRows.reduce((s, r) => s + r.koppels, 0);
+  }, [capRows, data?.montageCapaciteit?.koppels, regioFilter]);
+
+  const capMonteurs = useMemo(() => {
+    if (regioFilter === "alle") {
+      return data?.montageCapaciteit?.monteurs ?? 0;
+    }
+    return capRows.reduce((s, r) => s + r.monteurs, 0);
+  }, [capRows, data?.montageCapaciteit?.monteurs, regioFilter]);
+
+  const capPerWeek = useMemo(() => {
+    if (regioFilter === "alle") {
+      return data?.montageCapaciteit?.capPerWeek ?? 0;
+    }
+    return capRows.reduce((s, r) => s + r.capPerWeek, 0);
+  }, [capRows, data?.montageCapaciteit?.capPerWeek, regioFilter]);
 
   useEffect(() => {
     if (!weeks.length) {
@@ -305,7 +341,7 @@ export function PartnerVerwachtingPanel({ portalToken }: Props) {
             Concept = verkocht, datum nog niet vast.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 pt-4 sm:grid-cols-3">
+        <CardContent className="grid gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
               Totaal
@@ -333,6 +369,32 @@ export function PartnerVerwachtingPanel({ portalToken }: Props) {
             </p>
             <p className="text-xs text-muted">verkocht, nog inplannen</p>
           </div>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Koppels
+            </p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
+              {capKoppels}
+            </p>
+            <p className="text-xs text-muted">
+              {regioFilter === "alle"
+                ? "actieve installatiekoppels"
+                : `in ${regioFilter}`}
+            </p>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Cap / week
+            </p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums text-ink">
+              {capPerWeek}
+            </p>
+            <p className="text-xs text-muted">
+              {capMonteurs > 0
+                ? `koppels + ${capMonteurs} solo`
+                : "o.b.v. koppels & regio’s"}
+            </p>
+          </div>
         </CardContent>
       </Card>
 
@@ -346,18 +408,28 @@ export function PartnerVerwachtingPanel({ portalToken }: Props) {
           >
             Alle regio’s
           </Button>
-          {regioOpties.map((r) => (
-            <Button
-              key={r.regio}
-              type="button"
-              size="sm"
-              variant={regioFilter === r.regio ? "default" : "outline"}
-              onClick={() => setRegioFilter(r.regio)}
-            >
-              {r.regio}
-              <span className="ml-1.5 tabular-nums opacity-70">{r.aantal}</span>
-            </Button>
-          ))}
+          {regioOpties.map((r) => {
+            const cap = (data?.capaciteitPerRegio || []).find(
+              (c) => c.regio === r.regio
+            );
+            return (
+              <Button
+                key={r.regio}
+                type="button"
+                size="sm"
+                variant={regioFilter === r.regio ? "default" : "outline"}
+                onClick={() => setRegioFilter(r.regio)}
+              >
+                {r.regio}
+                <span className="ml-1.5 tabular-nums opacity-70">{r.aantal}</span>
+                {cap && cap.koppels + cap.monteurs > 0 ? (
+                  <span className="ml-1.5 tabular-nums opacity-60">
+                    · {cap.koppels}k/{cap.capPerWeek}c
+                  </span>
+                ) : null}
+              </Button>
+            );
+          })}
         </div>
       ) : null}
 

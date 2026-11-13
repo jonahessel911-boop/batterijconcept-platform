@@ -188,18 +188,18 @@ export async function POST(req: NextRequest) {
         error.message?.includes("locatie") || error.code === "42703"
           ? withoutLocatie
           : insertBase;
+      const softInsert =
+        error.message?.includes("interviewer_id") ||
+        error.message?.includes("end_at")
+          ? softPayload
+          : {
+              ...softPayload,
+              end_at: end.toISOString(),
+              interviewer_id: interviewerId,
+            };
       const soft = await sb
         .from("sollicitatie_afspraken")
-        .insert(
-          error.message?.includes("interviewer_id") ||
-            error.message?.includes("end_at")
-            ? softPayload
-            : {
-                ...softPayload,
-                end_at: end.toISOString(),
-                interviewer_id: interviewerId,
-              }
-        )
+        .insert(softInsert as typeof insertBase)
         .select("*, sollicitaties(id, naam, email, telefoon, functie, status)")
         .single();
       data = soft.data as Record<string, unknown> | null;

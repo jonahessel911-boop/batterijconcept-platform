@@ -6,6 +6,7 @@ import {
   isMissingWfProjectColumn,
   doorgestuurdAtVoorProjecten,
   isWarmtefondsPortalProject,
+  isWarmtefondsRelatedProject,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
@@ -33,7 +34,6 @@ export async function GET(
     const primary = await sb
       .from("projecten")
       .select(WF_PORTAL_PROJECT_SELECT)
-      .neq("status", "annulering")
       .or("betaalwijze.eq.warmtefonds,financiering_status.not.is.null")
       .order("warmtefonds_afspraak_at", {
         ascending: true,
@@ -86,24 +86,35 @@ export async function GET(
     type PortalListRow = Parameters<typeof isWarmtefondsPortalProject>[0] & {
       id: string;
       lead_id?: string | null;
+      offertes?: unknown;
     };
-    const orders = ((rows || []) as PortalListRow[])
-      .filter(isWarmtefondsPortalProject)
+    const related = ((rows || []) as PortalListRow[])
+      .filter(isWarmtefondsRelatedProject)
       .map((row) => withPortalBedragen(row));
+    const orders = related.filter(isWarmtefondsPortalProject);
+    const archief = related.filter((row) => !isWarmtefondsPortalProject(row));
 
-    const doorgestuurd = await doorgestuurdAtVoorProjecten(sb, orders);
+    const allForEnrich = [...orders, ...archief];
+    const doorgestuurd = await doorgestuurdAtVoorProjecten(sb, allForEnrich);
     const betaling = await betalingVoorProjecten(
       sb,
-      orders.map((row) => row.id)
+      allForEnrich.map((row) => row.id)
     );
-    const metDoorgestuurd = orders.map((row) => ({
-      ...row,
-      doorgestuurd_at: doorgestuurd.get(row.id) ?? null,
-      betaling: betaling.get(row.id) ?? {
-        key: "geen" as const,
-        label: "Nog geen factuur",
-      },
-    }));
+    function enrichRow(row: (typeof allForEnrich)[number]) {
+      const enrich = betaling.get(row.id);
+      return {
+        ...row,
+        doorgestuurd_at: doorgestuurd.get(row.id) ?? null,
+        betaling: enrich?.betaling ?? {
+          key: "geen" as const,
+          label: "Nog geen factuur",
+        },
+        aanbetaling_factuur_status: enrich?.aanbetalingFactuurStatus ?? null,
+        declaratie_factuur_status: enrich?.declaratieFactuurStatus ?? null,
+      };
+    }
+    const metDoorgestuurd = orders.map(enrichRow);
+    const archiefEnrich = archief.map(enrichRow);
 
     return NextResponse.json({
       operator: {
@@ -112,6 +123,7 @@ export async function GET(
         email: operator.email,
       },
       orders: metDoorgestuurd,
+      archief: archiefEnrich,
     });
   } catch (e) {
     return NextResponse.json(

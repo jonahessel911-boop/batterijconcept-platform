@@ -1,7 +1,11 @@
 /**
- * Helpers voor het Warmtefonds-portaal (externe operator, magic token).
+ * Helpers voor het Warmtefonds-portaal (accounts + portal token).
  */
-import { aanbetalingVanOrder } from "@/lib/aanbetaling";
+import {
+  aanbetalingVanOrder,
+  isAanbetalingFactuurOmschrijving,
+  isRestantFactuurOmschrijving,
+} from "@/lib/aanbetaling";
 import type { FinancieringStatus } from "@/lib/financiering-status";
 import {
   FINANCIERING_PIPELINE,
@@ -10,6 +14,8 @@ import {
   isFinancieringStatus,
   normalizeFinancieringStatus,
 } from "@/lib/financiering-status";
+import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
+import { warmtefondsWelkomEmail } from "@/lib/email/templates";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type WarmtefondsOperator = {
@@ -19,9 +25,42 @@ export type WarmtefondsOperator = {
   telefoon: string | null;
   actief: boolean;
   portal_token: string;
-  /** Vergoeding per aanvraag incl. btw. Null = globaal Edergy-tarief. */
+  /** Vergoeding per aanvraag (opgeslagen incl. btw). Null = standaard €150 excl. */
   tarief_inc?: number | null;
 };
+
+export function warmtefondsLoginUrl(): string {
+  return `${appBaseUrl()}/warmtefonds/login`;
+}
+
+/** Welkomstmail met e-mail + tijdelijk wachtwoord. */
+export async function verstuurWarmtefondsAccountInvite(opts: {
+  naam: string;
+  email: string;
+  password: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const email = opts.email.trim().toLowerCase();
+  if (!email) return { ok: false, error: "E-mail ontbreekt" };
+  try {
+    await sendEmail({
+      to: email,
+      subject: "Je Warmtefonds-account — Batterijconcept",
+      html: warmtefondsWelkomEmail({
+        naam: opts.naam,
+        email,
+        password: opts.password,
+        loginUrl: warmtefondsLoginUrl(),
+      }),
+      tag: "warmtefonds-account-welkom",
+    });
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "Mail versturen mislukt",
+    };
+  }
+}
 
 export const WF_PORTAL_STATUSES: FinancieringStatus[] = [
   ...FINANCIERING_PIPELINE,
@@ -101,7 +140,8 @@ export async function resolveWarmtefondsOperator(
 export const WF_PORTAL_PROJECT_SELECT = `
   id, project_nummer, titel, status, betaalwijze, lead_id, offerte_id,
   financiering_status, warmtefonds_afspraak_at, warmtefonds_aangevraagd_at,
-  warmtefonds_contact_pogingen, warmtefonds_notities, notities, created_at, updated_at,
+  warmtefonds_contact_pogingen, warmtefonds_notities, notities,
+  backoffice_notitie, hold_sales_deadline_at, created_at, updated_at,
   leads(
     id, naam, email, telefoon, lead_number,
     postcode, huisnummer, toevoeging, straat, plaats, notities
@@ -253,24 +293,45 @@ export function isMissingWfProjectColumn(error: {
     /warmtefonds_notities/i.test(msg) ||
     /warmtefonds_afspraak_at/i.test(msg) ||
     /warmtefonds_contact_pogingen/i.test(msg) ||
+    /backoffice_notitie/i.test(msg) ||
+    /hold_sales_deadline_at/i.test(msg) ||
     /financiering_status/i.test(msg) ||
     /schema cache/i.test(msg) ||
     /does not exist/i.test(msg)
   );
 }
 
+/** Hold / annulering — hoort in archief, niet in de open werklijst. */
+export function isWarmtefondsStopStatus(
+  status: string | null | undefined
+): boolean {
+  const st = (status || "").toLowerCase();
+  return (
+    st === "annulering" ||
+    st === "geannuleerd" ||
+    st === "hold_sales_actie" ||
+    st === "hold_sales"
+  );
+}
+
+/** WF-gerelateerd (actief of archief). */
+export function isWarmtefondsRelatedProject(row: {
+  betaalwijze?: string | null;
+  financiering_status?: string | null;
+}): boolean {
+  if (row.betaalwijze === "warmtefonds") return true;
+  if (row.financiering_status) return true;
+  return false;
+}
+
+/** Open werk in het Warmtefonds-portaal (geen hold/annulering). */
 export function isWarmtefondsPortalProject(row: {
   betaalwijze?: string | null;
   financiering_status?: string | null;
   status?: string | null;
 }): boolean {
-  const st = (row.status || "").toLowerCase();
-  if (st === "annulering" || st === "geannuleerd" || st === "hold_sales_actie" || st === "hold_sales") {
-    return false;
-  }
-  if (row.betaalwijze === "warmtefonds") return true;
-  if (row.financiering_status) return true;
-  return false;
+  if (isWarmtefondsStopStatus(row.status)) return false;
+  return isWarmtefondsRelatedProject(row);
 }
 
 export type PortalBetalingKey =
@@ -318,19 +379,29 @@ export function betalingSamenvattingVanStatussen(
   return { key: "overig", label: "Facturen aanwezig" };
 }
 
-/** Batch: betalingssamenvatting per project_id. */
+export type PortalFactuurEnrichment = {
+  betaling: PortalBetalingSamenvatting;
+  /** Status van de aanbetalingsfactuur, of null als die er nog niet is. */
+  aanbetalingFactuurStatus: string | null;
+  /** Status van de WF-declaratie/restantfactuur, of null als die er nog niet is. */
+  declaratieFactuurStatus: string | null;
+};
+
+/** Batch: betalingssamenvatting + declaratiefactuur-status per project_id. */
 export async function betalingVoorProjecten(
   sb: SupabaseClient,
   projectIds: string[]
-): Promise<Map<string, PortalBetalingSamenvatting>> {
-  const out = new Map<string, PortalBetalingSamenvatting>();
+): Promise<Map<string, PortalFactuurEnrichment>> {
+  const out = new Map<string, PortalFactuurEnrichment>();
   const ids = [...new Set(projectIds.filter(Boolean))];
   if (ids.length === 0) return out;
 
   type FacLite = {
     project_id?: string | null;
     status?: string | null;
+    omschrijving?: string | null;
     credit_van_factuur_id?: string | null;
+    created_at?: string | null;
   };
   const rows: FacLite[] = [];
 
@@ -338,15 +409,28 @@ export async function betalingVoorProjecten(
     const slice = ids.slice(i, i + 80);
     const res = await sb
       .from("facturen")
-      .select("project_id, status, credit_van_factuur_id")
+      .select(
+        "project_id, status, omschrijving, credit_van_factuur_id, created_at"
+      )
       .in("project_id", slice);
     if (res.error) {
-      if (res.error.message?.includes("credit_van_factuur_id")) {
+      if (
+        res.error.message?.includes("credit_van_factuur_id") ||
+        res.error.message?.includes("omschrijving")
+      ) {
         const plain = await sb
           .from("facturen")
-          .select("project_id, status")
+          .select("project_id, status, omschrijving, created_at")
           .in("project_id", slice);
-        if (plain.error) continue;
+        if (plain.error) {
+          const bare = await sb
+            .from("facturen")
+            .select("project_id, status")
+            .in("project_id", slice);
+          if (bare.error) continue;
+          rows.push(...((bare.data || []) as FacLite[]));
+          continue;
+        }
         rows.push(...((plain.data || []) as FacLite[]));
         continue;
       }
@@ -355,22 +439,46 @@ export async function betalingVoorProjecten(
     rows.push(...((res.data || []) as FacLite[]));
   }
 
-  const byProject = new Map<
-    string,
-    Array<{ status?: string | null; isCredit?: boolean }>
-  >();
+  const byProject = new Map<string, FacLite[]>();
   for (const id of ids) byProject.set(id, []);
   for (const f of rows) {
     const pid = f.project_id;
     if (!pid || !byProject.has(pid)) continue;
-    byProject.get(pid)!.push({
-      status: f.status,
-      isCredit: Boolean(f.credit_van_factuur_id),
-    });
+    byProject.get(pid)!.push(f);
   }
 
   for (const [pid, list] of byProject) {
-    out.set(pid, betalingSamenvattingVanStatussen(list));
+    const betaling = betalingSamenvattingVanStatussen(
+      list.map((f) => ({
+        status: f.status,
+        isCredit: Boolean(f.credit_van_factuur_id),
+      }))
+    );
+    const byNewest = (a: FacLite, b: FacLite) => {
+      const at = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bt = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return bt - at;
+    };
+    const aanbetalingen = list
+      .filter(
+        (f) =>
+          !f.credit_van_factuur_id &&
+          isAanbetalingFactuurOmschrijving(f.omschrijving) &&
+          !isRestantFactuurOmschrijving(f.omschrijving)
+      )
+      .sort(byNewest);
+    const restanten = list
+      .filter(
+        (f) =>
+          !f.credit_van_factuur_id &&
+          isRestantFactuurOmschrijving(f.omschrijving)
+      )
+      .sort(byNewest);
+    out.set(pid, {
+      betaling,
+      aanbetalingFactuurStatus: aanbetalingen[0]?.status?.trim() || null,
+      declaratieFactuurStatus: restanten[0]?.status?.trim() || null,
+    });
   }
   return out;
 }

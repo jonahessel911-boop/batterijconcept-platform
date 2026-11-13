@@ -7,33 +7,56 @@ import { addDays, format, isSameDay, isToday, isYesterday, parseISO, startOfWeek
 import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import {
+  Archive,
   Calendar,
   CalendarPlus,
+  Check,
   ChevronDown,
   Columns3,
   FileText,
   List,
+  MessageCircle,
   Phone,
   Search,
-  SlidersHorizontal,
   User,
+  X,
 } from "lucide-react";
-import { EDERGY_THUIS_ADRES } from "@/lib/edergy-tarief";
+import {
+  EDERGY_PER_AANVRAAG_EXCL,
+  EDERGY_THUIS_ADRES,
+  edergyBedragenVanExcl,
+} from "@/lib/edergy-tarief";
 import { adresRegel, formatDateTimeNl, formatEuro, formatTimeNl } from "@/lib/format";
 import { WarmtefondsAfspraakForm } from "@/components/warmtefonds/WarmtefondsAfspraakForm";
 import { WarmtefondsContactMail } from "@/components/warmtefonds/WarmtefondsContactMail";
 import { WarmtefondsCreditfacturen } from "@/components/warmtefonds/WarmtefondsCreditfacturen";
+import { cn } from "@/lib/utils";
 import {
   patchVoorWerkStatus,
   poortVoorWerkStatus,
+  WF_ARCHIEF_LABEL,
+  WF_ARCHIEF_SOORTEN,
+  WF_OPEN_FILTERS,
+  WF_PORTAL_FILTER_LABEL,
   WF_WERK_LABEL,
   WF_WERK_STATUSSEN,
+  wfArchiefSoortVan,
+  wfPortalFilterVan,
   wfWerkStatusVan,
+  type WfArchiefSoort,
+  type WfPortalFilter,
   type WfWerkStatus,
 } from "@/lib/warmtefonds-werkstatus";
 import type { PortalBetalingSamenvatting } from "@/lib/warmtefonds-portal";
+import {
+  WF_WHATSAPP_TEMPLATES,
+  warmtefondsWhatsappPhone,
+  warmtefondsWhatsappUrl,
+  warmtefondsWhatsappVoornaam,
+  type WfWhatsappTemplateId,
+} from "@/lib/warmtefonds-whatsapp";
 
-type AanvragenView = "table" | "kanban";
+type AanvragenView = "table" | "kanban" | "archief";
 
 const WF_KANBAN_ACCENT: Record<WfWerkStatus, string> = {
   afwachten_contact: "#6B7C72",
@@ -69,22 +92,150 @@ type OrderRow = {
   leads?: LeadLite | LeadLite[] | null;
   bedragen?: {
     warmtefondsInc: number | null;
+    aanbetalingInc?: number | null;
   } | null;
   betaling?: PortalBetalingSamenvatting | null;
+  /** Status van de aanbetalingsfactuur. */
+  aanbetaling_factuur_status?: string | null;
+  /** Status van de WF-restant/declaratiefactuur. */
+  declaratie_factuur_status?: string | null;
+  /** Hold-sales actie-reden (backoffice-notitie). */
+  backoffice_notitie?: string | null;
+  warmtefonds_notities?: string | null;
+  notities?: string | null;
+  hold_sales_deadline_at?: string | null;
+  updated_at?: string | null;
 };
+
+/** €0–€1 = symbolisch / alles via WF → geen echte aanbetaling nodig. */
+function isSymbolischeAanbetaling(bedragInc: number | null | undefined): boolean {
+  return (
+    bedragInc != null && Number.isFinite(bedragInc) && bedragInc >= 0 && bedragInc <= 1
+  );
+}
+
+function aanbetalingStatus(
+  status: string | null | undefined,
+  bedragInc?: number | null
+): {
+  ok: boolean | null;
+  label: string;
+  soort: "voldaan" | "open" | "niet_nodig" | "geen";
+} {
+  if (isSymbolischeAanbetaling(bedragInc)) {
+    return {
+      ok: true,
+      label: "Geen aanbetaling nodig",
+      soort: "niet_nodig",
+    };
+  }
+  if (status === "betaald") {
+    return { ok: true, label: "Aanbetaling voldaan", soort: "voldaan" };
+  }
+  if (status === "verzonden" || status === "deels_betaald") {
+    return { ok: false, label: "Aanbetaling open", soort: "open" };
+  }
+  if (status === "concept") {
+    return { ok: false, label: "Aanbetaling concept", soort: "open" };
+  }
+  return { ok: null, label: "Geen aanbetaling", soort: "geen" };
+}
+
+function AanbetalingRegel({
+  status,
+  bedragInc,
+  className,
+  /** Alleen icoon / status — voor tabelkolom met header. */
+  alleenStatus = false,
+}: {
+  status: string | null | undefined;
+  bedragInc?: number | null;
+  className?: string;
+  alleenStatus?: boolean;
+}) {
+  const info = aanbetalingStatus(status, bedragInc);
+  if (info.soort === "geen") {
+    return (
+      <p
+        className={["text-[12px] font-medium text-muted", className]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        Geen aanbetaling
+      </p>
+    );
+  }
+  const icon = info.ok ? (
+    <Check
+      className="h-3.5 w-3.5 shrink-0 text-green-dark"
+      strokeWidth={3}
+      aria-label={info.label}
+    />
+  ) : (
+    <X
+      className="h-3.5 w-3.5 shrink-0 text-[#B91C1C]"
+      strokeWidth={3}
+      aria-label={info.label}
+    />
+  );
+  if (info.soort === "niet_nodig") {
+    return (
+      <p
+        className={[
+          "inline-flex items-center gap-1 text-[12px] font-medium text-green-dark",
+          className,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        title={info.label}
+      >
+        {icon}
+        <span>Geen aanbetaling nodig</span>
+      </p>
+    );
+  }
+  if (alleenStatus) {
+    return (
+      <p
+        className={[
+          "inline-flex items-center gap-1 text-[12px] font-medium",
+          className,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        title={info.label}
+      >
+        {icon}
+        <span className={info.ok ? "text-green-dark" : "text-[#B91C1C]"}>
+          {info.ok ? "Voldaan" : info.label.replace(/^Aanbetaling\s+/i, "")}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p
+      className={["flex items-center gap-1 text-[12px] font-medium", className]
+        .filter(Boolean)
+        .join(" ")}
+      title={info.label}
+    >
+      <span className="text-muted">Aanbetaling</span>
+      {icon}
+    </p>
+  );
+}
 
 type TabId = "aanvragen" | "agenda" | "creditfacturen" | "account";
-type QuickFilter = "alle" | "te_bellen" | "ingepland" | "custom";
 
-const WF_PORTAL_BADGE: Record<WfWerkStatus, string> = {
-  afwachten_contact: "Nog te bellen",
-  afspraak_inplannen: "Afspraak inplannen",
-  afspraak_ingepland: "Ingepland",
-  in_behandeling: "In behandeling",
-  goedgekeurd: "Aanbod tekenen",
-  declaratie: "Declaratie",
-  afgerond: "Afgerond",
-};
+function portalBadgeFor(order: {
+  financiering_status?: string | null;
+  warmtefonds_afspraak_at?: string | null;
+  declaratie_factuur_status?: string | null;
+}): string {
+  const filter = wfPortalFilterVan(order);
+  if (filter) return WF_PORTAL_FILTER_LABEL[filter];
+  return "Afgewezen";
+}
 
 function momentLabel(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -188,6 +339,27 @@ function volgendeZelfdeDag(order: OrderRow, orders: OrderRow[]): OrderRow | null
   return later[0] || null;
 }
 
+/** Eerdere afspraak dezelfde dag (null = eerste van de dag). */
+function vorigeZelfdeDag(order: OrderRow, orders: OrderRow[]): OrderRow | null {
+  if (!order.warmtefonds_afspraak_at) return null;
+  const dag = agendaDagKey(order.warmtefonds_afspraak_at);
+  const start = new Date(order.warmtefonds_afspraak_at).getTime();
+  const earlier = orders
+    .filter(
+      (o) =>
+        o.id !== order.id &&
+        o.warmtefonds_afspraak_at &&
+        agendaDagKey(o.warmtefonds_afspraak_at) === dag &&
+        new Date(o.warmtefonds_afspraak_at).getTime() < start
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.warmtefonds_afspraak_at!).getTime() -
+        new Date(a.warmtefonds_afspraak_at!).getTime()
+    );
+  return earlier[0] || null;
+}
+
 function reisKort(sec: number): string {
   const mins = Math.max(1, Math.round(sec / 60));
   if (mins < 60) return `${mins}m`;
@@ -196,26 +368,110 @@ function reisKort(sec: number): string {
   return m ? `${h}u ${m}m` : `${h}u`;
 }
 
-type ReisInfo = { sec: number; soort: "volgende" | "huis" };
+type ReisInfo = { sec: number; soort: "volgende" | "van_huis" };
 
-function reisTekst(reis: ReisInfo | undefined): string | null {
-  if (!reis || !Number.isFinite(reis.sec)) return null;
+function reisRegel(reis: ReisInfo): string {
   const duur = reisKort(reis.sec);
-  return reis.soort === "huis"
-    ? `Reistijd naar huis ${duur}`
+  return reis.soort === "van_huis"
+    ? `Reistijd vanaf huis ${duur}`
     : `Reistijd naar volgende ${duur}`;
 }
 
-function StatusFilter({
+function reisTeksten(reizen: ReisInfo[] | undefined): string[] {
+  if (!reizen?.length) return [];
+  return reizen
+    .filter((r) => Number.isFinite(r.sec))
+    .map(reisRegel);
+}
+
+/** Standaard: alleen nieuw (nog contact opnemen). Geen declaratie-statussen. */
+const WF_PORTAL_FILTER_DEFAULT: WfPortalFilter[] = ["nieuw"];
+
+const AANVRAGEN_PAGE_SIZE = 20;
+
+function statusFilterStorageKey(token: string): string {
+  return `wf-portal-status-filter-v2:${token}`;
+}
+
+function pageStorageKey(token: string): string {
+  return `wf-portal-aanvragen-page-v1:${token}`;
+}
+
+function readStoredAanvragenPage(token: string): number | null {
+  if (typeof window === "undefined" || !token) return null;
+  try {
+    const raw = sessionStorage.getItem(pageStorageKey(token));
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAanvragenPage(token: string, page: number) {
+  if (typeof window === "undefined" || !token) return;
+  try {
+    sessionStorage.setItem(pageStorageKey(token), String(Math.max(1, page)));
+  } catch {
+    /* ignore */
+  }
+}
+
+function readStoredStatusFilter(token: string): WfPortalFilter[] | null {
+  if (typeof window === "undefined" || !token) return null;
+  try {
+    const raw = sessionStorage.getItem(statusFilterStorageKey(token));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const valid = parsed.filter((s): s is WfPortalFilter =>
+      WF_OPEN_FILTERS.includes(s as WfPortalFilter)
+    );
+    return valid.length > 0 ? valid : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredStatusFilter(token: string, filters: WfPortalFilter[]) {
+  if (typeof window === "undefined" || !token) return;
+  try {
+    sessionStorage.setItem(
+      statusFilterStorageKey(token),
+      JSON.stringify(filters)
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function statusFilterTriggerLabel(selected: WfPortalFilter[]): string {
+  if (
+    selected.length === 0 ||
+    selected.length === WF_OPEN_FILTERS.length
+  ) {
+    return "Alle statussen";
+  }
+  if (selected.length === 1) {
+    return WF_PORTAL_FILTER_LABEL[selected[0]!];
+  }
+  return `${selected.length} statussen`;
+}
+
+function StatusFilterDropdown({
   selected,
   onChange,
+  counts,
 }: {
-  selected: WfWerkStatus[];
-  onChange: (next: WfWerkStatus[]) => void;
+  selected: WfPortalFilter[];
+  onChange: (next: WfPortalFilter[]) => void;
+  counts: Record<WfPortalFilter, number>;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const active = selected.length !== WF_WERK_STATUSSEN.length;
+  const active =
+    selected.length > 0 && selected.length !== WF_OPEN_FILTERS.length;
 
   useEffect(() => {
     if (!open) return;
@@ -233,12 +489,11 @@ function StatusFilter({
     };
   }, [open]);
 
-  function toggle(status: WfWerkStatus) {
-    onChange(
-      selected.includes(status)
-        ? selected.filter((s) => s !== status)
-        : [...selected, status]
-    );
+  function toggle(status: WfPortalFilter) {
+    const next = selected.includes(status)
+      ? selected.filter((s) => s !== status)
+      : [...selected, status];
+    onChange(next.length > 0 ? next : [...WF_OPEN_FILTERS]);
   }
 
   return (
@@ -246,38 +501,63 @@ function StatusFilter({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={[
-          "inline-flex h-9 w-9 items-center justify-center rounded-full border bg-white hover:bg-wash",
-          active ? "border-green-dark text-green-dark" : "border-line text-muted",
-        ].join(" ")}
         aria-expanded={open}
-        aria-label="Filter op status"
+        aria-haspopup="listbox"
+        className={cn(
+          "inline-flex h-10 min-w-[14rem] items-center justify-between gap-2 rounded-full border bg-white px-3.5 text-[13px] font-semibold text-ink hover:bg-wash",
+          active ? "border-green-dark text-green-dark" : "border-line"
+        )}
       >
-        <SlidersHorizontal className="h-4 w-4" aria-hidden />
+        <span className="truncate">{statusFilterTriggerLabel(selected)}</span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted transition-transform",
+            open && "rotate-180"
+          )}
+          aria-hidden
+        />
       </button>
       {open ? (
-        <div className="absolute right-0 z-30 mt-1 w-64 border border-line bg-white py-1 shadow-lg">
-          <button
-            type="button"
-            onClick={() => onChange([...WF_WERK_STATUSSEN])}
-            className="w-full px-3 py-1.5 text-left text-xs font-semibold text-muted hover:bg-wash"
-          >
-            Alles
-          </button>
-          {WF_WERK_STATUSSEN.map((status) => (
-            <label
-              key={status}
-              className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-ink hover:bg-wash"
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute left-0 z-40 mt-1.5 w-80 overflow-hidden rounded-xl border border-line bg-white py-1 shadow-lg"
+        >
+          <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+              Status
+            </p>
+            <button
+              type="button"
+              className="text-[12px] font-semibold text-green-dark hover:underline"
+              onClick={() => onChange([...WF_OPEN_FILTERS])}
             >
-              <input
-                type="checkbox"
-                checked={selected.includes(status)}
-                onChange={() => toggle(status)}
-                className="accent-[#0d5c32]"
-              />
-              {WF_WERK_LABEL[status]}
-            </label>
-          ))}
+              Alles
+            </button>
+          </div>
+          <ul className="max-h-[min(70vh,22rem)] overflow-y-auto py-1">
+            {WF_OPEN_FILTERS.map((status) => {
+              const checked = selected.includes(status);
+              return (
+                <li key={status}>
+                  <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm text-ink hover:bg-wash">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(status)}
+                      className="size-4 accent-[#0d5c32]"
+                    />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {WF_PORTAL_FILTER_LABEL[status]}
+                    </span>
+                    <span className="tabular-nums text-xs text-muted">
+                      {counts[status] || 0}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
     </div>
@@ -289,50 +569,72 @@ export function WarmtefondsPortalPage() {
   const router = useRouter();
   const [tab, setTab] = useState<TabId>("aanvragen");
   const [operatorNaam, setOperatorNaam] = useState("");
-  const [operatorTarief, setOperatorTarief] = useState("375");
+  const [operatorEmail, setOperatorEmail] = useState("");
   const [operatorTariefExcl, setOperatorTariefExcl] = useState<number | null>(
-    296.25
-  );
-  const [operatorTariefBusy, setOperatorTariefBusy] = useState(false);
-  const [operatorTariefMsg, setOperatorTariefMsg] = useState<string | null>(
     null
   );
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwHuidig, setPwHuidig] = useState("");
+  const [pwNieuw, setPwNieuw] = useState("");
+  const [pwBevestig, setPwBevestig] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState<string | null>(null);
+  const [pwErr, setPwErr] = useState<string | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [archiefOrders, setArchiefOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [zoek, setZoek] = useState("");
   const [aanvragenView, setAanvragenView] = useState<AanvragenView>("table");
-  const [statusFilter, setStatusFilter] =
-    useState<WfWerkStatus[]>([...WF_WERK_STATUSSEN]);
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>("alle");
+  const [statusFilter, setStatusFilter] = useState<WfPortalFilter[]>(() => {
+    return readStoredStatusFilter(token) ?? [...WF_PORTAL_FILTER_DEFAULT];
+  });
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+  const [aanvragenPage, setAanvragenPage] = useState(() => {
+    return readStoredAanvragenPage(token) ?? 1;
+  });
   const [contactId, setContactId] = useState<string | null>(null);
   const [afspraakId, setAfspraakId] = useState<string | null>(null);
   const [afspraakKiezerOpen, setAfspraakKiezerOpen] = useState(false);
   const [afspraakKiezerZoek, setAfspraakKiezerZoek] = useState("");
   const [afspraakMsg, setAfspraakMsg] = useState<string | null>(null);
   const [openAfspraakId, setOpenAfspraakId] = useState<string | null>(null);
-  const [reistijd, setReistijd] = useState<Record<string, ReisInfo>>({});
+  const [reistijd, setReistijd] = useState<Record<string, ReisInfo[]>>({});
   const [weekStart, setWeekStart] = useState(() =>
     startOfWeek(new Date(), { weekStartsOn: 1 })
   );
 
-  function setQuick(next: Exclude<QuickFilter, "custom">) {
-    setQuickFilter(next);
-    if (next === "alle") setStatusFilter([...WF_WERK_STATUSSEN]);
-    else if (next === "te_bellen") setStatusFilter(["afwachten_contact"]);
-    else setStatusFilter(["afspraak_ingepland"]);
-  }
+  useEffect(() => {
+    const stored = readStoredStatusFilter(token);
+    setStatusFilter(stored ?? [...WF_PORTAL_FILTER_DEFAULT]);
+    setAanvragenPage(readStoredAanvragenPage(token) ?? 1);
+  }, [token]);
 
-  function setStatusFilterFromUi(next: WfWerkStatus[]) {
-    setStatusFilter(next);
-    const sorted = [...next].sort().join(",");
-    if (sorted === [...WF_WERK_STATUSSEN].sort().join(",")) setQuickFilter("alle");
-    else if (next.length === 1 && next[0] === "afwachten_contact") {
-      setQuickFilter("te_bellen");
-    } else if (next.length === 1 && next[0] === "afspraak_ingepland") {
-      setQuickFilter("ingepland");
-    } else setQuickFilter("custom");
+  useEffect(() => {
+    writeStoredStatusFilter(token, statusFilter);
+  }, [token, statusFilter]);
+
+  useEffect(() => {
+    writeStoredAanvragenPage(token, aanvragenPage);
+  }, [token, aanvragenPage]);
+
+  const skipPageResetRef = useRef(true);
+  useEffect(() => {
+    if (skipPageResetRef.current) {
+      skipPageResetRef.current = false;
+      return;
+    }
+    setAanvragenPage(1);
+  }, [statusFilter, zoek, sortDir]);
+
+  useEffect(() => {
+    skipPageResetRef.current = true;
+  }, [token]);
+
+  function setStatusFilterFromUi(next: WfPortalFilter[]) {
+    setStatusFilter(
+      next.length > 0 ? next : [...WF_PORTAL_FILTER_DEFAULT]
+    );
   }
 
   const load = useCallback(async () => {
@@ -344,6 +646,7 @@ export function WarmtefondsPortalPage() {
       if (!res.ok) throw new Error(data.error || "Niet gevonden");
       setOperatorNaam(data.operator?.naam || "");
       setOrders(data.orders || []);
+      setArchiefOrders(data.archief || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
@@ -357,46 +660,53 @@ export function WarmtefondsPortalPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Account laden mislukt");
       setOperatorNaam(data.operator?.naam || "");
-      setOperatorTarief(String(data.tarief?.per_aanvraag_inc ?? 375));
-      setOperatorTariefExcl(
+      setOperatorEmail(
+        typeof data.operator?.email === "string" ? data.operator.email : ""
+      );
+      const excl =
         typeof data.tarief?.per_aanvraag_excl === "number"
           ? data.tarief.per_aanvraag_excl
-          : null
-      );
+          : EDERGY_PER_AANVRAAG_EXCL;
+      setOperatorTariefExcl(excl);
     } catch {
       /* best-effort */
     }
   }, [token]);
 
-  async function opslaanTarief() {
-    setOperatorTariefBusy(true);
-    setOperatorTariefMsg(null);
-    setError(null);
+  async function wijzigWachtwoord() {
+    setPwBusy(true);
+    setPwMsg(null);
+    setPwErr(null);
     try {
+      if (pwNieuw.length < 8) {
+        throw new Error("Nieuw wachtwoord moet minstens 8 tekens zijn");
+      }
+      if (pwNieuw !== pwBevestig) {
+        throw new Error("Nieuwe wachtwoorden komen niet overeen");
+      }
       const res = await fetch(`/api/warmtefonds/${token}/account`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tarief_inc: Number(String(operatorTarief).replace(",", ".")),
+          huidig_wachtwoord: pwHuidig,
+          nieuw_wachtwoord: pwNieuw,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
-          (data as { error?: string }).error || "Opslaan mislukt"
+          (data as { error?: string }).error || "Wachtwoord wijzigen mislukt"
         );
       }
-      setOperatorTarief(String(data.tarief?.per_aanvraag_inc ?? operatorTarief));
-      setOperatorTariefExcl(
-        typeof data.tarief?.per_aanvraag_excl === "number"
-          ? data.tarief.per_aanvraag_excl
-          : null
-      );
-      setOperatorTariefMsg("Vergoeding opgeslagen.");
+      setPwHuidig("");
+      setPwNieuw("");
+      setPwBevestig("");
+      setPwOpen(false);
+      setPwMsg("Wachtwoord gewijzigd.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+      setPwErr(e instanceof Error ? e.message : "Wachtwoord wijzigen mislukt");
     } finally {
-      setOperatorTariefBusy(false);
+      setPwBusy(false);
     }
   }
 
@@ -425,33 +735,47 @@ export function WarmtefondsPortalPage() {
   useEffect(() => {
     const legs: {
       id: string;
+      orderId: string;
       from: string;
       to: string;
       soort: ReisInfo["soort"];
     }[] = [];
     for (const order of orders) {
       if (!order.warmtefonds_afspraak_at) continue;
-      const from = adresVanOrder(order);
-      if (!from) continue;
+      const adres = adresVanOrder(order);
+      if (!adres) continue;
       const next = volgendeZelfdeDag(order, orders);
-      if (next) {
-        const to = adresVanOrder(next);
-        if (!to) continue;
-        legs.push({ id: order.id, from, to, soort: "volgende" });
-      } else {
+      const prev = vorigeZelfdeDag(order, orders);
+      if (!prev) {
         legs.push({
-          id: order.id,
-          from,
-          to: EDERGY_THUIS_ADRES,
-          soort: "huis",
+          id: `${order.id}:van_huis`,
+          orderId: order.id,
+          from: EDERGY_THUIS_ADRES,
+          to: adres,
+          soort: "van_huis",
         });
       }
+      if (next) {
+        const to = adresVanOrder(next);
+        if (to) {
+          legs.push({
+            id: `${order.id}:volgende`,
+            orderId: order.id,
+            from: adres,
+            to,
+            soort: "volgende",
+          });
+        }
+      }
+      // Laatste van de dag: geen reistijd naar huis.
     }
     if (!legs.length) {
       setReistijd({});
       return;
     }
-    const soortVan = new Map(legs.map((leg) => [leg.id, leg.soort]));
+    const metaVan = new Map(
+      legs.map((leg) => [leg.id, { orderId: leg.orderId, soort: leg.soort }])
+    );
     let cancelled = false;
     void (async () => {
       try {
@@ -466,12 +790,17 @@ export function WarmtefondsPortalPage() {
           legs?: { id: string; durationSec: number }[];
         };
         if (cancelled || !res.ok) return;
-        const map: Record<string, ReisInfo> = {};
+        const map: Record<string, ReisInfo[]> = {};
         for (const leg of data.legs || []) {
-          const soort = soortVan.get(leg.id);
-          if (leg?.id && soort && Number.isFinite(leg.durationSec)) {
-            map[leg.id] = { sec: leg.durationSec, soort };
-          }
+          const meta = metaVan.get(leg.id);
+          if (!meta || !Number.isFinite(leg.durationSec)) continue;
+          const list = map[meta.orderId] || (map[meta.orderId] = []);
+          list.push({ sec: leg.durationSec, soort: meta.soort });
+        }
+        for (const list of Object.values(map)) {
+          list.sort((a, b) =>
+            a.soort === b.soort ? 0 : a.soort === "van_huis" ? -1 : 1
+          );
         }
         setReistijd(map);
       } catch {
@@ -483,12 +812,25 @@ export function WarmtefondsPortalPage() {
     };
   }, [orders, token]);
 
+  const filterCounts = useMemo(() => {
+    const counts = Object.fromEntries(
+      WF_OPEN_FILTERS.map((f) => [f, 0])
+    ) as Record<WfPortalFilter, number>;
+    for (const o of orders) {
+      if (wfArchiefSoortVan(o)) continue;
+      const f = wfPortalFilterVan(o);
+      if (f && f in counts) counts[f] += 1;
+    }
+    return counts;
+  }, [orders]);
+
   const openQueue = useMemo(() => {
     const q = zoek.trim().toLowerCase();
     const gekozen = new Set(statusFilter);
     const list = orders.filter((o) => {
-      const werk = wfWerkStatusVan(o);
-      if (!werk || !gekozen.has(werk)) return false;
+      if (wfArchiefSoortVan(o)) return false;
+      const filter = wfPortalFilterVan(o);
+      if (!filter || !gekozen.has(filter)) return false;
       if (!q) return true;
       const lead = leadOf(o);
       const blob = [
@@ -511,8 +853,52 @@ export function WarmtefondsPortalPage() {
     });
   }, [orders, zoek, sortDir, statusFilter]);
 
+  const aanvragenTotalPages = Math.max(
+    1,
+    Math.ceil(openQueue.length / AANVRAGEN_PAGE_SIZE)
+  );
+  const aanvragenPageSafe = Math.min(aanvragenPage, aanvragenTotalPages);
+  const pagedQueue = useMemo(() => {
+    const start = (aanvragenPageSafe - 1) * AANVRAGEN_PAGE_SIZE;
+    return openQueue.slice(start, start + AANVRAGEN_PAGE_SIZE);
+  }, [openQueue, aanvragenPageSafe]);
+
+  const archiefQueue = useMemo(() => {
+    const q = zoek.trim().toLowerCase();
+    const fromOpen = orders.filter((o) => wfArchiefSoortVan(o) != null);
+    const seen = new Set(fromOpen.map((o) => o.id));
+    const fromStop = archiefOrders.filter((o) => !seen.has(o.id));
+    const list = [...fromOpen, ...fromStop].filter((o) => {
+      if (!wfArchiefSoortVan(o)) return false;
+      if (!q) return true;
+      const lead = leadOf(o);
+      const blob = [
+        lead?.naam,
+        lead?.plaats,
+        lead?.straat,
+        lead?.postcode,
+        o.project_nummer,
+        lead?.telefoon,
+        o.backoffice_notitie,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return blob.includes(q);
+    });
+    return [...list].sort((a, b) => {
+      const av = new Date(a.updated_at || a.doorgestuurd_at || 0).getTime();
+      const bv = new Date(b.updated_at || b.doorgestuurd_at || 0).getTime();
+      return sortDir === "desc" ? bv - av : av - bv;
+    });
+  }, [orders, archiefOrders, zoek, sortDir]);
+
   const alleCount = useMemo(
-    () => orders.reduce((n, o) => (wfWerkStatusVan(o) ? n + 1 : n), 0),
+    () =>
+      orders.reduce((n, o) => {
+        if (wfArchiefSoortVan(o)) return n;
+        return wfPortalFilterVan(o) ? n + 1 : n;
+      }, 0),
     [orders]
   );
 
@@ -740,69 +1126,127 @@ export function WarmtefondsPortalPage() {
               Account
             </h1>
             <p className="mt-1.5 text-[13px] text-muted">Warmtefonds-portaal</p>
-            <div className="mt-5 border border-line bg-white p-5">
-              <div className="flex items-center gap-3">
-                <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-green-soft text-green-dark">
-                  <User className="h-6 w-6" aria-hidden />
+            <div className="mt-5 overflow-hidden border border-line bg-white">
+              <div className="flex items-center gap-3 border-b border-line px-4 py-4">
+                <span className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-green-soft text-green-dark">
+                  <User className="h-5 w-5" aria-hidden />
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-base font-semibold text-ink">
+                  <p className="truncate text-[15px] font-semibold text-ink">
                     {operatorNaam || "Warmtefonds-adviseur"}
                   </p>
-                  <p className="text-[12px] text-muted">Ingelogd via portaal-link</p>
+                  <p className="text-[12px] text-muted">Ingelogd via portaal</p>
                 </div>
               </div>
 
-              <div className="mt-6 border-t border-line pt-5">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  Vergoeding per aanvraag
-                </p>
-                <p className="mt-1 text-[13px] text-muted">
-                  Jouw tarief voor creditfacturen. Elke WF-persoon heeft een
-                  eigen bedrag.
-                </p>
-                <label className="mt-3 block text-[12px] font-semibold text-ink">
-                  Bedrag incl. btw (€)
-                  <input
-                    type="number"
-                    min={1}
-                    step={0.01}
-                    value={operatorTarief}
-                    onChange={(e) => {
-                      setOperatorTarief(e.target.value);
-                      setOperatorTariefMsg(null);
-                    }}
-                    className="mt-1.5 h-11 w-full border border-line bg-white px-3 text-sm outline-none focus:border-green-dark"
-                  />
-                </label>
-                {operatorTariefExcl != null ? (
-                  <p className="mt-1.5 text-[12px] text-muted">
-                    Excl. btw ≈ {formatEuro(operatorTariefExcl)}
-                  </p>
-                ) : null}
-                {operatorTariefMsg ? (
-                  <p className="mt-2 text-[12px] font-semibold text-green-dark">
-                    {operatorTariefMsg}
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => void opslaanTarief()}
-                  disabled={operatorTariefBusy}
-                  className="mt-3 w-full bg-green-dark px-4 py-3 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
-                >
-                  {operatorTariefBusy ? "Bezig…" : "Tarief opslaan"}
-                </button>
-              </div>
+              <div className="divide-y divide-line">
+                <div className="flex items-start justify-between gap-3 px-4 py-3.5">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      E-mail
+                    </p>
+                    <p className="mt-0.5 truncate text-[14px] text-ink">
+                      {operatorEmail || "—"}
+                    </p>
+                  </div>
+                </div>
 
-              <button
-                type="button"
-                onClick={() => void load()}
-                disabled={loading}
-                className="mt-5 w-full border border-line bg-wash px-4 py-3 text-sm font-semibold text-ink hover:bg-white disabled:opacity-50"
-              >
-                {loading ? "Bezig…" : "Vernieuwen"}
-              </button>
+                <div className="px-4 py-3.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                        Wachtwoord
+                      </p>
+                      <p className="mt-0.5 text-[14px] text-ink">••••••••</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPwOpen((o) => !o);
+                        setPwErr(null);
+                        setPwMsg(null);
+                      }}
+                      className="shrink-0 border border-line bg-white px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-wash"
+                    >
+                      {pwOpen ? "Sluiten" : "Wijzigen"}
+                    </button>
+                  </div>
+                  {pwOpen ? (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-[12px] font-semibold text-ink">
+                        Huidig wachtwoord
+                        <input
+                          type="password"
+                          autoComplete="current-password"
+                          value={pwHuidig}
+                          onChange={(e) => setPwHuidig(e.target.value)}
+                          className="mt-1 h-10 w-full border border-line bg-white px-3 text-sm outline-none focus:border-green-dark"
+                        />
+                      </label>
+                      <label className="block text-[12px] font-semibold text-ink">
+                        Nieuw wachtwoord
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={pwNieuw}
+                          onChange={(e) => setPwNieuw(e.target.value)}
+                          className="mt-1 h-10 w-full border border-line bg-white px-3 text-sm outline-none focus:border-green-dark"
+                        />
+                      </label>
+                      <label className="block text-[12px] font-semibold text-ink">
+                        Bevestig nieuw wachtwoord
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={pwBevestig}
+                          onChange={(e) => setPwBevestig(e.target.value)}
+                          className="mt-1 h-10 w-full border border-line bg-white px-3 text-sm outline-none focus:border-green-dark"
+                        />
+                      </label>
+                      {pwErr ? (
+                        <p className="text-[12px] font-semibold text-[#C45A12]">
+                          {pwErr}
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void wijzigWachtwoord()}
+                        disabled={pwBusy}
+                        className="w-full bg-green-dark px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
+                      >
+                        {pwBusy ? "Bezig…" : "Wachtwoord opslaan"}
+                      </button>
+                    </div>
+                  ) : null}
+                  {!pwOpen && pwMsg ? (
+                    <p className="mt-2 text-[12px] font-semibold text-green-dark">
+                      {pwMsg}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex items-start justify-between gap-3 px-4 py-3.5">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Vergoeding per afspraak
+                    </p>
+                    <p className="mt-0.5 text-[14px] font-semibold tabular-nums text-ink">
+                      {operatorTariefExcl != null
+                        ? `${formatEuro(operatorTariefExcl)} excl. btw`
+                        : "—"}
+                    </p>
+                    {operatorTariefExcl != null ? (
+                      <p className="mt-0.5 text-[12px] text-muted">
+                        Incl.{" "}
+                        {formatEuro(
+                          edergyBedragenVanExcl(operatorTariefExcl)
+                            .perAanvraagInc
+                        )}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         ) : (
@@ -832,44 +1276,21 @@ export function WarmtefondsPortalPage() {
               />
             </div>
 
-            <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-0.5">
-              {(
-                [
-                  {
-                    id: "alle" as const,
-                    label: `Alle ${alleCount}`,
-                  },
-                  {
-                    id: "te_bellen" as const,
-                    label: "Te bellen",
-                  },
-                  {
-                    id: "ingepland" as const,
-                    label: "Ingepland",
-                  },
-                ] as const
-              ).map((chip) => {
-                const active = quickFilter === chip.id;
-                return (
-                  <button
-                    key={chip.id}
-                    type="button"
-                    onClick={() => setQuick(chip.id)}
-                    className={[
-                      "shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition-colors",
-                      active
-                        ? "bg-green-dark text-white"
-                        : "border border-line bg-white text-ink hover:bg-wash",
-                    ].join(" ")}
-                  >
-                    {chip.label}
-                  </button>
-                );
-              })}
-              <StatusFilter
-                selected={statusFilter}
-                onChange={setStatusFilterFromUi}
-              />
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {aanvragenView !== "archief" ? (
+                <StatusFilterDropdown
+                  selected={statusFilter}
+                  onChange={setStatusFilterFromUi}
+                  counts={filterCounts}
+                />
+              ) : (
+                <p className="text-[13px] font-semibold text-ink">Archief</p>
+              )}
+              <span className="text-[12px] text-muted">
+                {aanvragenView === "archief"
+                  ? `${archiefQueue.length} dossier${archiefQueue.length === 1 ? "" : "s"}`
+                  : `${openQueue.length} van ${alleCount}`}
+              </span>
             </div>
 
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -912,13 +1333,35 @@ export function WarmtefondsPortalPage() {
                 >
                   <Columns3 className="h-4 w-4" aria-hidden />
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setAanvragenView("archief")}
+                  className={[
+                    "inline-flex h-8 w-8 items-center justify-center rounded-full",
+                    aanvragenView === "archief"
+                      ? "bg-green-dark text-white"
+                      : "text-muted hover:text-ink",
+                  ].join(" ")}
+                  aria-label="Archief"
+                  aria-pressed={aanvragenView === "archief"}
+                  title={`Archief (${archiefQueue.length})`}
+                >
+                  <Archive className="h-4 w-4" aria-hidden />
+                </button>
               </div>
             </div>
 
-            {aanvragenView === "kanban" ? (
+            {aanvragenView === "archief" ? (
+              <AanvragenArchief
+                rows={archiefQueue}
+                onOpen={(id) =>
+                  router.push(`/warmtefonds/${token}/orders/${id}`)
+                }
+              />
+            ) : aanvragenView === "kanban" ? (
               <AanvragenKanban
                 rows={openQueue}
-                statusFilter={statusFilter}
+                statusFilter={[...WF_WERK_STATUSSEN]}
                 token={token}
                 onOpen={(id) =>
                   router.push(`/warmtefonds/${token}/orders/${id}`)
@@ -927,18 +1370,60 @@ export function WarmtefondsPortalPage() {
                 onStap={zetStap}
               />
             ) : (
-              <AanvragenLijst
-                rows={openQueue}
-                sortDir={sortDir}
-                onToggleSort={() =>
-                  setSortDir((d) => (d === "desc" ? "asc" : "desc"))
-                }
-                onOpen={(id) =>
-                  router.push(`/warmtefonds/${token}/orders/${id}`)
-                }
-                onContact={(id) => void openContact(id)}
-                onMaakAfspraak={setAfspraakId}
-              />
+              <>
+                <AanvragenLijst
+                  rows={pagedQueue}
+                  sortDir={sortDir}
+                  onToggleSort={() =>
+                    setSortDir((d) => (d === "desc" ? "asc" : "desc"))
+                  }
+                  onOpen={(id) =>
+                    router.push(`/warmtefonds/${token}/orders/${id}`)
+                  }
+                  onContact={(id) => void openContact(id)}
+                  onMaakAfspraak={setAfspraakId}
+                />
+                {openQueue.length > AANVRAGEN_PAGE_SIZE ? (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
+                    <p className="text-[12px] text-muted">
+                      {(aanvragenPageSafe - 1) * AANVRAGEN_PAGE_SIZE + 1}
+                      –
+                      {Math.min(
+                        aanvragenPageSafe * AANVRAGEN_PAGE_SIZE,
+                        openQueue.length
+                      )}{" "}
+                      van {openQueue.length}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={aanvragenPageSafe <= 1}
+                        onClick={() =>
+                          setAanvragenPage((p) => Math.max(1, p - 1))
+                        }
+                        className="rounded-full border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-wash disabled:opacity-40"
+                      >
+                        Vorige
+                      </button>
+                      <span className="text-[13px] font-semibold tabular-nums text-ink">
+                        {aanvragenPageSafe} / {aanvragenTotalPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={aanvragenPageSafe >= aanvragenTotalPages}
+                        onClick={() =>
+                          setAanvragenPage((p) =>
+                            Math.min(aanvragenTotalPages, p + 1)
+                          )
+                        }
+                        className="rounded-full border border-line bg-white px-3 py-1.5 text-[13px] font-semibold text-ink hover:bg-wash disabled:opacity-40"
+                      >
+                        Volgende
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             )}
           </>
         )}
@@ -1133,7 +1618,7 @@ export function WarmtefondsPortalPage() {
       {openOrder ? (
         <AgendaAfspraakPaneel
           order={openOrder}
-          reis={reisTekst(reistijd[openOrder.id])}
+          reizen={reisTeksten(reistijd[openOrder.id])}
           onClose={() => setOpenAfspraakId(null)}
           onOpenOrder={() =>
             router.push(`/warmtefonds/${token}/orders/${openOrder.id}`)
@@ -1165,6 +1650,214 @@ async function patchWfStatus(
     );
   }
   return body;
+}
+
+const WF_ARCHIEF_ACCENT: Record<WfArchiefSoort, string> = {
+  hold_sales: "#5A4A6E",
+  annulering: "#B91C1C",
+  declaratie_ingediend: "#C45A12",
+  declaratie_uitbetaald: "#0D5C32",
+};
+
+const WF_ARCHIEF_TONE: Record<WfArchiefSoort, string> = {
+  hold_sales: "border-[#5A4A6E]/25 bg-[#F0ECF5] text-[#4A3A5C]",
+  annulering: "border-[#B91C1C]/25 bg-[#FEF2F2] text-[#B91C1C]",
+  declaratie_ingediend: "border-[#C45A12]/25 bg-[#FFF7ED] text-[#C45A12]",
+  declaratie_uitbetaald: "border-green/30 bg-green-soft text-green-dark",
+};
+
+function archiefHoldReden(o: OrderRow): string | null {
+  const candidates = [
+    o.backoffice_notitie,
+    o.warmtefonds_notities,
+    o.notities,
+  ];
+  for (const raw of candidates) {
+    const t = (raw || "").trim();
+    if (t) return t;
+  }
+  return null;
+}
+
+function AanvragenArchief({
+  rows,
+  onOpen,
+}: {
+  rows: OrderRow[];
+  onOpen: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState<WfArchiefSoort | "alles">("alles");
+
+  const counts = useMemo(() => {
+    const c = Object.fromEntries(
+      WF_ARCHIEF_SOORTEN.map((s) => [s, 0])
+    ) as Record<WfArchiefSoort, number>;
+    for (const o of rows) {
+      const s = wfArchiefSoortVan(o);
+      if (s) c[s] += 1;
+    }
+    return c;
+  }, [rows]);
+
+  const visible = useMemo(() => {
+    const list =
+      filter === "alles"
+        ? rows
+        : rows.filter((o) => wfArchiefSoortVan(o) === filter);
+    return [...list].sort((a, b) => {
+      const sa = wfArchiefSoortVan(a) || "";
+      const sb = wfArchiefSoortVan(b) || "";
+      if (sa !== sb) {
+        return (
+          WF_ARCHIEF_SOORTEN.indexOf(sa as WfArchiefSoort) -
+          WF_ARCHIEF_SOORTEN.indexOf(sb as WfArchiefSoort)
+        );
+      }
+      const av = new Date(a.updated_at || a.doorgestuurd_at || 0).getTime();
+      const bv = new Date(b.updated_at || b.doorgestuurd_at || 0).getTime();
+      return bv - av;
+    });
+  }, [rows, filter]);
+
+  if (rows.length === 0) {
+    return (
+      <div className="border border-line bg-white px-6 py-14 text-center">
+        <p className="text-sm text-muted">
+          Geen hold sales, annuleringen of afgeronde declaraties
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => setFilter("alles")}
+          className={[
+            "inline-flex items-center gap-1.5 border px-2.5 py-1 text-[12px] font-semibold",
+            filter === "alles"
+              ? "border-green-dark bg-green-dark text-white"
+              : "border-line bg-white text-ink hover:bg-wash",
+          ].join(" ")}
+        >
+          Alles
+          <span className="tabular-nums opacity-80">{rows.length}</span>
+        </button>
+        {WF_ARCHIEF_SOORTEN.map((soort) => {
+          const n = counts[soort];
+          if (!n) return null;
+          const active = filter === soort;
+          return (
+            <button
+              key={soort}
+              type="button"
+              onClick={() =>
+                setFilter((f) => (f === soort ? "alles" : soort))
+              }
+              className={[
+                "inline-flex items-center gap-1.5 border px-2.5 py-1 text-[12px] font-semibold",
+                active
+                  ? WF_ARCHIEF_TONE[soort]
+                  : "border-line bg-white text-ink hover:bg-wash",
+              ].join(" ")}
+            >
+              {WF_ARCHIEF_LABEL[soort]}
+              <span className="tabular-nums opacity-80">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="overflow-hidden border border-line bg-white">
+        <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_5.5rem_minmax(0,1.2fr)] gap-2 border-b border-line bg-[#fafbfa] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted sm:grid">
+          <span>Klant</span>
+          <span>Status</span>
+          <span className="text-right">Bedrag</span>
+          <span>Toelichting</span>
+        </div>
+        <ul className="divide-y divide-line">
+          {visible.map((o) => {
+            const soort = wfArchiefSoortVan(o);
+            if (!soort) return null;
+            const lead = leadOf(o);
+            const reden =
+              soort === "hold_sales" || soort === "annulering"
+                ? archiefHoldReden(o)
+                : null;
+            const bedrag =
+              o.bedragen?.warmtefondsInc != null
+                ? formatEuro(o.bedragen.warmtefondsInc)
+                : "—";
+            const deadline =
+              soort === "hold_sales" && o.hold_sales_deadline_at
+                ? momentLabel(o.hold_sales_deadline_at)
+                : null;
+            return (
+              <li key={o.id}>
+                <button
+                  type="button"
+                  onClick={() => onOpen(o.id)}
+                  className="grid w-full grid-cols-1 gap-1 px-3 py-2 text-left hover:bg-wash sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_5.5rem_minmax(0,1.2fr)] sm:items-center sm:gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-semibold leading-tight text-ink">
+                      {lead?.naam || o.titel || "Klant"}
+                    </p>
+                    <p className="truncate font-mono text-[10px] leading-tight text-muted">
+                      {o.project_nummer}
+                      {lead?.plaats ? ` · ${lead.plaats}` : ""}
+                    </p>
+                  </div>
+                  <div className="min-w-0">
+                    <span
+                      className={[
+                        "inline-flex max-w-full truncate border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                        WF_ARCHIEF_TONE[soort],
+                      ].join(" ")}
+                      style={{ borderLeftWidth: 3, borderLeftColor: WF_ARCHIEF_ACCENT[soort] }}
+                    >
+                      {WF_ARCHIEF_LABEL[soort]}
+                    </span>
+                    {deadline ? (
+                      <p className="mt-0.5 truncate text-[10px] text-muted">
+                        Deadline {deadline}
+                      </p>
+                    ) : null}
+                  </div>
+                  <p className="text-[12px] font-semibold tabular-nums text-ink sm:text-right">
+                    {bedrag}
+                  </p>
+                  <p
+                    className={[
+                      "truncate text-[12px] leading-snug",
+                      reden ? "text-ink" : "text-muted",
+                    ].join(" ")}
+                    title={reden || undefined}
+                  >
+                    {reden
+                      ? reden
+                      : soort === "hold_sales"
+                        ? "—"
+                        : soort === "declaratie_ingediend" ||
+                            soort === "declaratie_uitbetaald"
+                          ? portalBadgeFor(o)
+                          : "—"}
+                  </p>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {visible.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-muted">
+            Niets in deze filter
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function AanvragenKanban({
@@ -1394,6 +2087,136 @@ function AanvragenKanban({
   );
 }
 
+type WfWhatsappTarget = {
+  telefoon: string;
+  naam: string;
+  afspraakAt?: string | null;
+};
+
+function WfWhatsappTemplateDialog({
+  target,
+  onClose,
+}: {
+  target: WfWhatsappTarget | null;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<WfWhatsappTemplateId | null>(null);
+
+  if (!target) return null;
+
+  const phone = warmtefondsWhatsappPhone(target.telefoon);
+  const voornaam = warmtefondsWhatsappVoornaam(target.naam);
+  const afspraakLabel = target.afspraakAt
+    ? formatDateTimeNl(target.afspraakAt)
+    : null;
+
+  function openWhatsapp() {
+    if (!selected || !phone) return;
+    const tpl = WF_WHATSAPP_TEMPLATES.find((t) => t.id === selected);
+    if (!tpl) return;
+    const bericht = tpl.build({ voornaam, afspraakLabel });
+    const url = warmtefondsWhatsappUrl(target!.telefoon, bericht);
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+    onClose();
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="WhatsApp-bericht kiezen"
+      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md border border-line bg-white shadow-xl sm:rounded-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              WhatsApp
+            </p>
+            <h2 className="mt-0.5 truncate font-display text-lg font-semibold text-ink">
+              {target.naam}
+            </h2>
+            <p className="text-[12px] text-muted">{target.telefoon}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 border border-line px-2 py-1 text-xs font-semibold hover:bg-wash"
+          >
+            Sluiten
+          </button>
+        </div>
+
+        {!phone ? (
+          <p className="px-4 py-6 text-sm text-[#C45A12]">
+            Geen geldig telefoonnummer voor WhatsApp.
+          </p>
+        ) : (
+          <ul className="divide-y divide-line">
+            {WF_WHATSAPP_TEMPLATES.map((t) => {
+              const active = selected === t.id;
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(t.id)}
+                    className={[
+                      "flex w-full flex-col gap-0.5 px-4 py-3.5 text-left hover:bg-wash",
+                      active ? "bg-green-soft/60" : "",
+                    ].join(" ")}
+                  >
+                    <span className="flex items-center gap-2 text-[14px] font-semibold text-ink">
+                      <span
+                        className={[
+                          "flex h-4 w-4 items-center justify-center rounded-full border",
+                          active
+                            ? "border-green-dark bg-green-dark text-white"
+                            : "border-line bg-white",
+                        ].join(" ")}
+                        aria-hidden
+                      >
+                        {active ? (
+                          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                        ) : null}
+                      </span>
+                      {t.label}
+                    </span>
+                    <span className="pl-6 text-[12px] text-muted">{t.hint}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="flex gap-2 border-t border-line px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-11 flex-1 border border-line text-[13px] font-semibold text-ink hover:bg-wash"
+          >
+            Annuleren
+          </button>
+          <button
+            type="button"
+            disabled={!selected || !phone}
+            onClick={openWhatsapp}
+            className="inline-flex h-11 flex-1 items-center justify-center gap-1.5 bg-[#128C7E] text-[13px] font-semibold text-white hover:bg-[#0E6F64] disabled:opacity-40"
+          >
+            <MessageCircle className="h-4 w-4" aria-hidden />
+            Open WhatsApp
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AanvragenLijst({
   rows,
   sortDir,
@@ -1409,6 +2232,10 @@ function AanvragenLijst({
   onContact: (id: string) => void;
   onMaakAfspraak: (id: string) => void;
 }) {
+  const [whatsappTarget, setWhatsappTarget] = useState<WfWhatsappTarget | null>(
+    null
+  );
+
   if (rows.length === 0) {
     return (
       <div className="border border-line bg-white px-6 py-14 text-center">
@@ -1419,6 +2246,10 @@ function AanvragenLijst({
 
   return (
     <div className="overflow-hidden border border-line bg-white">
+      <WfWhatsappTemplateDialog
+        target={whatsappTarget}
+        onClose={() => setWhatsappTarget(null)}
+      />
       {/* Mobiel: compacte rijen */}
       <div className="divide-y divide-line md:hidden">
         {rows.map((o) => {
@@ -1441,6 +2272,11 @@ function AanvragenLijst({
                   <p className="mt-0.5 font-mono text-[12px] text-muted">
                     {o.project_nummer}
                   </p>
+                  <AanbetalingRegel
+                    status={o.aanbetaling_factuur_status}
+                    bedragInc={o.bedragen?.aanbetalingInc}
+                    className="mt-1"
+                  />
                   {adres && adres !== "—" ? (
                     <p className="mt-1 truncate text-[12px] text-muted">
                       {adres}
@@ -1459,7 +2295,7 @@ function AanvragenLijst({
                     )}
                     aria-hidden
                   />
-                  {werk ? WF_PORTAL_BADGE[werk] : "Afgewezen"}
+                  {portalBadgeFor(o)}
                 </span>
               </button>
               <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-muted">
@@ -1491,13 +2327,30 @@ function AanvragenLijst({
                         Contact
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => onContact(o.id)}
-                      className="inline-flex h-10 items-center justify-center border border-line text-[13px] font-semibold text-ink"
-                    >
-                      Mailen
-                    </button>
+                    {tel ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setWhatsappTarget({
+                            telefoon: lead?.telefoon || tel,
+                            naam: lead?.naam || o.titel || "Klant",
+                            afspraakAt: o.warmtefonds_afspraak_at,
+                          })
+                        }
+                        className="inline-flex h-10 items-center justify-center gap-1.5 border border-[#128C7E] bg-white text-[13px] font-semibold text-[#128C7E]"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+                        WhatsApp
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onContact(o.id)}
+                        className="inline-flex h-10 items-center justify-center border border-line text-[13px] font-semibold text-ink"
+                      >
+                        Mailen
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1536,15 +2389,15 @@ function AanvragenLijst({
 
       {/* Desktop: echte tabel, nieuwste eerst */}
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[64rem] border-collapse text-left text-sm">
+        <table className="w-full min-w-[62rem] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
               <th className="px-4 py-3 font-semibold text-ink">Project</th>
               <th className="px-3 py-3 font-semibold text-ink">Klant</th>
               <th className="px-3 py-3 font-semibold text-ink">Adres</th>
               <th className="px-3 py-3 font-semibold text-ink">Status</th>
+              <th className="px-3 py-3 font-semibold text-ink">Aanbetaling</th>
               <th className="px-3 py-3 font-semibold text-ink">Telefoon</th>
-              <th className="px-3 py-3 font-semibold text-ink">Afspraak</th>
               <th className="px-3 py-3 font-semibold text-ink">Bedrag</th>
               <th className="px-3 py-3 font-semibold text-ink">
                 <button
@@ -1607,8 +2460,15 @@ function AanvragenLijst({
                         ].join(" ")}
                         aria-hidden
                       />
-                      {werk ? WF_PORTAL_BADGE[werk] : "Afgewezen"}
+                      {portalBadgeFor(o)}
                     </span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3 align-top">
+                    <AanbetalingRegel
+                      status={o.aanbetaling_factuur_status}
+                      bedragInc={o.bedragen?.aanbetalingInc}
+                      alleenStatus
+                    />
                   </td>
                   <td
                     className="whitespace-nowrap px-3 py-3 align-top"
@@ -1624,11 +2484,6 @@ function AanvragenLijst({
                     ) : (
                       <span className="text-muted">—</span>
                     )}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-3 align-top text-[13px] text-ink">
-                    {o.warmtefonds_afspraak_at
-                      ? formatDateTimeNl(o.warmtefonds_afspraak_at)
-                      : "—"}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 align-top font-semibold tabular-nums text-ink">
                     {o.bedragen?.warmtefondsInc != null
@@ -1690,92 +2545,197 @@ function AanvragenLijst({
   );
 }
 
-function AgendaAfspraakRij({
+function aanbetalingAccent(order: OrderRow): {
+  bar: string;
+  tint: string;
+  border: string;
+  time: string;
+} {
+  const info = aanbetalingStatus(
+    order.aanbetaling_factuur_status,
+    order.bedragen?.aanbetalingInc
+  );
+  if (info.soort === "niet_nodig" || info.soort === "voldaan") {
+    return {
+      bar: "bg-green",
+      tint: "bg-[#F0FDF4]",
+      border: "border-[#86EFAC]",
+      time: "text-green-dark",
+    };
+  }
+  if (info.soort === "open") {
+    return {
+      bar: "bg-[#B91C1C]",
+      tint: "bg-[#FEF2F2]",
+      border: "border-[#FECACA]",
+      time: "text-[#B91C1C]",
+    };
+  }
+  return {
+    bar: "bg-[#94A3B8]",
+    tint: "bg-[#F8FAFC]",
+    border: "border-[#CBD5E1]",
+    time: "text-[#C45A12]",
+  };
+}
+
+/** Compacte chip — weekkolom, zoals adviseur-stickers. */
+function AgendaAfspraakChip({
   order,
-  idx,
-  total,
   reistijd,
-  compact,
   onOpen,
 }: {
   order: OrderRow;
-  idx: number;
-  total: number;
-  reistijd: Record<string, ReisInfo>;
-  compact?: boolean;
+  reistijd: Record<string, ReisInfo[]>;
   onOpen: (id: string) => void;
 }) {
   const lead = leadOf(order);
   const iso = order.warmtefonds_afspraak_at!;
-  const reis = reisTekst(reistijd[order.id]);
+  const accent = aanbetalingAccent(order);
+  const plaats = lead?.plaats || lead?.postcode || "";
+  const reizen = reisTeksten(reistijd[order.id]);
+  const info = aanbetalingStatus(
+    order.aanbetaling_factuur_status,
+    order.bedragen?.aanbetalingInc
+  );
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(order.id)}
+      title={[
+        agendaTijdLabel(iso),
+        lead?.naam || order.titel || "Klant",
+        plaats,
+        info.label,
+        ...reizen,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      className={[
+        "relative w-full overflow-hidden rounded-md border px-1.5 py-1.5 text-left transition hover:brightness-[0.98] hover:shadow-sm",
+        accent.tint,
+        accent.border,
+      ].join(" ")}
+      style={{ borderLeftWidth: 3 }}
+    >
+      <span
+        className={["absolute inset-y-0 left-0 w-[3px]", accent.bar].join(" ")}
+        aria-hidden
+      />
+      <p
+        className={[
+          "pl-0.5 text-[11px] font-bold tabular-nums leading-none",
+          accent.time,
+        ].join(" ")}
+      >
+        {agendaTijdLabel(iso)}
+      </p>
+      <p className="mt-1 truncate pl-0.5 text-[12px] font-semibold leading-tight text-ink">
+        {lead?.naam || order.titel || "Klant"}
+      </p>
+      <p className="mt-0.5 truncate pl-0.5 text-[10px] leading-tight text-muted">
+        {[plaats || null, info.soort === "geen" ? "Geen aanbetaling" : info.label]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+      {reizen[0] ? (
+        <p className="mt-0.5 truncate pl-0.5 text-[9px] font-semibold leading-tight text-[#1A4A6E]">
+          {reizen[0]}
+        </p>
+      ) : null}
+    </button>
+  );
+}
+
+/** Dagkaart — zoals adviseur day-chip, met acties. */
+function AgendaAfspraakRij({
+  order,
+  reistijd,
+  onOpen,
+}: {
+  order: OrderRow;
+  reistijd: Record<string, ReisInfo[]>;
+  onOpen: (id: string) => void;
+}) {
+  const lead = leadOf(order);
+  const iso = order.warmtefonds_afspraak_at!;
+  const reizen = reisTeksten(reistijd[order.id]);
   const adres = adresVanOrder(order);
+  const accent = aanbetalingAccent(order);
+  const tel = lead?.telefoon?.replace(/\s/g, "") || "";
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(order.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen(order.id);
-        }
-      }}
       className={[
-        "flex w-full cursor-pointer gap-3 text-left hover:bg-wash/60 sm:gap-5",
-        compact ? "px-3 py-2.5 sm:px-4" : "px-4 py-4 sm:px-5",
+        "flex overflow-hidden rounded-xl border text-left transition hover:brightness-[0.98] hover:shadow-[0_4px_16px_rgba(13,92,50,0.08)]",
+        accent.tint,
+        accent.border,
       ].join(" ")}
     >
-      <div className={compact ? "w-12 shrink-0 sm:w-14" : "w-16 shrink-0 sm:w-20"}>
-        <p
-          className={[
-            "font-bold tabular-nums leading-none text-[#C45A12]",
-            compact ? "text-base sm:text-lg" : "text-xl sm:text-2xl",
-          ].join(" ")}
-        >
-          {agendaTijdLabel(iso)}
-        </p>
-        {!compact && idx < total - 1 ? (
-          <p className="mt-2 text-[11px] text-muted">↓ volgende</p>
-        ) : null}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <p
-            className={[
-              "font-semibold text-ink",
-              compact ? "text-sm" : "text-base",
-            ].join(" ")}
-          >
-            {lead?.naam || order.titel || "Klant"}
-          </p>
-          <p className="font-mono text-xs text-muted">{order.project_nummer}</p>
-        </div>
-        <p className={compact ? "mt-0.5 text-[12px] text-muted" : "mt-1 text-sm text-muted"}>
-          {adres || lead?.plaats || "Geen adres"}
-        </p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-          {lead?.telefoon ? (
-            <a
-              href={`tel:${lead.telefoon.replace(/\s/g, "")}`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-[12px] font-semibold text-green-dark hover:underline"
+      <span className={["w-1.5 shrink-0", accent.bar].join(" ")} aria-hidden />
+      <button
+        type="button"
+        onClick={() => onOpen(order.id)}
+        className="min-w-0 flex-1 px-3.5 py-3 text-left"
+      >
+        <div className="flex items-start gap-3">
+          <div className="shrink-0">
+            <p
+              className={[
+                "font-display text-lg font-semibold tabular-nums leading-none",
+                accent.time,
+              ].join(" ")}
             >
-              {lead.telefoon}
-            </a>
-          ) : null}
-          {reis ? (
-            <span className="text-[12px] font-semibold text-[#1A4A6E]">
-              {reis}
-            </span>
-          ) : null}
+              {agendaTijdLabel(iso)}
+            </p>
+          </div>
+          <div className="min-w-0 flex-1 border-l border-line/70 pl-3">
+            <p className="truncate text-sm font-semibold text-ink">
+              {lead?.naam || order.titel || "Klant"}
+            </p>
+            <p className="mt-0.5 font-mono text-[11px] text-muted">
+              {order.project_nummer}
+            </p>
+            <div className="mt-1.5">
+              <AanbetalingRegel
+                status={order.aanbetaling_factuur_status}
+                bedragInc={order.bedragen?.aanbetalingInc}
+              />
+            </div>
+            <p className="mt-1.5 text-[13px] text-muted">
+              {adres || lead?.plaats || "Geen adres"}
+            </p>
+            {reizen.map((reis) => (
+              <p
+                key={reis}
+                className="mt-1 text-[12px] font-semibold text-[#1A4A6E]"
+              >
+                {reis}
+              </p>
+            ))}
+          </div>
         </div>
+      </button>
+      <div className="flex shrink-0 flex-col justify-center gap-1.5 border-l border-line/60 bg-white/50 px-2.5 py-2">
+        {tel ? (
+          <a
+            href={`tel:${tel}`}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex h-9 w-9 items-center justify-center bg-green-dark text-white hover:bg-green-deeper"
+            aria-label="Bellen"
+            title={lead?.telefoon || "Bellen"}
+          >
+            <Phone className="h-4 w-4" aria-hidden />
+          </a>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => onOpen(order.id)}
+          className="inline-flex h-9 items-center justify-center border border-line bg-white px-2.5 text-[11px] font-semibold text-ink hover:bg-wash"
+        >
+          Open
+        </button>
       </div>
-      {!compact ? (
-        <span className="hidden shrink-0 self-center text-sm font-semibold text-muted sm:inline">
-          Open →
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -1793,7 +2753,7 @@ function WeekAgenda({
   weekLabel: string;
   weekDays: Date[];
   agendaByDay: Map<string, OrderRow[]>;
-  reistijd: Record<string, ReisInfo>;
+  reistijd: Record<string, ReisInfo[]>;
   onPrev: () => void;
   onNext: () => void;
   onVandaag: () => void;
@@ -2011,47 +2971,96 @@ function WeekAgenda({
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-line">
-            {weekDays.map((day, i) => {
-              const key = weekKeys[i];
-              const dayOrders = agendaByDay.get(key) || [];
-              if (dayOrders.length === 0) return null;
-              return (
-                <div key={key}>
-                  <button
-                    type="button"
-                    onClick={() => selectDay(key)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-line bg-wash/50 px-4 py-2.5 text-left hover:bg-wash sm:px-5"
-                  >
-                    <p className="text-sm font-semibold capitalize text-ink">
-                      {format(day, "EEEE d MMMM", { locale: nl })}
-                      <span className="ml-2 font-normal text-muted">
-                        · {dayOrders.length}{" "}
-                        {dayOrders.length === 1 ? "afspraak" : "afspraken"}
+          <>
+            {/* Desktop: weekkolommen met chips (adviseur-stijl) */}
+            <div className="hidden overflow-x-auto md:block">
+              <div className="grid min-w-[52rem] grid-cols-7 divide-x divide-line border-b border-line">
+                {weekDays.map((day, i) => {
+                  const key = weekKeys[i];
+                  const dayOrders = agendaByDay.get(key) || [];
+                  const vandaag = isSameDay(day, new Date());
+                  return (
+                    <div
+                      key={key}
+                      className={[
+                        "min-h-[16rem] bg-white",
+                        vandaag ? "bg-[#FFFBF5]" : "",
+                      ].join(" ")}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => selectDay(key)}
+                        className="flex w-full items-center justify-between gap-1 border-b border-line px-2 py-2 text-left hover:bg-wash/70"
+                      >
+                        <span className="truncate text-[11px] font-semibold capitalize text-ink">
+                          {format(day, "EEE d", { locale: nl })}
+                        </span>
+                        <span className="tabular-nums text-[10px] text-muted">
+                          {dayOrders.length}
+                        </span>
+                      </button>
+                      <div className="space-y-1.5 p-1.5">
+                        {dayOrders.length === 0 ? (
+                          <p className="px-1 py-6 text-center text-[10px] text-muted">
+                            —
+                          </p>
+                        ) : (
+                          dayOrders.map((order) => (
+                            <AgendaAfspraakChip
+                              key={order.id}
+                              order={order}
+                              reistijd={reistijd}
+                              onOpen={onOpen}
+                            />
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Mobiel: gestapelde dagen met compacte kaarten */}
+            <div className="divide-y divide-line md:hidden">
+              {weekDays.map((day, i) => {
+                const key = weekKeys[i];
+                const dayOrders = agendaByDay.get(key) || [];
+                if (dayOrders.length === 0) return null;
+                return (
+                  <div key={key} className="bg-white">
+                    <button
+                      type="button"
+                      onClick={() => selectDay(key)}
+                      className="flex w-full items-center justify-between gap-3 border-b border-line bg-wash/50 px-4 py-2.5 text-left hover:bg-wash"
+                    >
+                      <p className="text-sm font-semibold capitalize text-ink">
+                        {format(day, "EEEE d MMMM", { locale: nl })}
+                        <span className="ml-2 font-normal text-muted">
+                          · {dayOrders.length}{" "}
+                          {dayOrders.length === 1 ? "afspraak" : "afspraken"}
+                        </span>
+                      </p>
+                      <span className="shrink-0 text-xs font-semibold text-muted">
+                        Dag →
                       </span>
-                    </p>
-                    <span className="shrink-0 text-xs font-semibold text-muted">
-                      Dag →
-                    </span>
-                  </button>
-                  <ul className="divide-y divide-line">
-                    {dayOrders.map((order, idx) => (
-                      <li key={order.id}>
-                        <AgendaAfspraakRij
-                          order={order}
-                          idx={idx}
-                          total={dayOrders.length}
-                          reistijd={reistijd}
-                          compact
-                          onOpen={onOpen}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
+                    </button>
+                    <ul className="space-y-2 p-3">
+                      {dayOrders.map((order) => (
+                        <li key={order.id}>
+                          <AgendaAfspraakRij
+                            order={order}
+                            reistijd={reistijd}
+                            onOpen={onOpen}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )
       ) : items.length === 0 ? (
         <div className="px-5 py-16 text-center">
@@ -2070,13 +3079,11 @@ function WeekAgenda({
           </button>
         </div>
       ) : (
-        <ul className="divide-y divide-line">
-          {items.map((order, idx) => (
+        <ul className="space-y-2.5 p-3 sm:p-4">
+          {items.map((order) => (
             <li key={order.id}>
               <AgendaAfspraakRij
                 order={order}
-                idx={idx}
-                total={items.length}
                 reistijd={reistijd}
                 onOpen={onOpen}
               />
@@ -2090,12 +3097,12 @@ function WeekAgenda({
 
 function AgendaAfspraakPaneel({
   order,
-  reis,
+  reizen,
   onClose,
   onOpenOrder,
 }: {
   order: OrderRow;
-  reis: string | null;
+  reizen: string[];
   onClose: () => void;
   onOpenOrder: () => void;
 }) {
@@ -2146,6 +3153,11 @@ function AgendaAfspraakPaneel({
               {lead?.naam || "—"}
             </p>
             <p className="font-mono text-xs text-muted">{order.project_nummer}</p>
+            <AanbetalingRegel
+              status={order.aanbetaling_factuur_status}
+              bedragInc={order.bedragen?.aanbetalingInc}
+              className="mt-2"
+            />
             {lead?.telefoon ? (
               <a
                 href={`tel:${lead.telefoon.replace(/\s/g, "")}`}
@@ -2192,11 +3204,14 @@ function AgendaAfspraakPaneel({
             )}
           </section>
 
-          {reis ? (
-            <p className="rounded-lg border border-[#1A4A6E]/20 bg-[#E8F0F6] px-3 py-2 text-sm font-semibold text-[#1A4A6E]">
+          {reizen.map((reis) => (
+            <p
+              key={reis}
+              className="rounded-lg border border-[#1A4A6E]/20 bg-[#E8F0F6] px-3 py-2 text-sm font-semibold text-[#1A4A6E]"
+            >
               {reis}
             </p>
-          ) : null}
+          ))}
 
           <button
             type="button"

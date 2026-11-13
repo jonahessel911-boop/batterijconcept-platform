@@ -50,11 +50,11 @@ export async function GET(req: Request) {
       (rowsQuery.error.code === "42703" ||
         rowsQuery.error.message?.includes("locatie"))
     ) {
-      rowsQuery = await sb
+      rowsQuery = (await sb
         .from("sollicitatie_afspraken")
         .select(selectWithoutLocatie)
         .gte("start_at", windowStart)
-        .lte("start_at", windowEnd);
+        .lte("start_at", windowEnd)) as typeof rowsQuery;
     }
 
     const { data: rows, error } = rowsQuery;

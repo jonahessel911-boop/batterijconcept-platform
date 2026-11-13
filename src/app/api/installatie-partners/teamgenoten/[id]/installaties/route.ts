@@ -61,11 +61,13 @@ export async function GET(
       (error.message?.includes("monteur_beoordeling") ||
         error.code === "42703")
     ) {
-      ({ data: rows, error } = await sb
+      const soft = await sb
         .from("projecten")
         .select(selectMin)
         .eq("installatie_teamgenoot_id", id)
-        .order("installatie_at", { ascending: false, nullsFirst: false }));
+        .order("installatie_at", { ascending: false, nullsFirst: false });
+      rows = soft.data as typeof rows;
+      error = soft.error;
     }
 
     if (error) {

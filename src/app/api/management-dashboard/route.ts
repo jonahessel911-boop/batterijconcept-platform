@@ -66,6 +66,8 @@ export async function GET(req: NextRequest) {
       adviseursRes,
       partnersRes,
       settingsRes,
+      teamgenotenRes,
+      koppelsRes,
     ] = await Promise.all([
       sb
         .from("leads")
@@ -119,6 +121,14 @@ export async function GET(req: NextRequest) {
         .eq("actief", true)
         .limit(1)
         .maybeSingle(),
+      sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, partner_id, actief, kan_installatie, regios"),
+      sb
+        .from("installatie_partner_koppels")
+        .select(
+          "id, partner_id, actief, monteur_1_id, monteur_2_id, monteur_1:installatie_partner_teamgenoten!monteur_1_id(id, actief, kan_installatie, regios), monteur_2:installatie_partner_teamgenoten!monteur_2_id(id, actief, kan_installatie, regios)"
+        ),
     ]);
 
     const mapOfferte = (o: Record<string, unknown>) => {
@@ -307,6 +317,93 @@ export async function GET(req: NextRequest) {
       settingsRes.error ? null : (settingsRes.data as Record<string, unknown>)
     );
 
+    const unwrapTg = (
+      row:
+        | {
+            id?: string;
+            actief?: boolean | null;
+            kan_installatie?: boolean | null;
+            regios?: unknown;
+          }
+        | {
+            id?: string;
+            actief?: boolean | null;
+            kan_installatie?: boolean | null;
+            regios?: unknown;
+          }[]
+        | null
+        | undefined
+    ) => {
+      if (!row) return null;
+      return Array.isArray(row) ? row[0] || null : row;
+    };
+
+    type TgRow = {
+      id: string;
+      partner_id: string;
+      actief?: boolean | null;
+      kan_installatie?: boolean | null;
+      regios?: unknown;
+    };
+    let teamgenotenRows: TgRow[] = [];
+    if (!teamgenotenRes.error && teamgenotenRes.data) {
+      teamgenotenRows = teamgenotenRes.data as TgRow[];
+    } else {
+      const soft = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, partner_id, actief, kan_installatie");
+      if (!soft.error && soft.data) {
+        teamgenotenRows = soft.data as TgRow[];
+      }
+    }
+
+    const teamgenoten = teamgenotenRows.map((t) => ({
+      id: t.id,
+      partner_id: t.partner_id,
+      actief: t.actief ?? true,
+      kan_installatie: t.kan_installatie ?? true,
+      regios: t.regios,
+    }));
+
+    const koppels = (koppelsRes.error ? [] : koppelsRes.data || []).map((k) => {
+      const row = k as {
+        id: string;
+        partner_id: string;
+        actief?: boolean | null;
+        monteur_1_id?: string | null;
+        monteur_2_id?: string | null;
+        monteur_1?: unknown;
+        monteur_2?: unknown;
+      };
+      return {
+        id: row.id,
+        partner_id: row.partner_id,
+        actief: row.actief ?? true,
+        monteur_1_id: row.monteur_1_id ?? null,
+        monteur_2_id: row.monteur_2_id ?? null,
+        monteur_1: unwrapTg(
+          row.monteur_1 as
+            | {
+                id?: string;
+                actief?: boolean | null;
+                kan_installatie?: boolean | null;
+                regios?: unknown;
+              }
+            | null
+        ),
+        monteur_2: unwrapTg(
+          row.monteur_2 as
+            | {
+                id?: string;
+                actief?: boolean | null;
+                kan_installatie?: boolean | null;
+                regios?: unknown;
+              }
+            | null
+        ),
+      };
+    });
+
     const raw: MgmtRaw = {
       leads,
       afspraken,
@@ -319,6 +416,8 @@ export async function GET(req: NextRequest) {
       beschikbaarheid,
       adviseurs,
       installateurs,
+      teamgenoten,
+      koppels,
     };
 
     const cfg = metaAdsSpendConfigured();

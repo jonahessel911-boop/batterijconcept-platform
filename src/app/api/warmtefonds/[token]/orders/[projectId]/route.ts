@@ -9,6 +9,7 @@ import {
 import {
   isMissingWfProjectColumn,
   isWarmtefondsPortalProject,
+  isWarmtefondsRelatedProject,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
@@ -52,7 +53,7 @@ async function loadOrder(sb: ReturnType<typeof getSupabaseAdmin>, projectId: str
   }
 
   if (error) throw error;
-  if (!order || !isWarmtefondsPortalProject(order)) return null;
+  if (!order || !isWarmtefondsRelatedProject(order)) return null;
   return order;
 }
 
@@ -87,11 +88,12 @@ export async function GET(
       titel: string;
       detail: string | null;
       created_at: string;
+      meta?: Record<string, unknown> | null;
     }> = [];
     if (leadId) {
       const { data: ev } = await sb
         .from("lead_events")
-        .select("id, soort, titel, detail, created_at")
+        .select("id, soort, titel, detail, created_at, meta")
         .eq("lead_id", leadId)
         .in("soort", [
           "notitie",
@@ -100,9 +102,10 @@ export async function GET(
           "financiering",
           "mail",
           "contact",
+          "bel",
         ])
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(80);
       events = (ev || []) as typeof events;
     }
 
@@ -444,6 +447,14 @@ export async function PATCH(
     const leadId = (before as { lead_id?: string }).lead_id;
     const projectNummer = (before as { project_nummer?: string }).project_nummer;
 
+    let declaratieFactuur: {
+      id: string;
+      nummer: string;
+      bedragInc: number;
+      created: boolean;
+      pdf: string;
+    } | null = null;
+
     const statusNaar =
       "financiering_status" in patch
         ? (patch.financiering_status as string | null)
@@ -590,7 +601,7 @@ export async function PATCH(
               const { ensureRestantDraftFactuur } = await import(
                 "@/lib/ensure-btw-factuur"
               );
-              await ensureRestantDraftFactuur(sb, {
+              const created = await ensureRestantDraftFactuur(sb, {
                 offerteId: offerte.id,
                 leadId: leadIdForFactuur,
                 projectId,
@@ -602,6 +613,15 @@ export async function PATCH(
                 orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
                 warmtefonds: true,
               });
+              if (created) {
+                declaratieFactuur = {
+                  id: created.id,
+                  nummer: created.factuur_nummer,
+                  bedragInc: created.bedragIncBtw,
+                  created: created.created,
+                  pdf: `/api/warmtefonds/${token}/facturen/${created.id}/pdf`,
+                };
+              }
             }
           } catch (e) {
             console.error(
@@ -636,6 +656,7 @@ export async function PATCH(
     return NextResponse.json({
       order: order ? withPortalBedragen(order) : null,
       bevestiging,
+      declaratieFactuur,
     });
   } catch (e) {
     return NextResponse.json(

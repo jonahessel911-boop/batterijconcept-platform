@@ -37,6 +37,7 @@ export type EdergyFactuur = {
   bedrag_ex: number;
   btw: number;
   bedrag_inc: number;
+  status: string | null;
   created_at: string;
 };
 
@@ -82,6 +83,7 @@ function normaliseer(raw: unknown): Store {
           typeof x.bedrag_inc === "number" && Number.isFinite(x.bedrag_inc)
             ? x.bedrag_inc
             : EDERGY_PER_AANVRAAG_INC,
+        status: typeof x.status === "string" ? x.status : null,
         created_at:
           typeof x.created_at === "string"
             ? x.created_at
@@ -168,7 +170,7 @@ export async function zorgEdergyFactuurBijStap(opts: {
   projectId: string;
   van: string | null;
   naar: string | null;
-  /** Eigen tarief van de WF-operator (incl. btw). Null/undefined = globaal. */
+  /** Eigen tarief van de WF-operator (opgeslagen incl. btw). Null/undefined = globaal €150 excl. */
   operatorTariefInc?: number | null;
 }): Promise<void> {
   const vanRank = stapRank(opts.van);
@@ -248,9 +250,61 @@ export async function zorgEdergyFactuurBijStap(opts: {
     bedrag_ex: tarief.perAanvraagExcl,
     btw: tarief.perAanvraagBtw,
     bedrag_inc: tarief.perAanvraagInc,
+    status: "concept",
     created_at: now.toISOString(),
   };
   store.facturen.push(factuur);
   store.volgende += 1;
   await schrijf(store);
+}
+
+/**
+ * Verstuur Edergy-creditfactuur (PDF) naar BatterijConcept facturen-mailbox.
+ */
+export async function verstuurEdergyFactuur(opts: {
+  factuurId: string;
+}): Promise<
+  | { ok: true; factuur: EdergyFactuur }
+  | { ok: false; error: string }
+> {
+  const id = (opts.factuurId || "").trim();
+  if (!id) return { ok: false, error: "Factuur niet gevonden" };
+
+  const store = await lees();
+  const factuur = store.facturen.find((f) => f.id === id);
+  if (!factuur) return { ok: false, error: "Factuur niet gevonden" };
+
+  const pdf = await edergyFactuurPdf(id);
+  if (!pdf) return { ok: false, error: "PDF genereren mislukt" };
+
+  const { sendEmail } = await import("@/lib/email/postmark");
+  const { FACTUREN_MAILBOX_EMAIL } = await import("@/lib/facturen-mailbox");
+  const { formatEuro } = await import("@/lib/format");
+
+  const to = FACTUREN_MAILBOX_EMAIL;
+  const html = `
+    <p>Hierbij de Edergy-creditfactuur <strong>${factuur.nummer}</strong>.</p>
+    <p>Klant: ${factuur.klant}<br/>
+    Project: ${factuur.project_nummer || "—"}<br/>
+    Bedrag incl.: ${formatEuro(factuur.bedrag_inc)}</p>
+  `;
+
+  const sent = await sendEmail({
+    to,
+    subject: `Edergy creditfactuur ${factuur.nummer}`,
+    html,
+    tag: "edergy-creditfactuur",
+    attachments: [
+      {
+        name: `${factuur.nummer}.pdf`,
+        contentType: "application/pdf",
+        content: Buffer.from(pdf.pdf),
+      },
+    ],
+  });
+
+  if (!sent.ok) {
+    return { ok: false, error: sent.error || "Mail versturen mislukt" };
+  }
+  return { ok: true, factuur };
 }

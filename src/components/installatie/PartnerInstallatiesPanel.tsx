@@ -333,7 +333,18 @@ export function PartnerInstallatiesPanel({
       const res = await fetch(
         `/api/installatie/${encodeURIComponent(portalToken)}/installaties`
       );
-      const data = await res.json();
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        installaties?: InstallatieRow[];
+        open_beoordeling?: number;
+      } | null;
+      if (!data || typeof data !== "object") {
+        throw new Error(
+          res.ok
+            ? "Installaties-antwoord ongeldig"
+            : `Installaties laden mislukt (${res.status})`
+        );
+      }
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       setItems((data.installaties || []) as InstallatieRow[]);
       setOpenBeoordeling(Number(data.open_beoordeling) || 0);

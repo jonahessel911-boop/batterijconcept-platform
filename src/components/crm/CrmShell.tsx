@@ -1353,9 +1353,11 @@ export function CrmShell() {
               ? "Acties"
               : boView === "service"
                 ? "Service"
-                : boView === "bel_rapportage"
-                  ? "Bel rapportage"
-                  : "Projecten",
+                : boView === "live"
+                  ? "Live"
+                  : boView === "bel_rapportage"
+                    ? "Bel rapportage"
+                    : "Projecten",
       sub:
         boView === "agenda"
           ? "Schouw, installatie en service per week"
@@ -1367,11 +1369,13 @@ export function CrmShell() {
                 : "Herplannen, schouw, financiering en facturen"
               : boView === "service"
                 ? "Service-desk · tickets inplannen op het planbord"
-                : boView === "bel_rapportage"
-                  ? "Bel-conversie · periodefilter · dagoel = 2 weken vol plannen (+20% uitval)"
-                  : filterLabel
-                    ? `Backoffice van ${filterLabel}`
-                    : "Backoffice in planning en uitvoering",
+                : boView === "live"
+                  ? "Recente leads · L→A op cohort binnenkomst · wanneer ingepland."
+                  : boView === "bel_rapportage"
+                    ? "Bel-conversie · periodefilter · dagoel = 2 weken vol plannen (+20% uitval)"
+                    : filterLabel
+                      ? `Backoffice van ${filterLabel}`
+                      : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",

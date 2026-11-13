@@ -105,6 +105,12 @@ export type ForecastPayload = {
     koppels: number;
     capPerWeek: number;
   }[];
+  /** Unieke koppels/solo’s (niet gesommeerd over regio’s). */
+  montageCapaciteit: {
+    koppels: number;
+    monteurs: number;
+    capPerWeek: number;
+  };
   installsPerMonteurWeek: number;
   installsPerKoppelWeek: number;
   wowGroei: number;
@@ -316,20 +322,114 @@ export function buildGroei(
   };
 }
 
-type TgCap = {
+export type TgCap = {
   id?: string;
+  partner_id?: string | null;
   actief?: boolean | null;
   kan_installatie?: boolean | null;
   regios?: unknown;
 };
 
-type KoppelCap = {
+export type KoppelCap = {
+  id?: string;
+  partner_id?: string | null;
   actief?: boolean | null;
   monteur_1_id?: string | null;
   monteur_2_id?: string | null;
-  monteur_1?: TgCap | null;
-  monteur_2?: TgCap | null;
+  monteur_1?: TgCap | TgCap[] | null;
+  monteur_2?: TgCap | TgCap[] | null;
 };
+
+function unwrapTg(row: TgCap | TgCap[] | null | undefined): TgCap | null {
+  if (!row) return null;
+  return Array.isArray(row) ? row[0] || null : row;
+}
+
+export type MontageCapaciteitSummary = {
+  koppels: number;
+  monteurs: number;
+  capPerWeek: number;
+  perRegio: ForecastPayload["capaciteitPerRegio"];
+  installsPerKoppelWeek: number;
+  installsPerMonteurWeek: number;
+};
+
+/**
+ * Montagecapaciteit o.b.v. actieve koppels (+ solo-monteurs buiten koppels)
+ * en hun geselecteerde regio’s.
+ */
+export function summarizeMontageCapaciteit(
+  teamgenoten: TgCap[],
+  koppels: KoppelCap[] = [],
+  opts?: {
+    regio?: string | null;
+    partnerId?: string | null;
+    installsPerMonteurWeek?: number;
+    installsPerKoppelWeek?: number;
+  }
+): MontageCapaciteitSummary {
+  const installsPerMonteurWeek =
+    opts?.installsPerMonteurWeek ?? FORECAST_INSTALLS_PER_MONTEUR_WEEK;
+  const installsPerKoppelWeek =
+    opts?.installsPerKoppelWeek ?? FORECAST_INSTALLS_PER_KOPPEL_WEEK;
+  const regioFilter = (opts?.regio || "").trim() || null;
+  const partnerId = (opts?.partnerId || "").trim() || null;
+
+  const tgs = partnerId
+    ? teamgenoten.filter((t) => t.partner_id === partnerId)
+    : teamgenoten;
+  const kps = partnerId
+    ? koppels.filter((k) => k.partner_id === partnerId)
+    : koppels;
+
+  const activeKoppels = kps.filter((k) => k.actief !== false);
+  const inKoppel = new Set<string>();
+  let koppelsCount = 0;
+
+  for (const k of activeKoppels) {
+    const m1 = unwrapTg(k.monteur_1);
+    const m2 = unwrapTg(k.monteur_2);
+    if (k.monteur_1_id) inKoppel.add(k.monteur_1_id);
+    if (k.monteur_2_id) inKoppel.add(k.monteur_2_id);
+
+    const regios = new Set<string>([
+      ...normalizeMonteurRegios(m1?.regios),
+      ...normalizeMonteurRegios(m2?.regios),
+    ]);
+    if (regioFilter && !regios.has(regioFilter)) continue;
+    koppelsCount += 1;
+  }
+
+  let monteursCount = 0;
+  for (const tg of tgs) {
+    if (tg.actief === false) continue;
+    if (tg.kan_installatie === false) continue;
+    if (tg.id && inKoppel.has(tg.id)) continue;
+    const regios = normalizeMonteurRegios(tg.regios) as string[];
+    if (regioFilter) {
+      if (!regios.includes(regioFilter)) continue;
+    }
+    monteursCount += 1;
+  }
+
+  const perRegio = buildCapaciteitPerRegio(
+    tgs,
+    kps,
+    installsPerMonteurWeek,
+    installsPerKoppelWeek
+  ).filter((r) => (regioFilter ? r.regio === regioFilter : true));
+
+  return {
+    koppels: koppelsCount,
+    monteurs: monteursCount,
+    capPerWeek:
+      koppelsCount * installsPerKoppelWeek +
+      monteursCount * installsPerMonteurWeek,
+    perRegio,
+    installsPerKoppelWeek,
+    installsPerMonteurWeek,
+  };
+}
 
 export function buildCapaciteitPerRegio(
   teamgenoten: TgCap[],
@@ -344,8 +444,8 @@ export function buildCapaciteitPerRegio(
   const inKoppel = new Set<string>();
 
   for (const k of activeKoppels) {
-    const m1 = k.monteur_1;
-    const m2 = k.monteur_2;
+    const m1 = unwrapTg(k.monteur_1);
+    const m2 = unwrapTg(k.monteur_2);
     if (k.monteur_1_id) inKoppel.add(k.monteur_1_id);
     if (k.monteur_2_id) inKoppel.add(k.monteur_2_id);
 
@@ -478,7 +578,7 @@ export function aggregateForecast(
       .map(([regio, orders]) => ({
         regio,
         aantal: orders.length,
-        orders: orders.sort((a, b) =>
+        orders: (orders as ForecastOrder[]).sort((a, b) =>
           (a.projectNummer || "").localeCompare(b.projectNummer || "", "nl")
         ),
       }))
@@ -552,6 +652,7 @@ export function aggregateForecast(
     .sort((a, b) => b.aantal - a.aantal || a.regio.localeCompare(b.regio, "nl"));
 
   const capaciteitPerRegio = buildCapaciteitPerRegio(teamgenoten, koppels);
+  const montage = summarizeMontageCapaciteit(teamgenoten, koppels);
 
   return {
     weekGroups,
@@ -561,6 +662,11 @@ export function aggregateForecast(
     groei,
     regioTotalen: regioTotalenMetGroei,
     capaciteitPerRegio,
+    montageCapaciteit: {
+      koppels: montage.koppels,
+      monteurs: montage.monteurs,
+      capPerWeek: montage.capPerWeek,
+    },
     installsPerMonteurWeek: FORECAST_INSTALLS_PER_MONTEUR_WEEK,
     installsPerKoppelWeek: FORECAST_INSTALLS_PER_KOPPEL_WEEK,
     wowGroei: FORECAST_WOW_GROEI,

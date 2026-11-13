@@ -102,6 +102,25 @@ export async function GET(
 
     if (!kp.error && kp.data) {
       koppels = kp.data as typeof koppels;
+    } else if (kp.error) {
+      const soft = await sb
+        .from("installatie_partner_koppels")
+        .select("actief, monteur_1_id, monteur_2_id")
+        .eq("partner_id", partner.id);
+      if (!soft.error && soft.data) {
+        const byId = new Map(teamgenoten.map((t) => [t.id, t]));
+        koppels = soft.data.map((row) => ({
+          actief: row.actief as boolean | null,
+          monteur_1_id: row.monteur_1_id as string | null,
+          monteur_2_id: row.monteur_2_id as string | null,
+          monteur_1: row.monteur_1_id
+            ? byId.get(row.monteur_1_id as string) || null
+            : null,
+          monteur_2: row.monteur_2_id
+            ? byId.get(row.monteur_2_id as string) || null
+            : null,
+        }));
+      }
     }
 
     const agg = aggregateForecast(data || [], weeks, now, teamgenoten, koppels);

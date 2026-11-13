@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hashPassword, verifyPassword } from "@/lib/auth-password";
 import { errMessage } from "@/lib/errors";
-import {
-  edergyBedragenVanInc,
-  leesEdergyTariefVoorOperator,
-} from "@/lib/edergy-tarief";
+import { leesEdergyTariefVoorOperator } from "@/lib/edergy-tarief";
 import { resolveWarmtefondsOperator } from "@/lib/warmtefonds-portal";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
@@ -48,17 +46,35 @@ export async function GET(
   }
 }
 
-/** PATCH — eigen vergoeding per aanvraag opslaan. */
+/** PATCH — eigen wachtwoord wijzigen. */
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
-  let body: { tarief_inc?: number | null };
+  let body: {
+    huidig_wachtwoord?: string;
+    nieuw_wachtwoord?: string;
+  };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
+  }
+
+  const huidig = String(body.huidig_wachtwoord || "");
+  const nieuw = String(body.nieuw_wachtwoord || "");
+  if (!huidig || !nieuw) {
+    return NextResponse.json(
+      { error: "Huidig en nieuw wachtwoord zijn verplicht" },
+      { status: 400 }
+    );
+  }
+  if (nieuw.length < 8) {
+    return NextResponse.json(
+      { error: "Nieuw wachtwoord moet minstens 8 tekens zijn" },
+      { status: 400 }
+    );
   }
 
   try {
@@ -71,53 +87,52 @@ export async function PATCH(
       );
     }
 
-    let tariefInc: number | null = null;
-    if (body.tarief_inc !== undefined && body.tarief_inc !== null) {
-      const n = Number(body.tarief_inc);
-      if (!Number.isFinite(n) || n <= 0) {
-        return NextResponse.json(
-          { error: "Vul een geldig bedrag in (incl. btw)" },
-          { status: 400 }
-        );
-      }
-      tariefInc = Math.round(n * 100) / 100;
-    }
-
-    const { data, error } = await sb
+    const { data: row, error: readErr } = await sb
       .from("warmtefonds_operators")
-      .update({ tarief_inc: tariefInc })
+      .select("id, password_hash")
       .eq("id", operator.id)
-      .select("id, naam, email, telefoon, tarief_inc")
-      .single();
-    if (error) {
-      if (error.code === "42703" || error.message?.includes("tarief_inc")) {
+      .maybeSingle();
+    if (readErr) {
+      if (
+        readErr.code === "42703" ||
+        readErr.message?.includes("password_hash")
+      ) {
         return NextResponse.json(
           {
             error:
-              "Kolom tarief_inc ontbreekt — draai migrate-warmtefonds-operator-tarief.sql",
+              "Wachtwoord-kolom ontbreekt — draai migrate-warmtefonds-operator-accounts.sql",
           },
           { status: 400 }
         );
       }
-      throw error;
+      throw readErr;
+    }
+    if (!row?.password_hash) {
+      return NextResponse.json(
+        {
+          error:
+            "Nog geen wachtwoord ingesteld. Vraag Batterijconcept om inloggegevens.",
+        },
+        { status: 400 }
+      );
+    }
+    if (!verifyPassword(huidig, String(row.password_hash))) {
+      return NextResponse.json(
+        { error: "Huidig wachtwoord is onjuist" },
+        { status: 400 }
+      );
     }
 
-    const bedragen = await leesEdergyTariefVoorOperator(
-      data?.tarief_inc ?? tariefInc
-    );
-    return NextResponse.json({
-      operator: data,
-      tarief: {
-        per_aanvraag_inc: bedragen.perAanvraagInc,
-        per_aanvraag_excl: bedragen.perAanvraagExcl,
-        per_aanvraag_btw: bedragen.perAanvraagBtw,
-        eigen: tariefInc != null,
-      },
-      preview: edergyBedragenVanInc(tariefInc ?? bedragen.perAanvraagInc),
-    });
+    const { error: updErr } = await sb
+      .from("warmtefonds_operators")
+      .update({ password_hash: hashPassword(nieuw) })
+      .eq("id", operator.id);
+    if (updErr) throw updErr;
+
+    return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json(
-      { error: errMessage(e, "Opslaan mislukt") },
+      { error: errMessage(e, "Wachtwoord wijzigen mislukt") },
       { status: 500 }
     );
   }

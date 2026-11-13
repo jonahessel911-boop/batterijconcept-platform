@@ -9,7 +9,15 @@ import type {
 } from "@/types/database";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { formatEuro } from "@/lib/format";
+import { bedragenMetBtw, RELATIE_BTW_PCT } from "@/lib/relatie-btw";
 import { cn } from "@/lib/utils";
+
+/** Bon/factuur incl. → opslag excl. (21% btw). */
+function exclVanInc(incRaw: number): number {
+  const inc = Number(incRaw);
+  if (!Number.isFinite(inc) || inc <= 0) return 0;
+  return Math.round((inc / (1 + RELATIE_BTW_PCT)) * 100) / 100;
+}
 
 type StatusFilter = "all" | AdviseurKostenStatus;
 
@@ -135,6 +143,11 @@ export function KostenPanel({ embedded = false }: { embedded?: boolean }) {
     setError(null);
     setOkMsg(null);
     try {
+      const inc = Number(String(bedrag).replace(",", ".").trim());
+      const excl = exclVanInc(inc);
+      if (!(excl > 0)) {
+        throw new Error("Vul een geldig bedrag incl. btw in");
+      }
       const res = await fetch("/api/adviseurs/kosten", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -142,7 +155,7 @@ export function KostenPanel({ embedded = false }: { embedded?: boolean }) {
           adviseur_id: adviseurId,
           soort,
           omschrijving: omschrijving.trim(),
-          bedrag_ex_btw: bedrag,
+          bedrag_ex_btw: excl,
           kosten_datum: kostenDatum || null,
           notities: notities.trim() || null,
         }),
@@ -474,7 +487,7 @@ export function KostenPanel({ embedded = false }: { embedded?: boolean }) {
             <div className="grid grid-cols-2 gap-3">
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-muted">
-                  Bedrag excl. btw
+                  Bedrag incl. btw
                 </span>
                 <input
                   required
@@ -484,6 +497,18 @@ export function KostenPanel({ embedded = false }: { embedded?: boolean }) {
                   placeholder="0,00"
                   className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
                 />
+                {(() => {
+                  const inc = Number(String(bedrag).replace(",", ".").trim());
+                  const excl = exclVanInc(inc);
+                  if (!(excl > 0)) return null;
+                  const split = bedragenMetBtw(excl);
+                  return (
+                    <span className="mt-1 block text-[11px] text-muted">
+                      Wordt {formatEuro(split.bedrag_ex_btw)} excl. · btw{" "}
+                      {formatEuro(split.btw_bedrag)}
+                    </span>
+                  );
+                })()}
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-muted">Datum</span>

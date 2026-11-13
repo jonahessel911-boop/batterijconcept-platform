@@ -24,7 +24,7 @@ export async function GET() {
   }
 }
 
-/** PUT /api/edergy-tarief — admin: zet vergoeding incl. btw */
+/** PUT /api/edergy-tarief — admin: zet vergoeding (opgeslagen als incl.) */
 export async function PUT(req: NextRequest) {
   let body: { per_aanvraag_inc?: unknown };
   try {
@@ -36,7 +36,7 @@ export async function PUT(req: NextRequest) {
   const inc = Number(body.per_aanvraag_inc);
   if (!Number.isFinite(inc) || inc <= 0 || inc > 100_000) {
     return NextResponse.json(
-      { error: "Vul een geldig bedrag in (incl. btw)" },
+      { error: "Vul een geldig bedrag in" },
       { status: 400 }
     );
   }

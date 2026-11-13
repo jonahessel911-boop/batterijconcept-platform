@@ -2491,10 +2491,7 @@ function AgendaItemSidebar({
                         <>
                           <StatusCheckRow
                             ok={Boolean(localOplevering?.url)}
-                            loading={
-                              localOplevering === undefined &&
-                              !localOplevering?.url
-                            }
+                            loading={localOplevering === undefined}
                             label="Opleverformulier"
                           />
                           <StatusCheckRow

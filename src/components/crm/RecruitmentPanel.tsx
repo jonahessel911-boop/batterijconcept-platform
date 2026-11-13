@@ -9,6 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
+  CalendarClock,
   CalendarPlus,
   Check,
   Copy,
@@ -87,6 +88,7 @@ import {
 import { RecruitmentPlannenView } from "@/components/crm/recruitment/RecruitmentPlannenView";
 import { RecruitmentTrainingenBoard } from "@/components/crm/recruitment/RecruitmentTrainingenBoard";
 import { RecruitmentKpisView } from "@/components/crm/recruitment/RecruitmentKpisView";
+import { RecruitmentDeadlinesView } from "@/components/crm/recruitment/RecruitmentDeadlinesView";
 import { RecruitmentJobsView } from "@/components/crm/recruitment/RecruitmentJobsView";
 import { RecruitmentBelPanel } from "@/components/crm/recruitment/RecruitmentBelPanel";
 import { RecruitmentInboxPanel } from "@/components/crm/recruitment/RecruitmentInboxPanel";
@@ -96,6 +98,7 @@ type ViewMode =
   | "tabel"
   | "bellen"
   | "inbox"
+  | "deadlines"
   | "trainingen"
   | "kpis"
   | "vacatures";
@@ -112,6 +115,7 @@ const VIEW_NAV: Array<{
 }> = [
   { id: "bellen", label: "Bellen", icon: PhoneCall, group: "werk" },
   { id: "inbox", label: "Inbox", icon: Inbox, group: "werk" },
+  { id: "deadlines", label: "Deadlines", icon: CalendarClock, group: "werk" },
   { id: "tabel", label: "Aanmeldingen", icon: Table2, group: "werk" },
   {
     id: "trainingen",
@@ -554,16 +558,9 @@ export function RecruitmentPanel() {
     }
     setBeoordelingSaving(true);
     try {
-      const due = new Date();
-      due.setDate(due.getDate() + 3);
-      due.setHours(17, 0, 0, 0);
       await patchKandidaat(beoordelingId, {
         status: SOLLICITATIE_STATUS_MET_VERVOLG,
         notitie_append: note,
-        vervolg_taak: {
-          titel: "Beoordeling afronden",
-          due_at: due.toISOString(),
-        },
       });
       setBeoordelingId(null);
       setBeoordelingNotitie("");
@@ -908,6 +905,13 @@ export function RecruitmentPanel() {
           <RecruitmentInboxPanel
             onOpenKandidaat={openDetail}
             onUnreadChange={setInboxUnread}
+          />
+        ) : view === "deadlines" ? (
+          <RecruitmentDeadlinesView
+            onOpenKandidaat={openDetail}
+            onSetStatus={async (id, status) => {
+              await requestStatusChange(id, status);
+            }}
           />
         ) : view === "trainingen" ? (
           <RecruitmentTrainingenBoard
@@ -1561,8 +1565,8 @@ export function RecruitmentPanel() {
             <DialogTitle>Gespreknotitie</DialogTitle>
             <DialogDescription>
               {beoordelingKandidaat
-                ? `Notitie over het gesprek met ${beoordelingKandidaat.naam}. Deze wordt toegevoegd aan het dossier.`
-                : "Notitie over het gesprek. Deze wordt toegevoegd aan het dossier."}
+                ? `Notitie over het gesprek met ${beoordelingKandidaat.naam}. Daarna: +1 dag beoordelen, binnen 3 dagen beslissing (diskwalificatie / training / actief).`
+                : "Notitie over het gesprek. Daarna: +1 dag beoordelen, binnen 3 dagen beslissing."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5 py-1">

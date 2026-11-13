@@ -14,6 +14,13 @@ import {
   SOLLICITATIE_STATUS_MET_VERVOLG,
   SOLLICITATIE_STATUSES,
 } from "@/lib/sollicitatie";
+import {
+  isSollicitatieUitkomstStatus,
+  SOLLICITATIE_TAKEL_BEOORDELEN,
+  SOLLICITATIE_TAKEL_BESLISSING,
+  sollicitatieBeoordelingDueAt,
+  sollicitatieBeslissingDueAt,
+} from "@/lib/sollicitatie-deadlines";
 import { resolveSollicitatieAdres } from "@/lib/sollicitatie-adres";
 import type { SollicitatieStatus } from "@/types/database";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
@@ -248,34 +255,120 @@ export async function PATCH(
     if (error) throw error;
 
     let taak = null;
-    if (vervolgTitel && vervolgDue) {
+    const takenSelect =
+      "*, sollicitaties(id, naam, email, telefoon, functie, status)";
+    const prevStatus = parseSollicitatieStatus(current?.status);
+    const nextStatus = patch.status
+      ? parseSollicitatieStatus(patch.status)
+      : prevStatus;
+
+    const enteringBeoordeling =
+      nextStatus === SOLLICITATIE_STATUS_MET_VERVOLG &&
+      prevStatus !== SOLLICITATIE_STATUS_MET_VERVOLG;
+    const enteringUitkomst =
+      isSollicitatieUitkomstStatus(nextStatus) &&
+      !isSollicitatieUitkomstStatus(prevStatus);
+
+    async function insertTaak(opts: {
+      titel: string;
+      due_at: string;
+      notities?: string | null;
+    }) {
       const { data: created, error: taakErr } = await sb
         .from("sollicitatie_taken")
         .insert({
           sollicitatie_id: id,
-          titel: vervolgTitel,
+          titel: opts.titel,
           status: "todo",
-          due_at: vervolgDue,
-          notities: notitieAppend,
+          due_at: opts.due_at,
+          notities: opts.notities ?? null,
         })
-        .select(
-          "*, sollicitaties(id, naam, email, telefoon, functie, status)"
-        )
+        .select(takenSelect)
         .single();
       if (taakErr) {
         if (taakErr.code === "42P01") {
-          return NextResponse.json(
-            {
-              error:
-                "Voer eerst supabase/migrate-sollicitatie-status-v2.sql uit in Supabase.",
-              sollicitatie: data,
-            },
-            { status: 400 }
-          );
+          return {
+            error: NextResponse.json(
+              {
+                error:
+                  "Voer eerst supabase/migrate-sollicitatie-status-v2.sql uit in Supabase.",
+                sollicitatie: data,
+              },
+              { status: 400 }
+            ),
+          };
         }
         throw taakErr;
       }
-      taak = created;
+      return { created };
+    }
+
+    if (enteringBeoordeling) {
+      // Basis = einde/start laatste gesprek, anders nu.
+      let gesprekBase = new Date().toISOString();
+      const { data: lastAfspraak } = await sb
+        .from("sollicitatie_afspraken")
+        .select("end_at, start_at")
+        .eq("sollicitatie_id", id)
+        .order("start_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastAfspraak) {
+        const end = (lastAfspraak.end_at as string | null) || null;
+        const start = (lastAfspraak.start_at as string | null) || null;
+        if (end || start) gesprekBase = end || start || gesprekBase;
+      }
+
+      const { data: openTaken } = await sb
+        .from("sollicitatie_taken")
+        .select("id, titel")
+        .eq("sollicitatie_id", id)
+        .neq("status", "done");
+      const openTitels = new Set(
+        (openTaken || []).map((t) => String(t.titel || ""))
+      );
+
+      if (!openTitels.has(SOLLICITATIE_TAKEL_BEOORDELEN)) {
+        const r = await insertTaak({
+          titel: SOLLICITATIE_TAKEL_BEOORDELEN,
+          due_at: sollicitatieBeoordelingDueAt(gesprekBase),
+          notities: notitieAppend,
+        });
+        if ("error" in r && r.error) return r.error;
+        taak = r.created ?? taak;
+      }
+      if (!openTitels.has(SOLLICITATIE_TAKEL_BESLISSING)) {
+        const r = await insertTaak({
+          titel: SOLLICITATIE_TAKEL_BESLISSING,
+          due_at: sollicitatieBeslissingDueAt(gesprekBase),
+          notities:
+            "Binnen 3 dagen: gesprek gehad — diskwalificatie, aangenomen — training gepland, of aangenomen — actief.",
+        });
+        if ("error" in r && r.error) return r.error;
+        taak = r.created ?? taak;
+      }
+    } else if (vervolgTitel && vervolgDue) {
+      // Handmatige vervolgtaak (andere statussen)
+      const r = await insertTaak({
+        titel: vervolgTitel,
+        due_at: vervolgDue,
+        notities: notitieAppend,
+      });
+      if ("error" in r && r.error) return r.error;
+      taak = r.created ?? null;
+    }
+
+    if (enteringUitkomst) {
+      await sb
+        .from("sollicitatie_taken")
+        .update({ status: "done", updated_at: new Date().toISOString() })
+        .eq("sollicitatie_id", id)
+        .neq("status", "done")
+        .in("titel", [
+          SOLLICITATIE_TAKEL_BEOORDELEN,
+          SOLLICITATIE_TAKEL_BESLISSING,
+          "Beoordeling afronden",
+        ]);
     }
 
     let mailSent = false;

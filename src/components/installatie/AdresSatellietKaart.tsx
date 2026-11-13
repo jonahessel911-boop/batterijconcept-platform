@@ -147,7 +147,6 @@ export function AdresSatellietKaart({
             mapTypeIds: ["hybrid", "satellite", "roadmap"],
           },
           rotateControl: true,
-          tiltControl: true,
           streetViewControl: true,
           fullscreenControl: true,
           zoomControl: true,

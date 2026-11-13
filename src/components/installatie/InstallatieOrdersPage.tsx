@@ -166,7 +166,23 @@ export function InstallatieOrdersPage({
     setError(null);
     try {
       const res = await fetch(`/api/installatie/${encodeURIComponent(apiToken)}`);
-      const data = await res.json();
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        partner?: { id?: string; naam?: string };
+        api_token?: string;
+        role?: string;
+        teamgenoot?: { naam?: string };
+        viewer_naam?: string;
+        tabs?: unknown;
+        orders?: OrderRow[];
+      } | null;
+      if (!data || typeof data !== "object") {
+        throw new Error(
+          res.ok
+            ? "Portaal-antwoord ongeldig"
+            : `Portaal laden mislukt (${res.status})`
+        );
+      }
       if (res.status === 401 || res.status === 404) {
         setSessionReady(false);
         setAllowedTabs(["agenda"]);
@@ -239,7 +255,18 @@ export function InstallatieOrdersPage({
       const res = await fetch(
         `/api/installatie/${encodeURIComponent(apiToken)}/facturen`
       );
-      const data = await res.json();
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        partner?: { naam?: string; heeft_kvk?: boolean };
+        facturen?: FactuurRow[];
+      } | null;
+      if (!data || typeof data !== "object") {
+        throw new Error(
+          res.ok
+            ? "Facturen-antwoord ongeldig"
+            : `Facturen laden mislukt (${res.status})`
+        );
+      }
       if (!res.ok) throw new Error(data.error || "Facturen laden mislukt");
       if (data.partner?.naam) setPartnerNaam(data.partner.naam);
       setFacturen((data.facturen || []) as FactuurRow[]);
@@ -309,7 +336,7 @@ export function InstallatieOrdersPage({
           body: JSON.stringify({ action: "goedkeuren" }),
         }
       );
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Goedkeuren mislukt");
       await loadFacturen();
     } catch (e) {
@@ -331,7 +358,7 @@ export function InstallatieOrdersPage({
           body: JSON.stringify({ action: "versturen" }),
         }
       );
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Versturen mislukt");
       await loadFacturen();
     } catch (e) {

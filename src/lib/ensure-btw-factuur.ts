@@ -260,7 +260,12 @@ export async function ensureRestantDraftFactuur(
     orderExBtw?: number | null;
     warmtefonds?: boolean;
   }
-): Promise<{ id: string; factuur_nummer: string; created: boolean } | null> {
+): Promise<{
+  id: string;
+  factuur_nummer: string;
+  created: boolean;
+  bedragIncBtw: number;
+} | null> {
   const { data: existingList } = await sb
     .from("facturen")
     .select("id, factuur_nummer, status, omschrijving, bedrag_inc_btw")
@@ -289,6 +294,11 @@ export async function ensureRestantDraftFactuur(
         id: anyRestant.id,
         factuur_nummer: anyRestant.factuur_nummer,
         created: false,
+        bedragIncBtw:
+          anyRestant.bedrag_inc_btw != null &&
+          Number.isFinite(Number(anyRestant.bedrag_inc_btw))
+            ? Number(anyRestant.bedrag_inc_btw)
+            : 0,
       };
     }
     return null;
@@ -331,6 +341,7 @@ export async function ensureRestantDraftFactuur(
       id: existingConcept.id,
       factuur_nummer: existingConcept.factuur_nummer,
       created: false,
+      bedragIncBtw,
     };
   }
 
@@ -366,6 +377,7 @@ export async function ensureRestantDraftFactuur(
     id: created.id,
     factuur_nummer: created.factuur_nummer,
     created: true,
+    bedragIncBtw,
   };
 }
 

@@ -66,7 +66,7 @@ export async function GET(
         error.message?.includes("installatie_teamgenoot") ||
         error.code === "PGRST200")
     ) {
-      ({ data, error } = await sb
+      const soft = await sb
         .from("projecten")
         .select(SELECT_FALLBACK)
         .eq("installatie_partner_id", partner.id)
@@ -74,7 +74,9 @@ export async function GET(
         .or(
           "installatie_at.not.is.null,status.in.(installatie_ingepland,installatie_voltooid,review_gevraagd,afgerond,service)"
         )
-        .order("installatie_at", { ascending: false, nullsFirst: false }));
+        .order("installatie_at", { ascending: false, nullsFirst: false });
+      data = soft.data as typeof data;
+      error = soft.error;
     }
 
     if (error) throw error;

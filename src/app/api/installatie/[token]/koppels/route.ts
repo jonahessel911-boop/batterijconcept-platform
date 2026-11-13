@@ -78,11 +78,13 @@ export async function GET(
     }
     if (error) {
       // Relatie-alias faalt soms → flat
-      ({ data, error } = await sb
+      const flat = await sb
         .from("installatie_partner_koppels")
         .select(SELECT_FLAT)
         .eq("partner_id", partner.id)
-        .order("naam"));
+        .order("naam");
+      data = flat.data as typeof data;
+      error = flat.error;
       if (error && isMissing(error)) {
         return NextResponse.json({
           koppels: [],
