@@ -413,7 +413,7 @@ export function AgendaPanel({
   adviseurs: adviseursProp = [],
   onStatusChange,
   onBellerChange,
-  /** Admin: toon beschikbare slots voor de geselecteerde week. */
+  /** Admin / backoffice / beller: toon ingepland vs open slots voor de week. */
   showAdminSlots = false,
   /** Admin/backoffice: toon maandconversie (sales/gelopen) bij kolomnamen. */
   showConversie = false,

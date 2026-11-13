@@ -1845,7 +1845,11 @@ export function CrmShell() {
                         onBellerChange={
                           userRol === "admin" ? updateLeadBeller : undefined
                         }
-                        showAdminSlots={userRol === "admin"}
+                        showAdminSlots={
+                          userRol === "admin" ||
+                          userRol === "backoffice" ||
+                          isBellerRol(userRol)
+                        }
                         showConversie={
                           userRol === "admin" || userRol === "backoffice"
                         }
