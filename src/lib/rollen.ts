@@ -155,6 +155,7 @@ export function tabsVoorRol(
         "inbox",
         "facturen",
         "purchasing",
+        "sales_cockpit",
         "finance",
         "facturen_mailbox",
         "stuur",

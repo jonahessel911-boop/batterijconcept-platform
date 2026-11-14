@@ -89,6 +89,7 @@ import { AdviseursKaartPanel } from "./AdviseursKaartPanel";
 import { AdviseursContactLijst } from "./AdviseursContactLijst";
 import { AdviseurInstellingenPanel } from "./AdviseurInstellingenPanel";
 import { magTodayDashboard } from "@/lib/admin-adviseur";
+import { SalesCockpitPanel } from "./SalesCockpitPanel";
 
 const VALID_TABS: CrmTab[] = [
   "today",
@@ -107,6 +108,7 @@ const VALID_TABS: CrmTab[] = [
   "inkomend",
   "inbox",
   "purchasing",
+  "sales_cockpit",
   "finance",
   "facturen_mailbox",
   "rapportage",
@@ -147,6 +149,10 @@ export function CrmShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlTab = parseTab(searchParams.get("tab"));
+  const salesCockpitFullscreen =
+    urlTab === "sales_cockpit" && searchParams.get("fs") === "1";
+  const salesCockpitLiveWall =
+    urlTab === "sales_cockpit" && searchParams.get("overview") === "live";
   const [tab, setTab] = useState<CrmTab>(urlTab);
   const [boView] = useBoViewStore();
 
@@ -183,6 +189,7 @@ export function CrmShell() {
       inkomend: "Inkomend",
       inbox: "Inbox",
       purchasing: "Purchasing",
+      sales_cockpit: "Salescockpit",
       rapportage: "Rapportage",
       admin: "Admin",
       ai: "AI",
@@ -1406,6 +1413,10 @@ export function CrmShell() {
       title: "Purchasing",
       sub: "Materiaal inkopen · schouw · betaling · Apex",
     },
+    sales_cockpit: {
+      title: "Cockpit",
+      sub: "Sales · periode en tabs",
+    },
     finance: {
       title: "Finance",
       sub: "Uitbetalingen en kaspositie",
@@ -1490,12 +1501,18 @@ export function CrmShell() {
   return (
     <div
       className={[
-        "crm-bg flex flex-col",
-        tab === "voice_ai" || tab === "instroom" || tab === "partners"
-          ? "h-dvh max-h-dvh overflow-hidden"
-          : "min-h-screen",
-      ].join(" ")}
+        tab === "sales_cockpit" ? "sales-cockpit-shell" : "crm-bg",
+        "flex flex-col",
+        tab === "sales_cockpit"
+          ? "h-dvh max-h-dvh overflow-hidden bg-[var(--wash)]"
+          : tab === "voice_ai" || tab === "instroom" || tab === "partners"
+            ? "h-dvh max-h-dvh overflow-hidden"
+            : "min-h-screen",
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
+      {tab === "sales_cockpit" ? null : (
       <CrmHeader
         onRefresh={load}
         loading={loading}
@@ -1524,6 +1541,7 @@ export function CrmShell() {
           });
         }}
       />
+      )}
 
       {impersonator ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#854D0E]/30 bg-[#FFF8D6] px-4 py-2.5 sm:px-6">
@@ -1567,32 +1585,34 @@ export function CrmShell() {
       ) : null}
 
       <div className="flex min-h-0 min-w-0 w-full flex-1">
-        <CrmSidebar
-          active={tab}
-          onChange={changeTab}
-          counts={counts}
-          allowedTabs={visibleTabIds}
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => {
-            setSidebarCollapsed((v) => {
-              const next = !v;
-              try {
-                localStorage.setItem(
-                  "bc_crm_sidebar_rail_v1",
-                  next ? "1" : "0"
-                );
-              } catch {
-                /* ignore */
-              }
-              return next;
-            });
-          }}
-          mobileOpen={sidebarMobileOpen}
-          onMobileClose={() => setSidebarMobileOpen(false)}
-          boCounts={{
-            acties: backofficeActieCount,
-          }}
-        />
+        {salesCockpitFullscreen ? null : (
+          <CrmSidebar
+            active={tab}
+            onChange={changeTab}
+            counts={counts}
+            allowedTabs={visibleTabIds}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => {
+              setSidebarCollapsed((v) => {
+                const next = !v;
+                try {
+                  localStorage.setItem(
+                    "bc_crm_sidebar_rail_v1",
+                    next ? "1" : "0"
+                  );
+                } catch {
+                  /* ignore */
+                }
+                return next;
+              });
+            }}
+            mobileOpen={sidebarMobileOpen}
+            onMobileClose={() => setSidebarMobileOpen(false)}
+            boCounts={{
+              acties: backofficeActieCount,
+            }}
+          />
+        )}
 
         <main
           className={[
@@ -1603,11 +1623,21 @@ export function CrmShell() {
             tab === "instroom" ||
             tab === "partners"
               ? "overflow-hidden px-0 py-0"
-              : "overflow-auto px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
+              : tab === "sales_cockpit"
+                ? [
+                    "sales-cockpit-shell-main",
+                    salesCockpitLiveWall
+                      ? "overflow-hidden bg-[var(--wash)] px-2 py-2 sm:px-3 sm:py-3"
+                      : salesCockpitFullscreen
+                        ? "overflow-auto bg-[var(--wash)] px-3 py-3 sm:px-5 sm:py-4"
+                        : "overflow-auto bg-[var(--wash)] px-3 py-3 sm:px-4 sm:py-4 lg:px-5",
+                  ].join(" ")
+                : "overflow-auto px-3 py-4 sm:px-5 sm:py-6 lg:px-6 lg:py-8",
           ].join(" ")}
         >
         {tab !== "leaderboard" &&
         tab !== "voice_ai" &&
+        tab !== "sales_cockpit" &&
         tab !== "inbox" &&
         tab !== "instroom" &&
         tab !== "partners" ? (
@@ -1646,7 +1676,10 @@ export function CrmShell() {
         </div>
         ) : null}
 
-        {error && tab !== "leaderboard" && tab !== "voice_ai" && (
+        {error &&
+        tab !== "leaderboard" &&
+        tab !== "voice_ai" &&
+        tab !== "sales_cockpit" && (
           <div className="mb-4 border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
             {error}
           </div>
@@ -1654,14 +1687,21 @@ export function CrmShell() {
 
         <div
           className={[
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+            "flex min-h-0 min-w-0 flex-1 flex-col",
+            tab === "sales_cockpit"
+              ? salesCockpitLiveWall
+                ? "overflow-hidden bg-transparent"
+                : "overflow-visible bg-transparent"
+              : "overflow-hidden",
             tab === "leaderboard"
               ? "border-0 bg-black"
               : tab === "voice_ai"
                 ? "border-0 bg-wash"
-                : tab === "instroom" || tab === "partners"
-                  ? "border-0 bg-white"
-                  : "border border-line bg-white",
+                : tab === "sales_cockpit"
+                  ? "border-0 bg-transparent"
+                  : tab === "instroom" || tab === "partners"
+                    ? "border-0 bg-white"
+                    : "border border-line bg-white",
           ].join(" ")}
         >
           {userRol === "installateur" ? (
@@ -1684,7 +1724,11 @@ export function CrmShell() {
               tab === "instroom" ||
               tab === "partners"
                 ? "overflow-hidden"
-                : "overflow-auto",
+                : tab === "sales_cockpit"
+                  ? salesCockpitLiveWall
+                    ? "flex flex-col overflow-hidden"
+                    : "overflow-visible"
+                  : "overflow-auto",
             ].join(" ")}
           >
             {(!sessionReady || !userRol) && !sessionUser ? (
@@ -1704,7 +1748,8 @@ export function CrmShell() {
               tab !== "voice_ai" &&
               tab !== "netto" &&
               tab !== "leaderboard" &&
-              tab !== "instroom" ? (
+              tab !== "instroom" &&
+              tab !== "sales_cockpit" ? (
               <p className="px-6 py-14 text-center text-sm text-muted">Laden…</p>
             ) : !userRol ||
               !magTab(userRol, tab, { email: sessionUser?.email }) ? (
@@ -1957,6 +2002,11 @@ export function CrmShell() {
                 {tab === "inkomend" && <InkomendPanel />}
                 {tab === "inbox" && <InboxPanel />}
                 {tab === "purchasing" && <PurchasingPanel />}
+                {tab === "sales_cockpit" && (
+                  <SalesCockpitPanel
+                    onOpenMenu={() => setSidebarMobileOpen(true)}
+                  />
+                )}
                 {tab === "rapportage" && (
                   <RapportagePanel />
                 )}

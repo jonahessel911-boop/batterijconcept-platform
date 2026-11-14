@@ -61,6 +61,22 @@ export const AFSPRAAK_UITKOMSTEN: LeadStatus[] = [
   "vervolg_geen_contact",
 ];
 
+/**
+ * Afboekuitkomsten die géén gelopen gesprek zijn voor adviseur-conversie.
+ * Deur niet open / afgezegd: bezoek was er, maar geen gesprek — telt niet
+ * in gelopen→sale denominators (Sales Manager, rapportage, cockpit).
+ */
+export const NIET_GELOPEN_UITKOMSTEN = new Set<string>([
+  "deur_niet_open",
+  "afspraak_afgezegd_klant",
+]);
+
+export function isNietGelopenUitkomst(
+  status: string | null | undefined
+): boolean {
+  return !!status && NIET_GELOPEN_UITKOMSTEN.has(status);
+}
+
 /** Bel-uitkomsten (excl. terugbel-afspraak / warme terugbel — die zijn aparte acties). */
 export const BEL_UITKOMSTEN: LeadStatus[] = [
   "foutief_nummer",

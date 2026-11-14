@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -167,6 +168,19 @@ export async function POST(req: NextRequest) {
     await sb.from("leads").update({ status: "afspraak" }).eq("id", body.lead_id);
     const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
     queueLeadMetaCapi(body.lead_id);
+
+    await logLeadEvent({
+      leadId: body.lead_id,
+      soort: "offerte",
+      titel: `Offerte ${offerte.offerte_nummer} aangemaakt`,
+      detail: null,
+      meta: {
+        offerte_id: offerte.id,
+        offerte_nummer: offerte.offerte_nummer,
+        status: "concept",
+        actor_id: session.adviseurId || null,
+      },
+    });
 
     const { appBaseUrl } = await import("@/lib/email/postmark");
     const signUrl = `${appBaseUrl()}/offerte/${offerte.sign_token}`;
