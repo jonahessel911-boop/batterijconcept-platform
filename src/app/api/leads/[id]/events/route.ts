@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { logLeadEvent } from "@/lib/lead-events";
@@ -61,12 +63,26 @@ export async function POST(
     return NextResponse.json({ error: "titel is verplicht" }, { status: 400 });
   }
   try {
+    const jar = await cookies();
+    const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+    const baseMeta =
+      body.meta && typeof body.meta === "object" && !Array.isArray(body.meta)
+        ? { ...body.meta }
+        : {};
+    if (session?.adviseurId) {
+      if (baseMeta.adviseur_id == null) {
+        baseMeta.adviseur_id = session.adviseurId;
+      }
+      if (baseMeta.adviseur_naam == null && session.naam) {
+        baseMeta.adviseur_naam = session.naam;
+      }
+    }
     await logLeadEvent({
       leadId: id,
       soort: body.soort || "overig",
       titel: body.titel.trim(),
       detail: body.detail,
-      meta: body.meta,
+      meta: Object.keys(baseMeta).length > 0 ? baseMeta : body.meta,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

@@ -131,6 +131,7 @@ export function tabsVoorRol(
         "inbox",
         "facturen",
         "purchasing",
+        "sales_cockpit",
         "rapportage",
         "voice_ai",
         "adviseurs",

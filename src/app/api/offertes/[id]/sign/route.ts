@@ -167,6 +167,20 @@ export async function POST(
 
     const klantNaam = body.naam.trim() || offerte.leads?.naam || "klant";
 
+    const { logLeadEvent } = await import("@/lib/lead-events");
+    await logLeadEvent({
+      leadId: offerte.lead_id as string,
+      soort: "offerte",
+      titel: `Offerte ${offerte.offerte_nummer} getekend`,
+      detail: `Getekend door ${klantNaam}`,
+      meta: {
+        offerte_id: offerte.id,
+        offerte_nummer: offerte.offerte_nummer,
+        status: "ondertekend",
+        ondertekend_naam: klantNaam,
+      },
+    });
+
     // Geen aanbetalingsfactuur-concept bij ondertekenen — pas bij
     // “Actie afronden” / doorzetten naar backoffice (juiste aanbetaling).
 

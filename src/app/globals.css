@@ -49,6 +49,258 @@ body {
   background: var(--wash);
 }
 
+/* Sales cockpit theme (TV / wallboard) */
+.sales-cockpit-theme {
+  color: var(--ink);
+  background: var(--wash);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/*
+ * Dark tokens op html: shell/sidebar/padding erven --wash mee,
+ * zodat er geen lichte rand buiten de cockpit blijft.
+ */
+html[data-sales-cockpit-theme="dark"] {
+  --green: #3ecf6a;
+  --green-dark: #2aa855;
+  --green-deeper: #e7fff0;
+  --green-soft: #143528;
+  --orange: #ff8a3d;
+  --ink: #eef5f0;
+  --muted: #93a59a;
+  --wash: #070d0b;
+  --charcoal: #d7e0da;
+  /* Surface voor kaarten; text-white wordt apart licht gehouden */
+  --white: #141e1a;
+  --line: #1e2c26;
+  --line-strong: #2f4037;
+  color-scheme: dark;
+  background: var(--wash);
+}
+
+html[data-sales-cockpit-theme="dark"] body {
+  background: var(--wash);
+  color: var(--ink);
+  color-scheme: dark;
+}
+
+.sales-cockpit-theme[data-theme="dark"] {
+  background: var(--wash);
+  color: var(--ink);
+  color-scheme: dark;
+}
+
+/* Shell / viewport: geen lichte rand buiten de cockpit */
+html[data-sales-cockpit-theme="dark"] .sales-cockpit-shell,
+html[data-sales-cockpit-theme="dark"] .sales-cockpit-shell-main {
+  background: var(--wash) !important;
+}
+
+html[data-sales-cockpit-theme="dark"] .crm-bg {
+  background: var(--wash) !important;
+}
+
+/* Sidebar mee in dark wanneer cockpit dark is */
+html[data-sales-cockpit-theme="dark"] .sales-cockpit-shell aside {
+  background: #0a1210 !important;
+  border-color: var(--line) !important;
+  color: var(--ink);
+}
+
+html[data-sales-cockpit-theme="dark"] .sales-cockpit-shell aside .hover\:bg-wash:hover {
+  background-color: #121a17 !important;
+}
+
+/* text-white moet écht licht blijven (--white is surface) */
+html[data-sales-cockpit-theme="dark"] .text-white {
+  color: #f3faf6 !important;
+}
+
+html[data-sales-cockpit-theme="dark"] .bg-white\/20 {
+  background-color: rgba(243, 250, 246, 0.2) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .bg-white,
+.sales-cockpit-theme[data-theme="dark"] .bg-white\/90,
+.sales-cockpit-theme[data-theme="dark"] .bg-white\/95,
+.sales-cockpit-theme[data-theme="dark"] .bg-white\/80,
+.sales-cockpit-theme[data-theme="dark"] .bg-white\/60,
+.sales-cockpit-theme[data-theme="dark"] .bg-white\/55 {
+  background-color: #141e1a !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-50,
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-50\/80,
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-50\/40,
+.sales-cockpit-theme[data-theme="dark"] .bg-wash\/40,
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-100 {
+  background-color: #0e1713 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .border-zinc-100,
+.sales-cockpit-theme[data-theme="dark"] .border-zinc-200,
+.sales-cockpit-theme[data-theme="dark"] .border-zinc-200\/70,
+.sales-cockpit-theme[data-theme="dark"] .border-zinc-200\/80 {
+  border-color: #24342d !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .border-line,
+.sales-cockpit-theme[data-theme="dark"] .border-line-strong {
+  border-color: var(--line) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-zinc-300,
+.sales-cockpit-theme[data-theme="dark"] .text-zinc-500,
+.sales-cockpit-theme[data-theme="dark"] .text-zinc-600,
+.sales-cockpit-theme[data-theme="dark"] .text-zinc-700 {
+  color: #8fa197 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-zinc-950,
+.sales-cockpit-theme[data-theme="dark"] .text-ink {
+  color: var(--ink) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-muted {
+  color: var(--muted) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .bg-teal-50,
+.sales-cockpit-theme[data-theme="dark"] .bg-teal-50\/70,
+.sales-cockpit-theme[data-theme="dark"] .bg-emerald-50,
+.sales-cockpit-theme[data-theme="dark"] .bg-sky-50,
+.sales-cockpit-theme[data-theme="dark"] .bg-amber-50,
+.sales-cockpit-theme[data-theme="dark"] .bg-orange-50 {
+  background-color: rgba(20, 184, 166, 0.12) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .border-teal-200,
+.sales-cockpit-theme[data-theme="dark"] .border-amber-200,
+.sales-cockpit-theme[data-theme="dark"] .border-sky-200,
+.sales-cockpit-theme[data-theme="dark"] .border-emerald-200 {
+  border-color: rgba(45, 212, 191, 0.28) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-teal-700,
+.sales-cockpit-theme[data-theme="dark"] .text-teal-800,
+.sales-cockpit-theme[data-theme="dark"] .text-teal-900,
+.sales-cockpit-theme[data-theme="dark"] .text-emerald-700,
+.sales-cockpit-theme[data-theme="dark"] .text-emerald-900,
+.sales-cockpit-theme[data-theme="dark"] .text-sky-700,
+.sales-cockpit-theme[data-theme="dark"] .text-sky-800,
+.sales-cockpit-theme[data-theme="dark"] .text-sky-900,
+.sales-cockpit-theme[data-theme="dark"] .text-amber-800,
+.sales-cockpit-theme[data-theme="dark"] .text-amber-900,
+.sales-cockpit-theme[data-theme="dark"] .text-amber-950 {
+  color: #7ee8d4 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-emerald-700,
+.sales-cockpit-theme[data-theme="dark"] .text-emerald-900 {
+  color: #6ee7b7 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-sky-700,
+.sales-cockpit-theme[data-theme="dark"] .text-sky-800,
+.sales-cockpit-theme[data-theme="dark"] .text-sky-900 {
+  color: #7dd3fc !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-amber-800,
+.sales-cockpit-theme[data-theme="dark"] .text-amber-900,
+.sales-cockpit-theme[data-theme="dark"] .text-amber-950 {
+  color: #fbbf24 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .ring-white,
+.sales-cockpit-theme[data-theme="dark"] .ring-white\/80 {
+  --tw-ring-color: #1a2822 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .from-white {
+  --tw-gradient-from: #141e1a !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .shadow-sm {
+  --tw-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.55);
+  --tw-shadow-color: rgba(0, 0, 0, 0.55);
+  box-shadow: var(--tw-shadow);
+}
+
+/* Status shells (adviseurs) */
+.sales-cockpit-theme[data-theme="dark"] .bg-teal-50\/70 {
+  background-color: rgba(15, 118, 110, 0.28) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-amber-50\/70 {
+  background-color: rgba(180, 83, 9, 0.26) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-sky-50\/70 {
+  background-color: rgba(3, 105, 161, 0.28) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-50\/80 {
+  background-color: rgba(24, 36, 31, 0.95) !important;
+}
+
+/* Avatar / soft fills */
+.sales-cockpit-theme[data-theme="dark"] .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.22) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-sky-100 {
+  background-color: rgba(14, 165, 233, 0.22) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-teal-100,
+.sales-cockpit-theme[data-theme="dark"] .bg-emerald-100 {
+  background-color: rgba(16, 185, 129, 0.22) !important;
+}
+
+/* Badges */
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-zinc-100"] {
+  background-color: #1a2621 !important;
+}
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-emerald-50"] {
+  background-color: rgba(16, 185, 129, 0.2) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-sky-50"] {
+  background-color: rgba(14, 165, 233, 0.2) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-amber-50"] {
+  background-color: rgba(245, 158, 11, 0.2) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-teal-50"] {
+  background-color: rgba(20, 184, 166, 0.2) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] [class*="bg-rose-50"] {
+  background-color: rgba(244, 63, 94, 0.18) !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .text-rose-700 {
+  color: #fb7185 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .ring-black\/\[0\.03\] {
+  --tw-ring-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .text-green-deeper {
+  color: var(--green-deeper) !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .border-dashed {
+  border-color: #2a3b33 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .hover\:bg-zinc-50:hover,
+.sales-cockpit-theme[data-theme="dark"] .hover\:bg-zinc-100:hover {
+  background-color: #1a2621 !important;
+}
+
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-900 {
+  background-color: #e7fff0 !important;
+}
+.sales-cockpit-theme[data-theme="dark"] .bg-zinc-900.text-white,
+.sales-cockpit-theme[data-theme="dark"] .text-white.bg-zinc-900 {
+  color: #0a1210 !important;
+}
+
 /* Strakke CRM-tabel */
 .crm-table {
   width: 100%;

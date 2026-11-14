@@ -17,6 +17,7 @@ export const CRM_TABS: { id: CrmTab; label: string }[] = [
   { id: "inbox", label: "Inbox" },
   { id: "facturen", label: "Facturen" },
   { id: "purchasing", label: "Purchasing" },
+  { id: "sales_cockpit", label: "Salesdashboard" },
   { id: "rapportage", label: "Rapportage" },
   { id: "voice_ai", label: "Voice AI" },
   { id: "adviseurs", label: "Adviseurs" },

@@ -113,6 +113,12 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M18 20V10M12 20V4M6 20v-6" />
     </Icon>
   ),
+  sales_cockpit: (
+    <Icon>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l2.5 2.5" />
+    </Icon>
+  ),
   admin: (
     <Icon>
       <circle cx="12" cy="12" r="3" />
@@ -171,6 +177,7 @@ const GROUPS: SidebarGroup[] = [
     id: "sturing",
     label: "Sturing",
     items: [
+      { id: "sales_cockpit", label: "Salescockpit", icon: ICONS.sales_cockpit },
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
       { id: "voice_ai", label: "Voice AI", icon: ICONS.bellen },
       { id: "adviseurs", label: "Adviseurs", icon: ICONS.partners },

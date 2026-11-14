@@ -172,6 +172,12 @@ export async function POST(req: NextRequest) {
       detail: needsVervolg
         ? "Via afboek + vervolg gepland"
         : "Via afboek (eindstatus)",
+      meta: {
+        afspraak_id: current.id,
+        adviseur_id: session.adviseurId,
+        adviseur_naam: session.naam,
+        bron: "afboek",
+      },
     });
 
     return NextResponse.json({

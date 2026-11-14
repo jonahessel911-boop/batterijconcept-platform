@@ -5,6 +5,7 @@ import { buildOffertePdfForId } from "@/lib/offerte-pdf-build";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import { offerteVerstuurdEmail } from "@/lib/email/templates";
+import { logLeadEvent } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -157,6 +158,21 @@ export async function POST(
         },
         { status: 500 }
       );
+    }
+
+    const leadId = built.offerte.lead_id as string | undefined;
+    if (leadId) {
+      await logLeadEvent({
+        leadId,
+        soort: "offerte",
+        titel: `Offerte ${offerte.offerte_nummer} verstuurd`,
+        detail: "Verstuurd naar klant",
+        meta: {
+          offerte_id: id,
+          offerte_nummer: offerte.offerte_nummer,
+          status: "verzonden",
+        },
+      });
     }
 
     return NextResponse.json({
