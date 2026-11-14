@@ -336,9 +336,19 @@ export async function syncLeadMetaCapi(
   };
 }
 
-/** Fire-and-forget vanaf server routes. */
+/** Fire-and-forget vanaf server routes. Meta, daarna dezelfde funnel naar TikTok. */
 export function queueLeadMetaCapi(leadId: string): void {
-  void syncLeadMetaCapi(leadId).catch((e) =>
-    console.error("meta-capi:", e)
-  );
+  void (async () => {
+    try {
+      await syncLeadMetaCapi(leadId);
+    } catch (e) {
+      console.error("meta-capi:", e);
+    }
+    try {
+      const { syncLeadTikTokEvents } = await import("@/lib/tiktok-events");
+      await syncLeadTikTokEvents(leadId);
+    } catch (e) {
+      console.error("tiktok-events:", e);
+    }
+  })();
 }

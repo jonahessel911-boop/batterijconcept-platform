@@ -6,6 +6,7 @@ import {
   FACTUUR_BEDRIJFSADRES_OP_PDF,
   factuurBetaaltermijnDagen,
   factuurHeeftAdresGegevensOpPdf,
+  ibanVoorKlantfactuur,
 } from "@/lib/factuur-betaling";
 import {
   PDF_COLORS,
@@ -119,6 +120,7 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 16;
   const co = companyInfo();
+  co.iban = ibanVoorKlantfactuur(factuur);
   if (factuurHeeftAdresGegevensOpPdf(factuur.notities)) {
     co.adres = FACTUUR_BEDRIJFSADRES_OP_PDF.straat;
     co.postcodePlaats = FACTUUR_BEDRIJFSADRES_OP_PDF.postcodePlaats;

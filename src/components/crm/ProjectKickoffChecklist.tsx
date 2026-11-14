@@ -83,15 +83,12 @@ export function ProjectKickoffChecklist({
   onFinancieringUpdated,
   onProjectUpdated,
   onFacturenChanged,
-  onOmzettenNaarWarmtefonds,
 }: {
   project: Project;
   facturen: Factuur[];
   onFinancieringUpdated?: (project: Project) => void;
   onProjectUpdated?: (project: Project) => void;
   onFacturenChanged?: () => void;
-  /** Eigen middelen → Warmtefonds (opent modal op ProjectPage). */
-  onOmzettenNaarWarmtefonds?: () => void;
 }) {
   const [waBusy, setWaBusy] = useState(false);
   const [afvinkBusy, setAfvinkBusy] = useState(false);
@@ -460,26 +457,6 @@ export function ProjectKickoffChecklist({
         Dit moet nu gebeuren
       </h2>
 
-      {!wf && onOmzettenNaarWarmtefonds ? (
-        <div className="mt-3 flex flex-col gap-2 border border-[#0D9488]/35 bg-[#F0FDFA] px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="text-[13px] font-semibold text-[#115E59]">
-              Eigen middelen → Warmtefonds?
-            </p>
-            <p className="mt-0.5 text-[12px] text-[#0F766E]">
-              Zet deze order om; standaard wordt de BTW de aanbetalingsfactuur.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onOmzettenNaarWarmtefonds}
-            className="shrink-0 bg-[#0D9488] px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-[#0F766E]"
-          >
-            Omzetten naar Warmtefonds →
-          </button>
-        </div>
-      ) : null}
-
       {waHint || actionHint ? (
         <p className="mt-3 border border-[#0D9488]/25 bg-[#F0FDFA] px-3 py-2 text-[12px] text-[#115E59]">
           {actionHint || waHint}
@@ -543,15 +520,6 @@ export function ProjectKickoffChecklist({
                         ? "Verstuur factuur"
                         : "Maak & verstuur"}
                   </button>
-                  {!wf && onOmzettenNaarWarmtefonds ? (
-                    <button
-                      type="button"
-                      onClick={onOmzettenNaarWarmtefonds}
-                      className="text-[11px] font-semibold text-[#0D9488] hover:underline"
-                    >
-                      Liever Warmtefonds? Omzetten →
-                    </button>
-                  ) : null}
                   {!lead?.email ? (
                     <p className="max-w-[14rem] text-right text-[11px] text-[#C45A12]">
                       Let op: geen e-mail op de lead

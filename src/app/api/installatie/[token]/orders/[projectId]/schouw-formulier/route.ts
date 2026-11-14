@@ -5,26 +5,23 @@ import {
   generateAndUploadSchouwFormulier,
   parseSchouwFormulierBody,
 } from "@/lib/schouw-formulier-upload";
+import { assertPortalOrderAccess } from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
-async function resolveOrder(token: string, projectId: string) {
-  const sb = getSupabaseAdmin();
-  const { data: partner, error: pErr } = await sb
-    .from("installatie_partners")
-    .select("id, actief, naam")
-    .eq("portal_token", token)
-    .single();
-  if (pErr || !partner || !partner.actief) return null;
-
-  const { data: order, error: oErr } = await sb
-    .from("projecten")
-    .select("id")
-    .eq("id", projectId)
-    .eq("installatie_partner_id", partner.id)
-    .single();
-  if (oErr || !order) return null;
-  return { sb, order, partner };
+async function resolveOrder(
+  token: string,
+  projectId: string,
+  req: NextRequest
+) {
+  const access = await assertPortalOrderAccess(token, projectId, "id", req);
+  if (!access) return null;
+  return {
+    sb: getSupabaseAdmin(),
+    order: access.order,
+    partner: access.session.partner,
+    session: access.session,
+  };
 }
 
 /**
@@ -37,7 +34,7 @@ export async function POST(
 ) {
   const { token, projectId } = await ctx.params;
   try {
-    const resolved = await resolveOrder(token, projectId);
+    const resolved = await resolveOrder(token, projectId, req);
     if (!resolved) {
       return NextResponse.json({ error: "Order niet gevonden" }, { status: 404 });
     }
@@ -48,19 +45,30 @@ export async function POST(
       return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    // Prefill opnemer met partnernaam als leeg
     if (!parsed.data.opnemer.trim()) {
-      parsed.data.opnemer = resolved.partner.naam || "";
+      return NextResponse.json(
+        { error: "Naam van de uitvoerende monteur is verplicht" },
+        { status: 400 }
+      );
     }
     if (!parsed.data.handtekeningOpnemerNaam.trim()) {
       parsed.data.handtekeningOpnemerNaam = parsed.data.opnemer;
+    }
+
+    let teamgenootId =
+      body && typeof body === "object" && "teamgenootId" in body
+        ? String((body as { teamgenootId?: unknown }).teamgenootId || "").trim() ||
+          null
+        : null;
+    if (resolved.session.kind === "teamgenoot") {
+      teamgenootId = resolved.session.teamgenoot.id;
     }
 
     const result = await generateAndUploadSchouwFormulier(
       resolved.sb,
       projectId,
       parsed.data,
-      { notitie: parsed.notitie }
+      { notitie: parsed.notitie, teamgenootId }
     );
     if ("error" in result) {
       return NextResponse.json(

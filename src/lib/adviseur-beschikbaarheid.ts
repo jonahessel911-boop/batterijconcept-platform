@@ -109,15 +109,18 @@ export function isHardGeblokkeerdSlot(
   return false;
 }
 
-/** Standaard-dicht: zondag, of maandag 10:00 weekmeeting (tenzij adviseur overslaat). */
+/** Standaard-dicht: zondag, of maandag 10:00 weekmeeting (tenzij vanaf huis). */
 export function isStandaardGeblokkeerdSlot(
   dateOrDayKey: Date | string,
   hour?: number,
-  adviseurId?: string | null
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): boolean {
   if (isZondagAmsterdam(dateOrDayKey)) return true;
   if (!isMaandagTienAmsterdam(dateOrDayKey, hour)) return false;
-  if (skipsMaandagOchtendmeeting(adviseurId)) return false;
+  if (skipsMaandagOchtendmeeting(adviseurId, startVanafHuisMaandag)) {
+    return false;
+  }
   return true;
 }
 
@@ -125,19 +128,26 @@ export function isStandaardGeblokkeerdSlot(
 export function magStandaardSlotOntblokken(
   dateOrDayKey: Date | string,
   hour?: number,
-  adviseurId?: string | null
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): boolean {
-  return isStandaardGeblokkeerdSlot(dateOrDayKey, hour, adviseurId);
+  return isStandaardGeblokkeerdSlot(
+    dateOrDayKey,
+    hour,
+    adviseurId,
+    startVanafHuisMaandag
+  );
 }
 
 export function standaardBlokkadeLabel(
   dateOrDayKey: Date | string,
   hour?: number,
-  adviseurId?: string | null
+  adviseurId?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): string | null {
   if (
     isMaandagTienAmsterdam(dateOrDayKey, hour) &&
-    !skipsMaandagOchtendmeeting(adviseurId)
+    !skipsMaandagOchtendmeeting(adviseurId, startVanafHuisMaandag)
   ) {
     return "Maandag 10:00 is standaard geblokkeerd (weekmeeting) — open via Afblokken";
   }
@@ -157,10 +167,18 @@ export function isSlotGeblokkeerd(
   dayKey: string,
   hour: number,
   afblokkingen: Set<string>,
-  vrijgaven: Set<string> = new Set()
+  vrijgaven: Set<string> = new Set(),
+  startVanafHuisMaandag?: boolean | null
 ): boolean {
   const key = afblokKey(adviseurId, dayKey, hour);
-  if (isStandaardGeblokkeerdSlot(dayKey, hour, adviseurId)) {
+  if (
+    isStandaardGeblokkeerdSlot(
+      dayKey,
+      hour,
+      adviseurId,
+      startVanafHuisMaandag
+    )
+  ) {
     return !vrijgaven.has(key);
   }
   return afblokkingen.has(key);
@@ -302,6 +320,30 @@ export async function loadSlotVrijgaven(
   return open;
 }
 
+async function loadStartVanafHuisMaandag(
+  sb: SupabaseClient,
+  adviseurId: string
+): Promise<boolean | null> {
+  const { data, error } = await sb
+    .from("adviseurs")
+    .select("start_vanaf_huis_maandag")
+    .eq("id", adviseurId)
+    .maybeSingle();
+  if (error) {
+    // Kolom nog niet gemigreerd → null = fallback-ID-set
+    if (
+      error.code === "42703" ||
+      /start_vanaf_huis_maandag/i.test(error.message || "")
+    ) {
+      return null;
+    }
+    return null;
+  }
+  const v = (data as { start_vanaf_huis_maandag?: boolean | null } | null)
+    ?.start_vanaf_huis_maandag;
+  return typeof v === "boolean" ? v : null;
+}
+
 export async function isSlotAfgeblokt(
   sb: SupabaseClient,
   adviseurId: string,
@@ -309,9 +351,10 @@ export async function isSlotAfgeblokt(
 ): Promise<boolean> {
   const dag = dayKeyAmsterdam(startAt);
   const hour = nearestSlotHour(startAt);
+  const startVanafHuis = await loadStartVanafHuisMaandag(sb, adviseurId);
 
   // Zondag / maandag 10: standaard dicht tenzij vrijgegeven
-  if (isStandaardGeblokkeerdSlot(startAt, hour, adviseurId)) {
+  if (isStandaardGeblokkeerdSlot(startAt, hour, adviseurId, startVanafHuis)) {
     const { data, error } = await sb
       .from("adviseur_slot_vrijgaven")
       .select("id")
@@ -349,12 +392,20 @@ export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
   slots: T[],
   adviseurId: string,
   blocked: Set<string>,
-  vrijgaven: Set<string> = new Set()
+  vrijgaven: Set<string> = new Set(),
+  startVanafHuisMaandag?: boolean | null
 ): T[] {
   return slots.filter((s) => {
     const dag = dayKeyAmsterdam(s.start_at);
     const hour = nearestSlotHour(s.start_at);
-    return !isSlotGeblokkeerd(adviseurId, dag, hour, blocked, vrijgaven);
+    return !isSlotGeblokkeerd(
+      adviseurId,
+      dag,
+      hour,
+      blocked,
+      vrijgaven,
+      startVanafHuisMaandag
+    );
   });
 }
 

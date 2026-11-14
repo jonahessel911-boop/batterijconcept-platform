@@ -5,9 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type MouseEvent,
 } from "react";
 import Image from "next/image";
 import { AMSTERDAM_TZ, formatEuro } from "@/lib/format";
@@ -20,6 +18,22 @@ import type {
 } from "@/lib/marketing-rapportage";
 import { buildChannelsFromCampaigns } from "@/lib/marketing-rapportage";
 import { SourceBrandMark } from "./SourceBrandMark";
+import { tiktokAuthUrl } from "@/lib/tiktok-ads";
+import { MarketingTrendChart } from "./MarketingTrendChart";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardDescription, CardHeader } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableHeader } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,
@@ -46,6 +60,7 @@ type MarketingData = {
   bySource?: MarketingSourceSlice[];
   metaConfigured: boolean;
   tiktokConfigured?: boolean;
+  tiktokError?: string | null;
   lastSyncAt: string | null;
   metaMissing?: string[];
   metaCampaigns?: string[];
@@ -68,30 +83,6 @@ function num(n: number | null | undefined): string {
 }
 
 /** % t.o.v. vorige periode; null als niet berekenbaar. */
-function pctChange(
-  curr: number | null | undefined,
-  prev: number | null | undefined
-): number | null {
-  if (curr == null || prev == null || Number.isNaN(curr) || Number.isNaN(prev)) {
-    return null;
-  }
-  if (prev === 0) return curr === 0 ? 0 : null;
-  return ((curr - prev) / Math.abs(prev)) * 100;
-}
-
-function fmtPctDelta(n: number | null): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toLocaleString("nl-NL", {
-    maximumFractionDigits: 0,
-  })}%`;
-}
-
-function deltaTone(n: number | null): string {
-  if (n == null || n === 0) return "text-muted";
-  return n > 0 ? "text-green-dark" : "text-[#C45A12]";
-}
-
 type ChartBucket = MarketingMetrics & {
   key: string;
   label: string;
@@ -140,28 +131,32 @@ function Kpi({
   hint?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-line bg-white p-3 sm:p-4">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
-        {label}
-      </p>
-      <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink sm:text-3xl">
+    <Card className="shadow-none">
+      <CardHeader className="px-3 pt-3 pb-0">
+        <CardDescription className="text-[10px] font-semibold uppercase tracking-[0.14em]">
+          {label}
+        </CardDescription>
+      </CardHeader>
+      <p className="px-3 pt-1 pb-3 font-display text-xl font-semibold tabular-nums text-ink sm:text-2xl">
         {value}
       </p>
-      {hint ? <p className="mt-0.5 text-[11px] text-muted">{hint}</p> : null}
-    </div>
+      {hint ? (
+        <p className="px-3 pb-3 text-[11px] text-muted">{hint}</p>
+      ) : null}
+    </Card>
   );
 }
 
 const sheetCell =
-  "border border-line px-2.5 py-2 text-[12px] tabular-nums text-ink";
+  "border-b border-line px-2.5 py-2 text-[12px] tabular-nums text-ink";
 const sheetHead =
-  "border border-line bg-[#F3F5F4] px-2.5 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-ink";
+  "border-b border-line bg-wash/80 px-2.5 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-muted";
 const sheetTotal =
-  "border border-line bg-[#EEF3F0] px-2.5 py-2.5 text-[12px] font-semibold tabular-nums text-ink";
+  "border-b border-line bg-green-soft/70 px-2.5 py-2.5 text-[12px] font-semibold tabular-nums text-ink";
 const sheetSelected =
-  "border border-line bg-[#E8F0EB] px-2.5 py-2 text-[12px] font-semibold tabular-nums text-ink";
+  "border-b border-line bg-green-soft/50 px-2.5 py-2 text-[12px] font-semibold tabular-nums text-ink";
 const sheetSelectedLabel =
-  "border border-line bg-[#E8F0EB] px-2.5 py-2 pl-5 text-left font-semibold text-ink shadow-[inset_4px_0_0_0_#0a4727]";
+  "border-b border-line bg-green-soft/50 px-2.5 py-2 pl-5 text-left font-semibold text-ink shadow-[inset_3px_0_0_0_#0a4727]";
 
 function MetricsCells({
   m,
@@ -184,27 +179,35 @@ function MetricsCells({
         {formatEuro(m.spend)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>{num(m.leads)}</td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.cpl != null ? formatEuro(m.cpl) : "—"}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>
+        {m.leadToAppt != null
+          ? `${m.leadToAppt.toLocaleString("nl-NL", {
+              minimumFractionDigits: 1,
+              maximumFractionDigits: 1,
+            })}%`
+          : "—"}
+      </td>
+      <td className={`${base} hidden whitespace-nowrap text-right md:table-cell`}>
         {num(m.afspraken)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.cpa != null ? formatEuro(m.cpa) : "—"}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>{num(m.deals)}</td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.cac != null ? formatEuro(m.cac) : "—"}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>
         {formatEuro(m.omzet)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.rpa != null ? formatEuro(m.rpa) : "—"}
       </td>
       <td
-        className={`${base} whitespace-nowrap text-right text-green-dark`}
+        className={`${base} hidden whitespace-nowrap text-right text-green-dark md:table-cell`}
       >
         {fmtRoas(m.roas)}
       </td>
@@ -216,414 +219,22 @@ const METRIC_HEADERS = (
   <>
     <th className={sheetHead}>Spend</th>
     <th className={sheetHead}>Leads</th>
-    <th className={sheetHead}>CPL</th>
-    <th className={sheetHead}>Afspr.</th>
-    <th className={sheetHead}>CPA</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>CPL</th>
+    <th
+      className={sheetHead}
+      title="Van de leads die in deze periode bij deze campagne of ad binnenkwamen: aandeel met een huisbezoek."
+    >
+      L→A
+    </th>
+    <th className={`${sheetHead} hidden md:table-cell`}>Afspr.</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>CPA</th>
     <th className={sheetHead}>Deals</th>
-    <th className={sheetHead}>CPD</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>CPD</th>
     <th className={sheetHead}>Omzet</th>
-    <th className={sheetHead}>RPA</th>
-    <th className={sheetHead}>ROAS</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>RPA</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>ROAS</th>
   </>
 );
-
-function TrendChart({
-  buckets,
-  compareLabel,
-  onBucketClick,
-  paceMode = false,
-}: {
-  buckets: ChartBucket[];
-  /** "vorige week" | "vorige maand" | "vorige dag" */
-  compareLabel: string;
-  onBucketClick?: (bucket: ChartBucket) => void;
-  /** Dag-drill: oranje lijn = cumulatief weekdoel (op schema) */
-  paceMode?: boolean;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [hoverBi, setHoverBi] = useState<number | null>(null);
-  const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
-
-  const maxSpend = Math.max(1, ...buckets.map((b) => b.spend));
-  // Staven: dagelijkse/wekelijkse leads (+ dagtotaal-doel)
-  const maxLeads = Math.max(
-    1,
-    ...buckets.map((b) => b.leads),
-    ...buckets.map((b) =>
-      b.leadsNodig != null && b.leadsNodig > 0 ? b.leadsNodig : 0
-    )
-  );
-  // Schema-lijnen (cumulatief) op eigen schaal zodat staven leesbaar blijven
-  const maxPace = Math.max(
-    1,
-    ...buckets.map((b) => b.cumLeads ?? 0),
-    ...buckets.map((b) =>
-      b.cumLeadsNodig != null && b.cumLeadsNodig > 0 ? b.cumLeadsNodig : 0
-    )
-  );
-  const w = 1200;
-  const h = 480;
-  const padL = 28;
-  const padR = 20;
-  const padT = 24;
-  const padB = 56;
-  const innerW = w - padL - padR;
-  const innerH = h - padT - padB;
-  const n = Math.max(1, buckets.length);
-  const step = innerW / n;
-  const barScale = 0.92;
-
-  function yForLeads(v: number) {
-    return (
-      padT +
-      innerH * (1 - (Math.min(maxLeads, Math.max(0, v)) / maxLeads) * barScale)
-    );
-  }
-  function yForPace(v: number) {
-    return (
-      padT +
-      innerH * (1 - (Math.min(maxPace, Math.max(0, v)) / maxPace) * barScale)
-    );
-  }
-
-  // Oranje lijn = leads nodig (week) of cumulatief schema (dag-drill)
-  const needPts = buckets.map((bk, i) => {
-    const x = padL + step * (i + 0.5);
-    const nNeed = paceMode ? bk.cumLeadsNodig : bk.leadsNodig;
-    const y =
-      nNeed == null || nNeed <= 0
-        ? null
-        : paceMode
-          ? yForPace(nNeed)
-          : yForLeads(nNeed);
-    return { x, y, nNeed };
-  });
-  const lineD = needPts
-    .filter(
-      (p): p is { x: number; y: number; nNeed: number } => p.y != null
-    )
-    .map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
-    .join(" ");
-
-  // Cumulatieve actuals (alleen paceMode) — tweede lijn om schema te zien
-  const cumActualD = paceMode
-    ? buckets
-        .map((bk, i) => {
-          const x = padL + step * (i + 0.5);
-          const y = yForPace(bk.cumLeads ?? 0);
-          return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-        })
-        .join(" ")
-    : "";
-
-  function updateTipPos(e: MouseEvent) {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setTipPos({ x: e.clientX - r.left, y: e.clientY - r.top });
-  }
-
-  function clearTip() {
-    setHoverBi(null);
-    setTipPos(null);
-  }
-
-  const tip = hoverBi != null ? buckets[hoverBi] ?? null : null;
-  const tipPrev =
-    hoverBi != null && hoverBi > 0 ? buckets[hoverBi - 1] ?? null : null;
-  const tipDeltas = tip
-    ? {
-        spend: pctChange(tip.spend, tipPrev?.spend),
-        leads: pctChange(tip.leads, tipPrev?.leads),
-        afspraken: pctChange(tip.afspraken, tipPrev?.afspraken),
-        cpl: pctChange(tip.cpl, tipPrev?.cpl),
-        cpa: pctChange(tip.cpa, tipPrev?.cpa),
-        cac: pctChange(tip.cac, tipPrev?.cac),
-        omzet: pctChange(tip.omzet, tipPrev?.omzet),
-        rpa: pctChange(tip.rpa, tipPrev?.rpa),
-        roas: pctChange(tip.roas, tipPrev?.roas),
-      }
-    : null;
-  const tipStyle =
-    tip && tipPos
-      ? (() => {
-          const box = wrapRef.current;
-          const width = box?.clientWidth ?? 400;
-          const height = box?.clientHeight ?? 320;
-          const tipW = tip?.leadsNodig != null ? 268 : 228;
-          const tipH = tipPrev ? 250 : 190;
-          const preferLeft = tipPos.x > width * 0.55;
-          let left = preferLeft
-            ? tipPos.x - tipW - 12
-            : tipPos.x + 12;
-          let top = tipPos.y - tipH * 0.35;
-          left = Math.max(4, Math.min(left, width - tipW - 4));
-          top = Math.max(4, Math.min(top, height - tipH - 4));
-          return { left, top, width: tipW } as const;
-        })()
-      : null;
-
-  if (buckets.length === 0) {
-    return (
-      <p className="py-8 text-center text-sm text-muted">Geen data.</p>
-    );
-  }
-
-  const tipRows: {
-    label: string;
-    huidig: string;
-    doel: string | null;
-    delta: number | null;
-  }[] = tip
-    ? [
-        {
-          label: "Spend",
-          huidig: formatEuro(tip.spend),
-          doel: null,
-          delta: tipDeltas?.spend ?? null,
-        },
-        {
-          label: "Leads",
-          huidig: num(tip.leads),
-          doel: tip.leadsNodig != null ? num(tip.leadsNodig) : null,
-          delta: tipDeltas?.leads ?? null,
-        },
-        {
-          label: "Afspr.",
-          huidig: num(tip.afspraken),
-          doel: null,
-          delta: tipDeltas?.afspraken ?? null,
-        },
-        {
-          label: "CPL",
-          huidig: tip.cpl != null ? formatEuro(tip.cpl) : "—",
-          doel: null,
-          delta: tipDeltas?.cpl ?? null,
-        },
-        {
-          label: "CPA",
-          huidig: tip.cpa != null ? formatEuro(tip.cpa) : "—",
-          doel: null,
-          delta: tipDeltas?.cpa ?? null,
-        },
-        {
-          label: "CPD",
-          huidig: tip.cac != null ? formatEuro(tip.cac) : "—",
-          doel: null,
-          delta: tipDeltas?.cac ?? null,
-        },
-        {
-          label: "Omzet",
-          huidig: formatEuro(tip.omzet),
-          doel: null,
-          delta: tipDeltas?.omzet ?? null,
-        },
-        {
-          label: "ROAS",
-          huidig: fmtRoas(tip.roas),
-          doel: null,
-          delta: tipDeltas?.roas ?? null,
-        },
-      ]
-    : [];
-  const showDoelCol = tipRows.some((r) => r.doel != null);
-  const showDeltaCol = Boolean(tipPrev);
-
-  return (
-    <div className="space-y-2">
-      <div
-        ref={wrapRef}
-        className="relative overflow-hidden"
-        onMouseLeave={clearTip}
-      >
-        <svg
-          viewBox={`0 0 ${w} ${h}`}
-          preserveAspectRatio="none"
-          className="block h-52 w-full sm:h-64 lg:h-72"
-          role="img"
-          aria-label={`Marketing trend — vergelijking met ${compareLabel}`}
-        >
-          {buckets.map((bk, i) => {
-            const cx = padL + step * (i + 0.5);
-            const barW = Math.max(8, step * 0.34);
-            const hSpend = (bk.spend / maxSpend) * (innerH * barScale);
-            const hLeads = (bk.leads / maxLeads) * (innerH * barScale);
-            const base = padT + innerH;
-            const active = hoverBi === i;
-            const prev = i > 0 ? buckets[i - 1] : null;
-            const dLeads = pctChange(bk.leads, prev?.leads);
-            return (
-              <g
-                key={bk.key}
-                className={onBucketClick ? "cursor-pointer" : "cursor-default"}
-                onMouseEnter={(e) => {
-                  setHoverBi(i);
-                  updateTipPos(e);
-                }}
-                onMouseMove={(e) => {
-                  setHoverBi(i);
-                  updateTipPos(e);
-                }}
-                onClick={() => onBucketClick?.(bk)}
-              >
-                <rect
-                  x={cx - step * 0.45}
-                  y={padT}
-                  width={step * 0.9}
-                  height={innerH}
-                  fill={active ? "rgba(10,71,39,0.04)" : "transparent"}
-                />
-                <rect
-                  x={cx - barW}
-                  y={base - hSpend}
-                  width={barW}
-                  height={Math.max(1, hSpend)}
-                  fill="#A8D5B5"
-                  opacity={active || hoverBi == null ? 1 : 0.45}
-                />
-                <rect
-                  x={cx}
-                  y={base - hLeads}
-                  width={barW}
-                  height={Math.max(1, hLeads)}
-                  fill="#0a4727"
-                  opacity={active || hoverBi == null ? 1 : 0.45}
-                />
-                <text
-                  x={cx}
-                  y={h - 28}
-                  textAnchor="middle"
-                  className="fill-muted"
-                  fontSize={13}
-                  fontWeight={700}
-                >
-                  {bk.shortLabel}
-                </text>
-                {dLeads != null ? (
-                  <text
-                    x={cx}
-                    y={h - 10}
-                    textAnchor="middle"
-                    fill={
-                      dLeads > 0 ? "#0a4727" : dLeads < 0 ? "#C45A12" : "#6b7280"
-                    }
-                    fontSize={12}
-                    fontWeight={700}
-                  >
-                    {fmtPctDelta(dLeads)}
-                  </text>
-                ) : null}
-              </g>
-            );
-          })}
-          {cumActualD ? (
-            <path
-              d={cumActualD}
-              fill="none"
-              stroke="#0a4727"
-              strokeWidth={2.5}
-              strokeDasharray="6 4"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              pointerEvents="none"
-              opacity={0.85}
-            />
-          ) : null}
-          {lineD ? (
-            <path
-              d={lineD}
-              fill="none"
-              stroke="#C45A12"
-              strokeWidth={3.5}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              pointerEvents="none"
-            />
-          ) : null}
-        </svg>
-        {tip && tipStyle ? (
-          <div
-            className="pointer-events-none absolute z-20 rounded-lg border border-line bg-white/95 px-2.5 py-2 text-[11px] shadow-md backdrop-blur-sm"
-            style={tipStyle}
-          >
-            <p className="mb-1.5 flex items-center gap-1.5 truncate font-semibold text-ink">
-              <MetaMark className="h-3 w-[18px] shrink-0" />
-              <span className="truncate">{tip.label}</span>
-            </p>
-            <table className="w-full border-collapse text-[11px] tabular-nums">
-              <thead>
-                <tr className="text-[9px] font-semibold uppercase tracking-wide text-muted">
-                  <th className="pb-1 pr-2 text-left font-semibold" />
-                  <th className="pb-1 pl-2 text-right font-semibold">Huidig</th>
-                  {showDoelCol ? (
-                    <th className="pb-1 pl-2 text-right font-semibold">Doel</th>
-                  ) : null}
-                  {showDeltaCol ? (
-                    <th className="pb-1 pl-2 text-right font-semibold">Δ</th>
-                  ) : null}
-                </tr>
-              </thead>
-              <tbody>
-                {tipRows.map((row) => (
-                  <tr key={row.label}>
-                    <td className="py-0.5 pr-2 text-left text-muted">
-                      {row.label}
-                    </td>
-                    <td className="py-0.5 pl-2 text-right font-semibold text-ink">
-                      {row.huidig}
-                    </td>
-                    {showDoelCol ? (
-                      <td
-                        className={`py-0.5 pl-2 text-right font-semibold ${
-                          row.doel != null ? "text-green-dark" : "text-muted/40"
-                        }`}
-                      >
-                        {row.doel ?? "—"}
-                      </td>
-                    ) : null}
-                    {showDeltaCol ? (
-                      <td
-                        className={`py-0.5 pl-2 text-right font-semibold ${deltaTone(row.delta)}`}
-                      >
-                        {fmtPctDelta(row.delta)}
-                      </td>
-                    ) : null}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {paceMode && tip.cumLeads != null && tip.cumLeadsNodig != null ? (
-              <p className="mt-1.5 text-[10px] tabular-nums text-muted">
-                Cum.{" "}
-                <span className="font-semibold text-ink">
-                  {num(tip.cumLeads)}
-                </span>
-                {" / "}
-                <span className="font-semibold text-[#C45A12]">
-                  {num(tip.cumLeadsNodig)}
-                </span>
-                {tip.cumLeads >= tip.cumLeadsNodig ? (
-                  <span className="ml-1 font-semibold text-green-dark">
-                    op schema
-                  </span>
-                ) : (
-                  <span className="ml-1 font-semibold text-[#C45A12]">
-                    −{num(tip.cumLeadsNodig - tip.cumLeads)}
-                  </span>
-                )}
-              </p>
-            ) : null}
-            {tipPrev ? (
-              <p className="mt-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
-                Δ vs {compareLabel}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
 export type MarketingPanelRangeProps = {
   rangeMode?: RangeMode;
@@ -906,6 +517,9 @@ export function MarketingPanel({
           deals: m.deals,
           omzet: m.omzet,
           cpl: m.cpl,
+          leadToAppt: m.leadToAppt,
+          cohortLeads: m.cohortLeads,
+          appointedLeads: m.appointedLeads,
           cpa: m.cpa,
           cac: m.cac,
           rpa: m.rpa,
@@ -945,6 +559,9 @@ export function MarketingPanel({
           deals: d.deals,
           omzet: d.omzet,
           cpl: d.cpl,
+          leadToAppt: d.leadToAppt,
+          cohortLeads: d.cohortLeads,
+          appointedLeads: d.appointedLeads,
           cpa: d.cpa,
           cac: d.cac,
           rpa: d.rpa,
@@ -968,6 +585,9 @@ export function MarketingPanel({
       deals: w.deals,
       omzet: w.omzet,
       cpl: w.cpl,
+      leadToAppt: w.leadToAppt,
+      cohortLeads: w.cohortLeads,
+      appointedLeads: w.appointedLeads,
       cpa: w.cpa,
       cac: w.cac,
       rpa: w.rpa,
@@ -1005,7 +625,7 @@ export function MarketingPanel({
   }, [data?.sources]);
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="flex items-center gap-2 font-display text-lg font-semibold text-ink">
@@ -1019,36 +639,24 @@ export function MarketingPanel({
         <div className="flex flex-wrap items-end gap-2">
           {!hideRangeControls ? (
             <>
-              <div className="flex gap-1 border border-line p-0.5">
-                {(
-                  [
-                    ["weeks", "Week"],
-                    ["month", "Maand"],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => {
-                      setMode(id);
-                      setDrillWeekKey(null);
-                      if (id === "month") setFocusMonthYm(monthYm);
-                    }}
-                    className={[
-                      "px-2.5 py-1.5 text-xs font-semibold transition",
-                      mode === id
-                        ? "bg-[#0a4727] text-white"
-                        : "bg-white text-muted hover:bg-wash",
-                    ].join(" ")}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <Tabs
+                value={mode}
+                onValueChange={(id) => {
+                  const next = id as RangeMode;
+                  setMode(next);
+                  setDrillWeekKey(null);
+                  if (next === "month") setFocusMonthYm(monthYm);
+                }}
+              >
+                <TabsList className="w-auto">
+                  <TabsTrigger value="weeks">Week</TabsTrigger>
+                  <TabsTrigger value="month">Maand</TabsTrigger>
+                </TabsList>
+              </Tabs>
               {mode === "month" ? (
                 <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                   Maand
-                  <input
+                  <Input
                     type="month"
                     value={monthYm}
                     onChange={(e) => {
@@ -1057,60 +665,70 @@ export function MarketingPanel({
                       setFocusMonthYm(next);
                       setDrillWeekKey(null);
                     }}
-                    className="border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                    className="h-8 w-auto bg-white text-sm font-medium"
                   />
                 </label>
               ) : (
                 <label className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                   Eindweek
-                  <select
+                  <NativeSelect
                     value={weekKey}
                     onChange={(e) => {
                       setWeekKey(e.target.value);
                       setDrillWeekKey(null);
                     }}
-                    className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                    className="min-w-[14rem] bg-white"
                   >
                     {weekOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
+                      <NativeSelectOption key={o.value} value={o.value}>
                         {o.label}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
               )}
             </>
           ) : null}
-          <button
-            type="button"
-            disabled={loading || syncing}
-            onClick={() => {
-              setSyncing(true);
-              void load({ sync: true });
-            }}
-            className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-            title="Meta spend syncen voor deze periode"
-          >
-            {syncing ? "Sync…" : "Meta sync"}
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || syncing}
+                  onClick={() => {
+                    setSyncing(true);
+                    void load({ sync: true });
+                  }}
+                />
+              }
+            >
+              {syncing ? "Sync…" : "Meta sync"}
+            </TooltipTrigger>
+            <TooltipContent>Meta spend syncen voor deze periode</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
       {error ? (
-        <p className="rounded-xl border border-[#C45A12]/30 bg-[#FFF0E6] px-4 py-3 text-sm text-[#C45A12]">
-          {error}{" "}
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="font-semibold underline"
-          >
-            Opnieuw
-          </button>
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>
+            {error}{" "}
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="font-semibold underline"
+            >
+              Opnieuw
+            </button>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {!data?.metaConfigured ? (
-        <p className="rounded-xl border border-line bg-wash px-4 py-3 text-xs text-muted">
+        <Alert>
+          <AlertDescription className="text-xs">
           <span className="mr-1.5 inline-flex align-middle">
             <SourceBrandMark source="Meta" className="h-3.5 w-5" />
           </span>
@@ -1119,45 +737,42 @@ export function MarketingPanel({
             ? ` (${data.metaMissing.join(", ")})`
             : ""}
           . Spend blijft 0 tot sync + env kloppen.
-        </p>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {loading && !data ? (
-        <p className="text-sm text-muted">Laden…</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-10">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <Skeleton key={i} className="h-[4.5rem] rounded-xl bg-white" />
+          ))}
+        </div>
       ) : data ? (
         <>
           <div className="flex flex-wrap gap-1.5">
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant={sourceFilter === "all" ? "default" : "outline"}
               onClick={() => {
                 setSourceFilter("all");
                 setDrillWeekKey(null);
               }}
-              className={[
-                "inline-flex min-h-9 items-center gap-1.5 border px-3 py-1.5 text-sm font-semibold transition",
-                sourceFilter === "all"
-                  ? "border-[#0a4727] bg-[#0a4727] text-white"
-                  : "border-line bg-white text-ink hover:bg-wash",
-              ].join(" ")}
             >
               Alles
-            </button>
+            </Button>
             {sourceTabs.map((row) => {
               const active = sourceFilter === row.source;
               return (
-                <button
+                <Button
                   key={row.source}
                   type="button"
+                  size="sm"
+                  variant={active ? "default" : "outline"}
                   onClick={() => {
                     setSourceFilter(row.source);
                     setDrillWeekKey(null);
                   }}
-                  className={[
-                    "inline-flex min-h-9 items-center gap-1.5 border px-3 py-1.5 text-sm font-semibold transition",
-                    active
-                      ? "border-[#0a4727] bg-[#0a4727] text-white"
-                      : "border-line bg-white text-ink hover:bg-wash",
-                  ].join(" ")}
                 >
                   <SourceBrandMark
                     source={row.source}
@@ -1168,23 +783,30 @@ export function MarketingPanel({
                     }
                   />
                   {row.source}
-                  <span
-                    className={[
-                      "tabular-nums text-[11px] font-medium",
-                      active ? "text-white/80" : "text-muted",
-                    ].join(" ")}
+                  <Badge
+                    variant={active ? "default" : "secondary"}
+                    className={active ? "bg-white/15 text-white" : undefined}
                   >
                     {num(row.leads)}
-                  </span>
-                </button>
+                  </Badge>
+                </Button>
               );
             })}
           </div>
           {sourceFilter === "TikTok" && !data.tiktokConfigured ? (
             <p className="text-xs text-muted">
-              TikTok-leads tellen al mee; spend-sync volgt zodra de API live
-              is.
+              TikTok-leads tellen al mee. Campagnesperk volgt na eenmalig
+              koppelen.{" "}
+              <a
+                href={tiktokAuthUrl()}
+                className="font-semibold text-[#0a4727] underline"
+              >
+                Koppel TikTok Ads
+              </a>
             </p>
+          ) : null}
+          {sourceFilter === "TikTok" && data.tiktokError ? (
+            <p className="text-xs text-red-700">{data.tiktokError}</p>
           ) : null}
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-10">
@@ -1212,17 +834,18 @@ export function MarketingPanel({
             <Kpi label="ROAS" value={fmtRoas(t?.roas)} />
           </div>
 
-          <section className="overflow-hidden rounded-2xl border border-line bg-white">
+          <Card className="overflow-hidden shadow-sm">
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
               <div className="flex items-center gap-2">
                 {drillWeek ? (
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="xs"
                     onClick={() => setDrillWeekKey(null)}
-                    className="rounded border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash"
                   >
                     ← Weken
-                  </button>
+                  </Button>
                 ) : null}
                 <p className="flex items-center gap-2 font-display text-sm font-semibold text-ink">
                   {sourceFilter !== "all" ? (
@@ -1238,11 +861,11 @@ export function MarketingPanel({
               </div>
               <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted">
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block h-2.5 w-3 bg-[#A8D5B5]" />
+                  <span className="inline-block h-2 w-3 rounded-sm bg-[#8FCBAA]" />
                   Spend
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block h-2.5 w-3 bg-[#0a4727]" />
+                  <span className="inline-block h-2 w-3 rounded-sm bg-[#0a4727]" />
                   Leads
                 </span>
                 {drillWeek ? (
@@ -1265,7 +888,7 @@ export function MarketingPanel({
               </div>
             </header>
             <div className="px-1 py-3 sm:px-2">
-              <TrendChart
+              <MarketingTrendChart
                 buckets={chartBuckets}
                 compareLabel={compareLabel}
                 paceMode={Boolean(drillWeek)}
@@ -1293,9 +916,9 @@ export function MarketingPanel({
                 </p>
               ) : null}
             </div>
-          </section>
+          </Card>
 
-          <section className="overflow-hidden rounded-2xl border border-line bg-white">
+          <Card className="overflow-hidden shadow-sm">
             <header className="border-b border-line px-4 py-3.5 sm:px-5">
               <p className="flex items-center gap-1.5 font-display text-base font-semibold text-ink">
                 <ChannelLogos className="h-3.5 w-3.5" />
@@ -1306,25 +929,25 @@ export function MarketingPanel({
                 ad
               </p>
             </header>
-            <div className="overflow-x-auto p-3 sm:p-4">
-              {data.months.length === 0 ? (
+            <div className="min-w-0 max-w-full overflow-x-auto p-3 sm:p-4">
+              {viewMonths.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted">
                   Geen data in deze periode.
                 </p>
               ) : (
-                <table className="w-full min-w-[960px] border-collapse border border-line text-[12px]">
-                  <thead>
+                <Table className="border-collapse text-[12px] md:min-w-[960px]">
+                  <TableHeader>
                     <tr>
                       <th
-                        className={`${sheetHead} sticky left-0 z-10 text-left`}
+                        className={`${sheetHead} sticky left-0 z-10 max-w-[8.5rem] whitespace-normal text-left md:max-w-none`}
                       >
                         Periode
                       </th>
                       {METRIC_HEADERS}
                     </tr>
-                  </thead>
-                  <tbody>
-                    {data.months.map((month) => {
+                  </TableHeader>
+                  <TableBody>
+                    {viewMonths.map((month) => {
                       const mOpen = openMonths.has(month.monthKey);
                       const monthSelected =
                         mode === "month" && month.monthKey === monthYm;
@@ -1339,7 +962,7 @@ export function MarketingPanel({
                                 monthSelected
                                   ? sheetSelectedLabel.replace("pl-5", "pl-2.5")
                                   : sheetTotal
-                              } sticky left-0 z-[1] text-left capitalize`}
+                              } sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal text-left capitalize md:max-w-none`}
                             >
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="w-3 text-muted">
@@ -1375,7 +998,7 @@ export function MarketingPanel({
                                           weekSelected
                                             ? sheetSelectedLabel
                                             : `${sheetCell} bg-[#FAFBFA] pl-6 text-left font-medium`
-                                        } sticky left-0 z-[1]`}
+                                        } sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal md:max-w-none`}
                                       >
                                         <span className="inline-flex items-center gap-1.5">
                                           <span className="w-3 text-muted">
@@ -1421,7 +1044,7 @@ export function MarketingPanel({
                                                 }
                                               >
                                                 <td
-                                                  className={`${sheetCell} sticky left-0 z-[1] bg-[#F7F9F8] pl-9 text-left font-semibold`}
+                                                  className={`${sheetCell} sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal bg-[#F7F9F8] pl-9 text-left font-semibold md:max-w-[18rem]`}
                                                 >
                                                   <span className="inline-flex items-center gap-1.5">
                                                     <span className="w-3 text-muted">
@@ -1468,7 +1091,7 @@ export function MarketingPanel({
                                                           }
                                                         >
                                                           <td
-                                                            className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-12 text-left font-medium`}
+                                                            className={`${sheetCell} sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal bg-white pl-12 text-left font-medium md:max-w-[18rem]`}
                                                           >
                                                             <span className="flex items-center gap-1.5">
                                                               <span className="w-3 shrink-0 text-muted">
@@ -1544,7 +1167,7 @@ export function MarketingPanel({
                                                                       }
                                                                     >
                                                                       <td
-                                                                        className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-16 text-left font-medium`}
+                                                                        className={`${sheetCell} sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal bg-white pl-16 text-left font-medium md:max-w-[18rem]`}
                                                                       >
                                                                         <span className="flex items-center gap-1.5">
                                                                           <span className="w-3 shrink-0 text-muted">
@@ -1580,7 +1203,7 @@ export function MarketingPanel({
                                                                               className="hover:bg-[#FAFBFA]"
                                                                             >
                                                                               <td
-                                                                                className={`${sheetCell} sticky left-0 z-[1] max-w-[18rem] bg-white pl-20 text-left font-normal text-ink`}
+                                                                                className={`${sheetCell} sticky left-0 z-[1] max-w-[8.5rem] whitespace-normal bg-white pl-20 text-left font-normal text-ink md:max-w-[18rem]`}
                                                                               >
                                                                                 <span
                                                                                   className="truncate"
@@ -1621,11 +1244,11 @@ export function MarketingPanel({
                         </Fragment>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               )}
             </div>
-          </section>
+          </Card>
 
           <p className="text-[11px] text-muted">
             {data.lastSyncAt
@@ -1634,7 +1257,7 @@ export function MarketingPanel({
             {" · "}
             {data.tiktokConfigured
               ? "TikTok-spend gekoppeld"
-              : "TikTok: leads tellen mee · spend-API volgt"}
+              : "TikTok: leads tellen mee · spend na koppelen"}
           </p>
         </>
       ) : null}

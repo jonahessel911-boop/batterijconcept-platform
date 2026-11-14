@@ -1,5 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeRol } from "@/lib/rollen";
+import { isRikNaam } from "@/lib/ops-namen";
+import {
+  isSpareAdviseur,
+  isWarmtefondsTeamAdviseur,
+  normalizeRol,
+  SPARE_ADVISEUR_EMAIL,
+} from "@/lib/rollen";
+
+export { isSpareAdviseur };
 
 /** Primaire bootstrap-admin (env of default) — catch-all voor ongekoppelde leads. */
 export function adminEmail(): string {
@@ -9,13 +17,14 @@ export function adminEmail(): string {
 /** Bekende admin-e-mail (o.a. rechten / catch-all), geen UI-gate meer. */
 export const CRM_SIDEBAR_EMAIL = "jona@batterijconcept.nl";
 
-/** Today-tab: jona@ of sales_manager-rol. */
+/** Today-tab: elke admin, sales manager, of jona@. */
 export function magTodayDashboard(
   email: string | null | undefined,
   rol?: string | null
 ): boolean {
-  if (email?.trim().toLowerCase() === CRM_SIDEBAR_EMAIL) return true;
-  return normalizeRol(rol) === "sales_manager";
+  const r = normalizeRol(rol);
+  if (r === "admin" || r === "sales_manager") return true;
+  return email?.trim().toLowerCase() === CRM_SIDEBAR_EMAIL;
 }
 
 /** CRM gebruikt overal de sidebar i.p.v. de oude tab-balk. */
@@ -56,6 +65,13 @@ export function isAdminAdviseur(a: {
   return Boolean(email && email === adminEmail());
 }
 
+/** E-mail van de SPARE-placeholder-agenda (geen login). */
+export function spareEmail(): string {
+  return (
+    process.env.SPARE_ADVISEUR_EMAIL || SPARE_ADVISEUR_EMAIL
+  ).toLowerCase();
+}
+
 /**
  * Tijdelijk: niet als bel/best-slot-optie (blijven actief: login, offertes, agenda).
  * Harald + Stijn — verwijder uit deze set om weer mee te plannen.
@@ -68,8 +84,9 @@ const TIJDELIJK_NIET_PLANBAAR_EMAILS = new Set([
 /**
  * Mag in klantgerichte slot-planning (Bel best-slots / capaciteit).
  * Alleen actieve sales-adviseurs. Inactief = niet automatisch inplannen.
- * Systeem-Admin én CRM-admins (o.a. jona@) uit — die hebben lege agenda's
- * waardoor "vrije" slots ontstaan die in de echte adviseur-agenda bezet zijn.
+ * Systeem-Admin, SPARE én CRM-admins (o.a. jona@) uit — die hebben lege
+ * agenda's waardoor "vrije" slots ontstaan die in de echte adviseur-agenda
+ * bezet zijn.
  */
 export function isPlanbaarAdviseur(a: {
   naam: string;
@@ -79,7 +96,9 @@ export function isPlanbaarAdviseur(a: {
 }): boolean {
   if (a.actief === false) return false;
   if (isAdminAdviseur(a)) return false;
+  if (isSpareAdviseur(a)) return false;
   if (isAdminEmail(a.email)) return false;
+  if (isWarmtefondsTeamAdviseur(a)) return false;
   const email = a.email?.trim().toLowerCase();
   if (email && TIJDELIJK_NIET_PLANBAAR_EMAILS.has(email)) return false;
   if (a.rol != null && a.rol !== "" && normalizeRol(a.rol) !== "adviseur") {
@@ -125,6 +144,87 @@ export function findAdminAdviseurId(
   return byName?.id ?? null;
 }
 
+/** Zoekt of maakt de SPARE-adviseur (placeholder-agenda). */
+export async function ensureSpareAdviseurId(
+  sb: SupabaseClient
+): Promise<string> {
+  const email = spareEmail();
+  const { data: byEmail } = await sb
+    .from("adviseurs")
+    .select("id")
+    .ilike("email", email)
+    .limit(1)
+    .maybeSingle();
+  if (byEmail?.id) return byEmail.id as string;
+
+  const { data: byName } = await sb
+    .from("adviseurs")
+    .select("id")
+    .ilike("naam", "SPARE")
+    .limit(1)
+    .maybeSingle();
+  if (byName?.id) return byName.id as string;
+
+  const row: Record<string, unknown> = {
+    naam: "SPARE",
+    email,
+    telefoon: null,
+    actief: true,
+    rol: "adviseur",
+    bel_planning: false,
+    commissie_pct: 0,
+    geblokkeerd: true,
+    werktijd_start: "10:00",
+    werktijd_eind: "19:00",
+    interne_notities:
+      "Systeem-placeholder: tijdelijk afspraken parkeren zodat het slot bij de echte adviseur vrijkomt. Geen bel/rapportage/login.",
+  };
+
+  let insert = await sb.from("adviseurs").insert(row).select("id").single();
+  if (insert.error) {
+    // Compat: ontbrekende kolommen strippen en opnieuw
+    const slim = { ...row };
+    for (const col of [
+      "bel_planning",
+      "geblokkeerd",
+      "commissie_pct",
+      "interne_notities",
+      "werktijd_start",
+      "werktijd_eind",
+    ]) {
+      if (
+        insert.error.message?.includes(col) ||
+        insert.error.code === "42703" ||
+        insert.error.code === "PGRST204"
+      ) {
+        delete slim[col];
+      }
+    }
+    insert = await sb.from("adviseurs").insert(slim).select("id").single();
+  }
+  if (insert.error || !insert.data?.id) {
+    throw new Error(
+      insert.error?.message || "SPARE-adviseur aanmaken mislukt"
+    );
+  }
+  return insert.data.id as string;
+}
+
+/** Client-side: SPARE-id uit geladen adviseurslijst. */
+export function findSpareAdviseurId(
+  adviseurs: { id: string; naam: string; email?: string | null }[]
+): string | null {
+  const email = spareEmail();
+  const byEmail = adviseurs.find(
+    (a) => a.email?.trim().toLowerCase() === email
+  );
+  if (byEmail) return byEmail.id;
+  const byName = adviseurs.find(
+    (a) => a.naam.trim().toLowerCase() === "spare"
+  );
+  return byName?.id ?? null;
+}
+
 /**
  * Standaard backoffice-medewerker op nieuwe projecten.
  * Override via DEFAULT_BACKOFFICE_EMAIL; anders Tarik (naam-match).
@@ -153,13 +253,8 @@ export async function getDefaultBackofficeMedewerkerId(
     .from("adviseurs")
     .select("id, naam")
     .eq("actief", true);
-  const tarik = (rows || []).find((r) => {
-    const n = String(r.naam || "")
-      .trim()
-      .toLowerCase();
-    return n === "tarik" || n.startsWith("tarik ");
-  });
-  return tarik?.id ?? null;
+  const rik = (rows || []).find((r) => isRikNaam(r.naam));
+  return rik?.id ?? null;
 }
 
 /** Client-side: Tarik (of DEFAULT_BACKOFFICE_EMAIL) uit geladen adviseurslijst. */
@@ -173,10 +268,6 @@ export function findDefaultBackofficeMedewerkerId(
     );
     if (byEmail) return byEmail.id;
   }
-  const tarik = adviseurs.find((a) => {
-    if (a.actief === false) return false;
-    const n = a.naam.trim().toLowerCase();
-    return n === "tarik" || n.startsWith("tarik ");
-  });
-  return tarik?.id ?? null;
+  const rik = adviseurs.find((a) => a.actief !== false && isRikNaam(a.naam));
+  return rik?.id ?? null;
 }

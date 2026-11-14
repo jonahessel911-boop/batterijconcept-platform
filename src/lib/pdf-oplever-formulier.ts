@@ -154,7 +154,8 @@ export async function buildOpleverFormulierPdf(
     [`Adres`, dash(data.adres)],
     [`Project`, dash(data.projectNummer)],
     [`Datum`, formatDatumNl(data.datum)],
-    [`Installateur`, dash(data.monteurNaam)],
+    [`Uitvoerend monteur`, dash(data.monteurNaam)],
+    [`SIN`, dash(data.sin)],
   ];
   for (const [label, value] of meta) {
     doc.setFont("helvetica", "bold");

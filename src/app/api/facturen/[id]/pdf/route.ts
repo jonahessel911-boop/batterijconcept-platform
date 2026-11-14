@@ -3,18 +3,13 @@ import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
 import { sendEmail } from "@/lib/email/postmark";
-import {
-  factuurVerzondenEmail,
-  factuurWarmtefondsAanbetalingHerinneringEmail,
-} from "@/lib/email/templates";
+import { factuurWarmtefondsAanbetalingHerinneringEmail } from "@/lib/email/templates";
+import { verstuurFactuurNaarKlant } from "@/lib/factuur-versturen";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import { errMessage } from "@/lib/errors";
 import {
   COMPANY_ACCOUNT_NAME,
-  COMPANY_IBAN_DISPLAY,
-  FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
-  amsterdamDatePlusDays,
-  factuurBetaaltermijnDagen,
+  ibanVoorKlantfactuur,
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
@@ -265,7 +260,7 @@ async function sendWarmtefondsAanbetalingHerinnering(
     vervaldatum: factuur.vervaldatum
       ? formatDateShort(factuur.vervaldatum)
       : null,
-    iban: co.iban || COMPANY_IBAN_DISPLAY,
+    iban: ibanVoorKlantfactuur(factuur),
     accountName: co.accountName || COMPANY_ACCOUNT_NAME,
     betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
     projectNummer: project.project_nummer || null,
@@ -363,307 +358,13 @@ export async function POST(
       return await sendWarmtefondsAanbetalingHerinnering(sb, id, factuur);
     }
 
-    const {
-      isRestantFactuurOmschrijving,
-      magWarmtefondsRestantFactuur,
-    } = await import("@/lib/aanbetaling");
-    const { resolveFinancieringStatus } = await import(
-      "@/lib/financiering-status"
-    );
-    const isRestant = isRestantFactuurOmschrijving(factuur.omschrijving);
-    let isWarmtefondsRestant = false;
-    let wfFinancieringStatus: string | null = null;
-
-    if (isRestant && factuur.project_id) {
-      const { data: project } = await sb
-        .from("projecten")
-        .select(
-          "id, status, betaalwijze, financiering_status, offertes(financiering_voorbehoud)"
-        )
-        .eq("id", factuur.project_id)
-        .maybeSingle();
-      const offJoin = project?.offertes as
-        | { financiering_voorbehoud?: boolean | null }
-        | { financiering_voorbehoud?: boolean | null }[]
-        | null
-        | undefined;
-      const off = Array.isArray(offJoin) ? offJoin[0] : offJoin;
-      const isWf =
-        Boolean(off?.financiering_voorbehoud) ||
-        project?.betaalwijze === "warmtefonds";
-      const fs = project ? resolveFinancieringStatus(project) : null;
-      wfFinancieringStatus = fs;
-      if (isWf && fs !== "afgewezen") {
-        isWarmtefondsRestant = true;
-        if (!magWarmtefondsRestantFactuur(fs)) {
-          return NextResponse.json(
-            {
-              error:
-                "Restantfactuur Warmtefonds pas versturen na goedkeuring van de aanvraag",
-              code: "wf_niet_goedgekeurd",
-            },
-            { status: 409 }
-          );
-        }
-      }
-    }
-
-    const email = factuur.leads?.email as string | null | undefined;
-    if (!email) {
-      return NextResponse.json(
-        { error: "Lead heeft geen e-mailadres" },
-        { status: 400 }
-      );
-    }
-
-    const offerte = factuur.offertes as {
-      offerte_nummer: string;
-      subtotaal_ex_btw: number;
-      btw_bedrag: number;
-      totaal_inc_btw: number;
-    } | null;
-
-    const creditVanRaw = factuur.credit_van as
-      | { id: string; factuur_nummer: string }
-      | { id: string; factuur_nummer: string }[]
-      | null;
-    const creditVan = Array.isArray(creditVanRaw)
-      ? creditVanRaw[0]
-      : creditVanRaw;
-    const isCredit = Boolean(factuur.credit_van_factuur_id);
-    const creditVanNummer = creditVan?.factuur_nummer || null;
-
-    // Warmtefonds-restant: altijd 14 dagen, ook als concept nog 3 had
-    const betaaltermijnDagen = isWarmtefondsRestant
-      ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
-      : factuurBetaaltermijnDagen({
-          factuurdatum: factuur.factuurdatum,
-          vervaldatum: factuur.vervaldatum,
-        });
-    const vervaldatum = amsterdamDatePlusDays(new Date(), betaaltermijnDagen);
-    const factuurVoorPdf = {
-      ...factuur,
-      status: "verzonden" as const,
-      vervaldatum,
-    };
-
-    const blob = await buildFactuurPdf({
-      factuur: factuurVoorPdf,
-      lead: factuur.leads,
-      offerte,
-      creditVanNummer,
-    });
-    const pdfBytes = Buffer.from(await blob.arrayBuffer());
-    const filename = `${isCredit ? "credit-" : ""}${factuur.factuur_nummer}.pdf`;
-
-    let trackUrl: string | null = null;
-    try {
-      const offerteId = factuur.offerte_id as string | null;
-      if (offerteId) {
-        const { ensureOfferteTrackToken } = await import(
-          "@/lib/ensure-track-token"
-        );
-        const { data: offTrack } = await sb
-          .from("offertes")
-          .select("id, track_token")
-          .eq("id", offerteId)
-          .maybeSingle();
-        if (offTrack?.id) {
-          const trackToken = await ensureOfferteTrackToken(
-            sb,
-            offTrack.id,
-            offTrack.track_token
-          );
-          if (trackToken) {
-            const { appBaseUrl } = await import("@/lib/email/postmark");
-            trackUrl = `${appBaseUrl()}/track/${trackToken}`;
-          }
-        }
-      }
-    } catch {
-      /* track optioneel */
-    }
-
-    const co = companyInfo();
-    const html = factuurVerzondenEmail({
-      naam: factuur.leads?.naam || "klant",
-      factuurNummer: factuur.factuur_nummer,
-      bedrag: formatEuro(factuur.bedrag_inc_btw),
-      vervaldatum: isCredit ? null : formatDateShort(vervaldatum),
-      betaaltermijnDagen: isCredit ? null : betaaltermijnDagen,
-      iban: isCredit ? null : co.iban || COMPANY_IBAN_DISPLAY,
-      accountName: co.accountName || COMPANY_ACCOUNT_NAME,
-      betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,
-      isCredit,
-      creditVanNummer,
-      trackUrl,
-    });
-
-    const sent = await sendEmail({
-      to: email,
-      subject: isCredit
-        ? `Creditfactuur ${factuur.factuur_nummer}${
-            creditVanNummer ? ` (${creditVanNummer})` : ""
-          } — Batterijconcept`
-        : `Factuur ${factuur.factuur_nummer} — Batterijconcept`,
-      html,
-      tag: isCredit ? "creditfactuur-verzonden" : "factuur-verzonden",
-      attachments: [
-        {
-          name: filename,
-          contentType: "application/pdf",
-          content: pdfBytes,
-        },
-      ],
-    });
-
+    const sent = await verstuurFactuurNaarKlant(id);
     if (!sent.ok) {
-      return NextResponse.json(
-        { error: sent.error || "Mail versturen mislukt" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: sent.error }, { status: sent.status });
     }
-
-    // Credit: er is niets te innen → direct voltooid (niet als openstaand laten staan)
-    const todayYmd = amsterdamDatePlusDays(new Date(), 0);
-    const { data: updated, error: upErr } = await sb
-      .from("facturen")
-      .update(
-        isCredit
-          ? {
-              status: "betaald",
-              betaald_op: todayYmd,
-              factuurdatum: todayYmd,
-              vervaldatum: null,
-            }
-          : {
-              status: "verzonden",
-              factuurdatum: todayYmd,
-              vervaldatum,
-            }
-      )
-      .eq("id", id)
-      .select("*, leads(naam, email, telefoon, lead_number)")
-      .single();
-
-    if (upErr) {
-      console.error("Factuur status update:", upErr);
-    }
-
-    const updatedWithCredit = updated
-      ? {
-          ...updated,
-          credit_van: Array.isArray(factuur.credit_van)
-            ? factuur.credit_van[0]
-            : factuur.credit_van,
-          credit_van_factuur_id: factuur.credit_van_factuur_id,
-        }
-      : updated;
-
-    // Credit: oorspronkelijke openstaande factuur vervalt (klant hoeft die niet meer te betalen)
-    if (isCredit && factuur.credit_van_factuur_id) {
-      await sb
-        .from("facturen")
-        .update({ status: "vervallen" })
-        .eq("id", factuur.credit_van_factuur_id)
-        .in("status", ["verzonden", "deels_betaald"]);
-    }
-
-    // Alleen bij echte restantfactuur → orderstatus restfactuur_verstuurd
-    // WF: label = "Factuur WF - Declaratie ingediend"; financiering → wacht op betaling
-    if (!isCredit && isRestant && factuur.project_id) {
-      await sb
-        .from("projecten")
-        .update({ status: "restfactuur_verstuurd" })
-        .eq("id", factuur.project_id)
-        .in("status", [
-          "schouwweek_inplannen",
-          "aanbetaling_verstuurd",
-          "aanbetaling_betaald",
-          "warmtefonds_afspraak_ingepland",
-          "warmtefonds_aangevraagd",
-          "warmtefonds_in_behandeling",
-          "warmtefonds_goedgekeurd",
-          "opstarten_voltooid_afwachten_wf",
-          "schouwdag_ingepland",
-          "schouw_voltooid",
-          "restfactuur_verstuurd",
-          // legacy
-          "schouwweek_gepland",
-          "schouw_aanbetaling",
-          "schouw_in_afwachting",
-          "schouw_inplannen",
-          "schouw_gepland",
-          "btw_factuur_eruit",
-        ]);
-
-      if (
-        isWarmtefondsRestant &&
-        wfFinancieringStatus &&
-        wfFinancieringStatus !== "uitbetaald" &&
-        wfFinancieringStatus !== "afgewezen" &&
-        wfFinancieringStatus !== "wacht_op_betaling"
-      ) {
-        await sb
-          .from("projecten")
-          .update({ financiering_status: "wacht_op_betaling" })
-          .eq("id", factuur.project_id);
-      }
-    }
-
-    const leadId = factuur.lead_id as string | null | undefined;
-    if (leadId) {
-      const { logLeadEvent } = await import("@/lib/lead-events");
-      const { isAanbetalingFactuurOmschrijving } = await import(
-        "@/lib/aanbetaling"
-      );
-      const nr = factuur.factuur_nummer || id.slice(0, 8);
-      const bedrag = Number(factuur.bedrag_inc_btw || 0);
-      const isAanb = isAanbetalingFactuurOmschrijving(factuur.omschrijving);
-      const soortLabel = isCredit
-        ? "Creditfactuur"
-        : isAanb
-          ? "Aanbetalingsfactuur"
-          : "Factuur";
-      await logLeadEvent({
-        leadId,
-        soort: "factuur",
-        titel: `${soortLabel} ${nr} verstuurd`,
-        detail: [
-          `Naar ${email}`,
-          bedrag > 0 ? `${formatEuro(bedrag)} incl. btw` : null,
-          factuur.omschrijving,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        meta: {
-          factuur_id: id,
-          factuur_nummer: nr,
-          message_id: sent.messageId,
-          is_credit: isCredit,
-          is_aanbetaling: isAanb,
-        },
-      });
-
-      if (isCredit && factuur.credit_van_factuur_id) {
-        await logLeadEvent({
-          leadId,
-          soort: "factuur",
-          titel: `Oorspronkelijke factuur vervallen (credit ${nr})`,
-          detail: creditVanNummer
-            ? `Was: ${creditVanNummer}`
-            : null,
-          meta: {
-            factuur_id: factuur.credit_van_factuur_id,
-            credit_factuur_id: id,
-          },
-        });
-      }
-    }
-
     return NextResponse.json({
       ok: true,
-      factuur: updatedWithCredit,
+      factuur: sent.factuur,
       messageId: sent.messageId,
     });
   } catch (e) {

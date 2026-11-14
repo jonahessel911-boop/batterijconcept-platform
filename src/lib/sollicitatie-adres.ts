@@ -183,3 +183,67 @@ export function formatSollicitatieAdres(a: {
   const line2 = [a.postcode, a.plaats].filter(Boolean).join(" ").trim();
   return [line1, line2].filter(Boolean).join(", ");
 }
+
+/**
+ * Quiz/webhook notities bevatten vaak "Postcode: 4874 MS" + "Huisnummer: 10"
+ * terwijl de adreskolommen leeg bleven.
+ */
+export function extractAdresFromNotitie(
+  notitie: string | null | undefined
+): SollicitatieAdres {
+  const text = String(notitie || "");
+  const empty: SollicitatieAdres = {
+    postcode: null,
+    huisnummer: null,
+    toevoeging: null,
+    straat: null,
+    plaats: null,
+  };
+  if (!text.trim()) return empty;
+
+  const pcMatch =
+    text.match(/(?:^|\n)\s*Postcode\s*:\s*([0-9A-Za-z\s-]{4,10})/i) ||
+    text.match(/\bPostcode\s*:\s*([0-9A-Za-z\s-]{4,10})/i);
+  const nrMatch =
+    text.match(/(?:^|\n)\s*Huisnummer\s*:\s*([0-9A-Za-z\s-]{1,12})/i) ||
+    text.match(/\bHuisnummer\s*:\s*([0-9A-Za-z\s-]{1,12})/i);
+  const straatMatch = text.match(
+    /(?:^|\n)\s*(?:Straat(?:naam)?)\s*:\s*([^\n]+)/i
+  );
+  const plaatsMatch = text.match(
+    /(?:^|\n)\s*(?:Plaats|Woonplaats)\s*:\s*([^\n]+)/i
+  );
+
+  let postcode = pcMatch?.[1]?.trim() || null;
+  let huisnummer = nrMatch?.[1]?.trim() || null;
+  let toevoeging: string | null = null;
+  if (huisnummer) {
+    const split = splitHuisnummer(huisnummer);
+    huisnummer = split.huisnummer;
+    toevoeging = split.toevoeging;
+  }
+  if (postcode) postcode = normalizePostcode(postcode);
+  if (huisnummer) huisnummer = normalizeHouseNumber(huisnummer) || huisnummer;
+
+  return {
+    postcode,
+    huisnummer,
+    toevoeging,
+    straat: straatMatch?.[1]?.trim() || null,
+    plaats: plaatsMatch?.[1]?.trim() || null,
+  };
+}
+
+/** Kolommen winnen; notitie vult alleen lege velden. */
+export function mergeSollicitatieAdres(
+  primary: SollicitatieAdres,
+  fallback: SollicitatieAdres
+): SollicitatieAdres {
+  return {
+    postcode: primary.postcode || fallback.postcode,
+    huisnummer: primary.huisnummer || fallback.huisnummer,
+    toevoeging: primary.toevoeging || fallback.toevoeging,
+    straat: primary.straat || fallback.straat,
+    plaats: primary.plaats || fallback.plaats,
+  };
+}

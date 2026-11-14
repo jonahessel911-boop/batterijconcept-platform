@@ -12,12 +12,16 @@ import {
   validateSchouwFormulierHandtekening,
   type SchouwFormulierData,
 } from "@/lib/schouw-formulier";
+import {
+  resolveMonteurNaamVoorPdf,
+  syncProjectMedewerkerVanNaam,
+} from "@/lib/project-medewerker";
 
 export async function generateAndUploadSchouwFormulier(
   sb: SupabaseClient,
   projectId: string,
   data: SchouwFormulierData,
-  opts?: { notitie?: string | null }
+  opts?: { notitie?: string | null; teamgenootId?: string | null }
 ): Promise<
   | {
       foto: {
@@ -37,7 +41,29 @@ export async function generateAndUploadSchouwFormulier(
   const handtekeningErr = validateSchouwFormulierHandtekening(data);
   if (handtekeningErr) return { error: handtekeningErr, status: 400 };
 
-  const blob = await buildSchouwFormulierPdf(data);
+  const monteurNaam = await resolveMonteurNaamVoorPdf(sb, projectId, {
+    teamgenootId: opts?.teamgenootId,
+    fallbackNaam: data.opnemer || data.handtekeningOpnemerNaam || "",
+  });
+  const pdfData: SchouwFormulierData = {
+    ...data,
+    opnemer: monteurNaam || data.opnemer,
+    handtekeningOpnemerNaam:
+      monteurNaam || data.handtekeningOpnemerNaam || data.opnemer,
+  };
+
+  try {
+    await syncProjectMedewerkerVanNaam(
+      sb,
+      projectId,
+      pdfData.opnemer || pdfData.handtekeningOpnemerNaam || "",
+      opts?.teamgenootId
+    );
+  } catch {
+    /* best-effort */
+  }
+
+  const blob = await buildSchouwFormulierPdf(pdfData);
   const filename = `schouwformulier-${(data.rapportNr || projectId).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`;
   const file = new File([blob], filename, { type: "application/pdf" });
 

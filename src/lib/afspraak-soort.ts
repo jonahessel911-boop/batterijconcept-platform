@@ -38,6 +38,7 @@ export const VERVOLG_PUNT_VRIJGESTELD = new Set<LeadStatus>([
   "deur_niet_open",
   "afspraak_afgezegd_klant",
   "geen_contact",
+  "definitief_geen_contact",
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
@@ -134,6 +135,14 @@ export function soortVoorVervolgUitkomst(
 
 export function afspraakStuurtMail(soort: string | null | undefined): boolean {
   return normalizeAfspraakSoort(soort) === "nieuw";
+}
+
+/** Vervolg fysiek/tel: herinneringsmail alleen bij expliciete opt-in. */
+export function isVervolgMetHerinneringOptIn(
+  soort: string | null | undefined
+): boolean {
+  const s = normalizeAfspraakSoort(soort);
+  return s === "vervolg_fysiek" || s === "vervolg_tel";
 }
 
 /** Interne soorten: geen klantmail, geen leadstatus-wijziging naar afspraak. */

@@ -9,6 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import type { SollicitatieAfspraakSoort } from "@/types/database";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -56,6 +57,11 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   try {
     const body = (await req.json()) as Record<string, unknown>;
@@ -107,6 +113,11 @@ export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   try {
     const sb = getSupabaseAdmin();

@@ -37,11 +37,11 @@ export function bestSlotsHelpText(opts: {
   }
   const limit = opts.limit ?? 5;
   return (
-    `Top ${limit}: reistijd eerst, daarna lege agenda & conversie` +
+    `Top ${limit}: zo vroeg mogelijk (max 16 dgn), reistijd & lege agenda` +
     (limit <= 5
       ? " · min. 2 adviseurs"
       : " · ook zelfde adviseur als die dichterbij is") +
-    ". Lege agenda’s worden vooraan geschoven."
+    "."
   );
 }
 
@@ -104,7 +104,7 @@ export function useBestSlots(opts: {
         const qs = new URLSearchParams({
           lead_id: lead.id,
           limit: "5",
-          days: "14",
+          days: "16",
         });
         if (lockAdviseur && defaultAdviseurId) {
           qs.set("adviseur_id", defaultAdviseurId);
@@ -162,7 +162,7 @@ export function useBestSlots(opts: {
       const qs = new URLSearchParams({
         lead_id: lead.id,
         limit: "10",
-        days: "14",
+        days: "16",
       });
       if (lockAdviseur && defaultAdviseurId) {
         qs.set("adviseur_id", defaultAdviseurId);

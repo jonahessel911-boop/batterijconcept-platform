@@ -62,6 +62,7 @@ export function FastDirectionButton({
   freeSlots,
   startAdres,
   startAdresLabel,
+  startVanafHuisMaandag,
   onSelectSlot,
 }: {
   adviseurId: string;
@@ -71,6 +72,7 @@ export function FastDirectionButton({
   freeSlots: { start_at: string; end_at: string }[];
   startAdres?: string | null;
   startAdresLabel?: string | null;
+  startVanafHuisMaandag?: boolean | null;
   onSelectSlot: (startAt: string) => void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -126,6 +128,10 @@ export function FastDirectionButton({
           depotAddress: startAdres || null,
           depotLabel: startAdresLabel || null,
           adviseurId: adviseurId || null,
+          startVanafHuisMaandag:
+            typeof startVanafHuisMaandag === "boolean"
+              ? startVanafHuisMaandag
+              : null,
         }),
       });
       const data = await res.json();

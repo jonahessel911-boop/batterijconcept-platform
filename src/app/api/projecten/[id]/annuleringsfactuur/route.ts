@@ -10,6 +10,7 @@ import {
   annuleringskostenIncBtw,
 } from "@/lib/av-annulering";
 import {
+  COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
 } from "@/lib/factuur-betaling";
@@ -134,7 +135,7 @@ export async function POST(
         bedrag_inc_btw: split.inc,
         factuurdatum: vandaag,
         vervaldatum,
-        notities: `Annuleringsfactuur · ${project.project_nummer || ""}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${ref}.`,
+        notities: `Annuleringsfactuur · ${project.project_nummer || ""}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${ref}.`,
       })
       .select("id, factuur_nummer, status, bedrag_inc_btw, omschrijving")
       .single();
@@ -158,6 +159,7 @@ export async function POST(
         service_at: null,
         materiaal_leverdatum: null,
         annulering_keuze_gecontroleerd_at: nowIso,
+        hold_sales_deadline_at: null,
       })
       .eq("id", id);
 

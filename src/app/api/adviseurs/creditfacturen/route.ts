@@ -17,12 +17,22 @@ import {
 import { verstuurAdviseurCreditfactuur } from "@/lib/creditfactuur-verstuur";
 import { dayKeyAmsterdam } from "@/lib/planning-window";
 import {
-  consolidateOpenSalesWeekCreditfacturen,
   ensureAdviseurCommissieTrancheB,
   ensureNettoAanbetalingCreditfactuur,
 } from "@/lib/netto-creditfactuur";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
+import {
+  isBelcommissieCreditfactuur,
+  isOpsCommissieCreditfactuur,
+} from "@/lib/callcenter-creditfactuur";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
+
+function isCallcenterOfOpsCreditfactuur(f: {
+  notities?: string | null;
+  factuur_nummer?: string | null;
+}): boolean {
+  return isBelcommissieCreditfactuur(f) || isOpsCommissieCreditfactuur(f);
+}
 
 export const runtime = "nodejs";
 
@@ -39,14 +49,26 @@ export async function GET(req: NextRequest) {
     try {
       const sb = getSupabaseAdmin();
       const weekInfo = previousCreditWeek();
-      const { data: facturen, error: facErr } = await sb
-        .from("adviseur_creditfacturen")
-        .select(
-          "*, adviseurs!adviseur_id(id, naam, rol, bedrijfsnaam, kvk_nummer, iban, start_adres)"
-        )
-        .order("week_jaar", { ascending: false })
-        .order("week_nummer", { ascending: false })
-        .limit(200);
+      // Read-only: strip/consolidate/bel-ops/ensure gebeurt via POST …/ensure
+      // zodat de Uitbetalingen-tab snel laadt.
+      const [{ data: facturen, error: facErr }, { data: salesAdviseurs }] =
+        await Promise.all([
+          sb
+            .from("adviseur_creditfacturen")
+            .select(
+              "*, adviseurs!adviseur_id(id, naam, rol, bedrijfsnaam, kvk_nummer, iban, start_adres)"
+            )
+            .order("week_jaar", { ascending: false })
+            .order("week_nummer", { ascending: false })
+            .limit(200),
+          sb
+            .from("adviseurs")
+            .select(
+              "id, naam, actief, rol, bedrijfsnaam, kvk_nummer, iban, commissie_pct, max_factuur_bedrag"
+            )
+            .eq("actief", true)
+            .order("naam"),
+        ]);
 
       if (facErr) {
         if (
@@ -61,64 +83,19 @@ export async function GET(req: NextRequest) {
         throw facErr;
       }
 
-      const { data: salesAdviseurs } = await sb
-        .from("adviseurs")
-        .select(
-          "id, naam, actief, rol, bedrijfsnaam, kvk_nummer, iban, commissie_pct, max_factuur_bedrag"
-        )
-        .eq("actief", true)
-        .order("naam");
-
       const adviseurs = (salesAdviseurs || []).filter(
         (a) => !isUitgeslotenVanSalesCommissie(a)
       );
 
-      // Huub/admin e.d.: openstaande sales-CF's annuleren (geen commissie)
-      const rawFacs = facturen || [];
-      const teAnnuleren = rawFacs.filter((f) => {
-        const adv = f.adviseurs as
-          | { naam?: string | null; rol?: string | null }
-          | { naam?: string | null; rol?: string | null }[]
-          | null;
-        const a = Array.isArray(adv) ? adv[0] : adv;
-        if (!a || !isUitgeslotenVanSalesCommissie(a)) return false;
-        return (
-          f.status === "concept" ||
-          f.status === "verzonden" ||
-          f.status === "goedgekeurd"
-        );
-      });
-      if (teAnnuleren.length > 0) {
-        await sb
-          .from("adviseur_creditfacturen")
-          .update({ status: "geannuleerd" })
-          .in(
-            "id",
-            teAnnuleren.map((f) => f.id)
-          );
-      }
-
-      // Losse AANBETALING/OFF → één weekfactuur per adviseur (portal + PDF)
-      await consolidateOpenSalesWeekCreditfacturen(sb);
-
-      const { data: facturenAfter } = await sb
-        .from("adviseur_creditfacturen")
-        .select(
-          "*, adviseurs!adviseur_id(id, naam, rol, bedrijfsnaam, kvk_nummer, iban, start_adres)"
-        )
-        .order("week_jaar", { ascending: false })
-        .order("week_nummer", { ascending: false })
-        .limit(200);
-
-      const facturenClean = (facturenAfter || rawFacs).filter((f) => {
+      const facturenClean = (facturen || []).filter((f) => {
         if (f.status === "geannuleerd") return false;
+        if (isCallcenterOfOpsCreditfactuur(f)) return true;
         const adv = f.adviseurs as
           | { naam?: string | null; rol?: string | null }
           | { naam?: string | null; rol?: string | null }[]
           | null;
         const a = Array.isArray(adv) ? adv[0] : adv;
         if (a && isUitgeslotenVanSalesCommissie(a)) return false;
-        if (teAnnuleren.some((x) => x.id === f.id)) return false;
         return true;
       });
 
@@ -415,6 +392,15 @@ export async function POST(req: NextRequest) {
       if (result.skipped === "geen_tranche_b") {
         return NextResponse.json(
           { error: "Geen rest-commissie voor deze deal (al volledig via tranche A)." },
+          { status: 400 }
+        );
+      }
+      if (result.skipped === "installatie_niet_voltooid") {
+        return NextResponse.json(
+          {
+            error:
+              "Rest-commissie pas bij status Installatie voltooid (eigen middelen/WF maakt niet uit).",
+          },
           { status: 400 }
         );
       }
@@ -751,8 +737,10 @@ export async function POST(req: NextRequest) {
 
 /**
  * PATCH /api/adviseurs/creditfacturen
- * Status wijzigen: { id, status, betaald_op? }
- * status=verzonden → mail + PDF naar adviseur
+ * - Status: { id, status, betaald_op? } — status=verzonden → mail + PDF
+ * - Regels vervangen: { id, regels: [{ omschrijving, bedrag }] }
+ * - Aftrek op concept: { id, aftrek_ex_btw, aftrek_omschrijving? }
+ * - Open kosten aftrekken: { id, kosten_ids: string[] }
  */
 export async function PATCH(req: NextRequest) {
   let body: {
@@ -764,6 +752,10 @@ export async function PATCH(req: NextRequest) {
       | "betaald"
       | "geannuleerd";
     betaald_op?: string | null;
+    aftrek_ex_btw?: number | string | null;
+    aftrek_omschrijving?: string | null;
+    kosten_ids?: string[] | null;
+    regels?: { omschrijving?: string; bedrag?: number | string }[] | null;
   };
   try {
     body = await req.json();
@@ -771,15 +763,266 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  if (!body.id || !body.status) {
-    return NextResponse.json(
-      { error: "id en status zijn verplicht" },
-      { status: 400 }
-    );
+  if (!body.id) {
+    return NextResponse.json({ error: "id is verplicht" }, { status: 400 });
   }
 
   try {
     const sb = getSupabaseAdmin();
+
+    if (Array.isArray(body.regels)) {
+      const { replaceCreditRegels } = await import(
+        "@/lib/creditfactuur-aftrek"
+      );
+      const { data: current, error: curErr } = await sb
+        .from("adviseur_creditfacturen")
+        .select("id, status, notities, factuur_nummer")
+        .eq("id", body.id)
+        .maybeSingle();
+      if (curErr || !current) {
+        return NextResponse.json(
+          { error: curErr?.message || "Factuur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (current.status !== "concept" && current.status !== "verzonden") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen zijn te bewerken" },
+          { status: 400 }
+        );
+      }
+      try {
+        const next = replaceCreditRegels({
+          notities: current.notities,
+          regels: body.regels.map((r) => ({
+            omschrijving: String(r.omschrijving || ""),
+            bedrag: Number(r.bedrag) || 0,
+          })),
+        });
+        const { data, error } = await sb
+          .from("adviseur_creditfacturen")
+          .update({
+            bedrag_ex_btw: next.bedrag_ex_btw,
+            btw_bedrag: next.btw_bedrag,
+            bedrag_inc_btw: next.bedrag_inc_btw,
+            notities: next.notities,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", body.id)
+          .select("*")
+          .single();
+        if (error || !data) {
+          return NextResponse.json(
+            { error: error?.message || "Bijwerken mislukt" },
+            { status: 500 }
+          );
+        }
+        return NextResponse.json({ factuur: data });
+      } catch (e) {
+        return NextResponse.json(
+          { error: errMessage(e, "Regels opslaan mislukt") },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (Array.isArray(body.kosten_ids) && body.kosten_ids.length > 0) {
+      const { applyAftrekToCreditfactuur } = await import(
+        "@/lib/creditfactuur-aftrek"
+      );
+      const kostenIds = body.kosten_ids
+        .map((id) => String(id).trim())
+        .filter(Boolean);
+      const { data: current, error: curErr } = await sb
+        .from("adviseur_creditfacturen")
+        .select(
+          "id, adviseur_id, status, bedrag_ex_btw, notities, factuur_nummer"
+        )
+        .eq("id", body.id)
+        .maybeSingle();
+      if (curErr || !current) {
+        return NextResponse.json(
+          { error: curErr?.message || "Factuur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (current.status !== "concept" && current.status !== "verzonden") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen zijn te bewerken" },
+          { status: 400 }
+        );
+      }
+
+      const { data: openKosten, error: kostenErr } = await sb
+        .from("adviseur_kosten")
+        .select("*")
+        .in("id", kostenIds)
+        .eq("adviseur_id", current.adviseur_id)
+        .eq("status", "open");
+      if (kostenErr) {
+        if (
+          kostenErr.code === "42P01" ||
+          /adviseur_kosten/i.test(kostenErr.message) ||
+          /schema cache/i.test(kostenErr.message)
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Tabel adviseur_kosten ontbreekt. Voer supabase/migrate-adviseur-kosten.sql uit.",
+            },
+            { status: 503 }
+          );
+        }
+        return NextResponse.json(
+          { error: kostenErr.message },
+          { status: 500 }
+        );
+      }
+      if (!openKosten || openKosten.length === 0) {
+        return NextResponse.json(
+          { error: "Geen open kosten gevonden voor deze medewerker" },
+          { status: 400 }
+        );
+      }
+
+      try {
+        let notities = current.notities as string | null;
+        let currentEx = Number(current.bedrag_ex_btw) || 0;
+        let next = {
+          notities: notities || "",
+          bedrag_ex_btw: currentEx,
+          btw_bedrag: 0,
+          bedrag_inc_btw: currentEx,
+        };
+        for (const k of openKosten) {
+          const bedrag = Number(k.bedrag_ex_btw) || 0;
+          if (!(bedrag > 0)) continue;
+          const soort =
+            k.soort === "voorschot"
+              ? "Voorschot"
+              : k.soort === "correctie"
+                ? "Correctie"
+                : "Kosten";
+          next = applyAftrekToCreditfactuur({
+            notities,
+            currentEx,
+            aftrekEx: bedrag,
+            omschrijving: `${soort} · ${String(k.omschrijving || "").trim()}`,
+            basisOmschrijving: `Vergoeding ${current.factuur_nummer}`,
+          });
+          notities = next.notities;
+          currentEx = next.bedrag_ex_btw;
+        }
+
+        const { data, error } = await sb
+          .from("adviseur_creditfacturen")
+          .update({
+            bedrag_ex_btw: next.bedrag_ex_btw,
+            btw_bedrag: next.btw_bedrag,
+            bedrag_inc_btw: next.bedrag_inc_btw,
+            notities: next.notities,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", body.id)
+          .select("*")
+          .single();
+        if (error || !data) {
+          return NextResponse.json(
+            { error: error?.message || "Bijwerken mislukt" },
+            { status: 500 }
+          );
+        }
+
+        const now = new Date().toISOString();
+        await sb
+          .from("adviseur_kosten")
+          .update({
+            status: "ingedekt",
+            creditfactuur_id: body.id,
+            ingedekt_op: now,
+            updated_at: now,
+          })
+          .in(
+            "id",
+            openKosten.map((k) => k.id as string)
+          );
+
+        return NextResponse.json({
+          factuur: data,
+          kosten_ingedekt: openKosten.length,
+        });
+      } catch (e) {
+        return NextResponse.json(
+          { error: errMessage(e, "Kosten aftrekken mislukt") },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (body.aftrek_ex_btw != null && body.aftrek_ex_btw !== "") {
+      const { applyAftrekToCreditfactuur } = await import(
+        "@/lib/creditfactuur-aftrek"
+      );
+      const { data: current, error: curErr } = await sb
+        .from("adviseur_creditfacturen")
+        .select(
+          "id, status, bedrag_ex_btw, notities, factuur_nummer"
+        )
+        .eq("id", body.id)
+        .maybeSingle();
+      if (curErr || !current) {
+        return NextResponse.json(
+          { error: curErr?.message || "Factuur niet gevonden" },
+          { status: 404 }
+        );
+      }
+      if (current.status !== "concept" && current.status !== "verzonden") {
+        return NextResponse.json(
+          { error: "Alleen conceptfacturen zijn te bewerken" },
+          { status: 400 }
+        );
+      }
+      try {
+        const next = applyAftrekToCreditfactuur({
+          notities: current.notities,
+          currentEx: Number(current.bedrag_ex_btw) || 0,
+          aftrekEx: Number(body.aftrek_ex_btw),
+          omschrijving: body.aftrek_omschrijving,
+          basisOmschrijving: `Vergoeding ${current.factuur_nummer}`,
+        });
+        const { data, error } = await sb
+          .from("adviseur_creditfacturen")
+          .update({
+            bedrag_ex_btw: next.bedrag_ex_btw,
+            btw_bedrag: next.btw_bedrag,
+            bedrag_inc_btw: next.bedrag_inc_btw,
+            notities: next.notities,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", body.id)
+          .select("*")
+          .single();
+        if (error || !data) {
+          return NextResponse.json(
+            { error: error?.message || "Bijwerken mislukt" },
+            { status: 500 }
+          );
+        }
+        return NextResponse.json({ factuur: data });
+      } catch (e) {
+        return NextResponse.json(
+          { error: errMessage(e, "Aftrek mislukt") },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (!body.status) {
+      return NextResponse.json(
+        { error: "id en status zijn verplicht" },
+        { status: 400 }
+      );
+    }
 
     if (body.status === "verzonden") {
       const result = await verstuurAdviseurCreditfactuur(sb, body.id);

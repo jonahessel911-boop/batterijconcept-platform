@@ -12,7 +12,8 @@ import {
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
+import { isAdminAdviseur, isPlanbaarAdviseur } from "@/lib/admin-adviseur";
+import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
   afspraakIsAfgelopen,
@@ -747,10 +748,12 @@ export async function buildSalesManagerDashboard(
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
     .select("id, naam, email, actief, rol, startdatum")
-    .eq("actief", true)
     .order("naam");
   if (advErr) throw advErr;
 
+  // Alle sales-adviseurs, ook inactief of tijdelijk niet planbaar,
+  // zodat gelopen afspraken zichtbaar blijven. Vrije blokken alleen
+  // voor wie nu echt ingepland mag worden.
   const adviseurs = (
     (adviseursRaw || []) as {
       id: string;
@@ -760,7 +763,8 @@ export async function buildSalesManagerDashboard(
       rol?: string | null;
       startdatum?: string | null;
     }[]
-  ).filter((a) => isPlanbaarAdviseur(a));
+  ).filter((a) => isAgendaAdviseur(a) && !isAdminAdviseur(a));
+  const planbaar = adviseurs.filter((a) => isPlanbaarAdviseur(a));
 
   const ids = adviseurs.map((a) => a.id);
   const emptyTotals = (): SalesManagerTotals => ({
@@ -827,7 +831,7 @@ export async function buildSalesManagerDashboard(
         .not("ondertekend_op", "is", null)
         .gte("ondertekend_op", period.startIso)
         .lte("ondertekend_op", period.endIso),
-      loadBlokkenAankomendeWeek(sb, adviseurs, upcoming, now),
+      loadBlokkenAankomendeWeek(sb, planbaar, upcoming, now),
     ]);
 
   const afspraken = (afsprakenRaw || []) as AfspraakRow[];

@@ -3,9 +3,42 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { isSaleUitkomst } from "@/lib/afspraak-soort";
 import { formatEuro, formatTimeNl } from "@/lib/format";
+import { formatInTimeZone } from "date-fns-tz";
+import { nl } from "date-fns/locale";
 import { leadStatusLabel } from "@/lib/labels";
-import type { DashboardV2Vandaag } from "@/lib/dashboard-v2";
+import type { DashboardV2Vandaag, VandaagPeriode } from "@/lib/dashboard-v2";
 import type { LeadStatus } from "@/types/database";
+
+const DAG_OPTIES: { periode: VandaagPeriode; label: string }[] = [
+  { periode: 1, label: "Vandaag" },
+  { periode: 3, label: "3 dgn" },
+  { periode: 7, label: "7 dgn" },
+  { periode: 14, label: "14 dgn" },
+  { periode: "this_month", label: "Deze maand" },
+  { periode: "prev_month", label: "Vorige maand" },
+];
+
+function periodeQuery(p: VandaagPeriode): string {
+  return String(p);
+}
+
+function periodeKortLabel(p: VandaagPeriode): string {
+  if (p === 1) return "vandaag";
+  if (p === 3) return "afgelopen 3 dagen";
+  if (p === 7) return "afgelopen 7 dagen";
+  if (p === 14) return "afgelopen 14 dagen";
+  if (p === "this_month") return "deze maand";
+  return "vorige maand";
+}
+
+function periodeHeroLabel(p: VandaagPeriode): string {
+  if (p === 1) return "Live dagstand";
+  if (p === 3) return "Afgelopen 3 dagen";
+  if (p === 7) return "Afgelopen 7 dagen";
+  if (p === 14) return "Afgelopen 14 dagen";
+  if (p === "this_month") return "Deze maand";
+  return "Vorige maand";
+}
 
 /** Pipeline-statussen zijn geen afboekreden. */
 const GEEN_AFBOEK_STATUS = new Set([
@@ -127,34 +160,41 @@ function KpiTile({
 }
 
 export function TodayPanel() {
+  const [periode, setPeriode] = useState<VandaagPeriode>(1);
   const [data, setData] = useState<DashboardV2Vandaag | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
-    if (opts?.silent) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        "/api/dashboard-v2?period=last_7_days&scope=team",
-        { cache: "no-store" }
-      );
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Laden mislukt");
-      setData((json.vandaag as DashboardV2Vandaag) || null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fout");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (opts?: { silent?: boolean; periode?: VandaagPeriode }) => {
+      const p = opts?.periode ?? periode;
+      if (opts?.silent) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/dashboard-v2?period=last_7_days&scope=team&vandaag_dagen=${encodeURIComponent(periodeQuery(p))}`,
+          { cache: "no-store" }
+        );
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || "Laden mislukt");
+        setData((json.vandaag as DashboardV2Vandaag) || null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Fout");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [periode]
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    // Eerste load: skeleton. Filterwissel: stille refresh bovenop bestaande data.
+    void load({ periode, silent: data != null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen herladen bij periode
+  }, [periode, load]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -204,6 +244,10 @@ export function TodayPanel() {
     data.afsprakenGelopen +
     data.afsprakenTeLopen +
     data.afsprakenNietAfgeboekt;
+  const periodeLabel = periodeKortLabel(periode);
+  const heroEyebrow = periodeHeroLabel(periode);
+  /** Meerdere kalenderdagen → toon datum onder de tijd. */
+  const multiDay = periode !== 1;
 
   return (
     <div className="space-y-5">
@@ -220,7 +264,7 @@ export function TodayPanel() {
         <div className="relative flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/55">
-              Live dagstand
+              {heroEyebrow}
             </p>
             <h2 className="mt-1 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
               {data.dateLabel.replace(/^./, (c) => c.toUpperCase())}
@@ -231,20 +275,47 @@ export function TodayPanel() {
               {afsprakenTotaal === 1 ? "" : "en"} op de planning
             </p>
           </div>
-          <button
-            type="button"
-            disabled={refreshing}
-            onClick={() => void load({ silent: true })}
-            className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white ring-1 ring-white/20 backdrop-blur hover:bg-white/15 disabled:opacity-60"
-          >
-            <span
-              className={[
-                "h-1.5 w-1.5 rounded-full bg-[#7ddea0]",
-                refreshing ? "animate-pulse" : "",
-              ].join(" ")}
-            />
-            {refreshing ? "Bezig…" : "Vernieuwen"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className="inline-flex rounded-xl bg-white/10 p-0.5 ring-1 ring-white/20"
+              role="group"
+              aria-label="Periode"
+            >
+              {DAG_OPTIES.map((opt) => {
+                const active = periode === opt.periode;
+                return (
+                  <button
+                    key={String(opt.periode)}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setPeriode(opt.periode)}
+                    className={[
+                      "rounded-[10px] px-2.5 py-1.5 text-xs font-semibold transition sm:px-3",
+                      active
+                        ? "bg-white text-[#0a4727] shadow-sm"
+                        : "text-white/75 hover:bg-white/10 hover:text-white",
+                    ].join(" ")}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              disabled={refreshing}
+              onClick={() => void load({ silent: true })}
+              className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white ring-1 ring-white/20 backdrop-blur hover:bg-white/15 disabled:opacity-60"
+            >
+              <span
+                className={[
+                  "h-1.5 w-1.5 rounded-full bg-[#7ddea0]",
+                  refreshing ? "animate-pulse" : "",
+                ].join(" ")}
+              />
+              {refreshing ? "Bezig…" : "Vernieuwen"}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -258,9 +329,9 @@ export function TodayPanel() {
       <div className="grid gap-3 lg:grid-cols-3">
         <div className="space-y-2">
           <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
-            Sales vandaag
+            Sales {periodeLabel}
           </p>
-          <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <KpiTile
               label="Offertes verstuurd"
               value={num(data.offertesVerstuurd)}
@@ -274,6 +345,16 @@ export function TodayPanel() {
               label="Orderwaarde"
               value={money(data.orderwaarde)}
               hint="excl. btw"
+              accent="green"
+            />
+            <KpiTile
+              label="Salesconversie"
+              value={
+                data.salesConversiePct == null
+                  ? "—"
+                  : `${num(data.salesConversiePct, 1)}%`
+              }
+              hint={`${num(data.afsprakenGelopen + data.afsprakenNietAfgeboekt)} gelopen`}
               accent="green"
             />
           </div>
@@ -320,7 +401,7 @@ export function TodayPanel() {
                 Verkopers
               </h3>
               <p className="text-[11px] text-muted">
-                Sales & omzet vandaag
+                Sales & omzet {periodeLabel}
               </p>
             </div>
             <span className="rounded-full bg-wash px-2.5 py-1 text-[10px] font-semibold tabular-nums text-muted">
@@ -329,7 +410,7 @@ export function TodayPanel() {
           </div>
           {data.verkopers.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-muted">
-              Nog geen sales of afspraken vandaag.
+              Nog geen sales of afspraken {periodeLabel}.
             </p>
           ) : (
             <ul className="divide-y divide-line">
@@ -373,6 +454,14 @@ export function TodayPanel() {
                           </span>
                           <span>
                             <strong className="tabular-nums text-ink">
+                              {v.salesConversiePct == null
+                                ? "—"
+                                : `${num(v.salesConversiePct, 1)}%`}
+                            </strong>{" "}
+                            conv.
+                          </span>
+                          <span>
+                            <strong className="tabular-nums text-ink">
                               {num(v.afsprakenTeLopen)}
                             </strong>{" "}
                             te lopen
@@ -405,7 +494,7 @@ export function TodayPanel() {
                 Afspraken
               </h3>
               <p className="text-[11px] text-muted">
-                Tijdlijn van vandaag
+                Tijdlijn {periodeLabel}
               </p>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -424,7 +513,7 @@ export function TodayPanel() {
           </div>
           {data.afspraken.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-muted">
-              Geen huisbezoeken gepland vandaag.
+              Geen huisbezoeken in deze periode.
             </p>
           ) : (
             <ul className="max-h-[32rem] overflow-y-auto">
@@ -438,7 +527,12 @@ export function TodayPanel() {
                 return (
                   <li
                     key={a.id}
-                    className="grid grid-cols-[4.5rem_1fr_auto] items-start gap-3 border-b border-line px-4 py-3.5 last:border-b-0 sm:px-5"
+                    className={[
+                      "grid items-start gap-3 border-b border-line px-4 py-3.5 last:border-b-0 sm:px-5",
+                      multiDay
+                        ? "grid-cols-[5.5rem_1fr_auto]"
+                        : "grid-cols-[4.5rem_1fr_auto]",
+                    ].join(" ")}
                   >
                     <div className="relative pt-0.5 text-right">
                       {idx < data.afspraken.length - 1 ? (
@@ -447,15 +541,27 @@ export function TodayPanel() {
                           aria-hidden
                         />
                       ) : null}
-                      <span className="relative inline-flex items-center gap-1.5 font-mono text-sm font-semibold tabular-nums text-ink">
-                        <span
-                          className={[
-                            "h-2 w-2 shrink-0 rounded-full",
-                            sale ? "bg-[#DB2777]" : BUCKET_DOT[a.bucket],
-                          ].join(" ")}
-                          aria-hidden
-                        />
-                        {formatTimeNl(a.start_at)}
+                      <span className="relative inline-flex flex-col items-end gap-0.5 font-mono text-sm font-semibold tabular-nums text-ink">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className={[
+                              "h-2 w-2 shrink-0 rounded-full",
+                              sale ? "bg-[#DB2777]" : BUCKET_DOT[a.bucket],
+                            ].join(" ")}
+                            aria-hidden
+                          />
+                          {formatTimeNl(a.start_at)}
+                        </span>
+                        {multiDay ? (
+                          <span className="pr-3.5 text-[10px] font-medium capitalize text-muted">
+                            {formatInTimeZone(
+                              new Date(a.start_at),
+                              "Europe/Amsterdam",
+                              "EEE d MMM",
+                              { locale: nl }
+                            )}
+                          </span>
+                        ) : null}
                       </span>
                     </div>
                     <div className="min-w-0">

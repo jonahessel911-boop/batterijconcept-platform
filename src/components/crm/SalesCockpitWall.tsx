@@ -30,18 +30,18 @@ import {
   UserPlus,
   Wrench,
 } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/crm/sales-cockpit/ui/avatar";
+import { Badge } from "@/components/crm/sales-cockpit/ui/badge";
+import { Button } from "@/components/crm/sales-cockpit/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
+} from "@/components/crm/sales-cockpit/ui/card";
+import { Progress } from "@/components/crm/sales-cockpit/ui/progress";
+import { Separator } from "@/components/crm/sales-cockpit/ui/separator";
 import { formatEuro } from "@/lib/format";
 import type {
   DayAdvisorAppt,

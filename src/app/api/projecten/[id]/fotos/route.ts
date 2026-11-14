@@ -3,9 +3,12 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { uploadProjectFotoFile } from "@/lib/project-fotos";
 import {
+  isFotoBatterij,
+  isFotoMeterkast,
   isOpleveringsrapport,
   isProjectDocumentUpload,
   isSchouwFormulier,
+  isVideoInstallatie,
 } from "@/lib/project-documenten";
 import { maybeAdvanceProjectNaSchouw } from "@/lib/project-na-schouw";
 import { maybeAdvanceProjectNaOplevering } from "@/lib/project-na-oplevering";
@@ -82,6 +85,10 @@ export async function POST(
       form.get("allow_pdf") === "1" ||
       form.get("allow_pdf") === "true" ||
       isProjectDocumentUpload(omschrijving);
+    const allowVideo =
+      form.get("allow_video") === "1" ||
+      form.get("allow_video") === "true" ||
+      isVideoInstallatie(omschrijving);
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -92,6 +99,7 @@ export async function POST(
 
     const result = await uploadProjectFotoFile(sb, id, file, omschrijving, {
       allowPdf,
+      allowVideo,
     });
     if ("error" in result) {
       return NextResponse.json(
@@ -108,9 +116,13 @@ export async function POST(
       project?: Record<string, unknown> | null;
     } | null = null;
 
-    if (isSchouwFormulier(omschrijving)) {
+    if (isSchouwFormulier(omschrijving) || isFotoMeterkast(omschrijving)) {
       statusAdvance = await maybeAdvanceProjectNaSchouw(sb, id);
-    } else if (isOpleveringsrapport(omschrijving)) {
+    } else if (
+      isOpleveringsrapport(omschrijving) ||
+      isFotoBatterij(omschrijving) ||
+      isVideoInstallatie(omschrijving)
+    ) {
       statusAdvance = await maybeAdvanceProjectNaOplevering(sb, id);
     }
 

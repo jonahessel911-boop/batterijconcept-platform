@@ -10,7 +10,10 @@ import {
   nogTeFacturerenRestant,
 } from "@/lib/aanbetaling";
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
-import { isSchouwFormulier } from "@/lib/project-documenten";
+import {
+  isFotoMeterkast,
+  isSchouwFormulier,
+} from "@/lib/project-documenten";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import type { ProjectStatus } from "@/types/database";
 
@@ -155,7 +158,11 @@ export async function maybeAdvanceProjectNaSchouw(
   const hasSchouwForm = (fotos || []).some((f) =>
     isSchouwFormulier(f.omschrijving)
   );
-  if (!hasSchouwForm) {
+  const hasFotoMeterkast = (fotos || []).some((f) =>
+    isFotoMeterkast(f.omschrijving)
+  );
+  // Schouw pas afronden als formulier én foto meterkast er zijn.
+  if (!hasSchouwForm || !hasFotoMeterkast) {
     return {
       advanced: false,
       from: current,

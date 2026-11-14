@@ -260,7 +260,11 @@ function finalizeMetrics(a: Acc): BelMetrics {
 
 function isGeenContactStatus(status: string | null | undefined): boolean {
   const s = (status || "").trim().toLowerCase();
-  return s === "geen_contact" || s === "vervolg_geen_contact";
+  return (
+    s === "geen_contact" ||
+    s === "definitief_geen_contact" ||
+    s === "vervolg_geen_contact"
+  );
 }
 
 function ymdAmsterdam(d: Date): string {

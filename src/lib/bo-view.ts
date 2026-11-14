@@ -1,19 +1,23 @@
 export type BoView =
   | "orders"
+  | "kanban"
   | "agenda"
   | "taken_agenda"
   | "acties"
   | "service"
-  | "bel_rapportage";
+  | "bel_rapportage"
+  | "live";
 
 export function parseBoView(raw: string | null | undefined): BoView {
   if (raw === "agenda") return "agenda";
   if (raw === "taken_agenda" || raw === "taken-agenda") return "taken_agenda";
   if (raw === "acties") return "acties";
   if (raw === "service") return "service";
+  if (raw === "kanban" || raw === "bord") return "kanban";
   if (raw === "bel_rapportage" || raw === "bel-rapportage") {
     return "bel_rapportage";
   }
+  if (raw === "live") return "live";
   // Oude tabs → Projecten / Acties
   if (raw === "schouwweek") return "acties";
   if (raw === "ai") return "orders";
@@ -28,9 +32,11 @@ export function backofficeHref(view: BoView = "orders"): string {
 
 export const BO_VIEWS: { id: BoView; label: string }[] = [
   { id: "orders", label: "Projecten" },
+  { id: "kanban", label: "Kanban" },
   { id: "acties", label: "Acties" },
   { id: "agenda", label: "Planbord" },
   { id: "taken_agenda", label: "Taken agenda" },
   { id: "service", label: "Service" },
+  { id: "live", label: "Live" },
   { id: "bel_rapportage", label: "Bel rapportage" },
 ];

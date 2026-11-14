@@ -4,12 +4,12 @@ import { errMessage } from "@/lib/errors";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { requireVoiceAiAccess } from "@/lib/voice-ai-auth";
 import type { VoiceAfspraakRow, VoiceNoteStatus } from "@/lib/voice-ai";
+import { isRikNaam } from "@/lib/ops-commissie";
 
 export const runtime = "nodejs";
 
 function isTarikNaam(naam: string | null | undefined): boolean {
-  const n = (naam || "").trim().toLowerCase();
-  return n === "tarik" || n.startsWith("tarik ");
+  return isRikNaam(naam);
 }
 
 /**

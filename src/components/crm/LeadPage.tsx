@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
@@ -20,6 +20,7 @@ import {
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import {
   MAX_BELPOGINGEN,
+  definitiefGeenContactDbHint,
   buildGeenContactOutcomePatch,
 } from "@/lib/bel-queue";
 import { MaakOfferteModal } from "./MaakOfferteModal";
@@ -191,6 +192,7 @@ export function LeadPage() {
   const [savingNote, setSavingNote] = useState(false);
   const [editingGegevens, setEditingGegevens] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const planFromQuery = useRef(false);
   /** null | huisbezoek | bel | warme_bel */
   const [planMode, setPlanMode] = useState<
     null | "huisbezoek" | "bel" | "warme_bel"
@@ -312,6 +314,15 @@ export function LeadPage() {
     return () => cancelAnimationFrame(frame);
   }, [load]);
 
+  useEffect(() => {
+    if (planFromQuery.current) return;
+    if (searchParams.get("plan") !== "huisbezoek") return;
+    if (!lead || !rol || rol === "adviseur") return;
+    planFromQuery.current = true;
+    setPlanMode("huisbezoek");
+    setPlanOpen(true);
+  }, [searchParams, lead, rol]);
+
   async function updateStatus(status: LeadStatus, extraNotitie?: string) {
     if (!lead) return;
     if (!kanStatusWijzigen) return;
@@ -355,16 +366,39 @@ export function LeadPage() {
           .eq("id", lead.id);
         error = retry.error;
       }
-      if (error) throw error;
+      if (error) {
+        const hint = definitiefGeenContactDbHint(error.message);
+        if (hint) throw new Error(hint);
+        throw error;
+      }
 
-      if (status === "geen_contact") {
+      if (status === "niet_gekwalificeerd" || status === "deur_niet_open") {
+        try {
+          await sb
+            .from("afspraken")
+            .update({
+              status: "geannuleerd",
+              notities:
+                status === "deur_niet_open"
+                  ? "Annulering: deur niet open"
+                  : "Annulering: niet goed gekwalificeerd",
+            })
+            .eq("lead_id", lead.id)
+            .eq("soort", "nieuw")
+            .in("status", ["gepland", "bevestigd", "verzet"]);
+        } catch {
+          /* non-blocking */
+        }
+      }
+
+      if (status === "geen_contact" && gc) {
         try {
           const res = await fetch("/api/bel/mark-called", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               lead_id: lead.id,
-              status: "geen_contact",
+              status: gc.patch.status,
               eerste_gebeld: !lead.eerste_gebeld_at,
             }),
           });
@@ -384,10 +418,14 @@ export function LeadPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
-          titel: `Status → ${leadStatusLabel[status] || status}`,
+          titel: `Status → ${
+            leadStatusLabel[gc?.patch.status ?? status] || status
+          }`,
           detail:
             status === "geen_contact" && gc
-              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}`
+              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}${
+                  gc.definitief ? " — definitief geen contact" : ""
+                }`
               : extraNotitie?.trim() || null,
         }),
       }).catch(() => {});
@@ -407,13 +445,16 @@ export function LeadPage() {
 
       const { fireMetaCapiSync } = await import("@/lib/meta-capi-client");
       fireMetaCapiSync(lead.id);
-    } catch {
+    } catch (e) {
       setLead({
         ...lead,
         status: prev,
         notities: prevNotes,
         ...prevBel,
       });
+      setErrorMsg(
+        e instanceof Error ? e.message : "Status bijwerken mislukt"
+      );
     }
   }
 
@@ -1178,6 +1219,7 @@ export function LeadPage() {
                 </span>
               ) : null}
             </SectionTitle>
+            {rol && rol !== "adviseur" ? (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               {planOpen ? (
                 <button
@@ -1213,35 +1255,30 @@ export function LeadPage() {
                   >
                     Terugbel
                   </button>
-                  {rol !== "adviseur" ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPlanMode("warme_bel");
-                        setPlanOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1 border border-[#C9A227]/50 bg-[#FFF8D6] px-2.5 py-1.5 text-xs font-semibold text-[#8A6D00] hover:bg-[#fff0b8]"
-                    >
-                      Warme terugbel
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlanMode("warme_bel");
+                      setPlanOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 border border-[#C9A227]/50 bg-[#FFF8D6] px-2.5 py-1.5 text-xs font-semibold text-[#8A6D00] hover:bg-[#fff0b8]"
+                  >
+                    Warme terugbel
+                  </button>
                 </>
               )}
             </div>
+            ) : null}
           </div>
 
           <div>
-            {planOpen && planMode === "huisbezoek" && (
+            {rol && rol !== "adviseur" && planOpen && planMode === "huisbezoek" && (
               <div className="border-b border-line bg-wash/40 px-4 py-3 sm:px-5">
                 <LeadAfspraakPlannen
                   lead={lead}
                   adviseurs={adviseurs}
-                  lockAdviseur={rol === "adviseur"}
-                  defaultAdviseurId={
-                    rol === "adviseur"
-                      ? session?.id
-                      : lead.adviseur_id || undefined
-                  }
+                  lockAdviseur={false}
+                  defaultAdviseurId={lead.adviseur_id || undefined}
                   onCancel={() => {
                     setPlanOpen(false);
                     setPlanMode(null);
@@ -1256,7 +1293,9 @@ export function LeadPage() {
                 />
               </div>
             )}
-            {planOpen &&
+            {rol &&
+              rol !== "adviseur" &&
+              planOpen &&
               (planMode === "bel" || planMode === "warme_bel") && (
                 <div className="border-b border-line bg-wash/40 px-4 py-3 sm:px-5">
                   <LeadTerugbelPlannen
@@ -1267,7 +1306,6 @@ export function LeadPage() {
                     lockAdviseur={false}
                     defaultAdviseurId={
                       lead.beller_id ||
-                      (rol === "adviseur" ? session?.id : null) ||
                       lead.adviseur_id ||
                       session?.id ||
                       undefined
@@ -1344,6 +1382,7 @@ export function LeadPage() {
         open={maakOfferteOpen}
         leadId={lead.id}
         leadNaam={lead.naam}
+        adviseurId={lead.adviseur_id}
         onClose={() => setMaakOfferteOpen(false)}
         onCreated={(offerteId) => {
           setMaakOfferteOpen(false);

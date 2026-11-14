@@ -158,7 +158,8 @@ export function PartnerSlotPicker({
       );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Slots laden mislukt");
-      setSlots((data.beschikbaar || data.slots || []) as PartnerSlotOption[]);
+      // Alle slots (vrij + bezet) — bezet mag overschreven worden na bevestiging
+      setSlots((data.slots || data.beschikbaar || []) as PartnerSlotOption[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Slots laden mislukt");
       setSlots([]);
@@ -241,26 +242,39 @@ export function PartnerSlotPicker({
     });
   }
 
-  const available = useMemo(
-    () => slots.filter((s) => s.beschikbaar !== false),
-    [slots]
-  );
+  function pickSlot(s: PartnerSlotOption) {
+    if (disabled) return;
+    if (s.beschikbaar === false) {
+      const reden = s.reason?.trim() || "Bezet of afgeblokt";
+      const ok = window.confirm(
+        `${reden}.\n\nToch dit slot overschrijven en inplannen?`
+      );
+      if (!ok) return;
+    }
+    onChange(s.start_at, s);
+  }
 
   const days = useMemo(() => {
     const map = new Map<string, PartnerSlotOption[]>();
-    for (const s of available) {
+    for (const s of slots) {
       const key = dayKeyOf(s.start_at);
       const list = map.get(key) || [];
       list.push(s);
       map.set(key, list);
     }
-    return [...map.entries()].map(([dk, daySlots]) => ({
-      dayKey: dk,
-      slots: daySlots.sort((a, b) => a.start_at.localeCompare(b.start_at)),
-    }));
-  }, [available]);
+    return [...map.entries()].map(([dk, daySlots]) => {
+      const sorted = daySlots.sort((a, b) =>
+        a.start_at.localeCompare(b.start_at)
+      );
+      return {
+        dayKey: dk,
+        slots: sorted,
+        freeCount: sorted.filter((s) => s.beschikbaar !== false).length,
+      };
+    });
+  }, [slots]);
 
-  // Zonder vaste dayKey: kies eerste beschikbare dag (of dag van huidige value)
+  // Zonder vaste dayKey: kies eerste dag met vrije slots, anders eerste dag / value
   useEffect(() => {
     if (dayKey) return;
     if (days.length === 0) {
@@ -273,7 +287,8 @@ export function PartnerSlotPicker({
         if (days.some((d) => d.dayKey === fromValue)) return fromValue;
       }
       if (prev && days.some((d) => d.dayKey === prev)) return prev;
-      return days[0]!.dayKey;
+      const firstFree = days.find((d) => d.freeCount > 0);
+      return (firstFree || days[0])!.dayKey;
     });
   }, [days, dayKey, value]);
 
@@ -292,8 +307,8 @@ export function PartnerSlotPicker({
   );
 
   const selectedSlot = useMemo(
-    () => available.find((s) => s.start_at === value) || null,
-    [available, value]
+    () => slots.find((s) => s.start_at === value) || null,
+    [slots, value]
   );
 
   function pickDay(dk: string) {
@@ -331,8 +346,8 @@ export function PartnerSlotPicker({
           {!compact ? (
             <p className="mt-0.5 text-[11px] text-muted">
               {soort === "installatie"
-                ? "Max. 1 ochtend + 1 middag per dag"
-                : "Slots van 30 min · open vensters"}
+                ? "Max. 1 ochtend + 1 middag per dag · bezet overschrijfbaar"
+                : "Slots van 30 min · rood = bezet (overschrijfbaar)"}
             </p>
           ) : null}
         </div>
@@ -350,15 +365,34 @@ export function PartnerSlotPicker({
       </div>
 
       {value && selectedSlot ? (
-        <div className="border border-green/30 bg-green-soft px-3 py-2.5 text-sm text-green-dark">
+        <div
+          className={
+            selectedSlot.beschikbaar === false
+              ? "border border-[#C62828]/30 bg-[#FDECEA] px-3 py-2.5 text-sm text-[#C62828]"
+              : "border border-green/30 bg-green-soft px-3 py-2.5 text-sm text-green-dark"
+          }
+        >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <p className="font-semibold">
                 {formatDateTimeNl(value)}
-                <span className="ml-1.5 font-normal text-green-dark/80">
+                <span
+                  className={[
+                    "ml-1.5 font-normal",
+                    selectedSlot.beschikbaar === false
+                      ? "text-[#C62828]/80"
+                      : "text-green-dark/80",
+                  ].join(" ")}
+                >
                   · {selectedSlot.venster === "ochtend" ? "ochtend" : "middag"}
+                  {selectedSlot.beschikbaar === false
+                    ? " · overschrijving"
+                    : ""}
                 </span>
               </p>
+              {selectedSlot.beschikbaar === false && selectedSlot.reason ? (
+                <p className="mt-1 text-xs font-medium">{selectedSlot.reason}</p>
+              ) : null}
               {reistijdHint(selectedSlot) ? (
                 <p className="mt-1 text-xs font-medium">
                   {reistijdHint(selectedSlot)}
@@ -463,9 +497,9 @@ export function PartnerSlotPicker({
         <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
           {error}
         </p>
-      ) : available.length === 0 ? (
+      ) : slots.length === 0 ? (
         <p className="text-sm text-muted">
-          Geen vrije slots
+          Geen slots
           {dayKey ? " op deze dag" : ` in de komende ${daysAhead} dagen`}. Check
           afblokkingen of kies een andere partner.
         </p>
@@ -477,7 +511,7 @@ export function PartnerSlotPicker({
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                 1. Dag
               </p>
-              <div className="flex gap-1 overflow-x-auto pb-0.5">
+              <div className="flex flex-wrap gap-1">
                 {(compact ? days.slice(0, 10) : days).map((d) => {
                   const active = selectedDay === d.dayKey;
                   return (
@@ -509,8 +543,7 @@ export function PartnerSlotPicker({
                             active ? "text-white/85" : "text-muted",
                           ].join(" ")}
                         >
-                          {d.slots.length}{" "}
-                          {d.slots.length === 1 ? "slot" : "slots"}
+                          {d.freeCount}/{d.slots.length} vrij
                         </span>
                       ) : null}
                     </button>
@@ -538,26 +571,39 @@ export function PartnerSlotPicker({
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {daySlots.map((s) => {
                     const selected = value === s.start_at;
+                    const busySlot = s.beschikbaar === false;
                     return (
                       <button
                         key={s.start_at}
                         type="button"
                         disabled={disabled}
-                        onClick={() => onChange(s.start_at, s)}
+                        title={
+                          busySlot
+                            ? `${s.reason || "Bezet"} — klik om te overschrijven`
+                            : undefined
+                        }
+                        onClick={() => pickSlot(s)}
                         className={[
                           "border px-3 py-3 text-left transition",
                           selected
                             ? "border-green bg-green text-white"
-                            : "border-line bg-white text-ink hover:border-green",
+                            : busySlot
+                              ? "border-[#C62828]/35 bg-[#FDECEA] text-[#C62828] hover:border-[#C62828]"
+                              : "border-line bg-white text-ink hover:border-green",
                         ].join(" ")}
                       >
                         <span className="block text-sm font-semibold">
                           {s.venster === "ochtend" ? "Ochtend" : "Middag"}
+                          {busySlot ? " · bezet" : ""}
                         </span>
                         <span
                           className={[
                             "mt-0.5 block text-xs font-medium",
-                            selected ? "text-white/85" : "text-muted",
+                            selected
+                              ? "text-white/85"
+                              : busySlot
+                                ? "text-[#C62828]/80"
+                                : "text-muted",
                           ].join(" ")}
                         >
                           Start {timeLabel(s.start_at)}
@@ -591,12 +637,18 @@ export function PartnerSlotPicker({
                         >
                           {list.map((s) => {
                             const selected = value === s.start_at;
+                            const busySlot = s.beschikbaar === false;
                             return (
                               <button
                                 key={s.start_at}
                                 type="button"
                                 disabled={disabled}
-                                onClick={() => onChange(s.start_at, s)}
+                                title={
+                                  busySlot
+                                    ? `${s.reason || "Bezet"} — klik om te overschrijven`
+                                    : undefined
+                                }
+                                onClick={() => pickSlot(s)}
                                 className={[
                                   "border text-center font-semibold tabular-nums transition",
                                   compact
@@ -604,7 +656,9 @@ export function PartnerSlotPicker({
                                     : "px-2 py-2 text-sm",
                                   selected
                                     ? "border-green bg-green text-white"
-                                    : "border-line bg-white text-ink hover:border-green",
+                                    : busySlot
+                                      ? "border-[#C62828]/35 bg-[#FDECEA] text-[#C62828] hover:border-[#C62828]"
+                                      : "border-line bg-white text-ink hover:border-green",
                                 ].join(" ")}
                               >
                                 {timeLabel(s.start_at)}
@@ -620,7 +674,7 @@ export function PartnerSlotPicker({
 
               {daySlots.length === 0 ? (
                 <p className="text-sm text-muted">
-                  Geen open slots op deze dag.
+                  Geen slots op deze dag.
                 </p>
               ) : null}
             </div>

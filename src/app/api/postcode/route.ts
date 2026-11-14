@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { lookupPostcode } from "@/lib/postcode";
+import { lookupPlaatsByPostcode, lookupPostcode } from "@/lib/postcode";
 import { errMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
-/** GET /api/postcode?postcode=1234AB&number=12&toevoeging=A */
+/**
+ * GET /api/postcode?postcode=1234AB&number=12&toevoeging=A
+ * number optioneel: zonder huisnummer → alleen plaats (PDOK).
+ */
 export async function GET(req: NextRequest) {
   const postcode = req.nextUrl.searchParams.get("postcode") || "";
   const number =
@@ -16,35 +19,78 @@ export async function GET(req: NextRequest) {
     req.nextUrl.searchParams.get("addition") ||
     "";
 
-  if (!postcode.trim() || !number.trim()) {
+  if (!postcode.trim()) {
     return NextResponse.json(
-      { error: "postcode en number zijn verplicht" },
+      { error: "postcode is verplicht" },
       { status: 400 }
     );
   }
 
-  if (!process.env.POSTCODE_API_TOKEN) {
-    return NextResponse.json(
-      { error: "POSTCODE_API_TOKEN ontbreekt" },
-      { status: 503 }
-    );
-  }
-
   try {
+    if (!number.trim()) {
+      const hit = await lookupPlaatsByPostcode(postcode);
+      if (!hit) {
+        return NextResponse.json(
+          { error: "Plaats niet gevonden voor deze postcode" },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({
+        straat: hit.straat,
+        plaats: hit.plaats,
+        postcode: hit.postcode,
+        huisnummer: null,
+        toevoeging: null,
+        province: null,
+      });
+    }
+
+    if (!process.env.POSTCODE_API_TOKEN) {
+      // Fallback: plaats via PDOK als api-postcode token ontbreekt
+      const hit = await lookupPlaatsByPostcode(postcode);
+      if (!hit) {
+        return NextResponse.json(
+          { error: "POSTCODE_API_TOKEN ontbreekt" },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json({
+        straat: hit.straat,
+        plaats: hit.plaats,
+        postcode: hit.postcode,
+        huisnummer: number.trim(),
+        toevoeging: toevoeging.trim() || null,
+        province: null,
+      });
+    }
+
     const result = await lookupPostcode(postcode, number, toevoeging || null);
-    if (!result) {
+    if (result) {
+      return NextResponse.json({
+        straat: result.street,
+        plaats: result.city,
+        postcode: result.postcode,
+        huisnummer: result.house_number,
+        toevoeging: toevoeging.trim() || null,
+        province: result.province,
+      });
+    }
+
+    // api-postcode faalde → PDOK voor plaats/straat
+    const hit = await lookupPlaatsByPostcode(postcode);
+    if (!hit) {
       return NextResponse.json(
         { error: "Adres niet gevonden" },
         { status: 404 }
       );
     }
     return NextResponse.json({
-      straat: result.street,
-      plaats: result.city,
-      postcode: result.postcode,
-      huisnummer: result.house_number,
+      straat: hit.straat,
+      plaats: hit.plaats,
+      postcode: hit.postcode,
+      huisnummer: number.trim(),
       toevoeging: toevoeging.trim() || null,
-      province: result.province,
+      province: null,
     });
   } catch (e) {
     return NextResponse.json(

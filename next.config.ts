@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
     ...(commit ? { NEXT_PUBLIC_APP_COMMIT: commit } : {}),
   },
+  serverExternalPackages: ["imapflow", "mailparser"],
   // Voice-uploads: body limiet voor proxy (geen FormData door Next meer, wel veiligheidsmarge)
   experimental: {
     proxyClientMaxBodySize: "30mb",

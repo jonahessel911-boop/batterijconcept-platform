@@ -59,6 +59,23 @@ export function nextWeekdayAmsterdamAfter(at: Date | string): Date {
   return fromZonedTime(local, AMSTERDAM_TZ);
 }
 
+/**
+ * Actie die op de eerstvolgende werkdag uitgevoerd moet worden.
+ * Valt die dag al achter ons, dan schuift hij door naar vandaag
+ * (of naar maandag als het weekend is), zodat hij op die dag in Acties staat.
+ */
+export function uitvoerDeadlineVolgendeWerkdag(
+  anchor: Date | string,
+  now: Date = new Date()
+): Date {
+  const natural = nextWeekdayAmsterdamAfter(anchor);
+  if (natural.getTime() > now.getTime()) return natural;
+  if (isAmsterdamWeekend(now)) return nextWeekdayAmsterdamAfter(now);
+  const local = toZonedTime(now, AMSTERDAM_TZ);
+  local.setHours(17, 0, 0, 0);
+  return fromZonedTime(local, AMSTERDAM_TZ);
+}
+
 /** 17:00 Amsterdam, N werkdagen vóór de installatie (levering alleen ma–vr). */
 export function bestelDeadlineVoorInstallatie(
   installatieAt: Date | string

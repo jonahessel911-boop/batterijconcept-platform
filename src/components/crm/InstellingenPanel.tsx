@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useSearchParams } from "next/navigation";
 import type { Adviseur, InstallatiePartner } from "@/types/database";
 import type { WarmtefondsOperator } from "@/lib/warmtefonds-portal";
+import { PartnerTeamgenotenPanel } from "@/components/installatie/PartnerTeamgenotenPanel";
 import {
   TEAM_ROLLEN,
   gebruikerRolLabel,
@@ -13,9 +21,14 @@ import {
 } from "@/lib/rollen";
 import { RelatieContractUpload } from "./RelatieContractUpload";
 import { TeamRelatieOnboarding } from "./TeamRelatieOnboarding";
+import { PartnerMonteursCrmPanel } from "./PartnerMonteursCrmPanel";
 import { TeamNotitiesSection } from "./TeamNotitiesSection";
 import { BellerCommissieWeeks } from "./BellerCommissieWeeks";
+import { OpsManagerCommissieWeeks } from "./OpsManagerCommissieWeeks";
+import { AdviseurProductenSection } from "./AdviseurProductenSection";
 import { isUsableStartAdres } from "@/lib/start-adres";
+import { formatDateTimeNl, formatEuro } from "@/lib/format";
+import { parseProjectNotitieEntries } from "@/lib/lead-notitie";
 import { StartAdresPostcodeField } from "./StartAdresPostcodeField";
 import { clearCrmShellCache } from "@/lib/crm-shell-cache";
 import { useCrmSession } from "@/hooks/useCrmSession";
@@ -23,11 +36,36 @@ import {
   isOpsManagerAdviseur,
   opsCommissieLabelVoorRol,
 } from "@/lib/ops-commissie";
+import { isSpareAdviseur } from "@/lib/admin-adviseur";
+import { adviseurProfielfotoPublicUrl } from "@/lib/adviseur-profielfoto";
+import { WfPartnerTariefVeld } from "./WfPartnerTariefVeld";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  EDERGY_PER_AANVRAAG_EXCL,
+  edergyBedragenVanInc,
+} from "@/lib/edergy-tarief";
 
 type ListFilter = "medewerkers" | "partners" | "warmtefonds";
 
 function isSalesRol(rol: string | null | undefined): boolean {
   return normalizeRol(rol) === "adviseur";
+}
+
+/** ZZP/factuurvelden: sales + iedereen met bel-/opscommissie-uitbetaling. */
+function needsFactuurgegevens(opts: {
+  rol: string | null | undefined;
+  id: string;
+  naam?: string | null;
+  email?: string | null;
+}): boolean {
+  if (isSalesRol(opts.rol)) return true;
+  if (normalizeRol(opts.rol) === "beller") return true;
+  return isOpsManagerAdviseur({
+    id: opts.id,
+    naam: opts.naam,
+    email: opts.email,
+    rol: opts.rol,
+  });
 }
 
 function portalBase(): string {
@@ -69,6 +107,8 @@ const ROL_BADGE: Record<TeamRol, string> = {
   adviseur: "bg-green-soft text-green-dark",
   beller: "bg-wash text-ink",
   backoffice: "bg-[#eef2f0] text-[#3d5248]",
+  warmtefonds: "bg-[#FFF0E6] text-[#C45A12]",
+  recruiter: "bg-[#E7F0EC] text-[#1F4D3A]",
 };
 
 export function InstellingenPanel({
@@ -83,7 +123,7 @@ export function InstellingenPanel({
   hideTeamRolFilter = false,
   /** Extern gestuurde teamrol (bij hideTeamRolFilter). */
   forcedTeamRol,
-  /** UI-tekst “Monteur” i.p.v. “Installatiepartner”. */
+  /** UI-tekst “Monteur” i.p.v. “Installatiepartner” (legacy). */
   monteurLabel = false,
 }: {
   onAdviseursChange?: () => void;
@@ -92,9 +132,12 @@ export function InstellingenPanel({
   hideListTabs?: boolean;
   hideTeamRolFilter?: boolean;
   forcedTeamRol?: "all" | TeamRol;
+  /** @deprecated altijd Installatiepartner */
   monteurLabel?: boolean;
 }) {
   const { session } = useCrmSession();
+  const searchParams = useSearchParams();
+  const teamgenootFromUrl = searchParams.get("teamgenoot");
   const [filter, setFilter] = useState<ListFilter>(
     listFilter ?? "medewerkers"
   );
@@ -102,16 +145,50 @@ export function InstellingenPanel({
   const [teamRolFilter, setTeamRolFilter] = useState<"all" | TeamRol>(
     forcedTeamRol ?? "all"
   );
-  const partnerWoord = monteurLabel ? "Monteur" : "Installatiepartner";
-  const partnerWoordMeervoud = monteurLabel
-    ? "monteurs"
-    : "installatiepartners";
+  const [zoek, setZoek] = useState("");
+  const partnerWoord = "Installatiepartner";
+  const partnerWoordMeervoud = "installatiepartners";
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   const [wfOperators, setWfOperators] = useState<WarmtefondsOperator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [expandedPartnerId, setExpandedPartnerId] = useState<string | null>(
+    null
+  );
+  const [focusTeamgenootId, setFocusTeamgenootId] = useState<string | null>(
+    teamgenootFromUrl
+  );
+
+  useEffect(() => {
+    setFocusTeamgenootId(teamgenootFromUrl);
+  }, [teamgenootFromUrl]);
+
+  useEffect(() => {
+    if (!focusTeamgenootId || partners.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/installatie-partners/teamgenoten/${encodeURIComponent(focusTeamgenootId)}/installaties`
+        );
+        const data = await res.json().catch(() => ({}));
+        const partnerId =
+          (data.teamgenoot as { partner_id?: string } | null)?.partner_id ||
+          null;
+        if (!cancelled && partnerId) {
+          setExpandedPartnerId(partnerId);
+          if (!listFilter) setFilter("partners");
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [focusTeamgenootId, partners.length, listFilter]);
 
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -268,8 +345,11 @@ export function InstellingenPanel({
       naam: a.naam,
       email: a.email,
       telefoon: a.telefoon,
+      unite_lijn: a.unite_lijn ?? "",
+      unite_ext: a.unite_ext ?? "",
       rol: normalizeRol(a.rol),
       start_adres: a.start_adres ?? null,
+      start_vanaf_huis_maandag: a.start_vanaf_huis_maandag === true,
       startdatum: a.startdatum ?? null,
       commissie_pct:
         a.commissie_pct != null && Number.isFinite(Number(a.commissie_pct))
@@ -294,6 +374,7 @@ export function InstellingenPanel({
       kvk_uitreksel_bestandsnaam: a.kvk_uitreksel_bestandsnaam ?? null,
       kvk_uitreksel_uploaded_at: a.kvk_uitreksel_uploaded_at ?? null,
       interne_notities: a.interne_notities ?? null,
+      profielfoto_path: a.profielfoto_path ?? null,
     });
     setNewPassword("");
     setConfirmPassword("");
@@ -466,17 +547,12 @@ export function InstellingenPanel({
         if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
         const op = data.operator as WarmtefondsOperator | undefined;
         setOkMsg(
-          op
-            ? `${op.naam} toegevoegd als Warmtefondspartner.`
-            : "Warmtefondspartner toegevoegd."
+          data.mail_sent
+            ? `${op?.naam || "Partner"} toegevoegd — inloggegevens gemaild.`
+            : `${op?.naam || "Partner"} toegevoegd${
+                data.mail_error ? ` (mail: ${data.mail_error})` : ""
+              }.`
         );
-        if (op?.portal_token) {
-          const url = `${portalBase()}/warmtefonds/${op.portal_token}`;
-          void navigator.clipboard.writeText(url).catch(() => {});
-          setOkMsg(
-            `${op.naam} toegevoegd — portaallink gekopieerd.`
-          );
-        }
       } else {
         const res = await fetch("/api/installatie-partners", {
           method: "POST",
@@ -510,8 +586,11 @@ export function InstellingenPanel({
         naam: (draft.naam || "").trim(),
         email: draft.email?.toString().trim().toLowerCase() || null,
         telefoon: draft.telefoon?.toString().trim() || null,
+        unite_lijn: draft.unite_lijn?.toString().trim() || null,
+        unite_ext: draft.unite_ext?.toString().trim() || null,
         rol: normalizeRol(draft.rol),
         start_adres: draft.start_adres?.toString().trim() || null,
+        start_vanaf_huis_maandag: draft.start_vanaf_huis_maandag === true,
         actief: draft.actief !== false,
         geblokkeerd: draft.geblokkeerd === true,
       };
@@ -520,6 +599,15 @@ export function InstellingenPanel({
         if (pct < 0 || pct > 100) throw new Error("Commissie moet tussen 0 en 100% zijn");
         patch.commissie_pct = Math.round(pct * 100) / 100;
         patch.startdatum = draft.startdatum?.toString().trim() || null;
+      }
+      if (
+        needsFactuurgegevens({
+          rol: draft.rol,
+          id: selectedAdviseur.id,
+          naam: draft.naam ?? selectedAdviseur.naam,
+          email: draft.email ?? selectedAdviseur.email,
+        })
+      ) {
         patch.bedrijfsnaam = draft.bedrijfsnaam?.toString().trim() || null;
         patch.kvk_nummer = draft.kvk_nummer?.toString().trim() || null;
         patch.btw_nummer = draft.btw_nummer?.toString().trim() || null;
@@ -617,6 +705,12 @@ export function InstellingenPanel({
           email: wfDraft.email?.toString().trim().toLowerCase() || null,
           telefoon: wfDraft.telefoon?.toString().trim() || null,
           actief: wfDraft.actief !== false,
+          tarief_inc:
+            wfDraft.tarief_inc === null ||
+            wfDraft.tarief_inc === undefined ||
+            wfDraft.tarief_inc === ("" as unknown)
+              ? null
+              : Number(wfDraft.tarief_inc),
         }),
       });
       const data = await res.json();
@@ -631,23 +725,27 @@ export function InstellingenPanel({
     }
   }
 
-  async function regenerateWfToken(o: WarmtefondsOperator) {
+  async function sendWfInvite(o: WarmtefondsOperator) {
     setError(null);
     setOkMsg(null);
     try {
       const res = await fetch("/api/warmtefonds-operators", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: o.id, regenerate_token: true }),
+        body: JSON.stringify({ id: o.id, send_invite: true }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Token vernieuwen mislukt");
-      const op = data.operator as WarmtefondsOperator;
-      setOkMsg(`Nieuwe portaallink voor ${op.naam}.`);
+      if (!res.ok) throw new Error(data.error || "Uitnodiging mislukt");
+      const op = (data.operator as WarmtefondsOperator) || o;
+      setOkMsg(
+        data.mail_sent
+          ? `Nieuw wachtwoord gemaild naar ${op.email}.`
+          : `Wachtwoord gezet, mail mislukt${
+              data.mail_error ? `: ${data.mail_error}` : ""
+            }.`
+      );
       await load();
-      openWarmtefonds(op);
-      const url = `${portalBase()}/warmtefonds/${op.portal_token}`;
-      void navigator.clipboard.writeText(url).catch(() => {});
+      if (data.operator) openWarmtefonds(data.operator as WarmtefondsOperator);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
     }
@@ -732,12 +830,31 @@ export function InstellingenPanel({
     }
   }
 
+  function installatiePortalUrl(p: InstallatiePartner): string | null {
+    const token = p.portal_token?.trim();
+    if (!token) return null;
+    return `${portalBase()}/installatie/${encodeURIComponent(token)}`;
+  }
+
   function copyPortalLink(p: InstallatiePartner) {
-    const url = `${portalBase()}/installatie/${p.portal_token}`;
+    const url = installatiePortalUrl(p);
+    if (!url) {
+      setError("Geen portaallink voor deze partner.");
+      return;
+    }
     void navigator.clipboard.writeText(url).then(
       () => setOkMsg(`Portaallink gekopieerd voor ${p.naam}.`),
       () => setError("Kopiëren mislukt")
     );
+  }
+
+  function openInstallatiePortal(p: InstallatiePartner) {
+    const url = installatiePortalUrl(p);
+    if (!url) {
+      setError("Geen portaallink voor deze partner.");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function disconnectGoogle(partnerId: string) {
@@ -766,27 +883,42 @@ export function InstellingenPanel({
     }
   }
 
+  function wfLoginUrl(): string {
+    return `${portalBase()}/warmtefonds/login`;
+  }
+
   function wfPortalUrl(o: WarmtefondsOperator): string {
     return `${portalBase()}/warmtefonds/${o.portal_token}`;
   }
 
-  function copyWfPortalLink(o: WarmtefondsOperator) {
-    void navigator.clipboard.writeText(wfPortalUrl(o)).then(
-      () => setOkMsg(`Warmtefonds-portaallink gekopieerd voor ${o.naam}.`),
-      () => setError("Kopiëren mislukt")
-    );
-  }
-
   function openWfPortal(o: WarmtefondsOperator) {
+    if (o.actief === false) {
+      setError("Account is inactief — geen portaaltoegang.");
+      return;
+    }
     window.open(wfPortalUrl(o), "_blank", "noopener,noreferrer");
   }
+
+  const zoekNorm = zoek.trim().toLowerCase();
 
   const rows = useMemo(() => {
     if (activeFilter === "medewerkers") {
       return [...adviseurs]
+        .filter((a) => !isSpareAdviseur(a))
         .filter((a) => {
           if (teamRolFilter === "all") return true;
           return normalizeRol(a.rol) === teamRolFilter;
+        })
+        .filter((a) => {
+          if (!zoekNorm) return true;
+          const naam = a.naam.toLowerCase();
+          const email = (a.email || "").toLowerCase();
+          const telefoon = (a.telefoon || "").toLowerCase();
+          return (
+            naam.includes(zoekNorm) ||
+            email.includes(zoekNorm) ||
+            telefoon.includes(zoekNorm)
+          );
         })
         .sort((a, b) => {
           if (a.actief !== b.actief) return a.actief ? -1 : 1;
@@ -794,16 +926,40 @@ export function InstellingenPanel({
         });
     }
     if (activeFilter === "warmtefonds") {
-      return [...wfOperators].sort((a, b) => {
+      return [...wfOperators]
+        .filter((o) => {
+          if (!zoekNorm) return true;
+          return (
+            o.naam.toLowerCase().includes(zoekNorm) ||
+            (o.email || "").toLowerCase().includes(zoekNorm) ||
+            (o.telefoon || "").toLowerCase().includes(zoekNorm)
+          );
+        })
+        .sort((a, b) => {
+          if (a.actief !== b.actief) return a.actief ? -1 : 1;
+          return a.naam.localeCompare(b.naam, "nl");
+        });
+    }
+    return [...partners]
+      .filter((p) => {
+        if (!zoekNorm) return true;
+        return (
+          p.naam.toLowerCase().includes(zoekNorm) ||
+          (p.email || "").toLowerCase().includes(zoekNorm) ||
+          (p.telefoon || "").toLowerCase().includes(zoekNorm) ||
+          (p.kvk_nummer || "").toLowerCase().includes(zoekNorm)
+        );
+      })
+      .sort((a, b) => {
         if (a.actief !== b.actief) return a.actief ? -1 : 1;
         return a.naam.localeCompare(b.naam, "nl");
       });
-    }
-    return [...partners].sort((a, b) => {
-      if (a.actief !== b.actief) return a.actief ? -1 : 1;
-      return a.naam.localeCompare(b.naam, "nl");
-    });
-  }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators]);
+  }, [activeFilter, teamRolFilter, adviseurs, partners, wfOperators, zoekNorm]);
+
+  const teamAdviseurs = useMemo(
+    () => adviseurs.filter((a) => !isSpareAdviseur(a)),
+    [adviseurs]
+  );
 
   const teamRolCounts = useMemo(() => {
     const counts: Record<TeamRol, number> = {
@@ -812,19 +968,29 @@ export function InstellingenPanel({
       adviseur: 0,
       beller: 0,
       backoffice: 0,
+      warmtefonds: 0,
+      recruiter: 0,
     };
-    for (const a of adviseurs) {
+    for (const a of teamAdviseurs) {
       const r = normalizeRol(a.rol);
       if (r in counts) counts[r as TeamRol] += 1;
     }
     return counts;
-  }, [adviseurs]);
+  }, [teamAdviseurs]);
+
+  const medewerkersInRol =
+    teamRolFilter === "all"
+      ? teamAdviseurs.length
+      : teamAdviseurs.filter((a) => normalizeRol(a.rol) === teamRolFilter)
+          .length;
 
   const countLabel =
     activeFilter === "medewerkers"
-      ? teamRolFilter === "all"
-        ? `${adviseurs.length} medewerker${adviseurs.length === 1 ? "" : "s"}`
-        : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
+      ? zoekNorm
+        ? `${rows.length} van ${medewerkersInRol}`
+        : teamRolFilter === "all"
+          ? `${teamAdviseurs.length} medewerker${teamAdviseurs.length === 1 ? "" : "s"}`
+          : `${rows.length}× ${gebruikerRolLabel[teamRolFilter]}`
       : activeFilter === "warmtefonds"
         ? `${wfOperators.length} Warmtefondspartner${wfOperators.length === 1 ? "" : "s"}`
         : `${partners.length} ${
@@ -837,6 +1003,12 @@ export function InstellingenPanel({
   if (selectedAdviseur && draft) {
     const rol = normalizeRol(draft.rol) as TeamRol;
     const sales = isSalesRol(draft.rol);
+    const toonFactuurgegevens = needsFactuurgegevens({
+      rol: draft.rol,
+      id: selectedAdviseur.id,
+      naam: draft.naam ?? selectedAdviseur.naam,
+      email: draft.email ?? selectedAdviseur.email,
+    });
     const actief = draft.actief !== false;
     const geblokkeerd = draft.geblokkeerd === true;
     const opsCommissieLabel = opsCommissieLabelVoorRol({
@@ -849,29 +1021,106 @@ export function InstellingenPanel({
       }),
     });
 
+    const blokkeerLabel = geblokkeerd
+      ? "Deblokkeer"
+      : rol === "adviseur"
+        ? "Blokkeer adviseur"
+        : "Blokkeer";
+    const uniteWebhook = `${(
+      typeof process !== "undefined" && process.env.NEXT_PUBLIC_APP_URL
+        ? process.env.NEXT_PUBLIC_APP_URL
+        : "https://batterijconcept-platform.vercel.app"
+    ).replace(/\/$/, "")}/api/unite/webhook?callid={calluniqueid}&callfrom={callfrom}&callto={callto}&status={status}&status_desc={status_desc}&direction={direction}&timestamp={timestamp}`;
+
     return (
-      <div className="relative w-full pb-24">
-        <div className="border border-line bg-white">
-          <div className="border-b border-line px-4 py-3 sm:px-5 lg:px-6">
-            <button
-              type="button"
-              onClick={closeDetail}
-              className="text-xs font-semibold text-green hover:underline"
-            >
-              ← Terug naar overzicht
-            </button>
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <span
-                className="flex h-11 w-11 shrink-0 items-center justify-center bg-green-soft text-sm font-bold tracking-wide text-green-dark"
-                aria-hidden
+      <div className="flex h-full min-h-0 flex-col bg-white">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="border-b border-line px-4 py-2.5 sm:px-5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="text-xs font-semibold text-green hover:underline"
               >
-                {naamInitialen(draft.naam || selectedAdviseur.naam) || "?"}
-              </span>
+                ← Overzicht
+              </button>
+              <span className="hidden h-4 w-px bg-line sm:block" aria-hidden />
+              <label
+                className="relative h-8 w-8 shrink-0 cursor-pointer overflow-hidden bg-green-soft"
+                title="Klik om profielfoto te wijzigen"
+              >
+                {adviseurProfielfotoPublicUrl(
+                  draft.profielfoto_path ?? selectedAdviseur.profielfoto_path
+                ) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={
+                      adviseurProfielfotoPublicUrl(
+                        draft.profielfoto_path ??
+                          selectedAdviseur.profielfoto_path
+                      )!
+                    }
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span
+                    className="flex h-full w-full items-center justify-center text-[11px] font-bold tracking-wide text-green-dark"
+                    aria-hidden
+                  >
+                    {naamInitialen(draft.naam || selectedAdviseur.naam) || "?"}
+                  </span>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file || !selectedAdviseur) return;
+                    void (async () => {
+                      setError(null);
+                      try {
+                        const fd = new FormData();
+                        fd.append("foto", file);
+                        const res = await fetch(
+                          `/api/adviseurs/${selectedAdviseur.id}/profielfoto`,
+                          { method: "POST", body: fd }
+                        );
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok)
+                          throw new Error(data.error || "Upload mislukt");
+                        const path =
+                          (data.path as string | undefined) ||
+                          selectedAdviseur.profielfoto_path;
+                        setDraft((d) =>
+                          d ? { ...d, profielfoto_path: path || null } : d
+                        );
+                        setAdviseurs((list) =>
+                          list.map((a) =>
+                            a.id === selectedAdviseur.id
+                              ? { ...a, profielfoto_path: path || null }
+                              : a
+                          )
+                        );
+                        setOkMsg("Profielfoto bijgewerkt.");
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : "Foto uploaden mislukt"
+                        );
+                      }
+                    })();
+                  }}
+                />
+              </label>
               <div className="min-w-0 flex-1">
-                <h2 className="font-display text-xl font-semibold text-ink sm:text-2xl">
-                  {draft.naam || selectedAdviseur.naam}
-                </h2>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate font-display text-lg font-semibold text-ink">
+                    {draft.naam || selectedAdviseur.naam}
+                  </h2>
                   <span
                     className={[
                       "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
@@ -885,19 +1134,17 @@ export function InstellingenPanel({
                       Geblokkeerd
                     </span>
                   ) : null}
-                  {sales ? (
-                    <span className="text-xs text-muted">
-                      Commissie {Number(draft.commissie_pct) || 0}%
-                    </span>
-                  ) : opsCommissieLabel ? (
-                    <span className="text-xs text-muted">
-                      {opsCommissieLabel}
-                    </span>
-                  ) : null}
                 </div>
+                {(sales || opsCommissieLabel) && (
+                  <p className="mt-0.5 truncate text-[12px] text-muted">
+                    {sales
+                      ? `Commissie ${Number(draft.commissie_pct) || 0}%`
+                      : opsCommissieLabel}
+                  </p>
+                )}
               </div>
-              <div className="flex w-full flex-col gap-2 sm:w-auto">
-                <div className="flex w-full border border-line p-0.5">
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                <div className="flex border border-line p-0.5">
                   <button
                     type="button"
                     onClick={() =>
@@ -908,7 +1155,7 @@ export function InstellingenPanel({
                       }))
                     }
                     className={[
-                      "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
+                      "px-3 py-1 text-xs font-semibold",
                       actief && !geblokkeerd
                         ? "bg-green text-white"
                         : "bg-white text-muted hover:bg-wash",
@@ -926,7 +1173,7 @@ export function InstellingenPanel({
                       }))
                     }
                     className={[
-                      "flex-1 px-3 py-1.5 text-xs font-semibold sm:flex-none",
+                      "px-3 py-1 text-xs font-semibold",
                       !actief && !geblokkeerd
                         ? "bg-[#C45A12] text-white"
                         : "bg-white text-muted hover:bg-wash",
@@ -945,39 +1192,36 @@ export function InstellingenPanel({
                     )
                   }
                   className={[
-                    "w-full border px-3 py-1.5 text-xs font-semibold",
+                    "border px-2.5 py-1 text-xs font-semibold",
                     geblokkeerd
                       ? "border-[#C62828] bg-[#C62828] text-white"
                       : "border-[#C62828]/40 bg-white text-[#C62828] hover:bg-[#FDECEA]",
                   ].join(" ")}
                 >
-                  {geblokkeerd ? "Deblokkeer gebruiker" : "Blokkeer adviseur"}
+                  {blokkeerLabel}
                 </button>
               </div>
             </div>
-            <p className="mt-2 text-[11px] text-muted">
-              Actief = in planning · Inactief = agenda wél, niet inplannen ·
-              Geblokkeerd = ziet niks (popup)
-            </p>
           </div>
 
           {(error || okMsg) && (
-            <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
-              {error && (
+            <div className="space-y-2 border-b border-line px-4 py-2 sm:px-5">
+              {error ? (
                 <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
                   {error}
                 </p>
-              )}
-              {okMsg && (
+              ) : null}
+              {okMsg ? (
                 <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
                   {okMsg}
                 </p>
-              )}
+              ) : null}
             </div>
           )}
 
-          <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2 lg:p-6 xl:grid-cols-2">
-            <FormSection title="Account">
+          <div className="divide-y divide-line">
+            {/* Contact */}
+            <div className="grid gap-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 sm:px-5">
               <Field label="Naam">
                 <input
                   value={draft.naam || ""}
@@ -1024,70 +1268,204 @@ export function InstellingenPanel({
                   ))}
                 </select>
               </Field>
-            </FormSection>
+            </div>
 
-            <FormSection
-              title="Startadres"
-              hint="Vertrekpunt voor reistijd bij inplannen"
-            >
-              <div className="sm:col-span-2">
-                <StartAdresPostcodeField
-                  value={draft.start_adres || ""}
-                  onChange={(next) =>
-                    setDraft((d) => ({ ...d, start_adres: next }))
+            {/* Unite + startadres */}
+            <div className="grid gap-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-3 sm:px-5">
+              <Field label="Unite-lijn (DID)">
+                <input
+                  value={(draft.unite_lijn as string) || ""}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, unite_lijn: e.target.value }))
                   }
-                  inputClassName={inputCls}
+                  placeholder="085 800 1645"
+                  className={inputCls}
                 />
+              </Field>
+              <Field label="Unite-extensie">
+                <input
+                  value={(draft.unite_ext as string) || ""}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, unite_ext: e.target.value }))
+                  }
+                  placeholder="0200"
+                  className={inputCls}
+                />
+              </Field>
+              <div className="sm:col-span-2 lg:col-span-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Startadres
+                </p>
+                <div className="mt-1">
+                  <StartAdresPostcodeField
+                    value={draft.start_adres || ""}
+                    onChange={(next) =>
+                      setDraft((d) => ({ ...d, start_adres: next }))
+                    }
+                    inputClassName={inputCls.replace(/^mt-1 /, "")}
+                  />
+                </div>
+                <label className="mt-2 flex items-start gap-2 text-[12px] text-ink">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 rounded border-line"
+                    checked={draft.start_vanaf_huis_maandag === true}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        start_vanaf_huis_maandag: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>
+                    <span className="font-medium">Altijd vanaf huisadres</span>
+                    <span className="block text-[11px] text-muted">
+                      Ook op maandag vanaf dit startadres (niet vanaf Daltonlaan);
+                      maandag 10:00 is dan open.
+                    </span>
+                  </span>
+                </label>
               </div>
-            </FormSection>
+              <details className="sm:col-span-2 lg:col-span-3">
+                <summary className="cursor-pointer text-[12px] font-semibold text-muted hover:text-ink">
+                  Unite-webhook (technisch)
+                </summary>
+                <p className="mt-1.5 text-[11px] text-muted">
+                  Lijn = inkomend (popups) · Extensie = softphone uitgaand. Plak
+                  de URL in Unite → Provisioning → App templates (Maatwerk CRM).
+                </p>
+                <p className="mt-1.5 break-all border border-line bg-wash px-2.5 py-2 font-mono text-[10px] text-ink">
+                  {uniteWebhook}
+                </p>
+              </details>
+            </div>
+
+            {/* Toegang — horizontale rij */}
+            <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-end sm:gap-4 sm:px-5">
+              <div className="w-28 shrink-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Toegang
+                </p>
+                <p className="text-[11px] text-muted">Login & wachtwoord</p>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-wrap items-end gap-2">
+                {selectedAdviseur.email ? (
+                  <button
+                    type="button"
+                    onClick={() => void resendInvite(selectedAdviseur)}
+                    className="h-9 border border-line bg-white px-3 text-[12px] font-semibold hover:bg-wash"
+                  >
+                    Stuur loginmail
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={
+                    loginAlsId === selectedAdviseur.id ||
+                    !selectedAdviseur.email
+                  }
+                  onClick={() => void loginAls(selectedAdviseur)}
+                  className="h-9 bg-green px-3 text-[12px] font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+                  title={
+                    !selectedAdviseur.email
+                      ? "Geen e-mailadres"
+                      : "Bekijk CRM als deze gebruiker"
+                  }
+                >
+                  {loginAlsId === selectedAdviseur.id ? "Bezig…" : "Login als"}
+                </button>
+                <label className="min-w-[8rem] flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Nieuw wachtwoord
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Min. 8 tekens"
+                    className={inputCls}
+                  />
+                </label>
+                <label className="min-w-[8rem] flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Bevestig
+                  <div className="flex gap-1.5">
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className={inputCls}
+                    />
+                    <button
+                      type="button"
+                      disabled={passwordSaving}
+                      onClick={() => void savePassword(selectedAdviseur)}
+                      className="mt-1 h-9 shrink-0 border border-line bg-white px-3 text-xs font-semibold hover:bg-wash disabled:opacity-60"
+                    >
+                      {passwordSaving ? "…" : "Zet"}
+                    </button>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Notities */}
+            <div className="px-4 py-3 sm:px-5">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Notities
+              </p>
+              <TeamNotitiesSection
+                value={draft.interne_notities}
+                authorNaam={session?.naam}
+                disabled={detailSaving || deleting}
+                onSave={saveMedewerkerNotities}
+              />
+            </div>
 
             {sales ? (
-              <>
-                <FormSection
-                  title="Planning & commissie"
-                  hint="Eerste werkdag: agenda + lead-targets vanaf die dag"
-                >
-                  <Field label="Startdatum">
-                    <input
-                      type="date"
-                      value={
-                        draft.startdatum
-                          ? String(draft.startdatum).slice(0, 10)
-                          : ""
-                      }
-                      onChange={(e) =>
-                        setDraft((d) => ({
-                          ...d,
-                          startdatum: e.target.value || null,
-                        }))
-                      }
-                      className={inputCls}
-                    />
-                  </Field>
-                  <Field label="Commissie (%)">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={0.5}
-                      value={draft.commissie_pct ?? 10}
-                      onChange={(e) =>
-                        setDraft((d) => ({
-                          ...d,
-                          commissie_pct: parseFloat(e.target.value) || 0,
-                        }))
-                      }
-                      className={inputCls}
-                    />
-                  </Field>
-                </FormSection>
+              <div className="grid gap-3 px-4 py-3 sm:grid-cols-2 sm:px-5">
+                <Field label="Startdatum">
+                  <input
+                    type="date"
+                    value={
+                      draft.startdatum
+                        ? String(draft.startdatum).slice(0, 10)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        startdatum: e.target.value || null,
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Commissie (%)">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    value={draft.commissie_pct ?? 10}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        commissie_pct: parseFloat(e.target.value) || 0,
+                      }))
+                    }
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+            ) : null}
 
-                <FormSection
-                  title="Factuurgegevens"
-                  className="lg:col-span-2"
-                  wide
-                >
-                  <Field label="Bedrijfsnaam" className="sm:col-span-2 xl:col-span-2">
+            {toonFactuurgegevens ? (
+              <div className="space-y-3 px-4 py-3 sm:px-5">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Factuurgegevens
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Field label="Bedrijfsnaam" className="sm:col-span-2">
                     <input
                       value={draft.bedrijfsnaam || ""}
                       onChange={(e) =>
@@ -1188,68 +1566,17 @@ export function InstellingenPanel({
                       className={inputCls}
                     />
                   </Field>
-                </FormSection>
-
-              </>
-            ) : null}
-
-            {sales ? (
-              <TeamRelatieOnboarding
-                kind="adviseur"
-                id={selectedAdviseur.id}
-                naam={draft.naam || selectedAdviseur.naam}
-                fields={draft}
-                onFieldsPatch={(patch) =>
-                  setDraft((d) =>
-                    d ? ({ ...d, ...patch } as Partial<Adviseur>) : d
-                  )
-                }
-                onMessage={(msg, isError) => {
-                  if (isError) setError(msg);
-                  else {
-                    setError(null);
-                    setOkMsg(msg);
-                  }
-                }}
-                onFocusIban={() => {
-                  document
-                    .getElementById("relatie-iban-adviseur")
-                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                  (
-                    document.getElementById(
-                      "relatie-iban-adviseur"
-                    ) as HTMLInputElement | null
-                  )?.focus();
-                }}
-                onOpenContract={() => {
-                  document
-                    .getElementById("relatie-contract-adviseur")
-                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                }}
-              />
-            ) : null}
-
-            <FormSection
-              title="Contract"
-              className="lg:col-span-2"
-              id="relatie-contract-adviseur"
-            >
-              <div className="sm:col-span-2">
-                <RelatieContractUpload
+                </div>
+                <TeamRelatieOnboarding
                   kind="adviseur"
                   id={selectedAdviseur.id}
-                  bestandsnaam={
-                    draft.contract_bestandsnaam ||
-                    selectedAdviseur.contract_bestandsnaam
+                  naam={draft.naam || selectedAdviseur.naam}
+                  fields={draft}
+                  onFieldsPatch={(patch) =>
+                    setDraft((d) =>
+                      d ? ({ ...d, ...patch } as Partial<Adviseur>) : d
+                    )
                   }
-                  uploadedAt={
-                    draft.contract_uploaded_at ||
-                    selectedAdviseur.contract_uploaded_at
-                  }
-                  onUploaded={(meta) => {
-                    setDraft((d) => ({ ...d, ...meta }));
-                    void load();
-                  }}
                   onMessage={(msg, isError) => {
                     if (isError) setError(msg);
                     else {
@@ -1257,115 +1584,119 @@ export function InstellingenPanel({
                       setOkMsg(msg);
                     }
                   }}
+                  onFocusIban={() => {
+                    document
+                      .getElementById("relatie-iban-adviseur")
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    (
+                      document.getElementById(
+                        "relatie-iban-adviseur"
+                      ) as HTMLInputElement | null
+                    )?.focus();
+                  }}
+                  onOpenContract={() => {
+                    document
+                      .getElementById("relatie-contract-adviseur")
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
                 />
               </div>
-            </FormSection>
-
-            <FormSection title="Notities" className="lg:col-span-2">
-              <div className="sm:col-span-2">
-                <TeamNotitiesSection
-                  value={draft.interne_notities}
-                  authorNaam={session?.naam}
-                  disabled={detailSaving || deleting}
-                  onSave={saveMedewerkerNotities}
-                />
-              </div>
-            </FormSection>
-
-            {rol === "beller" ? (
-              <FormSection title="Belcommissie" className="lg:col-span-2">
-                <div className="sm:col-span-2">
-                  <BellerCommissieWeeks
-                    bellerId={selectedAdviseur.id}
-                    bellerNaam={draft.naam || selectedAdviseur.naam}
-                  />
-                </div>
-              </FormSection>
             ) : null}
 
-            <FormSection title="Toegang" className="lg:col-span-2">
-              <div className="flex flex-wrap gap-2 sm:col-span-2">
-                {selectedAdviseur.email ? (
-                  <button
-                    type="button"
-                    onClick={() => void resendInvite(selectedAdviseur)}
-                    className="border border-line bg-white px-3 py-1.5 text-xs font-semibold hover:bg-wash"
-                  >
-                    Stuur loginmail
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={
-                    loginAlsId === selectedAdviseur.id ||
-                    !selectedAdviseur.email
-                  }
-                  onClick={() => void loginAls(selectedAdviseur)}
-                  className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                  title={
-                    !selectedAdviseur.email
-                      ? "Geen e-mailadres"
-                      : "Bekijk CRM als deze gebruiker"
-                  }
-                >
-                  {loginAlsId === selectedAdviseur.id ? "Bezig…" : "Login als"}
-                </button>
-              </div>
-              <Field label="Nieuw wachtwoord">
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Min. 8 tekens"
-                  className={inputCls}
+            {rol === "adviseur" ? (
+              <div className="px-4 py-3 sm:px-5">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Producten
+                </p>
+                <AdviseurProductenSection
+                  adviseurId={selectedAdviseur.id}
+                  adviseurNaam={draft.naam || selectedAdviseur.naam}
                 />
-              </Field>
-              <Field label="Bevestig">
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className={inputCls}
-                  />
-                  <button
-                    type="button"
-                    disabled={passwordSaving}
-                    onClick={() => void savePassword(selectedAdviseur)}
-                    className="mt-1 shrink-0 border border-line bg-white px-3 py-2 text-xs font-semibold hover:bg-wash disabled:opacity-60"
-                  >
-                    {passwordSaving ? "…" : "Zet"}
-                  </button>
-                </div>
-              </Field>
-            </FormSection>
-          </div>
+              </div>
+            ) : null}
 
-          <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="px-4 py-3 sm:px-5" id="relatie-contract-adviseur">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Contract
+              </p>
+              <RelatieContractUpload
+                kind="adviseur"
+                id={selectedAdviseur.id}
+                bestandsnaam={
+                  draft.contract_bestandsnaam ||
+                  selectedAdviseur.contract_bestandsnaam
+                }
+                uploadedAt={
+                  draft.contract_uploaded_at ||
+                  selectedAdviseur.contract_uploaded_at
+                }
+                onUploaded={(meta) => {
+                  setDraft((d) => ({ ...d, ...meta }));
+                  void load();
+                }}
+                onMessage={(msg, isError) => {
+                  if (isError) setError(msg);
+                  else {
+                    setError(null);
+                    setOkMsg(msg);
+                  }
+                }}
+              />
+            </div>
+
+            {rol === "beller" ? (
+              <div className="px-4 py-3 sm:px-5">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Belcommissie
+                </p>
+                <BellerCommissieWeeks
+                  bellerId={selectedAdviseur.id}
+                  bellerNaam={draft.naam || selectedAdviseur.naam}
+                />
+              </div>
+            ) : null}
+
+            {isOpsManagerAdviseur({
+              id: selectedAdviseur.id,
+              naam: draft.naam || selectedAdviseur.naam,
+              email: draft.email || selectedAdviseur.email,
+              rol,
+            }) ? (
+              <div className="px-4 py-3 sm:px-5">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Opscommissie
+                </p>
+                <OpsManagerCommissieWeeks
+                  opsManagerId={selectedAdviseur.id}
+                  opsManagerNaam={draft.naam || selectedAdviseur.naam}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="shrink-0 border-t border-line bg-white px-4 py-2.5 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              disabled={deleting || detailSaving}
+              onClick={() => void deleteMedewerker(selectedAdviseur)}
+              className="border border-[#C45A12]/40 bg-[#FFF0E6] px-3 py-2 text-xs font-semibold text-[#C45A12] hover:bg-[#ffe4d4] disabled:opacity-60"
+            >
+              {deleting ? "Verwijderen…" : "Verwijderen"}
+            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-xs text-muted">
+                Pas actief na <strong className="text-ink">Opslaan</strong>
+              </p>
               <button
                 type="button"
-                disabled={deleting || detailSaving}
-                onClick={() => void deleteMedewerker(selectedAdviseur)}
-                className="border border-[#C45A12]/40 bg-[#FFF0E6] px-3 py-2 text-xs font-semibold text-[#C45A12] hover:bg-[#ffe4d4] disabled:opacity-60"
+                disabled={detailSaving || deleting}
+                onClick={() => void saveMedewerker()}
+                className="bg-green px-5 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
               >
-                {deleting ? "Verwijderen…" : "Verwijderen"}
+                {detailSaving ? "Opslaan…" : "Opslaan"}
               </button>
-              <div className="flex flex-wrap items-center gap-3">
-                <p className="text-xs text-muted">
-                  Pas actief na <strong className="text-ink">Opslaan</strong>
-                </p>
-                <button
-                  type="button"
-                  disabled={detailSaving || deleting}
-                  onClick={() => void saveMedewerker()}
-                  className="bg-green px-5 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
-                >
-                  {detailSaving ? "Opslaan…" : "Opslaan"}
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1375,7 +1706,8 @@ export function InstellingenPanel({
 
   if (selectedPartner && partnerDraft) {
     return (
-      <div className="relative border border-line bg-white pb-24">
+      <div className="flex h-full min-h-0 flex-col border border-line bg-white">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="border-b border-line px-4 py-3 sm:px-5">
           <button
             type="button"
@@ -1681,12 +2013,29 @@ export function InstellingenPanel({
             />
           </div>
 
+          <PartnerMonteursCrmPanel
+            partnerId={selectedPartner.id}
+            partnerNaam={partnerDraft.naam || selectedPartner.naam}
+          />
+
           <TeamNotitiesSection
             value={partnerDraft.interne_notities}
             authorNaam={session?.naam}
             disabled={detailSaving || deleting}
             onSave={savePartnerNotities}
           />
+
+          {selectedPartner.portal_token ? (
+            <div className="border border-line p-4">
+              <PartnerTeamgenotenPanel
+                portalToken={selectedPartner.portal_token}
+                compact
+                adminBeoordeling
+                authorNaam={session?.naam || null}
+                initialTeamgenootId={focusTeamgenootId}
+              />
+            </div>
+          ) : null}
 
           <div className="border border-line bg-wash px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -1702,8 +2051,9 @@ export function InstellingenPanel({
               </p>
             ) : (
               <p className="mt-1 text-sm text-muted">
-                Nog niet gekoppeld. Laat de monteur (of jij met zijn Google-account)
-                één keer inloggen — daarna synct elke planning direct.
+                Nog niet gekoppeld. Laat de installatiepartner (of jij met hun
+                Google-account) één keer inloggen — daarna synct elke planning
+                direct.
               </p>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -1730,6 +2080,13 @@ export function InstellingenPanel({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              onClick={() => openInstallatiePortal(selectedPartner)}
+              className="border border-green/40 bg-green-soft px-4 py-2 text-sm font-semibold text-green-dark hover:bg-green hover:text-white"
+            >
+              Open portaal
+            </button>
+            <button
+              type="button"
               onClick={() => copyPortalLink(selectedPartner)}
               className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
             >
@@ -1737,8 +2094,9 @@ export function InstellingenPanel({
             </button>
           </div>
         </div>
+        </div>
 
-        <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
+        <div className="shrink-0 border-t border-line bg-white px-4 py-3 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted">
               Wijzigingen worden pas bewaard als je{" "}
@@ -1768,91 +2126,45 @@ export function InstellingenPanel({
       telefoon: (wfDraft.telefoon as string | null) ?? selectedWf.telefoon,
       actief: wfDraft.actief !== false,
     };
+    const wfActief = wfDraft.actief !== false;
+    const wfTarief =
+      wfDraft.tarief_inc != null &&
+      Number.isFinite(Number(wfDraft.tarief_inc)) &&
+      Number(wfDraft.tarief_inc) > 0
+        ? Number(wfDraft.tarief_inc)
+        : null;
+
     return (
-      <div className="relative border border-line bg-white pb-24">
-        <div className="border-b border-line px-4 py-3 sm:px-5">
-          <button
-            type="button"
-            onClick={closeDetail}
-            className="text-xs font-semibold text-green hover:underline"
-          >
-            ← Terug naar overzicht
-          </button>
-          <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="font-display text-xl font-semibold text-ink">
-                {selectedWf.naam}
-              </h2>
-              <p className="mt-0.5 text-sm text-muted">Warmtefondspartner</p>
-            </div>
-            <span
-              className={
-                wfDraft.actief !== false
-                  ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                  : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
-              }
-            >
-              {wfDraft.actief !== false ? "Actief" : "Inactief"}
-            </span>
-          </div>
-        </div>
-
-        {(error || okMsg) && (
-          <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
-            {error && (
-              <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-                {error}
-              </p>
-            )}
-            {okMsg && (
-              <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
-                {okMsg}
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="space-y-5 p-4 sm:p-5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Naam">
-              <input
-                value={wfDraft.naam || ""}
-                onChange={(e) =>
-                  setWfDraft((d) => ({ ...d, naam: e.target.value }))
-                }
-                className={inputCls}
-              />
-            </Field>
-            <Field label="E-mail">
-              <input
-                type="email"
-                value={wfDraft.email || ""}
-                onChange={(e) =>
-                  setWfDraft((d) => ({ ...d, email: e.target.value }))
-                }
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Telefoon">
-              <input
-                value={wfDraft.telefoon || ""}
-                onChange={(e) =>
-                  setWfDraft((d) => ({ ...d, telefoon: e.target.value }))
-                }
-                className={inputCls}
-              />
-            </Field>
-            <div className="sm:col-span-2 border border-line bg-wash/40 px-3 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Status
-              </p>
-              <div className="mt-2 flex border border-line p-0.5">
+      <div className="flex h-full min-h-0 flex-col bg-white">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="border-b border-line px-4 py-2.5 sm:px-5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="text-xs font-semibold text-green hover:underline"
+              >
+                ← Overzicht
+              </button>
+              <span className="hidden h-4 w-px bg-line sm:block" aria-hidden />
+              <span
+                className="flex h-8 w-8 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold tracking-wide text-green-dark"
+                aria-hidden
+              >
+                {naamInitialen(liveOp.naam) || "WF"}
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate font-display text-lg font-semibold text-ink">
+                  {liveOp.naam}
+                </h2>
+              </div>
+              <div className="flex shrink-0 border border-line p-0.5">
                 <button
                   type="button"
                   onClick={() => setWfDraft((d) => ({ ...d, actief: true }))}
                   className={[
-                    "flex-1 px-3 py-2 text-sm font-semibold",
-                    wfDraft.actief !== false
+                    "px-3 py-1 text-xs font-semibold",
+                    wfActief
                       ? "bg-green text-white"
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
@@ -1863,8 +2175,8 @@ export function InstellingenPanel({
                   type="button"
                   onClick={() => setWfDraft((d) => ({ ...d, actief: false }))}
                   className={[
-                    "flex-1 px-3 py-2 text-sm font-semibold",
-                    wfDraft.actief === false
+                    "px-3 py-1 text-xs font-semibold",
+                    !wfActief
                       ? "bg-[#C45A12] text-white"
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
@@ -1872,61 +2184,133 @@ export function InstellingenPanel({
                   Inactief
                 </button>
               </div>
-              <p className="mt-2 text-xs text-muted">
-                Actieve Warmtefondspartners krijgen toegang tot alle
-                Warmtefonds-orders via hun portaallink.
-              </p>
             </div>
+            {!wfActief ? (
+              <p className="mt-1.5 text-[11px] text-[#C45A12]">
+                Inactief = geen portaaltoegang. Opslaan om door te voeren.
+              </p>
+            ) : null}
           </div>
 
-          <div className="border border-line p-4">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Warmtefonds-account
-            </p>
-            <p className="mt-1 text-sm text-muted">
-              Login via magic link — geen wachtwoord. Deel de portaallink met de
-              partner.
-            </p>
-            <p className="mt-3 break-all rounded border border-line bg-wash/50 px-3 py-2 font-mono text-[11px] text-ink">
-              {wfPortalUrl(liveOp)}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => openWfPortal(liveOp)}
-                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-dark"
-              >
-                Open portaal
-              </button>
-              <button
-                type="button"
-                onClick={() => copyWfPortalLink(liveOp)}
-                className="border border-line bg-white px-4 py-2 text-sm font-medium hover:bg-wash"
-              >
-                Kopieer portaallink
-              </button>
-              <button
-                type="button"
-                onClick={() => void regenerateWfToken(selectedWf)}
-                className="border border-line bg-white px-4 py-2 text-sm font-medium text-muted hover:bg-wash hover:text-ink"
-              >
-                Vernieuw token
-              </button>
+          {(error || okMsg) && (
+            <div className="space-y-2 border-b border-line px-4 py-2 sm:px-5">
+              {error ? (
+                <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+                  {error}
+                </p>
+              ) : null}
+              {okMsg ? (
+                <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+                  {okMsg}
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          <div className="divide-y divide-line">
+            {/* Contact — 3 kolommen */}
+            <div className="grid gap-3 px-4 py-3 sm:grid-cols-3 sm:px-5">
+              <Field label="Naam">
+                <input
+                  value={wfDraft.naam || ""}
+                  onChange={(e) =>
+                    setWfDraft((d) => ({ ...d, naam: e.target.value }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="E-mail">
+                <input
+                  type="email"
+                  value={wfDraft.email || ""}
+                  onChange={(e) =>
+                    setWfDraft((d) => ({ ...d, email: e.target.value }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Telefoon">
+                <input
+                  value={wfDraft.telefoon || ""}
+                  onChange={(e) =>
+                    setWfDraft((d) => ({ ...d, telefoon: e.target.value }))
+                  }
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+
+            {/* Vergoeding — horizontale rij */}
+            <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <div className="w-36 shrink-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Vergoeding
+                </p>
+                <p className="text-[11px] text-muted">Per WF-aanvraag excl. btw</p>
+              </div>
+              <WfPartnerTariefVeld
+                value={wfTarief}
+                onChange={(next) =>
+                  setWfDraft((d) => ({ ...d, tarief_inc: next }))
+                }
+                standaardExcl={EDERGY_PER_AANVRAAG_EXCL}
+              />
+            </div>
+
+            {/* Inloggen — horizontale acties */}
+            <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <div className="w-36 shrink-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Inloggen
+                </p>
+                <p className="text-[11px] text-muted">E-mail + wachtwoord</p>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void sendWfInvite(selectedWf)}
+                  className="h-9 bg-green px-3 text-[13px] font-semibold text-white hover:bg-green-dark"
+                >
+                  Stuur inloggegevens
+                </button>
+                <button
+                  type="button"
+                  disabled={!wfActief}
+                  onClick={() => openWfPortal(liveOp)}
+                  className="h-9 border border-line bg-white px-3 text-[12px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
+                >
+                  Open portaal
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(wfLoginUrl()).then(
+                      () => setOkMsg("Login-URL gekopieerd."),
+                      () => setError("Kopiëren mislukt")
+                    )
+                  }
+                  className="h-9 border border-line bg-white px-3 text-[12px] font-semibold text-muted hover:bg-wash hover:text-ink"
+                >
+                  Kopieer URL
+                </button>
+                <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">
+                  {wfLoginUrl()}
+                </p>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 sm:px-5">
+        <div className="shrink-0 border-t border-line bg-white px-4 py-2.5 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted">
-              Wijzigingen worden pas bewaard als je{" "}
-              <strong className="text-ink">Opslaan</strong> klikt.
+              Pas actief na <strong className="text-ink">Opslaan</strong>
             </p>
             <button
               type="button"
               disabled={detailSaving}
               onClick={() => void saveWarmtefonds()}
-              className="bg-green px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
+              className="bg-green px-5 py-2 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60"
             >
               {detailSaving ? "Opslaan…" : "Opslaan"}
             </button>
@@ -1938,12 +2322,31 @@ export function InstellingenPanel({
 
   // ── List view ────────────────────────────────────────────────────────────
   const showListTabs = !teamOnly && !hideListTabs;
+  const embedded = hideListTabs;
 
   return (
-    <div className="border border-line bg-white">
-      <div className="space-y-3 border-b border-line px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+    <div
+      className={
+        embedded
+          ? "flex h-full min-h-0 flex-col bg-white"
+          : "border border-line bg-white"
+      }
+    >
+      <div
+        className={
+          embedded
+            ? "flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-center sm:px-4"
+            : "space-y-3 border-b border-line px-4 py-3 sm:px-5"
+        }
+      >
+        <div
+          className={
+            embedded
+              ? "flex w-full min-w-0 flex-1 flex-wrap items-center gap-2"
+              : "flex flex-wrap items-center justify-between gap-3"
+          }
+        >
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {showListTabs ? (
               <div className="flex border border-line p-0.5">
                 <button
@@ -1956,7 +2359,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Team
+                  Mensen
                 </button>
                 <button
                   type="button"
@@ -1968,7 +2371,7 @@ export function InstellingenPanel({
                       : "bg-white text-muted hover:bg-wash",
                   ].join(" ")}
                 >
-                  Monteurs
+                  Installatie partners
                 </button>
                 <button
                   type="button"
@@ -1984,6 +2387,38 @@ export function InstellingenPanel({
                 </button>
               </div>
             ) : null}
+            {embedded ? (
+              <div className="relative w-full min-w-0 flex-1 sm:max-w-md">
+                <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-muted">
+                  ⌕
+                </span>
+                <input
+                  type="search"
+                  value={zoek}
+                  onChange={(e) => setZoek(e.target.value)}
+                  placeholder="Zoek naam, e-mail, telefoon…"
+                  className="h-9 w-full rounded-md border border-line bg-white py-2 pr-3 pl-8 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green"
+                  aria-label="Zoeken"
+                />
+              </div>
+            ) : activeFilter === "medewerkers" ? (
+              <input
+                type="search"
+                value={zoek}
+                onChange={(e) => setZoek(e.target.value)}
+                placeholder={
+                  teamRolFilter === "adviseur"
+                    ? "Zoek adviseur…"
+                    : "Zoek op naam of e-mail…"
+                }
+                className="w-full min-w-[12rem] border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-muted/70 focus:border-green sm:w-56"
+                aria-label={
+                  teamRolFilter === "adviseur"
+                    ? "Zoek adviseur"
+                    : "Zoek medewerker"
+                }
+              />
+            ) : null}
             <p className="text-xs text-muted">{countLabel}</p>
           </div>
           <button
@@ -1995,12 +2430,16 @@ export function InstellingenPanel({
               setAddOpen(true);
               setError(null);
             }}
-            className="bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+            className={
+              embedded
+                ? "shrink-0 rounded-lg bg-green px-3 py-2 text-sm font-semibold text-white hover:bg-green-dark"
+                : "bg-orange px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#e0651c]"
+            }
           >
             {activeFilter === "medewerkers"
               ? teamRolFilter !== "all"
                 ? `+ ${gebruikerRolLabel[teamRolFilter]}`
-                : "+ Medewerker"
+                : "+ Nieuw"
               : activeFilter === "warmtefonds"
                 ? "+ Warmtefondspartner"
                 : `+ ${partnerWoord}`}
@@ -2044,22 +2483,36 @@ export function InstellingenPanel({
       </div>
 
       {(error || okMsg) && (
-        <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
+        <div className="shrink-0 space-y-2 border-b border-line px-3 py-2 sm:px-4">
           {error && (
-            <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+            <p className="rounded-md border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
               {error}
             </p>
           )}
           {okMsg && (
-            <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
+            <p className="rounded-md border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
               {okMsg}
             </p>
           )}
         </div>
       )}
 
+      <div className={embedded ? "min-h-0 flex-1 overflow-auto" : undefined}>
       {loading ? (
         <p className="px-5 py-14 text-center text-sm text-muted">Laden…</p>
+      ) : rows.length === 0 && zoekNorm ? (
+        <div className="px-5 py-14 text-center">
+          <p className="font-display text-base font-semibold text-ink">
+            Geen resultaten voor “{zoek.trim()}”
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Zoek op naam of e-mail
+            {teamRolFilter !== "all" && activeFilter === "medewerkers"
+              ? ` binnen ${gebruikerRolLabel[teamRolFilter].toLowerCase()}`
+              : ""}
+            .
+          </p>
+        </div>
       ) : rows.length === 0 ? (
         <div className="px-5 py-14 text-center">
           <p className="font-display text-base font-semibold text-ink">
@@ -2073,308 +2526,324 @@ export function InstellingenPanel({
           </p>
           <p className="mt-1 text-sm text-muted">
             {activeFilter === "medewerkers"
-              ? "Kies een rol (Admin, Adviseur, Beller of Backoffice) en voeg een account toe."
+              ? "Kies een rol (Admin, Adviseur, Beller, Backoffice, Warmtefonds of Recruiter) en voeg een account toe."
               : activeFilter === "warmtefonds"
-                ? "Voeg een Warmtefondspartner toe voor portaallink (bijv. Edwin)."
+                ? "Voeg een Warmtefondspartner toe voor portaallink."
                 : `Voeg een ${partnerWoord.toLowerCase()} toe voor schouw/installatie en portaallink.`}
           </p>
         </div>
       ) : activeFilter === "medewerkers" ? (
-        <div className="overflow-x-auto">
-          <table className="crm-table crm-table--compact w-full min-w-[720px]">
-            <thead>
-              <tr>
-                <th>Medewerker</th>
-                <th>Rol</th>
-                <th>Commissie</th>
-                <th>Start adres</th>
-                <th>Contract</th>
-                <th>Status</th>
-                <th className="w-36 text-right">Actie</th>
+        <table className="crm-table crm-table--compact">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>Rol</th>
+              <th>Status</th>
+              <th>Laatste notitie</th>
+              <th>Commissie</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as Adviseur[]).map((a) => {
+              const sales = isSalesRol(a.rol);
+              const rol = normalizeRol(a.rol) as TeamRol;
+              const actief = a.actief !== false;
+              const commissie =
+                a.commissie_pct != null &&
+                Number.isFinite(Number(a.commissie_pct))
+                  ? Number(a.commissie_pct)
+                  : 10;
+              const opsCommissieLabel = opsCommissieLabelVoorRol({
+                rol: a.rol,
+                isOpsManager: isOpsManagerAdviseur(a),
+              });
+              const notes = parseProjectNotitieEntries(a.interne_notities);
+              const lastNote = notes.length
+                ? [...notes].sort((x, y) =>
+                    y.at.localeCompare(x.at)
+                  )[0]
+                : null;
+              return (
+                <tr
+                  key={a.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openMedewerker(a)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openMedewerker(a);
+                    }
+                  }}
+                >
+                  <td>
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      {adviseurProfielfotoPublicUrl(a.profielfoto_path) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={adviseurProfielfotoPublicUrl(a.profielfoto_path)!}
+                          alt=""
+                          className="size-8 shrink-0 object-cover"
+                        />
+                      ) : (
+                        <Avatar size="sm" className="size-8">
+                          <AvatarFallback className="text-[11px]">
+                            {naamInitialen(a.naam) || "?"}
+                          </AvatarFallback>
+                        </Avatar>
+                      )}
+                      <div className="min-w-0">
+                        <span className="block truncate font-medium text-ink">
+                          {a.naam}
+                        </span>
+                        <span className="block truncate text-[11px] text-muted">
+                          {a.email || "Geen e-mail"}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap text-muted">
+                    {gebruikerRolLabel[rol]}
+                  </td>
+                  <td>
+                    <span
+                      className={[
+                        "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                        a.geblokkeerd === true
+                          ? "bg-[#FDECEA] text-[#C62828]"
+                          : actief
+                            ? "bg-green-soft text-green-dark"
+                            : "bg-[#FFF0E6] text-[#C45A12]",
+                      ].join(" ")}
+                    >
+                      {a.geblokkeerd === true
+                        ? "Geblokkeerd"
+                        : actief
+                          ? "Actief"
+                          : "Inactief"}
+                    </span>
+                  </td>
+                  <td className="max-w-[14rem]">
+                    {lastNote ? (
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] text-ink">
+                          {lastNote.text}
+                        </p>
+                        <p className="truncate text-[10px] text-muted">
+                          {formatDateTimeNl(lastNote.at)}
+                          {lastNote.author ? ` · ${lastNote.author}` : ""}
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-[12px] text-muted">—</span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap tabular-nums text-muted">
+                    {sales
+                      ? `${commissie.toLocaleString("nl-NL", {
+                          maximumFractionDigits: 1,
+                        })}%`
+                      : opsCommissieLabel || "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : activeFilter === "warmtefonds" ? (
+        <table className="crm-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>E-mail</th>
+              <th>Telefoon</th>
+              <th>Vergoeding</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as WarmtefondsOperator[]).map((o) => (
+              <tr
+                key={o.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openWarmtefonds(o)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openWarmtefonds(o);
+                  }
+                }}
+              >
+                <td>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Avatar size="sm" className="size-8">
+                      <AvatarFallback className="text-[11px]">
+                        {naamInitialen(o.naam) || "?"}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="truncate font-medium text-ink">
+                      {o.naam}
+                    </span>
+                  </div>
+                </td>
+                <td className="text-muted">{o.email || "—"}</td>
+                <td className="whitespace-nowrap text-muted">
+                  {o.telefoon || "—"}
+                </td>
+                <td className="tabular-nums font-semibold text-ink">
+                  {formatEuro(
+                    o.tarief_inc != null && Number(o.tarief_inc) > 0
+                      ? edergyBedragenVanInc(Number(o.tarief_inc)).perAanvraagExcl
+                      : EDERGY_PER_AANVRAAG_EXCL
+                  )} excl.
+                </td>
+                <td>
+                  <span
+                    className={[
+                      "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                      o.actief !== false
+                        ? "bg-green-soft text-green-dark"
+                        : "bg-[#FFF0E6] text-[#C45A12]",
+                    ].join(" ")}
+                  >
+                    {o.actief !== false ? "Actief" : "Inactief"}
+                  </span>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {(rows as Adviseur[]).map((a) => {
-                const sales = isSalesRol(a.rol);
-                const rol = normalizeRol(a.rol) as TeamRol;
-                const canLoginAls = Boolean(a.email?.trim());
-                const actief = a.actief !== false;
-                const startAdres = (a.start_adres || "").trim();
-                const heeftStartAdres = isUsableStartAdres(startAdres);
-                const startAdresIngevuld =
-                  Boolean(startAdres) && startAdres !== "—";
-                const heeftContract = Boolean(
-                  a.contract_bestandsnaam ||
-                    a.contract_sign_status === "ondertekend"
-                );
-                const commissie =
-                  a.commissie_pct != null &&
-                  Number.isFinite(Number(a.commissie_pct))
-                    ? Number(a.commissie_pct)
-                    : 10;
-                const opsCommissieLabel = opsCommissieLabelVoorRol({
-                  rol: a.rol,
-                  isOpsManager: isOpsManagerAdviseur(a),
-                });
-                return (
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <table className="crm-table">
+          <thead>
+            <tr>
+              <th>Naam</th>
+              <th>E-mail</th>
+              <th>KvK</th>
+              <th>Agenda</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as InstallatiePartner[]).map((p) => {
+              const open = expandedPartnerId === p.id;
+              return (
+                <Fragment key={p.id}>
                   <tr
-                    key={a.id}
-                    onClick={() => openMedewerker(a)}
-                    className="cursor-pointer"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() =>
+                      setExpandedPartnerId((cur) =>
+                        cur === p.id ? null : p.id
+                      )
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedPartnerId((cur) =>
+                          cur === p.id ? null : p.id
+                        );
+                      }
+                    }}
                   >
                     <td>
                       <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                          className="flex h-8 w-8 shrink-0 items-center justify-center bg-green-soft text-[11px] font-bold tracking-wide text-green-dark"
-                          aria-hidden
-                        >
-                          {naamInitialen(a.naam) || "?"}
-                        </span>
+                        <Avatar size="sm" className="size-8">
+                          <AvatarFallback className="text-[11px]">
+                            {naamInitialen(p.naam) || "?"}
+                          </AvatarFallback>
+                        </Avatar>
                         <div className="min-w-0">
-                          <p className="truncate font-semibold text-ink">
-                            {a.naam}
-                          </p>
-                          <p className="truncate text-[11px] text-muted">
-                            {a.email || "Geen e-mail"}
-                          </p>
+                          <span className="block truncate font-medium text-ink">
+                            {p.naam}
+                          </span>
+                          <span className="block truncate text-[11px] text-muted">
+                            {open ? "Team verbergen" : "Team tonen · klik"}
+                          </span>
                         </div>
                       </div>
                     </td>
-                    <td>
-                      <span
-                        className={[
-                          "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          ROL_BADGE[rol] || ROL_BADGE.adviseur,
-                        ].join(" ")}
-                      >
-                        {gebruikerRolLabel[rol]}
-                      </span>
+                    <td className="text-muted">{p.email || "—"}</td>
+                    <td className="whitespace-nowrap text-muted">
+                      {p.kvk_nummer || "—"}
                     </td>
-                    <td className="tabular-nums text-muted">
-                      {sales ? (
-                        <span className="font-semibold text-ink">
-                          {commissie.toLocaleString("nl-NL", {
-                            maximumFractionDigits: 1,
-                          })}
-                          %
-                        </span>
-                      ) : opsCommissieLabel ? (
-                        <span className="text-[11px] font-semibold text-ink">
-                          {opsCommissieLabel}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      {heeftStartAdres ? (
-                        <span
-                          className="inline-flex items-center gap-1 bg-green-soft px-2 py-0.5 text-[10px] font-semibold text-green-dark"
-                          title={startAdres}
-                        >
-                          <span aria-hidden>✓</span>
-                          Ja
-                        </span>
-                      ) : sales && startAdresIngevuld ? (
-                        <span
-                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
-                          title={`${startAdres} — huisnummer + postcode nodig`}
-                        >
-                          Onvolledig
-                        </span>
-                      ) : sales ? (
-                        <span
-                          className="inline-block bg-[#FFF0E6] px-2 py-0.5 text-[10px] font-semibold text-[#C45A12]"
-                          title="Nodig voor reistijd bij inplannen"
-                        >
-                          Ontbreekt
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {heeftContract ? (
-                        <span className="inline-block bg-green-soft px-2 py-0.5 text-[10px] font-semibold text-green-dark">
-                          Ja
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted">—</span>
-                      )}
+                    <td className="whitespace-nowrap text-muted">
+                      {p.google_connected_email ? "Gekoppeld" : "—"}
                     </td>
                     <td>
                       <span
                         className={[
-                          "inline-block px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          a.geblokkeerd === true
-                            ? "bg-[#FDECEA] text-[#C62828]"
-                            : actief
-                              ? "bg-green-soft text-green-dark"
-                              : "bg-[#FFF0E6] text-[#C45A12]",
+                          "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                          p.actief !== false
+                            ? "bg-green-soft text-green-dark"
+                            : "bg-[#FFF0E6] text-[#C45A12]",
                         ].join(" ")}
                       >
-                        {a.geblokkeerd === true
-                          ? "Geblokkeerd"
-                          : actief
-                            ? "Actief"
-                            : "Inactief"}
+                        {p.actief !== false ? "Actief" : "Inactief"}
                       </span>
-                    </td>
-                    <td
-                      className="text-right"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          disabled={!canLoginAls || loginAlsId === a.id}
-                          onClick={() => void loginAls(a)}
-                          className="bg-green px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-40"
-                          title={
-                            !canLoginAls
-                              ? "Geen e-mailadres"
-                              : `Login als ${a.naam}`
-                          }
-                        >
-                          {loginAlsId === a.id ? "…" : "Login als"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openMedewerker(a)}
-                          className="border border-line bg-white p-1.5 text-muted hover:border-green hover:text-green-dark"
-                          aria-label={`${a.naam} bewerken`}
-                        >
-                          <PencilIcon />
-                        </button>
-                      </div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : activeFilter === "warmtefonds" ? (
-        <div className="overflow-x-auto">
-          <table className="crm-table w-full">
-            <thead>
-              <tr>
-                <th>Naam</th>
-                <th>E-mail</th>
-                <th>Telefoon</th>
-                <th>Status</th>
-                <th className="w-36" />
-              </tr>
-            </thead>
-            <tbody>
-              {(rows as WarmtefondsOperator[]).map((o) => (
-                <tr
-                  key={o.id}
-                  onClick={() => openWarmtefonds(o)}
-                  className="cursor-pointer hover:bg-[#f7faf8]"
-                >
-                  <td className="font-medium text-ink">{o.naam}</td>
-                  <td className="text-muted">{o.email || "—"}</td>
-                  <td className="text-muted">{o.telefoon || "—"}</td>
-                  <td>
-                    <span
-                      className={
-                        o.actief !== false
-                          ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
-                      }
-                    >
-                      {o.actief !== false ? "Actief" : "Inactief"}
-                    </span>
-                  </td>
-                  <td
-                    className="text-right"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openWfPortal(o)}
-                        className="border border-green/40 bg-green-soft px-2 py-1 text-[11px] font-semibold text-green-dark hover:bg-green hover:text-white"
-                        title="Open Warmtefonds-portaal"
-                      >
-                        Open account
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openWarmtefonds(o)}
-                        className="text-muted hover:text-ink"
-                        aria-label={`${o.naam} bewerken`}
-                      >
-                        <PencilIcon />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="crm-table w-full">
-            <thead>
-              <tr>
-                <th>Naam</th>
-                <th>E-mail</th>
-                <th>Google Calendar</th>
-                <th>KvK</th>
-                <th>Contract</th>
-                <th>Status</th>
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {(rows as InstallatiePartner[]).map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => openPartner(p)}
-                  className="cursor-pointer hover:bg-[#f7faf8]"
-                >
-                  <td className="font-medium text-ink">{p.naam}</td>
-                  <td className="text-muted">{p.email || "—"}</td>
-                  <td className="text-muted text-xs">
-                    {p.google_connected_email ? (
-                      <span className="font-medium text-green-dark">
-                        Gekoppeld
-                      </span>
-                    ) : (
-                      <span className="text-[#C45A12]">Niet gekoppeld</span>
-                    )}
-                  </td>
-                  <td className="text-muted text-xs">
-                    {p.kvk_nummer || (
-                      <span className="text-[#C45A12]">Ontbreekt</span>
-                    )}
-                  </td>
-                  <td className="text-muted text-xs">
-                    {p.contract_bestandsnaam ? "Ja" : "—"}
-                  </td>
-                  <td>
-                    <span
-                      className={
-                        p.actief !== false
-                          ? "text-[11px] font-semibold uppercase tracking-wide text-green-dark"
-                          : "text-[11px] font-semibold uppercase tracking-wide text-[#C45A12]"
-                      }
-                    >
-                      {p.actief !== false ? "Actief" : "Inactief"}
-                    </span>
-                  </td>
-                  <td className="text-muted">
-                    <PencilIcon />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  {open ? (
+                    <tr className="!cursor-default hover:!bg-transparent">
+                      <td colSpan={5} className="!bg-[#FAFBFA] !p-0">
+                        <div className="border-t border-line px-4 py-4 sm:px-5">
+                          <div className="mb-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openPartner(p)}
+                              className="rounded-md border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                            >
+                              Bewerken
+                            </button>
+                            {p.portal_token ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openInstallatiePortal(p)}
+                                  className="rounded-md border border-green/40 bg-green-soft px-3 py-1.5 text-xs font-semibold text-green-dark hover:bg-green hover:text-white"
+                                >
+                                  Open portaal
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => copyPortalLink(p)}
+                                  className="rounded-md border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
+                                >
+                                  Kopieer link
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                          {p.portal_token ? (
+                            <PartnerTeamgenotenPanel
+                              portalToken={p.portal_token}
+                              compact
+                              adminBeoordeling
+                              authorNaam={session?.naam || null}
+                              initialTeamgenootId={
+                                expandedPartnerId === p.id
+                                  ? focusTeamgenootId
+                                  : null
+                              }
+                            />
+                          ) : (
+                            <p className="text-sm text-muted">
+                              Geen portaallink — teamleden kunnen niet geladen
+                              worden.
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
       )}
+      </div>
 
       {addOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-4 sm:items-center">
@@ -2463,6 +2932,12 @@ export function InstellingenPanel({
                     ]
                   }
                 </p>
+                {rol === "warmtefonds" ? (
+                  <p className="border border-[#C45A12]/25 bg-[#FFF0E6] px-3 py-2 text-[11px] leading-relaxed text-[#C45A12]">
+                    Komt in het systeem als Warmtefonds-operator (eigen portaal),
+                    niet als sales-adviseur. Geen bel-planning of commissie.
+                  </p>
+                ) : null}
                 {rol === "adviseur" ? (
                   <>
                     <Field label="Startdatum (verplicht)">
@@ -2486,8 +2961,9 @@ export function InstellingenPanel({
             )}
             {activeFilter === "warmtefonds" ? (
               <p className="border border-green/30 bg-green-soft/50 px-3 py-2 text-[11px] text-green-dark">
-                Na toevoegen krijg je een <strong>portaallink</strong> (magic
-                link) naar het Warmtefonds-account — geen wachtwoord.
+                Na toevoegen krijgt de adviseur een <strong>mail met
+                inloggegevens</strong> (e-mail + wachtwoord) voor{" "}
+                <strong>/warmtefonds/login</strong>.
               </p>
             ) : null}
             {error && (

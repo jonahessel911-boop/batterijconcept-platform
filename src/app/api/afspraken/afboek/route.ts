@@ -7,6 +7,7 @@ import {
   soortVoorVervolgUitkomst,
   uitkomstVereistVervolgPunt,
 } from "@/lib/afspraak-soort";
+import { checkDoorgezetteSale } from "@/lib/offerte-doorzet";
 import { planAfspraak } from "@/lib/plan-afspraak";
 import { leadStatusLabel } from "@/lib/labels";
 import { logLeadEvent } from "@/lib/lead-events";
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
     notitie?: string;
     /** Amsterdam-lokaal `YYYY-MM-DDTHH:mm` of ISO */
     vervolg_at?: string;
+    /** Opt-in: 24u-herinneringsmail bij vervolg fysiek/tel */
+    herinnering_mail?: boolean;
   };
   try {
     body = await req.json();
@@ -100,6 +103,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Al via Offertes doorgezet naar backoffice → niet opnieuw afboeken
+    // (voorkomt sale overschrijven met bijv. vervolg_tel).
+    const doorzet = await checkDoorgezetteSale(sb, current.lead_id);
+    if (doorzet.doorgezet) {
+      return NextResponse.json(
+        {
+          error:
+            "Deze order is al als sale doorgezet naar de backoffice via Offertes. Afboeken vanuit de agenda kan niet meer.",
+          reden: doorzet.reden,
+        },
+        { status: 409 }
+      );
+    }
+
     // 1) Vervolg eerst — bij falen blijft huidige afspraak open om opnieuw te proberen
     let nieuwVervolg: unknown = null;
     if (needsVervolg && body.vervolg_at) {
@@ -110,6 +127,7 @@ export async function POST(req: NextRequest) {
         notities: noteText,
         soort: soortVoorVervolgUitkomst(uitkomst),
         ingepland_door_id: session.adviseurId,
+        herinnering_mail: Boolean(body.herinnering_mail),
       });
       if (!plan.ok) {
         return NextResponse.json(

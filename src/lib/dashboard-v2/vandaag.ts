@@ -55,12 +55,32 @@ export type VandaagVerkoperRow = {
   afsprakenGelopen: number;
   afsprakenTeLopen: number;
   afsprakenNietAfgeboekt: number;
+  /** Sales / gelopen afspraken (incl. niet afgeboekt). Procent, 1 decimaal. */
+  salesConversiePct: number | null;
 };
+
+/** Rollende dagen óf kalendermaand-presets */
+export type VandaagPeriode =
+  | 1
+  | 3
+  | 7
+  | 14
+  | "this_month"
+  | "prev_month";
+
+/** @deprecated gebruik VandaagPeriode */
+export type VandaagDagen = VandaagPeriode;
 
 export type DashboardV2Vandaag = {
   dateLabel: string;
-  /** YYYY-MM-DD Amsterdam */
+  /** YYYY-MM-DD Amsterdam (einddatum van bereik) */
   dateKey: string;
+  /** Gekozen periode-preset */
+  periode: VandaagPeriode;
+  /** Aantal kalenderdagen in het bereik */
+  days: number;
+  /** YYYY-MM-DD Amsterdam startdatum van het bereik */
+  fromKey: string;
   offertesVerstuurd: number;
   orders: number;
   orderwaarde: number;
@@ -69,6 +89,11 @@ export type DashboardV2Vandaag = {
   afsprakenGelopen: number;
   afsprakenTeLopen: number;
   afsprakenNietAfgeboekt: number;
+  /**
+   * Sales-conversie van gelopen afspraken =
+   * sales-uitkomst / (gelopen + niet afgeboekt). Procent, 1 decimaal.
+   */
+  salesConversiePct: number | null;
   verkopers: VandaagVerkoperRow[];
   afspraken: VandaagAfspraakRow[];
 };
@@ -102,14 +127,6 @@ export type VandaagRaw = {
   adviseurs: DashboardV2Raw["adviseurs"];
 };
 
-function amsStartOfDay(d: Date): Date {
-  const z = toZonedTime(d, TZ);
-  return fromZonedTime(
-    new Date(z.getFullYear(), z.getMonth(), z.getDate(), 0, 0, 0, 0),
-    TZ
-  );
-}
-
 function amsEndOfDay(d: Date): Date {
   const z = toZonedTime(d, TZ);
   return fromZonedTime(
@@ -126,6 +143,30 @@ function dateLabelNl(d: Date): string {
   return formatInTimeZone(d, TZ, "EEEE d MMMM yyyy");
 }
 
+function rangeLabelNl(
+  start: Date,
+  end: Date,
+  periode: VandaagPeriode
+): string {
+  if (periode === 1) return dateLabelNl(end);
+  if (periode === "this_month" || periode === "prev_month") {
+    return formatInTimeZone(start, TZ, "MMMM yyyy");
+  }
+  const startDay = formatInTimeZone(start, TZ, "d");
+  const endFull = formatInTimeZone(end, TZ, "d MMMM yyyy");
+  const startMonth = formatInTimeZone(start, TZ, "MMMM");
+  const endMonth = formatInTimeZone(end, TZ, "MMMM");
+  const startYear = formatInTimeZone(start, TZ, "yyyy");
+  const endYear = formatInTimeZone(end, TZ, "yyyy");
+  if (startMonth === endMonth && startYear === endYear) {
+    return `${startDay} – ${endFull}`;
+  }
+  if (startYear === endYear) {
+    return `${formatInTimeZone(start, TZ, "d MMMM")} – ${endFull}`;
+  }
+  return `${formatInTimeZone(start, TZ, "d MMMM yyyy")} – ${endFull}`;
+}
+
 function actieveAfspraak(status: string): boolean {
   return (
     status === "gepland" ||
@@ -135,17 +176,105 @@ function actieveAfspraak(status: string): boolean {
   );
 }
 
+export function parseVandaagDagen(raw: string | null): VandaagPeriode {
+  const key = (raw || "").trim().toLowerCase();
+  if (key === "this_month" || key === "deze_maand") return "this_month";
+  if (key === "prev_month" || key === "vorige_maand" || key === "last_month")
+    return "prev_month";
+  const n = Number(raw);
+  if (n === 3 || n === 7 || n === 14) return n;
+  return 1;
+}
+
+/** @deprecated alias */
+export const parseVandaagPeriode = parseVandaagDagen;
+
+export function resolveVandaagRange(
+  now: Date,
+  periode: VandaagPeriode
+): {
+  start: Date;
+  end: Date;
+  dateKey: string;
+  fromKey: string;
+  days: number;
+} {
+  const zNow = toZonedTime(now, TZ);
+  if (periode === "this_month") {
+    const startLocal = new Date(zNow.getFullYear(), zNow.getMonth(), 1, 0, 0, 0, 0);
+    const start = fromZonedTime(startLocal, TZ);
+    const end = amsEndOfDay(now);
+    return {
+      start,
+      end,
+      dateKey: dayKey(end),
+      fromKey: dayKey(start),
+      days: zNow.getDate(),
+    };
+  }
+  if (periode === "prev_month") {
+    const startLocal = new Date(
+      zNow.getFullYear(),
+      zNow.getMonth() - 1,
+      1,
+      0,
+      0,
+      0,
+      0
+    );
+    const endLocal = new Date(
+      zNow.getFullYear(),
+      zNow.getMonth(),
+      0,
+      23,
+      59,
+      59,
+      999
+    );
+    const start = fromZonedTime(startLocal, TZ);
+    const end = fromZonedTime(endLocal, TZ);
+    return {
+      start,
+      end,
+      dateKey: dayKey(end),
+      fromKey: dayKey(start),
+      days: endLocal.getDate(),
+    };
+  }
+  const days = periode;
+  const startLocal = new Date(
+    zNow.getFullYear(),
+    zNow.getMonth(),
+    zNow.getDate() - (days - 1),
+    0,
+    0,
+    0,
+    0
+  );
+  const start = fromZonedTime(startLocal, TZ);
+  const end = amsEndOfDay(now);
+  return {
+    start,
+    end,
+    dateKey: dayKey(end),
+    fromKey: dayKey(start),
+    days,
+  };
+}
+
 /**
- * Bouwt het vandaag-overzicht (Amsterdam-kalenderdag).
+ * Bouwt het vandaag-overzicht (Amsterdam-kalenderdag of rollend bereik / maand).
  */
 export function buildDashboardV2Vandaag(
   raw: VandaagRaw,
   now = new Date(),
-  personId?: string | null
+  personId?: string | null,
+  periode: VandaagPeriode = 1
 ): DashboardV2Vandaag {
-  const start = amsStartOfDay(now);
-  const end = amsEndOfDay(now);
-  const dateKey = dayKey(now);
+  const { start, end, dateKey, fromKey, days } = resolveVandaagRange(
+    now,
+    periode
+  );
 
   const naamById = new Map(raw.adviseurs.map((a) => [a.id, a.naam]));
   const leadStatusById = new Map(
@@ -342,6 +471,23 @@ export function buildDashboardV2Vandaag(
     (a) => a.bucket === "niet_afgeboekt"
   ).length;
 
+  /** Gelopen = afgelopen huisbezoek (afgeboekt of nog open). */
+  const gelopenTotaal = afsprakenGelopen + afsprakenNietAfgeboekt;
+  const salesVanGelopen = afspraakRows.filter(
+    (a) => a.bucket !== "te_lopen" && a.sale_route != null
+  ).length;
+  const salesConversiePct =
+    gelopenTotaal > 0
+      ? Math.round((salesVanGelopen / gelopenTotaal) * 1000) / 10
+      : null;
+
+  const salesVanGelopenByAdv = new Map<string, number>();
+  for (const a of afspraakRows) {
+    if (a.bucket === "te_lopen" || a.sale_route == null) continue;
+    const aid = a.adviseur_id || "__geen__";
+    salesVanGelopenByAdv.set(aid, (salesVanGelopenByAdv.get(aid) || 0) + 1);
+  }
+
   const verkoperIds = new Set<string>();
   for (const id of salesByAdv.keys()) {
     if (id !== "__geen__") verkoperIds.add(id);
@@ -363,6 +509,8 @@ export function buildDashboardV2Vandaag(
         te_lopen: 0,
         niet_afgeboekt: 0,
       };
+      const gelopenAdv = af.gelopen + af.niet_afgeboekt;
+      const salesAdv = salesVanGelopenByAdv.get(id) || 0;
       return {
         id,
         naam: naamById.get(id) || "Onbekend",
@@ -371,6 +519,10 @@ export function buildDashboardV2Vandaag(
         afsprakenGelopen: af.gelopen,
         afsprakenTeLopen: af.te_lopen,
         afsprakenNietAfgeboekt: af.niet_afgeboekt,
+        salesConversiePct:
+          gelopenAdv > 0
+            ? Math.round((salesAdv / gelopenAdv) * 1000) / 10
+            : null,
       };
     })
     .filter(
@@ -384,8 +536,11 @@ export function buildDashboardV2Vandaag(
     .sort((a, b) => b.omzet - a.omzet || b.sales - a.sales);
 
   return {
-    dateLabel: dateLabelNl(now),
+    dateLabel: rangeLabelNl(start, end, periode),
     dateKey,
+    periode,
+    days,
+    fromKey,
     offertesVerstuurd: verstuurdIds.size,
     orders,
     orderwaarde: round2(orderwaarde),
@@ -394,6 +549,7 @@ export function buildDashboardV2Vandaag(
     afsprakenGelopen,
     afsprakenTeLopen,
     afsprakenNietAfgeboekt,
+    salesConversiePct,
     verkopers,
     afspraken: afspraakRows,
   };

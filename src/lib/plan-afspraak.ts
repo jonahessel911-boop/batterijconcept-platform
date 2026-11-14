@@ -55,6 +55,11 @@ export type PlanAfspraakInput = {
    * Commisssie telt nog steeds max. 1 actief nieuw per lead (geen extra).
    */
   herplan?: boolean;
+  /**
+   * Alleen voor vervolg_fysiek / vervolg_tel: 24u-herinneringsmail sturen.
+   * Geen bevestiging/opwarm — alleen de reminder-cron.
+   */
+  herinnering_mail?: boolean;
 };
 
 /** Marker in notities — herplan telt niet als tweede bruto booking. */
@@ -160,6 +165,10 @@ export async function planAfspraak(
   const end = addMinutes(start, afspraakDuurMinuten(soort));
 
   const magMailen = afspraakStuurtMail(soort);
+  const herinneringOptIn =
+    !magMailen &&
+    Boolean(input.herinnering_mail) &&
+    (soort === "vervolg_fysiek" || soort === "vervolg_tel");
   const ingeplandDoor = (input.ingepland_door_id || "").trim() || null;
   const noteBase = input.notities?.trim() || "";
   const herplanNote =
@@ -178,8 +187,9 @@ export async function planAfspraak(
     notities: herplanNote,
     partner_aanwezig: isHuisbezoek ? input.partner_aanwezig : null,
     andere_offertes_gehad: isHuisbezoek ? input.andere_offertes_gehad : null,
+    // nieuw: alle mails open; vervolg: standaard dicht, tenzij herinnering opt-in
     bevestiging_verstuurd: !magMailen,
-    herinnering_verstuurd: !magMailen,
+    herinnering_verstuurd: magMailen ? false : !herinneringOptIn,
     opwarm_verstuurd: !magMailen,
   };
   if (ingeplandDoor) {
@@ -543,6 +553,21 @@ async function markWarmtefondsAfspraakIngepland(
   const { error } = await sb.from("projecten").update(patch).eq("id", project.id);
 
   if (error) return;
+
+  if (patch.financiering_status === "doorgestuurd_naar_edwin") {
+    try {
+      const { zorgWarmtefondsDoorgestuurdKoppeling } = await import(
+        "@/lib/warmtefonds-koppeling"
+      );
+      await zorgWarmtefondsDoorgestuurdKoppeling({
+        projectId: project.id,
+        van: prevFs,
+        naar: "doorgestuurd_naar_edwin",
+      });
+    } catch {
+      /* koppeling mag afspraak niet blokkeren */
+    }
+  }
 
   await logLeadEvent({
     leadId,

@@ -8,7 +8,10 @@ import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
-import { generateAvailableSlots } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { blockingBusySlots, hasBlockingOverlap } from "@/lib/afspraak-busy";
 import { syncLeadNaAfspraak } from "@/lib/afspraak-lead-status";
 import {
@@ -70,7 +73,9 @@ export async function GET(
       [y - 1, y, y + 1]
     );
     const van = dayKeyAmsterdam(new Date());
-    const tot = dayKeyAmsterdam(addDays(new Date(), 40));
+    const tot = dayKeyAmsterdam(
+      addDays(new Date(), HUISBEZOEK_PLAN_DAYS_AHEAD + 2)
+    );
     const [afgeblokt, vrijgaven] = await Promise.all([
       loadAfblokkingen(sb, {
         adviseurIds: [afspraak.adviseur_id],
@@ -92,6 +97,7 @@ export async function GET(
         filterSlotsByBeschikbaarheid(
           generateAvailableSlots({
             busy,
+            daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
           }).map((s) => ({
             start_at: s.start.toISOString(),
             end_at: s.end.toISOString(),
@@ -267,23 +273,13 @@ export async function POST(
             "niet_gekwalificeerd",
           ]);
           if (leadRow && !protectedStatus.has(leadRow.status)) {
-            const upd = await sb
-              .from("leads")
-              .update({
-                status: "afspraak_afgezegd_klant",
-                terugbellen: false,
-                terugbel_notitie: null,
-              })
-              .eq("id", afspraak.lead_id);
-            if (
-              upd.error &&
-              (upd.error.message?.includes("terugbel") ||
-                upd.error.code === "42703")
-            ) {
-              await sb
-                .from("leads")
-                .update({ status: "afspraak_afgezegd_klant" })
-                .eq("id", afspraak.lead_id);
+            try {
+              const { activeerHerplanVoorBellen } = await import(
+                "@/lib/email/herplan-mail"
+              );
+              await activeerHerplanVoorBellen(sb, afspraak.lead_id as string);
+            } catch {
+              /* non-blocking */
             }
             try {
               const { queueLeadMetaCapi } = await import("@/lib/meta-capi");

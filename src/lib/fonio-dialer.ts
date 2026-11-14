@@ -21,9 +21,9 @@ const OPEN_CALL_STATUSES = ["ringing", "active"] as const;
 /** Safety-net: gesprekken langer dan dit → slot vrij (after-webhook faalt soms). */
 const STALE_CALL_MINUTES = 2;
 
+/** Kiezer staat uit. Bellen doen eigen mensen vanuit de belbak. */
 export function fonioDialerEnabled(): boolean {
-  const v = (process.env.FONIO_DIALER_ENABLED || "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  return false;
 }
 
 export function fonioDialerMaxConcurrent(): number {
@@ -403,20 +403,16 @@ export async function completeFonioCallForLead(
     return;
   }
 
-  const prev = Math.max(0, Number(lead.belpogingen) || 0);
-  const { belpogingenVandaagOf } = await import("@/lib/bel-queue");
-  const todayCount = belpogingenVandaagOf(lead) + 1;
+  const { buildGeenContactOutcomePatch } = await import("@/lib/bel-queue");
+  const gc = buildGeenContactOutcomePatch(lead);
   const door =
     (lead.laatst_gebeld_door || "").trim() ||
     (lead.bel_claimed_by || "").trim() ||
     (lead.beller_id || "").trim() ||
     null;
   const patch: Record<string, unknown> = {
-    status: "geen_contact",
-    belpogingen: prev + 1,
-    belpogingen_vandaag: todayCount,
+    ...gc.patch,
     laatst_gebeld_at: now,
-    terugbellen: false,
   };
   if (door) patch.laatst_gebeld_door = door;
   if (!lead.eerste_gebeld_at) patch.eerste_gebeld_at = now;

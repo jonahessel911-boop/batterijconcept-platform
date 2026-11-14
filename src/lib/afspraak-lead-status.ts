@@ -88,22 +88,10 @@ export async function syncLeadNaAfspraak(
     if ((count ?? 0) === 0) {
       // Echte nieuwe lead zonder afspraakgeschiedenis — status laten
     } else {
-      const nextStatus = "afspraak_afgezegd_klant";
-      let upd = await sb
-        .from("leads")
-        .update({
-          status: nextStatus,
-          terugbellen: false,
-          terugbel_notitie: null,
-        })
-        .eq("id", leadId);
-      if (
-        upd.error &&
-        (upd.error.code === "42703" ||
-          upd.error.message?.includes("terugbel"))
-      ) {
-        await sb.from("leads").update({ status: nextStatus }).eq("id", leadId);
-      }
+      const { activeerHerplanVoorBellen } = await import(
+        "@/lib/email/herplan-mail"
+      );
+      await activeerHerplanVoorBellen(sb, leadId);
       const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
       queueLeadMetaCapi(leadId);
       return;

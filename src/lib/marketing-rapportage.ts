@@ -29,6 +29,15 @@ export type MarketingMetrics = {
   omzet: number;
   /** Cost per lead = spend / leads */
   cpl: number | null;
+  /**
+   * Lead → afspraak: van de CRM-leads die in deze slice binnenkwamen,
+   * het aandeel met een huisbezoek (niet geannuleerd). Procent, 1 decimaal.
+   */
+  leadToAppt: number | null;
+  /** Noemer van leadToAppt (CRM-leads in de slice). */
+  cohortLeads: number;
+  /** Teller van leadToAppt. */
+  appointedLeads: number;
   /** Cost per appointment = spend / afspraken */
   cpa: number | null;
   /** Cost per deal (CAC) = spend / deals */
@@ -160,8 +169,9 @@ export type MarketingRapportage = {
   /** Zelfde week-/maandreeks als totalen, per bron. */
   bySource: MarketingSourceSlice[];
   metaConfigured: boolean;
-  /** TikTok Ads API nog niet gekoppeld — spend blijft 0 tot sync live is */
+  /** true zodra een TikTok Ads-token is opgeslagen. */
   tiktokConfigured: boolean;
+  tiktokError?: string | null;
   lastSyncAt: string | null;
 };
 
@@ -211,6 +221,8 @@ export type MarketingMetaRow = {
   spend: number;
   /** Meta Insights lead-count (API); null/undefined = nog niet gesync. */
   leads?: number | null;
+  /** Ontbreekt = Meta. TikTok-rijen komen uit de Ads-rapportage. */
+  source?: "Meta" | "TikTok";
 };
 
 export function adKeyFromLead(l: { ad_name?: string | null }): string {
@@ -318,6 +330,7 @@ export function resolveCampaignKey(
  */
 function mergeAccInto(target: Acc, from: Acc): void {
   for (const id of from.leadIds) target.leadIds.add(id);
+  for (const id of from.cohortLeadIds) target.cohortLeadIds.add(id);
   target.spend += from.spend;
   target.apiLeads += from.apiLeads;
   target.afspraken += from.afspraken;
@@ -356,6 +369,7 @@ function collapseZeroSpendIntoSiblings(
 
     const t = campMap.get(targetKey)!;
     for (const id of acc.leadIds) t.leadIds.add(id);
+    for (const id of acc.cohortLeadIds) t.cohortLeadIds.add(id);
     t.apiLeads += acc.apiLeads;
     t.afspraken += acc.afspraken;
     t.deals += acc.deals;
@@ -411,12 +425,19 @@ export function defaultMarketingRange(now = new Date()): {
   return { startYmd: startMonday, endYmd: today };
 }
 
+function leadToApptPct(appointed: number, cohort: number): number | null {
+  if (cohort <= 0) return null;
+  return Math.round((appointed / cohort) * 1000) / 10;
+}
+
 function finalizeMetrics(m: {
   spend: number;
   leads: number;
   afspraken: number;
   deals: number;
   omzet: number;
+  cohortLeads?: number;
+  appointedLeads?: number;
 }): MarketingMetrics {
   const spend = round2(m.spend);
   const omzet = round2(m.omzet);
@@ -426,6 +447,8 @@ function finalizeMetrics(m: {
   const rpa = safeDiv(omzet, m.afspraken);
   const roas = safeDiv(omzet, spend);
   const roi = spend > 0 ? (omzet - spend) / spend : null;
+  const cohortLeads = m.cohortLeads ?? 0;
+  const appointedLeads = m.appointedLeads ?? 0;
   return {
     spend,
     leads: m.leads,
@@ -433,6 +456,9 @@ function finalizeMetrics(m: {
     deals: m.deals,
     omzet,
     cpl: cpl != null ? round2(cpl) : null,
+    leadToAppt: leadToApptPct(appointedLeads, cohortLeads),
+    cohortLeads,
+    appointedLeads,
     cpa: cpa != null ? round2(cpa) : null,
     cac: cac != null ? round2(cac) : null,
     rpa: rpa != null ? round2(rpa) : null,
@@ -456,6 +482,8 @@ type Acc = {
   /** Meta (en later TikTok) leads rechtstreeks uit ads API. */
   apiLeads: number;
   afspraken: number;
+  /** CRM-leads die in deze slice binnenkwamen (ook Meta, los van de Leads-kolom). */
+  cohortLeadIds: Set<string>;
   deals: number;
   omzet: number;
 };
@@ -466,18 +494,25 @@ function newAcc(): Acc {
     leadIds: new Set(),
     apiLeads: 0,
     afspraken: 0,
+    cohortLeadIds: new Set(),
     deals: 0,
     omzet: 0,
   };
 }
 
-function accToMetrics(a: Acc): MarketingMetrics {
+function accToMetrics(a: Acc, appointed: Set<string>): MarketingMetrics {
+  let appointedLeads = 0;
+  for (const id of a.cohortLeadIds) {
+    if (appointed.has(id)) appointedLeads += 1;
+  }
   return finalizeMetrics({
     spend: a.spend,
     leads: a.apiLeads + a.leadIds.size,
     afspraken: a.afspraken,
     deals: a.deals,
     omzet: a.omzet,
+    cohortLeads: a.cohortLeadIds.size,
+    appointedLeads,
   });
 }
 
@@ -546,6 +581,8 @@ function monthsFromSeries(
       const afspraken = sorted.reduce((s, w) => s + w.afspraken, 0);
       const deals = sorted.reduce((s, w) => s + w.deals, 0);
       const omzet = sorted.reduce((s, w) => s + w.omzet, 0);
+      const cohortLeads = sorted.reduce((s, w) => s + w.cohortLeads, 0);
+      const appointedLeads = sorted.reduce((s, w) => s + w.appointedLeads, 0);
       const startYmdM = sorted[sorted.length - 1]?.startYmd || startYmd;
       const endYmdM = sorted[0]?.endYmd || endYmd;
       return {
@@ -553,7 +590,15 @@ function monthsFromSeries(
         label: monthLabel(monthKey),
         startYmd: startYmdM,
         endYmd: endYmdM,
-        ...finalizeMetrics({ spend, leads, afspraken, deals, omzet }),
+        ...finalizeMetrics({
+          spend,
+          leads,
+          afspraken,
+          deals,
+          omzet,
+          cohortLeads,
+          appointedLeads,
+        }),
         weeks: sorted,
       };
     });
@@ -579,6 +624,8 @@ function sumMetrics(rows: MarketingMetrics[]): MarketingMetrics {
     afspraken: rows.reduce((s, r) => s + r.afspraken, 0),
     deals: rows.reduce((s, r) => s + r.deals, 0),
     omzet: rows.reduce((s, r) => s + r.omzet, 0),
+    cohortLeads: rows.reduce((s, r) => s + r.cohortLeads, 0),
+    appointedLeads: rows.reduce((s, r) => s + r.appointedLeads, 0),
   });
 }
 
@@ -668,6 +715,7 @@ export function buildMarketingRapportage(opts: {
   metaLeadsFromApi?: boolean;
   tiktokConfigured?: boolean;
   tiktokSpend?: number;
+  tiktokError?: string | null;
   lastSyncAt?: string | null;
 }): MarketingRapportage {
   const { startYmd, endYmd } = opts;
@@ -791,7 +839,7 @@ export function buildMarketingRapportage(opts: {
     );
     const spend = Number(m.spend) || 0;
     const apiLeads = Math.max(0, Math.round(Number(m.leads) || 0));
-    const source = "Meta";
+    const source = m.source === "TikTok" ? "TikTok" : "Meta";
     if (m.level === "campaign") {
       weekAcc.get(wk)!.spend += spend;
       weekAcc.get(wk)!.apiLeads += apiLeads;
@@ -834,16 +882,26 @@ export function buildMarketingRapportage(opts: {
     const ad = leadAd.get(l.id) || "Onbekend";
     const source = leadSource.get(l.id) || "Onbekend";
     sourceNames.add(source);
-    if (source === "Meta" && skipCrmMetaLeads) {
-      continue;
-    }
-    weekAcc.get(wk)!.leadIds.add(l.id);
-    ensureCamp(wk, source, camp).leadIds.add(l.id);
-    ensureCampAd(wk, source, camp, ad).leadIds.add(l.id);
-    ensureDay(ymd)?.leadIds.add(l.id);
-    ensureSourceAcc(weekSourceAcc.get(wk)!, source).leadIds.add(l.id);
+    const skipLeadCount = source === "Meta" && skipCrmMetaLeads;
+    const addCohort = (acc: Acc) => {
+      acc.cohortLeadIds.add(l.id);
+      if (!skipLeadCount) acc.leadIds.add(l.id);
+    };
+    addCohort(weekAcc.get(wk)!);
+    addCohort(ensureCamp(wk, source, camp));
+    addCohort(ensureCampAd(wk, source, camp, ad));
+    const day = ensureDay(ymd);
+    if (day) addCohort(day);
+    addCohort(ensureSourceAcc(weekSourceAcc.get(wk)!, source));
     const dsm = daySourceAcc.get(ymd);
-    if (dsm) ensureSourceAcc(dsm, source).leadIds.add(l.id);
+    if (dsm) addCohort(ensureSourceAcc(dsm, source));
+  }
+
+  const appointedLeadIds = new Set<string>();
+  for (const a of opts.afspraken || []) {
+    if (a.status === "geannuleerd") continue;
+    if (!isNieuwHuisbezoek(a.soort)) continue;
+    if (a.lead_id) appointedLeadIds.add(a.lead_id);
   }
 
   // Afspraken: nieuwe huisbezoeken op created_at (wanneer ingepland)
@@ -923,7 +981,7 @@ export function buildMarketingRapportage(opts: {
             .map(([adKey, adAcc]) => ({
               key: adKey,
               label: adKey,
-              ...accToMetrics(adAcc),
+              ...accToMetrics(adAcc, appointedLeadIds),
             }))
             .filter(
               (ad) =>
@@ -938,7 +996,7 @@ export function buildMarketingRapportage(opts: {
           label: campKey,
           source,
           ads,
-          ...accToMetrics(a),
+          ...accToMetrics(a, appointedLeadIds),
         };
         if (
           row.spend > 0 ||
@@ -962,7 +1020,7 @@ export function buildMarketingRapportage(opts: {
         label: format(noonAmsterdamFromYmd(ymd), "EEE d MMM", { locale: nl }),
         startYmd: ymd,
         endYmd: ymd,
-        ...accToMetrics(da),
+        ...accToMetrics(da, appointedLeadIds),
       });
     }
     return {
@@ -970,7 +1028,7 @@ export function buildMarketingRapportage(opts: {
       label: w.label,
       startYmd: w.startYmd,
       endYmd: w.endYmd,
-      ...accToMetrics(acc),
+      ...accToMetrics(acc, appointedLeadIds),
       campaigns: sortedCampaigns,
       channels,
       days,
@@ -985,6 +1043,8 @@ export function buildMarketingRapportage(opts: {
     afspraken: series.reduce((s, w) => s + w.afspraken, 0),
     deals: series.reduce((s, w) => s + w.deals, 0),
     omzet: series.reduce((s, w) => s + w.omzet, 0),
+    cohortLeads: series.reduce((s, w) => s + w.cohortLeads, 0),
+    appointedLeads: series.reduce((s, w) => s + w.appointedLeads, 0),
   });
 
   const periodLabel =
@@ -1025,7 +1085,7 @@ export function buildMarketingRapportage(opts: {
             }),
             startYmd: ymd,
             endYmd: ymd,
-            ...accToMetrics(da),
+            ...accToMetrics(da, appointedLeadIds),
           });
         }
         const overallWeek = series[wi];
@@ -1037,7 +1097,7 @@ export function buildMarketingRapportage(opts: {
           label: w.label,
           startYmd: w.startYmd,
           endYmd: w.endYmd,
-          ...accToMetrics(acc),
+          ...accToMetrics(acc, appointedLeadIds),
           campaigns: sourceCamps,
           channels: buildChannelsFromCampaigns(sourceCamps),
           days,
@@ -1063,6 +1123,8 @@ export function buildMarketingRapportage(opts: {
         afspraken: srcSeries.reduce((s, w) => s + w.afspraken, 0),
         deals: srcSeries.reduce((s, w) => s + w.deals, 0),
         omzet: srcSeries.reduce((s, w) => s + w.omzet, 0),
+        cohortLeads: srcSeries.reduce((s, w) => s + w.cohortLeads, 0),
+        appointedLeads: srcSeries.reduce((s, w) => s + w.appointedLeads, 0),
       });
       const meta = sourceMeta(source, cfgFlags);
       return {
@@ -1100,6 +1162,7 @@ export function buildMarketingRapportage(opts: {
     bySource,
     metaConfigured: cfgFlags.metaConfigured,
     tiktokConfigured: cfgFlags.tiktokConfigured,
+    tiktokError: opts.tiktokError ?? null,
     lastSyncAt: opts.lastSyncAt ?? null,
   };
 }

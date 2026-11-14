@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
 import {
   CONVERSIE_PERIOD_LABELS,
@@ -19,6 +19,11 @@ import { LiveRapportagePanel } from "./LiveRapportagePanel";
 import { CeoTotaalPanel } from "./CeoTotaalPanel";
 import { ManagerInsightsPanel } from "./ManagerInsightsPanel";
 import { useCrmSession } from "@/hooks/useCrmSession";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 type ViewMode =
   | "ceo"
@@ -49,7 +54,9 @@ const ALL_VIEWS: { id: ViewMode; label: string }[] = [
 
 export function RapportagePanel() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { rol } = useCrmSession();
+  const viewFromQuery = useRef(false);
   const views = useMemo(
     () =>
       rol === "beller"
@@ -57,15 +64,24 @@ export function RapportagePanel() {
         : ALL_VIEWS,
     [rol]
   );
-  const [view, setView] = useState<ViewMode>(
-    rol === "beller" ? "bel_conversie" : "ceo"
-  );
+  const [view, setView] = useState<ViewMode>(() => {
+    if (searchParams.get("view") === "marketing") return "marketing";
+    return rol === "beller" ? "bel_conversie" : "ceo";
+  });
 
   useEffect(() => {
     if (rol === "beller" && view !== "bel_conversie") {
       setView("bel_conversie");
     }
   }, [rol, view]);
+
+  useEffect(() => {
+    if (viewFromQuery.current || !rol || rol === "beller") return;
+    if (searchParams.get("view") === "marketing") {
+      viewFromQuery.current = true;
+      setView("marketing");
+    }
+  }, [rol, searchParams]);
   const [geo, setGeo] = useState<GeoRegionMetrics[]>([]);
   const [geoPeriod, setGeoPeriod] = useState<ConversiePeriod>("all_time");
   const [geoPeriodLabel, setGeoPeriodLabel] = useState(
@@ -145,43 +161,44 @@ export function RapportagePanel() {
                         : "Leads per provincie · filter op binnenkomstdatum.";
 
   return (
-    <div className="px-4 py-4 sm:px-6 sm:py-5">
-      <div className="border border-line bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+    <TooltipProvider>
+    <div className="min-w-0 px-3 py-4 sm:px-6 sm:py-5">
+      <div className="overflow-hidden rounded-xl border border-line bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5">
           <div>
             <p className="font-display text-base font-semibold text-ink">
               {title}
             </p>
             <p className="mt-0.5 text-sm text-muted">{subtitle}</p>
           </div>
-          <div className="flex shrink-0 flex-wrap gap-1 border border-line p-0.5">
-            {views.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setView(id)}
-                className={[
-                  "px-3 py-1.5 text-xs font-semibold transition",
-                  view === id
-                    ? "bg-green text-white"
-                    : "bg-white text-muted hover:bg-wash",
-                ].join(" ")}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+            <Tabs
+              value={view}
+              onValueChange={(id) => setView(id as ViewMode)}
+              className="min-w-0"
+            >
+              <TabsList>
+                {views.map(({ id, label }) => (
+                  <TabsTrigger key={id} value={id}>
+                    {label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
             {rol !== "beller" ? (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => router.push("/?tab=weekmeeting")}
-                className="px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-wash"
                 title="Naar Weekmeeting"
               >
                 Weekmeeting
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>
+        <Separator />
 
         {error ? (
           <p className="border-b border-line bg-[#FFF0E6] px-4 py-2 text-sm text-[#C45A12]">
@@ -230,7 +247,10 @@ export function RapportagePanel() {
             <FinancialPanel />
           </div>
         ) : mapLoading ? (
-          <p className="px-4 py-10 text-center text-sm text-muted">Laden…</p>
+          <div className="space-y-3 px-4 py-8">
+            <Skeleton className="mx-auto h-4 w-40" />
+            <Skeleton className="h-72 w-full rounded-xl" />
+          </div>
         ) : (
           <RapportageMap
             regions={geo}
@@ -241,5 +261,6 @@ export function RapportagePanel() {
         )}
       </div>
     </div>
+    </TooltipProvider>
   );
 }

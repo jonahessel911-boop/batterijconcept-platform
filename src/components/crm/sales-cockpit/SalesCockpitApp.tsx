@@ -13,16 +13,16 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { KpiStat } from "@/components/ui/kpi-stat";
-import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Avatar, AvatarFallback } from "@/components/crm/sales-cockpit/ui/avatar";
+import { Badge } from "@/components/crm/sales-cockpit/ui/badge";
+import { Button } from "@/components/crm/sales-cockpit/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/crm/sales-cockpit/ui/card";
+import { KpiStat } from "@/components/crm/sales-cockpit/ui/kpi-stat";
+import { Progress } from "@/components/crm/sales-cockpit/ui/progress";
+import { Separator } from "@/components/crm/sales-cockpit/ui/separator";
+import { Skeleton } from "@/components/crm/sales-cockpit/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/crm/sales-cockpit/ui/tabs";
+import { TooltipProvider } from "@/components/crm/sales-cockpit/ui/tooltip";
 import { currentWeekKey, shiftWeek } from "@/lib/sales-cockpit/weeks";
 
 type Bundle = Record<string, any>;

@@ -8,6 +8,19 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const ADVISEUR_FOTO_BUCKET = "adviseur-fotos";
 const MAX_BYTES = 5 * 1024 * 1024;
 
+/** Client-safe public URL (geen Supabase-client nodig). */
+export function adviseurProfielfotoPublicUrl(
+  path: string | null | undefined
+): string | null {
+  const p = path?.trim();
+  if (!p) return null;
+  const base = (
+    process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+  ).replace(/\/$/, "");
+  if (!base) return null;
+  return `${base}/storage/v1/object/public/${ADVISEUR_FOTO_BUCKET}/${p.replace(/^\//, "")}`;
+}
+
 export function publicProfielfotoUrl(
   sb: SupabaseClient,
   path: string | null | undefined

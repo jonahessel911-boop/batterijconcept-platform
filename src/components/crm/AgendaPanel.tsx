@@ -36,6 +36,7 @@ import {
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
@@ -563,6 +564,52 @@ function FooterAction({
   );
 }
 
+function BeslissersAanwezig({
+  value,
+  busy,
+  onChoose,
+}: {
+  value: boolean | null;
+  busy: boolean;
+  onChoose: (aanwezig: boolean) => void;
+}) {
+  const idle =
+    "min-h-11 border border-line bg-white px-3 py-2.5 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60";
+  return (
+    <div>
+      <p className="text-sm font-medium text-ink">
+        Waren alle beslissers aanwezig?
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onChoose(true)}
+          className={
+            value === true
+              ? "min-h-11 bg-[#0D5C32] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              : idle
+          }
+        >
+          Ja
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onChoose(false)}
+          className={
+            value === false
+              ? "min-h-11 bg-[#1A4A6E] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              : idle
+          }
+        >
+          Nee
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AfspraakDetail({
   afspraak,
   allAfspraken,
@@ -605,6 +652,7 @@ export function AfspraakDetail({
   const [annuleerNotitie, setAnnuleerNotitie] = useState("");
   const [vervolgAt, setVervolgAt] = useState("");
   const [vervolgNotitie, setVervolgNotitie] = useState("");
+  const [vervolgHerinneringMail, setVervolgHerinneringMail] = useState(false);
   const [uitkomst, setUitkomst] = useState<LeadStatus | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -614,6 +662,11 @@ export function AfspraakDetail({
   const [adviseurOptiesLoading, setAdviseurOptiesLoading] = useState(false);
   const [saleOfferte, setSaleOfferte] = useState<Offerte | null>(null);
   const [saleOfferteLoading, setSaleOfferteLoading] = useState(false);
+  /** Verse leadstatus + of order al via Offertes naar BO is. */
+  const [freshLeadStatus, setFreshLeadStatus] = useState<string | null>(
+    leadStatusProp || afspraak.leads?.status || null
+  );
+  const [alDoorgezetBo, setAlDoorgezetBo] = useState(false);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
   const [sessionAdviseurId, setSessionAdviseurId] = useState<string | null>(
     null
@@ -637,6 +690,10 @@ export function AfspraakDetail({
   const [notitieDraft, setNotitieDraft] = useState("");
   const [notitieSaving, setNotitieSaving] = useState(false);
   const [notitieSavedMsg, setNotitieSavedMsg] = useState<string | null>(null);
+  const [beslissersAanwezig, setBeslissersAanwezig] = useState<boolean | null>(
+    afspraak.partner_afwezig_gemeld_at ? false : null
+  );
+  const [beslissersBusy, setBeslissersBusy] = useState(false);
   const actionSectionRef = useRef<HTMLElement | null>(null);
   const saleFormRef = useRef<HTMLDivElement | null>(null);
   const notitieTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -653,14 +710,17 @@ export function AfspraakDetail({
   const adres = mapsQueryFromLead(lead);
   const cancelled = current.status === "geannuleerd";
   const leadStatusNow =
-    leadStatusProp || current.leads?.status || null;
-  const needsAction = needsVervolgPunt(
+    freshLeadStatus || leadStatusProp || current.leads?.status || null;
+  const needsActionRaw = needsVervolgPunt(
     current,
     allAfspraken,
     new Date(),
     leadStatusNow
   );
-  const dealNogAfboeken = leadStatusNow === "deal" && needsAction;
+  // Al via Offertes doorgezet → geen agenda-afboek meer (voorkomt sale→vervolg).
+  const needsAction = needsActionRaw && !alDoorgezetBo;
+  const dealNogAfboeken =
+    leadStatusNow === "deal" && needsActionRaw && !alDoorgezetBo;
   const actionBadgeLabel = dealNogAfboeken
     ? "Uitkomst nodig"
     : "Vervolg punt nodig";
@@ -707,13 +767,17 @@ export function AfspraakDetail({
     setAnnuleerNotitie("");
     setVervolgAt("");
     setVervolgNotitie("");
+    setVervolgHerinneringMail(false);
     setUitkomst("");
     setSaleOfferte(null);
+    setFreshLeadStatus(leadStatusProp || afspraak.leads?.status || null);
+    setAlDoorgezetBo(false);
     setWfProjectId(null);
     setWfAangevraagdAt(null);
     setEditingNotitie(false);
     setNotitieDraft(afspraak.notities?.trim() || "");
     setNotitieSavedMsg(null);
+    setBeslissersAanwezig(afspraak.partner_afwezig_gemeld_at ? false : null);
     setBoValues({
       aanbetalingModus: "restant",
       aanbetalingHandmatig: "",
@@ -725,6 +789,43 @@ export function AfspraakDetail({
       energieContractType: "",
       energieContractEinddatum: "",
     });
+  }, [afspraak]);
+
+  useEffect(() => {
+    if (!afspraak.lead_id) return;
+    if (!afspraakBlokkeertAgenda(afspraak.soort)) return;
+    let cancelled = false;
+    void fetch(`/api/leads/${afspraak.lead_id}/events`)
+      .then((r) => r.json())
+      .then(
+        (data: {
+          events?: {
+            meta?: {
+              beslissers_aanwezig?: boolean;
+              partner_afwezig?: boolean;
+              afspraak_id?: string;
+            };
+          }[];
+        }) => {
+          if (cancelled) return;
+          const hit = (data.events || []).find(
+            (event) =>
+              event.meta?.afspraak_id === afspraak.id &&
+              (typeof event.meta.beslissers_aanwezig === "boolean" ||
+                event.meta.partner_afwezig === true)
+          );
+          if (!hit?.meta) return;
+          if (typeof hit.meta.beslissers_aanwezig === "boolean") {
+            setBeslissersAanwezig(hit.meta.beslissers_aanwezig);
+          } else if (hit.meta.partner_afwezig === true) {
+            setBeslissersAanwezig(false);
+          }
+        }
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [afspraak]);
 
   useEffect(() => {
@@ -796,6 +897,52 @@ export function AfspraakDetail({
       cancelled = true;
     };
   }, []);
+
+  // Verse leadstatus + of sale al via Offertes naar BO is (stale join blokkeert afboek niet genoeg).
+  useEffect(() => {
+    if (!current.lead_id) return;
+    let cancelled = false;
+    queueMicrotask(async () => {
+      try {
+        const sb = getSupabaseBrowser();
+        const [{ data: lead }, { data: offs }, { data: projs }] =
+          await Promise.all([
+            sb
+              .from("leads")
+              .select("status")
+              .eq("id", current.lead_id)
+              .maybeSingle(),
+            sb
+              .from("offertes")
+              .select("id, actie_required, status")
+              .eq("lead_id", current.lead_id)
+              .eq("status", "ondertekend")
+              .limit(5),
+            sb
+              .from("projecten")
+              .select("id, status")
+              .eq("lead_id", current.lead_id)
+              .limit(5),
+          ]);
+        if (cancelled) return;
+        const st = (lead?.status as string | null) || null;
+        setFreshLeadStatus(st);
+        const saleSt =
+          st === "sale_financiering" || st === "sale_eigen_middelen";
+        const offerteDoor =
+          (offs || []).some((o) => o.actie_required === false);
+        const heeftProject = (projs || []).some(
+          (p) => String(p.status || "") !== "annulering"
+        );
+        setAlDoorgezetBo(saleSt || offerteDoor || heeftProject);
+      } catch {
+        /* ignore — API blokkeert alsnog */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current.lead_id, current.id]);
 
   useEffect(() => {
     if (!isSaleUitkomst(uitkomst) || !current.lead_id) {
@@ -1110,6 +1257,32 @@ export function AfspraakDetail({
     setEditingNotitie(true);
   }
 
+  async function kiesBeslissersAanwezig(aanwezig: boolean) {
+    if (beslissersAanwezig === aanwezig || beslissersBusy) return;
+    setBeslissersBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: current.id,
+          action: "beslissers_aanwezig",
+          aanwezig,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Opslaan mislukt");
+      }
+      setBeslissersAanwezig(aanwezig);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setBeslissersBusy(false);
+    }
+  }
+
   async function saveNotitie(nextRaw: string) {
     const next = nextRaw.trim() || null;
     const prev = current.notities?.trim() || null;
@@ -1158,8 +1331,19 @@ export function AfspraakDetail({
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         const list = ((data.adviseurs as Adviseur[]) || [])
-          .filter((a) => a.actief !== false)
-          .sort((a, b) => a.naam.localeCompare(b.naam, "nl"));
+          .filter(
+            (a) =>
+              a.actief !== false &&
+              !isAdminAdviseur(a) &&
+              isAgendaAdviseur(a)
+          )
+          .sort((a, b) => {
+            // SPARE onderaan — duidelijk als placeholder
+            const aSpare = a.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            const bSpare = b.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            if (aSpare !== bSpare) return aSpare - bSpare;
+            return a.naam.localeCompare(b.naam, "nl");
+          });
         setAdviseurOpties(list);
         if (!adviseurKeuze) {
           const other = list.find((a) => a.id !== current.adviseur_id);
@@ -1377,6 +1561,11 @@ export function AfspraakDetail({
     setError(null);
     setOkMsg(null);
     try {
+      if (alDoorgezetBo) {
+        throw new Error(
+          "Deze order is al als sale doorgezet naar de backoffice via Offertes. Afboeken vanuit de agenda kan niet meer."
+        );
+      }
       if (!uitkomst) throw new Error("Kies een uitkomst");
       const isSale = isSaleUitkomst(uitkomst);
       const noteText = vervolgNotitie.trim();
@@ -1392,6 +1581,11 @@ export function AfspraakDetail({
         if (!saleOfferte) {
           throw new Error(
             "Geen ondertekende offerte gevonden voor deze lead — rond eerst de offerte af."
+          );
+        }
+        if (saleOfferte.actie_required === false) {
+          throw new Error(
+            "Deze offerte is al doorgezet naar de backoffice. Afboeken vanuit de agenda kan niet meer."
           );
         }
         const { validateBackofficeDoorzettenForm } = await import(
@@ -1485,6 +1679,11 @@ export function AfspraakDetail({
             notitie: noteText,
             // datetime-local als Amsterdam-lokaal (niet via Date→ISO offset)
             ...(needsVervolg && vervolgAt ? { vervolg_at: vervolgAt } : {}),
+            ...((uitkomst === "vervolg_fysiek" ||
+              uitkomst === "vervolg_tel") &&
+            vervolgHerinneringMail
+              ? { herinnering_mail: true }
+              : {}),
           }),
         });
         const data = (await res.json().catch(() => ({}))) as {
@@ -1509,6 +1708,7 @@ export function AfspraakDetail({
 
       setVervolgAt("");
       setVervolgNotitie("");
+      setVervolgHerinneringMail(false);
       setUitkomst("");
       setSaleOfferte(null);
       const plannedOpbel = isSale ? boValues.opbelMoment : null;
@@ -1672,6 +1872,19 @@ export function AfspraakDetail({
             </section>
           )}
 
+          {alDoorgezetBo && mode === "view" && !needsAction ? (
+            <section className="rounded-2xl border border-green/30 bg-green-soft/40 p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-green-dark">
+                Sale doorgezet
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Deze order is al via Offertes als sale naar de backoffice
+                gezet. Afboeken of een vervolg plannen vanuit de agenda kan
+                niet meer.
+              </p>
+            </section>
+          ) : null}
+
           {needsAction && mode === "view" && (
             <section
               ref={actionSectionRef}
@@ -1681,6 +1894,18 @@ export function AfspraakDetail({
                 {actionTitle}
               </p>
               <p className="mt-1 text-sm text-muted">{actionIntro}</p>
+
+              {afspraakBlokkeertAgenda(current.soort) ? (
+                <div className="mt-4">
+                  <BeslissersAanwezig
+                    value={beslissersAanwezig}
+                    busy={beslissersBusy || busy}
+                    onChoose={(aanwezig) =>
+                      void kiesBeslissersAanwezig(aanwezig)
+                    }
+                  />
+                </div>
+              ) : null}
 
               <form
                 onSubmit={(e) => void planVervolgPunt(e)}
@@ -1695,6 +1920,12 @@ export function AfspraakDetail({
                     onChange={(e) => {
                       const next = (e.target.value as LeadStatus) || "";
                       setUitkomst(next);
+                      if (
+                        next !== "vervolg_fysiek" &&
+                        next !== "vervolg_tel"
+                      ) {
+                        setVervolgHerinneringMail(false);
+                      }
                       if (next === "sale_eigen_middelen") {
                         setBoValues((prev) => ({
                           ...prev,
@@ -1803,6 +2034,29 @@ export function AfspraakDetail({
                         />
                       </label>
                     )}
+                    {(uitkomst === "vervolg_fysiek" ||
+                      uitkomst === "vervolg_tel") && (
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line bg-[#FAFBFA] px-3 py-2.5 text-sm text-ink">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={vervolgHerinneringMail}
+                          onChange={(e) =>
+                            setVervolgHerinneringMail(e.target.checked)
+                          }
+                          disabled={busy}
+                        />
+                        <span>
+                          <span className="font-semibold">
+                            Herinneringsmail 1 dag van tevoren
+                          </span>
+                          <span className="mt-0.5 block text-[12px] text-muted">
+                            Alleen als je dit aanzet krijgt de klant een mail
+                            ~24 uur vóór het vervolg. Geen bevestigingsmail.
+                          </span>
+                        </span>
+                      </label>
+                    )}
                     <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
                       Notitie
                       <textarea
@@ -1845,6 +2099,19 @@ export function AfspraakDetail({
           )}
 
           {magVoiceUpload && !needsAction ? voiceUploadPanel : null}
+
+          {!needsAction &&
+          mode === "view" &&
+          !cancelled &&
+          afspraakBlokkeertAgenda(current.soort) ? (
+            <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
+              <BeslissersAanwezig
+                value={beslissersAanwezig}
+                busy={beslissersBusy || busy}
+                onChoose={(aanwezig) => void kiesBeslissersAanwezig(aanwezig)}
+              />
+            </section>
+          ) : null}
 
           <section className="rounded-2xl border border-line bg-white p-5 shadow-[0_1px_2px_rgba(13,92,50,0.04)]">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
@@ -2534,9 +2801,14 @@ export function AgendaPanel({
       }
       if (!adv.error) {
         setAdviseurs(adv.adviseurs || []);
-        const planAdviseurs = ((adv.adviseurs || []) as Adviseur[]).filter(
-          (x) => !isAdminAdviseur(x)
-        );
+        const planAdviseurs = ((adv.adviseurs || []) as Adviseur[])
+          .filter((x) => !isAdminAdviseur(x) && isAgendaAdviseur(x))
+          .sort((a, b) => {
+            const aSpare = a.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            const bSpare = b.naam.trim().toLowerCase() === "spare" ? 1 : 0;
+            if (aSpare !== bSpare) return aSpare - bSpare;
+            return a.naam.localeCompare(b.naam, "nl");
+          });
         setAdviseurId((prev) => {
           if (defaultAdviseurId) return defaultAdviseurId;
           if (prev && planAdviseurs.some((x) => x.id === prev)) return prev;
@@ -2981,7 +3253,12 @@ export function AgendaPanel({
         >
           <option value="">Kies adviseur…</option>
           {adviseurs
-            .filter((a) => a.actief !== false && !isAdminAdviseur(a))
+            .filter(
+              (a) =>
+                a.actief !== false &&
+                !isAdminAdviseur(a) &&
+                isAgendaAdviseur(a)
+            )
             .map((a) => (
             <option key={a.id} value={a.id}>
               {a.naam}
@@ -3044,6 +3321,10 @@ export function AgendaPanel({
           }
           startAdresLabel={
             adviseurs.find((a) => a.id === adviseurId)?.naam || null
+          }
+          startVanafHuisMaandag={
+            adviseurs.find((a) => a.id === adviseurId)
+              ?.start_vanaf_huis_maandag
           }
         />
       )}

@@ -2,14 +2,14 @@
 
 import type { ReactNode } from "react";
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/crm/sales-cockpit/ui/badge";
+import { Card, CardContent } from "@/components/crm/sales-cockpit/ui/card";
+import { Skeleton } from "@/components/crm/sales-cockpit/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/components/crm/sales-cockpit/ui/tooltip";
 import { cn } from "@/lib/cn";
 
 export function KpiStat({

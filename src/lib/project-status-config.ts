@@ -17,15 +17,61 @@ export type ProjectStatusFase =
   | "overig";
 
 export const PROJECT_STATUS_FASE_LABEL: Record<ProjectStatusFase, string> = {
-  voorbereiding: "Voorbereiding",
+  voorbereiding: "Opstarten",
   financiering: "Financiering",
   schouw: "Schouw",
-  eindafrekening: "Eindafrekening",
-  uitvoering: "Uitvoering",
+  /** WF: declaratie ná goedkeuring, vóór schouw. EM: restfactuur ná schouw. */
+  eindafrekening: "WF declaratie",
+  uitvoering: "Installatie",
   afronding: "Afronding",
   nazorg: "Nazorg",
-  overig: "Overig",
+  overig: "Annuleringen",
 };
+
+/** Fase-label per betaalwijze (EM noemt eindafrekening geen WF-declaratie). */
+export function faseLabelFor(
+  fase: ProjectStatusFase,
+  betaalwijze?: Betaalwijze | null
+): string {
+  if (fase === "eindafrekening" && betaalwijze === "eigen_middelen") {
+    return "Restfactuur";
+  }
+  return PROJECT_STATUS_FASE_LABEL[fase];
+}
+
+/** Kanban Overzicht (gemengd): WF-declaratie vóór schouw. */
+export const PROJECT_STATUS_FASE_ORDER: ProjectStatusFase[] = [
+  "voorbereiding",
+  "financiering",
+  "eindafrekening",
+  "schouw",
+  "uitvoering",
+  "afronding",
+  "nazorg",
+  "overig",
+];
+
+/**
+ * Fasevolgorde per betaalwijze.
+ * EM: Opstarten → Schouw → Restfactuur (slaat financiering/WF-declaratie-positie over).
+ * WF: Opstarten → Financiering → WF-declaratie → Schouw → …
+ */
+export function faseOrderFor(
+  betaalwijze?: Betaalwijze | null
+): ProjectStatusFase[] {
+  if (betaalwijze === "eigen_middelen") {
+    return [
+      "voorbereiding",
+      "schouw",
+      "eindafrekening",
+      "uitvoering",
+      "afronding",
+      "nazorg",
+      "overig",
+    ];
+  }
+  return PROJECT_STATUS_FASE_ORDER;
+}
 
 export type ProjectStatusKey =
   | "schouwweek_inplannen"
@@ -200,7 +246,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "restfactuur_verstuurd",
-    /** EM: Restfactuur verstuurd · WF: Factuur WF - Declaratie ingediend (labels.ts) */
+    /** EM: Restfactuur · WF: WF-declaratie (vóór/rond schouw) — labels.ts */
     label: "Restfactuur verstuurd",
     fase: "eindafrekening",
     scope: "beide",
@@ -223,13 +269,15 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   {
     key: "restfactuur_betaald",
     label: "Restfactuur betaald — installatie plannen",
-    fase: "eindafrekening",
+    // WF-weergave: "Declaratie WF betaald - installatie inplannen" (labels.ts)
+    // Fase uitvoering: dit is de brug naar installatie plannen, niet “eindafrekening”.
+    fase: "uitvoering",
     scope: "beide",
     inPipeline: true,
     /**
-     * Volledig betaald + schouwformulier → installatie inplannen
-     * (deadline = volgende werkdag). Daarna Purchasing automatisch
-     * (5 werkdagen vóór installatie).
+     * WF: schouw geweest + declaratie betaald → installatie inplannen
+     * op de eerstvolgende werkdag. Daarna, zodra de installatie gepland is,
+     * Purchasing “te bestellen” met besteldatum 5 werkdagen vóór installatie.
      */
     taak: {
       autoKeySuffix: "installatie",
@@ -313,7 +361,7 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     key: "hold_sales_actie",
     label: "HOLD SALES ACTIE",
     fase: "overig",
-    scope: "beide",
+    scope: "eigen_middelen",
     inPipeline: false,
     taak: null,
   },
@@ -343,16 +391,44 @@ export function statusAppliesToBetaalwijze(
   return def.scope === "beide" || def.scope === betaalwijze;
 }
 
-/** Lineaire pipeline voor een betaalwijze (zonder afgewezen/service/financiering). */
+/**
+ * Lineaire pipeline per betaalwijze (zonder afgewezen/service/financiering-track).
+ *
+ * WF: Opstarten → afwachten WF → WF-declaratie → Schouw → installatie…
+ * EM: Opstarten (afwachten aanbetaling) → Schouw → Restfactuur → installatie…
+ *     (slaat WF/financiering/declaratie-fase over)
+ */
 export function projectPipelineFor(
   betaalwijze: Betaalwijze
 ): ProjectStatusKey[] {
-  return PROJECT_STATUS_DEFS.filter(
-    (d) =>
-      d.inPipeline &&
-      d.fase !== "financiering" &&
-      statusAppliesToBetaalwijze(d, betaalwijze)
-  ).map((d) => d.key);
+  if (betaalwijze === "eigen_middelen") {
+    return [
+      "schouwweek_inplannen",
+      "schouwdag_ingepland",
+      "schouw_voltooid",
+      "restfactuur_verstuurd",
+      "restfactuur_betaald",
+      "materiaal_besteld",
+      "installatie_ingepland",
+      "installatie_voltooid",
+      "review_gevraagd",
+      "afgerond",
+    ];
+  }
+
+  return [
+    "schouwweek_inplannen",
+    "opstarten_voltooid_afwachten_wf",
+    "restfactuur_verstuurd",
+    "schouwdag_ingepland",
+    "schouw_voltooid",
+    "restfactuur_betaald",
+    "materiaal_besteld",
+    "installatie_ingepland",
+    "installatie_voltooid",
+    "review_gevraagd",
+    "afgerond",
+  ];
 }
 
 /**

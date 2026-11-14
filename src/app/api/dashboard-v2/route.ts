@@ -13,6 +13,8 @@ import {
   emptyDashboardV2Finance,
   parseDashboardV2Kpi,
   parseDashboardV2Period,
+  parseVandaagDagen,
+  resolveVandaagRange,
   storeWeeklyGoals,
   type DashboardV2Goals,
   type DashboardV2Raw,
@@ -31,8 +33,6 @@ import {
 } from "@/lib/adviseur-beschikbaarheid";
 import { META_LEAD_CAMPAIGN_ID } from "@/lib/meta-ads-spend";
 import { addDays, getISOWeekYear } from "date-fns";
-import { fromZonedTime, toZonedTime } from "date-fns-tz";
-
 export const runtime = "nodejs";
 
 type Sb = ReturnType<typeof getSupabaseAdmin>;
@@ -145,7 +145,7 @@ async function loadUnavailableByAdviseur(
 }
 
 async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
-  const [leadsRows, afsprakenRows, offertesRows, projectenRows, adviseursRes] =
+  const [leadsRows, afsprakenRows, offertesRows, projectenRows, adviseursFirst] =
     await Promise.all([
       fetchAllRows((from, to) =>
         sb
@@ -177,9 +177,21 @@ async function loadDrilldownRaw(sb: Sb): Promise<DrilldownRaw> {
       ),
       sb
         .from("adviseurs")
-        .select("id, naam, email, actief, rol, startdatum, commissie_pct"),
+        .select(
+          "id, naam, email, actief, rol, startdatum, start_vanaf_huis_maandag, commissie_pct"
+        ),
     ]);
 
+  let adviseursRes = adviseursFirst;
+  if (
+    adviseursRes.error &&
+    (adviseursRes.error.message?.includes("start_vanaf_huis_maandag") ||
+      adviseursRes.error.code === "42703")
+  ) {
+    adviseursRes = await sb
+      .from("adviseurs")
+      .select("id, naam, email, actief, rol, startdatum, commissie_pct");
+  }
   if (adviseursRes.error) throw adviseursRes.error;
 
   const geannuleerdOfferteIds = new Set(
@@ -347,6 +359,10 @@ export async function GET(req: NextRequest) {
   const scope: "team" | "adviseur" | "beller" =
     scopeParam === "adviseur" || scopeParam === "beller" ? scopeParam : "team";
   let personId = req.nextUrl.searchParams.get("person");
+  const vandaagPeriode = parseVandaagDagen(
+    req.nextUrl.searchParams.get("vandaag_dagen") ||
+      req.nextUrl.searchParams.get("vandaag_periode")
+  );
 
   try {
     const sb = getSupabaseAdmin();
@@ -604,12 +620,8 @@ export async function GET(req: NextRequest) {
       finance = emptyDashboardV2Finance();
     }
 
-    // Offertes verstuurd vandaag: verzonden_op (niet updated_at / ondertekend_op)
-    const zNow = toZonedTime(now, "Europe/Amsterdam");
-    const vandaagStart = fromZonedTime(
-      new Date(zNow.getFullYear(), zNow.getMonth(), zNow.getDate(), 0, 0, 0, 0),
-      "Europe/Amsterdam"
-    ).toISOString();
+    // Offertes verstuurd in bereik: verzonden_op (niet updated_at / ondertekend_op)
+    const rangeStart = resolveVandaagRange(now, vandaagPeriode).start.toISOString();
     let offertesVerzonden: {
       id: string;
       adviseur_id: string | null;
@@ -626,7 +638,7 @@ export async function GET(req: NextRequest) {
       };
     };
     try {
-      // Primair: op verzonden_op vandaag
+      // Primair: op verzonden_op in bereik
       const byOp = await fetchAllRows((from, to) =>
         sb
           .from("offertes")
@@ -634,7 +646,7 @@ export async function GET(req: NextRequest) {
             "id, lead_id, status, verzonden_op, created_at, leads(adviseur_id)"
           )
           .in("status", ["verzonden", "ondertekend"])
-          .gte("verzonden_op", vandaagStart)
+          .gte("verzonden_op", rangeStart)
           .order("verzonden_op", { ascending: false })
           .range(from, to)
       );
@@ -646,7 +658,7 @@ export async function GET(req: NextRequest) {
           )
           .in("status", ["verzonden", "ondertekend"])
           .is("verzonden_op", null)
-          .gte("created_at", vandaagStart)
+          .gte("created_at", rangeStart)
           .order("created_at", { ascending: false })
           .range(from, to)
       );
@@ -656,14 +668,14 @@ export async function GET(req: NextRequest) {
       }
       offertesVerzonden = [...byId.values()];
     } catch {
-      // Migratie nog niet gedraaid → alleen created_at vandaag
+      // Migratie nog niet gedraaid → alleen created_at in bereik
       try {
         const rows = await fetchAllRows((from, to) =>
           sb
             .from("offertes")
             .select("id, lead_id, status, created_at, leads(adviseur_id)")
             .in("status", ["verzonden", "ondertekend"])
-            .gte("created_at", vandaagStart)
+            .gte("created_at", rangeStart)
             .order("created_at", { ascending: false })
             .range(from, to)
         );
@@ -684,7 +696,8 @@ export async function GET(req: NextRequest) {
         adviseurs: raw.adviseurs,
       },
       now,
-      scope !== "team" ? personId : null
+      scope !== "team" ? personId : null,
+      vandaagPeriode
     );
 
     return NextResponse.json(

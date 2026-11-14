@@ -6,30 +6,44 @@ import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import {
   geenContactPoging1Email,
   geenContactPoging3Email,
+  herplanGeprobeerdTeBellenEmail,
 } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
+import {
+  MAX_BELPOGINGEN,
+  MAX_HERPLAN_BELPOGINGEN,
+} from "@/lib/bel-queue";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/leads/[id]/geen-contact-mail
- * Body: { poging: 1 | 3 }
- * Verstuurt de juiste “geen contact”-mail na belpoging 1 of 3.
+ * Body: { poging: number, herplan?: boolean }
+ * Normaal: mail bij poging 1 of 3.
+ * Herplan: “we hebben je geprobeerd te bellen” (elke poging).
  */
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  let body: { poging?: number };
+  let body: { poging?: number; herplan?: boolean };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Ongeldige JSON" }, { status: 400 });
   }
 
-  const poging = body.poging;
-  if (poging !== 1 && poging !== 3) {
+  const herplan = Boolean(body.herplan);
+  const max = herplan ? MAX_HERPLAN_BELPOGINGEN : MAX_BELPOGINGEN;
+  const poging = Number(body.poging);
+  if (!Number.isFinite(poging) || poging < 1 || poging > max) {
+    return NextResponse.json(
+      { error: `poging moet tussen 1 en ${max} liggen` },
+      { status: 400 }
+    );
+  }
+  if (!herplan && poging !== 1 && poging !== 3) {
     return NextResponse.json(
       { error: "poging moet 1 of 3 zijn" },
       { status: 400 }
@@ -58,14 +72,29 @@ export async function POST(
     }
 
     const naam = lead.naam || "klant";
-    const isFirst = poging === 1;
-    const subject = isFirst
-      ? "We hebben je geprobeerd te bereiken — Batterijconcept"
-      : "Heeft u nog interesse in een batterij zonder eigen investering? — Batterijconcept";
-    const html = isFirst
-      ? geenContactPoging1Email({ naam })
-      : geenContactPoging3Email({ naam });
-    const tag = isFirst ? "lead-geen-contact-1" : "lead-geen-contact-3";
+    let subject: string;
+    let html: string;
+    let tag: string;
+    let titel: string;
+
+    if (herplan) {
+      subject = "We hebben je geprobeerd te bellen — Batterijconcept";
+      html = herplanGeprobeerdTeBellenEmail({ naam });
+      tag = `lead-herplan-geen-contact-${poging}`;
+      titel = `Herplan geen-contact mail #${poging} verstuurd`;
+    } else {
+      const isFirst = poging === 1;
+      subject = isFirst
+        ? "We hebben je geprobeerd te bereiken — Batterijconcept"
+        : "Heeft u nog interesse in een batterij zonder eigen investering? — Batterijconcept";
+      html = isFirst
+        ? geenContactPoging1Email({ naam })
+        : geenContactPoging3Email({ naam });
+      tag = isFirst ? "lead-geen-contact-1" : "lead-geen-contact-3";
+      titel = isFirst
+        ? "Geen-contact mail #1 verstuurd"
+        : "Geen-contact mail #3 verstuurd";
+    }
 
     const result = await sendEmail({
       to: email,
@@ -85,14 +114,17 @@ export async function POST(
     await logLeadEvent({
       leadId: id,
       soort: "contact",
-      titel: isFirst
-        ? "Geen-contact mail #1 verstuurd"
-        : "Geen-contact mail #3 verstuurd",
+      titel,
       detail: subject,
-      meta: { poging, tag, messageId: result.messageId || null },
+      meta: { poging, herplan, tag, messageId: result.messageId || null },
     });
 
-    return NextResponse.json({ ok: true, poging, messageId: result.messageId });
+    return NextResponse.json({
+      ok: true,
+      poging,
+      herplan,
+      messageId: result.messageId,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Geen-contact mail mislukt") },

@@ -9,21 +9,21 @@ import {
   dueAtFromDays,
   type AutoTaakDef,
 } from "@/lib/project-taken";
-import {
-  dueAtVoorSchouwdagInplan,
-  isSchouwdagDefinitief,
-  schouwWeekFromDate,
-} from "@/lib/schouw-week";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 import {
   remapLegacyProjectStatus,
   resolveBetaalwijze,
   type Betaalwijze,
 } from "@/lib/project-status-config";
-import { effectiveOperationalStatus } from "@/lib/project-volgende-stap";
 import {
-  resolveFinancieringStatus,
+  effectiveOperationalStatus,
+  kanWfSchouwdagInplannen,
+} from "@/lib/project-volgende-stap";
+import {
+  financieringStatusVoorAutoTaken,
   type FinancieringStatus,
 } from "@/lib/financiering-status";
+import type { Project } from "@/types/database";
 import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
 import { OPLEVERING_REVIEW_TAK_AUTO_KEY } from "@/lib/project-taken";
@@ -43,6 +43,7 @@ type ProjectSchouwFields = {
   status: string;
   betaalwijze?: string | null;
   financiering_status?: string | null;
+  warmtefonds_afspraak_at?: string | null;
   aanbetaling_te_innen_inc?: number | null;
   schouw_jaar?: number | null;
   schouw_week?: number | null;
@@ -74,19 +75,6 @@ type ProjectSchouwFields = {
       }[]
     | null;
 };
-
-function schouwWeekOf(project: ProjectSchouwFields): {
-  jaar: number;
-  week: number;
-} | null {
-  if (project.schouw_jaar && project.schouw_week) {
-    return { jaar: project.schouw_jaar, week: project.schouw_week };
-  }
-  if (project.schouw_at) {
-    return schouwWeekFromDate(project.schouw_at);
-  }
-  return null;
-}
 
 function leadStatusOf(project: ProjectSchouwFields): string | null {
   const l = Array.isArray(project.leads) ? project.leads[0] : project.leads;
@@ -167,7 +155,7 @@ export async function syncAutoTakenVoorProject(
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, betaalwijze, financiering_status, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
+      "status, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -176,6 +164,7 @@ export async function syncAutoTakenVoorProject(
     status,
     betaalwijze: null,
     financiering_status: null,
+    warmtefonds_afspraak_at: null,
     aanbetaling_te_innen_inc: null,
     schouw_jaar: null,
     schouw_week: null,
@@ -279,9 +268,10 @@ export async function syncAutoTakenVoorProject(
     const finStatus =
       financieringStatusOverride !== undefined
         ? financieringStatusOverride
-        : resolveFinancieringStatus({
+        : financieringStatusVoorAutoTaken({
             financiering_status: project.financiering_status,
             status: project.status,
+            warmtefonds_afspraak_at: project.warmtefonds_afspraak_at,
           });
 
     if (betaalwijze === "warmtefonds") {
@@ -290,14 +280,19 @@ export async function syncAutoTakenVoorProject(
       }
     }
 
-    const week = schouwWeekOf(project);
-    if (week && !isSchouwdagDefinitief(project)) {
+    // Schouwweek is geen trigger — alleen klant-indicatie.
+    // WF: schouwdag-taak pas ná goedkeuring (declaratie loopt via financiering-taken).
+    // EM: schouwdag zit in kickoff-taken, geen aparte week-reminder.
+    if (
+      betaalwijze === "warmtefonds" &&
+      !isSchouwdagDefinitief(project) &&
+      kanWfSchouwdagInplannen(project as Project)
+    ) {
       defs.push({
         autoKey: SCHOUWDAG_INPLAN_KEY,
-        titel: `Schouwdag inplannen met de klant (week ${week.week}) — want de week erop is de schouwweek`,
+        titel: "Schouwdag inplannen met de klant",
         afdeling: "Planning",
-        dueInDays: 0,
-        dueAt: dueAtVoorSchouwdagInplan(week.jaar, week.week),
+        dueInDays: 2,
       });
     }
   }
@@ -437,16 +432,24 @@ export async function syncAutoTakenVoorProject(
       }
       continue;
     }
-    await sb.from("project_taken").insert({
+    const insertRow: Record<string, unknown> = {
       project_id: projectId,
       titel: def.titel,
       status: "todo",
       afdeling: def.afdeling,
+      categorie: "project",
       due_at: dueAt,
       auto_key: def.autoKey,
       ...(isReferral && saleAdviseurId
         ? { verantwoordelijke_id: saleAdviseurId }
         : {}),
-    });
+    };
+    const { error: insertErr } = await sb
+      .from("project_taken")
+      .insert(insertRow);
+    if (insertErr && /categorie/i.test(insertErr.message || "")) {
+      delete insertRow.categorie;
+      await sb.from("project_taken").insert(insertRow);
+    }
   }
 }

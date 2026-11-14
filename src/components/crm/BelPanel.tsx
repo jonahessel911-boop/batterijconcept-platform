@@ -19,21 +19,28 @@ import { AMSTERDAM_TZ, adresRegel, formatDateTimeNl, formatTimeNl } from "@/lib/
 import {
   MAX_BELPOGINGEN,
   MAX_BELPOGINGEN_PER_DAG,
-  MIN_UREN_TUSSEN_BELPOGINGEN,
+  MAX_HERPLAN_BELPOGINGEN,
   activeBelAfspraak,
   annuleringsNotitieFromAfspraak,
   belpogingenOf,
   belpogingenVandaagOf,
+  definitiefGeenContactDbHint,
   buildGeenContactOutcomePatch,
   geenContactPogingLabel,
-  inAnnuleringQueueForBeller,
+  inAnnuleringBelQueue,
   inNormaleBelQueue,
   isHerplanBelLead,
+  isMailPositiefBelLead,
   isTerugbelDue,
-  latestCancelledVisitAfspraak,
+  isTerugbelForViewer,
+  latestKlantAnnuleringAfspraak,
+  latestPhysicalAfspraak,
   leadInProvincie,
+  maxBelpogingenVoor,
+  sortAnnuleringBelQueue,
   sortBelQueue,
 } from "@/lib/bel-queue";
+import { BATTERIJCONCEPT_BEL_TEL_DISPLAY } from "@/lib/email/bel-telefoon";
 import {
   NL_PROVINCIES,
   adviseurVoorProvincie,
@@ -41,6 +48,7 @@ import {
   type NlProvincie,
 } from "@/lib/postcode-provincie";
 import { leadStatusLabel } from "@/lib/labels";
+import { BellerNettoKaart } from "./BellerNettoKaart";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { LeadAdresEditor } from "./LeadAdresEditor";
 import { LeadContactEditor } from "./LeadContactEditor";
@@ -168,6 +176,8 @@ export function BelPanel({
   adviseurs,
   appointmentLeadIds,
   defaultAdviseurId,
+  /** Alleen terugbels op naam van deze medewerker (Bekijk-als of ingelogde user). */
+  terugbelViewerId,
   lockAdviseur = false,
   onLeadUpdated,
   onAfspraakCreated,
@@ -178,6 +188,7 @@ export function BelPanel({
   adviseurs: Adviseur[];
   appointmentLeadIds: Set<string>;
   defaultAdviseurId?: string;
+  terugbelViewerId?: string;
   /** Adviseur-rol: alleen eigen agenda, geen adviseur-wisselaar. */
   lockAdviseur?: boolean;
   onLeadUpdated: (id: string, patch: Partial<Lead>) => void;
@@ -236,6 +247,13 @@ export function BelPanel({
   /** Leads die deze sessie al via Volgende zijn doorgeschoven. */
   const [uitgesteldIds, setUitgesteldIds] = useState(() => new Set<string>());
   const [timelineTick, setTimelineTick] = useState(0);
+
+  const eigenBellerId = useMemo(() => {
+    if (!defaultAdviseurId) return null;
+    const self = adviseurs.find((a) => a.id === defaultAdviseurId);
+    if (!self || normalizeRol(self.rol) !== "beller") return null;
+    return self.id;
+  }, [adviseurs, defaultAdviseurId]);
 
   const planAdviseurs = useMemo(() => {
     const list = adviseurs.filter(
@@ -297,39 +315,39 @@ export function BelPanel({
     const bellers = terugbelMedewerkers.filter(
       (a) => normalizeRol(a.rol) === "beller"
     );
-    const sharath = bellers.find((a) =>
-      a.naam.toLowerCase().includes("sharath")
-    );
-    if (sharath) return sharath.id;
+    const simon = bellers.find((a) => {
+      const first = a.naam.trim().toLowerCase().split(/\s+/)[0] || "";
+      return first === "simon" || first === "sharath" || first === "sharet";
+    });
+    if (simon) return simon.id;
     if (bellers[0]) return bellers[0].id;
 
     if (self) return self.id;
     return terugbelMedewerkers[0]?.id || "";
   }
 
-  const allBelQueue = useMemo(
-    () =>
-      sortBelQueue(
-        leads.filter((l) => inNormaleBelQueue(l, appointmentLeadIds))
-      ),
-    [leads, appointmentLeadIds]
-  );
-
-  /** Klant-annuleringen die deze beller had ingepland → Annuleringen-bak. */
+  /**
+   * Afzegging door de klant of door ons, zonder nieuw huisbezoek erna.
+   * Nieuwste annulering eerst · max 3 pogingen · 1× per dag (daarna volgende).
+   */
   const annuleringQueue = useMemo(() => {
-    const bellerId = defaultAdviseurId || "";
-    if (!bellerId) return [];
-    return sortBelQueue(
+    return sortAnnuleringBelQueue(
       leads.filter((l) =>
-        inAnnuleringQueueForBeller(
-          l,
-          afspraken,
-          bellerId,
-          appointmentLeadIds
-        )
+        inAnnuleringBelQueue(l, afspraken, appointmentLeadIds)
+      ),
+      afspraken
+    );
+  }, [leads, afspraken, appointmentLeadIds]);
+
+  const allBelQueue = useMemo(() => {
+    const herplanIds = new Set(annuleringQueue.map((l) => l.id));
+    return sortBelQueue(
+      leads.filter(
+        (l) =>
+          inNormaleBelQueue(l, appointmentLeadIds) && !herplanIds.has(l.id)
       )
     );
-  }, [leads, afspraken, appointmentLeadIds, defaultAdviseurId]);
+  }, [leads, appointmentLeadIds, annuleringQueue]);
 
   const provincieCounts = useMemo(() => {
     const map = new Map<NlProvincie, number>();
@@ -367,7 +385,11 @@ export function BelPanel({
     return allBelQueue;
   }, [allBelQueue, annuleringQueue, bakMode, selectedProvincie]);
 
-  /** Openstaande terugbel-afspraken (vanaf geplande dag tot afgehandeld), 1× per lead. */
+  /** Viewer: Bekijk-als, anders ingelogde medewerker (defaultAdviseurId). */
+  const effectiveTerugbelViewerId =
+    terugbelViewerId || defaultAdviseurId || null;
+
+  /** Openstaande terugbel-afspraken op naam van de viewer, 1× per lead. */
   const terugbelDue = useMemo(() => {
     const byLead = new Map<
       string,
@@ -375,6 +397,7 @@ export function BelPanel({
     >();
     for (const a of afspraken) {
       if (!isTerugbelDue(a)) continue;
+      if (!isTerugbelForViewer(a, effectiveTerugbelViewerId)) continue;
       const lead = leads.find((l) => l.id === a.lead_id);
       if (!lead?.telefoon?.trim()) continue;
       const warm = normalizeAfspraakSoort(a.soort) === "warme_bel";
@@ -403,7 +426,7 @@ export function BelPanel({
         new Date(b.afspraak.start_at).getTime()
       );
     });
-  }, [afspraken, leads]);
+  }, [afspraken, leads, effectiveTerugbelViewerId]);
 
   /**
    * Alleen de normale bellijst. Openstaande terugbel-afspraken staan
@@ -428,8 +451,13 @@ export function BelPanel({
   const currentTerugbel = current
     ? activeBelAfspraak(afspraken, current.id)
     : null;
+  const currentTerugbelMine =
+    currentTerugbel &&
+    isTerugbelForViewer(currentTerugbel, effectiveTerugbelViewerId)
+      ? currentTerugbel
+      : null;
   const currentIsTerugbelDue = Boolean(
-    currentTerugbel && isTerugbelDue(currentTerugbel)
+    currentTerugbelMine && isTerugbelDue(currentTerugbelMine)
   );
 
   const slotsByDay = useMemo(() => {
@@ -848,9 +876,12 @@ export function BelPanel({
     setBusy(true);
     setError(null);
     try {
+      const herplan =
+        bakMode === "annuleringen" || isHerplanBelLead(current);
+      const maxPogingen = maxBelpogingenVoor({ herplan });
       const gc =
         status === "geen_contact"
-          ? buildGeenContactOutcomePatch(current)
+          ? buildGeenContactOutcomePatch(current, { herplan })
           : null;
       const pogingen = gc?.pogingen ?? belpogingenOf(current);
       const patch: Partial<Lead> = gc
@@ -888,12 +919,14 @@ export function BelPanel({
             "Voer eerst supabase/migrate-lead-belpogingen.sql uit in Supabase."
           );
         }
+        const hint = definitiefGeenContactDbHint(err.message);
+        if (hint) throw new Error(hint);
         throw err;
       }
       // Ingelogde medewerker = beller (server-side, geen RLS/claim-issues)
       const stamped = await stampGebeldDoor({
         leadId: current.id,
-        status,
+        status: gc?.patch.status ?? status,
         eersteGebeld: !current.eerste_gebeld_at,
       });
       Object.assign(patch, stamped);
@@ -901,17 +934,19 @@ export function BelPanel({
       onLeadUpdated(current.id, patch);
       void clientLogLeadEvent(current.id, {
         soort: "status",
-        titel: `Status → ${leadStatusLabel[status] || status}`,
+        titel: `Status → ${leadStatusLabel[gc?.patch.status ?? status] || status}`,
         detail:
           status === "geen_contact"
-            ? `Belpoging ${pogingen}/${MAX_BELPOGINGEN}`
+            ? `Belpoging ${pogingen}/${maxPogingen}${
+                herplan ? " (herplan)" : ""
+              }${gc?.definitief ? " — definitief geen contact" : ""}`
             : null,
       });
       if (gc?.sendGeenContactMail && current.email?.trim()) {
         void fetch(`/api/leads/${current.id}/geen-contact-mail`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ poging: pogingen }),
+          body: JSON.stringify({ poging: pogingen, herplan }),
         }).catch(() => {
           /* non-blocking */
         });
@@ -1093,9 +1128,12 @@ export function BelPanel({
             Welke belbak?
           </p>
           <p className="mt-2 text-sm text-muted">
-            Normale wachtrij, provincie, of jouw klant-annuleringen herplannen.
+            Normale wachtrij, provincie, of afzeggingen opnieuw inplannen.
           </p>
         </div>
+        {eigenBellerId ? (
+          <BellerNettoKaart bellerId={eigenBellerId} />
+        ) : null}
         <div className="mx-auto mt-6 grid max-w-2xl gap-3 sm:grid-cols-2">
           <button
             type="button"
@@ -1106,7 +1144,7 @@ export function BelPanel({
               Normale belbak
             </p>
             <p className="mt-1 text-sm text-muted">
-              Alle belbare leads in de standaard volgorde.
+              Nieuwste aanmelding eerst (laatste 10 dagen), tot 3 keer. Daarna de rest. Na 3 keer geen contact: definitief afgeboekt. Herplannen: max {MAX_HERPLAN_BELPOGINGEN}× · bel {BATTERIJCONCEPT_BEL_TEL_DISPLAY}.
             </p>
             <p className="mt-3 text-xs font-semibold text-green-dark">
               {allBelQueue.length} in de wachtrij
@@ -1140,8 +1178,8 @@ export function BelPanel({
               Annuleringen
             </p>
             <p className="mt-1 text-sm text-muted">
-              Klant-annuleringen die jij had ingepland — herplan om je netto te
-              redden (telt niet als extra afspraak).
+              Recentste klant-annulering eerst · 1× bellen/afboeken · max 3
+              pogingen. Alleen als de klant zelf afzegde.
             </p>
             <p className="mt-3 text-xs font-semibold text-[#0D47A1]">
               {annuleringQueue.length === 0
@@ -1285,10 +1323,12 @@ export function BelPanel({
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           {isAnnuleringen
-            ? "Alle klant-annuleringen op jouw naam zijn afgehandeld of opnieuw ingepland."
+            ? "Alle afzeggingen zijn afgehandeld of opnieuw ingepland."
             : bakMode === "provincie" && selectedProvincie
               ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
-              : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpogingen per lead per dag, met min. ${MIN_UREN_TUSSEN_BELPOGINGEN} uur ertussen — daarna komen ze later terug. Na ${MAX_BELPOGINGEN} keer geen contact vallen ze eruit.`}
+              : isAnnuleringen
+                ? `Klant-annuleringen om te herplannen. Max ${MAX_BELPOGINGEN_PER_DAG}× per dag, na ${MAX_HERPLAN_BELPOGINGEN}× geen contact: definitief. Belnummer in mails: ${BATTERIJCONCEPT_BEL_TEL_DISPLAY}.`
+                : `Alleen leads zonder afspraak, deal of “geen interesse” staan hier. Max ${MAX_BELPOGINGEN_PER_DAG} belpoging per lead per dag. Na ${MAX_BELPOGINGEN} keer geen contact worden ze afgeboekt als definitief geen contact.`}
         </p>
         <button
           type="button"
@@ -1379,16 +1419,23 @@ export function BelPanel({
     );
   }
 
+  const herplanHuidige =
+    bakMode === "annuleringen" || isHerplanBelLead(current);
+  const maxPogingenHuidige = maxBelpogingenVoor({ herplan: herplanHuidige });
   const pogingen = belpogingenOf(current);
   const pogingenVandaag = belpogingenVandaagOf(current);
-  const nextPoging = Math.min(pogingen + 1, MAX_BELPOGINGEN);
+  const nextPoging = Math.min(pogingen + 1, maxPogingenHuidige);
   const phone = current.telefoon!.trim();
   const position = queue.findIndex((l) => l.id === current.id) + 1;
   const cancelledVisit =
-    bakMode === "annuleringen" || isHerplanBelLead(current)
-      ? latestCancelledVisitAfspraak(afspraken, current.id)
-      : null;
+    bakMode === "annuleringen"
+      ? latestKlantAnnuleringAfspraak(afspraken, current.id)
+      : isHerplanBelLead(current)
+        ? latestPhysicalAfspraak(afspraken, current.id)
+        : null;
   const annuleringsReden = annuleringsNotitieFromAfspraak(cancelledVisit);
+  const geannuleerdOp =
+    cancelledVisit?.updated_at || cancelledVisit?.created_at || null;
 
   return (
     <div>
@@ -1402,7 +1449,11 @@ export function BelPanel({
             : "border-line bg-[#F7FBF8]",
         ].join(" ")}
       >
-        <p className="text-xs text-muted">
+        <div className="min-w-0">
+          {eigenBellerId ? (
+            <BellerNettoKaart bellerId={eigenBellerId} compact />
+          ) : null}
+          <p className="text-xs text-muted">
           <span className="font-semibold text-ink">
             {bakMode === "annuleringen"
               ? "Annuleringen"
@@ -1413,7 +1464,8 @@ export function BelPanel({
           <span className="ml-1.5">
             · {queue.length} in deze wachtrij
           </span>
-        </p>
+          </p>
+        </div>
         <button
           type="button"
           onClick={resetBakKeuze}
@@ -1443,7 +1495,9 @@ export function BelPanel({
             </span>
           ) : current.status === "geen_contact" || pogingen > 0 ? (
             <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
-              {geenContactPogingLabel(pogingen)}
+              {geenContactPogingLabel(pogingen, {
+                herplan: herplanHuidige,
+              })}
             </span>
           ) : (
             <span className="rounded-full bg-green-soft px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-green-dark">
@@ -1470,6 +1524,11 @@ export function BelPanel({
             <p className="mt-1 font-semibold text-ink">
               Was {formatDateTimeNl(cancelledVisit.start_at)}
             </p>
+            {geannuleerdOp ? (
+              <p className="mt-1 text-sm font-semibold text-[#C62828]">
+                Geannuleerd op {formatDateTimeNl(geannuleerdOp)}
+              </p>
+            ) : null}
             {annuleringsReden ? (
               <p className="mt-1 text-muted">Reden: {annuleringsReden}</p>
             ) : null}
@@ -1479,13 +1538,25 @@ export function BelPanel({
           </div>
         ) : null}
 
-        <h2 className="mt-3 font-display text-2xl font-semibold text-ink sm:text-3xl">
-          {current.naam}
+        <h2 className="mt-3 flex flex-wrap items-center gap-2 font-display text-2xl font-semibold text-ink sm:text-3xl">
+          <span>{current.naam}</span>
+          {isMailPositiefBelLead(current) ? (
+            <span className="rounded-md bg-[#C45A12] px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
+              Mail +
+            </span>
+          ) : null}
         </h2>
         <p className="font-mono text-xs text-muted">{current.lead_number}</p>
         <p className="mt-1 text-sm text-muted">
           Aangemeld {formatDateTimeNl(current.created_at)}
         </p>
+        {isMailPositiefBelLead(current) &&
+        current.mail_positief_samenvatting ? (
+          <p className="mt-2 border border-[#C45A12]/30 bg-[#FFF8F3] px-3 py-2 text-sm text-[#C45A12]">
+            <span className="font-semibold">Positieve mail:</span>{" "}
+            {current.mail_positief_samenvatting}
+          </p>
+        ) : null}
 
         {editingGegevens ? (
           <div className="mt-3 space-y-4 border border-line bg-wash/40 p-3.5 sm:p-4">
@@ -1553,14 +1624,15 @@ export function BelPanel({
           </div>
         )}
 
-        {currentIsTerugbelDue && currentTerugbel && (
+        {currentIsTerugbelDue && currentTerugbelMine && (
           <div className="mt-3 border border-[#C45A12]/30 bg-[#FFF0E6] px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
-              Gepland terugbelmoment · {formatDateTimeNl(currentTerugbel.start_at)}
+              Gepland terugbelmoment ·{" "}
+              {formatDateTimeNl(currentTerugbelMine.start_at)}
             </p>
-            {(currentTerugbel.notities || current.terugbel_notitie)?.trim() ? (
+            {(currentTerugbelMine.notities || current.terugbel_notitie)?.trim() ? (
               <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">
-                {currentTerugbel.notities || current.terugbel_notitie}
+                {currentTerugbelMine.notities || current.terugbel_notitie}
               </p>
             ) : null}
           </div>
@@ -1673,8 +1745,12 @@ export function BelPanel({
                 onClick={() => void saveOutcome("geen_contact")}
                 className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
               >
-                {geenContactPogingLabel(nextPoging)}
-                {nextPoging >= MAX_BELPOGINGEN ? " — uit bellijst" : ""}
+                {geenContactPogingLabel(nextPoging, {
+                  herplan: herplanHuidige,
+                })}
+                {nextPoging >= maxPogingenHuidige
+                  ? " — definitief geen contact"
+                  : ""}
               </button>
               <button
                 type="button"
@@ -2039,6 +2115,10 @@ export function BelPanel({
                 startAdresLabel={
                   planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
                 }
+                startVanafHuisMaandag={
+                  planAdviseurs.find((a) => a.id === adviseurId)
+                    ?.start_vanaf_huis_maandag
+                }
                 freeSlots={slots
                   .filter((s) => !s.busy)
                   .map((s) => ({
@@ -2065,6 +2145,10 @@ export function BelPanel({
               }
               startAdresLabel={
                 planAdviseurs.find((a) => a.id === adviseurId)?.naam || null
+              }
+              startVanafHuisMaandag={
+                planAdviseurs.find((a) => a.id === adviseurId)
+                  ?.start_vanaf_huis_maandag
               }
             />
               </>

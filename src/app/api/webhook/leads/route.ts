@@ -351,40 +351,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Optioneel: Fonio outbound direct na nieuwe lead (FONIO_AUTO_CALL_ON_LEAD=true)
-    let fonioCall: { ok: boolean; error?: string } | null = null;
-    try {
-      const { fonioAutoCallOnLead, fonioConfigured, triggerFonioOutbound, buildFonioLeadContext } =
-        await import("@/lib/fonio");
-      if (fonioAutoCallOnLead() && fonioConfigured()) {
-        const { data: fullLead } = await supabase
-          .from("leads")
-          .select(
-            "id, naam, email, telefoon, straat, huisnummer, toevoeging, postcode, plaats, lead_number, status, notities"
-          )
-          .eq("id", data.id)
-          .maybeSingle();
-        if (fullLead?.telefoon) {
-          const call = await triggerFonioOutbound({
-            toNumber: fullLead.telefoon,
-            context: buildFonioLeadContext(fullLead),
-          });
-          fonioCall = call.ok
-            ? { ok: true }
-            : { ok: false, error: call.error };
-          if (!call.ok) {
-            console.error("Fonio auto-call:", call.error);
-          }
-        }
-      }
-    } catch (fonioErr) {
-      console.error("Fonio auto-call:", fonioErr);
-      fonioCall = {
-        ok: false,
-        error: fonioErr instanceof Error ? fonioErr.message : "mislukt",
-      };
-    }
-
     return NextResponse.json(
       {
         ok: true,
@@ -394,7 +360,6 @@ export async function POST(req: NextRequest) {
         lander: data.lander ?? null,
         campaign_name: data.campaign_name ?? null,
         ad_name: data.ad_name ?? null,
-        ...(fonioCall ? { fonio_call: fonioCall } : {}),
       },
       { status: 201 }
     );
@@ -424,6 +389,8 @@ export async function GET() {
       Campaign_name: "Meta_NL_Augustus",
       Ad_name: "Video_besparing_v2",
       utm_source: "facebook",
+      ttclid: "TikTok click id uit de landings-URL, als de lead van TikTok komt",
+      ttp: "TikTok cookie _ttp",
     },
     response: {
       ok: true,
@@ -438,6 +405,8 @@ export async function GET() {
       campaign_name:
         "Aliases: campaign_name, Campaign_name, campaign, utm_campaign",
       ad_name: "Aliases: ad_name, Ad_name, ad, utm_content",
+      ttclid:
+        "TikTok click id (?ttclid=). Wordt met ttp / _ttp meegestuurd naar de Events API bij afspraak en sale.",
     },
   });
 }

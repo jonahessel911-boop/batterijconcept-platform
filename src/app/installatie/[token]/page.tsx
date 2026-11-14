@@ -5,14 +5,21 @@ export const metadata = {
   title: "Installatieportaal | Batterijconcept",
 };
 
-export default function Page() {
+/** Portaallink met token — geen wachtwoord-login verplicht. */
+export default async function InstallatieTokenPage({
+  params,
+}: {
+  params: Promise<{ token: string }>;
+}) {
+  const { token } = await params;
+
   return (
     <Suspense
       fallback={
         <p className="py-16 text-center text-sm text-muted">Laden…</p>
       }
     >
-      <InstallatieOrdersPage />
+      <InstallatieOrdersPage apiToken={token} />
     </Suspense>
   );
 }

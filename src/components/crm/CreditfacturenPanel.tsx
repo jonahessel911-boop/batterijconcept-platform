@@ -1,28 +1,110 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import {
+  CheckCircle2,
+  Copy,
+  ExternalLink,
+  FileText,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
+import { parseCreditRegels } from "@/lib/creditfactuur-aftrek";
 import type {
   Adviseur,
   AdviseurCreditFactuur,
+  AdviseurKosten,
   InstallatiePartner,
   PartnerCreditFactuur,
 } from "@/types/database";
-import { formatDateShort, formatEuro } from "@/lib/format";
+import {
+  formatDateShort,
+  formatDateTimeNl,
+  formatEuro,
+} from "@/lib/format";
 import {
   VERKOPER_AANBETALING_FEE,
+  creditWeekByYearWeek,
   creditWeekFromDate,
   previousCreditWeek,
   weekBeforePreviousCreditWeek,
 } from "@/lib/adviseur-creditfactuur";
-import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
+import {
+  isBelcommissieCreditfactuur,
+  isOpsCommissieCreditfactuur,
+} from "@/lib/callcenter-creditfactuur";
+import {
+  isUitgeslotenVanSalesCommissie,
+  normalizeRol,
+  type GebruikerRol,
+} from "@/lib/rollen";
 import type { ToekomstigeCreditfacturenPreview } from "@/lib/toekomstige-creditfacturen";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Label } from "@/components/ui/label";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 
 type MainTab = "concept_ab" | "te_betalen" | "betaald";
-/** Unit-filter in de inbox (standaard Alles). */
-type UnitFilter = "alles" | "sales" | "wf" | "installatie";
+/** Categorie-filter in de inbox (standaard Alles). */
+type PayoutCategorie = "operations" | "beller" | "adviseur" | "directie";
+type CategorieFilter = "alles" | PayoutCategorie;
 type CreateKind = "sales" | "wf" | "installatie";
 /** Concept-tab: huidige ronde, 1 week vooruit (deze week → volgende wo), of alles. */
 type WeekScope = "vorige" | "vooruit" | "alles";
+
+const PAYOUT_CATEGORIE_ORDER: PayoutCategorie[] = [
+  "operations",
+  "beller",
+  "adviseur",
+  "directie",
+];
+
+const PAYOUT_CATEGORIE_LABEL: Record<PayoutCategorie, string> = {
+  operations: "Operations",
+  beller: "Beller",
+  adviseur: "Adviseur",
+  directie: "Directie",
+};
+
+function normalizeSearchToken(s: string): string {
+  return s.toLowerCase().replace(/[\s\-_/·.•]/g, "");
+}
 
 type OverviewFactuur = AdviseurCreditFactuur & {
   adviseurs?: {
@@ -46,7 +128,28 @@ type PartnerOverview = PartnerCreditFactuur & {
   } | null;
 };
 
-type InvoiceKind = "sales" | "wf" | "installatie";
+type InvoiceKind = "sales" | "bel" | "ops" | "wf" | "installatie";
+type PayoutKind = "sales" | "bel" | "ops" | "installatie";
+
+function resolvePayoutCategorie(opts: {
+  kind: InvoiceKind;
+  rol?: string | null;
+}): PayoutCategorie {
+  if (opts.kind === "bel") return "beller";
+  if (opts.kind === "ops" || opts.kind === "installatie") return "operations";
+  const rol = normalizeRol(opts.rol);
+  if (rol === "admin" || rol === "sales_manager") return "directie";
+  if (rol === "backoffice") return "operations";
+  if (rol === "beller") return "beller";
+  return "adviseur";
+}
+
+function kindToPayoutKind(kind: InvoiceKind): PayoutKind {
+  if (kind === "bel") return "bel";
+  if (kind === "ops") return "ops";
+  if (kind === "installatie") return "installatie";
+  return "sales";
+}
 
 type InboxRow = {
   key: string;
@@ -60,6 +163,8 @@ type InboxRow = {
   nummer: string;
   kind: InvoiceKind;
   kindLabel: string;
+  categorie: PayoutCategorie;
+  rol: GebruikerRol | null;
   context: string | null;
   bedragEx: number;
   bedragInc: number;
@@ -72,10 +177,11 @@ type InboxRow = {
   searchText: string;
 };
 
-/** Eén uitbetalingsregel per relatie (sales én installatie). */
+/** Eén uitbetalingsregel per relatie (sales, belcommissie én installatie). */
 type PayoutGroup = {
   key: string;
-  kind: "sales" | "installatie";
+  kind: PayoutKind;
+  categorie: PayoutCategorie;
   relatieId: string;
   relatieNaam: string;
   bedrijfsnaam: string | null;
@@ -84,6 +190,8 @@ type PayoutGroup = {
   bedragEx: number;
   bedragInc: number;
   kenmerk: string;
+  /** ISO yyyy-mm-dd: woensdag na de werkweek (uitbetalingsdeadline). */
+  deadline: string | null;
   rows: InboxRow[];
   /** concept | verzonden | goedgekeurd | betaald | mixed | preview */
   status: string;
@@ -91,6 +199,90 @@ type PayoutGroup = {
   preview?: boolean;
   previewOrders?: number;
 };
+
+/** Woensdag-uitbetalingsdag bij een datum zonder week_jaar/week_nummer. */
+function deadlineFromFactuurdatum(ymd: string): string {
+  const d = new Date(ymd.length <= 10 ? `${ymd}T12:00:00` : ymd);
+  const dow = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Amsterdam",
+    weekday: "short",
+  }).format(d);
+  // Factuurdatum valt vaak in de betaalweek (ma–wo) → woensdag van die week.
+  // Anders (werkweek) → woensdag ná die week.
+  if (dow === "Mon" || dow === "Tue" || dow === "Wed") {
+    return previousCreditWeek(d).betaalWoensdag;
+  }
+  return creditWeekFromDate(d).betaalWoensdag;
+}
+
+/** Uitbetalingsdag = woensdag ná de ISO-werkweek van de factuur. */
+function payoutDeadlineYmd(rows: InboxRow[]): string | null {
+  const dates: string[] = [];
+  for (const r of rows) {
+    if (r.weekJaar != null && r.weekNummer != null) {
+      dates.push(
+        creditWeekByYearWeek(r.weekJaar, r.weekNummer).betaalWoensdag
+      );
+      continue;
+    }
+    if (r.factuurdatum) {
+      dates.push(deadlineFromFactuurdatum(r.factuurdatum));
+    }
+  }
+  if (dates.length === 0) return null;
+  return dates.sort()[0] || null;
+}
+
+function todayYmdAmsterdam(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Amsterdam",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function formatDeadlineLabel(ymd: string | null): string {
+  if (!ymd) return "—";
+  const todayYmd = todayYmdAmsterdam();
+  const label = formatDateShort(`${ymd}T12:00:00`);
+  if (ymd === todayYmd) return `Vandaag · ${label}`;
+  const t = new Date(`${ymd}T12:00:00`);
+  const n = new Date(`${todayYmd}T12:00:00`);
+  const diffDays = Math.round((t.getTime() - n.getTime()) / 86400000);
+  if (diffDays === 1) return `Morgen · ${label}`;
+  if (diffDays < 0) return `Verlopen · ${label}`;
+  return `wo ${label}`;
+}
+
+/** Compact voor dichte tabelrijen. */
+function formatDeadlineShort(ymd: string | null): string {
+  if (!ymd) return "—";
+  const todayYmd = todayYmdAmsterdam();
+  if (ymd === todayYmd) return "Vandaag";
+  const t = new Date(`${ymd}T12:00:00`);
+  const n = new Date(`${todayYmd}T12:00:00`);
+  const diffDays = Math.round((t.getTime() - n.getTime()) / 86400000);
+  if (diffDays === 1) return "Morgen";
+  if (diffDays < 0) return "Verlopen";
+  return formatDateShort(`${ymd}T12:00:00`);
+}
+
+function maskIban(iban: string): string {
+  const clean = iban.replace(/\s+/g, "").toUpperCase();
+  if (clean.length < 10) return iban;
+  return `${clean.slice(0, 4)} ${clean.slice(4, 8)} •••• ${clean.slice(-3)}`;
+}
+
+function detailStatusLabel(status: string, tab: MainTab): string {
+  if (tab === "concept_ab" || status === "concept" || status === "verzonden") {
+    return "Te controleren";
+  }
+  if (tab === "te_betalen" || status === "goedgekeurd") return "Te betalen";
+  if (status === "betaald") return "Betaald";
+  if (status === "preview") return "Vooruitblik";
+  return status;
+}
 
 function kvkIncompleet(r: {
   bedrijfsnaam?: string | null;
@@ -122,6 +314,22 @@ function parseKind(
 ): { kind: InvoiceKind; label: string } {
   if (source === "partner") {
     return { kind: "installatie", label: "Installatie" };
+  }
+  if (
+    isOpsCommissieCreditfactuur({
+      factuur_nummer: nummer,
+      notities: meta?.notities,
+    })
+  ) {
+    return { kind: "ops", label: "Opscommissie" };
+  }
+  if (
+    isBelcommissieCreditfactuur({
+      factuur_nummer: nummer,
+      notities: meta?.notities,
+    })
+  ) {
+    return { kind: "bel", label: "Belcommissie" };
   }
   if (isWfTagged({ nummer, ...meta })) {
     return { kind: "wf", label: "WF" };
@@ -180,6 +388,13 @@ function statusRank(status: string): number {
   }
 }
 
+function initialsFromName(naam: string): string {
+  const parts = naam.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] || ""}${parts[parts.length - 1]![0] || ""}`.toUpperCase();
+}
+
 function StatusBadge({
   status,
   goedgekeurd_op,
@@ -191,23 +406,22 @@ function StatusBadge({
 }) {
   if (status === "betaald") {
     return (
-      <span
-        className="inline-flex text-sm font-semibold text-green-dark"
+      <Badge
+        variant="secondary"
+        className="border-transparent bg-emerald-50 text-emerald-700"
         title={
-          betaald_op
-            ? `Betaald ${formatDateShort(betaald_op)}`
-            : "Betaald"
+          betaald_op ? `Betaald ${formatDateShort(betaald_op)}` : "Betaald"
         }
-        aria-label="Betaald"
       >
-        ✓
-      </span>
+        Betaald
+      </Badge>
     );
   }
   if (status === "goedgekeurd") {
     return (
-      <span
-        className="text-[11px] font-semibold text-green-dark"
+      <Badge
+        variant="secondary"
+        className="border-transparent bg-amber-50 text-amber-800"
         title={
           goedgekeurd_op
             ? `Te betalen sinds ${formatDateShort(goedgekeurd_op)}`
@@ -215,22 +429,37 @@ function StatusBadge({
         }
       >
         Te betalen
-      </span>
+      </Badge>
     );
   }
   if (status === "verzonden") {
     return (
-      <span className="text-[11px] font-semibold text-[#854D0E]">
+      <Badge
+        variant="secondary"
+        className="border-transparent bg-orange-50 text-orange-800"
+      >
         Wacht op acceptatie
-      </span>
+      </Badge>
     );
   }
   if (status === "concept") {
+    return <Badge variant="outline">Concept</Badge>;
+  }
+  if (status === "preview") {
     return (
-      <span className="text-[11px] font-semibold text-muted">Concept</span>
+      <Badge
+        variant="secondary"
+        className="border-transparent bg-amber-50 text-amber-800"
+      >
+        Vooruitblik
+      </Badge>
     );
   }
-  return <span className="text-[11px] capitalize text-muted">{status}</span>;
+  return (
+    <Badge variant="outline" className="capitalize">
+      {status}
+    </Badge>
+  );
 }
 
 function CopyMini({
@@ -241,31 +470,33 @@ function CopyMini({
   onCopy: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
-      onClick={onCopy}
-      className="shrink-0 border border-line bg-white px-1 py-0 text-[9px] font-semibold leading-4 text-muted hover:bg-wash hover:text-ink"
+      variant="ghost"
+      size="icon-xs"
+      onClick={(e) => {
+        e.stopPropagation();
+        onCopy();
+      }}
       title={copied ? "Gekopieerd" : "Kopieer"}
     >
-      {copied ? "✓" : "⎘"}
-    </button>
+      {copied ? "✓" : <Copy className="size-3" />}
+    </Button>
   );
 }
 
-function KindBadge({ kind, label }: { kind: InvoiceKind; label: string }) {
-  const cls =
-    kind === "installatie"
-      ? "border-green/25 bg-green-soft text-green-dark"
-      : kind === "wf"
-        ? "border-[#B7D9C4] bg-[#F4FBF7] text-[#0D5C32]"
-        : "border-line bg-wash text-muted";
-  return (
-    <span
-      className={`border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
-    >
-      {label}
-    </span>
-  );
+function amountQueryToCents(raw: string): number | null {
+  let s = raw.replace(/€/gi, "").replace(/\s/g, "");
+  if (!s || !/\d/.test(s)) return null;
+  if (s.includes(",")) {
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    s = s.replace(/\./g, "");
+  }
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
 }
 
 export function CreditfacturenPanel({
@@ -279,7 +510,8 @@ export function CreditfacturenPanel({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<MainTab>("concept_ab");
-  const [unitFilter, setUnitFilter] = useState<UnitFilter>("alles");
+  const [categorieFilter, setCategorieFilter] =
+    useState<CategorieFilter>("alles");
   /** Concepten: standaard vorige week (commissieronde). */
   const [weekScope, setWeekScope] = useState<WeekScope>("vorige");
   const vorigeWeek = useMemo(() => previousCreditWeek(), []);
@@ -328,21 +560,47 @@ export function CreditfacturenPanel({
   const [toekomstigVooruit, setToekomstigVooruit] =
     useState<ToekomstigeCreditfacturenPreview | null>(null);
   const [creatingConcepts, setCreatingConcepts] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRows, setEditRows] = useState<InboxRow[]>([]);
+  const [editFactuurId, setEditFactuurId] = useState("");
+  const [editRegels, setEditRegels] = useState<
+    { omschrijving: string; bedrag: string }[]
+  >([]);
+  const [aftrekBedrag, setAftrekBedrag] = useState("");
+  const [aftrekOmschrijving, setAftrekOmschrijving] = useState("");
+  const [editOpenKosten, setEditOpenKosten] = useState<AdviseurKosten[]>([]);
+  const [editSelectedKostenIds, setEditSelectedKostenIds] = useState<string[]>(
+    []
+  );
+  const [editSaving, setEditSaving] = useState(false);
+  const [detailGroup, setDetailGroup] = useState<PayoutGroup | null>(null);
+  const [detailFactuurId, setDetailFactuurId] = useState("");
+
+  const refreshAdvFacturen = useCallback(async () => {
+    const advRes = await fetch("/api/adviseurs/creditfacturen");
+    const advData = await advRes.json().catch(() => ({}));
+    if (!advRes.ok) return false;
+    setAllAdvFacturen(
+      ((advData as { facturen?: OverviewFactuur[] }).facturen ||
+        []) as OverviewFactuur[]
+    );
+    setAdviseurs(
+      ((advData as { adviseurs?: Adviseur[] }).adviseurs || []) as Adviseur[]
+    );
+    return true;
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [advRes, partRes, toeRes, toeVooruitRes] = await Promise.all([
+      // Snelle first paint: alleen bestaande facturen (read-only GETs).
+      const [advRes, partRes] = await Promise.all([
         fetch("/api/adviseurs/creditfacturen"),
         fetch("/api/partners/creditfacturen"),
-        fetch("/api/adviseurs/creditfacturen/toekomstig"),
-        fetch("/api/adviseurs/creditfacturen/toekomstig?mode=vooruit"),
       ]);
       const advData = await advRes.json().catch(() => ({}));
       const partData = await partRes.json().catch(() => ({}));
-      const toeData = await toeRes.json().catch(() => ({}));
-      const toeVooruitData = await toeVooruitRes.json().catch(() => ({}));
       if (!advRes.ok) {
         throw new Error(
           (advData as { error?: string }).error || "Adviseurs laden mislukt"
@@ -352,18 +610,6 @@ export function CreditfacturenPanel({
         throw new Error(
           (partData as { error?: string }).error || "Partners laden mislukt"
         );
-      }
-      if (toeRes.ok) {
-        setToekomstig(toeData as ToekomstigeCreditfacturenPreview);
-      } else {
-        setToekomstig(null);
-      }
-      if (toeVooruitRes.ok) {
-        setToekomstigVooruit(
-          toeVooruitData as ToekomstigeCreditfacturenPreview
-        );
-      } else {
-        setToekomstigVooruit(null);
       }
       setAllAdvFacturen(
         ((advData as { facturen?: OverviewFactuur[] }).facturen ||
@@ -391,32 +637,77 @@ export function CreditfacturenPanel({
     void loadAll();
   }, [loadAll]);
 
-  /** Eenmalig: ontbrekende sales-concepten (vorige week + week ervoor) aanmaken. */
-  const autoConceptsDone = useRef(false);
+  /** Preview + ensure op de achtergrond (blokkeert first paint niet). */
+  const backgroundSyncDone = useRef(false);
   useEffect(() => {
-    if (loading || autoConceptsDone.current) return;
-    const n = toekomstig?.totals.nieuw ?? 0;
-    if (n <= 0) return;
-    autoConceptsDone.current = true;
+    if (loading || backgroundSyncDone.current) return;
+    backgroundSyncDone.current = true;
     void (async () => {
       try {
-        const res = await fetch("/api/adviseurs/creditfacturen/toekomstig", {
-          method: "POST",
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) return;
-        const created = Number((json as { created?: number }).created || 0);
-        if (created > 0) {
-          setOkMsg(
-            `${created} sales-concept${created === 1 ? "" : "en"} klaargezet (W${weekDaarvoor.week}+W${vorigeWeek.week}).`
-          );
-          await loadAll();
+        const [toeRes, ensureRes] = await Promise.all([
+          fetch("/api/adviseurs/creditfacturen/toekomstig"),
+          fetch("/api/adviseurs/creditfacturen/ensure", { method: "POST" }),
+        ]);
+        const toeData = await toeRes.json().catch(() => ({}));
+        if (toeRes.ok) {
+          setToekomstig(toeData as ToekomstigeCreditfacturenPreview);
+        }
+
+        // Ensure kan bedragen/regels wijzigen of bel-/opsconcepten toevoegen.
+        if (ensureRes.ok) {
+          await ensureRes.json().catch(() => ({}));
+          await refreshAdvFacturen();
+        }
+
+        const nieuw = Number(
+          (toeData as ToekomstigeCreditfacturenPreview)?.totals?.nieuw || 0
+        );
+        if (toeRes.ok && nieuw > 0) {
+          const res = await fetch("/api/adviseurs/creditfacturen/toekomstig", {
+            method: "POST",
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) return;
+          const created = Number((json as { created?: number }).created || 0);
+          if (created > 0) {
+            setOkMsg(
+              `${created} sales-concept${created === 1 ? "" : "en"} klaargezet (W${weekDaarvoor.week}+W${vorigeWeek.week}).`
+            );
+            await refreshAdvFacturen();
+            setToekomstig(json as ToekomstigeCreditfacturenPreview);
+          }
         }
       } catch {
         /* stil — handmatige knop blijft beschikbaar */
       }
     })();
-  }, [loading, toekomstig, loadAll, weekDaarvoor.week, vorigeWeek.week]);
+  }, [
+    loading,
+    refreshAdvFacturen,
+    weekDaarvoor.week,
+    vorigeWeek.week,
+  ]);
+
+  /** Vooruit-preview pas laden als die scope actief is. */
+  useEffect(() => {
+    if (weekScope !== "vooruit") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          "/api/adviseurs/creditfacturen/toekomstig?mode=vooruit"
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        setToekomstigVooruit(data as ToekomstigeCreditfacturenPreview);
+      } catch {
+        if (!cancelled) setToekomstigVooruit(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [weekScope]);
 
   const loadDeals = useCallback(async (q: string) => {
     setDealsLoading(true);
@@ -465,12 +756,29 @@ export function CreditfacturenPanel({
 
     for (const f of allAdvFacturen) {
       if (f.status === "geannuleerd") continue;
-      if (f.adviseurs && isUitgeslotenVanSalesCommissie(f.adviseurs)) continue;
+      const keepCallcenter =
+        isBelcommissieCreditfactuur(f) || isOpsCommissieCreditfactuur(f);
+      if (
+        !keepCallcenter &&
+        f.adviseurs &&
+        isUitgeslotenVanSalesCommissie(f.adviseurs)
+      ) {
+        continue;
+      }
       const { kind, label } = parseKind("adviseur", f.factuur_nummer, {
         notities: f.notities,
       });
       const naam = f.adviseurs?.naam || "Onbekend";
+      const rol = f.adviseurs?.rol
+        ? normalizeRol(f.adviseurs.rol)
+        : null;
+      const categorie = resolvePayoutCategorie({
+        kind,
+        rol: f.adviseurs?.rol,
+      });
       const context = extractContext({ notities: f.notities });
+      const iban = f.adviseurs?.iban?.trim() || null;
+      const bedrijfsnaam = f.adviseurs?.bedrijfsnaam?.trim() || null;
       out.push({
         key: `a:${f.id}`,
         source: "adviseur",
@@ -478,11 +786,13 @@ export function CreditfacturenPanel({
         relatieId: f.adviseur_id,
         relatieNaam: naam,
         kvkOk: !kvkIncompleet(f.adviseurs || {}),
-        iban: f.adviseurs?.iban?.trim() || null,
-        bedrijfsnaam: f.adviseurs?.bedrijfsnaam?.trim() || null,
+        iban,
+        bedrijfsnaam,
         nummer: f.factuur_nummer,
         kind,
         kindLabel: label,
+        categorie,
+        rol,
         context,
         bedragEx: Number(f.bedrag_ex_btw || 0),
         bedragInc: Number(f.bedrag_inc_btw || 0),
@@ -492,7 +802,19 @@ export function CreditfacturenPanel({
         factuurdatum: f.factuurdatum,
         weekJaar: f.week_jaar ?? null,
         weekNummer: f.week_nummer ?? null,
-        searchText: [naam, f.factuur_nummer, f.notities, context, label]
+        searchText: [
+          naam,
+          f.factuur_nummer,
+          f.notities,
+          context,
+          label,
+          PAYOUT_CATEGORIE_LABEL[categorie],
+          bedrijfsnaam,
+          iban,
+          f.week_nummer != null ? `W${f.week_nummer} week${f.week_nummer}` : null,
+          String(f.bedrag_ex_btw ?? ""),
+          String(f.bedrag_inc_btw ?? ""),
+        ]
           .filter(Boolean)
           .join(" ")
           .toLowerCase(),
@@ -506,12 +828,16 @@ export function CreditfacturenPanel({
         omschrijving: f.omschrijving,
       });
       const naam = f.installatie_partners?.naam || "Onbekend";
+      const categorie = resolvePayoutCategorie({ kind });
       const context = extractContext({
         notities: f.notities,
         omschrijving: f.omschrijving,
         offerte_nummer: f.offerte_nummer,
         project_nummer: f.project_nummer,
       });
+      const iban = f.installatie_partners?.iban?.trim() || null;
+      const bedrijfsnaam =
+        f.installatie_partners?.bedrijfsnaam?.trim() || null;
       out.push({
         key: `p:${f.id}`,
         source: "partner",
@@ -519,11 +845,13 @@ export function CreditfacturenPanel({
         relatieId: f.partner_id,
         relatieNaam: naam,
         kvkOk: !kvkIncompleet(f.installatie_partners || {}),
-        iban: f.installatie_partners?.iban?.trim() || null,
-        bedrijfsnaam: f.installatie_partners?.bedrijfsnaam?.trim() || null,
+        iban,
+        bedrijfsnaam,
         nummer: f.factuur_nummer,
         kind,
         kindLabel: label,
+        categorie,
+        rol: null,
         context,
         bedragEx: Number(f.bedrag_ex_btw || 0),
         bedragInc: Number(f.bedrag_inc_btw || 0),
@@ -542,6 +870,12 @@ export function CreditfacturenPanel({
           f.project_nummer,
           context,
           label,
+          PAYOUT_CATEGORIE_LABEL[categorie],
+          bedrijfsnaam,
+          iban,
+          f.week_nummer != null ? `W${f.week_nummer} week${f.week_nummer}` : null,
+          String(f.bedrag_ex_btw ?? ""),
+          String(f.bedrag_inc_btw ?? ""),
         ]
           .filter(Boolean)
           .join(" ")
@@ -581,6 +915,8 @@ export function CreditfacturenPanel({
   const tabCounts = useMemo(() => {
     const conceptAb = rows.filter((r) => {
       if (r.status !== "concept" && r.status !== "verzonden") return false;
+      // Zonder IBAN betalen we niet uit → niet in concepten tonen
+      if (!r.iban?.trim()) return false;
       if (weekScope === "vorige" && !inUitbetalingsronde(r)) return false;
       if (weekScope === "vooruit" && !inVooruitWeek(r)) return false;
       return true;
@@ -618,14 +954,24 @@ export function CreditfacturenPanel({
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
-      if (unitFilter !== "alles" && r.kind !== unitFilter) return false;
+      if (categorieFilter !== "alles" && r.categorie !== categorieFilter) {
+        return false;
+      }
 
       if (tab === "concept_ab") {
         if (r.status !== "concept" && r.status !== "verzonden") return false;
+        // Zonder IBAN betalen we niet uit → niet in concepten tonen
+        if (!r.iban?.trim()) return false;
         if (weekScope === "vorige" && !inUitbetalingsronde(r)) return false;
         if (weekScope === "vooruit") {
-          // Vooruitblik: sales-concepten van de aankomende week; installatie niet
-          if (r.kind === "installatie") return false;
+          // Vooruitblik: sales-concepten van de aankomende week; bel/ops/installatie niet
+          if (
+            r.kind === "installatie" ||
+            r.kind === "bel" ||
+            r.kind === "ops"
+          ) {
+            return false;
+          }
           if (r.kind === "sales" && !inVooruitWeek(r)) return false;
         }
       } else if (tab === "te_betalen") {
@@ -634,18 +980,41 @@ export function CreditfacturenPanel({
         if (r.status !== "betaald") return false;
       }
 
-      if (
-        q &&
-        !r.searchText.includes(q) &&
-        !r.relatieNaam.toLowerCase().includes(q)
-      ) {
-        return false;
+      if (q) {
+        const tokens = q.split(/\s+/).filter(Boolean);
+        const hayRaw = [
+          r.searchText,
+          r.relatieNaam,
+          r.nummer,
+          r.bedrijfsnaam,
+          r.iban,
+          r.context,
+          r.kindLabel,
+          PAYOUT_CATEGORIE_LABEL[r.categorie],
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const hayNorm = normalizeSearchToken(hayRaw);
+        const allHit = tokens.every((token) => {
+          const cents = amountQueryToCents(token);
+          if (
+            cents != null &&
+            (Math.round(Math.abs(r.bedragEx) * 100) === cents ||
+              Math.round(Math.abs(r.bedragInc) * 100) === cents)
+          ) {
+            return true;
+          }
+          if (hayRaw.includes(token)) return true;
+          return hayNorm.includes(normalizeSearchToken(token));
+        });
+        if (!allHit) return false;
       }
       return true;
     });
   }, [
     rows,
-    unitFilter,
+    categorieFilter,
     tab,
     q,
     weekScope,
@@ -661,11 +1030,15 @@ export function CreditfacturenPanel({
     [adviseurs]
   );
 
-  function payoutKenmerk(
-    kind: "sales" | "installatie",
-    list: InboxRow[]
-  ): string {
-    const prefix = kind === "sales" ? "betaalcommissie" : "installatie";
+  function payoutKenmerk(kind: PayoutKind, list: InboxRow[]): string {
+    const prefix =
+      kind === "sales"
+        ? "betaalcommissie"
+        : kind === "bel"
+          ? "belcommissie"
+          : kind === "ops"
+            ? "opscommissie"
+            : "installatie";
     const weeks = [
       ...new Set(
         list
@@ -683,9 +1056,44 @@ export function CreditfacturenPanel({
   }
 
   function buildPayoutGroups(
-    kind: "sales" | "installatie",
-    list: InboxRow[]
+    kind: PayoutKind,
+    list: InboxRow[],
+    opts?: { individual?: boolean }
   ): PayoutGroup[] {
+    /** Betaald: elke factuur apart (zoekbaar op nummer). */
+    if (opts?.individual) {
+      return [...list]
+        .map((r) => {
+          const categorie =
+            r.categorie ||
+            resolvePayoutCategorie({ kind: r.kind, rol: r.rol });
+          return {
+            key: `${kind}:factuur:${r.id}`,
+            kind,
+            categorie,
+            relatieId: r.relatieId,
+            relatieNaam: r.relatieNaam,
+            bedrijfsnaam: r.bedrijfsnaam,
+            iban: r.iban,
+            kvkOk: r.kvkOk,
+            bedragEx: r.bedragEx,
+            bedragInc: r.bedragInc,
+            kenmerk: payoutKenmerk(kind, [r]),
+            deadline: payoutDeadlineYmd([r]),
+            rows: [r],
+            status: r.status,
+          } satisfies PayoutGroup;
+        })
+        .sort(
+          (a, b) =>
+            a.relatieNaam.localeCompare(b.relatieNaam, "nl") ||
+            (a.rows[0]?.nummer || "").localeCompare(
+              b.rows[0]?.nummer || "",
+              "nl"
+            )
+        );
+    }
+
     const byPerson = new Map<string, InboxRow[]>();
     for (const r of list) {
       const cur = byPerson.get(r.relatieId) || [];
@@ -696,9 +1104,13 @@ export function CreditfacturenPanel({
     for (const [relatieId, personRows] of byPerson) {
       const first = personRows[0];
       const statuses = [...new Set(personRows.map((r) => r.status))];
+      const categorie =
+        first.categorie ||
+        resolvePayoutCategorie({ kind: first.kind, rol: first.rol });
       groups.push({
         key: `${kind}:${relatieId}`,
         kind,
+        categorie,
         relatieId,
         relatieNaam: first.relatieNaam,
         bedrijfsnaam: first.bedrijfsnaam,
@@ -707,6 +1119,7 @@ export function CreditfacturenPanel({
         bedragEx: personRows.reduce((s, r) => s + r.bedragEx, 0),
         bedragInc: personRows.reduce((s, r) => s + r.bedragInc, 0),
         kenmerk: payoutKenmerk(kind, personRows),
+        deadline: payoutDeadlineYmd(personRows),
         rows: personRows,
         status: statuses.length === 1 ? statuses[0] : "mixed",
       });
@@ -715,26 +1128,38 @@ export function CreditfacturenPanel({
     return groups;
   }
 
+  const individualPayouts = tab === "betaald";
+
   const salesPayoutGroups = useMemo(() => {
     const fromFacturen = buildPayoutGroups(
       "sales",
-      filtered.filter((r) => r.kind === "sales")
+      filtered.filter((r) => r.kind === "sales" || r.kind === "wf"),
+      { individual: individualPayouts }
     );
-    if (weekScope !== "vooruit" || !toekomstigVooruit) return fromFacturen;
+    if (weekScope !== "vooruit" || !toekomstigVooruit || individualPayouts) {
+      return fromFacturen;
+    }
 
     // 1 week vooruit: merge bestaande concepten + preview uit aanbetalingen deze week
     const byId = new Map(fromFacturen.map((g) => [g.relatieId, g]));
     const weekLabel = toekomstigVooruit.week.week;
     const kenmerk = `betaalcommissie W${weekLabel}`;
+    const previewDeadline = toekomstigVooruit.week.betaalWoensdag;
     const needle = q;
 
     for (const p of toekomstigVooruit.perAdviseur) {
-      if (
-        needle &&
-        !p.naam.toLowerCase().includes(needle) &&
-        !p.id.toLowerCase().includes(needle)
-      ) {
-        continue;
+      if (needle) {
+        const hay = normalizeSearchToken(`${p.naam} ${p.id}`);
+        const tokens = needle.split(/\s+/).filter(Boolean);
+        if (
+          !tokens.every(
+            (t) =>
+              p.naam.toLowerCase().includes(t) ||
+              hay.includes(normalizeSearchToken(t))
+          )
+        ) {
+          continue;
+        }
       }
       const existing = byId.get(p.id);
       if (existing) {
@@ -745,26 +1170,42 @@ export function CreditfacturenPanel({
             bedragEx: p.bedragExBtw,
             bedragInc: Math.round(p.bedragExBtw * 1.21 * 100) / 100,
             kenmerk,
+            deadline: existing.deadline ?? previewDeadline,
             previewOrders: p.orders,
           });
         }
         continue;
       }
       const adv = adviseurs.find((a) => a.id === p.id);
+      const iban = adv?.iban?.trim() || null;
+      // Zonder IBAN niet in concepten / vooruitblik
+      if (!iban) continue;
       const kvkOk = Boolean(
         adv?.bedrijfsnaam && adv?.kvk_nummer && adv?.iban
       );
+      const previewCategorie = resolvePayoutCategorie({
+        kind: "sales",
+        rol: adv?.rol,
+      });
+      if (
+        categorieFilter !== "alles" &&
+        previewCategorie !== categorieFilter
+      ) {
+        continue;
+      }
       byId.set(p.id, {
         key: `preview-sales:${p.id}`,
         kind: "sales",
+        categorie: previewCategorie,
         relatieId: p.id,
         relatieNaam: p.naam,
         bedrijfsnaam: adv?.bedrijfsnaam?.trim() || null,
-        iban: adv?.iban?.trim() || null,
+        iban,
         kvkOk,
         bedragEx: p.bedragExBtw,
         bedragInc: Math.round(p.bedragExBtw * 1.21 * 100) / 100,
         kenmerk,
+        deadline: previewDeadline,
         rows: [],
         status: "preview",
         preview: true,
@@ -781,8 +1222,34 @@ export function CreditfacturenPanel({
     toekomstigVooruit,
     adviseurs,
     q,
+    categorieFilter,
     vorigeWeek.week,
+    individualPayouts,
   ]);
+
+  const belPayoutGroups = useMemo(
+    () =>
+      weekScope === "vooruit"
+        ? []
+        : buildPayoutGroups(
+            "bel",
+            filtered.filter((r) => r.kind === "bel"),
+            { individual: individualPayouts }
+          ),
+    [filtered, weekScope, vorigeWeek.week, individualPayouts]
+  );
+
+  const opsPayoutGroups = useMemo(
+    () =>
+      weekScope === "vooruit"
+        ? []
+        : buildPayoutGroups(
+            "ops",
+            filtered.filter((r) => r.kind === "ops"),
+            { individual: individualPayouts }
+          ),
+    [filtered, weekScope, vorigeWeek.week, individualPayouts]
+  );
 
   const installatiePayoutGroups = useMemo(
     () =>
@@ -790,14 +1257,38 @@ export function CreditfacturenPanel({
         ? []
         : buildPayoutGroups(
             "installatie",
-            filtered.filter((r) => r.kind === "installatie")
+            filtered.filter((r) => r.kind === "installatie"),
+            { individual: individualPayouts }
           ),
-    [filtered, weekScope, vorigeWeek.week]
+    [filtered, weekScope, vorigeWeek.week, individualPayouts]
   );
 
   const otherFilteredRows = useMemo(
-    () => filtered.filter((r) => r.kind !== "sales" && r.kind !== "installatie"),
+    () =>
+      filtered.filter(
+        (r) =>
+          r.kind !== "sales" &&
+          r.kind !== "wf" &&
+          r.kind !== "bel" &&
+          r.kind !== "ops" &&
+          r.kind !== "installatie"
+      ),
     [filtered]
+  );
+
+  const allPayoutGroups = useMemo(
+    () => [
+      ...salesPayoutGroups,
+      ...belPayoutGroups,
+      ...opsPayoutGroups,
+      ...installatiePayoutGroups,
+    ],
+    [
+      salesPayoutGroups,
+      belPayoutGroups,
+      opsPayoutGroups,
+      installatiePayoutGroups,
+    ]
   );
 
   async function copyField(key: string, value: string) {
@@ -1000,6 +1491,271 @@ export function CreditfacturenPanel({
     }
   }
 
+  function notitiesForRow(row: InboxRow): string | null {
+    if (row.source === "adviseur") {
+      return (
+        allAdvFacturen.find((f) => f.id === row.id)?.notities ?? null
+      );
+    }
+    return (
+      allPartnerFacturen.find((f) => f.id === row.id)?.notities ?? null
+    );
+  }
+
+  function loadEditRegelsForRow(row: InboxRow) {
+    const notes = notitiesForRow(row);
+    const parsed = parseCreditRegels(notes);
+    const regels =
+      parsed && parsed.length > 0
+        ? parsed
+        : [
+            {
+              omschrijving: `Vergoeding ${row.nummer}`,
+              bedrag: row.bedragEx,
+            },
+          ];
+    setEditRegels(
+      regels.map((r) => ({
+        omschrijving: r.omschrijving,
+        bedrag: String(r.bedrag),
+      }))
+    );
+  }
+
+  async function loadOpenKostenForRow(row: InboxRow) {
+    if (row.source !== "adviseur") {
+      setEditOpenKosten([]);
+      setEditSelectedKostenIds([]);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/adviseurs/kosten?adviseur_id=${encodeURIComponent(row.relatieId)}&status=open`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditOpenKosten([]);
+        setEditSelectedKostenIds([]);
+        return;
+      }
+      const list = ((data.kosten || []) as AdviseurKosten[]).map((k) => ({
+        ...k,
+        bedrag_ex_btw: Number(k.bedrag_ex_btw) || 0,
+      }));
+      setEditOpenKosten(list);
+      setEditSelectedKostenIds(list.map((k) => k.id));
+    } catch {
+      setEditOpenKosten([]);
+      setEditSelectedKostenIds([]);
+    }
+  }
+
+  function openEditConcept(rows: InboxRow[]) {
+    const editable = rows.filter(
+      (r) => r.status === "concept" || r.status === "verzonden"
+    );
+    if (editable.length === 0) return;
+    setDetailGroup(null);
+    setEditRows(editable);
+    setEditFactuurId(editable[0]!.id);
+    loadEditRegelsForRow(editable[0]!);
+    setAftrekBedrag("");
+    setAftrekOmschrijving("");
+    setEditOpenKosten([]);
+    setEditSelectedKostenIds([]);
+    setEditOpen(true);
+    void loadOpenKostenForRow(editable[0]!);
+  }
+
+  function openDetail(group: PayoutGroup) {
+    if (group.preview && group.rows.length === 0) {
+      setDetailGroup(group);
+      setDetailFactuurId("");
+      return;
+    }
+    setDetailGroup(group);
+    setDetailFactuurId(group.rows[0]?.id || "");
+  }
+
+  function openDetailFromRow(row: InboxRow) {
+    openDetail({
+      key: `detail:${row.key}`,
+      kind: kindToPayoutKind(row.kind),
+      categorie: row.categorie,
+      relatieId: row.relatieId,
+      relatieNaam: row.relatieNaam,
+      bedrijfsnaam: row.bedrijfsnaam,
+      iban: row.iban,
+      kvkOk: row.kvkOk,
+      bedragEx: row.bedragEx,
+      bedragInc: row.bedragInc,
+      kenmerk: row.context || row.nummer,
+      deadline: payoutDeadlineYmd([row]),
+      rows: [row],
+      status: row.status,
+    });
+  }
+
+  function rawFactuurForRow(row: InboxRow): OverviewFactuur | PartnerOverview | null {
+    if (row.source === "adviseur") {
+      return allAdvFacturen.find((f) => f.id === row.id) || null;
+    }
+    return allPartnerFacturen.find((f) => f.id === row.id) || null;
+  }
+
+  function adviseurForRow(row: InboxRow): Adviseur | null {
+    if (row.source !== "adviseur") return null;
+    return adviseurs.find((a) => a.id === row.relatieId) || null;
+  }
+
+  async function submitEditRegels() {
+    const row = editRows.find((r) => r.id === editFactuurId) || editRows[0];
+    if (!row) return;
+    const regels = editRegels
+      .map((r) => ({
+        omschrijving: r.omschrijving.trim(),
+        bedrag: Number(String(r.bedrag).replace(",", ".")),
+      }))
+      .filter((r) => r.omschrijving.length > 0);
+    if (regels.length === 0) {
+      setError("Minstens één regel is verplicht.");
+      return;
+    }
+    if (regels.some((r) => !Number.isFinite(r.bedrag))) {
+      setError("Alle bedragen moeten geldig zijn.");
+      return;
+    }
+    const som = Math.round(regels.reduce((s, r) => s + r.bedrag, 0) * 100) / 100;
+    if (som < 0) {
+      setError("Totaal mag niet onder €0.");
+      return;
+    }
+    setEditSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(payoutApiUrl(row), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row.id, regels }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Opslaan mislukt"
+        );
+      }
+      const nummer =
+        (json as { factuur?: { factuur_nummer?: string } }).factuur
+          ?.factuur_nummer || row.nummer;
+      setOkMsg(
+        `Concept ${nummer} bijgewerkt · ${formatEuro(som)} excl.`
+      );
+      setEditOpen(false);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Opslaan mislukt");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function submitAftrek() {
+    const row = editRows.find((r) => r.id === editFactuurId) || editRows[0];
+    if (!row) return;
+    const aftrek = Number(String(aftrekBedrag).replace(",", "."));
+    if (!Number.isFinite(aftrek) || aftrek <= 0) {
+      setError("Vul een aftrekbedrag groter dan 0 in.");
+      return;
+    }
+    setEditSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch(payoutApiUrl(row), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: row.id,
+          aftrek_ex_btw: aftrek,
+          aftrek_omschrijving: aftrekOmschrijving.trim() || null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Aftrek mislukt"
+        );
+      }
+      const nummer =
+        (json as { factuur?: { factuur_nummer?: string } }).factuur
+          ?.factuur_nummer || row.nummer;
+      setOkMsg(
+        `Aftrek op ${nummer}: −${formatEuro(aftrek)} excl. bijgewerkt.`
+      );
+      setEditOpen(false);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Aftrek mislukt");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function submitKostenAftrek() {
+    const row = editRows.find((r) => r.id === editFactuurId) || editRows[0];
+    if (!row || row.source !== "adviseur") return;
+    if (editSelectedKostenIds.length === 0) {
+      setError("Selecteer minstens één open kostenpost.");
+      return;
+    }
+    const som = editOpenKosten
+      .filter((k) => editSelectedKostenIds.includes(k.id))
+      .reduce((s, k) => s + (Number(k.bedrag_ex_btw) || 0), 0);
+    if (som > row.bedragEx + 0.001) {
+      setError(
+        `Geselecteerde kosten (${formatEuro(som)}) zijn hoger dan het factuurbedrag (${formatEuro(row.bedragEx)}).`
+      );
+      return;
+    }
+    setEditSaving(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/adviseurs/creditfacturen", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: row.id,
+          kosten_ids: editSelectedKostenIds,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Kosten aftrekken mislukt"
+        );
+      }
+      const nummer =
+        (json as { factuur?: { factuur_nummer?: string } }).factuur
+          ?.factuur_nummer || row.nummer;
+      const n =
+        (json as { kosten_ingedekt?: number }).kosten_ingedekt ||
+        editSelectedKostenIds.length;
+      setOkMsg(
+        `${n} kostenpost(en) afgetrokken op ${nummer} (−${formatEuro(som)} excl.).`
+      );
+      setEditOpen(false);
+      await loadAll();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Kosten aftrekken mislukt"
+      );
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
   async function patchStatus(
     row: InboxRow,
     status: "verzonden" | "goedgekeurd" | "betaald"
@@ -1093,6 +1849,7 @@ export function CreditfacturenPanel({
           : `${group.relatieNaam}: ${formatEuro(group.bedragEx)} bevestigd — wacht op acceptatie.`
       );
       if (anyTeBetalen) setTab("te_betalen");
+      setDetailGroup(null);
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bevestigen mislukt");
@@ -1148,6 +1905,7 @@ export function CreditfacturenPanel({
       }
       setOkMsg(`${group.relatieNaam} gemarkeerd als betaald.`);
       setTab("betaald");
+      setDetailGroup(null);
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Betaald zetten mislukt");
@@ -1189,160 +1947,417 @@ export function CreditfacturenPanel({
     (weekScope === "vooruit" ? toekomstigVooruit : toekomstig)?.totals
       .nieuw ?? 0;
 
-  return (
-    <div className={embedded ? "" : "space-y-4"}>
-      <div className={embedded ? "" : "border border-line bg-white"}>
-        <div
-          className={[
-            "flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5",
-            "border-b border-line",
-          ].join(" ")}
-        >
-          <div>
-            {!embedded ? (
+  const payoutSections = PAYOUT_CATEGORIE_ORDER.map((cat) => {
+    const groups = allPayoutGroups.filter((g) => g.categorie === cat);
+    return [PAYOUT_CATEGORIE_LABEL[cat], groups] as const;
+  }).filter(([, groups]) => groups.length > 0);
+
+  function renderPayoutRow(g: PayoutGroup) {
+    const busy = busyId === g.key || busyId === `pdf-${g.key}`;
+    const canBevestig =
+      !g.preview &&
+      tab === "concept_ab" &&
+      g.rows.some((r) => r.status === "concept" || r.status === "verzonden");
+    const canBetaald =
+      !g.preview &&
+      tab === "te_betalen" &&
+      g.rows.every((r) => r.status === "goedgekeurd");
+    const isBetaald = tab === "betaald" || g.status === "betaald";
+    const primaryNummer = g.preview
+      ? null
+      : g.rows.map((r) => r.nummer).filter(Boolean)[0] || null;
+    const extraNummers = g.preview
+      ? 0
+      : Math.max(0, g.rows.map((r) => r.nummer).filter(Boolean).length - 1);
+    const orderCount =
+      g.preview && g.previewOrders ? g.previewOrders : g.rows.length;
+    const statusKey = g.preview
+      ? "preview"
+      : isBetaald
+        ? "betaald"
+        : g.status === "mixed"
+          ? "concept"
+          : g.status;
+    const cell = "h-9 px-2 py-0 align-middle";
+    const stopBtn = (e: ReactMouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("button")) e.stopPropagation();
+    };
+    return (
+      <TableRow
+        key={g.key}
+        role="button"
+        tabIndex={0}
+        className="cursor-pointer hover:bg-wash/70"
+        onClick={() => openDetail(g)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openDetail(g);
+          }
+        }}
+      >
+        <TableCell className={cell} onClick={stopBtn}>
+          <div className="flex items-center gap-0.5">
+            {g.preview ? (
+              <span className="truncate text-[11px] text-muted-foreground">
+                {g.previewOrders ?? 0}× aanbet.
+              </span>
+            ) : primaryNummer ? (
               <>
-                <h2 className="font-display text-lg font-semibold text-ink">
-                  Uitbetalingen
-                </h2>
-                <p className="mt-1 text-sm text-muted">
-                  Per persoon één bedrag · Bevestig → te betalen → betaald
-                </p>
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground"
+                  title={g.rows.map((r) => r.nummer).join(" · ")}
+                >
+                  {primaryNummer}
+                  {extraNummers > 0 ? ` +${extraNummers}` : ""}
+                </span>
+                <CopyMini
+                  copied={copiedKey === `${g.key}:factuur`}
+                  onCopy={() =>
+                    void copyField(`${g.key}:factuur`, primaryNummer)
+                  }
+                />
               </>
             ) : (
-              <p className="text-sm text-muted">
-                Concept a.b. · te betalen · betaald
-              </p>
+              <span className="text-[11px] text-muted-foreground">—</span>
             )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {nieuwCount > 0 ? (
-              <button
-                type="button"
-                disabled={creatingConcepts}
-                onClick={() => void maakConcepten()}
-                className="bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-              >
-                {creatingConcepts
-                  ? "Bezig…"
-                  : `Maak ${nieuwCount} concept${nieuwCount === 1 ? "" : "en"}`}
-              </button>
-            ) : null}
-            <button
+            <Button
               type="button"
-              onClick={() => {
-                setShowCreate((v) => !v);
-                setError(null);
-                setOkMsg(null);
-                if (showCreate) resetCreateForm();
-              }}
-              className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-deeper"
+              variant="ghost"
+              size="icon-xs"
+              className="shrink-0"
+              disabled={busy || g.preview || g.rows.length === 0}
+              title="PDF"
+              onClick={() => void downloadPayoutGroupPdfs(g)}
             >
-              {showCreate ? "Sluiten" : "Nieuwe factuur"}
-            </button>
+              <FileText className="size-3.5" />
+            </Button>
           </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-px border-b border-line bg-line">
-          {(
-            [
-              [
-                "concept_ab",
-                "Concept a.b.",
-                String(tabCounts.concept_ab),
-                formatEuro(tabCounts.conceptEuro),
-              ],
-              [
-                "te_betalen",
-                "Te betalen",
-                String(tabCounts.te_betalen),
-                formatEuro(tabCounts.teBetalenEuro),
-              ],
-              ["betaald", "Betaald", String(tabCounts.betaald), ""],
-            ] as const
-          ).map(([id, label, count, euro]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setTab(id)}
-              className={[
-                "bg-white px-4 py-3 text-left transition",
-                tab === id ? "ring-2 ring-inset ring-green" : "hover:bg-wash",
-              ].join(" ")}
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {label}
-              </p>
-              <p className="mt-1 font-display text-lg font-semibold tabular-nums text-ink">
-                {count}
-              </p>
-              {euro ? (
-                <p className="mt-0.5 text-[11px] tabular-nums text-muted">
-                  {euro} excl.
-                </p>
-              ) : null}
-            </button>
-          ))}
-        </div>
-
-        {bannerPreview && tab === "concept_ab" ? (
-          <div
-            className={[
-              "border-b border-line px-4 py-3 sm:px-5",
-              weekScope === "vooruit" ? "bg-[#FFF8F0]" : "bg-[#F7FAF8]",
-            ].join(" ")}
+        </TableCell>
+        <TableCell className={cell}>
+          <span
+            className="block truncate text-[13px] font-medium text-foreground"
+            title={
+              [g.bedrijfsnaam, !g.kvkOk ? "KvK/IBAN ontbreekt" : null]
+                .filter(Boolean)
+                .join(" · ") || undefined
+            }
           >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  {weekScope === "vooruit"
-                    ? "1 week vooruit · volgende uitbetaling"
-                    : "Aankomende betaling"}
-                </p>
-                <p className="mt-0.5 font-display text-sm font-semibold text-ink">
-                  {bannerPreview.betaalLabel}
-                </p>
-                <p className="mt-0.5 text-xs text-muted">
-                  Week {bannerPreview.week.week} ·{" "}
-                  {formatDateShort(`${bannerPreview.week.van}T12:00:00`)} –{" "}
-                  {formatDateShort(`${bannerPreview.week.tot}T12:00:00`)} ·{" "}
-                  {bannerPreview.totals.orders} order
-                  {bannerPreview.totals.orders === 1 ? "" : "s"}
-                  {nieuwCount > 0
-                    ? ` · ${nieuwCount} nog zonder concept`
-                    : ""}
-                  {weekScope === "vooruit"
-                    ? " · aanbetalingen deze week"
-                    : ""}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="font-display text-lg font-semibold tabular-nums text-ink">
-                  {formatEuro(bannerPreview.totals.bedragExBtw)}
-                </p>
-                {weekScope !== "vooruit" ? (
-                  <button
-                    type="button"
-                    onClick={() => setWeekScope("vooruit")}
-                    className="mt-1 text-[11px] font-semibold text-green-dark hover:underline"
-                  >
-                    Bekijk 1 week vooruit →
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setWeekScope("vorige")}
-                    className="mt-1 text-[11px] font-semibold text-muted hover:underline"
-                  >
-                    ← Terug naar uitbetalingsronde
-                  </button>
-                )}
-              </div>
-            </div>
+            {g.relatieNaam}
+          </span>
+        </TableCell>
+        <TableCell className={cn(cell, "text-right")}>
+          <span
+            className="block tabular-nums text-[13px] font-semibold text-foreground"
+            title={`${formatEuro(g.bedragInc)} incl.${orderCount > 1 ? ` · ${orderCount}×` : ""}`}
+          >
+            {formatEuro(g.bedragEx)}
+          </span>
+        </TableCell>
+        <TableCell className={cell} onClick={stopBtn}>
+          <div className="flex items-center gap-0.5">
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+              {g.iban || "—"}
+            </span>
+            {g.iban ? (
+              <CopyMini
+                copied={copiedKey === `${g.key}:iban`}
+                onCopy={() => void copyField(`${g.key}:iban`, g.iban!)}
+              />
+            ) : null}
           </div>
+        </TableCell>
+        <TableCell className={cell} onClick={stopBtn}>
+          <div className="flex items-center gap-0.5">
+            <span
+              className="min-w-0 flex-1 truncate text-[11px] text-foreground"
+              title={g.kenmerk}
+            >
+              {g.kenmerk}
+            </span>
+            <CopyMini
+              copied={copiedKey === `${g.key}:kenmerk`}
+              onCopy={() => void copyField(`${g.key}:kenmerk`, g.kenmerk)}
+            />
+          </div>
+        </TableCell>
+        {tab === "te_betalen" ? (
+          <TableCell className={cell}>
+            <span
+              className={cn(
+                "text-[11px] font-medium tabular-nums",
+                !g.deadline
+                  ? "text-muted-foreground"
+                  : g.deadline < todayYmdAmsterdam()
+                    ? "text-orange-700"
+                    : g.deadline === todayYmdAmsterdam()
+                      ? "text-emerald-700"
+                      : "text-foreground"
+              )}
+              title={
+                g.deadline
+                  ? formatDeadlineLabel(g.deadline)
+                  : undefined
+              }
+            >
+              {formatDeadlineShort(g.deadline)}
+            </span>
+          </TableCell>
         ) : null}
+        <TableCell className={cell}>
+          <StatusBadge
+            status={statusKey}
+            goedgekeurd_op={null}
+            betaald_op={
+              isBetaald
+                ? g.rows.find((r) => r.betaald_op)?.betaald_op || null
+                : null
+            }
+          />
+        </TableCell>
+        <TableCell className={cn(cell, "text-right")} onClick={stopBtn}>
+          <div className="inline-flex items-center justify-end gap-1">
+            {canBevestig ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="h-7 px-1.5"
+                disabled={busy}
+                onClick={() => openEditConcept(g.rows)}
+                title="Bewerken"
+              >
+                <Pencil className="size-3" />
+              </Button>
+            ) : null}
+            {canBevestig ? (
+              <Button
+                type="button"
+                size="xs"
+                className="h-7 bg-orange px-2 text-[11px] text-white hover:bg-orange/90"
+                disabled={busy || !g.kvkOk}
+                onClick={() => void bevestigPayoutGroup(g)}
+                title={!g.kvkOk ? "Vul eerst ZZP-gegevens in" : "Bevestig"}
+              >
+                Bevestig
+              </Button>
+            ) : null}
+            {canBetaald ? (
+              <Button
+                type="button"
+                size="xs"
+                className="h-7 px-2 text-[11px]"
+                disabled={busy}
+                onClick={() => void markPayoutGroupBetaald(g)}
+              >
+                Betaald
+              </Button>
+            ) : null}
+            {!canBevestig && !canBetaald ? (
+              <span className="text-[11px] text-muted-foreground">—</span>
+            ) : null}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
 
-        {showCreate ? (
-          <div className="space-y-3 border-b border-line bg-wash/40 px-4 py-4 sm:px-5">
+  return (
+    <div className={cn("space-y-4", embedded && "space-y-3")}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          {!embedded ? (
+            <>
+              <h2 className="font-heading text-xl font-semibold tracking-tight text-foreground">
+                Uitbetalingen
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Per persoon één bedrag · bevestigen → betalen → afgerond
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Concept a.b. · te betalen · betaald
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {nieuwCount > 0 ? (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={creatingConcepts}
+              onClick={() => void maakConcepten()}
+            >
+              {creatingConcepts
+                ? "Bezig…"
+                : `Maak ${nieuwCount} concept${nieuwCount === 1 ? "" : "en"}`}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            onClick={() => {
+              setShowCreate((v) => !v);
+              setError(null);
+              setOkMsg(null);
+              if (showCreate) resetCreateForm();
+            }}
+          >
+            {showCreate ? (
+              "Sluiten"
+            ) : (
+              <>
+                <Plus data-icon="inline-start" />
+                Nieuwe factuur
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative w-full max-w-xl">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Zoek naam, factuurnr, IBAN, kenmerk, bedrag, W45…"
+            className="bg-background pl-8"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {tab === "concept_ab" ? (
+            <NativeSelect
+              value={weekScope}
+              onChange={(e) => setWeekScope(e.target.value as WeekScope)}
+              className="min-w-[14rem]"
+            >
+              <NativeSelectOption value="vorige">
+                W{weekDaarvoor.week}+W{vorigeWeek.week} (+ openstaand)
+              </NativeSelectOption>
+              <NativeSelectOption value="vooruit">
+                W{toekomstigVooruit?.week.week ?? huidigeWeek.week} · 1 week
+                vooruit
+              </NativeSelectOption>
+              <NativeSelectOption value="alles">Alle weken</NativeSelectOption>
+            </NativeSelect>
+          ) : null}
+          <NativeSelect
+            value={categorieFilter}
+            onChange={(e) =>
+              setCategorieFilter(e.target.value as CategorieFilter)
+            }
+            className="min-w-[10rem]"
+          >
+            <NativeSelectOption value="alles">Alle categorieën</NativeSelectOption>
+            <NativeSelectOption value="adviseur">Adviseur</NativeSelectOption>
+            <NativeSelectOption value="beller">Beller</NativeSelectOption>
+            <NativeSelectOption value="operations">Operations</NativeSelectOption>
+            <NativeSelectOption value="directie">Directie</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        {(
+          [
+            {
+              id: "concept_ab" as MainTab,
+              label: "Concept a.b.",
+              value: String(tabCounts.concept_ab),
+              hint: `${formatEuro(tabCounts.conceptEuro)} excl.`,
+            },
+            {
+              id: "te_betalen" as MainTab,
+              label: "Te betalen",
+              value: String(tabCounts.te_betalen),
+              hint: `${formatEuro(tabCounts.teBetalenEuro)} excl.`,
+            },
+            {
+              id: "betaald" as MainTab,
+              label: "Betaald",
+              value: String(tabCounts.betaald),
+              hint: "Afgeronde uitbetalingen",
+            },
+          ] as const
+        ).map((card) => {
+          const active = tab === card.id;
+          return (
+            <button
+              key={card.label}
+              type="button"
+              onClick={() => setTab(card.id)}
+              className={cn(
+                "rounded-xl border bg-card p-4 text-left shadow-xs transition hover:bg-wash/60",
+                active && "ring-2 ring-ring"
+              )}
+            >
+              <p className="text-xs font-medium text-muted-foreground">
+                {card.label}
+              </p>
+              <p className="mt-2 font-heading text-2xl font-semibold tracking-tight tabular-nums text-foreground">
+                {card.value}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{card.hint}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {bannerPreview && tab === "concept_ab" ? (
+        <Card size="sm" className="bg-wash/40 shadow-none ring-border/60">
+          <CardHeader className="flex flex-row items-start justify-between gap-3">
+            <div>
+              <CardDescription>
+                {weekScope === "vooruit"
+                  ? "1 week vooruit · volgende uitbetaling"
+                  : "Aankomende betaling"}
+              </CardDescription>
+              <CardTitle className="mt-1">
+                {bannerPreview.betaalLabel}
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Week {bannerPreview.week.week} ·{" "}
+                {formatDateShort(`${bannerPreview.week.van}T12:00:00`)} –{" "}
+                {formatDateShort(`${bannerPreview.week.tot}T12:00:00`)} ·{" "}
+                {bannerPreview.totals.orders} order
+                {bannerPreview.totals.orders === 1 ? "" : "s"}
+                {nieuwCount > 0 ? ` · ${nieuwCount} nog zonder concept` : ""}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="font-heading text-xl font-semibold tabular-nums">
+                {formatEuro(bannerPreview.totals.bedragExBtw)}
+              </p>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto px-0"
+                onClick={() =>
+                  setWeekScope(weekScope === "vooruit" ? "vorige" : "vooruit")
+                }
+              >
+                {weekScope === "vooruit"
+                  ? "← Terug naar uitbetalingsronde"
+                  : "Bekijk 1 week vooruit →"}
+              </Button>
+            </div>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      {showCreate ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Nieuwe factuur</CardTitle>
+            <CardDescription>
+              Sales, Warmtefonds of installatie-concept aanmaken
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
             <div className="flex flex-wrap gap-2">
               {(
                 [
@@ -1351,9 +2366,11 @@ export function CreditfacturenPanel({
                   ["installatie", "Installatie"],
                 ] as const
               ).map(([id, label]) => (
-                <button
+                <Button
                   key={id}
                   type="button"
+                  size="sm"
+                  variant={createKind === id ? "default" : "outline"}
                   onClick={() => {
                     setCreateKind(id);
                     if (id === "sales") {
@@ -1366,114 +2383,96 @@ export function CreditfacturenPanel({
                       setCreateBedrag("");
                     }
                   }}
-                  className={[
-                    "px-3 py-1.5 text-xs font-semibold",
-                    createKind === id
-                      ? "bg-ink text-white"
-                      : "border border-line bg-white text-muted hover:bg-wash",
-                  ].join(" ")}
                 >
                   {label}
-                </button>
+                </Button>
               ))}
             </div>
 
             {createKind === "sales" ? (
               <>
                 <div className="flex flex-wrap gap-2">
-                  <button
+                  <Button
                     type="button"
+                    size="sm"
+                    variant={createMode === "handmatig" ? "default" : "outline"}
                     onClick={() => {
                       setCreateMode("handmatig");
                       setCreateBedrag(String(VERKOPER_AANBETALING_FEE));
                     }}
-                    className={[
-                      "px-3 py-1.5 text-xs font-semibold",
-                      createMode === "handmatig"
-                        ? "bg-green text-white"
-                        : "border border-line bg-white text-muted hover:bg-wash",
-                    ].join(" ")}
                   >
                     Handmatig
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    size="sm"
+                    variant={createMode === "deal" ? "default" : "outline"}
                     onClick={() => {
                       setCreateMode("deal");
                       setCreateBedrag("");
                     }}
-                    className={[
-                      "px-3 py-1.5 text-xs font-semibold",
-                      createMode === "deal"
-                        ? "bg-green text-white"
-                        : "border border-line bg-white text-muted hover:bg-wash",
-                    ].join(" ")}
                   >
                     Vanuit deal
-                  </button>
+                  </Button>
                 </div>
 
                 {createMode === "handmatig" ? (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                       Verkoper
-                      <select
+                      <NativeSelect
                         value={createAdviseurId}
                         onChange={(e) => setCreateAdviseurId(e.target.value)}
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                        className="w-full"
                       >
-                        <option value="">Kies…</option>
+                        <NativeSelectOption value="">Kies…</NativeSelectOption>
                         {salesAdviseurs.map((a) => (
-                          <option key={a.id} value={a.id}>
+                          <NativeSelectOption key={a.id} value={a.id}>
                             {a.naam}
-                          </option>
+                          </NativeSelectOption>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </label>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                       Bedrag excl. btw
-                      <input
-                        type="text"
+                      <Input
                         inputMode="decimal"
                         value={createBedrag}
                         onChange={(e) => setCreateBedrag(e.target.value)}
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                       />
                     </label>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted sm:col-span-2">
+                    <label className="block space-y-1.5 text-xs font-medium text-muted-foreground sm:col-span-2">
                       Omschrijving (optioneel)
-                      <input
-                        type="text"
+                      <Input
                         value={createOmschrijving}
                         onChange={(e) => setCreateOmschrijving(e.target.value)}
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                       />
                     </label>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    <label className="block max-w-md space-y-1.5 text-xs font-medium text-muted-foreground">
                       Zoek deal
-                      <input
+                      <Input
                         type="search"
                         value={dealQuery}
                         onChange={(e) => setDealQuery(e.target.value)}
                         placeholder="Klant, plaats of offertenr…"
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green sm:max-w-md"
                       />
                     </label>
-                    <div className="max-h-48 overflow-y-auto border border-line bg-white">
+                    <div className="max-h-48 overflow-y-auto rounded-lg border">
                       {dealsLoading ? (
-                        <p className="px-3 py-4 text-sm text-muted">Laden…</p>
+                        <p className="px-3 py-4 text-sm text-muted-foreground">
+                          Laden…
+                        </p>
                       ) : dealOptions.length === 0 ? (
-                        <p className="px-3 py-4 text-sm text-muted">
+                        <p className="px-3 py-4 text-sm text-muted-foreground">
                           Geen deals gevonden.
                         </p>
                       ) : (
-                        <ul className="divide-y divide-line">
+                        <ul className="divide-y">
                           {dealOptions.map((d) => {
-                            const selected =
-                              selectedOfferteId === d.offerte_id;
+                            const selected = selectedOfferteId === d.offerte_id;
                             return (
                               <li key={d.offerte_id}>
                                 <button
@@ -1484,18 +2483,16 @@ export function CreditfacturenPanel({
                                       setCreateAdviseurId(d.adviseur_id);
                                     }
                                   }}
-                                  className={[
+                                  className={cn(
                                     "flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left text-sm",
-                                    selected
-                                      ? "bg-green-soft"
-                                      : "hover:bg-wash",
-                                  ].join(" ")}
+                                    selected ? "bg-primary/5" : "hover:bg-wash"
+                                  )}
                                 >
                                   <span>
-                                    <span className="font-medium text-ink">
+                                    <span className="font-medium text-foreground">
                                       {d.klant_naam}
                                     </span>
-                                    <span className="mt-0.5 block text-xs text-muted">
+                                    <span className="mt-0.5 block text-xs text-muted-foreground">
                                       {d.offerte_nummer || "Offerte"}
                                       {d.adviseur_naam
                                         ? ` · ${d.adviseur_naam}`
@@ -1504,9 +2501,7 @@ export function CreditfacturenPanel({
                                     </span>
                                   </span>
                                   {selected ? (
-                                    <span className="shrink-0 text-xs font-semibold text-green-dark">
-                                      Gekozen
-                                    </span>
+                                    <Badge variant="secondary">Gekozen</Badge>
                                   ) : null}
                                 </button>
                               </li>
@@ -1515,41 +2510,27 @@ export function CreditfacturenPanel({
                         </ul>
                       )}
                     </div>
-                    <div className="sm:max-w-xs">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        Soort commissie
-                      </p>
-                      <div className="mt-1 inline-flex border border-line">
-                        <button
-                          type="button"
-                          onClick={() => setCreateTranche("a")}
-                          className={[
-                            "px-3 py-1.5 text-xs font-semibold",
-                            createTranche === "a"
-                              ? "bg-ink text-white"
-                              : "bg-white text-muted hover:bg-wash",
-                          ].join(" ")}
-                        >
-                          A · aanbetaling
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCreateTranche("b")}
-                          className={[
-                            "px-3 py-1.5 text-xs font-semibold",
-                            createTranche === "b"
-                              ? "bg-ink text-white"
-                              : "bg-white text-muted hover:bg-wash",
-                          ].join(" ")}
-                        >
-                          B · rest / netto
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={createTranche === "a" ? "default" : "outline"}
+                        onClick={() => setCreateTranche("a")}
+                      >
+                        A · aanbetaling
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={createTranche === "b" ? "default" : "outline"}
+                        onClick={() => setCreateTranche("b")}
+                      >
+                        B · rest / netto
+                      </Button>
                     </div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted sm:max-w-xs">
+                    <label className="block max-w-xs space-y-1.5 text-xs font-medium text-muted-foreground">
                       Bedrag excl. (leeg = automatisch)
-                      <input
-                        type="text"
+                      <Input
                         inputMode="decimal"
                         value={createBedrag}
                         onChange={(e) => setCreateBedrag(e.target.value)}
@@ -1558,7 +2539,6 @@ export function CreditfacturenPanel({
                             ? "commissie% − €250"
                             : `€${VERKOPER_AANBETALING_FEE}`
                         }
-                        className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                       />
                     </label>
                   </div>
@@ -1566,563 +2546,1179 @@ export function CreditfacturenPanel({
               </>
             ) : createKind === "wf" ? (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Medewerker
-                  <select
+                  <NativeSelect
                     value={createAdviseurId}
                     onChange={(e) => setCreateAdviseurId(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                    className="w-full"
                   >
-                    <option value="">Kies…</option>
+                    <NativeSelectOption value="">Kies…</NativeSelectOption>
                     {adviseurs
                       .filter((a) => {
                         const n = (a.naam || "").toLowerCase();
-                        return !(
-                          n.includes("huub") && n.includes("veldman")
-                        );
+                        return !(n.includes("huub") && n.includes("veldman"));
                       })
                       .map((a) => (
-                        <option key={a.id} value={a.id}>
+                        <NativeSelectOption key={a.id} value={a.id}>
                           {a.naam}
-                        </option>
+                        </NativeSelectOption>
                       ))}
-                  </select>
+                  </NativeSelect>
                 </label>
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Bedrag excl. btw
-                  <input
-                    type="text"
+                  <Input
                     inputMode="decimal"
                     value={createBedrag}
                     onChange={(e) => setCreateBedrag(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                   />
                 </label>
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Omschrijving (optioneel)
-                  <input
-                    type="text"
+                  <Input
                     value={createOmschrijving}
                     onChange={(e) => setCreateOmschrijving(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                   />
                 </label>
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Installateur
-                  <select
+                  <NativeSelect
                     value={createPartnerId}
                     onChange={(e) => setCreatePartnerId(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
+                    className="w-full"
                   >
-                    <option value="">Kies…</option>
+                    <NativeSelectOption value="">Kies…</NativeSelectOption>
                     {partners.map((p) => (
-                      <option key={p.id} value={p.id}>
+                      <NativeSelectOption key={p.id} value={p.id}>
                         {p.naam}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Bedrag excl. btw
-                  <input
-                    type="text"
+                  <Input
                     inputMode="decimal"
                     value={createBedrag}
                     onChange={(e) => setCreateBedrag(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                   />
                 </label>
-                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
                   Omschrijving (optioneel)
-                  <input
-                    type="text"
+                  <Input
                     value={createOmschrijving}
                     onChange={(e) => setCreateOmschrijving(e.target.value)}
-                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink outline-none focus:border-green"
                   />
                 </label>
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-              <button
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button
                 type="button"
                 disabled={creating}
                 onClick={() => void submitCreate()}
-                className="bg-green px-4 py-2 text-sm font-semibold text-white hover:bg-green-deeper disabled:opacity-50"
               >
                 {creating ? "Bezig…" : "Maak concept"}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="outline"
                 disabled={creating}
                 onClick={() => {
                   setShowCreate(false);
                   resetCreateForm();
                 }}
-                className="border border-line bg-white px-4 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
               >
                 Annuleren
-              </button>
+              </Button>
             </div>
-          </div>
-        ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
-        <div className="flex flex-col gap-3 border-b border-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <div className="relative w-full sm:max-w-md">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted/50">
-              ⌕
-            </span>
-            <input
-              type="search"
-              inputMode="search"
-              placeholder="Zoek relatie, factuurnr, klant, project…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-line bg-white py-2.5 pl-8 pr-3 text-sm outline-none transition placeholder:text-muted/60 focus:border-green"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {tab === "concept_ab" ? (
-              <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Week
-                <select
-                  value={weekScope}
-                  onChange={(e) =>
-                    setWeekScope(e.target.value as WeekScope)
-                  }
-                  className="min-w-[12rem] border border-line bg-white px-2.5 py-2 text-xs font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
-                >
-                  <option value="vorige">
-                    W{weekDaarvoor.week}+W{vorigeWeek.week} (+ openstaand)
-                  </option>
-                  <option value="vooruit">
-                    W{toekomstigVooruit?.week.week ?? huidigeWeek.week} →{" "}
-                    {toekomstigVooruit?.betaalLabel ||
-                      `wo ${huidigeWeek.betaalWoensdag}`}{" "}
-                    (1 week vooruit)
-                  </option>
-                  <option value="alles">Alle weken</option>
-                </select>
-              </label>
-            ) : null}
-            <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Unit
-              <select
-                value={unitFilter}
-                onChange={(e) =>
-                  setUnitFilter(e.target.value as UnitFilter)
-                }
-                className="min-w-[9rem] border border-line bg-white px-2.5 py-2 text-xs font-semibold normal-case tracking-normal text-ink outline-none focus:border-green"
-              >
-                <option value="alles">Alles</option>
-                <option value="sales">Sales</option>
-                <option value="wf">WF</option>
-                <option value="installatie">Installatie</option>
-              </select>
-            </label>
-          </div>
+      {(error || okMsg) && (
+        <div className="space-y-2">
+          {error ? (
+            <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+              {error}
+            </div>
+          ) : null}
+          {okMsg ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              {okMsg}
+            </div>
+          ) : null}
         </div>
+      )}
 
-        {(error || okMsg) && (
-          <div className="space-y-2 border-b border-line px-4 py-3 sm:px-5">
-            {error && (
-              <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-                {error}
-              </p>
-            )}
-            {okMsg && (
-              <p className="border border-green/30 bg-green-soft px-3 py-2 text-xs text-green-dark">
-                {okMsg}
-              </p>
-            )}
-          </div>
-        )}
-
-        {loading ? (
-          <p className="px-5 py-10 text-center text-sm text-muted">Laden…</p>
-        ) : filtered.length === 0 &&
-          salesPayoutGroups.length === 0 &&
-          installatiePayoutGroups.length === 0 ? (
-          <p className="px-5 py-10 text-center text-sm text-muted">
-            {tab === "concept_ab"
-              ? weekScope === "vooruit"
-                ? "Nog geen aanbetalingen in deze week voor de volgende uitbetaling."
-                : nieuwCount > 0
-                  ? `Nog geen concepten. Klik “Maak ${nieuwCount} concepten” hierboven.`
-                  : "Geen conceptfacturen. Aankomende aanbetalingen verschijnen hier."
-              : tab === "te_betalen"
-                ? "Geen goedgekeurde facturen te betalen."
-                : "Nog geen betaalde facturen."}
-          </p>
-        ) : (
-          <>
-            <div className="border-b border-line px-4 py-2 text-xs text-muted sm:px-5">
-              {[
-                salesPayoutGroups.length > 0
-                  ? `${salesPayoutGroups.length} sales`
-                  : null,
-                installatiePayoutGroups.length > 0
-                  ? `${installatiePayoutGroups.length} installatie`
-                  : null,
-                otherFilteredRows.length > 0
-                  ? `${otherFilteredRows.length} overig`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" · ") ||
-                `${filtered.length} factuur${filtered.length === 1 ? "" : "en"}`}
-              {weekScope === "vooruit" ? " · vooruitblik" : ""}
-              {q ? ` · zoek: “${search.trim()}”` : ""}
+      <Card className="shadow-xs">
+        <CardHeader className="border-b [.border-b]:pb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Uitbetalingslijst</CardTitle>
+              <CardDescription>
+                {[
+                  ...PAYOUT_CATEGORIE_ORDER.map((cat) => {
+                    const n = allPayoutGroups.filter(
+                      (g) => g.categorie === cat
+                    ).length;
+                    return n > 0
+                      ? `${n} ${PAYOUT_CATEGORIE_LABEL[cat].toLowerCase()}`
+                      : null;
+                  }),
+                  otherFilteredRows.length > 0
+                    ? `${otherFilteredRows.length} overig`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") ||
+                  `${filtered.length} factuur${filtered.length === 1 ? "" : "en"}`}
+                {q ? ` · zoek “${search.trim()}”` : ""}
+              </CardDescription>
             </div>
-
-            {salesPayoutGroups.length > 0 ||
-            installatiePayoutGroups.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[960px] table-fixed text-left text-sm">
+            <Tabs
+              value={tab}
+              onValueChange={(id) => setTab(id as MainTab)}
+            >
+              <TabsList>
+                <TabsTrigger value="concept_ab">Concept</TabsTrigger>
+                <TabsTrigger value="te_betalen">Te betalen</TabsTrigger>
+                <TabsTrigger value="betaald">Betaald</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        </CardHeader>
+        <CardContent className="px-0 pt-0">
+          {loading ? (
+            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+              Laden…
+            </p>
+          ) : filtered.length === 0 && allPayoutGroups.length === 0 ? (
+            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+              {tab === "concept_ab"
+                ? weekScope === "vooruit"
+                  ? "Nog geen aanbetalingen in deze week voor de volgende uitbetaling."
+                  : nieuwCount > 0
+                    ? `Nog geen concepten. Klik “Maak ${nieuwCount} concepten” hierboven.`
+                    : "Geen conceptfacturen. Aankomende aanbetalingen verschijnen hier."
+                : tab === "te_betalen"
+                  ? "Geen goedgekeurde facturen te betalen."
+                  : "Nog geen betaalde facturen."}
+            </p>
+          ) : (
+            <>
+              {payoutSections.length > 0 ? (
+                <Table className="table-fixed w-full text-[13px]">
                   <colgroup>
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "12%" }} />
-                    <col style={{ width: "22%" }} />
-                    <col style={{ width: "16%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "16%" }} />
+                    {tab === "te_betalen" ? (
+                      <>
+                        <col className="w-[18%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[11%]" />
+                        <col className="w-[18%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[9%]" />
+                        <col className="w-[8%]" />
+                      </>
+                    ) : (
+                      <>
+                        <col className="w-[20%]" />
+                        <col className="w-[16%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[20%]" />
+                        <col className="w-[15%]" />
+                        <col className="w-[9%]" />
+                        <col className="w-[8%]" />
+                      </>
+                    )}
                   </colgroup>
-                  <thead>
-                    <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      <th className="px-3 py-1.5 sm:px-4">Relatie</th>
-                      <th className="px-2 py-1.5 text-right">Overmaken</th>
-                      <th className="px-2 py-1.5">IBAN</th>
-                      <th className="px-2 py-1.5">Kenmerk</th>
-                      <th className="px-2 py-1.5">Factuur</th>
-                      <th className="px-3 py-1.5 text-right sm:px-4"> </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(
-                      [
-                        ["Sales", salesPayoutGroups],
-                        ["Installatie", installatiePayoutGroups],
-                      ] as const
-                    ).flatMap(([sectionTitle, groups]) => {
-                      if (groups.length === 0) return [];
-                      return [
-                        <tr key={`sec-${sectionTitle}`}>
-                          <td
-                            colSpan={6}
-                            className="border-b border-line bg-wash/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-4"
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                        Factuur
+                      </TableHead>
+                      <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                        Relatie
+                      </TableHead>
+                      <TableHead className="h-8 px-2 text-right text-[11px] font-medium text-muted-foreground">
+                        Excl.
+                      </TableHead>
+                      <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                        IBAN
+                      </TableHead>
+                      <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                        Kenmerk
+                      </TableHead>
+                      {tab === "te_betalen" ? (
+                        <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                          Deadline
+                        </TableHead>
+                      ) : null}
+                      <TableHead className="h-8 px-2 text-[11px] font-medium text-muted-foreground">
+                        Status
+                      </TableHead>
+                      <TableHead className="h-8 px-2 text-right text-[11px] font-medium text-muted-foreground">
+                        Actie
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {payoutSections.flatMap(([sectionTitle, groups]) => [
+                      <TableRow
+                        key={`sec-${sectionTitle}`}
+                        className="hover:bg-transparent"
+                      >
+                        <TableCell
+                          colSpan={tab === "te_betalen" ? 8 : 7}
+                          className="bg-wash/60 py-1 px-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase"
+                        >
+                          {sectionTitle}
+                          {weekScope === "vooruit" &&
+                          sectionTitle === "Adviseur"
+                            ? " · aanbetalingen → volgende wo"
+                            : ""}
+                        </TableCell>
+                      </TableRow>,
+                      ...groups.map((g) => renderPayoutRow(g)),
+                    ])}
+                  </TableBody>
+                </Table>
+              ) : null}
+
+              {otherFilteredRows.length > 0 ? (
+                <div
+                  className={cn(
+                    payoutSections.length > 0 && "border-t"
+                  )}
+                >
+                  <div className="bg-wash/60 px-4 py-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                    Overig
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Relatie</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Deal / project</TableHead>
+                        <TableHead className="text-right">Excl.</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Acties</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {otherFilteredRows.map((r) => {
+                        const busy =
+                          busyId === r.key || busyId === `pdf-${r.key}`;
+                        return (
+                          <TableRow
+                            key={r.key}
+                            role="button"
+                            tabIndex={0}
+                            className="cursor-pointer hover:bg-wash/70"
+                            onClick={() => openDetailFromRow(r)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                openDetailFromRow(r);
+                              }
+                            }}
                           >
-                            {sectionTitle}
-                            {weekScope === "vooruit" &&
-                            sectionTitle === "Sales"
-                              ? " · aanbetalingen → volgende wo"
-                              : ""}
-                          </td>
-                        </tr>,
-                        ...groups.map((g) => {
-                          const busy =
-                            busyId === g.key || busyId === `pdf-${g.key}`;
-                          const canBevestig =
-                            !g.preview &&
-                            tab === "concept_ab" &&
-                            g.rows.some(
-                              (r) =>
-                                r.status === "concept" ||
-                                r.status === "verzonden"
-                            );
-                          const canBetaald =
-                            !g.preview &&
-                            tab === "te_betalen" &&
-                            g.rows.every((r) => r.status === "goedgekeurd");
-                          const isBetaald =
-                            tab === "betaald" || g.status === "betaald";
-                          const factuurHint = g.preview
-                            ? `${g.previewOrders ?? 0} aanbetaling${
-                                (g.previewOrders ?? 0) === 1 ? "" : "en"
-                              }`
-                            : g.rows
-                                .map((r) => r.nummer)
-                                .filter(Boolean)
-                                .slice(0, 2)
-                                .join(" · ");
-                          const orderCount =
-                            g.preview && g.previewOrders
-                              ? g.previewOrders
-                              : g.rows.length;
-                          return (
-                            <tr
-                              key={g.key}
-                              className="border-b border-line hover:bg-wash/60"
-                            >
-                              <td className="px-3 py-1.5 sm:px-4">
-                                <div className="truncate font-medium text-ink">
-                                  {g.relatieNaam}
-                                </div>
-                                {g.bedrijfsnaam ? (
-                                  <div className="truncate text-[11px] text-muted">
-                                    {g.bedrijfsnaam}
+                            <TableCell>
+                              <div className="flex min-w-0 items-center gap-3">
+                                <Avatar size="sm">
+                                  <AvatarFallback>
+                                    {initialsFromName(r.relatieNaam)}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="min-w-0">
+                                  <div className="truncate font-medium">
+                                    {r.relatieNaam}
                                   </div>
-                                ) : null}
-                                {!g.kvkOk ? (
-                                  <div className="text-[10px] font-semibold text-[#C45A12]">
-                                    KvK/IBAN
-                                  </div>
-                                ) : null}
-                              </td>
-                              <td className="px-2 py-1.5 text-right">
-                                <div className="font-semibold tabular-nums text-ink">
-                                  {formatEuro(g.bedragEx)}
-                                </div>
-                                <div className="text-[10px] tabular-nums text-muted">
-                                  {formatEuro(g.bedragInc)} inc.
-                                  {orderCount > 1
-                                    ? ` · ${orderCount}×`
-                                    : ""}
-                                </div>
-                              </td>
-                              <td className="px-2 py-1.5">
-                                <div className="flex min-w-0 items-center gap-1">
-                                  <span className="truncate font-mono text-[11px] text-ink">
-                                    {g.iban || "—"}
-                                  </span>
-                                  {g.iban ? (
+                                  <div className="flex min-w-0 items-center gap-1">
+                                    <span className="truncate font-mono text-xs text-muted-foreground">
+                                      {r.nummer}
+                                    </span>
                                     <CopyMini
-                                      copied={copiedKey === `${g.key}:iban`}
+                                      copied={copiedKey === `${r.key}:factuur`}
                                       onCopy={() =>
                                         void copyField(
-                                          `${g.key}:iban`,
-                                          g.iban!
+                                          `${r.key}:factuur`,
+                                          r.nummer
                                         )
                                       }
                                     />
-                                  ) : null}
+                                  </div>
                                 </div>
-                              </td>
-                              <td className="px-2 py-1.5">
-                                <div className="flex min-w-0 items-center gap-1">
-                                  <span className="truncate text-[11px] text-ink">
-                                    {g.kenmerk}
-                                  </span>
-                                  <CopyMini
-                                    copied={copiedKey === `${g.key}:kenmerk`}
-                                    onCopy={() =>
-                                      void copyField(
-                                        `${g.key}:kenmerk`,
-                                        g.kenmerk
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">
+                                {PAYOUT_CATEGORIE_LABEL[r.categorie]}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[14rem] truncate text-xs text-muted-foreground">
+                              {r.context || "—"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="font-semibold tabular-nums">
+                                {formatEuro(r.bedragEx)}
+                              </div>
+                              <div className="text-xs tabular-nums text-muted-foreground">
+                                {formatEuro(r.bedragInc)} inc.
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <StatusBadge
+                                status={r.status}
+                                goedgekeurd_op={r.goedgekeurd_op}
+                                betaald_op={r.betaald_op}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div
+                                className="inline-flex flex-wrap justify-end gap-1.5"
+                                onClick={(e) => {
+                                  const t = e.target as HTMLElement | null;
+                                  if (t?.closest("button")) e.stopPropagation();
+                                }}
+                              >
+                                {r.status === "concept" ||
+                                r.status === "verzonden" ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="xs"
+                                    disabled={busy}
+                                    onClick={() => openEditConcept([r])}
+                                    title="Concept bewerken / aftrek"
+                                  >
+                                    <Pencil data-icon="inline-start" />
+                                    Bewerk
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  disabled={busy}
+                                  onClick={() => void downloadPdf(r)}
+                                >
+                                  PDF
+                                </Button>
+                                {r.status === "concept" ||
+                                r.status === "verzonden" ? (
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    disabled={busy || !r.kvkOk}
+                                    onClick={() =>
+                                      void patchStatus(
+                                        r,
+                                        r.source === "adviseur"
+                                          ? "goedgekeurd"
+                                          : "verzonden"
                                       )
                                     }
-                                  />
-                                </div>
-                              </td>
-                              <td className="truncate px-2 py-1.5 text-[11px] text-muted">
-                                {factuurHint}
-                                {!g.preview && g.rows.length > 2
-                                  ? ` +${g.rows.length - 2}`
-                                  : ""}
-                              </td>
-                              <td className="px-3 py-1.5 text-right sm:px-4">
-                                <div className="inline-flex flex-wrap items-center justify-end gap-1">
-                                  {g.preview ? (
-                                    <span className="text-[11px] font-semibold text-[#854D0E]">
-                                      Vooruitblik
-                                    </span>
-                                  ) : isBetaald ? (
-                                    <StatusBadge
-                                      status="betaald"
-                                      goedgekeurd_op={null}
-                                      betaald_op={
-                                        g.rows.find((r) => r.betaald_op)
-                                          ?.betaald_op || null
-                                      }
-                                    />
-                                  ) : (
-                                    <StatusBadge
-                                      status={
-                                        g.status === "mixed"
-                                          ? "concept"
-                                          : g.status
-                                      }
-                                      goedgekeurd_op={null}
-                                      betaald_op={null}
-                                    />
-                                  )}
-                                  <button
-                                    type="button"
-                                    disabled={busy || g.preview || g.rows.length === 0}
-                                    onClick={() =>
-                                      void downloadPayoutGroupPdfs(g)
-                                    }
-                                    className="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                                    className="bg-orange text-white hover:bg-orange/90"
                                     title={
-                                      g.preview
-                                        ? "Eerst concepten maken"
+                                      !r.kvkOk
+                                        ? "Vul eerst ZZP-gegevens in"
                                         : undefined
                                     }
                                   >
-                                    PDF
-                                  </button>
-                                  {canBevestig ? (
-                                    <button
-                                      type="button"
-                                      disabled={busy || !g.kvkOk}
-                                      onClick={() =>
-                                        void bevestigPayoutGroup(g)
-                                      }
-                                      className="bg-orange px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                      title={
-                                        !g.kvkOk
-                                          ? "Vul eerst ZZP-gegevens in"
-                                          : "Bevestig uitbetaling"
-                                      }
-                                    >
-                                      Bevestig
-                                    </button>
-                                  ) : null}
-                                  {canBetaald ? (
-                                    <button
-                                      type="button"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void markPayoutGroupBetaald(g)
-                                      }
-                                      className="bg-green px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                    >
-                                      Betaald
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        }),
-                      ];
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-
-            {otherFilteredRows.length > 0 ? (
-              <div
-                className={`overflow-x-auto ${
-                  salesPayoutGroups.length > 0 ||
-                  installatiePayoutGroups.length > 0
-                    ? "border-t border-line"
-                    : ""
-                }`}
-              >
-                <div className="border-b border-line bg-wash/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-4">
-                  Overig
+                                    Bevestig
+                                  </Button>
+                                ) : null}
+                                {r.status === "goedgekeurd" ? (
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void patchStatus(r, "betaald")
+                                    }
+                                  >
+                                    Betaald
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
                 </div>
-                <table className="w-full min-w-[720px] text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      <th className="px-3 py-1.5 sm:px-4">Relatie</th>
-                      <th className="px-2 py-1.5">Type</th>
-                      <th className="px-2 py-1.5">Deal / project</th>
-                      <th className="px-2 py-1.5 text-right">Excl.</th>
-                      <th className="px-2 py-1.5">Status</th>
-                      <th className="px-3 py-1.5 text-right sm:px-4">Acties</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {otherFilteredRows.map((r) => {
-                      const busy =
-                        busyId === r.key || busyId === `pdf-${r.key}`;
-                      return (
-                        <tr key={r.key} className="hover:bg-wash/60">
-                          <td className="px-3 py-1.5 sm:px-4">
-                            <span className="font-medium text-ink">
-                              {r.relatieNaam}
-                            </span>
-                            <span className="ml-1.5 text-[11px] text-muted">
-                              {r.nummer}
-                            </span>
-                            {!r.kvkOk ? (
-                              <span className="ml-1.5 text-[10px] font-semibold text-[#C45A12]">
-                                KvK
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <KindBadge kind={r.kind} label={r.kindLabel} />
-                          </td>
-                          <td className="max-w-[14rem] truncate px-2 py-1.5 text-[11px] text-muted">
-                            {r.context || "—"}
-                          </td>
-                          <td className="px-2 py-1.5 text-right">
-                            <span className="font-semibold tabular-nums text-ink">
-                              {formatEuro(r.bedragEx)}
-                            </span>
-                            <span className="ml-1 text-[10px] tabular-nums text-muted">
-                              ({formatEuro(r.bedragInc)} inc.)
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <StatusBadge
-                              status={r.status}
-                              goedgekeurd_op={r.goedgekeurd_op}
-                              betaald_op={r.betaald_op}
+              ) : null}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Sheet
+        open={detailGroup != null}
+        onOpenChange={(open) => {
+          if (!open) setDetailGroup(null);
+        }}
+      >
+        <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-md">
+          {detailGroup ? (
+            (() => {
+              const g = detailGroup;
+              const row =
+                g.rows.find((r) => r.id === detailFactuurId) ||
+                g.rows[0] ||
+                null;
+              const raw = row ? rawFactuurForRow(row) : null;
+              const adv = row ? adviseurForRow(row) : null;
+              const bedragEx = g.bedragEx;
+              const bedragInc = g.bedragInc;
+              const btw = Math.round((bedragInc - bedragEx) * 100) / 100;
+              const regels =
+                row != null
+                  ? parseCreditRegels(notitiesForRow(row)) ||
+                    (raw && "omschrijving" in raw && raw.omschrijving
+                      ? [
+                          {
+                            omschrijving: String(raw.omschrijving),
+                            bedrag: row.bedragEx,
+                          },
+                        ]
+                      : [
+                          {
+                            omschrijving: g.kenmerk || "Vergoeding",
+                            bedrag: row?.bedragEx ?? bedragEx,
+                          },
+                        ])
+                  : [
+                      {
+                        omschrijving: g.kenmerk || "Vergoeding",
+                        bedrag: bedragEx,
+                      },
+                    ];
+              const adresParts = [
+                g.relatieNaam,
+                g.bedrijfsnaam || adv?.bedrijfsnaam || null,
+                adv?.factuur_adres || null,
+                [adv?.factuur_postcode, adv?.factuur_plaats]
+                  .filter(Boolean)
+                  .join(" ") || null,
+              ].filter(Boolean);
+              const factuurdatum = row?.factuurdatum || raw?.factuurdatum || null;
+              const deadline =
+                g.deadline || (row ? payoutDeadlineYmd([row]) : null);
+              const canBevestig =
+                !g.preview &&
+                tab === "concept_ab" &&
+                g.rows.some(
+                  (r) => r.status === "concept" || r.status === "verzonden"
+                );
+              const canBetaald =
+                !g.preview &&
+                tab === "te_betalen" &&
+                g.rows.every((r) => r.status === "goedgekeurd");
+              const canEdit =
+                !g.preview &&
+                tab === "concept_ab" &&
+                g.rows.some(
+                  (r) => r.status === "concept" || r.status === "verzonden"
+                );
+              const busy = busyId === g.key || busyId === `pdf-${g.key}`;
+              const sheetTitle =
+                tab === "concept_ab"
+                  ? "Factuur controleren"
+                  : tab === "te_betalen"
+                    ? "Uitbetaling"
+                    : "Factuurgegevens";
+              const statusForBadge =
+                g.preview
+                  ? "preview"
+                  : g.status === "mixed"
+                    ? row?.status || "concept"
+                    : g.status;
+              const history: { label: string; at: string }[] = [];
+              if (raw?.created_at) {
+                history.push({
+                  label: "Factuur aangemaakt",
+                  at: raw.created_at,
+                });
+              }
+              if (raw?.verzonden_op) {
+                history.push({
+                  label: "Bevestigd / verzonden",
+                  at: raw.verzonden_op,
+                });
+              }
+              if (raw?.goedgekeurd_op) {
+                history.push({
+                  label:
+                    tab === "concept_ab"
+                      ? "Acceptatie ontvangen"
+                      : "Goedgekeurd",
+                  at: raw.goedgekeurd_op,
+                });
+              }
+              if (raw?.betaald_op) {
+                history.push({ label: "Betaald", at: raw.betaald_op });
+              }
+
+              return (
+                <>
+                  <SheetHeader className="border-b px-4 py-4 text-left">
+                    <SheetTitle>{sheetTitle}</SheetTitle>
+                    <SheetDescription className="sr-only">
+                      Details voor {g.relatieNaam}
+                    </SheetDescription>
+                  </SheetHeader>
+
+                  <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-heading text-xl font-semibold tracking-tight text-foreground">
+                          {g.relatieNaam}
+                        </p>
+                        <div className="mt-0.5 flex min-w-0 items-center gap-1">
+                          <p className="truncate text-sm text-muted-foreground">
+                            {row?.nummer ||
+                              (g.preview
+                                ? `${g.previewOrders ?? 0} aanbetaling(en)`
+                                : g.rows.map((r) => r.nummer).join(" · "))}
+                          </p>
+                          {row?.nummer ? (
+                            <CopyMini
+                              copied={copiedKey === `${g.key}:detail-nummer`}
+                              onCopy={() =>
+                                void copyField(
+                                  `${g.key}:detail-nummer`,
+                                  row.nummer
+                                )
+                              }
                             />
-                          </td>
-                          <td className="px-3 py-1.5 text-right sm:px-4">
-                            <div className="inline-flex flex-wrap justify-end gap-1">
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => void downloadPdf(r)}
-                                className="border border-line bg-white px-1.5 py-0.5 text-[10px] font-semibold text-ink hover:bg-wash disabled:opacity-60"
+                          ) : null}
+                        </div>
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className={cn(
+                          "shrink-0 border-transparent",
+                          statusForBadge === "betaald"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : statusForBadge === "goedgekeurd"
+                              ? "bg-amber-50 text-amber-800"
+                              : "bg-emerald-50 text-emerald-800"
+                        )}
+                      >
+                        {detailStatusLabel(statusForBadge, tab)}
+                      </Badge>
+                    </div>
+
+                    {g.rows.length > 1 ? (
+                      <div className="space-y-1.5">
+                        <Label>Factuur</Label>
+                        <NativeSelect
+                          value={detailFactuurId || g.rows[0]!.id}
+                          onChange={(e) => setDetailFactuurId(e.target.value)}
+                          className="w-full"
+                        >
+                          {g.rows.map((r) => (
+                            <NativeSelectOption key={r.id} value={r.id}>
+                              {r.nummer} · {formatEuro(r.bedragEx)}
+                            </NativeSelectOption>
+                          ))}
+                        </NativeSelect>
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-xl border bg-card p-4 shadow-xs">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                            Factuur
+                          </p>
+                          <div className="mt-0.5 flex items-center gap-1">
+                            <p className="font-mono text-sm text-foreground">
+                              {row?.nummer || "—"}
+                            </p>
+                            {row?.nummer ? (
+                              <CopyMini
+                                copied={
+                                  copiedKey === `${g.key}:detail-card-nummer`
+                                }
+                                onCopy={() =>
+                                  void copyField(
+                                    `${g.key}:detail-card-nummer`,
+                                    row.nummer
+                                  )
+                                }
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                      <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                        {adresParts.join(", ") || "—"}
+                      </p>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                        <div>
+                          Factuurdatum:{" "}
+                          <span className="text-foreground">
+                            {factuurdatum
+                              ? formatDateShort(factuurdatum)
+                              : "—"}
+                          </span>
+                        </div>
+                        <div>
+                          Deadline:{" "}
+                          <span className="text-foreground">
+                            {deadline
+                              ? formatDateShort(`${deadline}T12:00:00`)
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-4 overflow-hidden rounded-lg border">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-wash/60 text-muted-foreground">
+                            <tr>
+                              <th className="px-2 py-1.5 font-medium">
+                                Omschrijving
+                              </th>
+                              <th className="px-2 py-1.5 text-right font-medium">
+                                Excl.
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {regels.map((regel, i) => (
+                              <tr
+                                key={`${regel.omschrijving}-${i}`}
+                                className="border-t"
                               >
-                                PDF
-                              </button>
-                              {r.status === "concept" ||
-                              r.status === "verzonden" ? (
-                                <button
-                                  type="button"
-                                  disabled={busy || !r.kvkOk}
-                                  onClick={() =>
-                                    void patchStatus(
-                                      r,
-                                      r.source === "adviseur"
-                                        ? "goedgekeurd"
-                                        : "verzonden"
-                                    )
-                                  }
-                                  className="bg-orange px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                  title={
-                                    !r.kvkOk
-                                      ? "Vul eerst ZZP-gegevens in"
-                                      : undefined
-                                  }
+                                <td className="px-2 py-1.5 text-foreground">
+                                  {regel.omschrijving}
+                                </td>
+                                <td
+                                  className={cn(
+                                    "px-2 py-1.5 text-right tabular-nums",
+                                    regel.bedrag < 0
+                                      ? "text-orange-700"
+                                      : "text-foreground"
+                                  )}
                                 >
-                                  Bevestig
-                                </button>
-                              ) : null}
-                              {r.status === "goedgekeurd" ? (
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => void patchStatus(r, "betaald")}
-                                  className="bg-green px-1.5 py-0.5 text-[10px] font-semibold text-white disabled:opacity-60"
-                                >
-                                  Betaald
-                                </button>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
+                                  {formatEuro(regel.bedrag)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div className="space-y-1 border-t bg-wash/40 px-2 py-2 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              Excl. btw
+                            </span>
+                            <span className="tabular-nums">
+                              {formatEuro(row?.bedragEx ?? bedragEx)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              Btw 21%
+                            </span>
+                            <span className="tabular-nums">
+                              {formatEuro(
+                                row
+                                  ? Math.round(
+                                      (row.bedragInc - row.bedragEx) * 100
+                                    ) / 100
+                                  : btw
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex justify-between font-semibold">
+                            <span>Totaal incl. btw</span>
+                            <span className="tabular-nums">
+                              {formatEuro(row?.bedragInc ?? bedragInc)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      {row && !g.preview ? (
+                        <button
+                          type="button"
+                          className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                          onClick={() => void downloadPdf(row)}
+                        >
+                          Bekijk volledige factuur
+                          <ExternalLink className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-sm text-muted-foreground">
+                          Excl. btw
+                        </span>
+                        <span className="tabular-nums text-foreground">
+                          {formatEuro(bedragEx)}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-sm text-muted-foreground">
+                          Btw 21%
+                        </span>
+                        <span className="tabular-nums text-foreground">
+                          {formatEuro(btw)}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3 border-t pt-2">
+                        <span className="text-sm font-medium text-foreground">
+                          {tab === "betaald" ? "Betaald" : "Te betalen"}
+                        </span>
+                        <span className="font-heading text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+                          {formatEuro(bedragInc)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                        Betaalgegevens
+                      </p>
+                      <div className="rounded-xl border bg-wash/40 px-3 py-3 text-sm">
+                        <p className="font-medium text-foreground">
+                          {g.bedrijfsnaam || adv?.bedrijfsnaam || g.relatieNaam}
+                        </p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {g.iban ? maskIban(g.iban) : "IBAN ontbreekt"}
+                          </span>
+                          {g.iban ? (
+                            <CopyMini
+                              copied={copiedKey === `${g.key}:detail-iban`}
+                              onCopy={() =>
+                                void copyField(`${g.key}:detail-iban`, g.iban!)
+                              }
+                            />
+                          ) : null}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-2 border-t pt-2">
+                          <span className="text-xs text-muted-foreground">
+                            Kenmerk
+                          </span>
+                          <div className="flex min-w-0 items-center gap-1">
+                            <span className="truncate text-xs font-medium text-foreground">
+                              {g.kenmerk}
+                            </span>
+                            <CopyMini
+                              copied={copiedKey === `${g.key}:detail-kenmerk`}
+                              onCopy={() =>
+                                void copyField(
+                                  `${g.key}:detail-kenmerk`,
+                                  g.kenmerk
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {history.length > 0 ? (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                          Geschiedenis
+                        </p>
+                        <ul className="space-y-3">
+                          {history.map((h) => (
+                            <li
+                              key={`${h.label}-${h.at}`}
+                              className="flex items-start gap-2.5"
+                            >
+                              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-foreground">
+                                  {h.label}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatDateTimeNl(h.at)}
+                                </p>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <SheetFooter className="border-t px-4 py-3 sm:flex-row">
+                    {canEdit ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1"
+                        disabled={busy}
+                        onClick={() => {
+                          openEditConcept(g.rows);
+                        }}
+                      >
+                        <Pencil data-icon="inline-start" />
+                        Bewerken
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1"
+                        disabled={busy || g.preview || g.rows.length === 0}
+                        onClick={() => void downloadPayoutGroupPdfs(g)}
+                      >
+                        <FileText data-icon="inline-start" />
+                        PDF
+                      </Button>
+                    )}
+                    {canBevestig ? (
+                      <Button
+                        type="button"
+                        className="flex-1"
+                        disabled={busy || !g.kvkOk}
+                        title={
+                          !g.kvkOk ? "Vul eerst ZZP-gegevens in" : undefined
+                        }
+                        onClick={() => void bevestigPayoutGroup(g)}
+                      >
+                        Goedkeuren
+                      </Button>
+                    ) : null}
+                    {canBetaald ? (
+                      <Button
+                        type="button"
+                        className="flex-1"
+                        disabled={busy}
+                        onClick={() => void markPayoutGroupBetaald(g)}
+                      >
+                        Betaald
+                      </Button>
+                    ) : null}
+                    {!canBevestig && !canBetaald && tab === "betaald" ? (
+                      <Button
+                        type="button"
+                        className="flex-1"
+                        variant="secondary"
+                        onClick={() => setDetailGroup(null)}
+                      >
+                        Sluiten
+                      </Button>
+                    ) : null}
+                  </SheetFooter>
+                </>
+              );
+            })()
+          ) : null}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={editOpen} onOpenChange={setEditOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md">
+          {(() => {
+            const row =
+              editRows.find((r) => r.id === editFactuurId) || editRows[0] || null;
+            if (!row) {
+              return (
+                <SheetHeader>
+                  <SheetTitle>Concept bewerken</SheetTitle>
+                  <SheetDescription>Geen factuur geselecteerd.</SheetDescription>
+                </SheetHeader>
+              );
+            }
+            const draftParsed = editRegels.map((r) => ({
+              omschrijving: r.omschrijving.trim(),
+              bedrag: Number(String(r.bedrag).replace(",", ".")),
+            }));
+            const draftOk =
+              draftParsed.length > 0 &&
+              draftParsed.every(
+                (r) => r.omschrijving.length > 0 && Number.isFinite(r.bedrag)
+              );
+            const previewEx = draftOk
+              ? Math.round(
+                  draftParsed.reduce((s, r) => s + r.bedrag, 0) * 100
+                ) / 100
+              : row.bedragEx;
+            const previewInc =
+              Math.round(previewEx * 1.21 * 100) / 100;
+            const aftrekNum = Number(String(aftrekBedrag).replace(",", "."));
+            const aftrekReady =
+              Number.isFinite(aftrekNum) && aftrekNum > 0;
+            return (
+              <>
+                <SheetHeader>
+                  <SheetTitle>Concept bewerken</SheetTitle>
+                  <SheetDescription>
+                    {row.relatieNaam} · {row.nummer} · regels aanpassen of
+                    verwijderen
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4">
+                  {editRows.length > 1 ? (
+                    <div className="space-y-1.5">
+                      <Label>Factuur</Label>
+                      <NativeSelect
+                        value={editFactuurId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          setEditFactuurId(id);
+                          const next =
+                            editRows.find((r) => r.id === id) || editRows[0];
+                          if (next) {
+                            loadEditRegelsForRow(next);
+                            void loadOpenKostenForRow(next);
+                          }
+                        }}
+                        className="w-full"
+                      >
+                        {editRows.map((r) => (
+                          <NativeSelectOption key={r.id} value={r.id}>
+                            {r.nummer} · {formatEuro(r.bedragEx)}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>Regels</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={() =>
+                          setEditRegels((list) => [
+                            ...list,
+                            { omschrijving: "", bedrag: "" },
+                          ])
+                        }
+                      >
+                        <Plus data-icon="inline-start" />
+                        Regel
+                      </Button>
+                    </div>
+                    {editRegels.map((regel, idx) => (
+                      <div
+                        key={`edit-regel-${idx}`}
+                        className="space-y-2 rounded-lg border border-line p-2.5"
+                      >
+                        <Input
+                          value={regel.omschrijving}
+                          onChange={(e) =>
+                            setEditRegels((list) =>
+                              list.map((r, i) =>
+                                i === idx
+                                  ? { ...r, omschrijving: e.target.value }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Omschrijving"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Input
+                            inputMode="decimal"
+                            value={regel.bedrag}
+                            onChange={(e) =>
+                              setEditRegels((list) =>
+                                list.map((r, i) =>
+                                  i === idx
+                                    ? { ...r, bedrag: e.target.value }
+                                    : r
+                                )
+                              )
+                            }
+                            placeholder="Bedrag excl."
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            disabled={editRegels.length <= 1}
+                            aria-label="Regel verwijderen"
+                            onClick={() =>
+                              setEditRegels((list) =>
+                                list.filter((_, i) => i !== idx)
+                              )
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex items-baseline justify-between border-t pt-2">
+                      <span className="text-xs text-muted-foreground">
+                        Totaal excl.
+                      </span>
+                      <span className="font-heading text-lg font-semibold tabular-nums">
+                        {formatEuro(previewEx)}
+                      </span>
+                    </div>
+                    <p className="text-right text-xs text-muted-foreground">
+                      ≈ {formatEuro(previewInc)} incl. btw
+                    </p>
+                  </div>
+
+                  {row.source === "adviseur" && editOpenKosten.length > 0 ? (
+                    <div className="space-y-2 rounded-lg border border-line bg-[#FAFBFA] p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-ink">
+                          Open kosten / voorschotten
+                        </p>
+                        <button
+                          type="button"
+                          className="text-[11px] font-semibold text-green-dark hover:underline"
+                          onClick={() => {
+                            const allSelected =
+                              editSelectedKostenIds.length ===
+                              editOpenKosten.length;
+                            setEditSelectedKostenIds(
+                              allSelected
+                                ? []
+                                : editOpenKosten.map((k) => k.id)
+                            );
+                          }}
+                        >
+                          {editSelectedKostenIds.length ===
+                          editOpenKosten.length
+                            ? "Deselecteer alles"
+                            : "Selecteer alles"}
+                        </button>
+                      </div>
+                      <ul className="space-y-1.5">
+                        {editOpenKosten.map((k) => {
+                          const checked = editSelectedKostenIds.includes(k.id);
+                          return (
+                            <li key={k.id}>
+                              <label className="flex cursor-pointer items-start gap-2 rounded-md border border-line bg-white px-2.5 py-2 text-sm hover:bg-wash/60">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={checked}
+                                  onChange={() => {
+                                    setEditSelectedKostenIds((ids) =>
+                                      checked
+                                        ? ids.filter((id) => id !== k.id)
+                                        : [...ids, k.id]
+                                    );
+                                  }}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium text-ink">
+                                    {k.omschrijving}
+                                  </span>
+                                  <span className="block text-[11px] text-muted">
+                                    {k.soort === "voorschot"
+                                      ? "Voorschot"
+                                      : k.soort === "correctie"
+                                        ? "Correctie"
+                                        : "Kosten"}
+                                    {k.kosten_datum
+                                      ? ` · ${formatDateShort(k.kosten_datum)}`
+                                      : ""}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 tabular-nums font-semibold text-ink">
+                                  −{formatEuro(Number(k.bedrag_ex_btw) || 0)}
+                                </span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <p className="text-right text-xs text-muted">
+                        Geselecteerd:{" "}
+                        <span className="font-semibold tabular-nums text-ink">
+                          −
+                          {formatEuro(
+                            editOpenKosten
+                              .filter((k) =>
+                                editSelectedKostenIds.includes(k.id)
+                              )
+                              .reduce(
+                                (s, k) => s + (Number(k.bedrag_ex_btw) || 0),
+                                0
+                              )
+                          )}
+                        </span>{" "}
+                        excl.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="w-full"
+                        disabled={
+                          editSaving || editSelectedKostenIds.length === 0
+                        }
+                        onClick={() => void submitKostenAftrek()}
+                      >
+                        Kosten aftrekken van factuur
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2 rounded-lg border border-dashed border-line p-3">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Of snelle aftrek
+                    </p>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="Aftrek excl. btw"
+                      value={aftrekBedrag}
+                      onChange={(e) => setAftrekBedrag(e.target.value)}
+                    />
+                    <Input
+                      placeholder="Reden (optioneel)"
+                      value={aftrekOmschrijving}
+                      onChange={(e) => setAftrekOmschrijving(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <SheetFooter>
+                  <Button
+                    type="button"
+                    disabled={editSaving || !draftOk || previewEx < 0}
+                    onClick={() => void submitEditRegels()}
+                  >
+                    {editSaving ? "Opslaan…" : "Regels opslaan"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={editSaving || !aftrekReady}
+                    onClick={() => void submitAftrek()}
+                  >
+                    Aftrek toepassen
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={editSaving}
+                    onClick={() => setEditOpen(false)}
+                  >
+                    Annuleren
+                  </Button>
+                </SheetFooter>
+              </>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

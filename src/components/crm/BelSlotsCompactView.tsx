@@ -28,7 +28,7 @@ type CompactPayload = {
 
 /** Compacte agenda-heatmap voor Bellen-rapportage: groen=vrij, rood=bezet. */
 export function BelSlotsCompactView({
-  days = 14,
+  days = 16,
 }: {
   days?: number;
 }) {

@@ -18,7 +18,10 @@ import {
 import { logLeadEvent } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
-import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
+import {
+  ensureAdviseurCommissieTrancheB,
+  stripHoldSalesFromOpenSalesCreditfacturen,
+} from "@/lib/netto-creditfactuur";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
@@ -30,6 +33,7 @@ import {
   withLeverancierBetalingInChecks,
 } from "@/lib/inkoop-leverancier-betaling";
 import type { InkoopLeverancierStatus } from "@/lib/project-inkoop-checklist";
+import { holdSalesDeadlineAt } from "@/lib/hold-sales";
 
 export const runtime = "nodejs";
 
@@ -229,6 +233,14 @@ export async function PATCH(
     schouw_notities?: string | null;
     installatie_notities?: string | null;
     service_notities?: string | null;
+    monteur_beoordeling_sterren?: number | string | null;
+    monteur_beoordeling_notitie?: string | null;
+    monteur_beoordeling_door?: string | null;
+    klantvriendelijkheid_sterren?: number | string | null;
+    klantvriendelijkheid_notitie?: string | null;
+    klantvriendelijkheid_door?: string | null;
+    /** AlphaESS systeem SIN (15 tekens, AL…). */
+    systeem_sin?: string | null;
     btw_terugvragen_aangevraagd_at?: string | null;
     overstap_dynamische_leverancier_at?: string | null;
     review_gevraagd_at?: string | null;
@@ -498,6 +510,142 @@ export async function PATCH(
   if (body.service_notities !== undefined) {
     patch.service_notities = body.service_notities?.trim() || null;
   }
+  if (body.systeem_sin !== undefined) {
+    const { normalizeSysteemSin, validateSysteemSin } = await import(
+      "@/lib/systeem-sin"
+    );
+    if (body.systeem_sin === null || String(body.systeem_sin).trim() === "") {
+      patch.systeem_sin = null;
+    } else {
+      const sin = normalizeSysteemSin(String(body.systeem_sin));
+      const sinErr = validateSysteemSin(sin);
+      if (sinErr) {
+        return NextResponse.json({ error: sinErr }, { status: 400 });
+      }
+      const { data: dupes } = await getSupabaseAdmin()
+        .from("projecten")
+        .select("id, project_nummer")
+        .eq("systeem_sin", sin)
+        .neq("id", id)
+        .limit(1);
+      if (dupes && dupes.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Dit SIN staat al op ${dupes[0].project_nummer || "ander project"}.`,
+          },
+          { status: 409 }
+        );
+      }
+      patch.systeem_sin = sin;
+    }
+  }
+
+  if (body.monteur_beoordeling_sterren !== undefined) {
+    const raw = body.monteur_beoordeling_sterren;
+    if (raw === null || raw === "") {
+      patch.monteur_beoordeling_sterren = null;
+      patch.monteur_beoordeling_op = null;
+      patch.monteur_beoordeling_door = null;
+    } else {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > 5) {
+        return NextResponse.json(
+          { error: "Beoordeling moet 0 t/m 5 sterren zijn" },
+          { status: 400 }
+        );
+      }
+      patch.monteur_beoordeling_sterren = n;
+      patch.monteur_beoordeling_op = new Date().toISOString();
+      if (body.monteur_beoordeling_door !== undefined) {
+        patch.monteur_beoordeling_door =
+          typeof body.monteur_beoordeling_door === "string"
+            ? body.monteur_beoordeling_door.trim() || null
+            : null;
+      }
+    }
+  }
+  if (body.monteur_beoordeling_notitie !== undefined) {
+    patch.monteur_beoordeling_notitie =
+      typeof body.monteur_beoordeling_notitie === "string"
+        ? body.monteur_beoordeling_notitie.trim() || null
+        : null;
+    if (
+      body.monteur_beoordeling_sterren === undefined &&
+      patch.monteur_beoordeling_notitie
+    ) {
+      patch.monteur_beoordeling_op = new Date().toISOString();
+      if (body.monteur_beoordeling_door !== undefined) {
+        patch.monteur_beoordeling_door =
+          typeof body.monteur_beoordeling_door === "string"
+            ? body.monteur_beoordeling_door.trim() || null
+            : null;
+      }
+    }
+  }
+  if (
+    body.monteur_beoordeling_door !== undefined &&
+    body.monteur_beoordeling_sterren === undefined &&
+    body.monteur_beoordeling_notitie === undefined
+  ) {
+    patch.monteur_beoordeling_door =
+      typeof body.monteur_beoordeling_door === "string"
+        ? body.monteur_beoordeling_door.trim() || null
+        : null;
+  }
+
+  if (body.klantvriendelijkheid_sterren !== undefined) {
+    const raw = body.klantvriendelijkheid_sterren;
+    if (raw === null || raw === "") {
+      patch.klantvriendelijkheid_sterren = null;
+      patch.klantvriendelijkheid_op = null;
+      patch.klantvriendelijkheid_door = null;
+    } else {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > 5) {
+        return NextResponse.json(
+          { error: "Klantvriendelijkheid moet 0 t/m 5 sterren zijn" },
+          { status: 400 }
+        );
+      }
+      patch.klantvriendelijkheid_sterren = n;
+      patch.klantvriendelijkheid_op = new Date().toISOString();
+      if (body.klantvriendelijkheid_door !== undefined) {
+        patch.klantvriendelijkheid_door =
+          typeof body.klantvriendelijkheid_door === "string"
+            ? body.klantvriendelijkheid_door.trim() || null
+            : null;
+      }
+    }
+  }
+  if (body.klantvriendelijkheid_notitie !== undefined) {
+    patch.klantvriendelijkheid_notitie =
+      typeof body.klantvriendelijkheid_notitie === "string"
+        ? body.klantvriendelijkheid_notitie.trim() || null
+        : null;
+    if (
+      body.klantvriendelijkheid_sterren === undefined &&
+      patch.klantvriendelijkheid_notitie
+    ) {
+      patch.klantvriendelijkheid_op = new Date().toISOString();
+      if (body.klantvriendelijkheid_door !== undefined) {
+        patch.klantvriendelijkheid_door =
+          typeof body.klantvriendelijkheid_door === "string"
+            ? body.klantvriendelijkheid_door.trim() || null
+            : null;
+      }
+    }
+  }
+  if (
+    body.klantvriendelijkheid_door !== undefined &&
+    body.klantvriendelijkheid_sterren === undefined &&
+    body.klantvriendelijkheid_notitie === undefined
+  ) {
+    patch.klantvriendelijkheid_door =
+      typeof body.klantvriendelijkheid_door === "string"
+        ? body.klantvriendelijkheid_door.trim() || null
+        : null;
+  }
+
   if (body.afdeling !== undefined) {
     patch.afdeling = body.afdeling?.trim() || null;
   }
@@ -520,7 +668,7 @@ export async function PATCH(
     let beforeQuery = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
@@ -532,7 +680,7 @@ export async function PATCH(
       beforeQuery = await sb
         .from("projecten")
         .select(
-          "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, financiering_status, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+          "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
         )
         .eq("id", id)
         .maybeSingle();
@@ -768,6 +916,25 @@ export async function PATCH(
       }
     }
 
+    // HOLD SALES: deadline 4 kalenderdagen; clear bij verlaten HOLD.
+    const nextStatusForHold =
+      (patch.status as string | undefined) ||
+      (body.status as string | undefined) ||
+      "";
+    const beforeStatus = (before as { status?: string } | null)?.status || "";
+    if (
+      nextStatusForHold === "hold_sales_actie" &&
+      beforeStatus !== "hold_sales_actie"
+    ) {
+      patch.hold_sales_deadline_at = holdSalesDeadlineAt();
+    } else if (
+      nextStatusForHold &&
+      nextStatusForHold !== "hold_sales_actie" &&
+      beforeStatus === "hold_sales_actie"
+    ) {
+      patch.hold_sales_deadline_at = null;
+    }
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
     }
@@ -800,6 +967,43 @@ export async function PATCH(
         .single();
       data = retryTg.data;
       error = retryTg.error;
+    }
+
+    // Kolom hold_sales_deadline_at nog niet gemigreerd.
+    if (
+      error &&
+      (error.code === "42703" ||
+        error.message?.includes("hold_sales_deadline_at"))
+    ) {
+      const { hold_sales_deadline_at: _drop, ...rest } = patch;
+      void _drop;
+      const retryHold = await sb
+        .from("projecten")
+        .update(rest)
+        .eq("id", id)
+        .select(PROJECT_PATCH_SELECT_NO_TG)
+        .single();
+      data = retryHold.data;
+      error = retryHold.error;
+    }
+
+    // Kolommen monteur_beoordeling_* / klantvriendelijkheid_* nog niet gemigreerd.
+    if (
+      error &&
+      (error.code === "42703" ||
+        error.message?.includes("monteur_beoordeling") ||
+        error.message?.includes("klantvriendelijkheid"))
+    ) {
+      const kv = error.message?.includes("klantvriendelijkheid");
+      return NextResponse.json(
+        {
+          error: kv
+            ? "Voer supabase/migrate-klantvriendelijkheid.sql uit in Supabase."
+            : "Voer supabase/migrate-monteur-beoordeling.sql uit in Supabase.",
+          migration_required: true,
+        },
+        { status: 503 }
+      );
     }
 
     // Kolom materiaal_leverdatum nog niet gemigreerd → bewaar in materiaal_checks.
@@ -1253,7 +1457,79 @@ export async function PATCH(
       );
     }
 
+    // HOLD SALES / annulering → open sales-commissieregels uit uitbetalingsconcepten
+    const nextStatus =
+      (patch.status as string | undefined) ||
+      (body.status as string | undefined) ||
+      "";
+    if (
+      (nextStatus === "hold_sales_actie" ||
+        nextStatus === "hold_sales" ||
+        nextStatus === "annulering") &&
+      before?.status !== nextStatus
+    ) {
+      try {
+        await stripHoldSalesFromOpenSalesCreditfacturen(sb, id);
+      } catch (stripErr) {
+        console.error("stripHoldSalesFromOpenSalesCreditfacturen:", stripErr);
+      }
+    }
+
     // Geen automatische annuleringsmail meer — knop op projectpagina.
+    if (
+      body.financiering_status !== undefined &&
+      body.financiering_status !==
+        (before as { financiering_status?: string | null } | null)
+          ?.financiering_status
+    ) {
+      try {
+        const { verstuurWarmtefondsStapFlows } = await import(
+          "@/lib/warmtefonds-automatisering"
+        );
+        const vanStatus =
+          (before as { financiering_status?: string | null } | null)
+            ?.financiering_status ?? null;
+        const naarStatus =
+          typeof body.financiering_status === "string"
+            ? body.financiering_status
+            : null;
+        await verstuurWarmtefondsStapFlows({
+          projectId: id,
+          van: vanStatus,
+          naar: naarStatus,
+        });
+        const { zorgEdergyFactuurBijStap } = await import(
+          "@/lib/edergy-factuur"
+        );
+        await zorgEdergyFactuurBijStap({
+          projectId: id,
+          van: vanStatus,
+          naar: naarStatus,
+        });
+      } catch {
+        /* mail mag de status niet blokkeren */
+      }
+    }
+
+    const nieuwAfspraak = patch.warmtefonds_afspraak_at;
+    const oudAfspraak = (
+      before as { warmtefonds_afspraak_at?: string | null } | null
+    )?.warmtefonds_afspraak_at;
+    if (typeof nieuwAfspraak === "string" && nieuwAfspraak) {
+      const veranderd =
+        !oudAfspraak ||
+        new Date(nieuwAfspraak).getTime() !== new Date(oudAfspraak).getTime();
+      if (veranderd) {
+        try {
+          const { verstuurWfAfspraakBevestiging } = await import(
+            "@/lib/warmtefonds-automatisering"
+          );
+          await verstuurWfAfspraakBevestiging(id);
+        } catch {
+          /* bevestiging mag de afspraak niet blokkeren */
+        }
+      }
+    }
     return NextResponse.json({ project: data });
   } catch (e) {
     return NextResponse.json(

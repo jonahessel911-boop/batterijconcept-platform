@@ -15,7 +15,10 @@ import { toZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ, formatSlotLabelSpokenNl } from "@/lib/format";
-import { generateAvailableSlots } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { blockingBusySlots } from "@/lib/afspraak-busy";
 import {
   dayKeyAmsterdam,
@@ -29,7 +32,7 @@ import {
 import { requireSalesOrAdminApiKey } from "@/lib/api-v1/auth";
 import { loadBestSlotsForLead } from "@/lib/api-v1/best-slots";
 import { jsonErr, jsonOk, parseNum, pickStr } from "@/lib/api-v1/http";
-import { isAdminAdviseur } from "@/lib/admin-adviseur";
+import { isAdminAdviseur, isSpareAdviseur } from "@/lib/admin-adviseur";
 
 export const runtime = "nodejs";
 
@@ -41,8 +44,8 @@ export async function GET(req: NextRequest) {
   const leadId = pickStr(sp.get("lead_id"), sp.get("leadId"));
   const adviseurId = pickStr(sp.get("adviseur_id"), sp.get("adviseurId"));
   const daysAhead = Math.min(
-    Math.max(parseNum(sp.get("days")) || 14, 1),
-    60
+    Math.max(parseNum(sp.get("days")) || HUISBEZOEK_PLAN_DAYS_AHEAD, 1),
+    HUISBEZOEK_PLAN_DAYS_AHEAD
   );
   const limit = Math.min(
     Math.max(parseNum(sp.get("limit")) || (leadId ? 5 : 40), 1),
@@ -87,7 +90,9 @@ export async function GET(req: NextRequest) {
           detail: error.message,
         });
       }
-      const adviseurs = (data || []).filter((a) => !isAdminAdviseur(a));
+      const adviseurs = (data || []).filter(
+        (a) => !isAdminAdviseur(a) && !isSpareAdviseur(a)
+      );
       return jsonOk({
         ok: true,
         hint: "Geef lead_id voor beste momenten (Retell), of adviseur_id voor kale slots",
@@ -100,11 +105,28 @@ export async function GET(req: NextRequest) {
     }
 
     // —— Legacy: slots van één adviseur ——
-    const { data: adviseur, error: aErr } = await sb
+    let { data: adviseur, error: aErr } = await sb
       .from("adviseurs")
-      .select("id, naam, email, actief, startdatum")
+      .select(
+        "id, naam, email, actief, startdatum, start_vanaf_huis_maandag"
+      )
       .eq("id", adviseurId)
       .maybeSingle();
+    if (
+      aErr &&
+      (aErr.message?.includes("start_vanaf_huis_maandag") ||
+        aErr.code === "42703")
+    ) {
+      const fb = await sb
+        .from("adviseurs")
+        .select("id, naam, email, actief, startdatum")
+        .eq("id", adviseurId)
+        .maybeSingle();
+      adviseur = fb.data
+        ? { ...fb.data, start_vanaf_huis_maandag: null as boolean | null }
+        : null;
+      aErr = fb.error;
+    }
 
     if (aErr) {
       return jsonErr("Adviseur laden mislukt", 500, { detail: aErr.message });
@@ -149,7 +171,9 @@ export async function GET(req: NextRequest) {
         filterSlotsByBeschikbaarheid(rawSlots, unavailable),
         adviseurId,
         afgeblokt,
-        vrijgaven
+        vrijgaven,
+        (adviseur as { start_vanaf_huis_maandag?: boolean | null })
+          .start_vanaf_huis_maandag
       ),
       (adviseur as { startdatum?: string | null }).startdatum
     )

@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { InstallatiePartner, Project, ProjectFoto } from "@/types/database";
+import type {
+  InstallatiePartner,
+  InstallatiePartnerTeamgenoot,
+  Project,
+  ProjectFoto,
+} from "@/types/database";
 import {
   isWarmtefondsProject,
   recommendedSchouwWeekForProject,
@@ -26,6 +31,7 @@ import {
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
+import { medewerkerNaamVanProject } from "@/lib/project-medewerker";
 
 function initialSchouwWeekValue(project: Project): string {
   if (project.schouw_jaar && project.schouw_week) {
@@ -87,6 +93,9 @@ export function ProjectSchouwSection({
 }) {
   const weekOptions = useMemo(() => upcomingSchouwWeekOptions(60), []);
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
+  const [teamgenoten, setTeamgenoten] = useState<
+    InstallatiePartnerTeamgenoot[]
+  >([]);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
   const [schouwWeek, setSchouwWeek] = useState(() =>
     initialSchouwWeekValue(project)
@@ -116,16 +125,25 @@ export function ProjectSchouwSection({
 
   const loadPartnersAndFotos = useCallback(async () => {
     try {
-      const [p, f] = await Promise.all([
+      const pid = project.installatie_partner_id || partnerId || null;
+      const [p, f, tg] = await Promise.all([
         fetch("/api/installatie-partners").then((r) => r.json()),
         fetch(`/api/projecten/${project.id}/fotos`).then((r) => r.json()),
+        pid
+          ? fetch(
+              `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(pid)}`
+            ).then((r) => r.json())
+          : Promise.resolve({ teamgenoten: [] }),
       ]);
       setPartners(p.partners || []);
       setFotos(f.fotos || []);
+      setTeamgenoten(
+        (tg.teamgenoten as InstallatiePartnerTeamgenoot[]) || []
+      );
     } catch {
       /* ignore */
     }
-  }, [project.id]);
+  }, [project.id, project.installatie_partner_id, partnerId]);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => void loadPartnersAndFotos());
@@ -850,7 +868,8 @@ export function ProjectSchouwSection({
         open={opleverFormOpen}
         project={project}
         submitUrl={`/api/projecten/${project.id}/oplever-formulier`}
-        monteurDefault={project.monteur || null}
+        monteurDefault={medewerkerNaamVanProject(project) || null}
+        teamgenoten={teamgenoten}
         onClose={() => setOpleverFormOpen(false)}
         onCreated={() => {
           setOkMsg("Opleverformulier opgeslagen.");

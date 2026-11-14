@@ -28,7 +28,10 @@ import {
   type FastDirectionStop,
 } from "@/lib/fast-direction";
 import { AMSTERDAM_TZ, adresRegel, formatSlotLabelNl, formatSlotLabelSpokenNl } from "@/lib/format";
-import { generateAvailableSlots } from "@/lib/slots";
+import {
+  generateAvailableSlots,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
+} from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
 import { loadAdviseurConversieMap } from "@/lib/adviseur-conversie";
 import {
@@ -265,6 +268,7 @@ type AdviseurRow = {
   email: string | null;
   actief: boolean | null;
   start_adres: string | null;
+  start_vanaf_huis_maandag?: boolean | null;
   startdatum?: string | null;
   factuur_adres?: string | null;
   factuur_postcode?: string | null;
@@ -308,7 +312,8 @@ async function freeSlotsForAdviseur(
   sb: SupabaseClient,
   adviseurId: string,
   daysAhead: number,
-  startdatum?: string | null
+  startdatum?: string | null,
+  startVanafHuisMaandag?: boolean | null
 ): Promise<{ start_at: string; end_at: string }[]> {
   const busyRows = await blockingBusySlots(sb, adviseurId);
   const rawSlots = generateAvailableSlots({
@@ -346,7 +351,8 @@ async function freeSlotsForAdviseur(
       filterSlotsByBeschikbaarheid(rawSlots, unavailable),
       adviseurId,
       afgeblokt,
-      vrijgaven
+      vrijgaven,
+      startVanafHuisMaandag
     ),
     startdatum
   );
@@ -432,7 +438,10 @@ export async function loadBestSlotsForLead(
     }
   | { ok: false; status: number; error: string; detail?: string }
 > {
-  const daysAhead = Math.min(Math.max(opts.daysAhead ?? 14, 1), 60);
+  const daysAhead = Math.min(
+    Math.max(opts.daysAhead ?? HUISBEZOEK_PLAN_DAYS_AHEAD, 1),
+    HUISBEZOEK_PLAN_DAYS_AHEAD
+  );
   const limit = Math.min(Math.max(opts.limit ?? 5, 1), 20);
   const diversifyHours = Boolean(opts.diversifyHours);
   const poolSize = Math.min(
@@ -474,7 +483,7 @@ export async function loadBestSlotsForLead(
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, email, actief, start_adres, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
+      "id, naam, email, actief, start_adres, start_vanaf_huis_maandag, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
     )
     .eq("actief", true)
     .order("naam");
@@ -483,6 +492,7 @@ export async function loadBestSlotsForLead(
   if (advErr) {
     const missingCol =
       advErr.message?.includes("start_adres") ||
+      advErr.message?.includes("start_vanaf_huis_maandag") ||
       advErr.message?.includes("startdatum") ||
       advErr.message?.includes("factuur_") ||
       advErr.message?.includes("rol") ||
@@ -616,7 +626,13 @@ export async function loadBestSlotsForLead(
     // eerste 40 chronologische — anders mis je dichte route-fits later.
     const freeCap = diversifyHours ? 100 : 90;
     const free = (
-      await freeSlotsForAdviseur(sb, adv.id, daysAhead, adv.startdatum)
+      await freeSlotsForAdviseur(
+        sb,
+        adv.id,
+        daysAhead,
+        adv.startdatum,
+        adv.start_vanaf_huis_maandag
+      )
     ).slice(0, freeCap);
     if (free.length === 0) continue;
 
@@ -644,7 +660,8 @@ export async function loadBestSlotsForLead(
         depotAddress,
         40,
         freeDayKeys,
-        adv.id
+        adv.id,
+        adv.start_vanaf_huis_maandag
       );
       if (addresses.length >= 1) {
         const { durationMap, distanceMap } = await buildDurationMap(addresses);
@@ -658,6 +675,7 @@ export async function loadBestSlotsForLead(
             depotAddress,
             depotLabel: adv.naam,
             adviseurId: adv.id,
+            startVanafHuisMaandag: adv.start_vanaf_huis_maandag,
             durationSecBetween: (from, to) => {
               if (from === to) return 0;
               return durationMap.get(`${from}|||${to}`) ?? null;
@@ -788,9 +806,9 @@ export async function loadBestSlotsForLead(
    * Reistijd is leidend. Conversie telt mee (± max ~12 min equivalent).
    * Lege/dunne agenda’s krijgen scorepunten (± max ~16 min) zodat die
    * bij het bellen naar voren worden geschoven en gevuld worden.
-   * Datum is lichte tie-breaker (~0.4 min/dag).
+   * Vroege datum krijgt sterke prio (~8 min/dag) zodat we z.s.m. inplannen.
    */
-  const DAY_PENALTY_MIN = 0.4;
+  const DAY_PENALTY_MIN = 8;
   /** 100% conversie ≈ 12 min “korting” op reistijd — niet genoeg om 20+ min rit te winnen. */
   const CONVERSIE_BONUS_MAX_MIN = 12;
   /**

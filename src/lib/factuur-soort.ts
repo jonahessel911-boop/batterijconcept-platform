@@ -10,6 +10,7 @@ export type FactuurSoort =
   | "em"
   | "wf_intern"
   | "wf_declaratie"
+  | "annulering"
   | "credit";
 
 export const factuurSoortLabel: Record<FactuurSoort, string> = {
@@ -17,6 +18,7 @@ export const factuurSoortLabel: Record<FactuurSoort, string> = {
   em: "EM factuur",
   wf_intern: "WF factuur intern",
   wf_declaratie: "WF declaratie factuur",
+  annulering: "Annuleringsfactuur",
   credit: "Credit",
 };
 
@@ -27,8 +29,20 @@ export const factuurSoortHint: Record<FactuurSoort, string> = {
   wf_intern: "Warmtefonds — intern; betaling vaak later via het fonds",
   wf_declaratie:
     "Warmtefonds-declaratie — betaling vaak later via het fonds",
+  annulering: "Annuleringskosten (20% AV)",
   credit: "Creditfactuur",
 };
+
+/**
+ * Annuleringsfactuur herkennen.
+ * Omschrijvingen in de praktijk: "Annuleringskosten …", "Annulering PRJ-…",
+ * "Annulering - PRJ-…".
+ */
+export function isAnnuleringsFactuur(f: {
+  omschrijving?: string | null;
+}): boolean {
+  return /\bannulering(skosten)?\b/i.test(f.omschrijving || "");
+}
 
 /**
  * Positief WF-signaal (geen default-WF zoals resolveBetaalwijze).
@@ -73,6 +87,7 @@ export function resolveFactuurSoort(
   }
 ): FactuurSoort {
   if (factuur.credit_van_factuur_id) return "credit";
+  if (isAnnuleringsFactuur(factuur)) return "annulering";
   if (isAanbetalingFactuurOmschrijving(factuur.omschrijving)) {
     return "aanbetaling";
   }
@@ -105,6 +120,8 @@ export function factuurSoortTone(soort: FactuurSoort): string {
     case "wf_intern":
     case "wf_declaratie":
       return "border border-[#1A4A6E]/30 bg-[#E8F0F6] text-[#1A4A6E]";
+    case "annulering":
+      return "border border-[#B91C1C]/25 bg-[#FEF2F2] text-[#B91C1C]";
     case "credit":
       return "border border-[#6B7C72]/25 bg-[#EEF2F0] text-[#5A635C]";
     default:

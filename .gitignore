@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# TikTok Ads token (lokaal; productie staat in tiktok_ads_account)
+/data/tiktok-ads-auth.json
+
 # vercel
 .vercel
 

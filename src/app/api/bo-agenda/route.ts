@@ -5,6 +5,11 @@ import { requireBackofficeSession } from "@/lib/auth-require-backoffice";
 import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { normalizeRol } from "@/lib/rollen";
+import {
+  defaultTaakCategorie,
+  isTaakCategorie,
+  type TaakCategorie,
+} from "@/lib/taak-categorie";
 
 export const runtime = "nodejs";
 
@@ -39,6 +44,43 @@ export async function GET(req: NextRequest) {
   }
 
   const sp = req.nextUrl.searchParams;
+  const projectIdFilter = sp.get("project_id")?.trim() || "";
+  if (projectIdFilter) {
+    try {
+      const sb = getSupabaseAdmin();
+      const { data, error } = await sb
+        .from("bo_agenda")
+        .select(
+          "*, adviseur:adviseurs!adviseur_id(id, naam), created_by:adviseurs!created_by_id(id, naam)"
+        )
+        .eq("project_id", projectIdFilter)
+        .order("created_at", { ascending: true })
+        .limit(200);
+      if (error) {
+        if (
+          error.code === "42P01" ||
+          error.message?.includes("bo_agenda") ||
+          /project_id/i.test(error.message || "")
+        ) {
+          return NextResponse.json({ items: [], project_taken: [] });
+        }
+        return NextResponse.json(
+          { error: "Agenda laden mislukt", detail: error.message },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json({
+        items: data || [],
+        project_taken: [],
+      });
+    } catch (e) {
+      return NextResponse.json(
+        { error: errMessage(e, "Fout") },
+        { status: 500 }
+      );
+    }
+  }
+
   let adviseurId = sp.get("adviseur_id")?.trim() || "";
   // Backoffice ziet standaard zichzelf; admin mag iedereen
   if (!adviseurId || normalizeRol(auth.session.rol) !== "admin") {
@@ -111,7 +153,7 @@ export async function GET(req: NextRequest) {
     let takenQ = sb
       .from("project_taken")
       .select(
-        "id, project_id, titel, status, afdeling, due_at, auto_key, verantwoordelijke_id, projecten(id, project_nummer, titel, leads(naam, plaats))"
+        "id, project_id, titel, status, afdeling, categorie, due_at, auto_key, verantwoordelijke_id, projecten(id, project_nummer, titel, leads(naam, plaats))"
       )
       .eq("verantwoordelijke_id", adviseurId)
       .order("due_at", { ascending: true })
@@ -121,7 +163,22 @@ export async function GET(req: NextRequest) {
     if (from) takenQ = takenQ.gte("due_at", from);
     if (to) takenQ = takenQ.lte("due_at", to);
 
-    const { data: projectTaken } = await takenQ;
+    let { data: projectTaken, error: takenErr } = await takenQ;
+    if (takenErr && /categorie/i.test(takenErr.message || "")) {
+      let retryQ = sb
+        .from("project_taken")
+        .select(
+          "id, project_id, titel, status, afdeling, due_at, auto_key, verantwoordelijke_id, projecten(id, project_nummer, titel, leads(naam, plaats))"
+        )
+        .eq("verantwoordelijke_id", adviseurId)
+        .order("due_at", { ascending: true })
+        .limit(300);
+      if (openOnly) retryQ = retryQ.neq("status", "done");
+      if (from) retryQ = retryQ.gte("due_at", from);
+      if (to) retryQ = retryQ.lte("due_at", to);
+      const plain = await retryQ;
+      projectTaken = plain.data as typeof projectTaken;
+    }
 
     return NextResponse.json({
       adviseur_id: adviseurId,
@@ -138,7 +195,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/bo-agenda
- * { titel, inhoud?, start_at, end_at?, soort?, adviseur_id?, project_id? }
+ * { titel, inhoud?, start_at, end_at?, soort?, adviseur_id?, project_id?, categorie? }
  */
 export async function POST(req: NextRequest) {
   const auth = await requireBackofficeSession();
@@ -155,6 +212,7 @@ export async function POST(req: NextRequest) {
       soort?: string;
       adviseur_id?: string | null;
       project_id?: string | null;
+      categorie?: string | null;
     };
 
     const titel = body.titel?.trim() || "";
@@ -181,6 +239,16 @@ export async function POST(req: NextRequest) {
     const endAt =
       soort === "afspraak" ? parseDueAt(body.end_at) || null : null;
     const projectId = body.project_id?.trim() || null;
+    if (body.categorie != null && body.categorie !== "" && !isTaakCategorie(body.categorie)) {
+      return NextResponse.json(
+        { error: "Ongeldige categorie" },
+        { status: 400 }
+      );
+    }
+    const categorie: TaakCategorie = defaultTaakCategorie({
+      hasProject: Boolean(projectId),
+      categorie: body.categorie,
+    });
 
     const sb = getSupabaseAdmin();
     const row: Record<string, unknown> = {
@@ -192,6 +260,7 @@ export async function POST(req: NextRequest) {
       end_at: endAt,
       status: "todo",
       created_by_id: auth.session.adviseurId,
+      categorie,
     };
     if (projectId) row.project_id = projectId;
 
@@ -203,13 +272,14 @@ export async function POST(req: NextRequest) {
       )
       .single();
 
-    // Oude DB zonder project_id-kolom: opnieuw zonder die kolom.
+    // Oude DB zonder project_id / categorie: opnieuw zonder die kolommen.
     if (
       error &&
-      projectId &&
-      /project_id/i.test(error.message || "")
+      (/project_id/i.test(error.message || "") ||
+        /categorie/i.test(error.message || ""))
     ) {
-      delete row.project_id;
+      if (/project_id/i.test(error.message || "")) delete row.project_id;
+      if (/categorie/i.test(error.message || "")) delete row.categorie;
       const retry = await sb
         .from("bo_agenda")
         .insert(row)

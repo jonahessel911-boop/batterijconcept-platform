@@ -2,6 +2,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead, LeadStatus } from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
+  afspraakBlokkeertAgenda,
   isTerugbelSoort,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
@@ -12,8 +13,17 @@ import {
   type NlProvincie,
 } from "@/lib/postcode-provincie";
 
-export const MAX_BELPOGINGEN = 5;
+export const MAX_BELPOGINGEN = 3;
+/** Herplannen (annuleringen-bak): zelfde plafond als normale bak (max 3 pogingen). */
+export const MAX_HERPLAN_BELPOGINGEN = MAX_BELPOGINGEN;
 export const MAX_BELPOGINGEN_PER_DAG = 1;
+/** Verse bel-prio: aangemaakt in deze kalenderdagen (Amsterdam). */
+export const VERS_BEL_DAGEN = 10;
+/**
+ * Nog in de verse laag zolang de 3 pogingen niet vol zijn.
+ * 0, 1 of 2 blijven vóór de oude voorraad. Vanaf 3 gaat de lead eruit.
+ */
+export const VERS_BEL_MAX_POGINGEN = 2;
 /** Minimale pauze tussen twee belpogingen op dezelfde dag (uren, Amsterdam). */
 export const MIN_UREN_TUSSEN_BELPOGINGEN = 3;
 
@@ -47,6 +57,7 @@ const BEL_BLOKKEER_STATUS = new Set<LeadStatus>([
   "huurwoning",
   "foutief_nummer",
   "gegevens_niet_overeen",
+  "definitief_geen_contact",
 ]);
 
 /** Sollicitaties horen in Instroom, niet in de bel-queue. */
@@ -85,43 +96,84 @@ export function belpogingenVandaagOf(
   return 1;
 }
 
-export function geenContactPogingLabel(pogingen: number): string {
-  const n = Math.min(Math.max(pogingen, 0), MAX_BELPOGINGEN);
-  return `Geen contact ${n}/${MAX_BELPOGINGEN}`;
+/** Postgres weigert de nieuwe status tot de check-constraint is bijgewerkt. */
+export function definitiefGeenContactDbHint(
+  message: string | undefined
+): string | null {
+  if (!message) return null;
+  if (
+    message.includes("leads_status_check") ||
+    message.includes("definitief_geen_contact")
+  ) {
+    return "Definitief geen contact staat nog niet in de database. Voer supabase/migrate-definitief-geen-contact.sql uit in Supabase.";
+  }
+  return null;
+}
+
+export function maxBelpogingenVoor(opts?: { herplan?: boolean }): number {
+  return opts?.herplan ? MAX_HERPLAN_BELPOGINGEN : MAX_BELPOGINGEN;
+}
+
+export function geenContactPogingLabel(
+  pogingen: number,
+  opts?: { herplan?: boolean }
+): string {
+  const max = maxBelpogingenVoor(opts);
+  const n = Math.min(Math.max(pogingen, 0), max);
+  return `Geen contact ${n}/${max}`;
 }
 
 /**
  * Patch + mailvlag bij status «geen contact» (BelPanel én Leads-tab).
- * Elke keer dat je op geen contact zet = +1 belpoging; mail bij poging 1 en 3.
+ * Elke keer dat je op geen contact zet = +1 belpoging.
+ * Normaal: mail bij poging 1 en 3; 3e = definitief geen contact.
+ * Herplan: mail bij elke poging; 5e = definitief geen contact.
  */
 export function buildGeenContactOutcomePatch(
-  lead: Pick<Lead, "belpogingen" | "belpogingen_vandaag" | "laatst_gebeld_at">
+  lead: Pick<Lead, "belpogingen" | "belpogingen_vandaag" | "laatst_gebeld_at">,
+  opts?: { herplan?: boolean }
 ): {
   patch: {
-    status: "geen_contact";
+    status:
+      | "geen_contact"
+      | "definitief_geen_contact"
+      | "afspraak_afgezegd_klant";
     belpogingen: number;
     belpogingen_vandaag: number;
     terugbellen: false;
     terugbel_notitie: null;
   };
   pogingen: number;
+  definitief: boolean;
   sendGeenContactMail: boolean;
+  herplan: boolean;
 } {
-  const pogingen = Math.min(belpogingenOf(lead) + 1, MAX_BELPOGINGEN);
+  const herplan = Boolean(opts?.herplan);
+  const max = maxBelpogingenVoor({ herplan });
+  const pogingen = Math.min(belpogingenOf(lead) + 1, max);
   const vandaag = Math.min(
     belpogingenVandaagOf(lead) + 1,
     MAX_BELPOGINGEN_PER_DAG
   );
+  const definitief = pogingen >= max;
   return {
     patch: {
-      status: "geen_contact",
+      status: definitief
+        ? "definitief_geen_contact"
+        : herplan
+          ? "afspraak_afgezegd_klant"
+          : "geen_contact",
       belpogingen: pogingen,
       belpogingen_vandaag: vandaag,
       terugbellen: false,
       terugbel_notitie: null,
     },
     pogingen,
-    sendGeenContactMail: pogingen === 1 || pogingen === 3,
+    definitief,
+    sendGeenContactMail: herplan
+      ? true
+      : pogingen === 1 || pogingen === 3,
+    herplan,
   };
 }
 
@@ -160,6 +212,18 @@ export function isTerugbelDue(
   if (!ACTIEVE_AFSPRAAK.has(afspraak.status)) return false;
   if (!isTerugbelSoort(afspraak.soort)) return false;
   return amsterdamDayKey(afspraak.start_at) <= amsterdamDayKey(now);
+}
+
+/**
+ * Terugbel alleen tonen voor de medewerker die op de afspraak staat
+ * (`adviseur_id`). Zo ziet callcenter geen warme terugbel van bv. Rik.
+ */
+export function isTerugbelForViewer(
+  afspraak: Pick<Afspraak, "adviseur_id">,
+  viewerId: string | null | undefined
+): boolean {
+  if (!viewerId) return false;
+  return afspraak.adviseur_id === viewerId;
 }
 
 /** @deprecated alias — gebruik isTerugbelDue */
@@ -280,30 +344,178 @@ export function isKlantAnnuleringAfspraak(
   return /annulering\s*\(\s*klant\s*\)/i.test(raw);
 }
 
+/** True als wij de afspraak zelf hebben afgezegd (`Annulering (CRM): …`). */
+export function isCrmAnnuleringAfspraak(
+  afspraak: Pick<Afspraak, "notities" | "status"> | null | undefined
+): boolean {
+  if (!afspraak || afspraak.status !== "geannuleerd") return false;
+  const raw = afspraak.notities?.trim() || "";
+  if (!raw) return false;
+  return /annulering\s*\(\s*crm\s*\)/i.test(raw);
+}
+
 /**
- * Lead hoort in de Annuleringen-bak van deze beller:
- * status afspraak_afgezegd_klant, meest recente geannuleerde nieuw-bezoek
- * was door de klant én door deze beller ingepland (`ingepland_door_id`).
+ * Echte afzegging: klant of wij. Een verzetting is geen annulering —
+ * die houdt dezelfde afspraak (of krijgt een latere vervanger).
+ */
+export function isAfzeggingAfspraak(
+  afspraak: Pick<Afspraak, "notities" | "status" | "soort"> | null | undefined
+): boolean {
+  if (!afspraak || afspraak.status !== "geannuleerd") return false;
+  if (!afspraakBlokkeertAgenda(afspraak.soort)) return false;
+  return (
+    isKlantAnnuleringAfspraak(afspraak) || isCrmAnnuleringAfspraak(afspraak)
+  );
+}
+
+/** Meest recente fysieke afspraak (huisbezoek), ongeacht status. */
+export function latestPhysicalAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) => a.lead_id === leadId && afspraakBlokkeertAgenda(a.soort)
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.start_at).getTime() - new Date(a.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+/**
+ * Na deze annulering is er een nieuwer huisbezoek (gepland, verzet of
+ * al gelopen). Dan is de afspraak verplaatst, niet open om te herplannen.
+ */
+export function heeftVervangendHuisbezoek(
+  afspraken: Afspraak[],
+  cancelled: Afspraak
+): boolean {
+  const cancelStart = new Date(cancelled.start_at).getTime();
+  const cancelCreated = cancelled.created_at
+    ? new Date(cancelled.created_at).getTime()
+    : cancelStart;
+  const anchor = Math.min(
+    Number.isNaN(cancelStart) ? cancelCreated : cancelStart,
+    Number.isNaN(cancelCreated) ? cancelStart : cancelCreated
+  );
+
+  for (const a of afspraken) {
+    if (a.lead_id !== cancelled.lead_id) continue;
+    if (a.id === cancelled.id) continue;
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
+    const startMs = new Date(a.start_at).getTime();
+    const createdMs = a.created_at
+      ? new Date(a.created_at).getTime()
+      : startMs;
+    if (startMs > anchor || createdMs > anchor) return true;
+  }
+  return false;
+}
+
+/**
+ * Meest recente *klant*-annulering van een huisbezoek (niet CRM-door-ons).
+ */
+export function latestKlantAnnuleringAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) =>
+        a.lead_id === leadId &&
+        a.status === "geannuleerd" &&
+        afspraakBlokkeertAgenda(a.soort) &&
+        isKlantAnnuleringAfspraak(a)
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.updated_at || b.start_at).getTime() -
+        new Date(a.updated_at || a.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+/**
+ * Moment waarop de klant annuleerde (updated_at van klant-cancel).
+ * CRM-annuleringen tellen hier niet mee.
+ */
+export function annuleringMomentMs(
+  afspraken: Afspraak[],
+  leadId: string
+): number {
+  const latest = latestKlantAnnuleringAfspraak(afspraken, leadId);
+  if (!latest) return 0;
+  const raw = latest.updated_at || latest.start_at;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Annuleringen-bak: alleen als de *klant* het huisbezoek afzegde,
+ * en er is daarna geen nieuw huisbezoek ingepland.
+ * Zelfde belplafond als normale bak: max 3 pogingen totaal, 1× per dag.
+ */
+export function inAnnuleringBelQueue(
+  lead: Lead,
+  afspraken: Afspraak[],
+  appointmentLeadIds?: Set<string>
+): boolean {
+  if (isSollicitatieLead(lead)) return false;
+  if (!lead.telefoon?.trim()) return false;
+  if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
+  if (lead.status === "deur_niet_open") return false;
+  if (appointmentLeadIds?.has(lead.id)) return false;
+  if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
+  if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+  if (inBelCooldown(lead)) return false;
+
+  const latest = latestKlantAnnuleringAfspraak(afspraken, lead.id);
+  if (!latest) return false;
+  if (heeftVervangendHuisbezoek(afspraken, latest)) return false;
+  return true;
+}
+
+/**
+ * Annuleringen: recentste *klant*-annulering eerst.
+ * Na 1× bellen/afboeken valt de lead er vandaag uit → volgende nieuwste komt vooraan.
+ */
+export function sortAnnuleringBelQueue(
+  leads: Lead[],
+  afspraken: Afspraak[]
+): Lead[] {
+  return [...leads].sort((a, b) => {
+    const aMs = annuleringMomentMs(afspraken, a.id);
+    const bMs = annuleringMomentMs(afspraken, b.id);
+    if (aMs !== bMs) return bMs - aMs;
+
+    const aToday = belpogingenVandaagOf(a);
+    const bToday = belpogingenVandaagOf(b);
+    if (aToday !== bToday) return aToday - bToday;
+
+    const aPog = belpogingenOf(a);
+    const bPog = belpogingenOf(b);
+    if (aPog !== bPog) return aPog - bPog;
+
+    return (
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  });
+}
+
+/**
+ * @deprecated Gebruik `inAnnuleringBelQueue`. De beller-filter is vervallen:
+ * de bak is de gedeelde herplan-wachtrij.
  */
 export function inAnnuleringQueueForBeller(
   lead: Lead,
   afspraken: Afspraak[],
-  bellerId: string,
+  _bellerId: string,
   appointmentLeadIds?: Set<string>
 ): boolean {
-  if (!bellerId) return false;
-  if (isSollicitatieLead(lead)) return false;
-  if (!lead.telefoon?.trim()) return false;
-  if (lead.status !== "afspraak_afgezegd_klant") return false;
-  if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
-  if (appointmentLeadIds?.has(lead.id)) return false;
-
-  const cancelled = latestCancelledVisitAfspraak(afspraken, lead.id);
-  if (!cancelled) return false;
-  if (!isKlantAnnuleringAfspraak(cancelled)) return false;
-  const door = (cancelled.ingepland_door_id || "").trim();
-  if (door !== bellerId) return false;
-  return true;
+  return inAnnuleringBelQueue(lead, afspraken, appointmentLeadIds);
 }
 
 /** Normale/provincie-bak: herplan-statussen eruit (die gaan via Annuleringen). */
@@ -346,9 +558,63 @@ export function isHerplanBelLead(lead: Pick<Lead, "status">): boolean {
   return HERPLAN_BEL_STATUSES.has(lead.status as LeadStatus);
 }
 
-export function sortBelQueue(leads: Lead[]): Lead[] {
+/** Kalenderdagen sinds aanmaak, Amsterdam. 0 = vandaag. */
+export function belLeadLeeftijdDagen(
+  createdAt: string,
+  now = new Date()
+): number {
+  const created = amsterdamDayKey(createdAt);
+  const today = amsterdamDayKey(now);
+  const [cy, cm, cd] = created.split("-").map(Number);
+  const [ty, tm, td] = today.split("-").map(Number);
+  const ms = Date.UTC(ty, tm - 1, td) - Date.UTC(cy, cm - 1, cd);
+  return Math.round(ms / 86_400_000);
+}
+
+/**
+ * Vooraan de belbak: ≤ 10 dagen oud én nog geen 3 pogingen.
+ * Binnen die laag wint de nieuwste aanmelding. Een gemiste oproep
+ * zakt niet naar de oude voorraad, maar een latere aanmelding gaat er wel voor.
+ */
+export function isVersBelLead(
+  lead: Pick<Lead, "created_at" | "belpogingen">,
+  now = new Date()
+): boolean {
+  if (!lead.created_at) return false;
+  if (belpogingenOf(lead) > VERS_BEL_MAX_POGINGEN) return false;
+  const age = belLeadLeeftijdDagen(lead.created_at, now);
+  return age >= 0 && age <= VERS_BEL_DAGEN;
+}
+
+/** Positieve mailintent (AI) → boven verse leads in claim-next / BelPanel. */
+export function isMailPositiefBelLead(
+  lead: Pick<Lead, "mail_positief_at">
+): boolean {
+  return Boolean(lead.mail_positief_at);
+}
+
+export function sortBelQueue(leads: Lead[], now = new Date()): Lead[] {
   return [...leads].sort((a, b) => {
-    // Herplannen eerst — beller moet die opnieuw inplannen
+    // 0) Positieve e-mailintent — altijd eerst
+    const aMail = isMailPositiefBelLead(a) ? 1 : 0;
+    const bMail = isMailPositiefBelLead(b) ? 1 : 0;
+    if (aMail !== bMail) return bMail - aMail;
+    if (aMail && bMail) {
+      const aAt = new Date(a.mail_positief_at || 0).getTime();
+      const bAt = new Date(b.mail_positief_at || 0).getTime();
+      if (aAt !== bAt) return bAt - aAt;
+    }
+
+    const aVers = isVersBelLead(a, now) ? 1 : 0;
+    const bVers = isVersBelLead(b, now) ? 1 : 0;
+    if (aVers !== bVers) return bVers - aVers;
+
+    if (aVers && bVers) {
+      return (
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    }
+
     const aHerplan = isHerplanBelLead(a) ? 1 : 0;
     const bHerplan = isHerplanBelLead(b) ? 1 : 0;
     if (aHerplan !== bHerplan) return bHerplan - aHerplan;
@@ -388,7 +654,7 @@ export function leadPostcodeDigits(
 ): string | null {
   const direct = (lead.postcode || "").trim();
   if (direct) {
-    const m = direct.replace(/\s+/g, "").match(/^(\d{4})/);
+    const m = direct.replace(/[^0-9A-Za-z]/g, "").match(/(\d{4})/);
     if (m) return m[1];
   }
   for (const raw of [lead.plaats, lead.straat]) {

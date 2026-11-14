@@ -15,6 +15,7 @@ import type {
   PnlMonthBucket,
   PnlWeekBucket,
 } from "@/lib/projected-pnl";
+import type { PnlForecast } from "@/lib/pnl-forecast";
 import {
   agendaWeekJumpOptions,
   formatSchouwWeekLabel,
@@ -37,6 +38,7 @@ type PnlData = {
   totals: PnlMetrics;
   series: PnlWeekBucket[];
   months: PnlMonthBucket[];
+  forecast?: PnlForecast | null;
 };
 
 type RangeMode = "weeks" | "month";
@@ -148,6 +150,9 @@ function MetricsCells({
         {formatEuro(m.ad_spend)}
       </td>
       <td className={`${base} whitespace-nowrap text-right text-muted`}>
+        {formatEuro(m.edergy)}
+      </td>
+      <td className={`${base} whitespace-nowrap text-right text-muted`}>
         {formatEuro(m.totale_kosten)}
       </td>
       <td
@@ -164,6 +169,89 @@ function MetricsCells({
   );
 }
 
+function ForecastSection({ forecast }: { forecast: PnlForecast }) {
+  const monthMetrics: PnlMetrics & { leads: number; slots: number } = {
+    ...forecast.totals,
+    leads: forecast.leads,
+    slots: forecast.slots,
+  };
+  return (
+    <section className="overflow-hidden rounded-2xl border border-line bg-white">
+      <header className="border-b border-line px-4 py-3.5 sm:px-5">
+        <p className="font-display text-base font-semibold text-ink">
+          Forecast · {forecast.label}
+        </p>
+        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted">
+          Volgende maand, per week, op de open slots. Leads = vrije slots ÷{" "}
+          {fmtPct(forecast.leadToApptPct)} lead→afspraak. Orders = open slots ×{" "}
+          {fmtPct(forecast.afspraakToSalePct)} afspraak→sale. Omzet = orders ×{" "}
+          {formatEuro(forecast.gemOrderwaarde)} gem. orderwaarde. Inkoop{" "}
+          {fmtPct(forecast.inkoopPct)} van omzet en ads {formatEuro(forecast.cpl)}{" "}
+          per lead uit de laatste 90 dagen. Installatie{" "}
+          {formatEuro(forecast.installatiePerOrder)} per order. Salescommissie
+          volgt het commissiepercentage van de adviseur. Edergy is de
+          admin-vergoeding × het aandeel Warmtefonds-orders van de laatste 90
+          dagen. Commissie ops is de
+          vaste weekfee van Rik, €10 per afspraak voor Simon en €2,50
+          bonus voor Rik per afspraak die Simon inplant.
+        </p>
+      </header>
+      <div className="min-w-0 max-w-full overflow-x-auto p-3 sm:p-4">
+        <table className="w-full min-w-[1200px] border-collapse border border-line text-[12px]">
+          <thead>
+            <tr>
+              <th className={`${sheetHead} sticky left-0 z-10 text-left`}>
+                Periode
+              </th>
+              <th className={sheetHead}>Leads</th>
+              <th className={sheetHead}>Slots</th>
+              {METRIC_HEADERS}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td
+                className={`${sheetTotal} sticky left-0 z-[1] text-left capitalize`}
+              >
+                {forecast.label}
+              </td>
+              <ForecastExtra month={monthMetrics} tone="total" />
+              <MetricsCells m={forecast.totals} tone="total" />
+            </tr>
+            {forecast.weeks.map((wk) => (
+              <tr key={wk.weekKey}>
+                <td
+                  className={`${sheetCell} sticky left-0 z-[1] bg-[#FAFBFA] pl-6 text-left font-medium`}
+                >
+                  {wk.label}
+                </td>
+                <ForecastExtra month={wk} tone="week" />
+                <MetricsCells m={wk} tone="week" />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ForecastExtra({
+  month,
+  tone,
+}: {
+  month: { leads: number; slots: number };
+  tone: "total" | "week";
+}) {
+  const base = tone === "total" ? sheetTotal : `${sheetCell} bg-[#FAFBFA]`;
+  return (
+    <>
+      <td className={`${base} whitespace-nowrap text-right`}>{num(month.leads)}</td>
+      <td className={`${base} whitespace-nowrap text-right`}>{num(month.slots)}</td>
+    </>
+  );
+}
+
 const METRIC_HEADERS = (
   <>
     <th className={sheetHead}>Orders</th>
@@ -173,6 +261,7 @@ const METRIC_HEADERS = (
     <th className={sheetHead}>Sales com.</th>
     <th className={sheetHead}>Com. ops</th>
     <th className={sheetHead}>Ads</th>
+    <th className={sheetHead}>Edergy</th>
     <th className={sheetHead}>Kosten</th>
     <th className={sheetHead}>Winst</th>
     <th className={sheetHead}>Marge</th>
@@ -318,6 +407,11 @@ function TrendChart({
           label: "Ads",
           value: formatEuro(tip.ad_spend),
           delta: tipDeltas?.ads ?? null,
+        },
+        {
+          label: "Edergy",
+          value: formatEuro(tip.edergy),
+          delta: null,
         },
         {
           label: "Winst",
@@ -811,13 +905,17 @@ export function ProjectedPnlPanel({
             </div>
           </section>
 
+          {data.forecast ? (
+            <ForecastSection forecast={data.forecast} />
+          ) : null}
+
           <section className="overflow-hidden rounded-2xl border border-line bg-white">
             <header className="border-b border-line px-4 py-3.5 sm:px-5">
               <p className="font-display text-base font-semibold text-ink">
                 Kostenregels
               </p>
             </header>
-            <div className="overflow-x-auto p-3 sm:p-4">
+            <div className="min-w-0 max-w-full overflow-x-auto p-3 sm:p-4">
               {data.months.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted">
                   Geen data in deze periode.

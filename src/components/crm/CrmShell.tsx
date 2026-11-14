@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   Adviseur,
@@ -44,9 +51,11 @@ import { RecruitmentPanel } from "./RecruitmentPanel";
 import { InkomendPanel } from "./InkomendPanel";
 import { InboxPanel } from "./InboxPanel";
 import { LeadToevoegenModal } from "./LeadToevoegenModal";
+import { CallPopupHost } from "./CallPopupHost";
 import { LEAD_STATUSES, leadStatusLabel } from "@/lib/labels";
 import {
   MAX_BELPOGINGEN,
+  definitiefGeenContactDbHint,
   buildGeenContactOutcomePatch,
   inBelQueue,
   isTerugbelDue,
@@ -100,7 +109,11 @@ const VALID_TABS: CrmTab[] = [
   "inbox",
   "purchasing",
   "sales_cockpit",
+  "finance",
+  "facturen_mailbox",
   "rapportage",
+  "performance",
+  "stuur",
   "ai",
   "voice_ai",
   "adviseurs",
@@ -182,7 +195,7 @@ export function CrmShell() {
       ai: "AI",
       voice_ai: "Voice AI",
       adviseurs: "Adviseurs",
-      partners: "Team",
+      partners: "Business",
       instellingen: "Instellingen",
     };
     const name = pageNames[tab] || "CRM";
@@ -193,47 +206,22 @@ export function CrmShell() {
   }, [tab]);
 
   const statusFilter = parseLeadStatus(searchParams.get("status"));
-  const [leads, setLeads] = useState<Lead[]>(
-    () => readCrmBootstrapCache()?.leads ?? []
-  );
-  const [afspraken, setAfspraken] = useState<Afspraak[]>(
-    () => readCrmBootstrapCache()?.afspraken ?? []
-  );
-  const [offertes, setOffertes] = useState<Offerte[]>(
-    () => readCrmBootstrapCache()?.offertes ?? []
-  );
-  const [projecten, setProjecten] = useState<Project[]>(
-    () => readCrmBootstrapCache()?.projecten ?? []
-  );
-  const [facturen, setFacturen] = useState<Factuur[]>(
-    () => readCrmBootstrapCache()?.facturen ?? []
-  );
-  const [instroomCount, setInstroomCount] = useState(
-    () => readCrmBootstrapCache()?.instroomCount ?? 0
-  );
-  const [adviseurs, setAdviseurs] = useState<Adviseur[]>(
-    () => readCrmBootstrapCache()?.adviseurs ?? []
-  );
-  const [adviseurFilter, setAdviseurFilter] = useState(() => {
-    if (typeof window === "undefined") return "";
-    try {
-      return localStorage.getItem(ADVISEUR_FILTER_KEY) || "";
-    } catch {
-      return "";
-    }
-  });
-  const [loading, setLoading] = useState(() => !hasCrmBootstrapCache());
+  // Eerste render moet gelijk zijn aan de server. sessionStorage/localStorage
+  // pas ná hydrate, anders gooit React de boom weg en blijft o.a. de
+  // maandleaderboard op "Laden…" staan.
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [afspraken, setAfspraken] = useState<Afspraak[]>([]);
+  const [offertes, setOffertes] = useState<Offerte[]>([]);
+  const [projecten, setProjecten] = useState<Project[]>([]);
+  const [facturen, setFacturen] = useState<Factuur[]>([]);
+  const [instroomCount, setInstroomCount] = useState(0);
+  const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
+  const [adviseurFilter, setAdviseurFilter] = useState("");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [addLeadOpen, setAddLeadOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem("bc_crm_sidebar_rail_v1") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
   const [adviseurFacturenPending, setAdviseurFacturenPending] = useState(0);
   const [sessionUser, setSessionUser] = useState<{
@@ -243,10 +231,36 @@ export function CrmShell() {
     rol: GebruikerRol;
     actief?: boolean;
     geblokkeerd?: boolean;
-  } | null>(() => readCrmSessionCache());
-  const [sessionReady, setSessionReady] = useState(
-    () => readCrmSessionCache() !== null
-  );
+  } | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
+
+  useLayoutEffect(() => {
+    const session = readCrmSessionCache();
+    if (session) {
+      setSessionUser(session);
+      setSessionReady(true);
+    }
+    const boot = readCrmBootstrapCache();
+    if (boot) {
+      setLeads(boot.leads ?? []);
+      setAfspraken(boot.afspraken ?? []);
+      setOffertes(boot.offertes ?? []);
+      setProjecten(boot.projecten ?? []);
+      setFacturen(boot.facturen ?? []);
+      setInstroomCount(boot.instroomCount ?? 0);
+      setAdviseurs(boot.adviseurs ?? []);
+      setLoading(false);
+    }
+    try {
+      const filter = localStorage.getItem(ADVISEUR_FILTER_KEY) || "";
+      if (filter) setAdviseurFilter(filter);
+      if (localStorage.getItem("bc_crm_sidebar_rail_v1") === "1") {
+        setSidebarCollapsed(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const [impersonator, setImpersonator] = useState<{
     id: string;
     naam: string;
@@ -759,6 +773,7 @@ export function CrmShell() {
         klantNaam: string | null;
         adviseurId: string | null;
         adviseurNaam: string | null;
+        deadlineAt: string | null;
       }
     >();
     for (const p of projecten) {
@@ -786,6 +801,7 @@ export function CrmShell() {
         klantNaam: lead?.naam || null,
         adviseurId,
         adviseurNaam,
+        deadlineAt: p.hold_sales_deadline_at || null,
       });
     }
     return m;
@@ -989,16 +1005,58 @@ export function CrmShell() {
           .eq("id", leadId);
         err = retry.error;
       }
-      if (err) throw err;
+      if (err) {
+        const hint = definitiefGeenContactDbHint(err.message);
+        if (hint) throw new Error(hint);
+        throw err;
+      }
 
-      if (status === "geen_contact") {
+      if (status === "niet_gekwalificeerd" || status === "deur_niet_open") {
+        try {
+          const open = await sb
+            .from("afspraken")
+            .select("id, status")
+            .eq("lead_id", leadId)
+            .eq("soort", "nieuw")
+            .in("status", ["gepland", "bevestigd", "verzet"]);
+          for (const a of open.data || []) {
+            await sb
+              .from("afspraken")
+              .update({
+                status: "geannuleerd",
+                notities:
+                  status === "deur_niet_open"
+                    ? "Annulering: deur niet open"
+                    : "Annulering: niet goed gekwalificeerd",
+              })
+              .eq("id", a.id);
+          }
+          if ((open.data || []).length > 0) {
+            setAfspraken((prev) =>
+              prev.map((a) =>
+                a.lead_id === leadId &&
+                a.soort === "nieuw" &&
+                (a.status === "gepland" ||
+                  a.status === "bevestigd" ||
+                  a.status === "verzet")
+                  ? { ...a, status: "geannuleerd" as const }
+                  : a
+              )
+            );
+          }
+        } catch {
+          /* non-blocking */
+        }
+      }
+
+      if (status === "geen_contact" && gc) {
         try {
           const res = await fetch("/api/bel/mark-called", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               lead_id: leadId,
-              status: "geen_contact",
+              status: gc.patch.status,
               eerste_gebeld: !current.eerste_gebeld_at,
             }),
           });
@@ -1022,10 +1080,14 @@ export function CrmShell() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
-          titel: `Status → ${leadStatusLabel[status] || status}`,
+          titel: `Status → ${
+            leadStatusLabel[gc?.patch.status ?? status] || status
+          }`,
           detail:
             status === "geen_contact" && gc
-              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}`
+              ? `Belpoging ${gc.pogingen}/${MAX_BELPOGINGEN}${
+                  gc.definitief ? " — definitief geen contact" : ""
+                }`
               : status === "niet_gekwalificeerd"
                 ? notities
                 : null,
@@ -1302,9 +1364,11 @@ export function CrmShell() {
               ? "Acties"
               : boView === "service"
                 ? "Service"
-                : boView === "bel_rapportage"
-                  ? "Bel rapportage"
-                  : "Projecten",
+                : boView === "live"
+                  ? "Live"
+                  : boView === "bel_rapportage"
+                    ? "Bel rapportage"
+                    : "Projecten",
       sub:
         boView === "agenda"
           ? "Schouw, installatie en service per week"
@@ -1316,11 +1380,13 @@ export function CrmShell() {
                 : "Herplannen, schouw, financiering en facturen"
               : boView === "service"
                 ? "Service-desk · tickets inplannen op het planbord"
-                : boView === "bel_rapportage"
-                  ? "Bel-conversie · periodefilter · dagoel = 2 weken vol plannen (+20% uitval)"
-                  : filterLabel
-                    ? `Backoffice van ${filterLabel}`
-                    : "Backoffice in planning en uitvoering",
+                : boView === "live"
+                  ? "Recente leads · L→A op cohort binnenkomst · wanneer ingepland."
+                  : boView === "bel_rapportage"
+                    ? "Bel-conversie · periodefilter · dagoel = 2 weken vol plannen (+20% uitval)"
+                    : filterLabel
+                      ? `Backoffice van ${filterLabel}`
+                      : "Backoffice in planning en uitvoering",
     },
     facturen: {
       title: "Facturen",
@@ -1333,7 +1399,7 @@ export function CrmShell() {
     },
     creditfacturen: {
       title: "Creditfacturen",
-      sub: "Adviseurs en monteurs · versturen en goedkeuring",
+      sub: "Adviseurs en installatiepartners · versturen en goedkeuring",
     },
     inkomend: {
       title: "Inkomend",
@@ -1341,7 +1407,7 @@ export function CrmShell() {
     },
     inbox: {
       title: "Inbox",
-      sub: "info@ · mappen · templates · acties (IMAP/SMTP volgt)",
+      sub: "info@ · AI zet mails automatisch in de juiste map",
     },
     purchasing: {
       title: "Purchasing",
@@ -1351,9 +1417,25 @@ export function CrmShell() {
       title: "Cockpit",
       sub: "Sales · periode en tabs",
     },
+    finance: {
+      title: "Finance",
+      sub: "Uitbetalingen en kaspositie",
+    },
+    facturen_mailbox: {
+      title: "Facturen mailbox",
+      sub: "Inkomende factuurmails",
+    },
     rapportage: {
       title: "Rapportage",
       sub: "Dashboard · Bellen · Leads · Financieel · Kaart",
+    },
+    performance: {
+      title: "Performance",
+      sub: "Marketing performance",
+    },
+    stuur: {
+      title: "Stuur",
+      sub: "Actieboard en sturing",
     },
     admin: {
       title: "Admin",
@@ -1375,8 +1457,8 @@ export function CrmShell() {
           : "Dekking op de kaart · 1u-rijden straal · leads per maand",
     },
     partners: {
-      title: "Team",
-      sub: "Medewerkers · monteurs · Warmtefonds · overeenkomsten · uitbetalingen",
+      title: "Business",
+      sub: "Mensen · overeenkomsten · kosten · uitbetalingen",
     },
     instellingen: {
       title: "Instellingen",
@@ -1419,13 +1501,13 @@ export function CrmShell() {
   return (
     <div
       className={[
+        tab === "sales_cockpit" ? "sales-cockpit-shell" : "crm-bg",
         "flex flex-col",
-        tab === "sales_cockpit" ? "sales-cockpit-shell" : "",
         tab === "sales_cockpit"
           ? "h-dvh max-h-dvh overflow-hidden bg-[var(--wash)]"
-          : tab === "voice_ai"
-            ? "crm-bg h-dvh max-h-dvh overflow-hidden"
-            : "crm-bg min-h-screen",
+          : tab === "voice_ai" || tab === "instroom" || tab === "partners"
+            ? "h-dvh max-h-dvh overflow-hidden"
+            : "min-h-screen",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1535,7 +1617,11 @@ export function CrmShell() {
         <main
           className={[
             "flex min-h-0 min-w-0 flex-1 flex-col",
-            tab === "leaderboard" || tab === "voice_ai"
+            tab === "leaderboard" ||
+            tab === "voice_ai" ||
+            tab === "inbox" ||
+            tab === "instroom" ||
+            tab === "partners"
               ? "overflow-hidden px-0 py-0"
               : tab === "sales_cockpit"
                 ? [
@@ -1551,7 +1637,10 @@ export function CrmShell() {
         >
         {tab !== "leaderboard" &&
         tab !== "voice_ai" &&
-        tab !== "sales_cockpit" ? (
+        tab !== "sales_cockpit" &&
+        tab !== "inbox" &&
+        tab !== "instroom" &&
+        tab !== "partners" ? (
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
@@ -1610,7 +1699,9 @@ export function CrmShell() {
                 ? "border-0 bg-wash"
                 : tab === "sales_cockpit"
                   ? "border-0 bg-transparent"
-                  : "border border-line bg-white",
+                  : tab === "instroom" || tab === "partners"
+                    ? "border-0 bg-white"
+                    : "border border-line bg-white",
           ].join(" ")}
         >
           {userRol === "installateur" ? (
@@ -1620,15 +1711,18 @@ export function CrmShell() {
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm text-muted">
                 Installateurs werken via het installatieportaal (aparte link per
-                partner). Beheer monteurs onder Team als admin.
+                partner). Beheer installatiepartners onder Business als admin.
               </p>
             </div>
           ) : (
             <>
           <div
             className={[
-              "min-h-0 min-w-0 flex-1",
-              tab === "voice_ai" || tab === "leaderboard"
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              tab === "voice_ai" ||
+              tab === "leaderboard" ||
+              tab === "instroom" ||
+              tab === "partners"
                 ? "overflow-hidden"
                 : tab === "sales_cockpit"
                   ? salesCockpitLiveWall
@@ -1796,7 +1890,11 @@ export function CrmShell() {
                         onBellerChange={
                           userRol === "admin" ? updateLeadBeller : undefined
                         }
-                        showAdminSlots={userRol === "admin"}
+                        showAdminSlots={
+                          userRol === "admin" ||
+                          userRol === "backoffice" ||
+                          isBellerRol(userRol)
+                        }
                         showConversie={
                           userRol === "admin" || userRol === "backoffice"
                         }
@@ -1843,7 +1941,21 @@ export function CrmShell() {
                   ) : (
                     <SalesLeaderboardPanel />
                   ))}
-                {tab === "instroom" && <RecruitmentPanel />}
+                {tab === "instroom" && (
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
+                      <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
+                        {titles.instroom.title}
+                      </h1>
+                      <p className="mt-0.5 text-sm text-muted">
+                        {titles.instroom.sub}
+                      </p>
+                    </div>
+                    <div className="min-h-0 flex-1">
+                      <RecruitmentPanel />
+                    </div>
+                  </div>
+                )}
                 {tab === "projecten" && (
                   <BackofficePanel
                     projecten={scopedProjecten}
@@ -1906,7 +2018,19 @@ export function CrmShell() {
                     <AdviseursKaartPanel />
                   ))}
                 {tab === "partners" && (
-                  <PartnersPanel onAdviseursChange={loadAdviseurs} />
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
+                      <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
+                        {titles.partners.title}
+                      </h1>
+                      <p className="mt-0.5 text-sm text-muted">
+                        {titles.partners.sub}
+                      </p>
+                    </div>
+                    <div className="min-h-0 flex-1">
+                      <PartnersPanel onAdviseursChange={loadAdviseurs} />
+                    </div>
+                  </div>
                 )}
               </>
             )}
@@ -1929,6 +2053,7 @@ export function CrmShell() {
           setLeads((prev) => [lead, ...prev]);
         }}
       />
+      <CallPopupHost adviseurId={sessionUser?.id || null} />
     </div>
   );
 }

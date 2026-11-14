@@ -8,9 +8,31 @@ export const FACTUUR_BETAALTERMIJN_DAGEN = 3;
 /** Restantfactuur via Warmtefonds — altijd 14 dagen. */
 export const FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN = 14;
 
-export const COMPANY_IBAN_DISPLAY = "NL48 BUNQ 2209 5579 33";
-export const COMPANY_IBAN_COMPACT = "NL48BUNQ2209557933";
+export const COMPANY_IBAN_DISPLAY = "NL60 RABO 0179 8394 97";
+export const COMPANY_IBAN_COMPACT = "NL60RABO0179839497";
+/** Stond op facturen die al verstuurd zijn. Die blijven zo. */
+export const COMPANY_IBAN_LEGACY_DISPLAY = "NL48 BUNQ 2209 5579 33";
+export const COMPANY_IBAN_LEGACY_COMPACT = "NL48BUNQ2209557933";
 export const COMPANY_ACCOUNT_NAME = "BatterijConcept";
+
+function ibanCompact(value: string): string {
+  return value.replace(/\s+/g, "").toUpperCase();
+}
+
+/**
+ * Rekeningnummer op een klantfactuur.
+ * Concept en facturen die al op Rabobank zijn gezet: nieuw nummer.
+ * Verzonden facturen houden het nummer dat erop stond.
+ */
+export function ibanVoorKlantfactuur(factuur: {
+  status?: string | null;
+  notities?: string | null;
+}): string {
+  const notes = ibanCompact(factuur.notities || "");
+  if (notes.includes(COMPANY_IBAN_COMPACT)) return COMPANY_IBAN_DISPLAY;
+  if (factuur.status === "concept") return COMPANY_IBAN_DISPLAY;
+  return COMPANY_IBAN_LEGACY_DISPLAY;
+}
 
 /** Parse gebruikersinvoer (dagen); fallback bij leeg/ongeldig. */
 export function parseBetaaltermijnDagen(

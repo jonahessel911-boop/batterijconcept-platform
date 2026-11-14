@@ -8,6 +8,10 @@ import {
   SCHOUW_DUUR_MINUTEN,
   SERVICE_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
+import {
+  resolveInstallatiePortal,
+  scopesToOwnJobsOnly,
+} from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
 
@@ -39,28 +43,33 @@ function leadFromRow(raw: unknown): LeadAdres | null {
  * Bevat schouw, installatie en service van deze partner.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
-    const sb = getSupabaseAdmin();
-    const { data: partner, error: partnerErr } = await sb
-      .from("installatie_partners")
-      .select("id, naam, actief, portal_token")
-      .eq("portal_token", token)
-      .single();
-
-    if (partnerErr || !partner || !partner.actief) {
+    const session = await resolveInstallatiePortal(token, req);
+    if (!session) {
       return new NextResponse("Portaal niet gevonden", { status: 404 });
     }
+    const partner = session.partner;
+    const sb = getSupabaseAdmin();
 
-    const { data: orders, error } = await sb
+    let query = sb
       .from("projecten")
       .select(
-        "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
+        "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, installatie_teamgenoot_id, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
       )
       .eq("installatie_partner_id", partner.id);
+
+    if (scopesToOwnJobsOnly(session)) {
+      query = query.eq(
+        "installatie_teamgenoot_id",
+        session.teamgenoot!.id
+      );
+    }
+
+    const { data: orders, error } = await query;
 
     if (error) throw error;
 

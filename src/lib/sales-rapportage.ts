@@ -300,12 +300,13 @@ function metricsToAcc(m: SalesMetrics): Acc {
   };
 }
 
-async function loadGeannuleerdeOfferteIds(
+async function loadOfferteProjectFlags(
   sb: SupabaseClient,
   offerteIds: string[]
-): Promise<Set<string>> {
-  const out = new Set<string>();
-  if (offerteIds.length === 0) return out;
+): Promise<{ geannuleerd: Set<string>; hold: Set<string> }> {
+  const geannuleerd = new Set<string>();
+  const hold = new Set<string>();
+  if (offerteIds.length === 0) return { geannuleerd, hold };
   const { data, error } = await sb
     .from("projecten")
     .select("offerte_id, status")
@@ -313,11 +314,20 @@ async function loadGeannuleerdeOfferteIds(
   if (error) throw error;
   for (const p of data || []) {
     if (!p.offerte_id) continue;
-    if (normalizeProjectStatus(p.status as string) === "annulering") {
-      out.add(p.offerte_id as string);
+    const raw = String(p.status || "");
+    const status = normalizeProjectStatus(raw);
+    if (status === "annulering" || raw === "annulering") {
+      geannuleerd.add(p.offerte_id as string);
+    }
+    if (
+      status === "hold_sales_actie" ||
+      raw === "hold_sales_actie" ||
+      raw === "hold_sales"
+    ) {
+      hold.add(p.offerte_id as string);
     }
   }
-  return out;
+  return { geannuleerd, hold };
 }
 
 async function loadDoorgezetteSaleLeadIds(
@@ -449,13 +459,15 @@ export async function buildSalesRapportage(
   const periodLeadIds = afspraken
     .filter((a) => isNieuwHuisbezoek(a.soort))
     .map((a) => a.lead_id);
-  const [doorgezetSaleLeadIds, geannuleerdOfferteIds] = await Promise.all([
+  const [doorgezetSaleLeadIds, projectFlags] = await Promise.all([
     loadDoorgezetteSaleLeadIds(sb, periodLeadIds),
-    loadGeannuleerdeOfferteIds(
+    loadOfferteProjectFlags(
       sb,
       offertes.map((o) => o.id).filter(Boolean)
     ),
   ]);
+  const geannuleerdOfferteIds = projectFlags.geannuleerd;
+  const holdOfferteIds = projectFlags.hold;
 
   // Fallback-adviseur per lead via nieuw huisbezoek (als lead.adviseur_id leeg is)
   const leadAdvFromAfspraak = new Map<string, string>();
@@ -574,7 +586,7 @@ export async function buildSalesRapportage(
   }
 
   for (const o of offertes) {
-    if (geannuleerdOfferteIds.has(o.id)) continue;
+    if (geannuleerdOfferteIds.has(o.id) || holdOfferteIds.has(o.id)) continue;
     if (!o.ondertekend_op) continue;
     const ymd = ymdFromIso(o.ondertekend_op);
     if (!inYmdRange(ymd, startYmd, endYmd)) continue;
@@ -589,12 +601,12 @@ export async function buildSalesRapportage(
     const ma = monthAcc.get(mk)!;
     const maa = ensureAdv(monthAdvAcc, mk, aid);
     wa.sales += 1;
-    wa.omzet += bedrag;
     aa.sales += 1;
-    aa.omzet += bedrag;
     ma.sales += 1;
-    ma.omzet += bedrag;
     maa.sales += 1;
+    wa.omzet += bedrag;
+    aa.omzet += bedrag;
+    ma.omzet += bedrag;
     maa.omzet += bedrag;
   }
 

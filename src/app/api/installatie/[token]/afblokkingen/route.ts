@@ -6,19 +6,9 @@ import {
   loadPartnerAfblokkingen,
   togglePartnerAfblokking,
 } from "@/lib/partner-afblokkingen-db";
+import { resolveInstallatiePortal } from "@/lib/installatie-portal";
 
 export const runtime = "nodejs";
-
-async function resolvePartner(token: string) {
-  const sb = getSupabaseAdmin();
-  const { data, error } = await sb
-    .from("installatie_partners")
-    .select("id, naam, actief, portal_token")
-    .eq("portal_token", token)
-    .single();
-  if (error || !data || !data.actief) return null;
-  return data;
-}
 
 /**
  * GET /api/installatie/[token]/afblokkingen?van=&tot=&teamgenoot_id=
@@ -29,18 +19,22 @@ export async function GET(
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
-    if (!partner) {
+    const session = await resolveInstallatiePortal(token, req);
+    if (!session) {
       return NextResponse.json(
         { error: "Portaal niet gevonden" },
         { status: 404 }
       );
     }
+    const partner = session.partner;
 
     const p = req.nextUrl.searchParams;
     const van = p.get("van");
     const tot = p.get("tot");
-    const teamgenootId = p.get("teamgenoot_id")?.trim() || null;
+    let teamgenootId = p.get("teamgenoot_id")?.trim() || null;
+    if (session.kind === "teamgenoot") {
+      teamgenootId = session.teamgenoot.id;
+    }
     if (!van || !tot) {
       return NextResponse.json(
         { error: "van en tot (yyyy-MM-dd) zijn verplicht" },
@@ -85,13 +79,14 @@ export async function POST(
 ) {
   const { token } = await ctx.params;
   try {
-    const partner = await resolvePartner(token);
-    if (!partner) {
+    const session = await resolveInstallatiePortal(token, req);
+    if (!session) {
       return NextResponse.json(
         { error: "Portaal niet gevonden" },
         { status: 404 }
       );
     }
+    const partner = session.partner;
 
     let body: {
       dag?: string;
@@ -125,7 +120,11 @@ export async function POST(
       );
     }
 
-    const teamgenootId = body.teamgenoot_id?.trim() || null;
+    let teamgenootId = body.teamgenoot_id?.trim() || null;
+    if (session.kind === "teamgenoot") {
+      teamgenootId = session.teamgenoot.id;
+    }
+
     const sb = getSupabaseAdmin();
 
     if (teamgenootId) {

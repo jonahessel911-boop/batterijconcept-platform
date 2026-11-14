@@ -23,21 +23,21 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/crm/sales-cockpit/ui/badge";
+import { Button } from "@/components/crm/sales-cockpit/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/crm/sales-cockpit/ui/card";
+import { Progress } from "@/components/crm/sales-cockpit/ui/progress";
+import { Skeleton } from "@/components/crm/sales-cockpit/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/crm/sales-cockpit/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { DualAreaChart, type ChartSeries } from "@/components/ui/charts";
-import { DataTable, type DataColumn } from "@/components/ui/data-table";
+} from "@/components/crm/sales-cockpit/ui/tooltip";
+import { Avatar, AvatarFallback } from "@/components/crm/sales-cockpit/ui/avatar";
+import { DualAreaChart, type ChartSeries } from "@/components/crm/sales-cockpit/ui/charts";
+import { DataTable, type DataColumn } from "@/components/crm/sales-cockpit/ui/data-table";
 import { AMSTERDAM_TZ, formatEuro } from "@/lib/format";
 import type {
   DayAdvisorAppt,

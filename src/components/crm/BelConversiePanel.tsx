@@ -236,8 +236,8 @@ function BelSeriesChart({
       : null;
 
   return (
-    <div>
-      <div ref={wrapRef} className="relative" onMouseLeave={clearTip}>
+    <div className="overflow-x-auto">
+      <div ref={wrapRef} className="relative min-w-[22rem]" onMouseLeave={clearTip}>
         {/* L→A % boven de plot */}
         <div className="mb-1 flex justify-around gap-3 px-1 sm:gap-4">
           {series.map((b) => (
@@ -651,7 +651,7 @@ export function BelConversiePanel() {
                 }`}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:items-end">
           {!bellerSimpel ? (
             <div className="flex flex-wrap justify-end gap-1.5">
               {(
@@ -712,7 +712,7 @@ export function BelConversiePanel() {
                 <select
                   value={bellerId}
                   onChange={(e) => setBellerId(e.target.value)}
-                  className="min-w-[10rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                  className="w-full min-w-0 border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green sm:min-w-[10rem] sm:w-auto"
                 >
                   <option value="">Alle</option>
                   {bellerOptions.map((b) => (
@@ -737,7 +737,7 @@ export function BelConversiePanel() {
                     ).slice(0, 10);
                     setAnchorYmd(monday || today);
                   }}
-                  className="min-w-[14rem] border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green"
+                  className="w-full min-w-0 border border-line bg-white px-2.5 py-2 text-sm font-semibold text-ink outline-none focus:border-green sm:min-w-[14rem] sm:w-auto"
                 >
                   {weekOptions.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -878,8 +878,8 @@ export function BelConversiePanel() {
                       {num(bruto)}
                     </p>
                     <p className="mt-1 text-xs font-semibold text-muted">
-                      Alle nieuwe huisbezoeken
-                      {uitval > 0 ? ` (incl. ${num(uitval)} uitval)` : ""}
+                      Zonder deur-niet-open / niet gekwalificeerd
+                      {uitval > 0 ? ` · incl. ${num(uitval)} uitval` : ""}
                     </p>
                   </div>
                   <div className="rounded-2xl border border-green/30 bg-white p-4">

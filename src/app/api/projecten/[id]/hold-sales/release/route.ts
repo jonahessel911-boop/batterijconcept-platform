@@ -6,7 +6,7 @@ import { appendStampedNotitie } from "@/lib/lead-notitie";
 import { projectStatusLabel } from "@/lib/labels";
 import {
   inferResumeStatusAfterHold,
-  isUsableResumeStatus,
+  resumeStatusFromHoldEvents,
 } from "@/lib/hold-sales";
 import type { ProjectStatus } from "@/types/database";
 
@@ -42,7 +42,7 @@ export async function POST(
     const { data: project, error: loadErr } = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, notities, schouw_at, schouw_jaar, schouw_week, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, installatie_at, installatie_voltooid_at, financiering_status, offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, notities, backoffice_notitie, schouw_at, schouw_jaar, schouw_week, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, installatie_at, installatie_voltooid_at, financiering_status, offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
@@ -68,19 +68,7 @@ export async function POST(
         .eq("soort", "status")
         .order("created_at", { ascending: false })
         .limit(40);
-
-      for (const ev of events || []) {
-        const meta = (ev.meta || {}) as {
-          project_id?: string;
-          naar?: string;
-          van?: string;
-        };
-        if (meta.project_id && meta.project_id !== id) continue;
-        if (meta.naar === "hold_sales_actie" && isUsableResumeStatus(meta.van)) {
-          resume = meta.van;
-          break;
-        }
-      }
+      resume = resumeStatusFromHoldEvents(events, id);
     }
 
     if (!resume) {
@@ -88,25 +76,48 @@ export async function POST(
     }
 
     const author = body.author_naam?.trim() || "Sales";
-    const noteText = `HOLD afgehandeld · terug naar backoffice\n${reply}`;
+    const noteText = `HOLD teruggestuurd door sales\n${reply}`;
     const mergedNotities = appendStampedNotitie(
       (project as { notities?: string | null }).notities,
       noteText,
       new Date(),
       author
     );
+    // Zichtbaar op project (zelfde plek als BO-notitie) — sales-antwoord voor BO.
+    const boNotitie = `HOLD teruggestuurd door ${author}:\n${reply}`;
 
-    const { data: updated, error: updErr } = await sb
+    const selectAfter =
+      "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)";
+    const patchBase = {
+      status: resume,
+      notities: mergedNotities,
+      backoffice_notitie: boNotitie,
+      backoffice_notitie_door: author,
+      hold_sales_deadline_at: null as string | null,
+    };
+    let { data: updated, error: updErr } = await sb
       .from("projecten")
-      .update({
-        status: resume,
-        notities: mergedNotities,
-      })
+      .update(patchBase)
       .eq("id", id)
-      .select(
-        "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam)), installatie_partners(id, naam, email, telefoon), verantwoordelijke:adviseurs!verantwoordelijke_id(id, naam, email), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc, aanbetaling_modus, aanbetaling_bedrag_inc, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, ondertekend_op)"
-      )
+      .select(selectAfter)
       .single();
+
+    if (
+      updErr &&
+      (updErr.code === "42703" ||
+        updErr.message?.includes("hold_sales_deadline_at"))
+    ) {
+      const { hold_sales_deadline_at: _drop, ...withoutDeadline } = patchBase;
+      void _drop;
+      const retry = await sb
+        .from("projecten")
+        .update(withoutDeadline)
+        .eq("id", id)
+        .select(selectAfter)
+        .single();
+      updated = retry.data;
+      updErr = retry.error;
+    }
 
     if (updErr || !updated) {
       return NextResponse.json(
@@ -119,14 +130,16 @@ export async function POST(
       await logLeadEvent({
         leadId: project.lead_id,
         soort: "status",
-        titel: `Projectstatus: ${projectStatusLabel[resume] || resume}`,
-        detail: `Was: HOLD SALES ACTIE · terug naar backoffice · Sales: ${reply}`,
+        titel: `HOLD teruggestuurd door sales → ${projectStatusLabel[resume] || resume}`,
+        detail: `${author}: ${reply}`,
         meta: {
           project_id: id,
           project_nummer: project.project_nummer,
           van: "hold_sales_actie",
           naar: resume,
           hold_released: true,
+          author,
+          reply,
         },
       });
       await logLeadEvent({
@@ -139,6 +152,7 @@ export async function POST(
           project_nummer: project.project_nummer,
           hold_released: true,
           author,
+          reply,
         },
       });
     }

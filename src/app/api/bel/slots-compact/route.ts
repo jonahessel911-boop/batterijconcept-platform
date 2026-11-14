@@ -1,5 +1,5 @@
 /**
- * GET /api/bel/slots-compact?days=14&adviseur_id=…
+ * GET /api/bel/slots-compact?days=16&adviseur_id=…
  * Compact overzicht: open slots (vrij/bezet) per planbare adviseur.
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -26,6 +26,7 @@ import { normalizeRol } from "@/lib/rollen";
 import {
   AFSPRAAK_DUUR_MINUTEN,
   generateDayBlocks,
+  HUISBEZOEK_PLAN_DAYS_AHEAD,
   type BusySlot,
 } from "@/lib/slots";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -81,10 +82,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
     }
 
-    const daysRaw = Number(req.nextUrl.searchParams.get("days") || "14");
+    const daysRaw = Number(
+      req.nextUrl.searchParams.get("days") ||
+        String(HUISBEZOEK_PLAN_DAYS_AHEAD)
+    );
     const daysAhead = Math.min(
-      Math.max(Number.isFinite(daysRaw) ? daysRaw : 14, 1),
-      21
+      Math.max(
+        Number.isFinite(daysRaw) ? daysRaw : HUISBEZOEK_PLAN_DAYS_AHEAD,
+        1
+      ),
+      HUISBEZOEK_PLAN_DAYS_AHEAD
     );
     let lockAdviseurId =
       req.nextUrl.searchParams.get("adviseur_id")?.trim() || null;
@@ -99,11 +106,29 @@ export async function GET(req: NextRequest) {
     const tot = dayKeyAmsterdam(addDays(now, daysAhead + 2));
     const y = getISOWeekYear(toZonedTime(now, AMSTERDAM_TZ));
 
-    const { data: adviseursRaw, error: advErr } = await sb
+    let { data: adviseursRaw, error: advErr } = await sb
       .from("adviseurs")
-      .select("id, naam, email, rol, actief, startdatum")
+      .select(
+        "id, naam, email, rol, actief, startdatum, start_vanaf_huis_maandag"
+      )
       .eq("actief", true)
       .order("naam");
+    if (
+      advErr &&
+      (advErr.message?.includes("start_vanaf_huis_maandag") ||
+        advErr.code === "42703")
+    ) {
+      const fb = await sb
+        .from("adviseurs")
+        .select("id, naam, email, rol, actief, startdatum")
+        .eq("actief", true)
+        .order("naam");
+      adviseursRaw = (fb.data || []).map((a) => ({
+        ...a,
+        start_vanaf_huis_maandag: null as boolean | null,
+      }));
+      advErr = fb.error;
+    }
     if (advErr) throw advErr;
 
     let adviseurs = (adviseursRaw || []).filter((a) =>
@@ -198,7 +223,9 @@ export async function GET(req: NextRequest) {
           dag,
           hour,
           afblokkingen,
-          vrijgaven
+          vrijgaven,
+          (adv as { start_vanaf_huis_maandag?: boolean | null })
+            .start_vanaf_huis_maandag
         );
         if (blocked) continue;
 

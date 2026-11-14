@@ -7,6 +7,7 @@ import {
   buildProjectedPnl,
   defaultPnlRange,
 } from "@/lib/projected-pnl";
+import { buildPnlMonthForecast } from "@/lib/pnl-forecast";
 import {
   conversieMonthRangeContaining,
   conversieWeekRangeContaining,
@@ -100,9 +101,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const result = await buildProjectedPnl(sb, from, to);
+    const [result, forecast] = await Promise.all([
+      buildProjectedPnl(sb, from, to),
+      buildPnlMonthForecast(sb).catch((err) => {
+        console.error("pnl forecast:", err);
+        return null;
+      }),
+    ]);
 
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, ...result, forecast });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Projected P&L laden mislukt") },

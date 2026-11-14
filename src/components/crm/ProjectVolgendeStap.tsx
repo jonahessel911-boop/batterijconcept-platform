@@ -1,6 +1,7 @@
 "use client";
 
 import type { Factuur, Project, ProjectStatus } from "@/types/database";
+import type { FinancieringStatus } from "@/lib/financiering-status";
 import {
   resolveProjectVolgendeStap,
   type ProjectVolgendeStapInfo,
@@ -12,17 +13,27 @@ export function ProjectVolgendeStap({
   disabled,
   onStatusChange,
   onPlanSchouwdag,
+  onFinancieringChange,
 }: {
   project: Project;
   facturen?: Factuur[];
   disabled?: boolean;
   onStatusChange?: (status: ProjectStatus) => void;
   onPlanSchouwdag?: () => void;
+  onFinancieringChange?: (status: FinancieringStatus) => void;
 }) {
   const stap = resolveProjectVolgendeStap(project, new Date(), facturen);
   if (!stap) return null;
 
-  return <VolgendeStapBanner stap={stap} disabled={disabled} onStatusChange={onStatusChange} onPlanSchouwdag={onPlanSchouwdag} />;
+  return (
+    <VolgendeStapBanner
+      stap={stap}
+      disabled={disabled}
+      onStatusChange={onStatusChange}
+      onPlanSchouwdag={onPlanSchouwdag}
+      onFinancieringChange={onFinancieringChange}
+    />
+  );
 }
 
 function VolgendeStapBanner({
@@ -30,11 +41,13 @@ function VolgendeStapBanner({
   disabled,
   onStatusChange,
   onPlanSchouwdag,
+  onFinancieringChange,
 }: {
   stap: ProjectVolgendeStapInfo;
   disabled?: boolean;
   onStatusChange?: (status: ProjectStatus) => void;
   onPlanSchouwdag?: () => void;
+  onFinancieringChange?: (status: FinancieringStatus) => void;
 }) {
   const tone = stap.overdue
     ? {
@@ -60,11 +73,18 @@ function VolgendeStapBanner({
       onStatusChange?.(stap.actie.status as ProjectStatus);
       return;
     }
-    if (stap.actie.openSoort === "schouwdag") {
-      onPlanSchouwdag?.();
+    if (stap.actie.kind === "financiering") {
+      onFinancieringChange?.(stap.actie.financiering_status);
+      return;
     }
-    const el = document.querySelector(stap.actie.href);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (stap.actie.kind === "anchor") {
+      if (stap.actie.openSoort === "schouwdag") {
+        onPlanSchouwdag?.();
+        return;
+      }
+      const el = document.querySelector(stap.actie.href);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   }
 
   return (

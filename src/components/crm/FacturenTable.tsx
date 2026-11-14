@@ -15,13 +15,20 @@ import {
   factuurSoortHint,
   factuurSoortLabel,
   factuurSoortTone,
+  isAnnuleringsFactuur,
   isFactuurWfLaterBetaald,
   isWarmtefondsFactuurContext,
   resolveFactuurSoort,
 } from "@/lib/factuur-soort";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 
-type StatusFilter = "actief" | "alles" | "betaald" | "open" | "concept";
+type StatusFilter =
+  | "actief"
+  | "alles"
+  | "betaald"
+  | "open"
+  | "concept"
+  | "annulering";
 
 type BtwKwartaal = {
   key: string;
@@ -34,6 +41,33 @@ type BtwKwartaal = {
 
 function isCreditFactuur(f: Factuur): boolean {
   return Boolean(f.credit_van_factuur_id);
+}
+
+/** "31,01" / "€ 1.142,59" / "31.01" → cents-integer (bijv. 3101). */
+function amountSearchToCents(raw: string): number | null {
+  let s = raw.replace(/€/gi, "").replace(/\s/g, "");
+  if (!s || !/\d/.test(s)) return null;
+  if (s.includes(",")) {
+    // NL: 1.142,59 of 31,01
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    // Alleen duizendtallen: 1.142
+    s = s.replace(/\./g, "");
+  }
+  // Anders: 31.01 of 3101 als gewone float/int
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+
+function factuurAmountMatches(f: Factuur, needleCents: number): boolean {
+  const amounts = [
+    Number(f.bedrag_inc_btw) || 0,
+    Number(f.bedrag_ex_btw) || 0,
+    Number(f.btw_bedrag) || 0,
+  ];
+  return amounts.some((a) => Math.round(Math.abs(a) * 100) === needleCents);
 }
 
 /** Amsterdam-kalenderdag → ISO yyyy-mm-dd. */
@@ -169,11 +203,15 @@ export function FacturenTable({
       case "concept":
         base = base.filter((f) => f.status === "concept");
         break;
+      case "annulering":
+        base = base.filter((f) => isAnnuleringsFactuur(f));
+        break;
       default:
         break;
     }
     const q = search.trim().toLowerCase();
     if (q) {
+      const amountCents = amountSearchToCents(q);
       base = base.filter((f) => {
         const lead = f.leads;
         const hay = [
@@ -188,7 +226,9 @@ export function FacturenTable({
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        return hay.includes(q);
+        if (hay.includes(q)) return true;
+        if (amountCents == null) return false;
+        return factuurAmountMatches(f, amountCents);
       });
     }
     // Verlopen bovenaan (excl. WF-intern/declaratie), daarna nieuwste factuurdatum
@@ -283,6 +323,10 @@ export function FacturenTable({
     (f) => f.status === "concept" && !isCreditFactuur(f)
   ).length;
 
+  const annuleringCount = facturen.filter(
+    (f) => isAnnuleringsFactuur(f) && !isCreditFactuur(f)
+  ).length;
+
   const filters: { id: StatusFilter; label: string }[] = [
     { id: "actief", label: "Zonder concepten" },
     { id: "open", label: "Openstaand" },
@@ -290,6 +334,10 @@ export function FacturenTable({
     {
       id: "concept",
       label: `Concepten${conceptCount ? ` (${conceptCount})` : ""}`,
+    },
+    {
+      id: "annulering",
+      label: `Annuleringsfacturen${annuleringCount ? ` (${annuleringCount})` : ""}`,
     },
     { id: "alles", label: "Alles" },
   ];

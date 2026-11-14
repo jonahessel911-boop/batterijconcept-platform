@@ -7,6 +7,7 @@ import { serializeFactuur } from "@/lib/api-v1/serialize";
 import { splitIncToExBtw } from "@/lib/aanbetaling";
 import { primaireProductOmschrijving } from "@/lib/factuur-omschrijving";
 import {
+  COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
   factuurIsOpenstaand,
@@ -138,7 +139,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
       ).data?.offerte_nummer || project.project_nummer;
 
-    const notitiesBase = `Betreft ${project.project_nummer}. Betaal op NL48 BUNQ 2209 5579 33 t.n.v. BatterijConcept o.v.v. ${ref}.`;
+    const notitiesBase = `Betreft ${project.project_nummer}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${ref}.`;
     const notities = withFactuurAdresOpPdfMarker(notitiesBase, adresOpFactuur);
 
     const { data: factuur, error } = await sb

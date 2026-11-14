@@ -93,7 +93,7 @@ function askLeverdatum(existingIso?: string | null): string | null {
 type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd" | "te_betalen";
 
 const ROW =
-  "grid grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] items-center gap-x-3";
+  "flex w-full flex-col gap-2 md:grid md:w-auto md:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] md:items-center md:gap-x-3 md:gap-y-0";
 
 function defaultSchouw(): SchouwInfo {
   return {
@@ -120,10 +120,11 @@ function openEuro(o: PurchasingOrder): number {
 function deskOf(o: PurchasingOrder): Exclude<Desk, "te_betalen"> {
   if (o.summary.overall === "geleverd") return "geleverd";
   if (o.summary.overall === "besteld") return "onderweg";
-  // Te bestellen: schouw PDF + klant volledig betaald
+  // Te bestellen pas als de installatie gepland is én de klant betaald heeft.
+  // Besteldatum = 5 werkdagen vóór de installatie.
   const klantOk =
     o.klant_betaling == null ? true : Boolean(o.klant_betaling.volledig);
-  if (o.schouw.kind === "voltooid" && klantOk) return "bestellen";
+  if (o.installatie_at && klantOk && isOpenInkoop(o)) return "bestellen";
   return "pipeline";
 }
 
@@ -307,11 +308,15 @@ export function PurchasingPanel() {
         buckets.te_betalen.push(o);
       }
     }
-    buckets.bestellen.sort(
-      (a, b) =>
-        openEuro(b) - openEuro(a) ||
-        (b.updated_at || "").localeCompare(a.updated_at || "")
-    );
+    buckets.bestellen.sort((a, b) => {
+      const ad = a.installatie_at
+        ? bestelDeadlineVoorInstallatie(a.installatie_at).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const bd = b.installatie_at
+        ? bestelDeadlineVoorInstallatie(b.installatie_at).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      return ad - bd || openEuro(b) - openEuro(a);
+    });
     buckets.pipeline.sort((a, b) =>
       pipelineSortKey(a).localeCompare(pipelineSortKey(b))
     );
@@ -607,9 +612,9 @@ export function PurchasingPanel() {
 
   const emptyCopy: Record<Desk, string> = {
     bestellen:
-      "Niets te bestellen. Orders komen hier zodra het schouwrapport (PDF) binnen is én de klant volledig heeft betaald.",
+      "Niets te bestellen. Orders komen hier zodra de installatie is ingepland. Bestellen doe je 5 werkdagen vóór die datum.",
     pipeline:
-      "Geen orders in pipeline (wacht op betaling en/of schouw).",
+      "Geen orders in pipeline (wacht op betaling, schouw of een installatiedatum).",
     onderweg: "Geen bestellingen onderweg.",
     geleverd: "Nog geen geleverde orders.",
     te_betalen: "Geen openstaande leveranciersfacturen (op krediet).",
@@ -626,13 +631,13 @@ export function PurchasingPanel() {
             Materiaal inkopen bij {leverancier} · status en levering
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <input
             type="search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Zoek project of klant…"
-            className="w-44 border border-line bg-white px-2.5 py-1.5 text-xs text-ink outline-none placeholder:text-muted focus:border-green sm:w-56"
+            className="w-full min-w-0 border border-line bg-white px-2.5 py-1.5 text-xs text-ink outline-none placeholder:text-muted focus:border-green sm:w-56"
           />
           <button
             type="button"
@@ -764,12 +769,11 @@ export function PurchasingPanel() {
             : emptyCopy[desk]}
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <div className="min-w-[920px]">
+        <div className="md:overflow-x-auto">
+          <div className="md:min-w-[920px]">
             <div
               className={[
-                ROW,
-                "border-b border-line bg-wash/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-5",
+                "hidden border-b border-line bg-wash/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-5 md:grid md:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] md:items-center md:gap-x-3",
               ].join(" ")}
             >
               <span>Project</span>
@@ -790,7 +794,7 @@ export function PurchasingPanel() {
                     : desk === "te_betalen"
                       ? order.besteld_ex_btw ?? order.inkoop_totaal_ex_btw
                       : order.inkoop_totaal_ex_btw;
-                const canOrder = order.schouw.kind === "voltooid";
+                const canOrder = Boolean(order.installatie_at);
                 const badge = levBadge(order.inkoop_leverancier_status);
 
                 return (
@@ -808,6 +812,9 @@ export function PurchasingPanel() {
                       ].join(" ")}
                     >
                       <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Project
+                        </p>
                         <p className="truncate font-display text-sm font-semibold text-ink">
                           {order.project_nummer || "Project"}
                         </p>
@@ -818,6 +825,9 @@ export function PurchasingPanel() {
                         ) : null}
                       </div>
                       <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Klant
+                        </p>
                         <p className="truncate text-sm text-ink">{order.klant}</p>
                         {order.leveradres ? (
                           <p className="truncate text-xs text-muted">
@@ -826,6 +836,9 @@ export function PurchasingPanel() {
                         ) : null}
                       </div>
                       <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Schouw
+                        </p>
                         <p className="truncate text-sm font-medium text-ink">
                           {schouwWhen(order.schouw)}
                         </p>
@@ -843,6 +856,9 @@ export function PurchasingPanel() {
                         </p>
                       </div>
                       <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Installatie
+                        </p>
                         <p className="truncate text-sm font-medium text-ink">
                           {installatieWhen(order.installatie_at)}
                         </p>
@@ -865,6 +881,9 @@ export function PurchasingPanel() {
                         })()}
                       </div>
                       <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Betaling
+                        </p>
                         {desk === "pipeline" && order.klant_betaling ? (
                           <KlantBetalingBar betaling={order.klant_betaling} />
                         ) : (
@@ -878,10 +897,15 @@ export function PurchasingPanel() {
                           </p>
                         )}
                       </div>
-                      <div className="text-right tabular-nums text-sm text-ink">
-                        {order.summary.te_kopen > 0
-                          ? order.summary.te_kopen
-                          : "—"}
+                      <div className="flex items-baseline justify-between text-sm text-ink md:block md:text-right">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
+                          Open
+                        </span>
+                        <span className="tabular-nums">
+                          {order.summary.te_kopen > 0
+                            ? order.summary.te_kopen
+                            : "—"}
+                        </span>
                       </div>
                       <div className="text-right">
                         <p className="font-display text-sm font-semibold tabular-nums text-ink">
@@ -917,7 +941,7 @@ export function PurchasingPanel() {
                             )}
                             {!canOrder ? (
                               <span className="text-muted">
-                                Bestellen pas na rapport
+                                Bestellen pas als de installatie gepland is
                               </span>
                             ) : null}
                             {order.materiaal_leverdatum ? (
@@ -1008,7 +1032,7 @@ export function PurchasingPanel() {
                         </div>
 
                         <div className="border border-line bg-white">
-                          <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] gap-x-3 border-b border-line px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                          <div className="hidden grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] gap-x-3 border-b border-line px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted sm:grid">
                             <span>Product</span>
                             <span className="text-right">Aantal</span>
                             <span className="text-right">Ex btw</span>
@@ -1033,7 +1057,7 @@ export function PurchasingPanel() {
                               <li
                                 key={item.key}
                                 className={[
-                                  "grid grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] items-center gap-x-3 px-3 py-2",
+                                  "grid grid-cols-1 gap-y-1 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] sm:items-center sm:gap-x-3 sm:gap-y-0",
                                   cancelled ? "opacity-60" : "",
                                 ].join(" ")}
                               >

@@ -90,7 +90,7 @@ export function TeamNotitiesSection({
       {entries.length === 0 ? (
         <p className="text-xs text-muted">Nog geen notities.</p>
       ) : (
-        <ul className="max-h-64 space-y-2 overflow-y-auto">
+        <ul className="space-y-2">
           {[...entries].reverse().map((e, i) => (
             <li
               key={`${e.at}-${i}`}

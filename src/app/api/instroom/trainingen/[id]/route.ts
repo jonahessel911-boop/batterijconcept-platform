@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { RECRUITMENT_TRAINING_LOCATIE } from "@/lib/sollicitatie";
+import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
 export const runtime = "nodejs";
 
@@ -72,6 +73,11 @@ export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   try {
     const sb = getSupabaseAdmin();
@@ -103,6 +109,11 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   let body: Record<string, unknown>;
   try {
@@ -220,6 +231,11 @@ export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireRecruitmentSession();
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   try {
     const sb = getSupabaseAdmin();

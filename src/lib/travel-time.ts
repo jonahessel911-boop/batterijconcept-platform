@@ -28,7 +28,7 @@ function mapsKey(): string | undefined {
   );
 }
 
-function formatDurationNl(sec: number): string {
+export function formatDurationNl(sec: number): string {
   if (sec < 60) return `${sec} sec.`;
   const mins = Math.round(sec / 60);
   if (mins < 60) return `${mins} min.`;

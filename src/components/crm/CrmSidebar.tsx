@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CrmTab } from "@/types/database";
 import { BO_VIEWS, backofficeHref } from "@/lib/bo-view";
@@ -181,7 +181,7 @@ const GROUPS: SidebarGroup[] = [
       { id: "rapportage", label: "Rapportage", icon: ICONS.rapportage },
       { id: "voice_ai", label: "Voice AI", icon: ICONS.bellen },
       { id: "adviseurs", label: "Adviseurs", icon: ICONS.partners },
-      { id: "partners", label: "Team", icon: ICONS.partners },
+      { id: "partners", label: "Business", icon: ICONS.partners },
       { id: "instellingen", label: "Instellingen", icon: ICONS.instellingen },
     ],
   },
@@ -214,45 +214,44 @@ export function CrmSidebar({
   const router = useRouter();
   const [activeBoView, setBoView] = useBoViewStore();
   const allowed = new Set(allowedTabs);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") {
-      return { sales: true, operatie: true, sturing: true };
-    }
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    sales: true,
+    operatie: true,
+    sturing: true,
+  });
+  const [boOpen, setBoOpen] = useState(true);
+  const [prefsReady, setPrefsReady] = useState(false);
+
+  useLayoutEffect(() => {
     try {
       const raw = localStorage.getItem(COLLAPSE_KEY);
-      if (raw) return JSON.parse(raw) as Record<string, boolean>;
+      if (raw) setOpenGroups(JSON.parse(raw) as Record<string, boolean>);
+      const bo = localStorage.getItem(BO_OPEN_KEY);
+      if (bo === "0") setBoOpen(false);
+      else if (bo === "1") setBoOpen(true);
     } catch {
       /* ignore */
     }
-    return { sales: true, operatie: true, sturing: true };
-  });
-  const [boOpen, setBoOpen] = useState(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      const raw = localStorage.getItem(BO_OPEN_KEY);
-      if (raw === "0") return false;
-      if (raw === "1") return true;
-    } catch {
-      /* ignore */
-    }
-    return true;
-  });
+    setPrefsReady(true);
+  }, []);
 
   useEffect(() => {
+    if (!prefsReady) return;
     try {
       localStorage.setItem(COLLAPSE_KEY, JSON.stringify(openGroups));
     } catch {
       /* ignore */
     }
-  }, [openGroups]);
+  }, [openGroups, prefsReady]);
 
   useEffect(() => {
+    if (!prefsReady) return;
     try {
       localStorage.setItem(BO_OPEN_KEY, boOpen ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }, [boOpen]);
+  }, [boOpen, prefsReady]);
 
   useEffect(() => {
     for (const g of GROUPS) {
@@ -289,7 +288,6 @@ export function CrmSidebar({
   const boParentActive =
     active === "projecten" ||
     (hasBackoffice && (active === "purchasing" || active === "facturen"));
-  const showBoChildren = !collapsed && boOpen;
   const boExtraTabs: SidebarItem[] = hasBackoffice
     ? [
         ...(allowed.has("purchasing")
@@ -313,11 +311,12 @@ export function CrmSidebar({
       ]
     : [];
 
-  function renderNav() {
+  function renderNav(iconOnly: boolean) {
+    const showBoChildren = !iconOnly && boOpen;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-3">
-          {!collapsed ? (
+          {!iconOnly ? (
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
               Menu
             </p>
@@ -329,13 +328,13 @@ export function CrmSidebar({
               type="button"
               onClick={onToggleCollapsed}
               className="hidden h-8 w-8 items-center justify-center border border-line text-muted hover:bg-wash hover:text-ink md:inline-flex"
-              title={collapsed ? "Sidebar uitklappen" : "Sidebar inklappen"}
+              title={iconOnly ? "Sidebar uitklappen" : "Sidebar inklappen"}
               aria-label={
-                collapsed ? "Sidebar uitklappen" : "Sidebar inklappen"
+                iconOnly ? "Sidebar uitklappen" : "Sidebar inklappen"
               }
             >
               <Icon className="h-3.5 w-3.5">
-                {collapsed ? (
+                {iconOnly ? (
                   <path d="m9 18 6-6-6-6" />
                 ) : (
                   <path d="m15 18-6-6 6-6" />
@@ -357,10 +356,10 @@ export function CrmSidebar({
 
         <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
           {groups.map((group) => {
-            const isOpen = collapsed ? true : openGroups[group.id] !== false;
+            const isOpen = iconOnly ? true : openGroups[group.id] !== false;
             return (
               <div key={group.id} className="mb-3">
-                {!collapsed ? (
+                {!iconOnly ? (
                   <button
                     type="button"
                     onClick={() => toggleGroup(group.id)}
@@ -390,7 +389,7 @@ export function CrmSidebar({
                             <button
                               type="button"
                               onClick={() => {
-                                if (collapsed) {
+                                if (iconOnly) {
                                   onToggleCollapsed?.();
                                   setBoOpen(true);
                                   onChange("projecten");
@@ -416,7 +415,7 @@ export function CrmSidebar({
                                 boParentActive
                                   ? "bg-green-soft text-green-deeper"
                                   : "text-ink hover:bg-wash",
-                                collapsed ? "justify-center" : "",
+                                iconOnly ? "justify-center" : "",
                               ].join(" ")}
                             >
                               <span
@@ -429,7 +428,7 @@ export function CrmSidebar({
                               >
                                 {item.icon}
                               </span>
-                              {!collapsed ? (
+                              {!iconOnly ? (
                                 <>
                                   <span className="min-w-0 flex-1 truncate font-display tracking-tight">
                                     {item.label}
@@ -549,7 +548,7 @@ export function CrmSidebar({
                               isActive
                                 ? "bg-green-soft text-green-deeper"
                                 : "text-ink hover:bg-wash",
-                              collapsed ? "justify-center" : "",
+                              iconOnly ? "justify-center" : "",
                             ].join(" ")}
                           >
                             <span
@@ -560,7 +559,7 @@ export function CrmSidebar({
                             >
                               {item.icon}
                             </span>
-                            {!collapsed ? (
+                            {!iconOnly ? (
                               <>
                                 <span className="min-w-0 flex-1 truncate font-display tracking-tight">
                                   {item.label}
@@ -601,7 +600,7 @@ export function CrmSidebar({
           collapsed ? "w-[4.25rem]" : "w-56",
         ].join(" ")}
       >
-        {renderNav()}
+        {renderNav(collapsed)}
       </aside>
 
       {mobileOpen ? (
@@ -612,8 +611,8 @@ export function CrmSidebar({
             aria-label="Menu sluiten"
             onClick={onMobileClose}
           />
-          <aside className="absolute inset-y-0 left-0 flex w-[16.5rem] flex-col border-r border-line bg-white shadow-xl">
-            {renderNav()}
+          <aside className="absolute inset-y-0 left-0 flex w-[min(18.5rem,calc(100vw-2.75rem))] max-w-[100vw] flex-col border-r border-line bg-white pt-[env(safe-area-inset-top)] shadow-xl">
+            {renderNav(false)}
           </aside>
         </div>
       ) : null}

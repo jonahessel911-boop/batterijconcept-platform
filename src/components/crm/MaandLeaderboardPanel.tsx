@@ -28,6 +28,15 @@ type ApiResponse = {
   rows?: MaandLeaderboardRow[];
 };
 
+type BoardCache = {
+  rows: MaandLeaderboardRow[];
+  label: string;
+  meId: string | null;
+};
+
+/** Overleeft een remount (hydration) zodat het bord niet terugvalt op Laden…. */
+let boardCache: BoardCache | null = null;
+
 function formatConv(pct: number | null): string {
   if (pct == null) return "—";
   return `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`;
@@ -154,34 +163,63 @@ function PodiumCard({
 
 export function MaandLeaderboardPanel() {
   const { session } = useCrmSession();
-  const [rows, setRows] = useState<MaandLeaderboardRow[]>([]);
-  const [label, setLabel] = useState("");
-  const [meId, setMeId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<MaandLeaderboardRow[]>(
+    () => boardCache?.rows ?? []
+  );
+  const [label, setLabel] = useState(() => boardCache?.label ?? "");
+  const [meId, setMeId] = useState<string | null>(
+    () => boardCache?.meId ?? null
+  );
+  const [loading, setLoading] = useState(() => boardCache == null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal: AbortSignal) => {
     setError(null);
     try {
       const res = await fetch("/api/maand-leaderboard", {
         credentials: "include",
+        signal,
+        cache: "no-store",
       });
       const data = (await res.json().catch(() => ({}))) as ApiResponse;
       if (!res.ok) {
         throw new Error(data.error || "Laden mislukt");
       }
-      setRows(data.rows || []);
-      setLabel(data.label || "");
-      setMeId(data.me_id || null);
+      const next: BoardCache = {
+        rows: data.rows || [],
+        label: data.label || "",
+        meId: data.me_id || null,
+      };
+      boardCache = next;
+      setRows(next.rows);
+      setLabel(next.label);
+      setMeId(next.meId);
+      setLoading(false);
     } catch (e) {
+      if (signal.aborted) return;
       setError(e instanceof Error ? e.message : "Laden mislukt");
-    } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void load();
+    const ctrl = new AbortController();
+    let alive = true;
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, 20000);
+    void load(ctrl.signal).then(() => {
+      if (!alive || !timedOut) return;
+      setError("Leaderboard laden duurde te lang. Probeer opnieuw.");
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      ctrl.abort();
+    };
   }, [load]);
 
   const top3 = rows.slice(0, 3);
@@ -235,12 +273,25 @@ export function MaandLeaderboardPanel() {
         </header>
 
         {error ? (
-          <p className="mt-8 text-center text-sm text-[#FCA5A5]">{error}</p>
+          <div className="mt-8 text-center">
+            <p className="text-sm text-[#FCA5A5]">{error}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                const ctrl = new AbortController();
+                void load(ctrl.signal);
+              }}
+              className="mt-3 border border-white/30 bg-black/40 px-3 py-2 text-xs font-semibold text-white hover:bg-black/55"
+            >
+              Opnieuw
+            </button>
+          </div>
         ) : null}
 
         {loading ? (
           <p className="mt-16 text-center text-sm text-white/55">Laden…</p>
-        ) : rows.length === 0 ? (
+        ) : error ? null : rows.length === 0 ? (
           <p className="mt-16 text-center text-sm text-white/55">
             Nog geen resultaten deze maand.
           </p>

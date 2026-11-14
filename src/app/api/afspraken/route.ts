@@ -20,6 +20,7 @@ import { planAfspraak } from "@/lib/plan-afspraak";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { appendVerzetNotitie } from "@/lib/format";
+import { fetchAllRows } from "@/lib/supabase-fetch-all";
 
 export const runtime = "nodejs";
 
@@ -33,18 +34,26 @@ function resolveIngeplandDoorId(
   return session?.adviseurId?.trim() || null;
 }
 
-/** GET — lijst afspraken */
+/** GET — lijst afspraken (paginated: PostgREST default max 1000 rows). */
 export async function GET() {
   try {
     const sb = getSupabaseAdmin();
-    const { data, error } = await sb
-      .from("afspraken")
-      .select(
-        "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
-      )
-      .order("start_at", { ascending: true });
-    if (error) throw error;
-    return NextResponse.json({ afspraken: data || [] });
+    // Zelfde horizon als CRM-bootstrap: anders mist de agenda toekomstige
+    // slots zodra er >1000 rijen zijn (oudste 1000 winnen bij ascending).
+    const sinds = new Date();
+    sinds.setDate(sinds.getDate() - 120);
+    const data = await fetchAllRows((from, to) =>
+      sb
+        .from("afspraken")
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
+        )
+        .gte("start_at", sinds.toISOString())
+        .order("start_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+    return NextResponse.json({ afspraken: data });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Fout";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -61,6 +70,7 @@ export async function PATCH(req: NextRequest) {
     notitie?: string;
     notities?: string | null;
     adviseur_id?: string;
+    aanwezig?: boolean;
   };
   try {
     body = await req.json();
@@ -77,12 +87,13 @@ export async function PATCH(req: NextRequest) {
     "send_annuleringsmail",
     "update_notities",
     "overzetten_adviseur",
+    "beslissers_aanwezig",
   ];
   if (!body.id || !body.action || !actions.includes(body.action)) {
     return NextResponse.json(
       {
         error:
-          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief | send_annuleringsmail | update_notities | overzetten_adviseur) zijn verplicht",
+          "id en action (send_bevestiging | verzet | annuleer | verwijder_definitief | send_annuleringsmail | update_notities | overzetten_adviseur | beslissers_aanwezig) zijn verplicht",
       },
       { status: 400 }
     );
@@ -111,6 +122,124 @@ export async function PATCH(req: NextRequest) {
     const adviseur = Array.isArray(afspraak.adviseurs)
       ? afspraak.adviseurs[0]
       : afspraak.adviseurs;
+
+    if (body.action === "beslissers_aanwezig") {
+      if (typeof body.aanwezig !== "boolean") {
+        return NextResponse.json(
+          { error: "Kies ja of nee" },
+          { status: 400 }
+        );
+      }
+      if (afspraak.status === "geannuleerd") {
+        return NextResponse.json(
+          { error: "Geannuleerde afspraak" },
+          { status: 400 }
+        );
+      }
+      if (!afspraakBlokkeertAgenda(afspraak.soort as string | null)) {
+        return NextResponse.json(
+          { error: "Alleen bij een fysiek huisbezoek" },
+          { status: 400 }
+        );
+      }
+
+      const jar = await cookies();
+      const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+      if (!session) {
+        return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
+      }
+
+      const { data: actor } = await sb
+        .from("adviseurs")
+        .select("naam")
+        .eq("id", session.adviseurId)
+        .maybeSingle();
+      const doorNaam =
+        (actor?.naam as string | undefined)?.trim() ||
+        session.naam?.trim() ||
+        "Onbekend";
+
+      const plannerId =
+        ((afspraak.ingepland_door_id as string | null) || "").trim() || null;
+      let plannerNaam: string | null = null;
+      if (plannerId) {
+        const { data: planner } = await sb
+          .from("adviseurs")
+          .select("naam")
+          .eq("id", plannerId)
+          .maybeSingle();
+        plannerNaam = (planner?.naam as string | undefined)?.trim() || null;
+      }
+
+      const { data: existingEvents } = await sb
+        .from("lead_events")
+        .select("id, created_at, meta")
+        .eq("lead_id", afspraak.lead_id as string)
+        .eq("soort", "afspraak")
+        .order("created_at", { ascending: false })
+        .limit(80);
+      const already = (existingEvents || []).find((event) => {
+        const meta = event.meta as {
+          beslissers_aanwezig?: boolean;
+          partner_afwezig?: boolean;
+          afspraak_id?: string;
+        } | null;
+        if (!meta || meta.afspraak_id !== afspraak.id) return false;
+        if (typeof meta.beslissers_aanwezig === "boolean") {
+          return meta.beslissers_aanwezig === body.aanwezig;
+        }
+        return body.aanwezig === false && meta.partner_afwezig === true;
+      });
+
+      if (!already) {
+        const wanneer = new Date(afspraak.start_at as string);
+        const wanneerLabel = Number.isNaN(wanneer.getTime())
+          ? ""
+          : ` (${wanneer.toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" })})`;
+        const antwoord = body.aanwezig ? "ja" : "nee";
+        const { logLeadEvent } = await import("@/lib/lead-events");
+        await logLeadEvent({
+          leadId: afspraak.lead_id as string,
+          soort: "afspraak",
+          titel: body.aanwezig
+            ? "Alle beslissers aanwezig"
+            : "Niet alle beslissers aanwezig",
+          detail: `Alle beslissers aanwezig: ${antwoord}${wanneerLabel}.`,
+          meta: {
+            beslissers_aanwezig: body.aanwezig,
+            partner_afwezig: body.aanwezig === false,
+            afspraak_id: afspraak.id,
+            ingepland_door_id: plannerId,
+            planner_naam: plannerNaam,
+            gemeld_door: doorNaam,
+            start_at: afspraak.start_at,
+          },
+        });
+      }
+
+      if (body.aanwezig === false) {
+        const { error: colErr } = await sb
+          .from("afspraken")
+          .update({
+            partner_afwezig_gemeld_at: new Date().toISOString(),
+            partner_afwezig_gemeld_door: doorNaam,
+          })
+          .eq("id", afspraak.id);
+        if (
+          colErr &&
+          colErr.code !== "42703" &&
+          !colErr.message?.includes("partner_afwezig_gemeld")
+        ) {
+          console.error("partner_afwezig kolom:", colErr.message);
+        }
+      }
+
+      return NextResponse.json({
+        ok: true,
+        aanwezig: body.aanwezig,
+        already: Boolean(already),
+      });
+    }
 
     if (body.action === "update_notities") {
       const prevNotities = ((afspraak.notities as string | null) || "").trim();

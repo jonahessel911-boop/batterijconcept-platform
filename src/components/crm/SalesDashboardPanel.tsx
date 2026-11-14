@@ -92,15 +92,15 @@ function shiftMonthYm(ym: string, delta: number): string {
 }
 
 const sheetCell =
-  "border border-line px-2.5 py-2 text-[12px] tabular-nums text-ink";
+  "border border-line px-1 py-2 text-[12px] tabular-nums text-ink sm:px-2.5";
 const sheetHead =
-  "border border-line bg-[#F3F5F4] px-2.5 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-ink";
+  "border border-line bg-[#F3F5F4] px-1 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-ink sm:px-2.5";
 const sheetTotal =
-  "border border-line bg-[#EEF3F0] px-2.5 py-2.5 text-[12px] font-semibold tabular-nums text-ink";
+  "border border-line bg-[#EEF3F0] px-1 py-2.5 text-[12px] font-semibold tabular-nums text-ink sm:px-2.5";
 const sheetSelected =
-  "border border-line bg-[#E8F0EB] px-2.5 py-2 text-[12px] font-semibold tabular-nums text-ink";
+  "border border-line bg-[#E8F0EB] px-1 py-2 text-[12px] font-semibold tabular-nums text-ink sm:px-2.5";
 const sheetSelectedLabel =
-  "border border-line bg-[#E8F0EB] px-2.5 py-2 pl-5 text-left font-semibold text-ink shadow-[inset_4px_0_0_0_#0a4727]";
+  "border border-line bg-[#E8F0EB] px-1 py-2 pl-3.5 text-left font-semibold text-ink shadow-[inset_4px_0_0_0_#0a4727] sm:px-2.5 sm:pl-5";
 
 function MetricsCells({
   m,
@@ -119,16 +119,16 @@ function MetricsCells({
           : sheetCell;
   return (
     <>
-      <td className={`${base} whitespace-nowrap text-right`}>
+      <td className={`${base} hidden whitespace-nowrap text-right md:table-cell`}>
         {num(m.ingepland)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>
         {num(m.gelopen)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {fmtPct(m.conv_ingepland_gelopen_pct)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right`}>
+      <td className={`${base} hidden whitespace-nowrap text-right md:table-cell`}>
         {num(m.niet_afgeboekt)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>{num(m.sales)}</td>
@@ -137,16 +137,16 @@ function MetricsCells({
       >
         {fmtPct(m.conv_gelopen_sale_pct)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {fmtPct(m.conv_ingepland_sale_pct)}
       </td>
       <td className={`${base} whitespace-nowrap text-right`}>
         {formatEuro(m.omzet)}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.aov != null ? formatEuro(m.aov) : "—"}
       </td>
-      <td className={`${base} whitespace-nowrap text-right text-muted`}>
+      <td className={`${base} hidden whitespace-nowrap text-right text-muted md:table-cell`}>
         {m.omzet_per_gelopen != null
           ? formatEuro(m.omzet_per_gelopen)
           : "—"}
@@ -157,16 +157,16 @@ function MetricsCells({
 
 const METRIC_HEADERS = (
   <>
-    <th className={sheetHead}>Ingepland</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>Ingepland</th>
     <th className={sheetHead}>Gelopen</th>
-    <th className={sheetHead}>I→G</th>
-    <th className={sheetHead}>Niet afg.</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>I→G</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>Niet afg.</th>
     <th className={sheetHead}>Sales</th>
     <th className={sheetHead}>G→S</th>
-    <th className={sheetHead}>I→S</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>I→S</th>
     <th className={sheetHead}>Omzet</th>
-    <th className={sheetHead}>AOV</th>
-    <th className={sheetHead}>€/gel.</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>AOV</th>
+    <th className={`${sheetHead} hidden md:table-cell`}>€/gel.</th>
   </>
 );
 
@@ -726,7 +726,7 @@ export function SalesDashboardPanel({
   const chartTitle = mode === "month" ? "Per maand" : "Per week";
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-display text-lg font-semibold text-ink">Sales</p>
@@ -831,17 +831,17 @@ export function SalesDashboardPanel({
                 Adviseurs
               </p>
             </header>
-            <div className="overflow-x-auto p-3 sm:p-4">
+            <div className="min-w-0 max-w-full overflow-x-auto sm:p-4">
               {data.months.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted">
                   Geen data in deze periode.
                 </p>
               ) : (
-                <table className="w-full min-w-[1100px] border-collapse border border-line text-[12px]">
+                <table className="w-full border-collapse border border-line text-[12px] md:min-w-[1100px]">
                   <thead>
                     <tr>
                       <th
-                        className={`${sheetHead} sticky left-0 z-10 text-left`}
+                        className={`${sheetHead} sticky left-0 z-10 max-w-[7.5rem] whitespace-normal text-left md:max-w-none`}
                       >
                         Periode
                       </th>
@@ -864,7 +864,7 @@ export function SalesDashboardPanel({
                                 monthSelected
                                   ? sheetSelectedLabel.replace("pl-5", "pl-2.5")
                                   : sheetTotal
-                              } sticky left-0 z-[1] text-left capitalize`}
+                              } sticky left-0 z-[1] max-w-[7.5rem] whitespace-normal text-left capitalize md:max-w-none`}
                             >
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="w-3 text-muted">
@@ -894,7 +894,7 @@ export function SalesDashboardPanel({
                                           weekSelected
                                             ? sheetSelectedLabel
                                             : `${sheetCell} bg-[#FAFBFA] pl-6 text-left font-medium`
-                                        } sticky left-0 z-[1]`}
+                                        } sticky left-0 z-[1] max-w-[7.5rem] whitespace-normal md:max-w-none`}
                                       >
                                         <span className="inline-flex items-center gap-1.5">
                                           <span className="w-3 text-muted">
@@ -928,7 +928,7 @@ export function SalesDashboardPanel({
                                               className="hover:bg-[#FAFBFA]"
                                             >
                                               <td
-                                                className={`${sheetCell} sticky left-0 z-[1] whitespace-nowrap bg-white pl-10 text-left font-medium`}
+                                                className={`${sheetCell} sticky left-0 z-[1] max-w-[7.5rem] whitespace-normal bg-white pl-10 text-left font-medium md:max-w-none md:whitespace-nowrap`}
                                               >
                                                 {a.label}
                                               </td>
