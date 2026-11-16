@@ -54,16 +54,23 @@ export function adviseurHeeftSlotUur(
   );
 }
 
-/** Unie van sloturen over adviseurs (agenda-raster). */
+/**
+ * Agenda-raster voor meerdere adviseurs.
+ * Team blijft 10/13/16/19. Extra uren van één adviseur (Marcel 12/14)
+ * mogen nooit als extra rijen bij de rest verschijnen — dat zag eruit
+ * alsof 12:00/14:00 bij iedereen geblokt stonden.
+ * Alleen Marcel solo: zijn eigen 10/12/14/16.
+ */
 export function unionSlotHours(
   adviseurIds?: (string | null | undefined)[]
 ): number[] {
-  if (!adviseurIds?.length) return [...ADVISEUR_SLOT_HOURS];
-  const set = new Set<number>();
-  for (const id of adviseurIds) {
-    for (const h of slotHoursForAdviseur(id)) set.add(h);
+  const ids = (adviseurIds || []).filter(
+    (id): id is string => Boolean(id)
+  );
+  if (ids.length === 1) {
+    return [...slotHoursForAdviseur(ids[0])];
   }
-  return [...set].sort((a, b) => a - b);
+  return [...ADVISEUR_SLOT_HOURS];
 }
 
 export function isKnownSlotHour(hour: number): hour is AdviseurSlotHour {

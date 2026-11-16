@@ -7,6 +7,8 @@ Alle noemenswaardige wijzigingen in dit project, per review-item.
 ### Marcel Klaasman: eigen inplantijden
 - Alleen voor Marcel Klaasman: vaste slots **10:00 / 12:00 / 14:00 / 16:00** (i.p.v. 10/13/16/19).
 - Geldt in agenda, bel-plannen, capaciteit en afblokkingen; overige adviseurs ongewijzigd.
+- Team-agenda blijft **10 / 13 / 16 / 19** — Marcel’s 12/14 verschijnen niet meer als extra (dicht) rijen bij iedereen. Alleen in Marcel’s eigen agenda.
+- Team-agenda: 12:00/14:00 zijn **geen blok** bij anderen (lege cel), alleen Marcel plant daar.
 
 ### Financieel: Aanbetaling bewerken
 - Knop **Aanbetaling bewerken** op projecttab Financieel → popup met vorige + nieuwe aanbetaling.

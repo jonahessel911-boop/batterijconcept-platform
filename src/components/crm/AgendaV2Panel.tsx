@@ -37,6 +37,7 @@ import {
 } from "@/lib/schouw-week";
 import {
   adviseurHeeftSlotUur,
+  slotHoursForAdviseur,
   unionSlotHours,
 } from "@/lib/slots";
 import {
@@ -591,12 +592,10 @@ export function AgendaPanel({
     mobileAdviseurId,
   ]);
 
-  /** Agenda-rijen: unie van sloturen van zichtbare adviseurs (Marcel = 10/12/14/16). */
+  /** Agenda-rijen: team = 10/13/16/19; alleen Marcel solo = 10/12/14/16. */
   const SLOT_ROWS = useMemo(
     () =>
-      slotRowsFromHours(
-        unionSlotHours(displayAdviseurs.map((a) => a.id))
-      ),
+      slotRowsFromHours(unionSlotHours(displayAdviseurs.map((a) => a.id))),
     [displayAdviseurs]
   );
 
@@ -1021,6 +1020,7 @@ export function AgendaPanel({
     dayKey: string,
     hour: number
   ) {
+    if (!adviseurHeeftSlotUur(adviseurId, hour)) return;
     const key = afblokKey(adviseurId, dayKey, hour);
     const currentlyBlocked = isSlotBlocked(adviseurId, dayKey, hour);
     const nextBlocked = !currentlyBlocked;
@@ -1110,11 +1110,15 @@ export function AgendaPanel({
     dayKey: string,
     slotIdx: number
   ): Afspraak[] {
+    const row = SLOT_ROWS[slotIdx];
+    if (!row || !adviseurHeeftSlotUur(adviseurId, row.hour)) return [];
+    const advRows = slotRowsFromHours(slotHoursForAdviseur(adviseurId));
     return afspraken.filter((a) => {
       if (a.adviseur_id !== adviseurId) return false;
       if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
       if (dayKeyAmsterdam(a.start_at) !== dayKey) return false;
-      return nearestSlotIndex(a.start_at, SLOT_ROWS) === slotIdx;
+      return nearestSlotIndex(a.start_at, advRows) ===
+        advRows.findIndex((r) => r.hour === row.hour);
     });
   }
 
@@ -1745,9 +1749,10 @@ export function AgendaPanel({
                       );
                       const weekBlocked = isWeekBlocked(adv.id);
                       const slotBlocked =
-                        notHisSlot ||
+                        !notHisSlot &&
                         isSlotBlocked(adv.id, day.key, row.hour);
-                      const blocked = weekBlocked || slotBlocked;
+                      const blocked =
+                        !notHisSlot && (weekBlocked || slotBlocked);
                       const items = notHisSlot
                         ? []
                         : appointmentsInCell(adv.id, day.key, slotIdx);
@@ -1820,12 +1825,20 @@ export function AgendaPanel({
                           key={`${adv.id}-${day.key}-${slotIdx}`}
                           className={[
                             "min-h-[2.75rem] min-w-0 border-r border-line p-0.5",
-                            afblokMode && slotVrijVoorAfblok
-                              ? "bg-[#FFF7F7]/60"
-                              : "",
+                            notHisSlot
+                              ? "bg-[#F3F4F6]"
+                              : afblokMode && slotVrijVoorAfblok
+                                ? "bg-[#FFF7F7]/60"
+                                : "",
                           ].join(" ")}
                         >
-                          {blocked && slotVrijVoorAfblok ? (
+                          {notHisSlot ? (
+                            <div
+                              className="h-full min-h-[2.25rem] w-full"
+                              title="Geen inplanuur voor deze adviseur"
+                              aria-hidden
+                            />
+                          ) : blocked && slotVrijVoorAfblok ? (
                             <div className="space-y-1">
                               <GeblokkeerdCell
                                 onClick={

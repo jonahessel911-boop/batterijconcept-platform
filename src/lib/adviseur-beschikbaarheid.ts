@@ -3,6 +3,7 @@ import { getISOWeek, getISOWeekYear } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
+  adviseurHeeftSlotUur,
   isKnownSlotHour,
   slotHoursForAdviseur,
   type AdviseurSlotHour,
@@ -186,6 +187,9 @@ export function isSlotGeblokkeerd(
   vrijgaven: Set<string> = new Set(),
   startVanafHuisMaandag?: boolean | null
 ): boolean {
+  // Uren die niet bij deze adviseur horen (Marcel 12/14 bij de rest, of
+  // 13/19 bij Marcel) zijn geen afspraakslot — nooit als “afgeblokt” tellen.
+  if (!adviseurHeeftSlotUur(adviseurId, hour)) return false;
   const key = afblokKey(adviseurId, dayKey, hour);
   if (
     isStandaardGeblokkeerdSlot(
