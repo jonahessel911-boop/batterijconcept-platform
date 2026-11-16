@@ -67,6 +67,8 @@ const STATUS_TONE: Record<
   nieuw: { bar: "#1A4A6E", soft: "#E8F0F6", text: "#1A4A6E" },
   geen_contact: { bar: "#6B7280", soft: "#F3F4F6", text: "#4B5563" },
   definitief_geen_contact: { bar: "#455A64", soft: "#CFD8DC", text: "#263238" },
+  geen_interesse: { bar: "#6B7280", soft: "#F3F4F6", text: "#4B5563" },
+  terugbelafspraak: { bar: "#1D4ED8", soft: "#EFF6FF", text: "#1D4ED8" },
   diskwalificatie: { bar: "#9B2C2C", soft: "#FCEAEA", text: "#9B2C2C" },
   gesprek_gepland: { bar: "#A16207", soft: "#FEF7E6", text: "#854D0E" },
   gesprek_gehad: { bar: "#C2410C", soft: "#FFF4ED", text: "#9A3412" },

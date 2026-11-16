@@ -19,7 +19,11 @@ import {
   type InboxAttachment,
   type InboxMail,
 } from "@/lib/inbox";
-import { bookInboxMail, openaiInboxConfigured } from "@/lib/inbox-ai";
+import {
+  bookInboxMail,
+  openaiInboxConfigured,
+  type InboxBookResult,
+} from "@/lib/inbox-ai";
 import { uploadInboxAttachment } from "@/lib/inbox-attachments";
 import {
   insertBookedInboxMail,
@@ -100,7 +104,15 @@ function firstHeaderId(
  */
 export async function syncInboxFromImap(
   sb: SupabaseClient,
-  opts?: { maxMessages?: number; markSeen?: boolean; recent?: boolean }
+  opts?: {
+    maxMessages?: number;
+    markSeen?: boolean;
+    recent?: boolean;
+    /** Tag inbox_mails.mailbox (facturen@ sync). */
+    mailboxTag?: "info" | "facturen";
+    /** Geen AI-classificatie — alles in map algemeen. */
+    skipAi?: boolean;
+  }
 ): Promise<ImapSyncResult> {
   const errors: string[] = [];
   const insertedRows: InboxDbRow[] = [];
@@ -271,26 +283,45 @@ export async function syncInboxFromImap(
             };
 
             // AI boekt map; bij fout → heuristic zodat sync niet stilvalt.
-            let booked;
-            try {
-              booked = await bookInboxMail({
-                subject: draft.subject,
-                bodyText: draft.bodyText,
-                fromName: draft.fromName,
-                fromEmail: draft.fromEmail,
-              });
-            } catch (bookErr) {
-              const { bookInboxMailHeuristic } = await import("@/lib/inbox-ai");
-              booked = bookInboxMailHeuristic({
-                subject: draft.subject,
-                bodyText: draft.bodyText,
-                fromEmail: draft.fromEmail,
-              });
-              errors.push(
-                `uid ${msg.uid}: AI-boek faalde (${
-                  bookErr instanceof Error ? bookErr.message : "fout"
-                }) → heuristic`
-              );
+            // Facturen-mailbox: geen AI — alles blijft algemeen.
+            let booked: InboxBookResult;
+            if (opts?.skipAi) {
+              booked = {
+                folder: "algemeen",
+                summary: "Facturen-mailbox",
+                confidence: 1,
+                functionName: "book_to_algemeen",
+                source: "heuristic",
+                effects: {
+                  createServiceVerzoek: false,
+                  cancelAfspraak: false,
+                  leadGeenContact: false,
+                  leadGeenInteresse: false,
+                },
+              };
+            } else {
+              try {
+                booked = await bookInboxMail({
+                  subject: draft.subject,
+                  bodyText: draft.bodyText,
+                  fromName: draft.fromName,
+                  fromEmail: draft.fromEmail,
+                });
+              } catch (bookErr) {
+                const { bookInboxMailHeuristic } = await import(
+                  "@/lib/inbox-ai"
+                );
+                booked = bookInboxMailHeuristic({
+                  subject: draft.subject,
+                  bodyText: draft.bodyText,
+                  fromEmail: draft.fromEmail,
+                });
+                errors.push(
+                  `uid ${msg.uid}: AI-boek faalde (${
+                    bookErr instanceof Error ? bookErr.message : "fout"
+                  }) → heuristic`
+                );
+              }
             }
 
             const mail = applyInboxBooking(draft, {
@@ -308,6 +339,7 @@ export async function syncInboxFromImap(
               aiFunction: booked.functionName,
               attachments,
               imageUrls,
+              mailbox: opts?.mailboxTag || null,
             });
 
             if (result.skipped) {
@@ -410,7 +442,11 @@ export async function syncFacturenMailboxFromImap(
   process.env.IMAP_MAILBOX = cfg.mailbox;
 
   try {
-    return await syncInboxFromImap(sb, opts);
+    return await syncInboxFromImap(sb, {
+      ...opts,
+      mailboxTag: "facturen",
+      skipAi: true,
+    });
   } finally {
     if (prev.host === undefined) delete process.env.IMAP_HOST;
     else process.env.IMAP_HOST = prev.host;

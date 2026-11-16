@@ -153,7 +153,7 @@ function kindToPayoutKind(kind: InvoiceKind): PayoutKind {
 
 type InboxRow = {
   key: string;
-  source: "adviseur" | "partner";
+  source: "adviseur" | "partner" | "inbox";
   id: string;
   relatieId: string;
   relatieNaam: string;
@@ -174,7 +174,24 @@ type InboxRow = {
   factuurdatum: string;
   weekJaar: number | null;
   weekNummer: number | null;
+  /** Expliciete woensdag (inkomende facturen inbox). */
+  payoutDeadline?: string | null;
   searchText: string;
+};
+
+type InboxFactuurRow = {
+  id: string;
+  status: string;
+  factuur_nummer: string | null;
+  bedrijfsnaam: string | null;
+  iban: string | null;
+  bedrag_ex_btw: number | null;
+  bedrag_inc_btw: number | null;
+  betaal_woensdag: string | null;
+  factuurdatum: string | null;
+  goedgekeurd_op: string | null;
+  referentie: string | null;
+  inbox_mail_id: string;
 };
 
 /** Eén uitbetalingsregel per relatie (sales, belcommissie én installatie). */
@@ -219,6 +236,10 @@ function deadlineFromFactuurdatum(ymd: string): string {
 function payoutDeadlineYmd(rows: InboxRow[]): string | null {
   const dates: string[] = [];
   for (const r of rows) {
+    if (r.payoutDeadline) {
+      dates.push(r.payoutDeadline);
+      continue;
+    }
     if (r.weekJaar != null && r.weekNummer != null) {
       dates.push(
         creditWeekByYearWeek(r.weekJaar, r.weekNummer).betaalWoensdag
@@ -525,6 +546,7 @@ export function CreditfacturenPanel({
   const [allPartnerFacturen, setAllPartnerFacturen] = useState<
     PartnerOverview[]
   >([]);
+  const [inboxFacturen, setInboxFacturen] = useState<InboxFactuurRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showCreate, setShowCreate] = useState(false);
@@ -595,12 +617,14 @@ export function CreditfacturenPanel({
     setError(null);
     try {
       // Snelle first paint: alleen bestaande facturen (read-only GETs).
-      const [advRes, partRes] = await Promise.all([
+      const [advRes, partRes, inboxRes] = await Promise.all([
         fetch("/api/adviseurs/creditfacturen"),
         fetch("/api/partners/creditfacturen"),
+        fetch("/api/facturen-inbox?status=uitbetalingen"),
       ]);
       const advData = await advRes.json().catch(() => ({}));
       const partData = await partRes.json().catch(() => ({}));
+      const inboxData = await inboxRes.json().catch(() => ({}));
       if (!advRes.ok) {
         throw new Error(
           (advData as { error?: string }).error || "Adviseurs laden mislukt"
@@ -626,6 +650,14 @@ export function CreditfacturenPanel({
         ((partData as { partners?: InstallatiePartner[] }).partners ||
           []) as InstallatiePartner[]
       );
+      if (inboxRes.ok) {
+        setInboxFacturen(
+          ((inboxData as { items?: InboxFactuurRow[] }).items ||
+            []) as InboxFactuurRow[]
+        );
+      } else {
+        setInboxFacturen([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -883,13 +915,61 @@ export function CreditfacturenPanel({
       });
     }
 
+    for (const f of inboxFacturen) {
+      const naam = f.bedrijfsnaam?.trim() || "Crediteur";
+      const nummer = f.factuur_nummer?.trim() || `INB-${f.id.slice(0, 8)}`;
+      const bedragEx = Number(f.bedrag_ex_btw || 0);
+      const bedragInc =
+        Number(f.bedrag_inc_btw || 0) ||
+        (bedragEx > 0 ? Math.round(bedragEx * 1.21 * 100) / 100 : 0);
+      out.push({
+        key: `i:${f.id}`,
+        source: "inbox",
+        id: f.id,
+        relatieId: `inbox:${f.id}`,
+        relatieNaam: naam,
+        kvkOk: Boolean(f.iban?.trim()),
+        iban: f.iban?.trim() || null,
+        bedrijfsnaam: f.bedrijfsnaam?.trim() || null,
+        nummer,
+        kind: "installatie",
+        kindLabel: "Inkomende factuur",
+        categorie: "operations",
+        rol: null,
+        context: f.referentie || "Facturen Inbox",
+        bedragEx,
+        bedragInc,
+        status: f.status,
+        goedgekeurd_op: f.goedgekeurd_op ?? null,
+        betaald_op: null,
+        factuurdatum: f.factuurdatum || f.betaal_woensdag || "",
+        weekJaar: null,
+        weekNummer: null,
+        payoutDeadline: f.betaal_woensdag || null,
+        searchText: [
+          naam,
+          nummer,
+          f.referentie,
+          "inkomende factuur",
+          "inbox",
+          f.iban,
+          f.betaal_woensdag,
+          String(bedragEx),
+          String(bedragInc),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase(),
+      });
+    }
+
     out.sort((a, b) => {
       const sr = statusRank(a.status) - statusRank(b.status);
       if (sr !== 0) return sr;
       return (b.factuurdatum || "").localeCompare(a.factuurdatum || "");
     });
     return out;
-  }, [allAdvFacturen, allPartnerFacturen]);
+  }, [allAdvFacturen, allPartnerFacturen, inboxFacturen]);
 
   /** Vorige week + openstaande concepten van eerdere weken (nog niet betaald). */
   const inUitbetalingsronde = (r: InboxRow) => {
@@ -1764,6 +1844,30 @@ export function CreditfacturenPanel({
     setError(null);
     setOkMsg(null);
     try {
+      if (row.source === "inbox") {
+        const res = await fetch("/api/facturen-inbox", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: row.id, status }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (json as { error?: string }).error || "Bijwerken mislukt"
+          );
+        }
+        const item = (json as { item?: { factuur_nummer?: string | null } })
+          .item;
+        const nr = item?.factuur_nummer || row.nummer;
+        if (status === "betaald") {
+          setOkMsg(`Factuur ${nr} gemarkeerd als betaald.`);
+          setTab("betaald");
+        } else {
+          setOkMsg(`Factuur ${nr} bijgewerkt.`);
+        }
+        await loadAll();
+        return;
+      }
       const url =
         row.source === "adviseur"
           ? "/api/adviseurs/creditfacturen"
@@ -1799,12 +1903,20 @@ export function CreditfacturenPanel({
   }
 
   function payoutApiUrl(row: InboxRow): string {
+    if (row.source === "inbox") return "/api/facturen-inbox";
     return row.source === "adviseur"
       ? "/api/adviseurs/creditfacturen"
       : "/api/partners/creditfacturen";
   }
 
   function payoutPdfUrl(row: InboxRow): string {
+    if (row.source === "inbox") {
+      const raw = inboxFacturen.find((f) => f.id === row.id);
+      if (raw?.inbox_mail_id) {
+        return `/api/inbox/${encodeURIComponent(raw.inbox_mail_id)}`;
+      }
+      return "#";
+    }
     return row.source === "adviseur"
       ? `/api/adviseurs/creditfacturen/${row.id}/pdf`
       : `/api/partners/creditfacturen/${row.id}/pdf`;
@@ -1917,6 +2029,18 @@ export function CreditfacturenPanel({
   async function downloadPdf(row: InboxRow) {
     setBusyId(`pdf-${row.key}`);
     try {
+      if (row.source === "inbox") {
+        const raw = inboxFacturen.find((f) => f.id === row.id);
+        if (!raw?.inbox_mail_id) {
+          throw new Error("Geen mailbijlage voor deze factuur");
+        }
+        // Open Facturen Inbox op deze mail
+        window.location.href = `/?tab=partners&partners=facturen_inbox`;
+        setOkMsg(
+          `Open Facturen Inbox om de PDF van ${row.nummer} te downloaden.`
+        );
+        return;
+      }
       const url =
         row.source === "adviseur"
           ? `/api/adviseurs/creditfacturen/${row.id}/pdf`

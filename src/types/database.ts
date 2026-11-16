@@ -80,6 +80,8 @@ export type SollicitatieStatus =
   | "nieuw"
   | "geen_contact"
   | "definitief_geen_contact"
+  | "geen_interesse"
+  | "terugbelafspraak"
   | "diskwalificatie"
   | "gesprek_gepland"
   | "gesprek_gehad"
@@ -923,6 +925,9 @@ export interface Sollicitatie {
   belpogingen?: number | null;
   belpogingen_vandaag?: number | null;
   laatst_gebeld_at?: string | null;
+  /** Recruitment-terugbel (niet sales/callcenter). */
+  terugbel_at?: string | null;
+  terugbel_notitie?: string | null;
   /** Meta / UTM attributie (recruitment ads, attributie BANEN). */
   meta_campaign_id?: string | null;
   meta_adset_id?: string | null;

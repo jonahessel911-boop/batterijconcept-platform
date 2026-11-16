@@ -2,6 +2,9 @@
  * Twee klantmails voor het Warmtefonds-portaal:
  * bij binnenkomst, en 1 dag voor de afspraak.
  * Opgeslagen in de privé-bucket (geen extra tabel).
+ *
+ * Kill-switch: geen WF-klantmails (bevestiging / binnenkomst / dag-ervoor)
+ * tot dit weer op true gezet wordt.
  */
 import { formatInTimeZone } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -11,6 +14,9 @@ import { klantContactEmail } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
 import { adresRegel, formatDateTimeLongNl, formatDateTimeNl } from "@/lib/format";
 import { isWarmtefondsPortalProject } from "@/lib/warmtefonds-portal";
+
+/** false = geen automatische of portal-klantmails vanuit WF. */
+export const WF_KLANTMAILS_ENABLED = false;
 
 const BUCKET = "crm-private";
 const OBJECT = "warmtefonds/automatisering.json";
@@ -178,6 +184,7 @@ async function verstuurMail(
   projectId: string,
   soort: WfMailSoort
 ): Promise<boolean> {
+  if (!WF_KLANTMAILS_ENABLED) return false;
   const mail = config[soort];
   if (!mail.actief || !mail.onderwerp.trim() || !mail.bericht.trim()) {
     return false;
@@ -262,7 +269,8 @@ async function verstuurMail(
 /** Bevestiging naar de klant zodra een WF-afspraak is gezet of verzet. */
 export async function verstuurWfAfspraakBevestiging(
   projectId: string
-): Promise<"verzonden" | "geen_email" | "mislukt"> {
+): Promise<"verzonden" | "geen_email" | "mislukt" | "uitgeschakeld"> {
+  if (!WF_KLANTMAILS_ENABLED) return "uitgeschakeld";
   const sb = getSupabaseAdmin();
   const { data: project } = await sb
     .from("projecten")
@@ -332,6 +340,7 @@ export async function verstuurWarmtefondsStapFlows(opts: {
   van: string | null;
   naar: string | null;
 }): Promise<number> {
+  if (!WF_KLANTMAILS_ENABLED) return 0;
   if (!opts.naar || opts.naar === opts.van || opts.van) return 0;
   const config = await leesWarmtefondsConfig();
   const ok = await verstuurMail(config, opts.projectId, "binnenkomst");
@@ -343,6 +352,7 @@ export async function verstuurWarmtefondsStapFlows(opts: {
 export async function verstuurWarmtefondsAfspraakFlows(
   now = new Date()
 ): Promise<{ bekeken: number; verstuurd: number }> {
+  if (!WF_KLANTMAILS_ENABLED) return { bekeken: 0, verstuurd: 0 };
   const config = await leesWarmtefondsConfig();
   const mail = config.dag_ervoor;
   if (!mail.actief || !mail.onderwerp.trim() || !mail.bericht.trim()) {

@@ -54,7 +54,7 @@ export const WF_WERK_STAP_UITLEG: Record<WfWerkStatus, string> = {
   afwachten_contact:
     "Bel of mail de klant. Markeer contact → status wordt Afspraak inplannen.",
   afspraak_inplannen:
-    "Plan de WF-afspraak. Klant krijgt bevestiging per mail → status Afspraak ingepland.",
+    "Plan de WF-afspraak → status Afspraak ingepland. (Klantmail tijdelijk uit.)",
   afspraak_ingepland:
     "Na het gesprek: zet door naar WF in behandeling.",
   in_behandeling:
@@ -123,8 +123,7 @@ export function poortVoorWerkStatus(status: WfWerkStatus | null): {
       soort: "status",
       volgende: "in_behandeling",
       titel: "Naar WF in behandeling",
-      uitleg:
-        "Na het gesprek: zet door. Bij deze stap wordt de Edergy-creditfactuur aangemaakt (één keer per aanvraag).",
+      uitleg: "Na het gesprek: zet door naar WF in behandeling.",
       ctaLabel: "Zet door → WF in behandeling",
     };
   }

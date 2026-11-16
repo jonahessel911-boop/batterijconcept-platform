@@ -7,8 +7,9 @@ import { splitIncToExBtw } from "@/lib/aanbetaling";
 import {
   AV_ANNULERING_ARTIKEL,
   AV_ANNULERING_PCT,
-  annuleringskostenIncBtw,
+  annuleringAfrekening,
 } from "@/lib/av-annulering";
+import { formatEuro } from "@/lib/format";
 import {
   COMPANY_IBAN_DISPLAY,
   FACTUUR_BETAALTERMIJN_DAGEN,
@@ -68,24 +69,26 @@ export async function POST(
       );
     }
 
-    const bedragInc = annuleringskostenIncBtw(orderInc);
-    if (bedragInc <= 0) {
+    const { data: alleFacturen, error: facErr } = await sb
+      .from("facturen")
+      .select(
+        "id, factuur_nummer, status, omschrijving, bedrag_inc_btw, credit_van_factuur_id"
+      )
+      .eq("project_id", id);
+    if (facErr) {
       return NextResponse.json(
-        { error: "Annuleringsbedrag is € 0" },
-        { status: 400 }
+        { error: facErr.message || "Facturen laden mislukt" },
+        { status: 500 }
       );
     }
 
-    const { data: bestaande } = await sb
-      .from("facturen")
-      .select("id, factuur_nummer, status, omschrijving")
-      .eq("project_id", id)
-      .is("credit_van_factuur_id", null)
-      .neq("status", "vervallen")
-      .ilike("omschrijving", "%annuleringskosten%")
-      .limit(1);
-
-    if (bestaande?.length) {
+    const bestaande = (alleFacturen || []).filter(
+      (f) =>
+        !f.credit_van_factuur_id &&
+        f.status !== "vervallen" &&
+        /annuleringskosten/i.test(f.omschrijving || "")
+    );
+    if (bestaande.length) {
       return NextResponse.json(
         {
           error: `Er is al een annuleringsfactuur (${bestaande[0]!.factuur_nummer})`,
@@ -95,11 +98,63 @@ export async function POST(
       );
     }
 
+    const afrekening = annuleringAfrekening({
+      orderIncBtw: orderInc,
+      facturen: alleFacturen || [],
+    });
+    if (afrekening.kostenInc <= 0) {
+      return NextResponse.json(
+        { error: "Annuleringsbedrag is € 0" },
+        { status: 400 }
+      );
+    }
+
+    // Alleen factureren wat nog openstaat ná verrekening met al betaald.
+    if (afrekening.richting !== "bijbetalen" || afrekening.saldoInc <= 0) {
+      const nowIso = new Date().toISOString();
+      await sb
+        .from("projecten")
+        .update({
+          status: "annulering",
+          schouw_at: null,
+          schouw_jaar: null,
+          schouw_week: null,
+          installatie_at: null,
+          service_at: null,
+          materiaal_leverdatum: null,
+          annulering_keuze_gecontroleerd_at: nowIso,
+          hold_sales_deadline_at: null,
+        })
+        .eq("id", id);
+      await syncAutoTakenVoorProject(sb, id, "annulering");
+      return NextResponse.json({
+        ok: true,
+        factuur: null,
+        sent: false,
+        sendError: null,
+        project_status: "annulering",
+        afrekening,
+        message:
+          afrekening.richting === "terugbetalen"
+            ? `Geen annuleringsfactuur — klant heeft te veel betaald; terugbetalen ${formatEuro(Math.abs(afrekening.saldoInc))}.`
+            : "Geen annuleringsfactuur — al betaald dekt de 20% annuleringskosten.",
+      });
+    }
+
+    const bedragInc = afrekening.saldoInc;
     const split = splitIncToExBtw(bedragInc);
     const pct = Math.round(AV_ANNULERING_PCT * 100);
-    const omschrijving = `Annuleringskosten ${pct}% (art. ${AV_ANNULERING_ARTIKEL} AV)${
-      project.project_nummer ? ` · ${project.project_nummer}` : ""
-    }`;
+    // PDF toont deze omschrijving als factuurregel.
+    const omschrijving = [
+      `Annuleringskosten ${pct}% (art. ${AV_ANNULERING_ARTIKEL} AV)`,
+      `over order ${formatEuro(afrekening.orderInc)}`,
+      afrekening.alBetaaldInc > 0
+        ? `minus ${formatEuro(afrekening.alBetaaldInc)} reeds betaald`
+        : null,
+      project.project_nummer || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     const vandaag = amsterdamDatePlusDays(new Date(), 0);
     const vervaldatum = amsterdamDatePlusDays(
       new Date(),
@@ -121,6 +176,14 @@ export async function POST(
 
     const ref =
       off?.offerte_nummer || project.project_nummer || String(nummer);
+    const notities = [
+      `Annuleringsfactuur · ${project.project_nummer || ""}`,
+      `Order incl. btw: ${formatEuro(afrekening.orderInc)}`,
+      `Annuleringskosten ${pct}%: ${formatEuro(afrekening.kostenInc)}`,
+      `Reeds betaald: ${formatEuro(afrekening.alBetaaldInc)}`,
+      `Nog te betalen: ${formatEuro(bedragInc)}`,
+      `Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${ref}.`,
+    ].join("\n");
     const { data: factuur, error: fErr } = await sb
       .from("facturen")
       .insert({
@@ -135,7 +198,7 @@ export async function POST(
         bedrag_inc_btw: split.inc,
         factuurdatum: vandaag,
         vervaldatum,
-        notities: `Annuleringsfactuur · ${project.project_nummer || ""}. Betaal op ${COMPANY_IBAN_DISPLAY} t.n.v. BatterijConcept o.v.v. ${ref}.`,
+        notities,
       })
       .select("id, factuur_nummer, status, bedrag_inc_btw, omschrijving")
       .single();
@@ -197,6 +260,8 @@ export async function POST(
       sent,
       sendError,
       project_status: "annulering",
+      afrekening,
+      message: `Annuleringsfactuur ${factuur.factuur_nummer} voor ${formatEuro(bedragInc)} (20% minus al betaald).`,
     });
   } catch (e) {
     return NextResponse.json(

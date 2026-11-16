@@ -107,6 +107,7 @@ export function tabsVoorRol(
         "leads",
         "bellen",
         "agenda",
+        "instroom",
         "projecten",
         "stuur",
         "inbox",
@@ -272,7 +273,8 @@ export function isSpareAdviseur(a: {
 /** Mag Recruitment (instroom) bekijken/bewerken. */
 export function magRecruitment(rol: GebruikerRol | string | null | undefined): boolean {
   const r = normalizeRol(rol);
-  return r === "admin" || r === "recruiter";
+  // Tijdelijk: backoffice ook (naast admin + recruiter)
+  return r === "admin" || r === "recruiter" || r === "backoffice";
 }
 
 /** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */

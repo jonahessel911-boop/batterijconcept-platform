@@ -91,9 +91,10 @@ export function buildGesprekSlots(opts: {
 export function upcomingWorkdays(count: number, from = new Date()): string[] {
   const out: string[] = [];
   const cursor = new Date(from.getTime());
-  // Start vandaag (Amsterdam)
+  // Start vandaag (Amsterdam). Guard ruim genoeg voor ~3+ weken.
   let guard = 0;
-  while (out.length < count && guard < 40) {
+  const maxGuard = Math.max(60, count * 3);
+  while (out.length < count && guard < maxGuard) {
     guard += 1;
     const ymd = amsterdamYmd(cursor);
     const [y, m, d] = ymd.split("-").map(Number);

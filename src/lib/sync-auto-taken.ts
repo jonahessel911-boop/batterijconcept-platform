@@ -376,7 +376,18 @@ export async function syncAutoTakenVoorProject(
       def.dueAt !== undefined ? def.dueAt : dueAtFromDays(def.dueInDays);
     const isReferral = def.autoKey === REFERRAL_TAK_AUTO_KEY;
     if (cur) {
-      if (
+      // Schouwweek-indicatie ≠ echte schouwdag: taak mag niet op done blijven.
+      if (def.autoKey === SCHOUWDAG_INPLAN_KEY && cur.status === "done") {
+        await sb
+          .from("project_taken")
+          .update({
+            status: "todo",
+            due_at: dueAt,
+            titel: def.titel,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", cur.id);
+      } else if (
         def.autoKey === SCHOUWDAG_INPLAN_KEY &&
         cur.status !== "done" &&
         cur.due_at !== dueAt

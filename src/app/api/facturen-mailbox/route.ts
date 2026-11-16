@@ -38,16 +38,24 @@ export async function GET(req: NextRequest) {
 
     const limit = Number(req.nextUrl.searchParams.get("limit") || 150) || 150;
     const sb = getSupabaseAdmin();
-    const rows = await listInboxMails(sb, {
+    let rows = await listInboxMails(sb, {
+      mailbox: "facturen",
       email: FACTUREN_MAILBOX_EMAIL,
       limit,
     });
+    // Fallback: mails gericht aan facturen@ zonder mailbox-tag
+    if (rows.length === 0) {
+      rows = await listInboxMails(sb, {
+        email: FACTUREN_MAILBOX_EMAIL,
+        limit,
+      });
+    }
     return NextResponse.json({
       email: FACTUREN_MAILBOX_EMAIL,
       configured: facturenImapConfigured(),
       mails: rows.map(rowToInboxMail),
       count: rows.length,
-      hint: "Run supabase/migrate-inbox-mailbox.sql indien mailbox-kolom ontbreekt",
+      hint: "Run supabase/migrate-facturen-inbox.sql voor mailbox + goedkeur-items",
     });
   } catch (e) {
     return NextResponse.json(

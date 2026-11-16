@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   FileText,
+  Inbox,
   Receipt,
   Users,
   Wallet,
@@ -12,17 +13,24 @@ import {
 import type { TeamRol } from "@/lib/rollen";
 import { cn } from "@/lib/utils";
 import { CreditfacturenPanel } from "./CreditfacturenPanel";
+import { FacturenMailboxPanel } from "./FacturenMailboxPanel";
 import { InstellingenPanel } from "./InstellingenPanel";
 import { KostenPanel } from "./KostenPanel";
 import { OvereenkomstenPanel } from "./OvereenkomstenPanel";
 
-type HubView = "mensen" | "overeenkomsten" | "kosten" | "uitbetalingen";
+type HubView =
+  | "mensen"
+  | "overeenkomsten"
+  | "kosten"
+  | "facturen_inbox"
+  | "uitbetalingen";
 
 /** Subfilter binnen Mensen: login-rollen + Installatie partners + Warmtefonds. */
 export type TeamSubFilter = "all" | TeamRol | "monteurs" | "warmtefonds";
 
 const HUB_NAV: { key: HubView; label: string; icon: LucideIcon; group: "werk" | "beheer" }[] = [
   { key: "mensen", label: "Mensen", icon: Users, group: "werk" },
+  { key: "facturen_inbox", label: "Facturen Inbox", icon: Inbox, group: "beheer" },
   { key: "overeenkomsten", label: "Overeenkomsten", icon: FileText, group: "beheer" },
   { key: "kosten", label: "Kosten", icon: Receipt, group: "beheer" },
   { key: "uitbetalingen", label: "Uitbetalingen", icon: Wallet, group: "beheer" },
@@ -42,6 +50,13 @@ const TEAM_NAV: { key: TeamSubFilter; label: string }[] = [
 
 function hubFromParams(p: string | null): HubView {
   if (p === "uitbetalingen" || p === "facturen") return "uitbetalingen";
+  if (
+    p === "facturen_inbox" ||
+    p === "facturen-inbox" ||
+    p === "inbox_facturen"
+  ) {
+    return "facturen_inbox";
+  }
   if (p === "overeenkomsten" || p === "contracten") return "overeenkomsten";
   if (p === "kosten") return "kosten";
   return "mensen";
@@ -121,6 +136,9 @@ export function PartnersPanel({
         params.delete("team");
       } else if (nextHub === "kosten") {
         params.set("partners", "kosten");
+        params.delete("team");
+      } else if (nextHub === "facturen_inbox") {
+        params.set("partners", "facturen_inbox");
         params.delete("team");
       } else {
         params.set("partners", "uitbetalingen");
@@ -243,7 +261,10 @@ export function PartnersPanel({
 
       <div
         className={
-          hub === "mensen" || hub === "overeenkomsten" || hub === "kosten"
+          hub === "mensen" ||
+          hub === "overeenkomsten" ||
+          hub === "kosten" ||
+          hub === "facturen_inbox"
             ? "min-h-0 flex-1 overflow-hidden"
             : "min-h-0 flex-1 overflow-auto"
         }
@@ -264,12 +285,15 @@ export function PartnersPanel({
 
         {hub === "kosten" ? <KostenPanel embedded /> : null}
 
+        {hub === "facturen_inbox" ? <FacturenMailboxPanel /> : null}
+
         {hub === "uitbetalingen" ? (
           <div className="flex min-h-0 flex-col">
             <div className="shrink-0 border-b border-line px-4 py-2.5 sm:px-5">
               <p className="text-sm text-muted">
                 Commissie adviseurs · bel-/opscommissie ·
-                installatiepartner-facturen · goedkeuren en betalen
+                installatiepartner-facturen · inkomende facturen · goedkeuren en
+                betalen
               </p>
             </div>
             <CreditfacturenPanel embedded />

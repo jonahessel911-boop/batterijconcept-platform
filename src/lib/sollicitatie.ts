@@ -4,6 +4,8 @@ export const SOLLICITATIE_STATUSES: SollicitatieStatus[] = [
   "nieuw",
   "geen_contact",
   "definitief_geen_contact",
+  "geen_interesse",
+  "terugbelafspraak",
   "diskwalificatie",
   "gesprek_gepland",
   "gesprek_gehad",
@@ -16,6 +18,8 @@ export const SOLLICITATIE_STATUS_LABEL: Record<SollicitatieStatus, string> = {
   nieuw: "Nieuw",
   geen_contact: "Geen contact",
   definitief_geen_contact: "Definitief geen contact",
+  geen_interesse: "Geen interesse",
+  terugbelafspraak: "Terugbelafspraak",
   diskwalificatie: "Diskwalificatie",
   gesprek_gepland: "Gesprek gepland",
   gesprek_gehad: "Gesprek gehad - in beoordeling",
@@ -74,6 +78,7 @@ export function canAutoPromoteToGesprekGepland(
   return (
     status === "nieuw" ||
     status === "geen_contact" ||
+    status === "terugbelafspraak" ||
     status === "gesprek_gepland"
   );
 }

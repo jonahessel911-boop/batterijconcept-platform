@@ -25,6 +25,8 @@ export function LeadToevoegenModal({
   const [plaats, setPlaats] = useState("");
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupMsg, setLookupMsg] = useState<string | null>(null);
+  /** Referral ja/nee — default nee. */
+  const [referral, setReferral] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +41,7 @@ export function LeadToevoegenModal({
     setToevoeging("");
     setStraat("");
     setPlaats("");
+    setReferral(false);
     setLookupMsg(null);
     setError(null);
   }
@@ -104,6 +107,7 @@ export function LeadToevoegenModal({
           straat: straat.trim() || undefined,
           plaats: plaats.trim() || undefined,
           adviseur_id: defaultAdviseurId || null,
+          referral,
         }),
       });
       const data = await res.json();
@@ -241,6 +245,43 @@ export function LeadToevoegenModal({
               />
             </label>
           </div>
+
+          <fieldset className="border border-line bg-wash/40 px-3 py-3">
+            <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-muted">
+              Referral
+            </legend>
+            <p className="mb-2 text-xs text-muted">
+              Is dit een referral (via bestaande klant/relatie)?
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setReferral(true)}
+                className={[
+                  "min-h-10 border px-3 text-sm font-semibold",
+                  referral
+                    ? "border-green bg-green-soft text-green-dark"
+                    : "border-line bg-white text-ink hover:bg-wash",
+                ].join(" ")}
+                aria-pressed={referral}
+              >
+                Ja
+              </button>
+              <button
+                type="button"
+                onClick={() => setReferral(false)}
+                className={[
+                  "min-h-10 border px-3 text-sm font-semibold",
+                  !referral
+                    ? "border-green bg-green-soft text-green-dark"
+                    : "border-line bg-white text-ink hover:bg-wash",
+                ].join(" ")}
+                aria-pressed={!referral}
+              >
+                Nee
+              </button>
+            </div>
+          </fieldset>
 
           {error && (
             <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">

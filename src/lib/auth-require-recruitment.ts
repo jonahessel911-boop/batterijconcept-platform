@@ -7,7 +7,7 @@ import {
 import { magRecruitment } from "@/lib/rollen";
 
 /**
- * Admin of recruiter — Recruitment / instroom-API's.
+ * Admin, recruiter of (tijdelijk) backoffice — Recruitment / instroom-API's.
  * Live DB-rol (niet alleen JWT) zodat rolwijziging meteen geldt.
  */
 export async function requireRecruitmentSession(): Promise<

@@ -204,6 +204,7 @@ type KanbanTrack =
   | "wf_contact_verstuurd"
   | "wf_in_behandeling"
   | "wf_afspraak_ingepland"
+  | "wf_aanbod_ondertekenen"
   | "financiering"
   | "schouw"
   | "eindafrekening"
@@ -215,7 +216,8 @@ type WfSpecialKind =
   | "wf_doorgestuurd"
   | "wf_contact_verstuurd"
   | "wf_in_behandeling"
-  | "wf_afspraak_ingepland";
+  | "wf_afspraak_ingepland"
+  | "wf_aanbod_ondertekenen";
 
 function isParkedStatus(status: ProjectStatus): boolean {
   return status === "annulering" || status === "hold_sales_actie";
@@ -305,6 +307,12 @@ function isWfContactVerstuurd(p: Project): boolean {
 function isWfInBehandeling(p: Project): boolean {
   if (isWfParked(p) || isOrderVoorbijOpstarten(p)) return false;
   return wfFinancieringNorm(p) === "in_behandeling";
+}
+
+/** WF aanbod ondertekenen — goedgekeurd, klant tekent nog. */
+function isWfAanbodOndertekenen(p: Project): boolean {
+  if (isWfParked(p) || isOrderVoorbijOpstarten(p)) return false;
+  return wfFinancieringNorm(p) === "aanbod_ondertekenen";
 }
 
 /**
@@ -476,7 +484,7 @@ const KANBAN_TRACKS: { id: KanbanTrack; label: string; hint: string }[] = [
   {
     id: "alles",
     label: "Overzicht",
-    hint: "Opstarten: Opstarten WF + Opstarten EM. Daarna (WF-route): doorgestuurd → contact → in behandeling → afspraak · schouw. EM: Opstarten EM → schouw.",
+    hint: "Opstarten: Opstarten WF + Opstarten EM. Daarna (WF-route): doorgestuurd → contact → afspraak → in behandeling → aanbod ondertekenen · schouw. EM: Opstarten EM → schouw.",
   },
   {
     id: "opstarten_wf",
@@ -507,6 +515,11 @@ const KANBAN_TRACKS: { id: KanbanTrack; label: string; hint: string }[] = [
     id: "wf_in_behandeling",
     label: "WF in behandeling",
     hint: "Alleen WF-route · Warmtefonds beoordeelt.",
+  },
+  {
+    id: "wf_aanbod_ondertekenen",
+    label: "WF aanbod",
+    hint: "WF goedgekeurd · klant moet aanbod nog ondertekenen.",
   },
   {
     id: "financiering",
@@ -736,6 +749,17 @@ export function ProjectKanban({
       return grouped;
     }
 
+    if (track === "wf_aanbod_ondertekenen") {
+      grouped.push({
+        key: "wf_aanbod_ondertekenen",
+        fase: "financiering",
+        label: "WF — aanbod ondertekenen",
+        statuses: [],
+        kind: "wf_aanbod_ondertekenen",
+      });
+      return grouped;
+    }
+
     if (track === "alles") {
       for (const fase of FASE_ORDER) {
         if (fase === "overig") continue;
@@ -758,7 +782,7 @@ export function ProjectKanban({
           continue;
         }
         if (fase === "financiering") {
-          // Ná Opstarten: doorgestuurd → contact → afspraak → in behandeling
+          // Ná Opstarten: doorgestuurd → contact → afspraak → in behandeling → aanbod
           grouped.push({
             key: "wf_doorgestuurd",
             fase: "financiering",
@@ -786,6 +810,13 @@ export function ProjectKanban({
             label: "WF — in behandeling",
             statuses: [],
             kind: "wf_in_behandeling",
+          });
+          grouped.push({
+            key: "wf_aanbod_ondertekenen",
+            fase: "financiering",
+            label: "WF — aanbod ondertekenen",
+            statuses: [],
+            kind: "wf_aanbod_ondertekenen",
           });
           continue;
         }
@@ -935,6 +966,9 @@ export function ProjectKanban({
     }
     if (t === "wf_afspraak_ingepland") {
       return filteredProjecten.filter(isWfAfspraakIngepland).length;
+    }
+    if (t === "wf_aanbod_ondertekenen") {
+      return filteredProjecten.filter(isWfAanbodOndertekenen).length;
     }
     return PROJECT_STATUSES.filter((s) => faseForStatus(s) === t).reduce(
       (n, s) => n + (byStatus.get(s)?.length || 0),
@@ -1340,7 +1374,8 @@ export function ProjectKanban({
               group.kind === "wf_doorgestuurd" ||
               group.kind === "wf_contact_verstuurd" ||
               group.kind === "wf_in_behandeling" ||
-              group.kind === "wf_afspraak_ingepland"
+              group.kind === "wf_afspraak_ingepland" ||
+              group.kind === "wf_aanbod_ondertekenen"
             ) {
               const wfMeta =
                 group.kind === "wf_doorgestuurd"
@@ -1373,15 +1408,26 @@ export function ProjectKanban({
                           showContactPogingen: false,
                           showAfspraakAt: false,
                         }
-                      : {
-                          match: isWfAfspraakIngepland,
-                          dropFs: null as FinancieringStatus | null,
-                          accent: "#1D4ED8",
-                          hint: "WF-afspraak gezet · links eerstvolgende, rechts later in de tijd",
-                          sort: sortByWfAfspraakAsc,
-                          showContactPogingen: false,
-                          showAfspraakAt: true,
-                        };
+                      : group.kind === "wf_aanbod_ondertekenen"
+                        ? {
+                            match: isWfAanbodOndertekenen,
+                            dropFs:
+                              "aanbod_ondertekenen" as FinancieringStatus | null,
+                            accent: "#0D5C32",
+                            hint: "WF goedgekeurd · klant tekent het aanbod",
+                            sort: null as ((a: Project, b: Project) => number) | null,
+                            showContactPogingen: false,
+                            showAfspraakAt: false,
+                          }
+                        : {
+                            match: isWfAfspraakIngepland,
+                            dropFs: null as FinancieringStatus | null,
+                            accent: "#1D4ED8",
+                            hint: "WF-afspraak gezet · links eerstvolgende, rechts later in de tijd",
+                            sort: sortByWfAfspraakAsc,
+                            showContactPogingen: false,
+                            showAfspraakAt: true,
+                          };
               const items = filteredProjecten
                 .filter(wfMeta.match)
                 .slice()
@@ -1394,7 +1440,8 @@ export function ProjectKanban({
                 filteredProjecten.filter(isWfDoorgestuurd).length +
                 filteredProjecten.filter(isWfContactVerstuurd).length +
                 filteredProjecten.filter(isWfInBehandeling).length +
-                filteredProjecten.filter(isWfAfspraakIngepland).length;
+                filteredProjecten.filter(isWfAfspraakIngepland).length +
+                filteredProjecten.filter(isWfAanbodOndertekenen).length;
               return (
                 <section key={group.key} className="space-y-2.5">
                   {track === "alles" && group.kind === "wf_doorgestuurd" ? (

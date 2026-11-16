@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, Check, ExternalLink } from "lucide-react";
+import {
+  CalendarClock,
+  Check,
+  ExternalLink,
+  ThumbsDown,
+  GraduationCap,
+} from "lucide-react";
 import type { SollicitatieStatus, SollicitatieTaak } from "@/types/database";
 import {
   SOLLICITATIE_STATUS_LABEL,
@@ -10,7 +16,7 @@ import {
 import {
   SOLLICITATIE_TAKEL_BEOORDELEN,
   SOLLICITATIE_TAKEL_BESLISSING,
-  SOLLICITATIE_UITKOMST_STATUSSEN,
+  isSollicitatieUitkomstStatus,
 } from "@/lib/sollicitatie-deadlines";
 import { formatDateTimeNl } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -28,17 +34,39 @@ function dueTone(dueAt: string): string {
   return "text-muted";
 }
 
+function isVervolgTaak(titel: string): boolean {
+  return (
+    titel === SOLLICITATIE_TAKEL_BEOORDELEN ||
+    titel === SOLLICITATIE_TAKEL_BESLISSING ||
+    titel === "Beoordeling afronden" ||
+    titel === "Vervolg beoordeling" ||
+    /beoordel|beslissing|vervolg/i.test(titel)
+  );
+}
+
+type FilterTab = "open" | "overdue" | "beoordelen" | "beslissing";
+
+type PendingUitkomst = {
+  taak: SollicitatieTaak;
+  status: SollicitatieStatus;
+};
+
 export function RecruitmentDeadlinesView({
   onOpenKandidaat,
   onSetStatus,
+  onAcceptForTraining,
 }: {
   onOpenKandidaat?: (id: string) => void;
   onSetStatus?: (id: string, status: SollicitatieStatus) => Promise<void>;
+  /** Zet aangenomen-training (zonder moment) + ga naar Trainingen-board. */
+  onAcceptForTraining?: (id: string) => Promise<void>;
 }) {
   const [taken, setTaken] = useState<SollicitatieTaak[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterTab>("open");
+  const [pending, setPending] = useState<PendingUitkomst | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,11 +107,33 @@ export function RecruitmentDeadlinesView({
     let beslissing = 0;
     for (const t of taken) {
       if (isOverdue(t.due_at)) overdue += 1;
-      if (t.titel === SOLLICITATIE_TAKEL_BEOORDELEN) beoordelen += 1;
+      if (
+        t.titel === SOLLICITATIE_TAKEL_BEOORDELEN ||
+        t.titel === "Vervolg beoordeling" ||
+        t.titel === "Beoordeling afronden"
+      ) {
+        beoordelen += 1;
+      }
       if (t.titel === SOLLICITATIE_TAKEL_BESLISSING) beslissing += 1;
     }
     return { overdue, beoordelen, beslissing, totaal: taken.length };
   }, [taken]);
+
+  const filtered = useMemo(() => {
+    if (filter === "overdue") return sorted.filter((t) => isOverdue(t.due_at));
+    if (filter === "beoordelen") {
+      return sorted.filter(
+        (t) =>
+          t.titel === SOLLICITATIE_TAKEL_BEOORDELEN ||
+          t.titel === "Vervolg beoordeling" ||
+          t.titel === "Beoordeling afronden"
+      );
+    }
+    if (filter === "beslissing") {
+      return sorted.filter((t) => t.titel === SOLLICITATIE_TAKEL_BESLISSING);
+    }
+    return sorted;
+  }, [sorted, filter]);
 
   async function markDone(id: string) {
     setBusyId(id);
@@ -108,24 +158,55 @@ export function RecruitmentDeadlinesView({
     }
   }
 
-  async function setUitkomst(sollicitatieId: string, status: SollicitatieStatus) {
-    // Training vereist een moment — open kandidaat i.p.v. blind zetten.
-    if (status === "aangenomen_training_gepland") {
-      onOpenKandidaat?.(sollicitatieId);
+  function askUitkomst(taak: SollicitatieTaak, status: SollicitatieStatus) {
+    if (!taak.sollicitatie_id) return;
+    setPending({ taak, status });
+  }
+
+  async function confirmPending() {
+    if (!pending) return;
+    const { taak, status } = pending;
+    const sollicitatieId = taak.sollicitatie_id;
+    if (!sollicitatieId) {
+      setPending(null);
       return;
     }
-    if (!onSetStatus) return;
-    setBusyId(sollicitatieId);
+
+    setBusyId(taak.id);
     setError(null);
     try {
-      await onSetStatus(sollicitatieId, status);
-      await load();
+      if (status === "aangenomen_training_gepland") {
+        if (onAcceptForTraining) {
+          await onAcceptForTraining(sollicitatieId);
+        } else if (onSetStatus) {
+          await onSetStatus(sollicitatieId, status);
+          await load();
+        }
+      } else {
+        if (!onSetStatus) return;
+        await onSetStatus(sollicitatieId, status);
+        await load();
+      }
+      setPending(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Status wijzigen mislukt");
     } finally {
       setBusyId(null);
     }
   }
+
+  const tabs: { id: FilterTab; label: string; count: number; danger?: boolean }[] =
+    [
+      { id: "open", label: "Open", count: counts.totaal },
+      {
+        id: "overdue",
+        label: "Verlopen",
+        count: counts.overdue,
+        danger: counts.overdue > 0,
+      },
+      { id: "beoordelen", label: "Beoordelen", count: counts.beoordelen },
+      { id: "beslissing", label: "Beslissing", count: counts.beslissing },
+    ];
 
   return (
     <div className="space-y-4 px-3 py-4 sm:px-4">
@@ -151,22 +232,37 @@ export function RecruitmentDeadlinesView({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <span className="inline-flex items-center gap-1.5 border border-line bg-white px-2.5 py-1 text-[12px] font-semibold text-ink">
-          Open
-          <span className="tabular-nums text-muted">{counts.totaal}</span>
-        </span>
-        {counts.overdue > 0 ? (
-          <span className="inline-flex items-center gap-1.5 border border-[#B91C1C]/30 bg-[#FEF2F2] px-2.5 py-1 text-[12px] font-semibold text-[#B91C1C]">
-            Verlopen
-            <span className="tabular-nums">{counts.overdue}</span>
-          </span>
-        ) : null}
-        <span className="inline-flex items-center gap-1.5 border border-line bg-wash px-2.5 py-1 text-[12px] font-medium text-muted">
-          Beoordelen {counts.beoordelen}
-        </span>
-        <span className="inline-flex items-center gap-1.5 border border-line bg-wash px-2.5 py-1 text-[12px] font-medium text-muted">
-          Beslissing {counts.beslissing}
-        </span>
+        {tabs.map((tab) => {
+          const active = filter === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setFilter(tab.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 border px-2.5 py-1 text-[12px] font-semibold transition",
+                active && tab.danger
+                  ? "border-[#B91C1C]/40 bg-[#FEF2F2] text-[#B91C1C]"
+                  : active
+                    ? "border-ink bg-ink text-white"
+                    : tab.danger
+                      ? "border-[#B91C1C]/30 bg-[#FEF2F2] text-[#B91C1C] hover:border-[#B91C1C]/50"
+                      : "border-line bg-white text-ink hover:bg-wash"
+              )}
+            >
+              {tab.label}
+              <span
+                className={cn(
+                  "tabular-nums",
+                  active && !tab.danger ? "text-white/80" : "text-muted",
+                  tab.danger && "text-[#B91C1C]"
+                )}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {error ? (
@@ -177,21 +273,24 @@ export function RecruitmentDeadlinesView({
 
       {loading ? (
         <p className="py-10 text-center text-sm text-muted">Laden…</p>
-      ) : sorted.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="border border-line bg-white px-6 py-14 text-center">
           <CalendarClock className="mx-auto size-8 text-muted" aria-hidden />
           <p className="mt-3 text-sm text-muted">Geen open deadlines</p>
         </div>
       ) : (
         <ul className="divide-y divide-line border border-line bg-white">
-          {sorted.map((t) => {
+          {filtered.map((t) => {
             const sol = t.sollicitaties;
             const solId = t.sollicitatie_id;
             const solStatus = sol?.status
               ? normalizeSollicitatieStatus(sol.status)
               : null;
             const overdue = isOverdue(t.due_at);
-            const isBeslissing = t.titel === SOLLICITATIE_TAKEL_BESLISSING;
+            const showUitkomst =
+              Boolean(onSetStatus && solId) &&
+              isVervolgTaak(t.titel) &&
+              (!solStatus || !isSollicitatieUitkomstStatus(solStatus));
             const busy = busyId === t.id || busyId === solId;
             return (
               <li key={t.id} className="px-3.5 py-3 sm:px-4">
@@ -251,24 +350,47 @@ export function RecruitmentDeadlinesView({
                   </div>
                 </div>
 
-                {isBeslissing && onSetStatus && solId ? (
+                {showUitkomst ? (
                   <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-line pt-2.5">
                     <p className="w-full text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Zet uitkomst
+                      Vervolg
                     </p>
-                    {SOLLICITATIE_UITKOMST_STATUSSEN.map((st) => (
-                      <Button
-                        key={st}
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        className="text-[12px]"
-                        onClick={() => void setUitkomst(solId, st)}
-                      >
-                        {SOLLICITATIE_STATUS_LABEL[st]}
-                      </Button>
-                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      className="border-[#B91C1C]/35 text-[#B91C1C] hover:bg-[#FEF2F2]"
+                      onClick={() =>
+                        askUitkomst(t, "gesprek_gehad_diskwalificatie")
+                      }
+                    >
+                      <ThumbsDown className="size-3.5" />
+                      Diskwalificatie
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      className="border-green/40 text-green hover:bg-green/5"
+                      onClick={() =>
+                        askUitkomst(t, "aangenomen_training_gepland")
+                      }
+                    >
+                      <GraduationCap className="size-3.5" />
+                      Aangenomen training
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      className="text-[12px]"
+                      onClick={() => askUitkomst(t, "aangenomen_actief")}
+                    >
+                      Actief
+                    </Button>
                   </div>
                 ) : null}
               </li>
@@ -276,6 +398,145 @@ export function RecruitmentDeadlinesView({
           })}
         </ul>
       )}
+
+      {pending ? (
+        <UitkomstConfirmModal
+          pending={pending}
+          busy={busyId === pending.taak.id}
+          onClose={() => {
+            if (!busyId) setPending(null);
+          }}
+          onConfirm={() => void confirmPending()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function UitkomstConfirmModal({
+  pending,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  pending: PendingUitkomst;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const naam = pending.taak.sollicitaties?.naam || "deze kandidaat";
+  const isDisk =
+    pending.status === "gesprek_gehad_diskwalificatie";
+  const isTraining = pending.status === "aangenomen_training_gepland";
+  const isActief = pending.status === "aangenomen_actief";
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] flex items-end justify-center bg-ink/40 p-4 sm:items-center"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="deadline-uitkomst-title"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="w-full max-w-md border border-line bg-white shadow-xl">
+        <div className="border-b border-line px-4 py-3">
+          <h2
+            id="deadline-uitkomst-title"
+            className="font-display text-lg font-semibold text-ink"
+          >
+            {isDisk
+              ? "Diskwalificatie bevestigen"
+              : isTraining
+                ? "Aangenomen voor training?"
+                : "Direct actief zetten?"}
+          </h2>
+          <p className="mt-0.5 text-xs text-muted">{naam}</p>
+        </div>
+
+        <div className="space-y-3 px-4 py-4 text-sm text-ink">
+          {isDisk ? (
+            <>
+              <p>
+                Status wordt <strong>Gesprek gehad — diskwalificatie</strong>.
+              </p>
+              <div className="border border-line bg-wash/60 px-3 py-2.5 text-[13px] leading-relaxed text-ink">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Mail naar sollicitant
+                </p>
+                <p className="mt-1.5">
+                  Helaas bent u het niet geworden. We wensen u nog veel succes
+                  in de toekomst.
+                </p>
+              </div>
+            </>
+          ) : null}
+
+          {isTraining ? (
+            <>
+              <p>
+                Status wordt <strong>Aangenomen — training gepland</strong>{" "}
+                (nog zonder trainingsmoment).
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-[13px] text-muted">
+                <li>
+                  Kandidaat verschijnt bij <strong>Trainingen → Te trainen</strong>
+                </li>
+                <li>Daar sleepbaar naar een concrete training</li>
+                <li>
+                  Planningsmail pas bij toewijzing aan een training — niet nu
+                </li>
+              </ul>
+            </>
+          ) : null}
+
+          {isActief ? (
+            <p>
+              Status wordt direct <strong>Aangenomen — actief</strong> (geen
+              trainingsmoment / geen trainingsmail).
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 border-t border-line px-4 py-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            className="border border-line px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
+          >
+            Annuleren
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+            className={cn(
+              "px-3 py-2 text-sm font-semibold text-white disabled:opacity-50",
+              isDisk
+                ? "bg-[#B91C1C] hover:bg-[#991B1B]"
+                : "bg-green hover:bg-green-deeper"
+            )}
+          >
+            {busy
+              ? "Bezig…"
+              : isDisk
+                ? "Diskwalificeren + mailen"
+                : isTraining
+                  ? "Naar Te trainen"
+                  : "Zet actief"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

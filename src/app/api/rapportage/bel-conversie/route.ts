@@ -333,16 +333,32 @@ export async function GET(req: NextRequest) {
     const padStart = new Date(start.getTime() - 12 * 3600 * 1000).toISOString();
     const padEnd = new Date(end.getTime() + 12 * 3600 * 1000).toISOString();
 
-    async function loadGebeldLeads(): Promise<BelConversieLead[]> {
+    const leadSelectFull =
+      "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, created_at, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id";
+    const leadSelectLegacy =
+      "id, naam, lead_number, status, postcode, bron, created_at, laatst_gebeld_at, bel_claimed_by, beller_id";
+
+    function mapLegacyLeads(rows: BelConversieLead[]): BelConversieLead[] {
+      return rows.map((l) => ({
+        ...l,
+        laatst_gebeld_door: null,
+        utm_source: null,
+        lander: null,
+        campaign_name: null,
+        ad_name: null,
+      }));
+    }
+
+    async function loadLeadsByColumn(
+      column: "laatst_gebeld_at" | "created_at"
+    ): Promise<BelConversieLead[]> {
       try {
         return await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
           sb
             .from("leads")
-            .select(
-              "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
-            )
-            .gte("laatst_gebeld_at", padStart)
-            .lte("laatst_gebeld_at", padEnd)
+            .select(leadSelectFull)
+            .gte(column, padStart)
+            .lte(column, padEnd)
             .order("id", { ascending: true })
             .range(fromIdx, toIdx)
         );
@@ -360,23 +376,23 @@ export async function GET(req: NextRequest) {
         const rows = await fetchAllRows<BelConversieLead>((fromIdx, toIdx) =>
           sb
             .from("leads")
-            .select(
-              "id, naam, lead_number, status, postcode, bron, laatst_gebeld_at, bel_claimed_by, beller_id"
-            )
-            .gte("laatst_gebeld_at", padStart)
-            .lte("laatst_gebeld_at", padEnd)
+            .select(leadSelectLegacy)
+            .gte(column, padStart)
+            .lte(column, padEnd)
             .order("id", { ascending: true })
             .range(fromIdx, toIdx)
         );
-        return rows.map((l) => ({
-          ...l,
-          laatst_gebeld_door: null,
-          utm_source: null,
-          lander: null,
-          campaign_name: null,
-          ad_name: null,
-        }));
+        return mapLegacyLeads(rows);
       }
+    }
+
+    async function loadGebeldLeads(): Promise<BelConversieLead[]> {
+      return loadLeadsByColumn("laatst_gebeld_at");
+    }
+
+    /** Leads die in het venster binnenkwamen — voor cohort L→A per dag. */
+    async function loadCohortLeads(): Promise<BelConversieLead[]> {
+      return loadLeadsByColumn("created_at");
     }
 
     async function loadAfsprakenDag(): Promise<BelConversieAfspraak[]> {
@@ -410,9 +426,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const [leadsLoaded, afsprakenLoaded, adviseursRes, goalsRaw] =
+    const [leadsLoaded, cohortLeadsLoaded, afsprakenLoaded, adviseursRes, goalsRaw] =
       await Promise.all([
         loadGebeldLeads(),
+        loadCohortLeads(),
         loadAfsprakenDag(),
         sb
           .from("adviseurs")
@@ -424,37 +441,23 @@ export async function GET(req: NextRequest) {
 
     if (adviseursRes.error) throw adviseursRes.error;
 
-    let leadsRows = leadsLoaded;
+    // Merge gebeld + cohort (unique by id); cohort heeft created_at voor L→A
+    const leadsById = new Map<string, BelConversieLead>();
+    for (const l of leadsLoaded) leadsById.set(l.id, l);
+    for (const l of cohortLeadsLoaded) {
+      const prev = leadsById.get(l.id);
+      leadsById.set(
+        l.id,
+        prev
+          ? { ...prev, ...l, created_at: l.created_at || prev.created_at }
+          : l
+      );
+    }
+    let leadsRows = [...leadsById.values()];
     const afsprakenDag = afsprakenLoaded;
 
-    // Annuleringen in het venster (updated_at) — ook als created_at eerder was
-    {
-      try {
-        const cancelRows = await fetchAllRows<BelConversieAfspraak>(
-          (fromIdx, toIdx) =>
-            sb
-              .from("afspraken")
-              .select(
-                "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
-              )
-              .eq("soort", "nieuw")
-              .eq("status", "geannuleerd")
-              .gte("updated_at", padStart)
-              .lte("updated_at", padEnd)
-              .order("id", { ascending: true })
-              .range(fromIdx, toIdx)
-        );
-        const seen = new Set(afsprakenDag.map((a) => a.id));
-        for (const a of cancelRows) {
-          if (!seen.has(a.id)) {
-            seen.add(a.id);
-            afsprakenDag.push(a);
-          }
-        }
-      } catch {
-        /* annulerings-merge optioneel */
-      }
-    }
+    // Uitval is cohort op created_at (gezet die dag) — geen aparte
+    // updated_at-merge meer van “alles wat vandaag sneuvelde”.
 
     const adviseurRows = (adviseursRes.data || []).map((a) => ({
       id: a.id as string,
@@ -464,17 +467,20 @@ export async function GET(req: NextRequest) {
       email: (a as { email?: string | null }).email ?? null,
       startdatum: (a as { startdatum?: string | null }).startdatum ?? null,
     }));
-    // Historie: alle nieuw-huisbezoeken van leads in deze periode → 2e bezoek / bijklant uitsluiten
+    // Historie: nieuw-huisbezoeken van gebelde + cohort-leads
+    // (cohort L→A: afspraak mag ná de lead-dag zijn gezet)
     const periodeNieuwLeadIds = [
-      ...new Set(
-        afsprakenDag
+      ...new Set([
+        ...afsprakenDag
           .filter((a) => (a.soort || "").trim() === "nieuw")
-          .map((a) => a.lead_id)
-      ),
+          .map((a) => a.lead_id),
+        ...cohortLeadsLoaded.map((l) => l.id),
+      ]),
     ];
     let huisbezoekHistorie = afsprakenDag;
     if (periodeNieuwLeadIds.length > 0) {
       const hist: BelConversieAfspraak[] = [];
+      const seenHist = new Set<string>();
       for (let i = 0; i < periodeNieuwLeadIds.length; i += 200) {
         const chunk = periodeNieuwLeadIds.slice(i, i + 200);
         const { data: histRows } = await sb
@@ -485,7 +491,11 @@ export async function GET(req: NextRequest) {
           .eq("soort", "nieuw")
           .in("lead_id", chunk);
         if (histRows?.length) {
-          hist.push(...(histRows as BelConversieAfspraak[]));
+          for (const row of histRows as BelConversieAfspraak[]) {
+            if (seenHist.has(row.id)) continue;
+            seenHist.add(row.id);
+            hist.push(row);
+          }
         }
       }
       if (hist.length > 0) huisbezoekHistorie = hist;
@@ -498,8 +508,8 @@ export async function GET(req: NextRequest) {
       huisbezoekHistorie
     );
 
-    // Ook leads van geannuleerde afspraken (created_at eerder, updated_at in venster)
-    // — die zitten niet in huisbezoekIds maar wel in recenteAfspraken.
+    // Leads van huisbezoeken gezet in het venster (incl. later geannuleerd)
+    // die nog niet via gebeld/cohort binnenkwamen.
     const knownLeadIds = new Set(leadsRows.map((l) => l.id));
     const missingLeadIds = [
       ...new Set([
@@ -511,7 +521,7 @@ export async function GET(req: NextRequest) {
       const { data: extra, error: extraErr } = await sb
         .from("leads")
         .select(
-          "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
+          "id, naam, lead_number, status, postcode, bron, utm_source, lander, campaign_name, ad_name, created_at, laatst_gebeld_at, laatst_gebeld_door, bel_claimed_by, beller_id"
         )
         .in("id", missingLeadIds);
       if (!extraErr && extra) {

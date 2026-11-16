@@ -384,13 +384,16 @@ function reisTeksten(reizen: ReisInfo[] | undefined): string[] {
     .map(reisRegel);
 }
 
-/** Standaard: alleen nieuw (nog contact opnemen). Geen declaratie-statussen. */
-const WF_PORTAL_FILTER_DEFAULT: WfPortalFilter[] = ["nieuw"];
+/** Standaard: nieuw + contact opnemen. Geen latere/declaratie-statussen. */
+const WF_PORTAL_FILTER_DEFAULT: WfPortalFilter[] = [
+  "nieuw",
+  "contact_opnemen",
+];
 
 const AANVRAGEN_PAGE_SIZE = 20;
 
 function statusFilterStorageKey(token: string): string {
-  return `wf-portal-status-filter-v2:${token}`;
+  return `wf-portal-status-filter-v3:${token}`;
 }
 
 function pageStorageKey(token: string): string {
@@ -902,13 +905,12 @@ export function WarmtefondsPortalPage() {
     [orders]
   );
 
+  /** Alleen nieuwe WF-aanvragen zonder afspraak — niet "Afspraak ingepland". */
   const afspraakKandidaten = useMemo(() => {
     const q = afspraakKiezerZoek.trim().toLowerCase();
     const list = orders.filter((o) => {
-      const werk = wfWerkStatusVan(o);
-      if (werk !== "afspraak_inplannen" && werk !== "afspraak_ingepland") {
-        return false;
-      }
+      if (wfWerkStatusVan(o) !== "afspraak_inplannen") return false;
+      if (o.warmtefonds_afspraak_at) return false;
       if (!q) return true;
       const lead = leadOf(o);
       const blob = [lead?.naam, lead?.plaats, o.project_nummer, lead?.telefoon]
@@ -917,15 +919,11 @@ export function WarmtefondsPortalPage() {
         .toLowerCase();
       return blob.includes(q);
     });
-    return [...list].sort((a, b) => {
-      const aw = wfWerkStatusVan(a) === "afspraak_inplannen" ? 0 : 1;
-      const bw = wfWerkStatusVan(b) === "afspraak_inplannen" ? 0 : 1;
-      if (aw !== bw) return aw - bw;
-      return (
+    return [...list].sort(
+      (a, b) =>
         new Date(b.doorgestuurd_at || 0).getTime() -
         new Date(a.doorgestuurd_at || 0).getTime()
-      );
-    });
+    );
   }, [orders, afspraakKiezerZoek]);
 
   function zetStap(
@@ -1492,7 +1490,7 @@ export function WarmtefondsPortalPage() {
                 Afspraak inplannen
               </h2>
               <p className="text-xs text-muted">
-                Kies eerst een klant of project.
+                Alleen nieuwe WF-aanvragen zonder afspraak.
               </p>
             </div>
             <button
@@ -1513,7 +1511,7 @@ export function WarmtefondsPortalPage() {
             />
             {afspraakKandidaten.length === 0 ? (
               <p className="border border-line bg-wash px-4 py-8 text-center text-sm text-muted">
-                Geen klanten klaar voor een afspraak.
+                Geen nieuwe aanvragen zonder afspraak.
               </p>
             ) : (
               <ul className="divide-y divide-line border border-line">
@@ -1588,7 +1586,7 @@ export function WarmtefondsPortalPage() {
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-y-auto px-5 py-4">
             <p className="mb-4 text-sm text-muted">
-              Kies datum en tijd. De klant krijgt een bevestiging per e-mail.
+              Kies datum en tijd. (Klantmails zijn tijdelijk uitgeschakeld.)
             </p>
             <WarmtefondsAfspraakForm
               token={token}

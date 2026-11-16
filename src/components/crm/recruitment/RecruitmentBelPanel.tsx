@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { Sollicitatie } from "@/types/database";
-import { formatDateTimeNl } from "@/lib/format";
+import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
 import {
   normalizeSollicitatieStatus,
   SOLLICITATIE_STATUS_LABEL,
 } from "@/lib/sollicitatie";
 import {
   buildSollicitatieGeenContactPatch,
+  isSollicitatieTerugbelDue,
   sollicitatieBelpogingenOf,
   sollicitatieGeenContactLabel,
+  sollicitatieTerugbelAt,
   sortSollicitatieBelQueue,
   SOLLICITATIE_MAX_BELPOGINGEN,
 } from "@/lib/sollicitatie-bel";
@@ -24,6 +27,20 @@ import {
   mergeSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
 import { SollicitatieAntwoordenRows } from "@/components/crm/recruitment/SollicitatieAntwoordenRows";
+
+function defaultTerugbelLocal(): string {
+  const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
+  return formatInTimeZone(inOneHour, AMSTERDAM_TZ, "yyyy-MM-dd'T'HH:mm");
+}
+
+function localAmsterdamToIso(local: string): string | null {
+  const raw = local.trim();
+  if (!raw) return null;
+  // datetime-local zonder timezone → Amsterdam
+  const d = fromZonedTime(raw.length === 16 ? `${raw}:00` : raw, AMSTERDAM_TZ);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
 
 function CopyIcon() {
   return (
@@ -104,6 +121,9 @@ export function RecruitmentBelPanel({
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [nextMode, setNextMode] = useState(false);
+  const [terugbelMode, setTerugbelMode] = useState(false);
+  const [terugbelAtLocal, setTerugbelAtLocal] = useState(defaultTerugbelLocal);
+  const [terugbelNotitie, setTerugbelNotitie] = useState("");
   const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +135,9 @@ export function RecruitmentBelPanel({
   const position = current
     ? queue.findIndex((k) => k.id === current.id) + 1
     : 0;
+  const terugbelInQueue = queue.filter(
+    (k) => normalizeSollicitatieStatus(k.status) === "terugbelafspraak"
+  ).length;
   const pogingen = current ? sollicitatieBelpogingenOf(current) : 0;
   const nextPoging = Math.min(pogingen + 1, SOLLICITATIE_MAX_BELPOGINGEN);
   const phone = current?.telefoon?.trim() || "";
@@ -132,6 +155,9 @@ export function RecruitmentBelPanel({
 
   function resetQueueUi() {
     setNextMode(false);
+    setTerugbelMode(false);
+    setTerugbelAtLocal(defaultTerugbelLocal());
+    setTerugbelNotitie("");
     setNoteDraft("");
     setError(null);
   }
@@ -287,11 +313,79 @@ export function RecruitmentBelPanel({
           status: "diskwalificatie",
           notitie_append: "Gebeld — diskwalificatie",
           laatst_gebeld_at: new Date().toISOString(),
+          terugbel_at: null,
+          terugbel_notitie: null,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
       onKandidaatUpdated(data.sollicitatie as Sollicitatie);
+      goNewest();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markGeenInteresse() {
+    if (!current || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/instroom/${current.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "geen_interesse",
+          notitie_append: "Gebeld — geen interesse",
+          laatst_gebeld_at: new Date().toISOString(),
+          terugbel_at: null,
+          terugbel_notitie: null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      onKandidaatUpdated(data.sollicitatie as Sollicitatie);
+      setMsg("Geen interesse");
+      window.setTimeout(() => setMsg(null), 2800);
+      goNewest();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markTerugbelafspraak() {
+    if (!current || busy) return;
+    const iso = localAmsterdamToIso(terugbelAtLocal);
+    if (!iso) {
+      setError("Kies een geldig terugbeltijdstip");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const note = terugbelNotitie.trim();
+      const res = await fetch(`/api/instroom/${current.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "terugbelafspraak",
+          terugbel_at: iso,
+          terugbel_notitie: note || null,
+          laatst_gebeld_at: new Date().toISOString(),
+          notitie_append: `Terugbelafspraak ${formatDateTimeNl(iso)}${
+            note ? ` — ${note}` : ""
+          }`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      onKandidaatUpdated(data.sollicitatie as Sollicitatie);
+      setMsg("Terugbel gezet (alleen recruitment)");
+      window.setTimeout(() => setMsg(null), 3200);
       goNewest();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Mislukt");
@@ -310,7 +404,8 @@ export function RecruitmentBelPanel({
           </p>
         </div>
         <p className="px-4 py-16 text-center text-sm text-muted sm:px-6">
-          Niemand om te bellen (Nieuw / Geen contact met telefoonnummer).
+          Niemand om te bellen (Nieuw / Geen contact / Terugbel met
+          telefoonnummer). Komt niet bij sales-bellers.
         </p>
       </div>
     );
@@ -322,8 +417,9 @@ export function RecruitmentBelPanel({
         <p className="text-xs text-muted">
           <span className="font-semibold text-ink">Recruitment bellen</span>
           <span className="ml-1.5">
-            · {queue.length} in wachtrij · nieuwste eerst · max{" "}
-            {SOLLICITATIE_MAX_BELPOGINGEN}×
+            · {queue.length} in wachtrij
+            {terugbelInQueue > 0 ? ` · ${terugbelInQueue} terugbel` : ""} ·
+            terugbel eerst · max {SOLLICITATIE_MAX_BELPOGINGEN}×
           </span>
         </p>
       </div>
@@ -352,8 +448,24 @@ export function RecruitmentBelPanel({
             </p>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {pogingen > 0 ||
-              normalizeSollicitatieStatus(current.status) === "geen_contact" ? (
+              {normalizeSollicitatieStatus(current.status) ===
+              "terugbelafspraak" ? (
+                <span
+                  className={[
+                    "rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide",
+                    isSollicitatieTerugbelDue(current)
+                      ? "border-[#1D4ED8]/40 bg-[#DBEAFE] text-[#1E40AF]"
+                      : "border-[#1D4ED8]/30 bg-[#EFF6FF] text-[#1D4ED8]",
+                  ].join(" ")}
+                >
+                  Terugbel
+                  {sollicitatieTerugbelAt(current)
+                    ? ` · ${formatDateTimeNl(sollicitatieTerugbelAt(current)!.toISOString())}`
+                    : ""}
+                  {isSollicitatieTerugbelDue(current) ? " · nu" : ""}
+                </span>
+              ) : pogingen > 0 ||
+                normalizeSollicitatieStatus(current.status) === "geen_contact" ? (
                 <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
                   {sollicitatieGeenContactLabel(pogingen)}
                 </span>
@@ -368,6 +480,14 @@ export function RecruitmentBelPanel({
                 </span>
               ) : null}
             </div>
+            {current.terugbel_notitie?.trim() ? (
+              <p className="mt-2 text-sm text-muted">
+                Terugbelnotitie:{" "}
+                <span className="font-medium text-ink">
+                  {current.terugbel_notitie.trim()}
+                </span>
+              </p>
+            ) : null}
 
             <h2 className="mt-3 font-display text-2xl font-semibold text-ink sm:text-3xl">
               <button
@@ -481,18 +601,63 @@ export function RecruitmentBelPanel({
                 disabled={busy}
                 onClick={() => {
                   setNextMode(true);
+                  setTerugbelMode(false);
                   setError(null);
                 }}
                 className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-14 sm:text-base"
               >
                 Volgende
               </button>
+            ) : terugbelMode ? (
+              <div className="space-y-2 rounded-2xl border border-[#1D4ED8]/25 bg-white p-4">
+                <p className="text-sm font-semibold text-ink">
+                  Terugbelafspraak (sollicitatie)
+                </p>
+                <p className="text-xs text-muted">
+                  Alleen in recruitment-belqueue — komt niet bij sales-bellers.
+                </p>
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Wanneer terugbellen
+                  <input
+                    type="datetime-local"
+                    value={terugbelAtLocal}
+                    onChange={(e) => setTerugbelAtLocal(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  Notitie (optioneel)
+                  <textarea
+                    value={terugbelNotitie}
+                    onChange={(e) => setTerugbelNotitie(e.target.value)}
+                    rows={2}
+                    placeholder="Bijv. bel na 17:00 / belt zelf terug…"
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy || !terugbelAtLocal}
+                  onClick={() => void markTerugbelafspraak()}
+                  className="flex min-h-12 w-full items-center justify-center bg-[#1D4ED8] px-4 text-sm font-semibold text-white hover:bg-[#1E40AF] disabled:opacity-60"
+                >
+                  Terugbel opslaan
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setTerugbelMode(false)}
+                  className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
+                >
+                  Terug
+                </button>
+              </div>
             ) : (
               <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
                 <p className="text-sm font-semibold text-ink">Kies de status</p>
                 <p className="text-xs text-muted">
                   Afboeken → volgende. Wel bereikt → eerst gesprek plannen,
-                  daarna pas volgende.
+                  daarna pas volgende. Terugbel blijft bij recruitment.
                 </p>
                 <button
                   type="button"
@@ -506,6 +671,27 @@ export function RecruitmentBelPanel({
                     : nextPoging === 1 || nextPoging === 3
                       ? " + mail"
                       : ""}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setTerugbelMode(true);
+                    setTerugbelAtLocal(defaultTerugbelLocal());
+                    setTerugbelNotitie("");
+                    setError(null);
+                  }}
+                  className="flex min-h-12 w-full items-center justify-center border border-[#1D4ED8]/35 bg-[#EFF6FF] px-4 text-sm font-semibold text-[#1D4ED8] hover:bg-[#DBEAFE] disabled:opacity-60"
+                >
+                  Terugbelafspraak
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void markGeenInteresse()}
+                  className="flex min-h-11 w-full items-center justify-center border border-line bg-[#F3F4F6] px-4 text-sm font-semibold text-[#4B5563] hover:bg-[#E5E7EB] disabled:opacity-60"
+                >
+                  Geen interesse
                 </button>
                 <button
                   type="button"

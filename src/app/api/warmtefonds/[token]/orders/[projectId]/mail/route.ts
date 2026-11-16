@@ -6,6 +6,7 @@ import { INFO_REPLY_TO } from "@/lib/email/adviseur-reply-to";
 import { klantContactEmail } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
+import { WF_KLANTMAILS_ENABLED } from "@/lib/warmtefonds-automatisering";
 import {
   isWarmtefondsPortalProject,
   resolveWarmtefondsOperator,
@@ -27,6 +28,16 @@ export async function POST(
 ) {
   const { token, projectId } = await ctx.params;
   try {
+    if (!WF_KLANTMAILS_ENABLED) {
+      return NextResponse.json(
+        {
+          error:
+            "Klantmails vanuit het Warmtefonds-portaal zijn tijdelijk uitgeschakeld.",
+          sent: false,
+        },
+        { status: 503 }
+      );
+    }
     const sb = getSupabaseAdmin();
     const operator = await resolveWarmtefondsOperator(sb, token);
     if (!operator) {

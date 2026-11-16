@@ -1204,7 +1204,7 @@ export function WarmtefondsOrderDetailPage() {
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-y-auto px-5 py-6">
             <p className="mb-5 text-sm text-muted">
-              Kies datum en tijd. De klant krijgt een bevestiging per e-mail.
+              Kies datum en tijd. (Klantmails zijn tijdelijk uitgeschakeld.)
             </p>
             <WarmtefondsAfspraakForm
               token={token}

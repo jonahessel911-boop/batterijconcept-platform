@@ -116,11 +116,16 @@ export function RecruitmentTrainingenBoard({
     void load();
   }, [load]);
 
+  /** Te trainen: gesprek gehad, of aangenomen-training zonder moment (nog sleepbaar). */
   const pool = useMemo(
     () =>
-      kandidaten.filter(
-        (k) => normalizeSollicitatieStatus(k.status) === "gesprek_gehad"
-      ),
+      kandidaten.filter((k) => {
+        const st = normalizeSollicitatieStatus(k.status);
+        if (k.training_moment_id) return false;
+        return (
+          st === "gesprek_gehad" || st === "aangenomen_training_gepland"
+        );
+      }),
     [kandidaten]
   );
 
@@ -176,7 +181,7 @@ export function RecruitmentTrainingenBoard({
     }
   }
 
-  /** Haal van training af → terug naar «Te trainen». */
+  /** Haal van training af → terug naar «Te trainen» (aangenomen, nog geen moment). */
   async function removeFromTraining(sollicitatieId: string) {
     const current = kandidaten.find((k) => k.id === sollicitatieId);
     if (!current?.training_moment_id) {
@@ -190,9 +195,9 @@ export function RecruitmentTrainingenBoard({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          status: "gesprek_gehad",
+          status: "aangenomen_training_gepland",
           training_moment_id: null,
-          notitie_append: "Training geannuleerd",
+          notitie_append: "Training geannuleerd — terug naar Te trainen",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -322,7 +327,7 @@ export function RecruitmentTrainingenBoard({
               <p className="px-1 py-8 text-center text-sm text-muted">
                 {overPool && draggingFromTraining
                   ? "Laat hier los om te annuleren"
-                  : "Niemand met status «Gesprek gehad»"}
+                  : "Niemand te trainen — zet via Deadlines «Aangenomen training»"}
               </p>
             ) : (
               <ul className="space-y-2">

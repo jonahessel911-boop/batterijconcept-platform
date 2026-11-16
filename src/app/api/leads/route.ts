@@ -62,6 +62,8 @@ export async function POST(req: NextRequest) {
     straat?: string;
     plaats?: string;
     adviseur_id?: string | null;
+    /** Handmatig: referral ja/nee */
+    referral?: boolean;
   };
   try {
     body = await req.json();
@@ -98,6 +100,7 @@ export async function POST(req: NextRequest) {
       plaats: body.plaats?.trim() || null,
     });
 
+    const isReferral = body.referral === true;
     const base = {
       lead_number: leadNumber as string,
       naam,
@@ -108,7 +111,7 @@ export async function POST(req: NextRequest) {
       toevoeging,
       straat: enriched.straat,
       plaats: enriched.plaats,
-      bron: "crm",
+      bron: isReferral ? "referral" : "crm",
       status: "nieuw" as const,
       prioriteit: "normaal" as const,
     };

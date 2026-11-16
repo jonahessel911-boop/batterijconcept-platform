@@ -171,6 +171,66 @@ export function ProjectStatusSelect({
     setLocalStatus(next);
     setOpen(false);
     try {
+      // Na bedenktijd: status + netto-annuleringsfactuur + direct versturen.
+      if (
+        next === "annulering" &&
+        opts?.annulering &&
+        !opts.annulering.binnenBedenktijd
+      ) {
+        const facRes = await fetch(
+          `/api/projecten/${project.id}/annuleringsfactuur?send=1`,
+          { method: "POST" }
+        );
+        const facData = (await facRes.json().catch(() => ({}))) as {
+          error?: string;
+          factuur?: { factuur_nummer?: string } | null;
+          sent?: boolean;
+          sendError?: string | null;
+          message?: string;
+        };
+        if (!facRes.ok) {
+          throw new Error(facData.error || "Annuleringsfactuur mislukt");
+        }
+        const updated: Project = {
+          ...project,
+          status: "annulering",
+          annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+          hold_sales_deadline_at: null,
+        };
+        if (facData.factuur) {
+          setNotice(
+            facData.sent
+              ? `Annuleringsfactuur ${facData.factuur.factuur_nummer} verstuurd.`
+              : `Annuleringsfactuur ${facData.factuur.factuur_nummer} aangemaakt.`
+          );
+          if (facData.sendError) {
+            setError(`Factuurmail mislukt: ${facData.sendError}`);
+          }
+        } else if (facData.message) {
+          setNotice(facData.message);
+        }
+        if (opts.annulering.stuurMail) {
+          const mailRes = await fetch(
+            `/api/projecten/${project.id}/annuleringsmail`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ binnenBedenktijd: false }),
+            }
+          );
+          if (!mailRes.ok) {
+            const mailData = await mailRes.json().catch(() => ({}));
+            setError(
+              (mailData as { error?: string }).error ||
+                "Annuleringsmail mislukt"
+            );
+          }
+        }
+        onUpdated?.(updated);
+        setAnnuleringModal(false);
+        return;
+      }
+
       const body: {
         status: ProjectStatus;
         backoffice_notitie?: string | null;

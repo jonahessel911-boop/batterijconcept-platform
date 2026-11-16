@@ -2,9 +2,19 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowUpRight,
+  Mail,
+  RefreshCw,
+  Reply,
+  Search,
+  Trash2,
+  User,
+} from "lucide-react";
 import { useCrmSession } from "@/hooks/useCrmSession";
+import { Button } from "@/components/ui/button";
 import { formatDateTimeNl } from "@/lib/format";
-import { afspraakStatusLabel, leadStatusLabel, statusTone } from "@/lib/labels";
+import { afspraakStatusLabel, leadStatusLabel } from "@/lib/labels";
 import {
   afspraakSoortLabel,
   normalizeAfspraakSoort,
@@ -13,7 +23,6 @@ import { normalizeReplySubject } from "@/lib/inbox-ai";
 import {
   INBOX_ACTION_LABEL,
   INBOX_FOLDERS,
-  applyInboxBooking,
   extractImageUrlsFromHtml,
   extractInboxFacts,
   type InboxExtract,
@@ -23,10 +32,17 @@ import {
   mailSuggestsGeenInteresse,
   templatesForFolder,
   unreadCount,
-  type InboxBookFolder,
   type InboxFolderId,
   type InboxMail,
 } from "@/lib/inbox";
+import {
+  buildMailConversations,
+  isOutboundMail,
+  normMailSubject,
+  previewMailText,
+  shortMailDate,
+} from "@/lib/mail-conversations";
+import { cn } from "@/lib/utils";
 import type { AfspraakStatus, LeadStatus } from "@/types/database";
 
 type MatchedLead = {
@@ -151,41 +167,6 @@ function initials(naam: string | null | undefined): string {
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
   return `${parts[0]!.charAt(0)}${parts[parts.length - 1]!.charAt(0)}`.toUpperCase();
-}
-
-function shortWhen(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) {
-    return d.toLocaleTimeString("nl-NL", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
-  return d.toLocaleDateString("nl-NL", { day: "2-digit", month: "short" });
-}
-
-function Avatar({
-  name,
-  size = "md",
-}: {
-  name: string | null | undefined;
-  size?: "sm" | "md" | "lg";
-}) {
-  const dim =
-    size === "sm" ? "h-8 w-8 text-[10px]" : size === "lg" ? "h-11 w-11 text-sm" : "h-9 w-9 text-xs";
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center justify-center rounded-full bg-green-soft font-semibold text-green-dark ${dim}`}
-    >
-      {initials(name)}
-    </span>
-  );
 }
 
 function AiMark({ className }: { className?: string }) {
@@ -373,6 +354,93 @@ function afspraakWanneer(iso: string): {
   };
 }
 
+function mailAsksAfspraakWijziging(mail: InboxMail | null): boolean {
+  if (!mail) return false;
+  if (mail.folder === "afzegging_afspraak") return true;
+  if (mail.aiEffects?.cancelAfspraak) return true;
+  const t = `${mail.subject}\n${mail.bodyText}\n${mail.aiSummary || ""}`.toLowerCase();
+  return (
+    /(afspraak|bezoek|huisbezoek).{0,80}(cancel|annul|afzeg|verzet|verplaats|anders)/.test(
+      t
+    ) ||
+    /\b(annuleren|afzeggen|verzetten|verplaatsen)\b/.test(t)
+  );
+}
+
+/** Splits nieuw bericht van geciteerde thread — makkelijker lezen. */
+function splitMailBody(raw: string): { main: string; quoted: string | null } {
+  const text = raw.replace(/\r\n/g, "\n").trim();
+  if (!text) return { main: "(geen tekst)", quoted: null };
+  const patterns = [
+    /\nOn .+ wrote:\s*\n/i,
+    /\nOp .+ schreef .+:\s*\n/i,
+    /\nFrom:\s+.+\nSent:\s+/i,
+    /\nVan:\s+.+\nVerzonden:\s+/i,
+    /\n-{2,}\s*Original Message\s*-{2,}/i,
+    /\n_{5,}\s*\n/,
+  ];
+  let cut = -1;
+  for (const re of patterns) {
+    const m = re.exec(text);
+    if (m && (cut < 0 || m.index < cut)) cut = m.index;
+  }
+  // Geciteerde regels vanaf eerste block met > 
+  if (cut < 0) {
+    const lines = text.split("\n");
+    const qi = lines.findIndex(
+      (l, i) => i > 0 && /^>/.test(l.trim()) && lines.slice(i, i + 3).every((x) => !x.trim() || /^>/.test(x.trim()) || /schrijft?:/i.test(x))
+    );
+    if (qi > 2) cut = lines.slice(0, qi).join("\n").length;
+  }
+  if (cut <= 0 || cut >= text.length - 20) {
+    return { main: text, quoted: null };
+  }
+  const main = text.slice(0, cut).trim();
+  const quoted = text.slice(cut).trim();
+  if (main.length < 8) return { main: text, quoted: null };
+  return { main, quoted: quoted || null };
+}
+
+function softenLongUrls(text: string) {
+  return text.replace(/https?:\/\/[^\s]+/g, (url) => {
+    try {
+      const u = new URL(url);
+      const path = u.pathname.length > 24 ? `${u.pathname.slice(0, 22)}…` : u.pathname;
+      return `${u.host}${path}`;
+    } catch {
+      return url.length > 48 ? `${url.slice(0, 46)}…` : url;
+    }
+  });
+}
+
+function MailBodyReadable({ text }: { text: string }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const { main, quoted } = useMemo(() => splitMailBody(text), [text]);
+  return (
+    <div className="mt-3">
+      <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.55] text-[#1D1D1F]">
+        {softenLongUrls(main)}
+      </div>
+      {quoted ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setShowQuoted((v) => !v)}
+            className="text-[12px] font-semibold text-[#007AFF] hover:underline"
+          >
+            {showQuoted ? "Verberg eerdere berichten" : "Toon eerdere berichten"}
+          </button>
+          {showQuoted ? (
+            <div className="mt-2 whitespace-pre-wrap break-words border-l-2 border-black/10 pl-3 text-[13px] leading-relaxed text-[#6E6E73]">
+              {softenLongUrls(quoted)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AfspraakActieKaart({
   afspraak,
   leadId,
@@ -388,7 +456,8 @@ function AfspraakActieKaart({
 }) {
   const wanneer = afspraakWanneer(afspraak.start_at);
   const cancelled = afspraak.status === "geannuleerd";
-  const open = afspraak.status !== "geannuleerd" && afspraak.status !== "voltooid";
+  const open =
+    afspraak.status !== "geannuleerd" && afspraak.status !== "voltooid";
   const soort =
     afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)] || "Afspraak";
   const status =
@@ -396,41 +465,49 @@ function AfspraakActieKaart({
 
   return (
     <div
-      className={
+      className={cn(
+        "w-full overflow-hidden rounded-2xl border shadow-sm",
         cancelled
-          ? "rounded-xl border border-[#C62828]/25 bg-[#FDECEA] p-3"
-          : "rounded-xl border border-line bg-white p-3"
-      }
+          ? "border-[#FF3B30]/25 bg-[#FFF5F5]"
+          : canCancel
+            ? "border-[#FF9500]/30 bg-[#FFF9F0]"
+            : "border-black/8 bg-[#F2F2F7]"
+      )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            {wanneer.weekdag}
+      <div className="flex items-start gap-4 px-4 py-3.5">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+            {wanneer.weekdag} · actie
           </p>
-          <p className="mt-0.5 text-base font-semibold text-ink">
+          <p className="mt-1 text-[20px] font-semibold tracking-tight text-[#1D1D1F]">
             {wanneer.datum}
+            <span className="ml-2 tabular-nums text-[#007AFF]">
+              {wanneer.tijd}
+            </span>
           </p>
-          <p className="text-2xl font-semibold tabular-nums tracking-tight text-ink">
-            {wanneer.tijd}
+          <p className="mt-1 text-[13px] text-[#6E6E73]">
+            {soort}
+            {afspraak.adviseurNaam ? ` · ${afspraak.adviseurNaam}` : ""}
           </p>
         </div>
         <span
-          className={`shrink-0 px-2 py-1 text-[11px] font-semibold ${statusTone("afspraak", afspraak.status)}`}
+          className={cn(
+            "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+            cancelled
+              ? "bg-[#FF3B30]/15 text-[#C62828]"
+              : "bg-[#34C759]/15 text-[#1B7A3D]"
+          )}
         >
           {status}
         </span>
       </div>
-      <p className="mt-2 text-xs text-muted">
-        {soort}
-        {afspraak.adviseurNaam ? ` · ${afspraak.adviseurNaam}` : ""}
-      </p>
-      <div className="mt-3 flex flex-col gap-2">
+      <div className="flex flex-col gap-2 border-t border-black/5 bg-white/70 px-4 py-3 sm:flex-row">
         {canCancel && open ? (
           <button
             type="button"
             disabled={busy}
             onClick={onCancel}
-            className="w-full bg-[#C45A12] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#a3480e] disabled:opacity-50"
+            className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-[#FF9500] px-4 text-[13px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
           >
             {busy ? "Bezig…" : "Afspraak afzeggen"}
           </button>
@@ -438,14 +515,17 @@ function AfspraakActieKaart({
         {cancelled && leadId ? (
           <Link
             href={`/leads/${leadId}?plan=huisbezoek`}
-            className="inline-flex w-full items-center justify-center bg-[#0D5C32] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#0a4626]"
+            className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-[#007AFF] px-4 text-[13px] font-semibold text-white hover:bg-[#0066D6]"
           >
             Opnieuw inplannen
           </Link>
         ) : null}
         <Link
           href={`/?tab=agenda&afspraak=${afspraak.id}`}
-          className="inline-flex w-full items-center justify-center border border-line bg-white px-3 py-2.5 text-xs font-semibold text-ink hover:bg-wash"
+          className={cn(
+            "inline-flex h-10 items-center justify-center rounded-xl border border-black/10 bg-white px-4 text-[13px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03]",
+            canCancel && open ? "sm:flex-none" : "flex-1"
+          )}
         >
           Open in agenda
         </Link>
@@ -460,7 +540,7 @@ export function InboxPanel() {
   const [loading, setLoading] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
   const [folder, setFolder] = useState<InboxFolderId>("inbox");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [replySubject, setReplySubject] = useState("");
@@ -469,7 +549,6 @@ export function InboxPanel() {
   const replyToTouched = useRef(false);
   const [templateId, setTemplateId] = useState("");
   const [actionMsg, setActionMsg] = useState<string | null>(null);
-  const [classifyBusyId, setClassifyBusyId] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [matchedLead, setMatchedLead] = useState<MatchedLead | null>(null);
@@ -507,10 +586,89 @@ export function InboxPanel() {
     void loadInbox();
   }, [loadInbox]);
 
-  const selected = useMemo(
-    () => mails.find((m) => m.id === selectedId) || null,
-    [mails, selectedId]
+  const conversations = useMemo(
+    () => buildMailConversations(mails),
+    [mails]
   );
+
+  const listMailIds = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const matchQ = (m: InboxMail) => {
+      if (!needle) return true;
+      const hay = [
+        m.fromName,
+        m.fromEmail,
+        m.subject,
+        m.bodyText,
+        m.aiSummary || "",
+        m.leadNaam || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(needle);
+    };
+
+    if (needle) {
+      return new Set(mails.filter(matchQ).map((m) => m.id));
+    }
+
+    const repliedThreads = new Set(
+      mails
+        .filter((m) => m.folder === "verzonden")
+        .flatMap((m) =>
+          [m.threadId, m.messageId].filter(
+            (x): x is string => Boolean(x && String(x).trim())
+          )
+        )
+    );
+    return new Set(
+      mails
+        .filter((m) => mailInFolder(m, folder))
+        .filter((m) => {
+          if (folder === "archief" || folder === "verzonden") return true;
+          const tid = m.threadId || m.messageId || m.id;
+          if (tid && repliedThreads.has(tid)) return false;
+          return true;
+        })
+        .map((m) => m.id)
+    );
+  }, [mails, folder, q]);
+
+  const filteredConversations = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return conversations.filter((c) => {
+      if (!c.messages.some((m) => listMailIds.has(m.id))) return false;
+      if (!needle) return true;
+      return [
+        c.peerName,
+        c.peerEmail,
+        c.subject,
+        ...c.messages.map(
+          (m) => `${m.fromName} ${m.bodyText} ${m.subject} ${m.aiSummary || ""}`
+        ),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [conversations, listMailIds, q]);
+
+  useEffect(() => {
+    if (!filteredConversations.length) {
+      setSelectedKey(null);
+      return;
+    }
+    setSelectedKey((prev) => {
+      if (prev && filteredConversations.some((c) => c.key === prev)) return prev;
+      return filteredConversations[0]!.key;
+    });
+  }, [filteredConversations]);
+
+  const selectedConversation =
+    filteredConversations.find((c) => c.key === selectedKey) || null;
+
+  const selected = selectedConversation?.replyTarget || null;
+
   const extracted = useMemo(
     () => (selected ? extractInboxFacts(selected) : null),
     [selected]
@@ -712,57 +870,6 @@ export function InboxPanel() {
     };
   }, [selected?.id, selected?.fromEmail, selected?.fromName, selected?.leadId, selected?.bodyText]);
 
-  const list = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const matchQ = (m: InboxMail) => {
-      if (!needle) return true;
-      const hay = [
-        m.fromName,
-        m.fromEmail,
-        m.subject,
-        m.bodyText,
-        m.aiSummary || "",
-        m.leadNaam || "",
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(needle);
-    };
-
-    // Zoeken: alle mails (alle mappen, archief, beantwoord, verwijderd)
-    if (needle) {
-      return mails
-        .filter(matchQ)
-        .sort(
-          (a, b) =>
-            new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
-        );
-    }
-
-    // Threads waar al een uitgaand antwoord op staat → niet in open lijst
-    const repliedThreads = new Set(
-      mails
-        .filter((m) => m.folder === "verzonden")
-        .flatMap((m) =>
-          [m.threadId, m.messageId].filter(
-            (x): x is string => Boolean(x && String(x).trim())
-          )
-        )
-    );
-    return mails
-      .filter((m) => mailInFolder(m, folder))
-      .filter((m) => {
-        if (folder === "archief" || folder === "verzonden") return true;
-        const tid = m.threadId || m.messageId || m.id;
-        if (tid && repliedThreads.has(tid)) return false;
-        return true;
-      })
-      .sort(
-        (a, b) =>
-          new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
-      );
-  }, [mails, folder, q]);
-
   const folderCounts = useMemo(() => {
     const map = {} as Record<InboxFolderId, number>;
     for (const f of INBOX_FOLDERS) {
@@ -815,130 +922,24 @@ export function InboxPanel() {
     }
   }
 
-  const bookMail = useCallback(async (mail: InboxMail) => {
-    setClassifyBusyId(mail.id);
+  function selectConversation(key: string) {
+    setSelectedKey(key);
     setActionMsg(null);
-    try {
-      const res = await fetch("/api/inbox/classify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subject: mail.subject,
-          bodyText: mail.bodyText,
-          fromName: mail.fromName,
-          fromEmail: mail.fromEmail,
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        folder?: InboxFolderId;
-        functionName?: string;
-        summary?: string;
-        confidence?: number;
-        effects?: InboxMail["aiEffects"];
-        source?: string;
-      };
-      if (!res.ok) throw new Error(data.error || "Boeken mislukt");
-      if (!data.folder) throw new Error("Geen map teruggekregen");
+    setComposeOpen(true);
+  }
 
-      const booked = applyInboxBooking(mail, {
-        folder: data.folder as InboxBookFolder,
-        summary: data.summary || "",
-        confidence: data.confidence ?? 0.5,
-        functionName: data.functionName,
-        effects: data.effects || undefined,
-      });
-
-      setMails((prev) => prev.map((m) => (m.id === mail.id ? booked : m)));
-
-      await fetch(`/api/inbox/${encodeURIComponent(mail.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          folder: booked.folder,
-          aiSummary: booked.aiSummary,
-          aiReason: booked.aiReason,
-          aiConfidence: booked.aiConfidence,
-          aiClassifiedAt: booked.aiClassifiedAt,
-          aiFunction: data.functionName || null,
-          aiEffects: booked.aiEffects,
-        }),
-      }).catch(() => undefined);
-
-      const folderLabel =
-        INBOX_FOLDERS.find((f) => f.id === booked.folder)?.label ||
-        booked.folder;
-      setActionMsg(
-        `Geboekt → ${folderLabel}${
-          data.source === "heuristic" ? " · fallback" : ""
-        }`
-      );
-      return booked;
-    } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : "Boeken mislukt");
-      return null;
-    } finally {
-      setClassifyBusyId(null);
-    }
-  }, []);
-
-  function selectMail(mail: InboxMail) {
-    setSelectedId(mail.id);
-    setActionMsg(null);
-    // Compose altijd klaar (chat-stijl), met standaard Beste… / groet
+  function prepareReply(mail: InboxMail) {
     const agent = session?.naam || "BatterijConcept";
-    const klant = mail.leadNaam || mail.fromName || "klant";
+    const klant =
+      matchedLead?.naam || mail.leadNaam || mail.fromName || "klant";
     setComposeOpen(true);
     setTemplateId("");
     replyToTouched.current = false;
-    setReplyToEmail((mail.fromEmail || "").trim());
+    setReplyToEmail(
+      (matchedLead?.email || mail.fromEmail || "").trim()
+    );
     setReplySubject(normalizeReplySubject(mail.subject));
     setReplyBody(defaultReplyBody(klant, agent));
-    if (mail.status === "nieuw") {
-      setMails((prev) =>
-        prev.map((m) =>
-          m.id === mail.id ? { ...m, status: "gelezen" as const } : m
-        )
-      );
-      void fetch(`/api/inbox/${encodeURIComponent(mail.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "gelezen" }),
-      }).catch(() => undefined);
-    }
-  }
-
-  function moveToFolder(mailId: string, nextFolder: InboxFolderId) {
-    const nextStatus =
-      nextFolder === "archief" ? ("gearchiveerd" as const) : undefined;
-    setMails((prev) =>
-      prev.map((m) =>
-        m.id === mailId
-          ? {
-              ...m,
-              folder: nextFolder,
-              status: nextStatus || m.status,
-            }
-          : m
-      )
-    );
-    if (nextFolder === "archief" && selectedId === mailId) {
-      setSelectedId(null);
-      setComposeOpen(false);
-    }
-    setActionMsg(
-      `Verplaatst naar ${
-        INBOX_FOLDERS.find((f) => f.id === nextFolder)?.label || nextFolder
-      }`
-    );
-    void fetch(`/api/inbox/${encodeURIComponent(mailId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        folder: nextFolder,
-        ...(nextStatus ? { status: nextStatus } : {}),
-      }),
-    }).catch(() => undefined);
   }
 
   async function cancelLinkedAfspraak() {
@@ -976,7 +977,7 @@ export function InboxPanel() {
             : m
         )
       );
-      setSelectedId(null);
+      setSelectedKey(null);
       setComposeOpen(false);
       void fetch(`/api/inbox/${encodeURIComponent(mailId)}`, {
         method: "PATCH",
@@ -1084,8 +1085,8 @@ export function InboxPanel() {
           : m
       )
     );
-    if (selectedId === mailId) {
-      setSelectedId(null);
+    if (selected?.id === mailId) {
+      setSelectedKey(null);
       setComposeOpen(false);
       setReplyBody("");
       setReplySubject("");
@@ -1110,9 +1111,53 @@ export function InboxPanel() {
     const t = templatesForFolder(selected.folder).find((x) => x.id === id);
     setTemplateId(id);
     if (!t) return;
+    setComposeOpen(true);
     setReplySubject(t.subject(selected));
     setReplyBody(t.body(selected));
   }
+
+  // Markeer ongelezen + zet antwoord klaar (altijd open composer)
+  useEffect(() => {
+    if (!selectedConversation) {
+      setComposeOpen(false);
+      return;
+    }
+    const mail = selectedConversation.replyTarget;
+    const agent = session?.naam || "BatterijConcept";
+    const klant =
+      matchedLead?.naam || mail.leadNaam || mail.fromName || "klant";
+    replyToTouched.current = false;
+    setReplyToEmail(
+      (
+        matchedLead?.email ||
+        (!isOutboundMail(mail) ? mail.fromEmail : selectedConversation.peerEmail) ||
+        mail.fromEmail ||
+        ""
+      ).trim()
+    );
+    setReplySubject(normalizeReplySubject(selectedConversation.subject));
+    setReplyBody(defaultReplyBody(klant, agent));
+    setTemplateId("");
+    setComposeOpen(true);
+
+    const unreadIds = selectedConversation.messages
+      .filter((m) => m.status === "nieuw" && !isOutboundMail(m))
+      .map((m) => m.id);
+    if (!unreadIds.length) return;
+    setMails((prev) =>
+      prev.map((m) =>
+        unreadIds.includes(m.id) ? { ...m, status: "gelezen" as const } : m
+      )
+    );
+    for (const id of unreadIds) {
+      void fetch(`/api/inbox/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "gelezen" }),
+      }).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- alleen bij wissel conversatie
+  }, [selectedConversation?.key]);
 
   async function draftReply(mail: InboxMail) {
     setComposeOpen(true);
@@ -1212,7 +1257,7 @@ export function InboxPanel() {
           threadId: data.mail.threadId || threadKey,
         });
       });
-      setSelectedId(null);
+      setSelectedKey(null);
       setComposeOpen(false);
       setTemplateId("");
       setReplySubject("");
@@ -1225,11 +1270,6 @@ export function InboxPanel() {
     }
   }
 
-  const templates = selected
-    ? templatesForFolder(selected.folder)
-    : templatesForFolder(folder);
-
-  // Als lead binnenkomt na selectie: groet bijwerken als nog standaard leeg
   useEffect(() => {
     if (!selected || !composeOpen || !matchedLead?.naam) return;
     setReplyBody((prev) => {
@@ -1248,710 +1288,620 @@ export function InboxPanel() {
     if (crm) setReplyToEmail(crm);
   }, [matchedLead?.id, matchedLead?.email, selected?.id]);
 
-  const atts = selected?.attachments || [];
-  const fileAtts = atts.filter((a) => !isInboxImageAttachment(a));
-  const photos = selected ? collectMailPhotos(selected) : [];
+  const threadMessages = selectedConversation?.messages || [];
+  const templates = selected
+    ? templatesForFolder(selected.folder)
+    : templatesForFolder(folder);
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden border-t border-line bg-white lg:h-[calc(100dvh-3.75rem)]">
-      <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2 sm:px-4">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-ink">Inbox</p>
-          <p className="truncate text-[11px] text-muted">
-            info@ · mails worden automatisch in de juiste map gezet
-            {loading ? " · Laden…" : syncBusy ? " · Sync…" : ""}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
+    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-1 flex-col overflow-hidden bg-[#F5F5F7] lg:h-[calc(100dvh-3.75rem)]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/10 bg-white/80 px-3 py-2 backdrop-blur-md sm:px-4">
+        <p className="text-[13px] font-semibold tracking-tight text-[#1D1D1F]">
+          Inbox
+        </p>
+        <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] font-medium tabular-nums text-[#6E6E73]">
+          {filteredConversations.length}
+        </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-[13px]"
+            disabled={!selected}
+            onClick={() => {
+              if (!selected) return;
+              prepareReply(selected);
+            }}
+          >
+            <Reply className="size-3.5" />
+            Beantwoorden
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-[13px]"
+            disabled={loading || syncBusy}
             onClick={() => void loadInbox()}
-            disabled={loading || syncBusy}
-            className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
             Vernieuwen
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            onClick={() => void syncImap()}
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-[13px]"
             disabled={loading || syncBusy}
-            className="bg-green px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+            onClick={() => void syncImap()}
           >
+            <RefreshCw className={cn("size-3.5", syncBusy && "animate-spin")} />
             {syncBusy ? "Sync…" : "Sync IMAP"}
-          </button>
+          </Button>
         </div>
       </div>
+
       {actionMsg ? (
-        <p className="border-b border-line bg-wash px-4 py-2 text-xs text-ink">
+        <div className="shrink-0 border-b border-black/5 bg-white px-4 py-2 text-[13px] text-[#1D1D1F]">
           {actionMsg}
-        </p>
+        </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)_260px]">
-        {/* Conversaties + mappen */}
-        <section className="flex min-h-0 flex-col border-b border-line lg:border-b-0 lg:border-r">
-          <div className="flex gap-1 overflow-x-auto border-b border-line px-2 py-2">
-            {INBOX_FOLDERS.map((f) => {
-              const active = folder === f.id;
-              const n = folderCounts[f.id];
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => {
-                    setFolder(f.id);
-                    setSelectedId(null);
-                    setComposeOpen(false);
-                  }}
-                  title={f.hint}
-                  className={[
-                    "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-                    active
-                      ? "bg-green text-white"
-                      : "bg-wash text-muted hover:text-ink",
-                  ].join(" ")}
-                >
-                  {f.label}
-                  {n > 0 ? ` · ${n}` : ""}
-                </button>
-              );
-            })}
-          </div>
-          <div className="border-b border-line px-3 py-2">
-            <input
-              type="search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Zoek alle mails…"
-              className="w-full rounded-md border border-line bg-wash px-3 py-2 text-sm text-ink outline-none focus:border-green focus:bg-white"
-            />
-            {q.trim() ? (
-              <p className="mt-1.5 text-[10px] text-muted">
-                Zoekt in alle mappen, archief en verwijderd · {list.length} resultaat
-                {list.length === 1 ? "" : "en"}
-              </p>
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {list.length === 0 ? (
-              <p className="px-4 py-10 text-center text-sm text-muted">
-                {q.trim() ? "Geen mails gevonden." : "Geen mails in deze map."}
-              </p>
-            ) : (
-              list.map((m) => {
-                const active = m.id === selectedId;
-                const unread = m.status === "nieuw";
-                const searching = Boolean(q.trim());
-                const folderLabel =
-                  INBOX_FOLDERS.find((f) => f.id === m.folder)?.label || m.folder;
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
+        <aside className="flex min-h-0 flex-col border-b border-black/10 bg-white lg:border-b-0 lg:border-r">
+          <div className="shrink-0 space-y-2 border-b border-black/5 px-3 py-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-[#8E8E93]" />
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Zoek"
+                className="h-8 w-full rounded-lg border-0 bg-[#F2F2F7] pr-3 pl-8 text-[13px] text-[#1D1D1F] outline-none placeholder:text-[#8E8E93] focus:ring-2 focus:ring-[#007AFF]/30"
+              />
+            </div>
+            <div className="flex gap-1 overflow-x-auto pb-0.5">
+              {INBOX_FOLDERS.map((f) => {
+                const active = folder === f.id;
+                const n = folderCounts[f.id];
                 return (
                   <button
-                    key={m.id}
+                    key={f.id}
                     type="button"
-                    onClick={() => selectMail(m)}
-                    className={[
-                      "flex w-full gap-3 border-b border-line/60 px-3 py-3 text-left transition-colors",
-                      active ? "bg-green-soft/60" : "hover:bg-wash",
-                    ].join(" ")}
+                    title={f.hint}
+                    onClick={() => {
+                      setFolder(f.id);
+                    }}
+                    className={cn(
+                      "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold transition",
+                      active
+                        ? "bg-[#007AFF] text-white"
+                        : "bg-[#F2F2F7] text-[#6E6E73] hover:text-[#1D1D1F]"
+                    )}
                   >
-                    <Avatar name={m.fromName || m.fromEmail} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p
-                          className={[
-                            "truncate text-sm",
-                            unread ? "font-semibold text-ink" : "font-medium text-ink",
-                          ].join(" ")}
-                        >
-                          {m.fromName || m.fromEmail}
-                        </p>
-                        <span className="shrink-0 text-[10px] tabular-nums text-muted">
-                          {shortWhen(m.receivedAt)}
-                        </span>
-                      </div>
-                      <p
-                        className={[
-                          "mt-0.5 truncate text-[13px]",
-                          unread ? "font-medium text-ink" : "text-muted",
-                        ].join(" ")}
-                      >
-                        {m.subject}
-                      </p>
-                      <p className="mt-0.5 line-clamp-1 text-xs text-muted">
-                        {searching ? `${folderLabel} · ` : ""}
-                        {m.aiSummary ||
-                          m.bodyText.replace(/\s+/g, " ").trim() ||
-                          "—"}
-                      </p>
-                    </div>
-                    {unread ? (
-                      <span className="mt-1 inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-green px-1.5 text-[10px] font-semibold text-white">
-                        1
-                      </span>
-                    ) : null}
+                    {f.label}
+                    {n > 0 ? ` · ${n}` : ""}
                   </button>
                 );
-              })
+              })}
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-auto">
+            {loading && filteredConversations.length === 0 ? (
+              <p className="px-4 py-10 text-center text-[13px] text-[#8E8E93]">
+                Laden…
+              </p>
+            ) : filteredConversations.length === 0 ? (
+              <div className="px-4 py-14 text-center">
+                <Mail className="mx-auto mb-2 size-7 text-[#C7C7CC]" />
+                <p className="text-[13px] text-[#8E8E93]">
+                  {q.trim() ? "Geen mails gevonden" : "Geen mails in deze map"}
+                </p>
+              </div>
+            ) : (
+              <ul>
+                {filteredConversations.map((c) => {
+                  const active = selectedKey === c.key;
+                  const n = c.messages.length;
+                  const unread = c.messages.some(
+                    (m) => m.status === "nieuw" && !isOutboundMail(m)
+                  );
+                  return (
+                    <li key={c.key}>
+                      <button
+                        type="button"
+                        onClick={() => selectConversation(c.key)}
+                        className={cn(
+                          "w-full border-b border-black/[0.04] px-3 py-2.5 text-left transition",
+                          active
+                            ? "bg-[#007AFF] text-white"
+                            : "hover:bg-black/[0.03]"
+                        )}
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <p
+                            className={cn(
+                              "flex min-w-0 items-center gap-1.5 truncate text-[13px]",
+                              unread && !active
+                                ? "font-bold text-[#1D1D1F]"
+                                : "font-semibold",
+                              active ? "text-white" : "text-[#1D1D1F]"
+                            )}
+                          >
+                            {unread && !active ? (
+                              <span
+                                className="size-1.5 shrink-0 rounded-full bg-[#007AFF]"
+                                aria-hidden
+                              />
+                            ) : null}
+                            <span className="truncate">
+                              {c.replyTarget.leadNaam || c.peerName}
+                            </span>
+                            {n > 1 ? (
+                              <span
+                                className={cn(
+                                  "ml-0.5 font-normal",
+                                  active ? "text-white/75" : "text-[#8E8E93]"
+                                )}
+                              >
+                                ({n})
+                              </span>
+                            ) : null}
+                          </p>
+                          <span
+                            className={cn(
+                              "shrink-0 text-[11px] tabular-nums",
+                              active
+                                ? "text-white/80"
+                                : unread
+                                  ? "font-semibold text-[#007AFF]"
+                                  : "text-[#8E8E93]"
+                            )}
+                          >
+                            {shortMailDate(c.latest.receivedAt)}
+                          </span>
+                        </div>
+                        <p
+                          className={cn(
+                            "mt-0.5 truncate text-[12.5px]",
+                            active
+                              ? "font-medium text-white/95"
+                              : unread
+                                ? "font-semibold text-[#1D1D1F]"
+                                : "font-medium text-[#1D1D1F]"
+                          )}
+                        >
+                          {c.subject || "(geen onderwerp)"}
+                        </p>
+                        <p
+                          className={cn(
+                            "mt-0.5 truncate text-[12px]",
+                            active ? "text-white/70" : "text-[#8E8E93]"
+                          )}
+                        >
+                          {isOutboundMail(c.latest) ? "Jij: " : ""}
+                          {previewMailText(
+                            c.latest.aiSummary || c.latest.bodyText
+                          ) || "—"}
+                        </p>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
-        </section>
+        </aside>
 
-        {/* Mail + antwoord */}
-        <section className="flex min-h-[360px] flex-col border-b border-line lg:min-h-0 lg:border-b-0 lg:border-r">
-          {!selected ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted">
-              Selecteer links een mail.
+        <section className="flex min-h-0 flex-col bg-white">
+          {!selected || !selectedConversation ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 text-[#8E8E93]">
+              <Mail className="size-10 opacity-40" />
+              <p className="text-[14px]">Geen bericht geselecteerd</p>
             </div>
           ) : (
             <>
-              <header className="flex items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-6">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    {INBOX_FOLDERS.find((f) => f.id === selected.folder)?.label ||
-                      selected.folder}
-                    {selected.aiSummary ? ` · ${selected.aiSummary}` : ""}
-                    {classifyBusyId === selected.id ? " · boeken…" : ""}
-                  </p>
-                  <h2 className="mt-1 text-lg font-semibold leading-snug text-ink sm:text-xl">
-                    {selected.subject}
-                  </h2>
-                  <p className="mt-1 text-xs text-muted">
-                    {selected.fromName || selected.fromEmail}
-                    {selected.fromEmail ? ` · ${selected.fromEmail}` : ""}
-                    {" · "}
-                    {formatDateTimeNl(selected.receivedAt)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  title="Verwijderen uit mailbox"
-                  onClick={() => void deleteMail(selected.id)}
-                  className="shrink-0 border border-line px-3 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
-                >
-                  Verwijderen
-                </button>
-              </header>
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
-                {photos.length > 0 ? (
-                  <MailPhotoGallery photos={photos} mailId={selected.id} />
-                ) : null}
-
-                <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-relaxed text-ink sm:text-base">
-                  {displayBodyText(selected)}
-                </pre>
-
-                {fileAtts.length > 0 ? (
-                  <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-line pt-4">
-                    <p className="w-full text-xs font-semibold uppercase tracking-wide text-muted">
-                      Bijlagen ({fileAtts.length})
-                    </p>
-                    {fileAtts.map((a) => (
-                      <a
-                        key={a.id}
-                        href={`/api/inbox/${encodeURIComponent(selected.id)}/attachments/${encodeURIComponent(a.id)}`}
-                        className="inline-flex items-center gap-2 border border-line bg-white px-3 py-2 text-sm font-semibold text-ink hover:bg-wash"
-                      >
-                        Download {a.filename}
-                        {a.size ? (
-                          <span className="font-normal text-muted">
-                            {formatBytes(a.size)}
-                          </span>
-                        ) : null}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
-
-                {(selected.replies || []).length > 0 ? (
-                  <div className="mt-8 space-y-3 border-t border-line pt-4">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Verzonden antwoorden
-                    </p>
-                    {selected.replies!.map((r) => (
-                      <div key={r.id} className="bg-wash px-3 py-3">
-                        <p className="text-xs text-muted">
-                          {formatDateTimeNl(r.at)} · {r.subject}
-                        </p>
-                        <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-ink">
-                          {r.bodyText}
-                        </pre>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="shrink-0 border-t border-line bg-white px-4 py-4 sm:px-6">
-                <label className="mb-2 flex items-center gap-2">
-                  <span className="w-10 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Aan
-                  </span>
-                  <input
-                    type="email"
-                    value={replyToEmail}
-                    onChange={(e) => {
-                      replyToTouched.current = true;
-                      setReplyToEmail(e.target.value);
-                    }}
-                    className="min-w-0 flex-1 border border-line bg-wash px-3 py-2 text-sm text-ink outline-none focus:border-green focus:bg-white"
-                    placeholder="klant@email.nl"
-                  />
-                </label>
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={replySubject}
-                    onChange={(e) => setReplySubject(e.target.value)}
-                    className="min-w-0 flex-1 border border-line bg-wash px-3 py-2 text-sm text-ink outline-none focus:border-green focus:bg-white"
-                    placeholder="Onderwerp"
-                  />
-                  <select
-                    value={templateId}
-                    onChange={(e) => applyTemplate(e.target.value)}
-                    className="border border-line bg-white px-2 py-2 text-xs text-ink outline-none focus:border-green"
-                  >
-                    <option value="">Template…</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <textarea
-                  value={replyBody}
-                  onChange={(e) => setReplyBody(e.target.value)}
-                  rows={14}
-                  className="min-h-[220px] w-full resize-y border border-line bg-wash px-3 py-3 text-[15px] leading-relaxed text-ink outline-none focus:border-green focus:bg-white sm:min-h-[280px]"
-                  placeholder={`Beste …,\n\n\nMet vriendelijke groet,\n${session?.naam || "…"}`}
-                />
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    title="AI-concept"
-                    disabled={draftBusy}
-                    onClick={() => void draftReply(selected)}
-                    className="inline-flex h-9 w-9 items-center justify-center text-green-dark hover:bg-green-soft disabled:opacity-40"
-                  >
-                    <AiMark className="h-5 w-5" />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={sendBusy || !replyBody.trim()}
-                    onClick={() => void sendReply()}
-                    className="inline-flex h-10 items-center bg-green px-5 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                  >
-                    {sendBusy ? "Versturen…" : "Versturen"}
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </section>
-
-        {/* Info + actie rechts */}
-        <aside className="hidden min-h-0 flex-col lg:flex">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <p className="text-sm font-semibold text-ink">Info</p>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-            {!selected ? (
-              <p className="text-xs text-muted">Geen gesprek geselecteerd.</p>
-            ) : leadLookupBusy || contextBusy ? (
-              <p className="text-xs text-muted">Klant zoeken…</p>
-            ) : (
-              <div className="space-y-5">
-                <div className="flex items-center gap-3">
-                  <Avatar
-                    name={
-                      matchedLead?.naam ||
-                      selected.fromName ||
-                      selected.fromEmail
-                    }
-                    size="lg"
-                  />
+              <div className="shrink-0 border-b border-black/5 px-4 py-3 sm:px-5">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-ink">
-                      {matchedLead?.naam || selected.fromName || "Onbekend"}
-                    </p>
-                    <p className="truncate text-xs text-muted">
-                      {matchedLead?.lead_number ||
-                        (matchedLead
-                          ? "Lead gevonden"
-                          : leadCandidates.length
-                            ? "Meerdere mogelijke klanten"
-                            : "Geen lead-match")}
+                    <h2 className="truncate text-[17px] font-semibold tracking-tight text-[#1D1D1F] sm:text-[19px]">
+                      {selectedConversation.subject || "(geen onderwerp)"}
+                    </h2>
+                    <p className="mt-0.5 text-[12px] text-[#8E8E93]">
+                      {threadMessages.length} bericht
+                      {threadMessages.length === 1 ? "" : "en"} ·{" "}
+                      {selectedConversation.peerEmail || "onbekend"}
+                      {selected.aiSummary
+                        ? ` · ${selected.aiSummary}`
+                        : ""}
                     </p>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 shrink-0 text-[12px] text-[#8E8E93]"
+                    onClick={() => void deleteMail(selected.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                    Verwijderen
+                  </Button>
                 </div>
 
-                {matchedLead?.status ? (
-                  <p className="inline-flex rounded-full bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-semibold text-[#C45A12]">
-                    {leadStatusLabel[matchedLead.status as LeadStatus] ||
-                      matchedLead.status}
-                  </p>
-                ) : null}
-
-                <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Contact
-                  </p>
-                  <dl className="space-y-2.5 text-xs">
-                    <div>
-                      <dt className="text-muted">E-mail</dt>
-                      <dd className="break-all font-medium text-ink">
-                        {matchedLead?.email || selected.fromEmail || "—"}
-                      </dd>
-                      {matchedLead?.email &&
-                      selected.fromEmail &&
-                      matchedLead.email.trim().toLowerCase() !==
-                        selected.fromEmail.trim().toLowerCase() ? (
-                        <p className="mt-0.5 text-[11px] text-muted">
-                          Mail kwam van {selected.fromEmail}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div>
-                      <dt className="text-muted">Telefoon</dt>
-                      <dd className="font-medium text-ink">
-                        {matchedLead?.telefoon || "—"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted">Plaats</dt>
-                      <dd className="font-medium text-ink">
+                {matchedLead ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-[#F2F2F7] px-3 py-2.5">
+                    <User className="size-4 text-[#007AFF]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-semibold text-[#1D1D1F]">
+                        {matchedLead.naam}
+                      </p>
+                      <p className="text-[12px] text-[#8E8E93]">
                         {[
-                          [matchedLead?.postcode, matchedLead?.huisnummer]
-                            .filter(Boolean)
-                            .join(" "),
-                          matchedLead?.plaats,
+                          matchedLead.lead_number,
+                          matchedLead.plaats,
+                          matchedLead.status
+                            ? leadStatusLabel[
+                                matchedLead.status as LeadStatus
+                              ] || matchedLead.status
+                            : null,
                         ]
                           .filter(Boolean)
-                          .join(" · ") || "—"}
-                      </dd>
+                          .join(" · ") || "Lead"}
+                      </p>
                     </div>
-                    {(linkedProject?.project_nummer ||
-                      selected.projectNummer) && (
-                      <div>
-                        <dt className="text-muted">Project</dt>
-                        <dd className="font-medium text-ink">
-                          {linkedProject?.project_nummer ||
-                            selected.projectNummer}
-                        </dd>
-                      </div>
-                    )}
-                  </dl>
-                </div>
-
-                {extracted &&
-                (extracted.emails.length > 0 ||
-                  extracted.phones.length > 0 ||
-                  extracted.postcode ||
-                  extracted.plaats ||
-                  extracted.panelen ||
-                  extracted.merken.length > 0 ||
-                  extracted.huisbezoek ||
-                  extracted.afspraakAfzeggen) ? (
-                  <div className="border-t border-line pt-4">
-                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Uit de mail
-                    </p>
-                    <dl className="space-y-2 text-xs">
-                      {extracted.emails.map((email) => (
-                        <div key={email} className="flex items-center justify-between gap-2">
-                          <div>
-                            <dt className="text-muted">E-mail</dt>
-                            <dd className="font-medium text-ink">{email}</dd>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={leadLookupBusy}
-                            onClick={() => void loadKlantOp(email, email)}
-                            className="shrink-0 border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                          >
-                            Laad
-                          </button>
-                        </div>
-                      ))}
-                      {extracted.phones.map((phone) => (
-                        <div key={phone} className="flex items-center justify-between gap-2">
-                          <div>
-                            <dt className="text-muted">Telefoon</dt>
-                            <dd className="font-medium text-ink">{phone}</dd>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={leadLookupBusy}
-                            onClick={() => void loadKlantOp(phone)}
-                            className="shrink-0 border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                          >
-                            Laad
-                          </button>
-                        </div>
-                      ))}
-                      {extracted.postcode ? (
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <dt className="text-muted">Postcode</dt>
-                            <dd className="font-medium text-ink">{extracted.postcode}</dd>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={leadLookupBusy}
-                            onClick={() =>
-                              void loadKlantOp(extracted.postcode!.replace(/\s/g, ""))
-                            }
-                            className="shrink-0 border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                          >
-                            Laad
-                          </button>
-                        </div>
-                      ) : null}
-                      {extracted.plaats ? (
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <dt className="text-muted">Plaats</dt>
-                            <dd className="font-medium text-ink">{extracted.plaats}</dd>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={leadLookupBusy}
-                            onClick={() => void loadKlantOp(extracted.plaats!)}
-                            className="shrink-0 border border-line bg-white px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                          >
-                            Laad
-                          </button>
-                        </div>
-                      ) : null}
-                      {extracted.panelen ? (
-                        <div>
-                          <dt className="text-muted">Panelen</dt>
-                          <dd className="font-medium text-ink">{extracted.panelen}</dd>
-                        </div>
-                      ) : null}
-                      {extracted.merken.length > 0 ? (
-                        <div>
-                          <dt className="text-muted">Merk</dt>
-                          <dd className="font-medium text-ink">
-                            {extracted.merken.join(", ")}
-                          </dd>
-                        </div>
-                      ) : null}
-                      {extracted.huisbezoek ? (
-                        <div>
-                          <dt className="text-muted">Huisbezoek</dt>
-                          <dd className="font-medium text-ink">
-                            {extracted.huisbezoek === "ja"
-                              ? "Wil een huisbezoek"
-                              : extracted.huisbezoek === "nee"
-                                ? "Wil geen huisbezoek"
-                                : "Eerst een indicatie"}
-                          </dd>
-                        </div>
-                      ) : null}
-                      {extracted.afspraakAfzeggen ? (
-                        <div>
-                          <dt className="text-muted">Afspraak</dt>
-                          <dd className="font-medium text-ink">Wil afzeggen</dd>
-                        </div>
-                      ) : null}
-                    </dl>
-                    {extracted.huisbezoek ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const email =
-                            replyToEmail.trim() ||
-                            extracted.emails[0] ||
-                            selected?.fromEmail ||
-                            "";
-                          const line =
-                            extracted.huisbezoek === "ja"
-                              ? `We plannen het huisbezoek op ${email}. Antwoord gerust op deze mail, dan komt het binnen op info@batterijconcept.nl.`
-                              : extracted.huisbezoek === "nee"
-                                ? `We sturen het voorstel naar ${email}, zonder huisbezoek.`
-                                : `Je krijgt eerst een indicatie op ${email}. Een huisbezoek plannen we alleen als je dat wilt.`;
-                          zetExtractInAntwoord(line, email);
-                        }}
-                        className="mt-3 w-full bg-green px-3 py-2.5 text-xs font-semibold text-white hover:bg-green-dark"
-                      >
-                        {extracted.huisbezoek === "ja"
-                          ? "Zet huisbezoek in antwoord"
-                          : extracted.huisbezoek === "nee"
-                            ? "Antwoord zonder huisbezoek"
-                            : "Zet indicatie in antwoord"}
-                      </button>
-                    ) : null}
+                    <Link
+                      href={`/leads/${matchedLead.id}`}
+                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-black/10 bg-white px-2.5 text-[12px] font-medium text-[#1D1D1F] hover:bg-black/[0.03]"
+                    >
+                      Open
+                      <ArrowUpRight className="size-3.5" />
+                    </Link>
                   </div>
-                ) : null}
-
-                {/* Actie bij deze mail */}
-                <div className="border-t border-line pt-4">
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Actie
+                ) : leadLookupBusy || contextBusy ? (
+                  <p className="mt-3 text-[12px] text-[#8E8E93]">
+                    Klant zoeken…
                   </p>
-                  <p className="mb-3 text-xs text-ink">
-                    <span className="font-semibold">
-                      {INBOX_FOLDERS.find((f) => f.id === selected.folder)
-                        ?.label || selected.folder}
-                    </span>
-                    {selected.aiSummary ? (
-                      <span className="text-muted">
-                        {" "}
-                        · {selected.aiSummary}
-                      </span>
-                    ) : null}
+                ) : leadCandidates.length > 0 ? (
+                  <div className="mt-3 space-y-1.5 rounded-xl bg-[#F2F2F7] px-3 py-2.5">
+                    <p className="text-[12px] text-[#8E8E93]">
+                      Meerdere mogelijke klanten — kies er één:
+                    </p>
+                    {leadCandidates.map((lead) => (
+                      <button
+                        key={lead.id}
+                        type="button"
+                        onClick={() => chooseLead(lead)}
+                        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-left text-[12px] hover:bg-black/[0.03]"
+                      >
+                        <span className="block font-semibold text-[#1D1D1F]">
+                          {lead.naam}
+                          {lead.plaats ? ` · ${lead.plaats}` : ""}
+                        </span>
+                        <span className="block text-[#8E8E93]">
+                          {lead.email || lead.telefoon || lead.lead_number}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[12px] text-[#8E8E93]">
+                    Geen gekoppelde lead
                   </p>
+                )}
 
+                {/* Actiekaart(en) — full width, direct bruikbaar */}
+                <div className="mt-3 space-y-2">
                   {linkedAfspraak ? (
                     <AfspraakActieKaart
                       afspraak={linkedAfspraak}
                       leadId={matchedLead?.id}
                       canCancel={
-                        selected.folder === "afzegging_afspraak" ||
-                        Boolean(selected.aiEffects?.cancelAfspraak) ||
-                        Boolean(extracted?.afspraakAfzeggen)
+                        Boolean(extracted?.afspraakAfzeggen) ||
+                        mailAsksAfspraakWijziging(selected)
                       }
                       busy={actionBusy}
                       onCancel={() => void cancelLinkedAfspraak()}
                     />
-                  ) : selected.folder === "afzegging_afspraak" ||
-                    selected.aiEffects?.cancelAfspraak ||
-                    extracted?.afspraakAfzeggen ? (
-                    <div className="space-y-2 rounded-md border border-line bg-wash/60 p-3">
-                      {leadCandidates.length > 0 ? (
-                        <div className="space-y-2">
-                          <p className="text-xs text-ink">
-                            Geen exact e-mailadres. Kies de klant:
-                          </p>
-                          {leadCandidates.map((lead) => (
-                            <button
-                              key={lead.id}
-                              type="button"
-                              onClick={() => chooseLead(lead)}
-                              className="w-full border border-line bg-white px-3 py-2 text-left text-xs hover:bg-wash"
-                            >
-                              <span className="block font-semibold text-ink">
-                                {lead.naam}
-                                {lead.plaats ? ` · ${lead.plaats}` : ""}
-                              </span>
-                              <span className="block text-muted">
-                                {lead.email || lead.telefoon || lead.lead_number}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-muted">
-                          Geen openstaande afspraak gevonden voor deze klant.
-                        </p>
-                      )}
-                    </div>
                   ) : null}
 
                   {selected.folder === "service" ||
                   selected.aiEffects?.createServiceVerzoek ? (
-                    <div className="mt-2 space-y-2">
-                      <button
-                        type="button"
-                        disabled={actionBusy}
-                        onClick={() => void createServiceFromMail()}
-                        className="w-full bg-green px-3 py-2.5 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
-                      >
-                        {actionBusy
-                          ? "Bezig…"
-                          : INBOX_ACTION_LABEL.maak_service_verzoek}
-                      </button>
+                    <div className="w-full overflow-hidden rounded-2xl border border-[#007AFF]/20 bg-[#F0F7FF] shadow-sm">
+                      <div className="px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                          Service · actie
+                        </p>
+                        <p className="mt-1 text-[15px] font-semibold text-[#1D1D1F]">
+                          Serviceverzoek aanmaken
+                        </p>
+                        <p className="mt-0.5 text-[13px] text-[#6E6E73]">
+                          Zet deze mail om in een service-ticket.
+                        </p>
+                      </div>
+                      <div className="border-t border-[#007AFF]/10 bg-white/70 px-4 py-3">
+                        <button
+                          type="button"
+                          disabled={actionBusy}
+                          onClick={() => void createServiceFromMail()}
+                          className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-[#007AFF] px-4 text-[13px] font-semibold text-white hover:bg-[#0066D6] disabled:opacity-50"
+                        >
+                          {actionBusy
+                            ? "Bezig…"
+                            : INBOX_ACTION_LABEL.maak_service_verzoek}
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
                   {matchedLead &&
                   mailSuggestsGeenInteresse(selected) &&
                   matchedLead.status !== "geen_interesse" ? (
-                    <div className="mt-2">
-                      <button
-                        type="button"
-                        disabled={actionBusy}
-                        onClick={() => void markLeadStatus("geen_interesse")}
-                        className="w-full bg-[#C45A12] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#a3480e] disabled:opacity-50"
-                      >
-                        {actionBusy
-                          ? "Bezig…"
-                          : INBOX_ACTION_LABEL.mark_geen_interesse}
-                      </button>
+                    <div className="w-full overflow-hidden rounded-2xl border border-[#FF9500]/25 bg-[#FFF9F0] shadow-sm">
+                      <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                            Lead · actie
+                          </p>
+                          <p className="mt-0.5 text-[14px] font-semibold text-[#1D1D1F]">
+                            Klant lijkt geen interesse te hebben
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={actionBusy}
+                          onClick={() => void markLeadStatus("geen_interesse")}
+                          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl bg-[#FF9500] px-4 text-[13px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
+                        >
+                          {INBOX_ACTION_LABEL.mark_geen_interesse}
+                        </button>
+                      </div>
                     </div>
-                  ) : matchedLead?.status === "geen_interesse" &&
-                    mailSuggestsGeenInteresse(selected) ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Lead staat al op &quot;Geen interesse&quot;.
-                    </p>
                   ) : null}
 
                   {matchedLead &&
                   mailSuggestsGeenContact(selected) &&
                   matchedLead.status !== "geen_contact" &&
                   matchedLead.status !== "geen_interesse" ? (
-                    <div className="mt-2">
-                      <button
-                        type="button"
-                        disabled={actionBusy}
-                        onClick={() => void markLeadStatus("geen_contact")}
-                        className="w-full border border-line bg-white px-3 py-2.5 text-xs font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                      >
-                        {actionBusy
-                          ? "Bezig…"
-                          : INBOX_ACTION_LABEL.mark_geen_contact}
-                      </button>
+                    <div className="w-full overflow-hidden rounded-2xl border border-black/8 bg-[#F2F2F7] shadow-sm">
+                      <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                            Lead · actie
+                          </p>
+                          <p className="mt-0.5 text-[14px] font-semibold text-[#1D1D1F]">
+                            Geen contact meer gewenst
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={actionBusy}
+                          onClick={() => void markLeadStatus("geen_contact")}
+                          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white px-4 text-[13px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03] disabled:opacity-50"
+                        >
+                          {INBOX_ACTION_LABEL.mark_geen_contact}
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
-                  {selected.folder === "annulering_vraag" ? (
-                    <p className="mt-2 rounded-md border border-[#C45A12]/25 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-                      Dit is een order-/projectannulering — geen
-                      afspraak-afzegging. Open het project om verder te gaan.
-                    </p>
-                  ) : null}
-
-                  {selected.folder === "installatie" ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Installatievraag — open het project voor planning /
-                      status.
-                    </p>
-                  ) : null}
-
-                  {selected.folder === "ordervraag" ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Ordervraag — open lead of project om te beantwoorden.
-                    </p>
-                  ) : null}
-
-                  <div className="mt-3 flex flex-col gap-2">
-                    {matchedLead ? (
-                      <Link
-                        href={`/leads/${matchedLead.id}`}
-                        className="inline-flex w-full items-center justify-center border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
-                      >
-                        Open lead
-                      </Link>
-                    ) : null}
-                    {linkedProject?.id ? (
-                      <Link
-                        href={`/projecten/${linkedProject.id}`}
-                        className="inline-flex w-full items-center justify-center border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
-                      >
+                  {linkedProject?.id ? (
+                    <Link
+                      href={`/projecten/${linkedProject.id}`}
+                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-black/8 bg-white px-4 py-3 text-[13px] font-semibold text-[#1D1D1F] shadow-sm hover:bg-black/[0.02]"
+                    >
+                      <span>
                         Open project
                         {linkedProject.project_nummer
                           ? ` · ${linkedProject.project_nummer}`
                           : ""}
-                      </Link>
-                    ) : null}
+                      </span>
+                      <ArrowUpRight className="size-4 text-[#007AFF]" />
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+
+              <div
+                className="min-h-0 flex-1 overflow-auto bg-[#F5F5F7] px-4 py-3 sm:px-6"
+                ref={(el) => {
+                  if (!el || !selectedConversation) return;
+                  requestAnimationFrame(() => {
+                    el.scrollTop = el.scrollHeight;
+                  });
+                }}
+              >
+                <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+                  {threadMessages.length === 0 ? (
+                    <p className="py-10 text-center text-[13px] text-[#8E8E93]">
+                      Geen berichten in deze conversatie.
+                    </p>
+                  ) : null}
+                  {threadMessages.map((m, idx) => {
+                    const outbound = isOutboundMail(m);
+                    const msgPhotos = collectMailPhotos(m);
+                    const msgFileAtts = (m.attachments || []).filter(
+                      (a) => !isInboxImageAttachment(a)
+                    );
+                    return (
+                      <article
+                        key={m.id}
+                        className={cn(
+                          "rounded-2xl border px-4 py-4 shadow-sm sm:px-5",
+                          outbound
+                            ? "border-[#007AFF]/20 bg-[#F0F7FF]"
+                            : "border-black/10 bg-white"
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span
+                            className={cn(
+                              "flex size-9 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold",
+                              outbound
+                                ? "bg-[#007AFF] text-white"
+                                : "bg-[#E5E5EA] text-[#3A3A3C]"
+                            )}
+                          >
+                            {outbound
+                              ? "BC"
+                              : initials(m.fromName || m.fromEmail)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                              <p className="text-[14px] font-semibold text-[#1D1D1F]">
+                                {outbound
+                                  ? "BatterijConcept"
+                                  : m.fromName || m.fromEmail}
+                                {outbound ? (
+                                  <span className="ml-1.5 text-[11px] font-medium text-[#007AFF]">
+                                    Verzonden
+                                  </span>
+                                ) : null}
+                              </p>
+                              <span className="text-[12px] tabular-nums text-[#8E8E93]">
+                                {formatDateTimeNl(m.receivedAt)}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-[12px] text-[#8E8E93]">
+                              {m.fromEmail}
+                              {m.toEmail ? ` → ${m.toEmail}` : ""}
+                            </p>
+                            {idx === 0 &&
+                            normMailSubject(m.subject) !==
+                              normMailSubject(
+                                selectedConversation.subject
+                              ) ? (
+                              <p className="mt-1 text-[13px] font-medium text-[#1D1D1F]">
+                                {m.subject}
+                              </p>
+                            ) : null}
+                            {msgPhotos.length > 0 ? (
+                              <div className="mt-3">
+                                <MailPhotoGallery
+                                  photos={msgPhotos}
+                                  mailId={m.id}
+                                />
+                              </div>
+                            ) : null}
+                            <MailBodyReadable text={displayBodyText(m)} />
+                            {msgFileAtts.length > 0 ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {msgFileAtts.map((a) => (
+                                  <a
+                                    key={a.id}
+                                    href={`/api/inbox/${encodeURIComponent(m.id)}/attachments/${encodeURIComponent(a.id)}`}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-white px-3 py-1.5 text-[12px] font-medium text-[#1D1D1F] hover:bg-black/[0.03]"
+                                  >
+                                    {a.filename}
+                                    {a.size ? (
+                                      <span className="text-[#8E8E93]">
+                                        {formatBytes(a.size)}
+                                      </span>
+                                    ) : null}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="shrink-0 border-t border-black/10 bg-[#FAFAFA]">
+                <div className="px-4 py-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                    <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                      Snel
+                    </span>
+                    {templates.slice(0, 4).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => applyTemplate(t.id)}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-[12px] font-medium transition",
+                          templateId === t.id
+                            ? "border-[#007AFF] bg-[#007AFF]/10 text-[#007AFF]"
+                            : "border-black/10 bg-white text-[#1D1D1F] hover:bg-black/[0.03]"
+                        )}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      title="AI-concept"
+                      disabled={draftBusy}
+                      onClick={() => void draftReply(selected)}
+                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-semibold text-[#007AFF] hover:bg-[#007AFF]/10 disabled:opacity-40"
+                    >
+                      <AiMark className="h-4 w-4" />
+                      {draftBusy ? "Schrijven…" : "AI"}
+                    </button>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm">
+                    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-2 border-b border-black/5 px-3 py-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                        Aan
+                      </span>
+                      <input
+                        type="email"
+                        value={replyToEmail}
+                        onChange={(e) => {
+                          replyToTouched.current = true;
+                          setReplyToEmail(e.target.value);
+                        }}
+                        className="min-w-0 w-full border-0 bg-transparent text-[13px] text-[#1D1D1F] outline-none"
+                        placeholder="klant@email.nl"
+                      />
+                    </div>
+                    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-2 border-b border-black/5 px-3 py-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
+                        Onderwerp
+                      </span>
+                      <input
+                        type="text"
+                        value={replySubject}
+                        onChange={(e) => setReplySubject(e.target.value)}
+                        className="min-w-0 w-full border-0 bg-transparent text-[13px] text-[#1D1D1F] outline-none"
+                      />
+                    </div>
+                    <textarea
+                      value={replyBody}
+                      onChange={(e) => setReplyBody(e.target.value)}
+                      rows={6}
+                      placeholder="Typ hier je antwoord…"
+                      className="min-h-[120px] w-full resize-y border-0 bg-white px-3 py-3 text-[15px] leading-relaxed text-[#1D1D1F] outline-none"
+                    />
+                    <div className="flex items-center justify-between gap-2 border-t border-black/5 bg-[#FAFAFA] px-3 py-2.5">
+                      <p className="truncate text-[12px] text-[#8E8E93]">
+                        Antwoord naar {replyToEmail || "…"}
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-9 gap-1.5 bg-[#007AFF] px-5 text-[13px] text-white hover:bg-[#0066D6]"
+                        disabled={
+                          sendBusy ||
+                          !replyBody.trim() ||
+                          !replyToEmail.trim()
+                        }
+                        onClick={() => void sendReply()}
+                      >
+                        <Reply className="size-3.5" />
+                        {sendBusy ? "Versturen…" : "Versturen"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
-            )}
-          </div>
-        </aside>
+            </>
+          )}
+        </section>
       </div>
     </div>
   );

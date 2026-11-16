@@ -56,6 +56,8 @@ const STATUS_PILL: Record<SollicitatieStatus, string> = {
   nieuw: "border-transparent bg-[#E8F0F6] text-[#1A4A6E]",
   geen_contact: "border-transparent bg-[#F3F4F6] text-[#4B5563]",
   definitief_geen_contact: "border-transparent bg-[#CFD8DC] text-[#263238]",
+  geen_interesse: "border-transparent bg-[#F3F4F6] text-[#4B5563]",
+  terugbelafspraak: "border-transparent bg-[#EFF6FF] text-[#1D4ED8]",
   diskwalificatie: "border-transparent bg-[#FCEAEA] text-[#9B2C2C]",
   gesprek_gepland: "border-transparent bg-[#FEF7E6] text-[#854D0E]",
   gesprek_gehad: "border-transparent bg-[#FFF4ED] text-[#9A3412]",

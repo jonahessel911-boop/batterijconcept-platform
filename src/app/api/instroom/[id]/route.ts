@@ -66,6 +66,8 @@ export async function PATCH(
       belpogingen?: number;
       belpogingen_vandaag?: number;
       laatst_gebeld_at?: string | null;
+      terugbel_at?: string | null;
+      terugbel_notitie?: string | null;
       postcode?: string | null;
       huisnummer?: string | null;
       toevoeging?: string | null;
@@ -98,6 +100,23 @@ export async function PATCH(
         if (!Number.isNaN(d.getTime())) patch.laatst_gebeld_at = d.toISOString();
       }
     }
+    if ("terugbel_at" in body) {
+      if (body.terugbel_at === null || body.terugbel_at === "") {
+        patch.terugbel_at = null;
+      } else if (typeof body.terugbel_at === "string") {
+        const d = new Date(body.terugbel_at);
+        if (Number.isNaN(d.getTime())) {
+          return NextResponse.json(
+            { error: "Ongeldig terugbeltijdstip" },
+            { status: 400 }
+          );
+        }
+        patch.terugbel_at = d.toISOString();
+      }
+    }
+    if ("terugbel_notitie" in body) {
+      patch.terugbel_notitie = pickStr(body.terugbel_notitie);
+    }
 
     if ("status" in body) {
       const status = parseSollicitatieStatus(body.status);
@@ -105,6 +124,11 @@ export async function PATCH(
         return NextResponse.json({ error: "Ongeldige status" }, { status: 400 });
       }
       patch.status = status;
+      // Terugbelvelden alleen bij terugbelafspraak; anders wissen
+      if (status !== "terugbelafspraak") {
+        if (!("terugbel_at" in body)) patch.terugbel_at = null;
+        if (!("terugbel_notitie" in body)) patch.terugbel_notitie = null;
+      }
     }
 
     const notitieAppend = pickStr(body.notitie_append);
@@ -191,21 +215,11 @@ export async function PATCH(
     }
 
     if (patch.status === SOLLICITATIE_STATUS_MET_TRAINING) {
-      const wasAlready =
-        parseSollicitatieStatus(current?.status) ===
-        SOLLICITATIE_STATUS_MET_TRAINING;
-      const trainingId =
-        patch.training_moment_id ??
-        (current?.training_moment_id as string | null) ??
-        null;
-      if (!wasAlready && !trainingId) {
-        return NextResponse.json(
-          { error: "Kies een trainingmoment" },
-          { status: 400 }
-        );
-      }
-      if (patch.training_moment_id === undefined && trainingId) {
-        patch.training_moment_id = trainingId;
+      // Mag zonder moment (= «Te trainen»-pool). Mail pas bij echt training_moment_id.
+      if (patch.training_moment_id === undefined) {
+        const existing =
+          (current?.training_moment_id as string | null) ?? null;
+        if (existing) patch.training_moment_id = existing;
       }
     }
 
@@ -229,10 +243,34 @@ export async function PATCH(
         error.message?.includes("laatst_gebeld_at") ||
         error.code === "42703")
     ) {
+      const needsTerugbelMigrate =
+        error.message?.includes("terugbel_at") ||
+        error.message?.includes("terugbel_notitie") ||
+        error.message?.includes("geen_interesse") ||
+        error.message?.includes("terugbelafspraak") ||
+        error.message?.includes("sollicitaties_status_check");
+      return NextResponse.json(
+        {
+          error: needsTerugbelMigrate
+            ? "Voer supabase/migrate-sollicitatie-geen-interesse-terugbel.sql uit in Supabase."
+            : "Voer supabase/migrate-sollicitatie-belpogingen.sql uit in Supabase.",
+          detail: error.message,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      error &&
+      (error.message?.includes("geen_interesse") ||
+        error.message?.includes("terugbelafspraak") ||
+        error.message?.includes("terugbel_at") ||
+        error.message?.includes("sollicitaties_status_check"))
+    ) {
       return NextResponse.json(
         {
           error:
-            "Voer supabase/migrate-sollicitatie-belpogingen.sql uit in Supabase.",
+            "Voer supabase/migrate-sollicitatie-geen-interesse-terugbel.sql uit in Supabase.",
           detail: error.message,
         },
         { status: 400 }
@@ -368,6 +406,7 @@ export async function PATCH(
           SOLLICITATIE_TAKEL_BEOORDELEN,
           SOLLICITATIE_TAKEL_BESLISSING,
           "Beoordeling afronden",
+          "Vervolg beoordeling",
         ]);
     }
 
@@ -415,7 +454,7 @@ export async function PATCH(
                 to_email: to,
                 subject,
                 body_text:
-                  "Het is helaas niet geworden om te werken met BatterijConcept.",
+                  "Helaas bent u het niet geworden. We wensen u nog veel succes in de toekomst.",
                 body_html: html,
                 received_at: new Date().toISOString(),
                 suggested_actions: [],

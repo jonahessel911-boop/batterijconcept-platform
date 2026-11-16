@@ -830,9 +830,10 @@ export function ProjectPage() {
       );
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
-        factuur?: { factuur_nummer?: string };
+        factuur?: { factuur_nummer?: string } | null;
         sent?: boolean;
         sendError?: string | null;
+        message?: string;
       };
       if (!res.ok) throw new Error(data.error || "Annuleringsfactuur mislukt");
       setProject((p) =>
@@ -849,15 +850,26 @@ export function ProjectPage() {
             }
           : p
       );
-      if (data.sendError) {
+      if (!data.factuur) {
+        setOkMsg(
+          data.message ||
+            "Project op Annulering — geen extra factuur (al vereffend of terugbetalen)."
+        );
+      } else if (data.sendError) {
         setError(
-          `Factuur ${data.factuur?.factuur_nummer || ""} aangemaakt, mail mislukt: ${data.sendError}`
+          `Factuur ${data.factuur.factuur_nummer || ""} aangemaakt, mail mislukt: ${data.sendError}`
         );
         setOkMsg("Project op Annulering — factuur als concept klaar.");
       } else {
         setOkMsg(
-          `Annuleringsfactuur ${data.factuur?.factuur_nummer || ""} verstuurd.`
+          data.message ||
+            `Annuleringsfactuur ${data.factuur.factuur_nummer || ""} verstuurd.`
         );
+      }
+      const factRes = await fetch(`/api/projecten/${project.id}/facturen`);
+      const factData = await factRes.json().catch(() => ({}));
+      if (factRes.ok) {
+        setFacturen((factData.facturen as Factuur[]) || []);
       }
       void refreshLeadEvents(project.lead_id);
       const takenRes = await fetch(
@@ -980,6 +992,91 @@ export function ProjectPage() {
     const prev = project.status;
     setProject({ ...project, status });
     try {
+      // Na bedenktijd: status + netto-annuleringsfactuur + direct versturen.
+      if (status === "annulering" && annulering && !annulering.binnenBedenktijd) {
+        const facRes = await fetch(
+          `/api/projecten/${project.id}/annuleringsfactuur?send=1`,
+          { method: "POST" }
+        );
+        const facData = (await facRes.json().catch(() => ({}))) as {
+          error?: string;
+          factuur?: { factuur_nummer?: string; bedrag_inc_btw?: number } | null;
+          sent?: boolean;
+          sendError?: string | null;
+          message?: string;
+        };
+        if (!facRes.ok) {
+          throw new Error(facData.error || "Annuleringsfactuur mislukt");
+        }
+
+        setProject((p) =>
+          p
+            ? {
+                ...p,
+                status: "annulering",
+                annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+                hold_sales_deadline_at: null,
+                schouw_at: null,
+                schouw_jaar: null,
+                schouw_week: null,
+                installatie_at: null,
+              }
+            : p
+        );
+
+        const factRes = await fetch(`/api/projecten/${project.id}/facturen`);
+        const factData = await factRes.json().catch(() => ({}));
+        if (factRes.ok) {
+          setFacturen((factData.facturen as Factuur[]) || []);
+        }
+
+        let bits: string[] = [];
+        if (facData.factuur) {
+          bits.push(
+            facData.sent
+              ? `Annuleringsfactuur ${facData.factuur.factuur_nummer} verstuurd`
+              : `Annuleringsfactuur ${facData.factuur.factuur_nummer} aangemaakt`
+          );
+          if (facData.sendError) {
+            setError(`Factuurmail mislukt: ${facData.sendError}`);
+          }
+        } else if (facData.message) {
+          bits.push(facData.message);
+        } else {
+          bits.push("Order geannuleerd");
+        }
+
+        if (annulering.stuurMail) {
+          const mailRes = await fetch(
+            `/api/projecten/${project.id}/annuleringsmail`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ binnenBedenktijd: false }),
+            }
+          );
+          const mailData = await mailRes.json().catch(() => ({}));
+          if (!mailRes.ok) {
+            setError(
+              (mailData as { error?: string }).error ||
+                "Annuleringsmail mislukt"
+            );
+          } else {
+            bits.push("bevestigingsmail verstuurd");
+          }
+        }
+
+        setOkMsg(`${bits.join(" · ")}.`);
+        setAnnuleringModal(null);
+        void refreshLeadEvents(project.lead_id);
+        const takenRes = await fetch(
+          `/api/taken?project_id=${project.id}&open=0`
+        );
+        const takenData = await takenRes.json().catch(() => ({}));
+        if (takenRes.ok) setTaken((takenData.taken as ProjectTaak[]) || []);
+        return;
+      }
+
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -4793,6 +4890,8 @@ export function ProjectPage() {
           project={project}
           mailOnly={annuleringModal === "mail"}
           busy={statusSaving || annuleringsMailBusy}
+          orderIncBtw={offerte?.totaal_inc_btw ?? 0}
+          facturen={facturen}
           onClose={() => {
             if (!statusSaving && !annuleringsMailBusy) {
               setAnnuleringModal(null);

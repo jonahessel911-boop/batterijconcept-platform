@@ -369,13 +369,22 @@ export function isWarmtefondsStopStatus(
   );
 }
 
-/** WF-gerelateerd (actief of archief). */
+/**
+ * Pas in het WF-portaal nadat BO heeft doorgestuurd
+ * (`financiering_status` gezet, start = doorgestuurd_naar_edwin).
+ * Alleen `betaalwijze=warmtefonds` is niet genoeg.
+ */
 export function isWarmtefondsRelatedProject(row: {
   betaalwijze?: string | null;
   financiering_status?: string | null;
 }): boolean {
+  // Eigen middelen hoort nooit in het WF-portaal.
+  if (row.betaalwijze === "eigen_middelen") return false;
+  // Nog niet doorgestuurd naar Edwin → niet in portaal.
+  if (!row.financiering_status) return false;
   if (row.betaalwijze === "warmtefonds") return true;
-  if (row.financiering_status) return true;
+  // Legacy: betaalwijze nog leeg, wél financieringspipeline → WF
+  if (!row.betaalwijze) return true;
   return false;
 }
 

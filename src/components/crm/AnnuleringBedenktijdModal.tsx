@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Project } from "@/types/database";
 import {
   bedenktijdVanOndertekening,
   ondertekendOpVanProject,
 } from "@/lib/bedenktijd";
 import { isWarmtefondsProject } from "@/lib/backoffice-acties";
+import {
+  annuleringAfrekening,
+  type AnnuleringAfrekening,
+} from "@/lib/av-annulering";
+import { formatEuro } from "@/lib/format";
 
 export type AnnuleringKeuze = {
   binnenBedenktijd: boolean;
@@ -17,10 +22,87 @@ export type AnnuleringKeuze = {
 
 type WarmtefondsVervolg = "meewerken" | "annuleren_kosten";
 
+type FactuurLike = {
+  status: string;
+  bedrag_inc_btw: number | null;
+  credit_van_factuur_id?: string | null;
+  omschrijving?: string | null;
+};
+
+function AfrekeningSheet({ afrekening }: { afrekening: AnnuleringAfrekening }) {
+  const bij = afrekening.richting === "bijbetalen";
+  const terug = afrekening.richting === "terugbetalen";
+  return (
+    <div className="border border-line bg-wash/50 px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        Rekensom · art. 4A AV
+      </p>
+      <dl className="mt-2 space-y-1.5 text-sm">
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted">Order incl. btw</dt>
+          <dd className="tabular-nums font-medium text-ink">
+            {formatEuro(afrekening.orderInc)}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted">
+            Annuleringskosten ({afrekening.pct}%)
+          </dt>
+          <dd className="tabular-nums font-medium text-ink">
+            {formatEuro(afrekening.kostenInc)}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted">Al betaald (aanbetaling e.d.)</dt>
+          <dd className="tabular-nums font-medium text-ink">
+            − {formatEuro(afrekening.alBetaaldInc)}
+          </dd>
+        </div>
+        <div className="border-t border-line pt-1.5">
+          {bij ? (
+            <div className="flex justify-between gap-3">
+              <dt className="font-semibold text-[#9A3B1A]">
+                Nog bij te betalen
+              </dt>
+              <dd className="tabular-nums font-semibold text-[#9A3B1A]">
+                {formatEuro(afrekening.saldoInc)}
+              </dd>
+            </div>
+          ) : terug ? (
+            <div className="flex justify-between gap-3">
+              <dt className="font-semibold text-green-deeper">
+                Terug te betalen aan klant
+              </dt>
+              <dd className="tabular-nums font-semibold text-green-deeper">
+                {formatEuro(Math.abs(afrekening.saldoInc))}
+              </dd>
+            </div>
+          ) : (
+            <div className="flex justify-between gap-3">
+              <dt className="font-semibold text-ink">Vereffend</dt>
+              <dd className="tabular-nums font-semibold text-ink">
+                {formatEuro(0)}
+              </dd>
+            </div>
+          )}
+        </div>
+      </dl>
+      <p className="mt-2 text-[11px] leading-snug text-muted">
+        {bij
+          ? "Bij doorzetten: factuur voor dit restant wordt automatisch aangemaakt en naar de klant gemaild."
+          : terug
+            ? "Klant heeft meer betaald dan de 20% — dit bedrag terugbetalen / crediteren (geen extra factuur)."
+            : "Al betaald dekt precies de annuleringskosten — geen extra factuur."}
+      </p>
+    </div>
+  );
+}
+
 /**
  * Popup vóór order-annulering: bedenktijd-check bepaalt of
  * annuleringskosten in de klantmail komen.
  * Warmtefonds + na bedenktijd: eerst kiezen meewerken vs. kosten.
+ * Bij «na bedenktijd»: korte rekensom (bijbetalen / terugbetalen).
  */
 export function AnnuleringBedenktijdModal({
   project,
@@ -29,12 +111,16 @@ export function AnnuleringBedenktijdModal({
   busy,
   /** Alleen mail versturen (status staat al op annulering). */
   mailOnly = false,
+  orderIncBtw = 0,
+  facturen = [],
 }: {
   project: Project;
   onClose: () => void;
   onConfirm: (keuze: AnnuleringKeuze) => void | Promise<void>;
   busy?: boolean;
   mailOnly?: boolean;
+  orderIncBtw?: number | null;
+  facturen?: FactuurLike[];
 }) {
   const warmtefonds = isWarmtefondsProject(project);
   const [ondertekendOp, setOndertekendOp] = useState<string | null>(() =>
@@ -50,6 +136,76 @@ export function AnnuleringBedenktijdModal({
   const [stuurMail, setStuurMail] = useState(true);
   const [creditFacturen, setCreditFacturen] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadedOrderInc, setLoadedOrderInc] = useState<number | null>(null);
+  const [loadedFacturen, setLoadedFacturen] = useState<FactuurLike[] | null>(
+    null
+  );
+
+  const effectiveOrderInc =
+    Number(orderIncBtw) > 0
+      ? Number(orderIncBtw)
+      : loadedOrderInc != null
+        ? loadedOrderInc
+        : Number(
+            (Array.isArray(project.offertes)
+              ? project.offertes[0]
+              : project.offertes
+            )?.totaal_inc_btw
+          ) || 0;
+  const effectiveFacturen = facturen.length
+    ? facturen
+    : loadedFacturen || [];
+
+  const afrekening = useMemo(
+    () =>
+      annuleringAfrekening({
+        orderIncBtw: effectiveOrderInc,
+        facturen: effectiveFacturen,
+      }),
+    [effectiveOrderInc, effectiveFacturen]
+  );
+
+  // Laad order + facturen voor rekensom als parent ze niet doorgeeft.
+  useEffect(() => {
+    if (binnenBedenktijd !== false) return;
+    if (Number(orderIncBtw) > 0 && facturen.length > 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [pRes, fRes] = await Promise.all([
+          Number(orderIncBtw) > 0
+            ? null
+            : fetch(`/api/projecten/${project.id}`),
+          facturen.length > 0
+            ? null
+            : fetch(`/api/projecten/${project.id}/facturen`),
+        ]);
+        if (cancelled) return;
+        if (pRes) {
+          const data = await pRes.json().catch(() => ({}));
+          const p = (data as { project?: Project }).project;
+          const off = p
+            ? Array.isArray(p.offertes)
+              ? p.offertes[0]
+              : p.offertes
+            : null;
+          setLoadedOrderInc(Number(off?.totaal_inc_btw) || 0);
+        }
+        if (fRes) {
+          const data = await fRes.json().catch(() => ({}));
+          setLoadedFacturen(
+            ((data as { facturen?: FactuurLike[] }).facturen ||
+              []) as FactuurLike[]
+          );
+        }
+      } catch {
+        /* non-blocking */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [binnenBedenktijd, orderIncBtw, facturen.length, project.id]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -91,6 +247,11 @@ export function AnnuleringBedenktijdModal({
   const wilMeewerken = toontWfFork && wfVervolg === "meewerken";
   const wilAnnulerenMetKosten =
     !toontWfFork || wfVervolg === "annuleren_kosten";
+  const toontRekensom =
+    binnenBedenktijd === false &&
+    wilAnnulerenMetKosten &&
+    !wilMeewerken &&
+    afrekening.orderInc > 0;
 
   async function submit() {
     if (binnenBedenktijd == null) {
@@ -220,7 +381,7 @@ export function AnnuleringBedenktijdModal({
               <span className="mt-0.5 block text-[11px] text-muted">
                 {warmtefonds && !mailOnly
                   ? "Kies hieronder: meewerken of annuleringskosten"
-                  : "Annuleringskosten (20%) wel in de mail"}
+                  : "20% annuleringskosten · zie rekensom"}
               </span>
             </button>
           </div>
@@ -274,12 +435,14 @@ export function AnnuleringBedenktijdModal({
                     Annuleren met annuleringskosten
                   </span>
                   <span className="mt-0.5 block text-[11px] text-muted">
-                    20% van het orderbedrag in de annuleringsmail (art. 4A AV)
+                    20% van het orderbedrag (art. 4A AV) · zie rekensom
                   </span>
                 </button>
               </div>
             </div>
           ) : null}
+
+          {toontRekensom ? <AfrekeningSheet afrekening={afrekening} /> : null}
 
           {wilAnnulerenMetKosten && !wilMeewerken ? (
             mailOnly ? (

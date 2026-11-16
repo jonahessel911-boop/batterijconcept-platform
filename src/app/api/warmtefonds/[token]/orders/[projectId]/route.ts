@@ -633,7 +633,12 @@ export async function PATCH(
       }
     }
 
-    let bevestiging: "verzonden" | "geen_email" | "mislukt" | null = null;
+    let bevestiging:
+      | "verzonden"
+      | "geen_email"
+      | "mislukt"
+      | "uitgeschakeld"
+      | null = null;
     const nieuwAt = patch.warmtefonds_afspraak_at;
     const oudAt = (before as { warmtefonds_afspraak_at?: string | null })
       .warmtefonds_afspraak_at;

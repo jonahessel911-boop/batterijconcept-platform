@@ -15,6 +15,8 @@ export const SOLLICITATIE_STATUS_TONE: Record<SollicitatieStatus, string> = {
   geen_contact: "border border-[#37474F]/30 bg-[#ECEFF1] text-[#37474F]",
   definitief_geen_contact:
     "border border-[#455A64]/35 bg-[#CFD8DC] text-[#263238]",
+  geen_interesse: "border border-[#6B7280]/30 bg-[#F3F4F6] text-[#4B5563]",
+  terugbelafspraak: "border border-[#1D4ED8]/30 bg-[#EFF6FF] text-[#1D4ED8]",
   gesprek_gepland: "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
   gesprek_gehad: "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
   gesprek_gehad_diskwalificatie:

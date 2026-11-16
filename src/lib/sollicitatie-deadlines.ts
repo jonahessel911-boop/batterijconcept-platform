@@ -15,6 +15,9 @@ export const SOLLICITATIE_UITKOMST_STATUSSEN: SollicitatieStatus[] = [
   "gesprek_gehad_diskwalificatie",
   "aangenomen_training_gepland",
   "aangenomen_actief",
+  "diskwalificatie",
+  "definitief_geen_contact",
+  "geen_interesse",
 ];
 
 export function isSollicitatieUitkomstStatus(

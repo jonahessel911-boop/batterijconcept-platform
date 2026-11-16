@@ -157,16 +157,16 @@ export function sollicitatieGesprekDiskwalificatieEmail(opts: {
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
   return emailLayout({
-    title: "Update over je sollicitatie",
-    preheader: "Het is helaas niet geworden om te werken met BatterijConcept.",
+    title: "Update over uw sollicitatie",
+    preheader: "Helaas bent u het niet geworden — veel succes in de toekomst.",
     bodyHtml: [
-      emailH1("Update over je sollicitatie"),
-      emailP(`Hoi ${first},`),
+      emailH1("Update over uw sollicitatie"),
+      emailP(`Beste ${first},`),
       emailP(
-        "Bedankt voor je tijd en het gesprek. Na zorgvuldige afweging is het helaas niet geworden om te werken met BatterijConcept."
+        "Hartelijk dank voor uw tijd en het gesprek. Helaas bent u het niet geworden."
       ),
       emailP(
-        "We wensen je veel succes met je verdere stappen."
+        "We wensen u nog veel succes in de toekomst."
       ),
       emailMuted("BatterijConcept Recruitment"),
     ].join(""),

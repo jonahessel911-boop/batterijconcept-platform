@@ -300,6 +300,14 @@ export function normalizeLeadSource(opts: {
   if (key === "native" || key.includes("native")) {
     return "Native";
   }
+  if (
+    key === "referral" ||
+    key === "referrals" ||
+    key.includes("verwijzing") ||
+    key === "vangunst"
+  ) {
+    return "Referral";
+  }
   // Korte lander-codes die per ongeluk in utm_source/bron staan → negeren
   if (/^[a-z]{1,2}$/i.test(raw.trim())) {
     return "Onbekend";

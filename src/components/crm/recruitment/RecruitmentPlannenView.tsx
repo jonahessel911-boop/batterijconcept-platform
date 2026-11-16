@@ -82,7 +82,8 @@ export function RecruitmentPlannenView({
   onBack?: () => void;
 }) {
   const locked = Boolean(lockedKandidaat?.id);
-  const days = useMemo(() => upcomingWorkdays(10), []);
+  /** 3 weken vooruit (ma–vr ≈ 15 werkdagen), horizontaal scrollbaar. */
+  const days = useMemo(() => upcomingWorkdays(15), []);
   const [sollicitatieId, setSollicitatieId] = useState(
     lockedKandidaat?.id || defaultSollicitatieId || ""
   );
@@ -386,7 +387,12 @@ export function RecruitmentPlannenView({
         ) : null}
 
         <div className="grid gap-2">
-          <Label>Dag *</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label>Dag *</Label>
+            <span className="text-[11px] text-muted">
+              3 weken · scroll voor meer
+            </span>
+          </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {days.map((ymd) => {
               const chip = dayChipLabel(ymd);

@@ -39,6 +39,8 @@ export type InboxDbRow = {
   in_reply_to: string | null;
   /** AI-boeking leeft hier: de live tabel heeft nog geen ai_* kolommen. */
   raw_headers: Record<string, unknown> | null;
+  /** info@ vs facturen@ — optioneel tot migrate-inbox-mailbox.sql. */
+  mailbox?: string | null;
 };
 
 function parseAttachments(
@@ -244,6 +246,8 @@ export async function insertBookedInboxMail(
     aiFunction?: string | null;
     attachments?: InboxAttachment[] | null;
     imageUrls?: string[] | null;
+    /** info | facturen — vereist mailbox-kolom; anders raw_headers.mailbox. */
+    mailbox?: "info" | "facturen" | null;
   }
 ): Promise<{ row: InboxDbRow | null; inserted: boolean; skipped?: boolean }> {
   const messageId = (opts?.messageId || "").trim() || null;
@@ -266,7 +270,12 @@ export async function insertBookedInboxMail(
     fallbackThreadId: mail.threadId || null,
   });
 
-  const insertRow = {
+  const mailboxTag =
+    opts?.mailbox === "facturen" || opts?.mailbox === "info"
+      ? opts.mailbox
+      : null;
+
+  const insertRow: Record<string, unknown> = {
     folder: normalizeInboxFolder(
       mail.folder === "inbox" ? "algemeen" : mail.folder
     ),
@@ -293,6 +302,7 @@ export async function insertBookedInboxMail(
       ai_classified_at: mail.aiClassifiedAt || null,
       ai_function: opts?.aiFunction || null,
       ai_effects: mail.aiEffects || null,
+      mailbox: mailboxTag,
       attachments: opts?.attachments?.length
         ? opts.attachments
         : mail.attachments?.length
@@ -305,6 +315,7 @@ export async function insertBookedInboxMail(
           : [],
     },
   };
+  if (mailboxTag) insertRow.mailbox = mailboxTag;
 
   let { data, error } = await sb
     .from("inbox_mails")
@@ -312,17 +323,31 @@ export async function insertBookedInboxMail(
     .select(SELECT_COLS)
     .maybeSingle();
 
+  // mailbox-kolom nog niet gemigreerd → opnieuw zonder kolom
+  if (
+    error &&
+    mailboxTag &&
+    (error.code === "42703" || /mailbox|column/i.test(error.message || ""))
+  ) {
+    delete insertRow.mailbox;
+    ({ data, error } = await sb
+      .from("inbox_mails")
+      .insert(insertRow)
+      .select(SELECT_COLS)
+      .maybeSingle());
+  }
+
   // DB-constraint nog op oude mappen → fallback algemeen + intended_folder
   if (
     error &&
     (error.code === "23514" || /folder|check/i.test(error.message || ""))
   ) {
-    const intended = insertRow.folder;
+    const intended = insertRow.folder as string;
     insertRow.folder = "algemeen";
     insertRow.raw_headers = {
-      ...insertRow.raw_headers,
+      ...(insertRow.raw_headers as Record<string, unknown>),
       intended_folder: intended,
-    } as typeof insertRow.raw_headers;
+    };
     ({ data, error } = await sb
       .from("inbox_mails")
       .insert(insertRow)
@@ -379,10 +404,13 @@ export async function listInboxMails(
     folder?: string | null;
     email?: string | null;
     leadId?: string | null;
+    mailbox?: "info" | "facturen" | null;
     limit?: number;
   }
 ): Promise<InboxDbRow[]> {
   const limit = Math.min(Math.max(opts?.limit || 100, 1), 300);
+  const mailbox = opts?.mailbox || null;
+
   let query = sb
     .from("inbox_mails")
     .select(SELECT_COLS)
@@ -407,19 +435,39 @@ export async function listInboxMails(
     }
   }
 
-  const email = (opts?.email || "").trim().toLowerCase();
-  const leadId = (opts?.leadId || "").trim();
-  if (leadId && email) {
-    query = query.or(
-      `lead_id.eq.${leadId},from_email.eq.${email},to_email.eq.${email}`
-    );
-  } else if (leadId) {
-    query = query.eq("lead_id", leadId);
-  } else if (email) {
-    query = query.or(`from_email.eq.${email},to_email.eq.${email}`);
+  if (mailbox) {
+    query = query.eq("mailbox", mailbox);
   }
 
-  const { data, error } = await query;
+  const email = (opts?.email || "").trim().toLowerCase();
+  const leadId = (opts?.leadId || "").trim();
+  // Bij expliciete mailbox-filter: niet ook op e-mail filteren
+  // (tenzij geen mailbox-kolom → caller valt terug op email).
+  if (!mailbox) {
+    if (leadId && email) {
+      query = query.or(
+        `lead_id.eq.${leadId},from_email.eq.${email},to_email.eq.${email}`
+      );
+    } else if (leadId) {
+      query = query.eq("lead_id", leadId);
+    } else if (email) {
+      query = query.or(`from_email.eq.${email},to_email.eq.${email}`);
+    }
+  }
+
+  let { data, error } = await query;
+  if (
+    error &&
+    mailbox &&
+    (error.code === "42703" || /mailbox|column/i.test(error.message || ""))
+  ) {
+    // Kolom ontbreekt → fallback op to/from e-mail
+    return listInboxMails(sb, {
+      ...opts,
+      mailbox: null,
+      email: opts?.email || null,
+    });
+  }
   if (error) {
     if (
       error.code === "42P01" ||

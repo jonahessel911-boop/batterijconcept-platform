@@ -13,7 +13,8 @@ export type FinanceBron =
   | "partner_creditfactuur"
   | "edergy_factuur"
   | "inkoop_project"
-  | "manual";
+  | "manual"
+  | "facturen_mailbox";
 
 export type FinanceStatus =
   | "concept"

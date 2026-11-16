@@ -31,10 +31,12 @@ export async function GET(
       );
     }
 
+    // Alleen doorgestuurde WF-aanvragen (financiering_status gezet).
+    // Eigen middelen worden in isWarmtefondsRelatedProject uitgefilterd.
     const primary = await sb
       .from("projecten")
       .select(WF_PORTAL_PROJECT_SELECT)
-      .or("betaalwijze.eq.warmtefonds,financiering_status.not.is.null")
+      .not("financiering_status", "is", null)
       .order("warmtefonds_afspraak_at", {
         ascending: true,
         nullsFirst: false,
@@ -48,7 +50,7 @@ export async function GET(
         .from("projecten")
         .select(WF_PORTAL_PROJECT_SELECT_MIN)
         .neq("status", "annulering")
-        .or("betaalwijze.eq.warmtefonds,financiering_status.not.is.null")
+        .not("financiering_status", "is", null)
         .order("warmtefonds_afspraak_at", {
           ascending: true,
           nullsFirst: false,
@@ -69,6 +71,7 @@ export async function GET(
           )
           .neq("status", "annulering")
           .eq("betaalwijze", "warmtefonds")
+          .not("financiering_status", "is", null)
           .order("created_at", { ascending: false });
         if (bare.error) throw bare.error;
         rows = bare.data;

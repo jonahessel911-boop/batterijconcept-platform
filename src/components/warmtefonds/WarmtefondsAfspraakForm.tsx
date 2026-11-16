@@ -8,6 +8,9 @@ function berichtVan(bevestiging: string | null | undefined): string {
   if (bevestiging === "verzonden") {
     return "Afspraak gezet. Bevestiging is naar de klant gestuurd.";
   }
+  if (bevestiging === "uitgeschakeld") {
+    return "Afspraak gezet. (Geen klantmail — tijdelijk uitgeschakeld.)";
+  }
   if (bevestiging === "geen_email") {
     return "Afspraak gezet. De klant heeft geen e-mailadres, dus geen bevestiging.";
   }

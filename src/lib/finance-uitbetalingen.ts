@@ -309,7 +309,63 @@ export async function listFinanceBetalingen(
     }
   }
 
-  // 5) Tracked rows zonder bron-match (manual / operations concepten)
+  // 5) Inkomende facturen (Facturen Inbox → goedgekeurd)
+  {
+    const { data, error } = await sb
+      .from("facturen_inbox_items")
+      .select(
+        "id, status, factuur_nummer, bedrijfsnaam, iban, bedrag_ex_btw, bedrag_inc_btw, betaal_woensdag, goedgekeurd_op, referentie"
+      )
+      .in("status", ["goedgekeurd", "betaald"])
+      .order("updated_at", { ascending: false })
+      .limit(200);
+    if (!error) {
+      for (const row of data || []) {
+        const bron: FinanceBron = "facturen_mailbox";
+        const k = keyOf(bron, row.id as string);
+        seen.add(k);
+        const trackedRow = byKey.get(k);
+        if (trackedRow) {
+          out.push({
+            ...fromTracked(trackedRow),
+            link: "/?tab=partners&partners=facturen_inbox",
+          });
+          continue;
+        }
+        out.push({
+          id: `virt:${k}`,
+          categorie: "overig",
+          bron,
+          bron_id: row.id as string,
+          begunstigde: (row.bedrijfsnaam as string) || "Crediteur",
+          iban: (row.iban as string) || null,
+          omschrijving: [
+            "Inkomende factuur",
+            row.factuur_nummer ? `nr ${row.factuur_nummer}` : null,
+            row.betaal_woensdag ? `wo ${row.betaal_woensdag}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          referentie:
+            (row.referentie as string) ||
+            (row.factuur_nummer as string) ||
+            null,
+          bedrag_ex_btw: Number(row.bedrag_ex_btw) || null,
+          bedrag_inc_btw: Number(row.bedrag_inc_btw) || 0,
+          status:
+            row.status === "betaald" ? "betaald" : "goedgekeurd",
+          goedgekeurd_op: (row.goedgekeurd_op as string) || null,
+          betaald_op: null,
+          bunq_payment_id: null,
+          foutmelding: null,
+          tracked: false,
+          link: "/?tab=partners&partners=facturen_inbox",
+        });
+      }
+    }
+  }
+
+  // 6) Tracked rows zonder bron-match (manual / operations concepten)
   for (const t of tracked) {
     const k = keyOf(t.bron, t.bron_id);
     if (seen.has(k)) continue;
@@ -360,6 +416,15 @@ async function markBronBetaald(
         inkoop_leverancier_betaald_op: betaaldOp.slice(0, 10),
       })
       .eq("id", bronId);
+  } else if (bron === "facturen_mailbox") {
+    await sb
+      .from("facturen_inbox_items")
+      .update({
+        status: "betaald",
+        updated_at: betaaldOp,
+      })
+      .eq("id", bronId)
+      .in("status", ["goedgekeurd", "te_goedkeuren"]);
   }
   // edergy: store update later; tracked row is source of truth for payout
 }

@@ -130,6 +130,8 @@ const VIEW_NAV: Array<{
 const KANBAN_COLUMNS: SollicitatieStatus[] = [
   "nieuw",
   "geen_contact",
+  "terugbelafspraak",
+  "geen_interesse",
   "gesprek_gepland",
   "gesprek_gehad",
   "gesprek_gehad_diskwalificatie",
@@ -539,9 +541,10 @@ export function RecruitmentPanel() {
 
   async function requestStatusChange(id: string, next: SollicitatieStatus) {
     const item = items.find((s) => s.id === id);
-    if (!item) return;
-    const current = normalizeSollicitatieStatus(item.status);
-    if (next === current) return;
+    const current = item
+      ? normalizeSollicitatieStatus(item.status)
+      : null;
+    if (current && next === current) return;
     if (next === SOLLICITATIE_STATUS_MET_VERVOLG) {
       openBeoordelingDialog(id);
       return;
@@ -911,6 +914,13 @@ export function RecruitmentPanel() {
             onOpenKandidaat={openDetail}
             onSetStatus={async (id, status) => {
               await requestStatusChange(id, status);
+            }}
+            onAcceptForTraining={async (id) => {
+              await patchKandidaat(id, {
+                status: "aangenomen_training_gepland",
+                training_moment_id: null,
+              });
+              setView("trainingen");
             }}
           />
         ) : view === "trainingen" ? (

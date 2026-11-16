@@ -49,6 +49,8 @@ type BelConversieData = {
     geannuleerd?: number;
     annuleringsPct?: number | null;
     leadToAppt: number | null;
+    cohortLeads?: number;
+    cohortAppointed?: number;
     nonNieuwGebeld?: number;
     nonNieuwIngepland?: number;
     nonNieuwLeadToAppt?: number | null;
@@ -247,7 +249,11 @@ function BelSeriesChart({
             >
               <p
                 className="text-[11px] font-semibold tabular-nums text-green-dark"
-                title="Lead to appointment %"
+                title={
+                  b.cohortLeads != null
+                    ? `L→A cohort: ${b.cohortAppointed ?? 0}/${b.cohortLeads} leads die die dag binnenkwamen`
+                    : "Lead to appointment % (leads van die dag)"
+                }
               >
                 {b.leadToAppt != null ? `${num(b.leadToAppt, 1)}%` : "—"}
               </p>
@@ -376,10 +382,17 @@ function BelSeriesChart({
                 </li>
               ) : null}
               <li>
-                Lead to appointment{" "}
+                L→A leads{" "}
+                {granularity === "week" ? "die week" : "die dag"}{" "}
                 <span className="font-semibold text-green-dark">
                   {tip.leadToAppt != null ? `${num(tip.leadToAppt, 1)}%` : "—"}
                 </span>
+                {tip.cohortLeads != null && tip.cohortLeads > 0 ? (
+                  <span className="text-muted">
+                    {" "}
+                    ({num(tip.cohortAppointed)}/{num(tip.cohortLeads)})
+                  </span>
+                ) : null}
               </li>
               <li>
                 <span
@@ -406,7 +419,7 @@ function BelSeriesChart({
                 <span className="font-semibold text-[#C45A12]">
                   {num(tip.geannuleerd)}
                   {tip.annuleringsPct != null
-                    ? ` (${num(tip.annuleringsPct, 1)}% van geplaatst)`
+                    ? ` (${num(tip.annuleringsPct, 1)}% van die dag geplaatst)`
                     : ""}
                 </span>
               </li>
@@ -977,9 +990,15 @@ export function BelConversiePanel() {
                 Lead to appointment
               </p>
               <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-green-dark">
-                {totals?.nonNieuwLeadToAppt != null
-                  ? `${num(totals.nonNieuwLeadToAppt, 1)}%`
+                {totals?.leadToAppt != null
+                  ? `${num(totals.leadToAppt, 1)}%`
                   : "—"}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Van leads die in deze periode binnenkwamen
+                {totals?.cohortLeads != null && totals.cohortLeads > 0
+                  ? ` · ${num(totals.cohortAppointed)}/${num(totals.cohortLeads)}`
+                  : ""}
               </p>
             </div>
             <div className="rounded-2xl border border-[#C45A12]/25 bg-white p-4">
@@ -996,7 +1015,7 @@ export function BelConversiePanel() {
                   ? `${num(
                       totals?.annuleringsPct ?? seriesSums.annuleringsPct,
                       1
-                    )}% van geplaatst`
+                    )}% van in periode geplaatst`
                   : "Geen annuleringen"}
               </p>
             </div>
@@ -1063,7 +1082,7 @@ export function BelConversiePanel() {
                     </th>
                   ) : null}
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
-                    L→A %
+                    L→A % (inkomende leads)
                   </th>
                   <th
                     className="px-3 py-2.5 font-semibold tabular-nums"
@@ -1133,7 +1152,7 @@ export function BelConversiePanel() {
                             <span className="ml-1 text-[11px] font-normal text-muted">
                               (
                               {b.annuleringsPct != null
-                                ? `${num(b.annuleringsPct, 1)}% van geplaatst`
+                                ? `${num(b.annuleringsPct, 1)}% van die dag geplaatst`
                                 : "—"}
                               )
                             </span>

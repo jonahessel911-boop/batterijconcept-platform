@@ -30,6 +30,8 @@ export type BelConversieLead = {
   lander?: string | null;
   campaign_name?: string | null;
   ad_name?: string | null;
+  /** Wanneer de lead binnenkwam — voor cohort L→A per dag */
+  created_at?: string | null;
   laatst_gebeld_at: string | null;
   laatst_gebeld_door?: string | null;
   bel_claimed_by?: string | null;
@@ -183,11 +185,17 @@ export type BelConversieResult = {
     ingepland: number;
     geannuleerd: number;
     annuleringsPct: number | null;
+    /**
+     * Cohort L→A: leads die in het venster binnenkwamen → % met
+     * niet-geannuleerd nieuw huisbezoek (mag later zijn ingepland).
+     */
     leadToAppt: number | null;
+    cohortLeads: number;
+    cohortAppointed: number;
     redenen: BelConversieRedenen;
     /**
      * Alleen leads die niet meer status “nieuw” hebben (afgeboekt / in funnel).
-     * L→A = huisbezoeken ÷ die leads.
+     * Bel-activiteit L→A (niet cohort).
      */
     nonNieuwGebeld: number;
     nonNieuwIngepland: number;
@@ -220,9 +228,15 @@ export type BelConversieSeriesBucket = {
   geannuleerd: number;
   /** Uitval % = geannuleerd ÷ (ingepland + geannuleerd) */
   annuleringsPct: number | null;
-  /** L→A alleen op leads met status ≠ nieuw */
+  /** L→A alleen op leads met status ≠ nieuw (bel-activiteit) */
   nonNieuwGebeld: number;
   nonNieuwIngepland: number;
+  /**
+   * Cohort L→A: leads die in dit venster binnenkwamen → % met
+   * niet-geannuleerd nieuw huisbezoek (ingepland mag later zijn).
+   */
+  cohortLeads: number;
+  cohortAppointed: number;
   leadToAppt: number | null;
   /** Ingepland-doel voor dit venster (0 in weekend bij dagreeks) */
   doel: number;
@@ -589,9 +603,10 @@ export function annuleringsMomentIso(
 }
 
 /**
- * Eerste nieuw-huisbezoeken die in [start, end] zijn geannuleerd (updated_at).
- * Telt dus ook bookings van eerdere dagen die vandaag sneuvelden.
- * % uitval = geannuleerd ÷ (actief ingepland + geannuleerd).
+ * Eerste nieuw-huisbezoeken die in [start, end] zijn gezet (created_at) én
+ * (nog) geannuleerd staan — cohort-uitval van die plandag, niet “alles wat
+ * vandaag sneuvelde”. Herplande leads tellen niet mee.
+ * % uitval = geannuleerd ÷ (actief ingepland + geannuleerd) van die cohort.
  */
 export function countGeannuleerdeEersteHuisbezoeken(opts: {
   afspraken: BelConversieAfspraak[];
@@ -630,8 +645,11 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
     ) {
       continue;
     }
-    const when = annuleringsMomentIso(a);
-    if (!when || !inAmsterdamDayRange(when, opts.start, opts.end)) continue;
+    // Cohort: gezet in dit venster (niet: geannuleerd op deze kalenderdag)
+    const placedAt = (a.created_at || "").trim();
+    if (!placedAt || !inAmsterdamDayRange(placedAt, opts.start, opts.end)) {
+      continue;
+    }
 
     const door = (a.ingepland_door_id || "").trim();
     let attributed = door;
@@ -1026,7 +1044,7 @@ export function buildBelConversie(opts: {
     }
   }
 
-  // Uitval per beller: eerste-nieuw geannuleerd in venster (annuleringsmoment)
+  // Uitval per beller: van huisbezoeken gezet in venster, hoeveel geannuleerd
   const uitval = countGeannuleerdeEersteHuisbezoeken({
     afspraken: opts.afspraken,
     historie,
@@ -1126,8 +1144,6 @@ export function buildBelConversie(opts: {
     );
 
   const gebeld = byId.size;
-  const l2a = safeDiv(ingeplandTotal, gebeld);
-  const leadToAppt = l2a != null ? round2(l2a * 100) : null;
   const redenen = redenenTotal;
 
   // L→A voor leads die niet (meer) “nieuw” zijn — outcome/werk in de funnel
@@ -1142,6 +1158,24 @@ export function buildBelConversie(opts: {
   const nonNieuwL2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
   const nonNieuwLeadToAppt =
     nonNieuwL2a != null ? round2(nonNieuwL2a * 100) : null;
+
+  // Cohort L→A over het hele rapportagevenster (leads die toen binnenkwamen)
+  const appointedEver = new Set<string>();
+  for (const a of historie) {
+    if (!isHuisbezoekAfspraak(a)) continue;
+    if (a.lead_id) appointedEver.add(a.lead_id);
+  }
+  let cohortLeads = 0;
+  let cohortAppointed = 0;
+  for (const l of opts.leads) {
+    if (!l.created_at) continue;
+    if (!inAmsterdamDayRange(l.created_at, start, end)) continue;
+    cohortLeads += 1;
+    if (appointedEver.has(l.id)) cohortAppointed += 1;
+  }
+  const cohortL2a = safeDiv(cohortAppointed, cohortLeads);
+  const leadToAppt =
+    cohortL2a != null ? round2(cohortL2a * 100) : null;
 
   const baseTargets =
     opts.targets ||
@@ -1253,7 +1287,10 @@ export function buildBelConversie(opts: {
         geannuleerdTotal,
         ingeplandTotal
       ),
+      /** Cohort: leads binnen in venster → % met huisbezoek */
       leadToAppt,
+      cohortLeads,
+      cohortAppointed,
       redenen,
       nonNieuwGebeld,
       nonNieuwIngepland,
@@ -1395,7 +1432,7 @@ export function scoreBelConversieWindow(opts: {
     }
   }
 
-  // Uitval: eerste-nieuw geannuleerd in dit venster (op annuleringsmoment)
+  // Uitval: van de huisbezoeken gezet in dit venster, hoeveel zijn geannuleerd
   const { geannuleerd } = countGeannuleerdeEersteHuisbezoeken({
     afspraken: opts.afspraken,
     historie: opts.huisbezoekHistorie,
@@ -1408,7 +1445,24 @@ export function scoreBelConversieWindow(opts: {
   });
 
   const gebeld = byId.size;
-  const l2a = safeDiv(nonNieuwIngepland, nonNieuwGebeld);
+
+  // Cohort L→A: leads die in dit venster binnenkwamen (niet: wie je die dag belde).
+  // Appointed = ooit een actief (niet-geannuleerd) nieuw huisbezoek — mag later zijn.
+  const appointedLeadIds = new Set<string>();
+  for (const a of historie) {
+    if (!isHuisbezoekAfspraak(a)) continue;
+    if (a.lead_id) appointedLeadIds.add(a.lead_id);
+  }
+  let cohortLeads = 0;
+  let cohortAppointed = 0;
+  for (const l of opts.leads) {
+    if (!l.created_at) continue;
+    if (!inAmsterdamDayRange(l.created_at, start, end)) continue;
+    cohortLeads += 1;
+    if (appointedLeadIds.has(l.id)) cohortAppointed += 1;
+  }
+  const cohortL2a = safeDiv(cohortAppointed, cohortLeads);
+
   const uitvalPct = annuleringsPctVanGeplaatst(geannuleerd, ingepland);
   return {
     ingepland,
@@ -1419,7 +1473,9 @@ export function scoreBelConversieWindow(opts: {
     annuleringsPct: uitvalPct,
     nonNieuwGebeld,
     nonNieuwIngepland,
-    leadToAppt: l2a != null ? round2(l2a * 100) : null,
+    cohortLeads,
+    cohortAppointed,
+    leadToAppt: cohortL2a != null ? round2(cohortL2a * 100) : null,
     doel: 0,
   };
 }
