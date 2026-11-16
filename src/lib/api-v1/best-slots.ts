@@ -127,12 +127,14 @@ function dayKeyAmsterdamIso(iso: string): string {
   return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
-/** Agenda-blokken: 10 ochtend, 13/16 middag, 19 avond. */
+/** Agenda-blokken: 10 ochtend, 12/13/14/16 middag, 19 avond. */
 export type FonioDagdeel = "ochtend" | "middag" | "avond";
 
 export function dagdeelVanHour(hour: number): FonioDagdeel | null {
   if (hour === 10) return "ochtend";
-  if (hour === 13 || hour === 16) return "middag";
+  if (hour === 12 || hour === 13 || hour === 14 || hour === 16) {
+    return "middag";
+  }
   if (hour === 19) return "avond";
   return null;
 }
@@ -166,7 +168,7 @@ export function pickFonioDaypartSlots<T extends { start_at: string }>(
 
   const middag = pickFirst((s) => {
     const h = hourAmsterdam(s.start_at);
-    return h === 13 || h === 16;
+    return h === 12 || h === 13 || h === 14 || h === 16;
   });
   if (middag) picked.push(middag);
 
@@ -319,6 +321,7 @@ async function freeSlotsForAdviseur(
   const rawSlots = generateAvailableSlots({
     busy: busyRows,
     daysAhead,
+    adviseurId,
   }).map((s) => ({
     start_at: s.start.toISOString(),
     end_at: s.end.toISOString(),

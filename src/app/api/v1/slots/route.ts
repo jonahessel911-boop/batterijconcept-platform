@@ -139,6 +139,7 @@ export async function GET(req: NextRequest) {
     const rawSlots = generateAvailableSlots({
       busy: busyRows,
       daysAhead,
+      adviseurId,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),

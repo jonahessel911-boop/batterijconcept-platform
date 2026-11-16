@@ -95,16 +95,22 @@ export function RapportagePanel() {
     setError(null);
     try {
       const res = await fetch(
-        `/api/rapportage?geo_period=${encodeURIComponent(period)}`
+        `/api/rapportage/geo?geo_period=${encodeURIComponent(period)}`
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Laden mislukt");
-      setGeo(data.geo || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Kaart laden mislukt"
+        );
+      }
+      setGeo((data as { geo?: GeoRegionMetrics[] }).geo || []);
       setGeoPeriodLabel(
-        (data.geoPeriodLabel as string) || CONVERSIE_PERIOD_LABELS[period]
+        (data as { geoPeriodLabel?: string }).geoPeriodLabel ||
+          CONVERSIE_PERIOD_LABELS[period]
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fout");
+      setGeo([]);
     } finally {
       setMapLoading(false);
     }

@@ -87,54 +87,138 @@ export function extractFactuurFromText(
   text: string,
   opts?: { subject?: string | null; fromName?: string | null }
 ): FactuurExtract {
-  const hay = `${opts?.subject || ""}\n${text || ""}`;
+  const subject = (opts?.subject || "").trim();
+  const hay = `${subject}\n${text || ""}`;
 
   const ibanRaw = firstMatch(hay, [
-    /\bIBAN\b[:\s]*([A-Z]{2}\d{2}[\sA-Z0-9]{10,30})/i,
-    /\b(NL\d{2}\s?[A-Z]{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{0,2})\b/i,
-    /\b([A-Z]{2}\d{2}[A-Z0-9]{10,28})\b/,
+    // "IBAN NL40 RABO 0302 4843 29" / "IBAN: NL…"
+    /\bIBAN\b[:\s]*([A-Z]{2}\s*\d{2}(?:\s*[A-Z0-9]{4}){3}(?:\s*[A-Z0-9]{0,4})?)/i,
+    /\b(NL\s*\d{2}(?:\s*[A-Z]{4})(?:\s*\d{4}){3})\b/i,
+    /\b(NL\d{2}(?:\s?[A-Z0-9]{4}){4})\b/i,
   ]);
-  const iban = ibanRaw ? normalizeIban(ibanRaw) : null;
+  let iban = ibanRaw ? normalizeIban(ibanRaw) : null;
+  // NL-IBAN is precies 18 tekens — knip trailing rotzooi (bijv. "T" van "T.n.v.")
+  if (iban?.startsWith("NL")) {
+    iban = iban.slice(0, 18);
+    if (iban.length !== 18 || !/^NL\d{2}[A-Z]{4}\d{10}$/.test(iban)) {
+      iban = null;
+    }
+  } else if (iban && (iban.length < 15 || iban.length > 34)) {
+    iban = null;
+  }
 
-  const factuur_nummer = firstMatch(hay, [
-    /factuur(?:nummer| nr\.?|nr\.?)[:\s#]*([A-Z0-9][-A-Z0-9/]{2,40})/i,
-    /invoice\s*(?:number|no\.?|#)[:\s]*([A-Z0-9][-A-Z0-9/]{2,40})/i,
-    /\bF[-\s]?(\d{4}[-/]\d{3,})\b/i,
-  ]);
+  const rawFactuurnr =
+    firstMatch(hay, [
+      /factuurn(?:ummer)?(?:\s*nr\.?)?[:\s#]*([A-Z0-9][-A-Z0-9/.]{2,40})/i,
+      /factuur\s*(?:nummer|nr\.?|#)?[:\s#]*([A-Z0-9][-A-Z0-9/.]{2,40})/i,
+      /invoice\s*(?:number|no\.?|#)[:\s]*([A-Z0-9][-A-Z0-9/.]{2,40})/i,
+      /\b(FAC[-/]?\d{4}[-/]\d{3,})\b/i,
+      /\bF[-\s]?(\d{4}[-/]\d{3,})\b/i,
+      // Bestandsnaam / subject: 202602850-jdj-investments-…
+      /^(\d{6,12})[-_]/m,
+    ]) ||
+    firstMatch(subject, [/^(\d{6,12})\b/, /\b(FAC[-/]?\d{4}[-/]\d{3,})\b/i]);
+  const factuur_nummer = rawFactuurnr
+    ? rawFactuurnr.replace(/[.\s]+$/g, "")
+    : null;
 
+  // Let op: geen "totaal" matchen in "subtotaal"
   const bedragInc = firstMatch(hay, [
-    /(?:totaal|te\s*betalen|amount\s*due|incl\.?\s*btw)[:\s]*€?\s*([\d.,]+)/i,
-    /€\s*([\d.,]+)\s*(?:incl\.?\s*btw|totaal)/i,
+    /(?:^|[^\w])(?:totaal(?:\s*incl\.?\s*btw)?|te\s*betalen|amount\s*due)[:\s]*€?\s*([\d.,]+)/im,
+    /(?:^|[^\w])bedrag[:\s]*€?\s*([\d.,]+)/im,
+    /€\s*([\d.,]+)\s*(?:incl\.?\s*btw|(?<!sub)totaal)/i,
   ]);
   const bedragEx = firstMatch(hay, [
     /(?:subtotaal|excl\.?\s*btw|ex\.?\s*btw|subtotal)[:\s]*€?\s*([\d.,]+)/i,
     /€\s*([\d.,]+)\s*(?:excl\.?\s*btw|ex\.?\s*btw)/i,
   ]);
   const btw = firstMatch(hay, [
-    /(?:btw|vat)\s*(?:\d+\s*%?)?[:\s]*€?\s*([\d.,]+)/i,
+    /(?:^|[^\w])(?:btw|vat)\s*(?:\d+\s*%?)?[:\s]*€?\s*([\d.,]+)/im,
   ]);
 
-  const bedrag_inc_btw = bedragInc ? parseEuroAmount(bedragInc) : null;
-  const bedrag_ex_btw = bedragEx ? parseEuroAmount(bedragEx) : null;
-  const btw_bedrag = btw ? parseEuroAmount(btw) : null;
+  let bedrag_inc_btw = bedragInc ? parseEuroAmount(bedragInc) : null;
+  let bedrag_ex_btw = bedragEx ? parseEuroAmount(bedragEx) : null;
+  let btw_bedrag = btw ? parseEuroAmount(btw) : null;
+  // Vul ontbrekende bedragen uit BTW-som
+  if (
+    bedrag_inc_btw == null &&
+    bedrag_ex_btw != null &&
+    btw_bedrag != null
+  ) {
+    bedrag_inc_btw =
+      Math.round((bedrag_ex_btw + btw_bedrag) * 100) / 100;
+  }
+  if (
+    bedrag_ex_btw == null &&
+    bedrag_inc_btw != null &&
+    btw_bedrag != null
+  ) {
+    bedrag_ex_btw =
+      Math.round((bedrag_inc_btw - btw_bedrag) * 100) / 100;
+  }
+  // Inconsistente BTW-parse (ruis uit PDF) weggooien
+  if (
+    bedrag_inc_btw != null &&
+    bedrag_ex_btw != null &&
+    btw_bedrag != null
+  ) {
+    const sum = Math.round((bedrag_ex_btw + btw_bedrag) * 100) / 100;
+    if (Math.abs(sum - bedrag_inc_btw) > 0.05) {
+      btw_bedrag = null;
+      bedrag_ex_btw = null;
+    }
+  }
 
   const vervalRaw = firstMatch(hay, [
     /verval(?:datum)?[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
     /due\s*date[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
+    /voor\s+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})\s+te\s+voldoen/i,
   ]);
   const factuurRaw = firstMatch(hay, [
     /factuurdatum[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
     /invoice\s*date[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
   ]);
 
-  const bedrijfsnaam =
+  const firstLine = (text || "")
+    .split(/\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length >= 3 && !/^factuur/i.test(l));
+
+  const cleanName = (s: string | null | undefined) => {
+    let t = (s || "").trim();
+    if (!t) return null;
+    // Behoud B.V. / N.V. — strip alleen losse trailing punt
+    if (/\b[BN]\.?V\.?$/i.test(t)) {
+      return t.replace(/\s+/g, " ").replace(/B\.?V\.?$/i, "B.V.");
+    }
+    return t.replace(/[.\s]+$/g, "") || null;
+  };
+
+  const bedrijfsnaam = cleanName(
     firstMatch(hay, [
-      /(?:bedrijfsnaam|leverancier|crediteur|van)[:\s]*([^\n]{3,80})/i,
+      /statutaire\s*naam\s+([A-Za-z0-9][^\n|]{2,70}?)(?=\s+KvK|\s+BTW|\s+IBAN|$)/i,
+      /(?:bedrijfsnaam|leverancier|crediteur)[:\s]*([^\n]{3,80})/i,
     ]) ||
-    (opts?.fromName && !/@/.test(opts.fromName) ? opts.fromName.trim() : null);
+      (firstLine &&
+      /\b(b\.?v\.?|n\.?v\.?|vof|eenmanszaak|holding|accountants)\b/i.test(
+        firstLine
+      ) &&
+      !/\binvestments\b/i.test(firstLine)
+        ? firstLine.slice(0, 80)
+        : null) ||
+      (firstLine &&
+      /\b(b\.?v\.?|n\.?v\.?|vof|eenmanszaak|holding|investments)\b/i.test(
+        firstLine
+      )
+        ? firstLine.slice(0, 80)
+        : null) ||
+      (opts?.fromName && !/@/.test(opts.fromName)
+        ? opts.fromName.trim()
+        : null)
+  );
 
   const referentie = firstMatch(hay, [
-    /(?:kenmerk|referentie|betalingskenmerk|payment\s*reference)[:\s]*([A-Z0-9][-A-Z0-9/ ]{2,60})/i,
+    /(?:kenmerk|referentie|betalingskenmerk|omschrijving|betreft|payment\s*reference)[:\s]*([A-Z0-9][-A-Z0-9/ ]{2,80})/i,
   ]);
 
   return {

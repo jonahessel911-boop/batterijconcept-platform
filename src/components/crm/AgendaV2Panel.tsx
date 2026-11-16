@@ -35,7 +35,10 @@ import {
   schouwWeekToMondayIso,
   schouwWeekValue,
 } from "@/lib/schouw-week";
-import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
+import {
+  adviseurHeeftSlotUur,
+  unionSlotHours,
+} from "@/lib/slots";
 import {
   afblokKey,
   isBeforeStartdatum,
@@ -48,13 +51,15 @@ import { AfspraakDetail } from "./AgendaPanel";
 import { LeadsTable } from "./LeadsTable";
 import { ReistijdHint } from "./ReistijdHint";
 
-/** Vaste afspraakblokken: 10:00, 13:00, 16:00, 19:00 */
-const SLOT_ROWS: { label: string; hour: number; minute: number }[] =
-  ADVISEUR_SLOT_HOURS.map((hour) => ({
+type SlotRow = { label: string; hour: number; minute: number };
+
+function slotRowsFromHours(hours: readonly number[]): SlotRow[] {
+  return hours.map((hour) => ({
     label: `${String(hour).padStart(2, "0")}:00`,
     hour,
     minute: 0,
   }));
+}
 
 type LegendItem = { color: string; label: string };
 
@@ -126,11 +131,11 @@ function appointmentHourLocal(startAt: string): number {
   return h + m / 60;
 }
 
-function nearestSlotIndex(startAt: string): number {
+function nearestSlotIndex(startAt: string, rows: SlotRow[]): number {
   const t = appointmentHourLocal(startAt);
   let best = 0;
   let bestDist = Infinity;
-  SLOT_ROWS.forEach((row, i) => {
+  rows.forEach((row, i) => {
     const rowT = row.hour + row.minute / 60;
     const d = Math.abs(rowT - t);
     if (d < bestDist) {
@@ -586,6 +591,15 @@ export function AgendaPanel({
     mobileAdviseurId,
   ]);
 
+  /** Agenda-rijen: unie van sloturen van zichtbare adviseurs (Marcel = 10/12/14/16). */
+  const SLOT_ROWS = useMemo(
+    () =>
+      slotRowsFromHours(
+        unionSlotHours(displayAdviseurs.map((a) => a.id))
+      ),
+    [displayAdviseurs]
+  );
+
   /**
    * Per adviseur deze week: geplande blokken / totaal beschikbare blokken.
    * Beschikbaar = elk niet-geblokkeerd planbaar slot (ongeacht of er al iets in staat).
@@ -604,14 +618,17 @@ export function AgendaPanel({
         vrij.set(adv.id, 0);
         continue;
       }
+      const advRows = slotRowsFromHours(
+        unionSlotHours([adv.id])
+      );
       let geplandN = 0;
       let beschikbaarN = 0;
       for (const day of days) {
         if (isBeforeStartdatum(`${day.key}T12:00:00`, adv.startdatum)) {
           continue;
         }
-        for (let slotIdx = 0; slotIdx < SLOT_ROWS.length; slotIdx++) {
-          const row = SLOT_ROWS[slotIdx]!;
+        for (let slotIdx = 0; slotIdx < advRows.length; slotIdx++) {
+          const row = advRows[slotIdx]!;
           if (
             isSlotGeblokkeerd(
               adv.id,
@@ -632,7 +649,7 @@ export function AgendaPanel({
             if (a.adviseur_id !== adv.id) return false;
             if (!afspraakBlokkeertAgenda(a.soort)) return false;
             if (dayKeyAmsterdam(a.start_at) !== day.key) return false;
-            return nearestSlotIndex(a.start_at) === slotIdx;
+            return nearestSlotIndex(a.start_at, advRows) === slotIdx;
           });
           if (bezet) geplandN += 1;
         }
@@ -1080,6 +1097,7 @@ export function AgendaPanel({
     slotIdx: number
   ) {
     const row = SLOT_ROWS[slotIdx];
+    if (!row || !adviseurHeeftSlotUur(adviseurId, row.hour)) return;
     if (afblokMode) {
       void toggleSlotAfblok(adviseurId, dayKey, row.hour);
       return;
@@ -1096,7 +1114,7 @@ export function AgendaPanel({
       if (a.adviseur_id !== adviseurId) return false;
       if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
       if (dayKeyAmsterdam(a.start_at) !== dayKey) return false;
-      return nearestSlotIndex(a.start_at) === slotIdx;
+      return nearestSlotIndex(a.start_at, SLOT_ROWS) === slotIdx;
     });
   }
 
@@ -1170,6 +1188,10 @@ export function AgendaPanel({
       return;
     }
     const row = SLOT_ROWS[slotIdx];
+    if (!row || !adviseurHeeftSlotUur(adviseurId, row.hour)) {
+      setError("Dit tijdslot geldt niet voor deze adviseur");
+      return;
+    }
     // Over bezet slot: afblokkingen negeren — telefonisch/terugbel mag altijd
     if (!overBezet && isSlotBlocked(adviseurId, dayKey, row.hour)) {
       const vanafHuis = startVanafHuisFor(adviseurId);
@@ -1543,7 +1565,7 @@ export function AgendaPanel({
           <div className="mt-3 space-y-1">
             {afblokMode && (
               <p className="border border-[#B91C1C]/25 bg-[#FEF2F2] px-3 py-2 text-xs font-medium text-[#B91C1C]">
-                Afblok-modus actief — klik op een leeg tijdslot (10 / 13 / 16 /
+                Afblok-modus actief — klik op een leeg tijdslot (vaste uren /
                 19) om te blokkeren of weer te openen. Klik op “Klaar met
                 afblokken” als je klaar bent.
               </p>
@@ -1717,18 +1739,18 @@ export function AgendaPanel({
                       {row.label}
                     </div>
                     {displayAdviseurs.map((adv) => {
-                      const weekBlocked = isWeekBlocked(adv.id);
-                      const slotBlocked = isSlotBlocked(
+                      const notHisSlot = !adviseurHeeftSlotUur(
                         adv.id,
-                        day.key,
                         row.hour
                       );
+                      const weekBlocked = isWeekBlocked(adv.id);
+                      const slotBlocked =
+                        notHisSlot ||
+                        isSlotBlocked(adv.id, day.key, row.hour);
                       const blocked = weekBlocked || slotBlocked;
-                      const items = appointmentsInCell(
-                        adv.id,
-                        day.key,
-                        slotIdx
-                      );
+                      const items = notHisSlot
+                        ? []
+                        : appointmentsInCell(adv.id, day.key, slotIdx);
                       // Geannuleerde afspraken mogen afblokken niet blokkeren
                       const activeItems = items.filter(
                         (a) => a.status !== "geannuleerd"

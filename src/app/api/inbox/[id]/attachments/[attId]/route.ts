@@ -12,7 +12,8 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/inbox/[id]/attachments/[attId]
- * Afbeeldingen inline (galerij); ?download=1 forceren als download.
+ * PDF/afbeeldingen standaard inline (preview in iframe).
+ * ?download=1 forceren als download.
  */
 export async function GET(
   req: NextRequest,
@@ -58,12 +59,19 @@ export async function GET(
 
     const filename = att.filename.replace(/"/g, "");
     const forceDownload = req.nextUrl.searchParams.get("download") === "1";
-    const asImage = isInboxImageAttachment(att) && !forceDownload;
+    const contentType = (att.contentType || file.contentType || "").trim();
+    const isPdf =
+      /pdf/i.test(contentType) || /\.pdf$/i.test(att.filename || "");
+    const asInline =
+      !forceDownload && (isInboxImageAttachment(att) || isPdf);
     return new NextResponse(new Uint8Array(file.bytes), {
       status: 200,
       headers: {
-        "Content-Type": att.contentType || file.contentType,
-        "Content-Disposition": asImage
+        "Content-Type":
+          isPdf && !/pdf/i.test(contentType)
+            ? "application/pdf"
+            : contentType || "application/octet-stream",
+        "Content-Disposition": asInline
           ? `inline; filename="${filename}"`
           : `attachment; filename="${filename}"`,
         "Cache-Control": "private, max-age=3600",

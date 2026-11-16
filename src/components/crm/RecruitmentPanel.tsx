@@ -16,6 +16,7 @@ import {
   Inbox,
   LayoutGrid,
   Mail,
+  Map as MapIcon,
   Phone,
   PhoneCall,
   Plus,
@@ -92,6 +93,7 @@ import { RecruitmentDeadlinesView } from "@/components/crm/recruitment/Recruitme
 import { RecruitmentJobsView } from "@/components/crm/recruitment/RecruitmentJobsView";
 import { RecruitmentBelPanel } from "@/components/crm/recruitment/RecruitmentBelPanel";
 import { RecruitmentInboxPanel } from "@/components/crm/recruitment/RecruitmentInboxPanel";
+import { RecruitmentKaartView } from "@/components/crm/recruitment/RecruitmentKaartView";
 import { cn } from "@/lib/utils";
 
 type ViewMode =
@@ -99,6 +101,7 @@ type ViewMode =
   | "bellen"
   | "inbox"
   | "deadlines"
+  | "kaart"
   | "trainingen"
   | "kpis"
   | "vacatures";
@@ -117,6 +120,7 @@ const VIEW_NAV: Array<{
   { id: "inbox", label: "Inbox", icon: Inbox, group: "werk" },
   { id: "deadlines", label: "Deadlines", icon: CalendarClock, group: "werk" },
   { id: "tabel", label: "Aanmeldingen", icon: Table2, group: "werk" },
+  { id: "kaart", label: "Kaart", icon: MapIcon, group: "werk" },
   {
     id: "trainingen",
     label: "Trainingen",
@@ -883,6 +887,10 @@ export function RecruitmentPanel() {
           <RecruitmentKpisView />
         ) : view === "vacatures" ? (
           <RecruitmentJobsView />
+        ) : view === "kaart" ? (
+          <div className="min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-4">
+            <RecruitmentKaartView />
+          </div>
         ) : view === "bellen" ? (
           <RecruitmentBelPanel
             kandidaten={items}

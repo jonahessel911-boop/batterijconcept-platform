@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import type { GeoRegionMetrics } from "@/lib/rapportage";
 import {
@@ -38,6 +38,32 @@ export function RapportageMap({
 }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
+  const [geoJson, setGeoJson] = useState<object | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(GEO_URL, { cache: "force-cache" });
+        if (!res.ok) throw new Error(`GeoJSON ${res.status}`);
+        const json = (await res.json()) as object;
+        if (!cancelled) {
+          setGeoJson(json);
+          setGeoError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setGeoError(
+            e instanceof Error ? e.message : "Nederland-kaart laden mislukt"
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const byLabel = useMemo(() => {
     const m = new Map<string, GeoRegionMetrics>();
@@ -111,61 +137,75 @@ export function RapportageMap({
         </div>
 
         <div className="mx-auto mt-3 w-full max-w-[640px]">
-          <ComposableMap
-            projection="geoMercator"
-            projectionConfig={{ scale: 7500, center: [5.3, 52.15] }}
-            width={640}
-            height={720}
-            style={{ width: "100%", height: "auto" }}
-          >
-            <Geographies geography={GEO_URL}>
-              {({ geographies }) =>
-                geographies.map((geo) => {
-                  const rawName = String(
-                    geo.properties?.statnaam ||
-                      geo.properties?.name ||
-                      "Unknown"
-                  );
-                  const label = normalizeProvincieLabel(rawName);
-                  const m = metricsForGeoName(rawName);
-                  const leads = m?.leads || 0;
-                  const isActive = activeKey === label;
-                  return (
-                    <Geography
-                      key={geo.rsmKey}
-                      geography={geo}
-                      onClick={() =>
-                        setSelected((prev) => (prev === label ? null : label))
-                      }
-                      onMouseEnter={() => setHover(label)}
-                      onMouseLeave={() => setHover(null)}
-                      style={{
-                        default: {
-                          fill: isActive ? "#f37021" : heatColor(leads, maxLeads),
-                          stroke: isActive ? "#c45a12" : "#1f6b3a",
-                          strokeWidth: isActive ? 1.6 : 0.9,
-                          outline: "none",
-                          cursor: "pointer",
-                          transition: "fill 0.12s",
-                        },
-                        hover: {
-                          fill: isActive ? "#f37021" : "#6aa87a",
-                          stroke: "#1f6b3a",
-                          strokeWidth: 1.4,
-                          outline: "none",
-                          cursor: "pointer",
-                        },
-                        pressed: {
-                          fill: "#f37021",
-                          outline: "none",
-                        },
-                      }}
-                    />
-                  );
-                })
-              }
-            </Geographies>
-          </ComposableMap>
+          {geoError ? (
+            <p className="rounded-lg border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-3 text-sm text-[#C45A12]">
+              Kaart kon niet laden: {geoError}
+            </p>
+          ) : !geoJson ? (
+            <p className="py-16 text-center text-sm text-muted">
+              Nederland-kaart laden…
+            </p>
+          ) : (
+            <ComposableMap
+              projection="geoMercator"
+              projectionConfig={{ scale: 7500, center: [5.3, 52.15] }}
+              width={640}
+              height={720}
+              style={{ width: "100%", height: "auto" }}
+            >
+              <Geographies geography={geoJson}>
+                {({ geographies }) =>
+                  geographies.map((geo) => {
+                    const rawName = String(
+                      geo.properties?.statnaam ||
+                        geo.properties?.name ||
+                        "Unknown"
+                    );
+                    const label = normalizeProvincieLabel(rawName);
+                    const m = metricsForGeoName(rawName);
+                    const leads = m?.leads || 0;
+                    const isActive = activeKey === label;
+                    return (
+                      <Geography
+                        key={geo.rsmKey}
+                        geography={geo}
+                        onClick={() =>
+                          setSelected((prev) =>
+                            prev === label ? null : label
+                          )
+                        }
+                        onMouseEnter={() => setHover(label)}
+                        onMouseLeave={() => setHover(null)}
+                        style={{
+                          default: {
+                            fill: isActive
+                              ? "#f37021"
+                              : heatColor(leads, maxLeads),
+                            stroke: isActive ? "#c45a12" : "#1f6b3a",
+                            strokeWidth: isActive ? 1.6 : 0.9,
+                            outline: "none",
+                            cursor: "pointer",
+                            transition: "fill 0.12s",
+                          },
+                          hover: {
+                            fill: isActive ? "#f37021" : "#6aa87a",
+                            stroke: "#1f6b3a",
+                            strokeWidth: 1.4,
+                            outline: "none",
+                            cursor: "pointer",
+                          },
+                          pressed: {
+                            fill: "#f37021",
+                            outline: "none",
+                          },
+                        }}
+                      />
+                    );
+                  })
+                }
+              </Geographies>
+            </ComposableMap>
+          )}
         </div>
       </div>
 

@@ -125,7 +125,8 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/adviseurs/afblokkingen
- * Body: { adviseur_id, dag: "yyyy-MM-dd", slot_hour: 10|13|16|19, geblokkeerd: boolean }
+ * Body: { adviseur_id, dag: "yyyy-MM-dd", slot_hour: number, geblokkeerd: boolean }
+ * slot_hour = vaste inplanuren van die adviseur (standaard 10/13/16/19; Marcel 10/12/14/16)
  */
 export async function POST(req: NextRequest) {
   let body: {
@@ -153,9 +154,12 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  if (!isSlotHour(slot_hour)) {
+  if (!isSlotHour(slot_hour, adviseur_id)) {
     return NextResponse.json(
-      { error: "slot_hour moet 10, 13, 16 of 19 zijn" },
+      {
+        error:
+          "slot_hour hoort niet bij de vaste inplantijden van deze adviseur",
+      },
       { status: 400 }
     );
   }

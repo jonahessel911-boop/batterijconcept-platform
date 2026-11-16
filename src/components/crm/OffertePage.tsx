@@ -128,6 +128,32 @@ export function OffertePage() {
         );
         setBackofficeNotitie(data.backoffice_notitie || "");
         setInstallateurNotitie(data.installateur_notitie || "");
+        setEnergieForm({
+          elektraVerbruikKwh:
+            data.elektra_verbruik_kwh != null
+              ? String(data.elektra_verbruik_kwh)
+              : "",
+          gasVerbruikM3:
+            data.gas_verbruik_m3 != null ? String(data.gas_verbruik_m3) : "",
+          terugleveringKwh:
+            data.teruglevering_kwh != null
+              ? String(data.teruglevering_kwh)
+              : "",
+          energieContractType:
+            data.energie_contract_type === "vast" ||
+            data.energie_contract_type === "variabel" ||
+            data.energie_contract_type === "dynamisch"
+              ? data.energie_contract_type
+              : "",
+          energieContractEinddatum: data.energie_contract_einddatum
+            ? String(data.energie_contract_einddatum).slice(0, 10)
+            : "",
+          energieOverstapLeverancier:
+            data.energie_overstap_leverancier === "frank" ||
+            data.energie_overstap_leverancier === "next_energy"
+              ? data.energie_overstap_leverancier
+              : "",
+        });
         setActieOpen(
           data.status === "ondertekend" &&
             Boolean(data.actie_required) &&
@@ -612,6 +638,12 @@ export function OffertePage() {
                       ? {
                           energieContractEinddatum:
                             patch.energieContractEinddatum,
+                        }
+                      : {}),
+                    ...(patch.energieOverstapLeverancier != null
+                      ? {
+                          energieOverstapLeverancier:
+                            patch.energieOverstapLeverancier,
                         }
                       : {}),
                   }));

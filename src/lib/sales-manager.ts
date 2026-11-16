@@ -445,6 +445,7 @@ async function loadBlokkenAankomendeWeek(
       busy,
       fromDate,
       weekdaysOnly: false,
+      adviseurId: adv.id,
     });
 
     let vrij = 0;
@@ -457,7 +458,7 @@ async function loadBlokkenAankomendeWeek(
       if (unavailable.has(weekKeyString(wk.jaar, wk.week))) continue;
 
       const dag = dayKeyAmsterdam(block.start);
-      const hour = nearestSlotHour(block.start);
+      const hour = nearestSlotHour(block.start, adv.id);
       if (
         isSlotGeblokkeerd(
           adv.id,

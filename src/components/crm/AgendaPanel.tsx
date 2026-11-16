@@ -682,6 +682,7 @@ export function AfspraakDetail({
     terugleveringKwh: "",
     energieContractType: "",
     energieContractEinddatum: "",
+    energieOverstapLeverancier: "",
   });
   const [wfProjectId, setWfProjectId] = useState<string | null>(null);
   const [wfAangevraagdAt, setWfAangevraagdAt] = useState<string | null>(null);
@@ -788,6 +789,7 @@ export function AfspraakDetail({
       terugleveringKwh: "",
       energieContractType: "",
       energieContractEinddatum: "",
+      energieOverstapLeverancier: "",
     });
   }, [afspraak]);
 
@@ -1002,6 +1004,11 @@ export function AfspraakDetail({
           energieContractEinddatum: o.energie_contract_einddatum
             ? String(o.energie_contract_einddatum).slice(0, 10)
             : "",
+          energieOverstapLeverancier:
+            o.energie_overstap_leverancier === "frank" ||
+            o.energie_overstap_leverancier === "next_energy"
+              ? o.energie_overstap_leverancier
+              : "",
         });
         window.requestAnimationFrame(() => {
           saleFormRef.current?.scrollIntoView({

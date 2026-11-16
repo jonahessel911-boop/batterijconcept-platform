@@ -18,12 +18,57 @@ const SLOT_MINUTES = 120;
 export const HUISBEZOEK_PLAN_DAYS_AHEAD = 16;
 
 /**
- * Vier afspraakblokken per dag (Europe/Amsterdam).
+ * Standaard vier afspraakblokken per dag (Europe/Amsterdam).
  * 2 uur afspraak + 1 uur reistijd:
  * 10:00–12:00, 13:00–15:00, 16:00–18:00, 19:00–21:00.
  */
 export const AFSPRAAK_DUUR_MINUTEN = SLOT_MINUTES;
 export const ADVISEUR_SLOT_HOURS = [10, 13, 16, 19] as const;
+
+/** Alleen Marcel Klaasman: 10 / 12 / 14 / 16 (geen 13/19). */
+export const MARCEL_KLAASMAN_ADVISEUR_ID =
+  "1925468e-5645-44a0-a6fc-962b95d0f46c";
+export const MARCEL_KLAASMAN_SLOT_HOURS = [10, 12, 14, 16] as const;
+
+/** Alle uren die ergens als vaste slot voorkomen (validatie / agenda-union). */
+export const ALL_ADVISEUR_SLOT_HOURS = [10, 12, 13, 14, 16, 19] as const;
+
+export type AdviseurSlotHour = (typeof ALL_ADVISEUR_SLOT_HOURS)[number];
+
+/** Sloturen voor één adviseur. Standaard 10/13/16/19; Marcel: 10/12/14/16. */
+export function slotHoursForAdviseur(
+  adviseurId?: string | null
+): readonly number[] {
+  if (adviseurId === MARCEL_KLAASMAN_ADVISEUR_ID) {
+    return MARCEL_KLAASMAN_SLOT_HOURS;
+  }
+  return ADVISEUR_SLOT_HOURS;
+}
+
+export function adviseurHeeftSlotUur(
+  adviseurId: string | null | undefined,
+  hour: number
+): boolean {
+  return (slotHoursForAdviseur(adviseurId) as readonly number[]).includes(
+    hour
+  );
+}
+
+/** Unie van sloturen over adviseurs (agenda-raster). */
+export function unionSlotHours(
+  adviseurIds?: (string | null | undefined)[]
+): number[] {
+  if (!adviseurIds?.length) return [...ADVISEUR_SLOT_HOURS];
+  const set = new Set<number>();
+  for (const id of adviseurIds) {
+    for (const h of slotHoursForAdviseur(id)) set.add(h);
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+export function isKnownSlotHour(hour: number): hour is AdviseurSlotHour {
+  return (ALL_ADVISEUR_SLOT_HOURS as readonly number[]).includes(hour);
+}
 
 export type BusySlot = { start_at: string; end_at: string };
 
@@ -44,10 +89,15 @@ export function generateDayBlocks(opts: {
   fromDate?: Date;
   /** @deprecated Alleen nog voor backwards compat; zaterdag is standaard wél beschikbaar. */
   weekdaysOnly?: boolean;
+  /** Per-adviseur sloturen (o.a. Marcel Klaasman). */
+  adviseurId?: string | null;
+  slotHours?: readonly number[];
 }): DayBlock[] {
   const daysAhead = opts.daysAhead ?? HUISBEZOEK_PLAN_DAYS_AHEAD;
   const from = opts.fromDate ?? new Date();
   const slots: DayBlock[] = [];
+  const hours =
+    opts.slotHours ?? slotHoursForAdviseur(opts.adviseurId);
 
   // d=0 = vandaag (nog vrije blokken later vandaag); al gestarte slots vallen weg via startUtc <= from
   for (let d = 0; d <= daysAhead; d++) {
@@ -62,7 +112,7 @@ export function generateDayBlocks(opts: {
       0
     );
 
-    for (const hour of ADVISEUR_SLOT_HOURS) {
+    for (const hour of hours) {
       const slotStartLocal = setHours(dayBase, hour);
       const slotEndLocal = addMinutes(slotStartLocal, SLOT_MINUTES);
 
@@ -91,6 +141,8 @@ export function generateAvailableSlots(opts: {
   busy: BusySlot[];
   fromDate?: Date;
   weekdaysOnly?: boolean;
+  adviseurId?: string | null;
+  slotHours?: readonly number[];
 }): { start: Date; end: Date }[] {
   return generateDayBlocks(opts)
     .filter((s) => !s.busy)
@@ -98,8 +150,11 @@ export function generateAvailableSlots(opts: {
 }
 
 /** De vaste blokken voor één dag (yyyy-MM-dd in Amsterdam). */
-export function blocksForDayKey(dayKey: string): { start: Date; end: Date }[] {
-  return ADVISEUR_SLOT_HOURS.map((hour) => {
+export function blocksForDayKey(
+  dayKey: string,
+  adviseurId?: string | null
+): { start: Date; end: Date }[] {
+  return slotHoursForAdviseur(adviseurId).map((hour) => {
     const start = fromZonedTime(
       `${dayKey}T${String(hour).padStart(2, "0")}:00:00`,
       AMSTERDAM_TZ

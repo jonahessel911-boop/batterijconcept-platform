@@ -22,7 +22,7 @@ import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { formatSchouwWeekLabel } from "@/lib/schouw-week";
 import {
-  ADVISEUR_SLOT_HOURS,
+  slotHoursForAdviseur,
   AFSPRAAK_DUUR_MINUTEN,
   generateDayBlocks,
   type BusySlot,
@@ -268,6 +268,7 @@ export function buildDashboardV2Capacity(opts: {
       busy,
       fromDate: now,
       weekdaysOnly: opts.weekdaysOnly === true,
+      adviseurId: adv.id,
     });
 
     const advByWeek = new Map<string, CapacityWeekRow>();
@@ -297,7 +298,7 @@ export function buildDashboardV2Capacity(opts: {
       }
 
       const dag = dayKeyAmsterdam(block.start);
-      const hour = nearestSlotHour(block.start);
+      const hour = nearestSlotHour(block.start, adv.id);
       const blocked = isSlotGeblokkeerd(
         adv.id,
         dag,
@@ -477,7 +478,7 @@ export function countPlanbareSlotsBreakdown(opts: {
         if ((opts.unavailableByAdviseur.get(adv.id) || new Set()).has(wkKey)) {
           continue;
         }
-        for (const hour of ADVISEUR_SLOT_HOURS) {
+        for (const hour of slotHoursForAdviseur(adv.id)) {
           // Capaciteit: alleen standaard-dicht (zo/ma 10) — lege afblokkingen-set
           const standaardDicht = isSlotGeblokkeerd(
             adv.id,

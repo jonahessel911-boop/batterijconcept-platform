@@ -4,7 +4,10 @@ import type { AanbetalingModus } from "@/lib/aanbetaling";
 import {
   ENERGIE_CONTRACT_TYPE_LABEL,
   ENERGIE_CONTRACT_TYPES,
+  ENERGIE_OVERSTAP_LEVERANCIER_LABEL,
+  ENERGIE_OVERSTAP_LEVERANCIERS,
   type EnergieContractType,
+  type EnergieOverstapLeverancier,
   type EnergieVerbruikFormValues,
 } from "@/lib/energie-contract";
 import type { SaleOpbelMoment } from "@/lib/sale-opbel";
@@ -96,11 +99,54 @@ export function BackofficeActieForm({
 
         <div className="rounded-xl border border-[#0a4727]/20 bg-[#F7F9F7] px-3 py-3 sm:px-4">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0a4727]">
-            Energie · Frank overstap
+            Energie-overstap
           </p>
           <p className="mt-1 text-[11px] text-muted">
-            Optioneel. Gas alleen invullen als de klant gas heeft.
+            Verplicht bij doorzetten: kies Frank of Next Energy. Verbruik
+            optioneel — gas alleen als de klant gas heeft.
           </p>
+
+          <div className="mt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Leverancier <span className="text-[#C45A12]">*</span>
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {ENERGIE_OVERSTAP_LEVERANCIERS.map((l) => {
+                const active = values.energieOverstapLeverancier === l;
+                return (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() =>
+                      onChange({
+                        energieOverstapLeverancier:
+                          l as EnergieOverstapLeverancier,
+                      })
+                    }
+                    className={[
+                      "inline-flex min-h-9 items-center gap-2 border px-3 py-1.5 text-sm font-semibold",
+                      active
+                        ? "border-[#0a4727] bg-[#0a4727] text-white"
+                        : "border-line bg-white text-ink hover:bg-wash",
+                    ].join(" ")}
+                  >
+                    <span
+                      className={[
+                        "flex h-4 w-4 items-center justify-center border text-[10px]",
+                        active
+                          ? "border-white bg-white text-[#0a4727]"
+                          : "border-line bg-white text-transparent",
+                      ].join(" ")}
+                      aria-hidden
+                    >
+                      ✓
+                    </span>
+                    {ENERGIE_OVERSTAP_LEVERANCIER_LABEL[l]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="block text-xs font-semibold uppercase tracking-wide text-muted">

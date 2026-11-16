@@ -84,6 +84,37 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Lege inbox + IMAP ok → meteen sync (anders lijkt "Sync" kapot)
+    let syncMeta: {
+      fetched?: number;
+      inserted?: number;
+      skipped?: number;
+      errors?: string[];
+    } | null = null;
+    if (rows.length === 0 && facturenImapConfigured()) {
+      const syncResult = await syncFacturenMailboxFromImap(sb, {
+        maxMessages: 40,
+        recent: true,
+      });
+      syncMeta = {
+        fetched: syncResult.fetched,
+        inserted: syncResult.inserted,
+        skipped: syncResult.skipped,
+        errors: syncResult.errors,
+      };
+      rows = await listInboxMails(sb, {
+        mailbox: "facturen",
+        email: FACTUREN_MAILBOX_EMAIL,
+        limit,
+      });
+      if (rows.length === 0) {
+        rows = await listInboxMails(sb, {
+          email: FACTUREN_MAILBOX_EMAIL,
+          limit,
+        });
+      }
+    }
+
     const { entries, hint } = await buildFacturenInboxEntries(sb, rows);
     return NextResponse.json({
       email: FACTUREN_MAILBOX_EMAIL,
@@ -91,6 +122,7 @@ export async function GET(req: NextRequest) {
       entries,
       count: entries.length,
       hint,
+      ...(syncMeta ? { autoSync: syncMeta } : {}),
     });
   } catch (e) {
     return NextResponse.json(

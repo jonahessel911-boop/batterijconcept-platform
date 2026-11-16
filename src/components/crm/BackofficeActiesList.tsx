@@ -783,8 +783,16 @@ function SaleNotitiesAside({
   const hasEnergie =
     project.elektra_verbruik_kwh != null ||
     project.teruglevering_kwh != null ||
-    project.energie_contract_type != null;
+    project.energie_contract_type != null ||
+    project.energie_overstap_leverancier != null;
   if (!backoffice && !installateur && !hasEnergie && !forceShow) return null;
+
+  const overstapLabel =
+    project.energie_overstap_leverancier === "frank"
+      ? "Frank Energie"
+      : project.energie_overstap_leverancier === "next_energy"
+        ? "Next Energy"
+        : null;
 
   return (
     <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-0 lg:w-[16.5rem] xl:w-[18rem]">
@@ -792,13 +800,19 @@ function SaleNotitiesAside({
         <div className="overflow-hidden rounded-2xl border border-[#0a4727]/20 bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
           <div className="border-b border-line bg-white px-3.5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#0a4727]">
-              Frank overstap
+              Energie-overstap
             </p>
             <p className="mt-0.5 font-display text-sm font-semibold text-ink">
-              Energieverbruik
+              {overstapLabel || "Energieverbruik"}
             </p>
           </div>
           <div className="space-y-2 px-3.5 py-3 text-[12px]">
+            {overstapLabel ? (
+              <p>
+                <span className="text-muted">Leverancier · </span>
+                <span className="font-semibold text-ink">{overstapLabel}</span>
+              </p>
+            ) : null}
             <p>
               <span className="text-muted">Elektra · </span>
               <span className="font-semibold tabular-nums text-ink">

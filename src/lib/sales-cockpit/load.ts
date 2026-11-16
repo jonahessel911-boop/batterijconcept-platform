@@ -15,7 +15,7 @@ import {
   loadSlotVrijgaven,
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
-import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
+import { slotHoursForAdviseur } from "@/lib/slots";
 import {
   advisorRows,
   applyFilters,
@@ -1804,7 +1804,7 @@ async function loadAvailableBlocksByYmd(
       let total = 0;
       planbaar.forEach((adv, index) => {
         if (unavailableSets[index]?.has(weekKey)) return;
-        for (const hour of ADVISEUR_SLOT_HOURS) {
+        for (const hour of slotHoursForAdviseur(adv.id)) {
           const noon = new Date(`${day}T12:00:00.000Z`);
           if (isBeforeStartdatum(noon, adv.startdatum)) continue;
           if (isSlotGeblokkeerd(adv.id, day, hour, blocked, open)) continue;
@@ -1870,7 +1870,7 @@ async function loadAvailability(
           day = addYmd(day, 1);
           continue;
         }
-        for (const hour of ADVISEUR_SLOT_HOURS) {
+        for (const hour of slotHoursForAdviseur(adv.id)) {
           const noon = new Date(`${day}T12:00:00.000Z`);
           if (isBeforeStartdatum(noon, adv.startdatum)) continue;
           if (isSlotGeblokkeerd(adv.id, day, hour, blocked, open)) continue;

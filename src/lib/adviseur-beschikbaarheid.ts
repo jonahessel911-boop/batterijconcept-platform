@@ -2,12 +2,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getISOWeek, getISOWeekYear } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
+import {
+  isKnownSlotHour,
+  slotHoursForAdviseur,
+  type AdviseurSlotHour,
+} from "@/lib/slots";
 import { skipsMaandagOchtendmeeting } from "@/lib/start-adres";
 
 export type WeekKey = { jaar: number; week: number };
 
-export type SlotHour = (typeof ADVISEUR_SLOT_HOURS)[number];
+export type SlotHour = AdviseurSlotHour;
 
 export function weekKeyFromDate(d: Date): WeekKey {
   const zoned = toZonedTime(d, AMSTERDAM_TZ);
@@ -21,8 +25,16 @@ export function weekKeyString(jaar: number, week: number): string {
   return `${jaar}-W${String(week).padStart(2, "0")}`;
 }
 
-export function isSlotHour(hour: number): hour is SlotHour {
-  return (ADVISEUR_SLOT_HOURS as readonly number[]).includes(hour);
+export function isSlotHour(
+  hour: number,
+  adviseurId?: string | null
+): hour is SlotHour {
+  if (adviseurId) {
+    return (slotHoursForAdviseur(adviseurId) as readonly number[]).includes(
+      hour
+    );
+  }
+  return isKnownSlotHour(hour);
 }
 
 /** Key voor één geblokkeerd blok: adviseur + dag + uur */
@@ -60,18 +72,22 @@ export function isZondagAmsterdam(dateOrDayKey: Date | string): boolean {
   return amsterdamWeekday(dateOrDayKey) === 0;
 }
 
-/** Nearest vaste slot-hour (10/13/16/19) voor een starttijd. */
-export function nearestSlotHour(startAt: string | Date): SlotHour {
+/** Nearest vaste slot-hour voor een starttijd (per adviseur indien bekend). */
+export function nearestSlotHour(
+  startAt: string | Date,
+  adviseurId?: string | null
+): SlotHour {
+  const hours = slotHoursForAdviseur(adviseurId);
   const t = Number(formatInTimeZone(new Date(startAt), AMSTERDAM_TZ, "H"));
   const m = Number(formatInTimeZone(new Date(startAt), AMSTERDAM_TZ, "m"));
   const local = t + m / 60;
-  let best: SlotHour = ADVISEUR_SLOT_HOURS[0];
+  let best = hours[0] as SlotHour;
   let bestDist = Infinity;
-  for (const h of ADVISEUR_SLOT_HOURS) {
+  for (const h of hours) {
     const d = Math.abs(h - local);
     if (d < bestDist) {
       bestDist = d;
-      best = h;
+      best = h as SlotHour;
     }
   }
   return best;
@@ -350,7 +366,7 @@ export async function isSlotAfgeblokt(
   startAt: Date
 ): Promise<boolean> {
   const dag = dayKeyAmsterdam(startAt);
-  const hour = nearestSlotHour(startAt);
+  const hour = nearestSlotHour(startAt, adviseurId);
   const startVanafHuis = await loadStartVanafHuisMaandag(sb, adviseurId);
 
   // Zondag / maandag 10: standaard dicht tenzij vrijgegeven
@@ -397,7 +413,7 @@ export function filterSlotsByAfblokkingen<T extends { start_at: string }>(
 ): T[] {
   return slots.filter((s) => {
     const dag = dayKeyAmsterdam(s.start_at);
-    const hour = nearestSlotHour(s.start_at);
+    const hour = nearestSlotHour(s.start_at, adviseurId);
     return !isSlotGeblokkeerd(
       adviseurId,
       dag,
@@ -499,7 +515,7 @@ export function isBeforeStartdatum(
 }
 
 /**
- * Blokkeer alle vaste slots (10/13/16/19) op élke dag vóór startdatum
+ * Blokkeer alle vaste slots op élke dag vóór startdatum
  * (incl. za/zo). Van vandaag (Amsterdam) t/m dag vóór startdatum.
  */
 export async function blockAgendaUntilStartdatum(
@@ -516,9 +532,10 @@ export async function blockAgendaUntilStartdatum(
     return { blockedDays: 0, blockedSlots: 0 };
   }
   const days = calendarDaysInclusive(today, lastDay);
+  const hours = slotHoursForAdviseur(adviseurId);
   const rows: { adviseur_id: string; dag: string; slot_hour: number }[] = [];
   for (const dag of days) {
-    for (const hour of ADVISEUR_SLOT_HOURS) {
+    for (const hour of hours) {
       rows.push({ adviseur_id: adviseurId, dag, slot_hour: hour });
     }
   }

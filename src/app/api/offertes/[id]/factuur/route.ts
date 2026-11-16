@@ -138,6 +138,18 @@ export async function POST(
           : null,
     });
 
+    // €0 of gewijzigd bedrag → kickoff-taken (BTW-factuur) syncen
+    if (project?.id) {
+      try {
+        const { syncAutoTakenVoorProject } = await import(
+          "@/lib/sync-auto-taken"
+        );
+        await syncAutoTakenVoorProject(sb, project.id, project.status);
+      } catch (syncErr) {
+        console.error("syncAutoTaken na aanbetalingsfactuur:", syncErr);
+      }
+    }
+
     if (!factuur) {
       return NextResponse.json({
         skipped: true,

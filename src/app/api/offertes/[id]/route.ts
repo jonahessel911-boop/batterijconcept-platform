@@ -68,6 +68,7 @@ export async function PATCH(
     teruglevering_kwh?: number | string | null;
     energie_contract_type?: string | null;
     energie_contract_einddatum?: string | null;
+    energie_overstap_leverancier?: string | null;
   };
   try {
     body = await req.json();
@@ -77,12 +78,15 @@ export async function PATCH(
 
   const patch: Record<string, unknown> = {};
 
-  // Bij afronden sale → BO: energievelden optioneel meenemen
+  // Bij afronden sale → BO: Frank/Next Energy verplicht, rest optioneel
   if (body.actie_required === false) {
     const { parseEnergieVerbruikBody } = await import(
       "@/lib/energie-contract"
     );
-    const energie = parseEnergieVerbruikBody(body);
+    const energie = parseEnergieVerbruikBody({
+      ...body,
+      requireOverstapLeverancier: true,
+    });
     if (!energie.ok) {
       return NextResponse.json({ error: energie.error }, { status: 400 });
     }
@@ -151,7 +155,7 @@ export async function PATCH(
       .update(patch)
       .eq("id", id)
       .select(
-        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, leads(naam)"
+        "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, backoffice_notitie_door, installateur_notitie_door, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, energie_overstap_leverancier, leads(naam)"
       )
       .single();
 
@@ -161,15 +165,16 @@ export async function PATCH(
         update.error.message?.includes("gas_verbruik") ||
         update.error.message?.includes("teruglevering") ||
         update.error.message?.includes("energie_contract") ||
+        update.error.message?.includes("energie_overstap") ||
         (update.error.code === "42703" &&
-          /elektra|gas_verbruik|teruglever|energie_contract/i.test(
+          /elektra|gas_verbruik|teruglever|energie_contract|energie_overstap/i.test(
             update.error.message || ""
           )))
     ) {
       return NextResponse.json(
         {
           error:
-            "Run migrate-energie-verbruik-contract.sql in Supabase (energievelden).",
+            "Run migrate-energie-verbruik-contract.sql en migrate-energie-overstap-leverancier.sql in Supabase.",
           detail: update.error.message,
         },
         { status: 400 }
@@ -188,7 +193,7 @@ export async function PATCH(
         .update(patch)
         .eq("id", id)
         .select(
-          "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, leads(naam)"
+          "id, lead_id, titel, offerte_nummer, status, btw_bedrag, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, aanbetaling_modus, aanbetaling_bedrag_inc, actie_required, aanbetaling_te_innen_inc, backoffice_notitie, installateur_notitie, elektra_verbruik_kwh, gas_verbruik_m3, teruglevering_kwh, energie_contract_type, energie_contract_einddatum, energie_overstap_leverancier, leads(naam)"
         )
         .single();
     }
@@ -239,6 +244,7 @@ export async function PATCH(
           teruglevering_kwh?: number | null;
           energie_contract_type?: string | null;
           energie_contract_einddatum?: string | null;
+          energie_overstap_leverancier?: string | null;
         };
         const projectPatch: Record<string, unknown> = {
           betaalwijze: Boolean(offerte.financiering_voorbehoud)
@@ -255,6 +261,8 @@ export async function PATCH(
           teruglevering_kwh: o.teruglevering_kwh ?? null,
           energie_contract_type: o.energie_contract_type ?? null,
           energie_contract_einddatum: o.energie_contract_einddatum ?? null,
+          energie_overstap_leverancier:
+            o.energie_overstap_leverancier ?? null,
         };
         if (o.backoffice_notitie_door !== undefined) {
           projectPatch.backoffice_notitie_door =

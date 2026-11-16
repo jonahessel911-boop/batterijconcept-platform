@@ -1,4 +1,4 @@
-/** Energiecontract + verbruik (Frank Energie-overstap). */
+/** Energiecontract + verbruik (energie-overstap Frank / Next Energy). */
 
 export const ENERGIE_CONTRACT_TYPES = ["vast", "variabel", "dynamisch"] as const;
 
@@ -10,12 +10,35 @@ export const ENERGIE_CONTRACT_TYPE_LABEL: Record<EnergieContractType, string> = 
   dynamisch: "Dynamisch",
 };
 
+export const ENERGIE_OVERSTAP_LEVERANCIERS = ["frank", "next_energy"] as const;
+
+export type EnergieOverstapLeverancier =
+  (typeof ENERGIE_OVERSTAP_LEVERANCIERS)[number];
+
+export const ENERGIE_OVERSTAP_LEVERANCIER_LABEL: Record<
+  EnergieOverstapLeverancier,
+  string
+> = {
+  frank: "Frank Energie",
+  next_energy: "Next Energy",
+};
+
+export function isEnergieOverstapLeverancier(
+  v: unknown
+): v is EnergieOverstapLeverancier {
+  return (
+    typeof v === "string" &&
+    (ENERGIE_OVERSTAP_LEVERANCIERS as readonly string[]).includes(v)
+  );
+}
+
 export type EnergieVerbruikFields = {
   elektra_verbruik_kwh: number | null;
   gas_verbruik_m3: number | null;
   teruglevering_kwh: number | null;
   energie_contract_type: EnergieContractType | null;
   energie_contract_einddatum: string | null;
+  energie_overstap_leverancier: EnergieOverstapLeverancier | null;
 };
 
 /** Formuliervelden (strings voor inputs). */
@@ -25,6 +48,8 @@ export type EnergieVerbruikFormValues = {
   terugleveringKwh: string;
   energieContractType: EnergieContractType | "";
   energieContractEinddatum: string;
+  /** Verplicht bij doorzetten → backoffice */
+  energieOverstapLeverancier: EnergieOverstapLeverancier | "";
 };
 
 export const EMPTY_ENERGIE_FORM: EnergieVerbruikFormValues = {
@@ -33,6 +58,7 @@ export const EMPTY_ENERGIE_FORM: EnergieVerbruikFormValues = {
   terugleveringKwh: "",
   energieContractType: "",
   energieContractEinddatum: "",
+  energieOverstapLeverancier: "",
 };
 
 export function isEnergieContractType(
@@ -103,6 +129,10 @@ export function validateEnergieVerbruikForm(
       return { ok: false, error: "Ongeldige einddatum vast contract." };
     }
   }
+  const overstap = isEnergieOverstapLeverancier(form.energieOverstapLeverancier)
+    ? form.energieOverstapLeverancier
+    : null;
+
   return {
     ok: true,
     data: {
@@ -112,6 +142,7 @@ export function validateEnergieVerbruikForm(
       energie_contract_type: contractType,
       energie_contract_einddatum:
         contractType === "vast" ? einddatum : null,
+      energie_overstap_leverancier: overstap,
     },
   };
 }
@@ -125,8 +156,8 @@ export type BackofficeDoorzettenFormValues = EnergieVerbruikFormValues & {
 
 /**
  * Validatie bij doorzetten signed offerte → backoffice.
- * Notities en energievelden zijn optioneel; handmatig bedrag alleen
- * verplicht als die modus gekozen is.
+ * Frank / Next Energy is verplicht; overige energievelden optioneel;
+ * handmatig bedrag alleen verplicht als die modus gekozen is.
  */
 export function validateBackofficeDoorzettenForm(
   form: BackofficeDoorzettenFormValues
@@ -146,6 +177,12 @@ export function validateBackofficeDoorzettenForm(
       };
     }
   }
+  if (!isEnergieOverstapLeverancier(form.energieOverstapLeverancier)) {
+    return {
+      ok: false,
+      error: "Vink Frank Energie of Next Energy aan bij doorzetten.",
+    };
+  }
   return validateEnergieVerbruikForm(form);
 }
 
@@ -156,6 +193,9 @@ export function parseEnergieVerbruikBody(body: {
   teruglevering_kwh?: number | string | null;
   energie_contract_type?: string | null;
   energie_contract_einddatum?: string | null;
+  energie_overstap_leverancier?: string | null;
+  /** true = doorzetten: leverancier verplicht */
+  requireOverstapLeverancier?: boolean;
 }):
   | { ok: true; data: EnergieVerbruikFields }
   | { ok: false; error: string } {
@@ -208,6 +248,24 @@ export function parseEnergieVerbruikBody(body: {
       return { ok: false, error: "Ongeldige einddatum vast contract." };
     }
   }
+  const overstap = isEnergieOverstapLeverancier(
+    body.energie_overstap_leverancier
+  )
+    ? body.energie_overstap_leverancier
+    : null;
+  if (
+    body.energie_overstap_leverancier != null &&
+    body.energie_overstap_leverancier !== "" &&
+    !overstap
+  ) {
+    return { ok: false, error: "Ongeldige energie-overstap leverancier." };
+  }
+  if (body.requireOverstapLeverancier && !overstap) {
+    return {
+      ok: false,
+      error: "Vink Frank Energie of Next Energy aan bij doorzetten.",
+    };
+  }
   return {
     ok: true,
     data: {
@@ -217,6 +275,7 @@ export function parseEnergieVerbruikBody(body: {
       energie_contract_type: contractType,
       energie_contract_einddatum:
         contractType === "vast" ? einddatum : null,
+      energie_overstap_leverancier: overstap,
     },
   };
 }

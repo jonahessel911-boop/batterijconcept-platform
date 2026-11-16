@@ -4465,6 +4465,13 @@ export function ProjectPage() {
                 offerteId={project.offerte_id}
                 warmtefonds={isWarmtefondsProject(project)}
                 financieringStatus={resolveFinancieringStatus(project)}
+                projectStatus={project.status}
+                aanbetalingTeInnenInc={
+                  project.aanbetaling_te_innen_inc ??
+                  resolveOfferte(project)?.aanbetaling_te_innen_inc ??
+                  null
+                }
+                onAanbetalingChanged={() => void load()}
               />
               <ProjectInkoopSection
                 project={project}

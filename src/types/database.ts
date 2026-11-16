@@ -330,12 +330,12 @@ export interface AdviseurBeschikbaarheid {
   notitie?: string | null;
 }
 
-/** Geblokkeerd vast tijdsblok (10 / 13 / 16 / 19) per dag. */
+/** Geblokkeerd vast tijdsblok per dag (standaard 10/13/16/19; Marcel 10/12/14/16). */
 export interface AdviseurAfblokkering {
   id?: string;
   adviseur_id: string;
   dag: string;
-  slot_hour: 10 | 13 | 16 | 19;
+  slot_hour: 10 | 12 | 13 | 14 | 16 | 19;
 }
 
 export interface Afspraak {
@@ -669,6 +669,8 @@ export interface Offerte {
   energie_contract_type?: "vast" | "variabel" | "dynamisch" | null;
   /** Einddatum vast contract (YYYY-MM-DD) */
   energie_contract_einddatum?: string | null;
+  /** frank | next_energy — verplicht bij doorzetten */
+  energie_overstap_leverancier?: "frank" | "next_energy" | null;
   installatie_partner_id?: string | null;
   /** Adviseur die de offerte heeft aangemaakt */
   aangemaakt_door_id?: string | null;
@@ -771,6 +773,8 @@ export interface Project {
   teruglevering_kwh?: number | null;
   energie_contract_type?: "vast" | "variabel" | "dynamisch" | null;
   energie_contract_einddatum?: string | null;
+  /** frank | next_energy */
+  energie_overstap_leverancier?: "frank" | "next_energy" | null;
   backoffice_afgerond_at?: string | null;
   /** Afdeling verantwoordelijk (Backoffice, Planning, Installatie, …). */
   afdeling?: string | null;

@@ -6,7 +6,7 @@ import {
 } from "@/lib/adviseur-beschikbaarheid";
 import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
-import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
+import { slotHoursForAdviseur } from "@/lib/slots";
 import { normalizeProjectStatus } from "@/lib/labels";
 import type { CockpitSettings } from "@/lib/sales-cockpit/settings";
 import {
@@ -492,7 +492,7 @@ export function capacityForWeek(opts: {
   const startGrens = (opts.adviseur.startdatum || "").slice(0, 10);
   for (const dag of days) {
     if (startGrens && dag < startGrens) continue;
-    for (const hour of ADVISEUR_SLOT_HOURS) {
+    for (const hour of slotHoursForAdviseur(opts.adviseur.id)) {
       if (isSlotGeblokkeerd(opts.adviseur.id, dag, hour, opts.afblok, opts.vrijgave)) {
         continue;
       }

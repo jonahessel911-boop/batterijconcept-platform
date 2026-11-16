@@ -10,6 +10,7 @@ import {
   isRestantFactuurOmschrijving,
   magWarmtefondsRestantFactuur,
 } from "@/lib/aanbetaling";
+import { AanbetalingBewerkenModal } from "./AanbetalingBewerkenModal";
 import { StatusBadge } from "./StatusBadge";
 
 function creditsForParent(all: Factuur[], parentId: string): Factuur[] {
@@ -29,6 +30,12 @@ type Props = {
   offerteId?: string | null;
   warmtefonds?: boolean;
   financieringStatus?: string | null;
+  /** Huidige projectstatus (voor €0 → Opstarten WF). */
+  projectStatus?: string | null;
+  /** Huidige geplande aanbetaling incl. btw. */
+  aanbetalingTeInnenInc?: number | null;
+  /** Na bewerken aanbetaling: project + facturen herladen. */
+  onAanbetalingChanged?: () => void | Promise<void>;
 };
 
 export function ProjectFinancieelSection({
@@ -40,6 +47,9 @@ export function ProjectFinancieelSection({
   offerteId = null,
   warmtefonds = false,
   financieringStatus = null,
+  projectStatus = null,
+  aanbetalingTeInnenInc = null,
+  onAanbetalingChanged,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen || alwaysOpen);
   const [facturen, setFacturen] = useState<Factuur[]>([]);
@@ -47,6 +57,7 @@ export function ProjectFinancieelSection({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [showAanbetaling, setShowAanbetaling] = useState(false);
 
   const [showCreate, setShowCreate] = useState(false);
   const [bedrag, setBedrag] = useState("");
@@ -390,6 +401,15 @@ export function ProjectFinancieelSection({
             >
               + Factuur
             </button>
+            {offerteId ? (
+              <button
+                type="button"
+                onClick={() => setShowAanbetaling(true)}
+                className="border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-wash"
+              >
+                Aanbetaling bewerken
+              </button>
+            ) : null}
             {warmtefonds && offerteId ? (
               <button
                 type="button"
@@ -723,6 +743,25 @@ export function ProjectFinancieelSection({
             </ul>
           )}
         </div>
+      ) : null}
+
+      {offerteId && showAanbetaling ? (
+        <AanbetalingBewerkenModal
+          open={showAanbetaling}
+          onClose={() => setShowAanbetaling(false)}
+          projectId={projectId}
+          offerteId={offerteId}
+          warmtefonds={warmtefonds}
+          currentStatus={projectStatus || "schouwweek_inplannen"}
+          vorigeAanbetalingInc={aanbetalingTeInnenInc}
+          facturen={facturen}
+          onDone={async () => {
+            setError(null);
+            setMsg("Aanbetaling bijgewerkt.");
+            await load();
+            await onAanbetalingChanged?.();
+          }}
+        />
       ) : null}
     </section>
   );

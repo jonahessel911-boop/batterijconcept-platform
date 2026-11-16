@@ -114,6 +114,7 @@ export function tabsVoorRol(
         "facturen",
         "purchasing",
         "finance",
+        "rapportage",
         "adviseurs",
       ];
       break;

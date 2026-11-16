@@ -216,6 +216,7 @@ export async function GET(req: NextRequest) {
     const rawSlots = generateAvailableSlots({
       busy: busyRows,
       daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
+      adviseurId,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -223,6 +224,7 @@ export async function GET(req: NextRequest) {
     const rawBlocks = generateDayBlocks({
       busy: busyRows,
       daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
+      adviseurId,
     }).map((s) => ({
       start_at: s.start.toISOString(),
       end_at: s.end.toISOString(),
@@ -273,7 +275,7 @@ export async function GET(req: NextRequest) {
       const blocked = isSlotGeblokkeerd(
         adviseurId,
         dayKeyAmsterdam(b.start_at),
-        nearestSlotHour(b.start_at),
+        nearestSlotHour(b.start_at, adviseurId),
         afgeblokt,
         vrijgaven
       );

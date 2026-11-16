@@ -98,6 +98,7 @@ export async function GET(
           generateAvailableSlots({
             busy,
             daysAhead: HUISBEZOEK_PLAN_DAYS_AHEAD,
+            adviseurId: afspraak.adviseur_id,
           }).map((s) => ({
             start_at: s.start.toISOString(),
             end_at: s.end.toISOString(),

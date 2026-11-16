@@ -8,6 +8,7 @@ import {
   extractFactuurFromText,
   type FactuurExtract,
 } from "@/lib/facturen-inbox-parse";
+import { extractTextFromMailPdfs } from "@/lib/facturen-inbox-pdf";
 import type { InboxMail } from "@/lib/inbox";
 import { rowToInboxMail, type InboxDbRow } from "@/lib/inbox-persist";
 
@@ -60,10 +61,14 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-export function extractFromMail(mail: InboxMail): FactuurExtract {
+export function extractFromMail(
+  mail: InboxMail,
+  pdfText?: string | null
+): FactuurExtract {
   const text = [
     mail.bodyText || "",
     mail.bodyHtml ? stripHtml(mail.bodyHtml) : "",
+    pdfText || "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -153,14 +158,16 @@ function mergeExtractOntoItem(
 /** Zorg dat elke mail een te_goedkeuren-item heeft + uitgelezen velden. */
 export async function ensureFacturenInboxItem(
   sb: SupabaseClient,
-  mail: InboxMail
+  mail: InboxMail,
+  opts?: { pdfText?: string | null }
 ): Promise<{ item: FacturenInboxItem | null; hint?: string }> {
-  const extract = extractFromMail(mail);
+  const extract = extractFromMail(mail, opts?.pdfText);
   const existing = await getFacturenInboxItemByMail(sb, mail.id);
   const merged = mergeExtractOntoItem(extract, existing);
 
   if (existing) {
-    // Alleen lege velden aanvullen
+    // Alleen lege velden aanvullen; bedrijfsnaam upgraden als extract
+    // een echte bedrijfsnaam heeft en huidig = afzender-naam.
     const patch: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
       extract_raw: merged.extract_raw,
@@ -178,9 +185,93 @@ export async function ensureFacturenInboxItem(
     ] as const;
     for (const k of keys) {
       const cur = existing[k];
+      const extracted = extract[k];
       const next = merged[k];
       if ((cur == null || cur === "") && next != null && next !== "") {
         patch[k] = next;
+        continue;
+      }
+      // Verbeteringen t.o.v. eerdere heuristiek (altijd extract, niet merge)
+      if (
+        k === "bedrijfsnaam" &&
+        typeof cur === "string" &&
+        typeof extracted === "string" &&
+        extracted &&
+        extracted !== cur &&
+        (cur === (mail.fromName || "").trim() ||
+          /\binvestments\b/i.test(cur) ||
+          /statutaire|accountants/i.test(extracted))
+      ) {
+        // Liever leverancier (statutaire naam) dan klant/afzender
+        if (
+          /accountants|statutaire/i.test(extracted) ||
+          (/\b(b\.?v\.?|n\.?v\.?)\b/i.test(extracted) &&
+            cur === (mail.fromName || "").trim())
+        ) {
+          patch[k] = extracted;
+        }
+      }
+      if (
+        k === "bedrag_inc_btw" &&
+        typeof cur === "number" &&
+        typeof extracted === "number" &&
+        existing.bedrag_ex_btw != null &&
+        cur === existing.bedrag_ex_btw &&
+        extracted > cur
+      ) {
+        patch[k] = extracted;
+      }
+      if (
+        k === "factuur_nummer" &&
+        typeof cur === "string" &&
+        typeof extracted === "string" &&
+        /[.\s]$/.test(cur) &&
+        extracted === cur.replace(/[.\s]+$/g, "")
+      ) {
+        patch[k] = extracted;
+      }
+      if (
+        k === "iban" &&
+        typeof cur === "string" &&
+        cur.startsWith("NL") &&
+        cur.length !== 18 &&
+        typeof extracted === "string" &&
+        extracted.length === 18
+      ) {
+        patch[k] = extracted;
+      }
+      if (
+        k === "bedrijfsnaam" &&
+        typeof cur === "string" &&
+        /\.$/.test(cur) &&
+        !/\b[BN]\.V\.$/i.test(cur)
+      ) {
+        patch[k] = cur.replace(/\.+$/g, "");
+      }
+      if (
+        k === "bedrijfsnaam" &&
+        typeof cur === "string" &&
+        /\b[BN]\.V$/i.test(cur)
+      ) {
+        patch[k] = `${cur}.`;
+      }
+    }
+    // Inconsistente bedragen (subtotaal/BTW-ruis) corrigeren vanuit extract
+    if (
+      existing.bedrag_inc_btw != null &&
+      existing.bedrag_ex_btw != null &&
+      existing.btw_bedrag != null
+    ) {
+      const sum =
+        Math.round(
+          (Number(existing.bedrag_ex_btw) + Number(existing.btw_bedrag)) * 100
+        ) / 100;
+      if (Math.abs(sum - Number(existing.bedrag_inc_btw)) > 0.05) {
+        if (extract.bedrag_inc_btw != null) {
+          patch.bedrag_inc_btw = extract.bedrag_inc_btw;
+        }
+        patch.bedrag_ex_btw = extract.bedrag_ex_btw;
+        patch.btw_bedrag = extract.btw_bedrag;
       }
     }
     const { data, error } = await sb
@@ -229,14 +320,37 @@ export async function buildFacturenInboxEntries(
   let hint: string | undefined;
   for (const row of rows) {
     const mail = rowToInboxMail(row);
-    const ensured = await ensureFacturenInboxItem(sb, mail);
-    if (ensured.hint) hint = ensured.hint;
-    const extract = extractFromMail(mail);
     const pdfAttachments = (mail.attachments || []).filter(
       (a) =>
         /pdf/i.test(a.contentType || "") ||
         /\.pdf$/i.test(a.filename || "")
     );
+    // PDF-tekst meenemen zodat rechts alle factuurvelden gevuld worden
+    // (veel facturen hebben een lege mailbody + alleen PDF).
+    let pdfText = "";
+    const existing = await getFacturenInboxItemByMail(sb, mail.id);
+    const needsPdf =
+      !existing ||
+      !existing.iban ||
+      (!existing.bedrag_inc_btw &&
+        !existing.bedrag_ex_btw &&
+        !existing.factuur_nummer) ||
+      (existing.bedrag_inc_btw != null &&
+        existing.bedrag_ex_btw != null &&
+        existing.bedrag_inc_btw === existing.bedrag_ex_btw) ||
+      (typeof existing.iban === "string" &&
+        existing.iban.startsWith("NL") &&
+        existing.iban.length !== 18) ||
+      (typeof existing.factuur_nummer === "string" &&
+        /[.\s]$/.test(existing.factuur_nummer)) ||
+      (typeof existing.bedrijfsnaam === "string" &&
+        existing.bedrijfsnaam === (mail.fromName || "").trim());
+    if (needsPdf && pdfAttachments.length) {
+      pdfText = await extractTextFromMailPdfs(pdfAttachments);
+    }
+    const ensured = await ensureFacturenInboxItem(sb, mail, { pdfText });
+    if (ensured.hint) hint = ensured.hint;
+    const extract = extractFromMail(mail, pdfText);
     entries.push({
       mail,
       item: ensured.item,

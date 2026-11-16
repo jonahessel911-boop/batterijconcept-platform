@@ -207,6 +207,7 @@ export async function GET(req: NextRequest) {
         daysAhead,
         busy,
         fromDate: now,
+        adviseurId: adv.id,
       });
       const ini = initials(adv.naam || "");
 
@@ -217,7 +218,7 @@ export async function GET(req: NextRequest) {
         if (unavailable.has(wkKey)) continue;
 
         const dag = dayKeyAmsterdam(block.start);
-        const hour = nearestSlotHour(block.start);
+        const hour = nearestSlotHour(block.start, adv.id);
         const blocked = isSlotGeblokkeerd(
           adv.id,
           dag,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Download,
@@ -96,6 +96,8 @@ function Field({
   );
 }
 
+const AUTO_SYNC_MS = 10 * 60 * 1000;
+
 export function FacturenMailboxPanel() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [email, setEmail] = useState("facturen@batterijconcept.nl");
@@ -109,6 +111,9 @@ export function FacturenMailboxPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftFields>(fieldsFromEntry(null));
   const [filter, setFilter] = useState<"open" | "all" | "goedgekeurd">("open");
+  /** Reset auto-sync timer na handmatige sync. */
+  const [syncEpoch, setSyncEpoch] = useState(0);
+  const syncingRef = useRef(false);
 
   const selected = useMemo(
     () => entries.find((e) => e.mail.id === selectedId) || null,
@@ -132,7 +137,9 @@ export function FacturenMailboxPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/facturen-inbox?limit=200");
+      const res = await fetch("/api/facturen-inbox?limit=200", {
+        cache: "no-store",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Laden mislukt");
       const list = (data.entries as Entry[]) || [];
@@ -140,6 +147,15 @@ export function FacturenMailboxPanel() {
       if (data.email) setEmail(String(data.email));
       setConfigured(Boolean(data.configured));
       setHint(typeof data.hint === "string" ? data.hint : null);
+      const auto = data.autoSync as
+        | { inserted?: number; errors?: string[] }
+        | undefined;
+      if (auto && Number(auto.inserted) > 0) {
+        setMsg(`IMAP: ${auto.inserted} nieuwe factuurmail(s) opgehaald`);
+      }
+      if (Array.isArray(auto?.errors) && auto.errors.length) {
+        setError(auto.errors.slice(0, 3).join(" · "));
+      }
       setSelectedId((prev) => {
         if (prev && list.some((e) => e.mail.id === prev)) return prev;
         return list[0]?.mail.id || null;
@@ -151,44 +167,83 @@ export function FacturenMailboxPanel() {
     }
   }, []);
 
+  const sync = useCallback(
+    async (opts?: { recent?: boolean; quiet?: boolean }) => {
+      if (syncingRef.current) return;
+      syncingRef.current = true;
+      setSyncing(true);
+      if (!opts?.quiet) {
+        setMsg(null);
+        setError(null);
+      }
+      try {
+        const recent = Boolean(opts?.recent);
+        const res = await fetch("/api/facturen-inbox", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recent, max: recent ? 60 : 40 }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Sync mislukt");
+        const summary = `Sync: ${data.fetched || 0} opgehaald · ${data.inserted || 0} nieuw · ${data.skipped || 0} overgeslagen`;
+        if (!opts?.quiet || Number(data.inserted) > 0) {
+          setMsg(summary);
+        }
+        if (Array.isArray(data.errors) && data.errors.length) {
+          setError(data.errors.slice(0, 3).join(" · "));
+        }
+        if (Array.isArray(data.entries)) {
+          const list = data.entries as Entry[];
+          setEntries(list);
+          setSelectedId((prev) => {
+            if (prev && list.some((e) => e.mail.id === prev)) return prev;
+            return prev || list[0]?.mail.id || null;
+          });
+        } else {
+          await load();
+        }
+        if (typeof data.hint === "string") setHint(data.hint);
+        if (typeof data.configured === "boolean") {
+          setConfigured(data.configured);
+        }
+      } catch (e) {
+        if (!opts?.quiet) {
+          setError(e instanceof Error ? e.message : "Sync mislukt");
+        }
+      } finally {
+        syncingRef.current = false;
+        setSyncing(false);
+        setSyncEpoch((n) => n + 1);
+      }
+    },
+    [load]
+  );
+
   useEffect(() => {
     void load();
   }, [load]);
 
+  // IMAP auto-sync elke 10 min; Sync-knop reset de timer (syncEpoch).
+  useEffect(() => {
+    if (!configured) return;
+    const id = window.setInterval(() => {
+      void sync({ recent: true, quiet: true });
+    }, AUTO_SYNC_MS);
+    return () => window.clearInterval(id);
+  }, [configured, sync, syncEpoch]);
+
+  // Eerste sync zodra IMAP geconfigureerd is (na initial load).
+  // Quiet=false als inbox leeg is, zodat sync-fouten zichtbaar zijn.
+  const initialSyncDone = useRef(false);
+  useEffect(() => {
+    if (!configured || initialSyncDone.current || loading) return;
+    initialSyncDone.current = true;
+    void sync({ recent: true, quiet: entries.length > 0 });
+  }, [configured, sync, loading, entries.length]);
+
   useEffect(() => {
     setDraft(fieldsFromEntry(selected));
-  }, [selected?.mail.id, selected?.item?.updated_at]);
-
-  async function sync(recent = false) {
-    setSyncing(true);
-    setMsg(null);
-    setError(null);
-    try {
-      const res = await fetch("/api/facturen-inbox", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recent, max: recent ? 60 : 40 }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Sync mislukt");
-      setMsg(
-        `Sync: ${data.fetched || 0} opgehaald · ${data.inserted || 0} nieuw · ${data.skipped || 0} overgeslagen`
-      );
-      if (Array.isArray(data.errors) && data.errors.length) {
-        setError(data.errors.slice(0, 3).join(" · "));
-      }
-      if (Array.isArray(data.entries)) {
-        setEntries(data.entries as Entry[]);
-      } else {
-        await load();
-      }
-      if (typeof data.hint === "string") setHint(data.hint);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Sync mislukt");
-    } finally {
-      setSyncing(false);
-    }
-  }
+  }, [selected?.mail.id, selected?.item?.updated_at, selected?.extract]);
 
   async function savePatch(
     extra?: { status?: FacturenInboxItem["status"] },
@@ -259,7 +314,9 @@ export function FacturenMailboxPanel() {
           </h2>
           <p className="truncate text-[12px] text-[#8E8E93]">
             {email}
-            {!configured ? " · IMAP nog niet geconfigureerd" : ""}
+            {!configured
+              ? " · IMAP nog niet geconfigureerd"
+              : " · auto-sync elke 10 min"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -287,7 +344,7 @@ export function FacturenMailboxPanel() {
           <button
             type="button"
             disabled={syncing || !configured}
-            onClick={() => void sync(false)}
+            onClick={() => void sync({ recent: false, quiet: false })}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#007AFF] px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
           >
             {syncing ? (
@@ -423,16 +480,28 @@ export function FacturenMailboxPanel() {
                 {selected.mail.attachments &&
                 selected.mail.attachments.length > 0 ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {selected.mail.attachments.map((a) => (
-                      <a
-                        key={a.id}
-                        href={`/api/inbox/${encodeURIComponent(selected.mail.id)}/attachments/${encodeURIComponent(a.id)}?download=1`}
-                        className="inline-flex items-center gap-1 rounded-md border border-[#E5E5EA] bg-[#F2F2F7] px-2 py-1 text-[11px] font-medium text-[#007AFF] hover:bg-white"
-                      >
-                        <Download className="size-3" />
-                        {a.filename}
-                      </a>
-                    ))}
+                    {selected.mail.attachments.map((a) => {
+                      const base = `/api/inbox/${encodeURIComponent(selected.mail.id)}/attachments/${encodeURIComponent(a.id)}`;
+                      return (
+                        <span
+                          key={a.id}
+                          className="inline-flex items-center gap-1 rounded-md border border-[#E5E5EA] bg-[#F2F2F7] px-2 py-1 text-[11px] font-medium text-[#3A3A3C]"
+                        >
+                          <FileText className="size-3 shrink-0" />
+                          <span className="max-w-[12rem] truncate">
+                            {a.filename}
+                          </span>
+                          <a
+                            href={`${base}?download=1`}
+                            className="ml-0.5 inline-flex text-[#007AFF] hover:opacity-80"
+                            title="Downloaden"
+                            aria-label={`${a.filename} downloaden`}
+                          >
+                            <Download className="size-3" />
+                          </a>
+                        </span>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>
