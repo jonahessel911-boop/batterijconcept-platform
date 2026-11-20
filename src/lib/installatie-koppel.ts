@@ -86,7 +86,7 @@ export async function resolveKoppelVanPartner(
     error = flat.error;
   }
   if (error || !data) return null;
-  const row = data as InstallatiePartnerKoppel;
+  const row = data as unknown as InstallatiePartnerKoppel;
   if (row.actief === false) return null;
   return {
     ...row,

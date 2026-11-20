@@ -77,7 +77,10 @@ export async function GET(
         .or(GEDAAN_OR)
         .order("installatie_at", { ascending: false, nullsFirst: false });
 
-    let { data, error } = await load(SELECT);
+    const first = await load(SELECT);
+    let error = first.error;
+    let data: Record<string, unknown>[] | null =
+      (first.data as Record<string, unknown>[] | null) ?? null;
 
     if (
       error &&
@@ -93,41 +96,50 @@ export async function GET(
           ? SELECT_NO_KOPPEL
           : SELECT_FALLBACK
       );
-      data = soft.data as typeof data;
+      data = (soft.data as Record<string, unknown>[] | null) ?? null;
       error = soft.error;
     }
 
     if (error) throw error;
 
-    const rows = (data || []).filter(
-      (r) =>
-        isInstallatieGedaan(r) &&
-        isInstallatieVanafCutoff(r.installatie_at, r.installatie_voltooid_at)
-    );
+    const rows = (data || []).filter((r) => {
+      const status = typeof r.status === "string" ? r.status : null;
+      const voltooid =
+        typeof r.installatie_voltooid_at === "string"
+          ? r.installatie_voltooid_at
+          : null;
+      const at =
+        typeof r.installatie_at === "string" ? r.installatie_at : null;
+      return (
+        isInstallatieGedaan({ status, installatie_voltooid_at: voltooid }) &&
+        isInstallatieVanafCutoff(at, voltooid)
+      );
+    });
 
     let koppels: InstallatiePartnerKoppel[] = [];
     {
-      let kq = await sb
+      const nested = await sb
         .from("installatie_partner_koppels")
         .select(KOPPEL_SELECT)
         .eq("partner_id", partner.id);
-      if (kq.error) {
-        kq = await sb
-          .from("installatie_partner_koppels")
-          .select(KOPPEL_SELECT_FLAT)
-          .eq("partner_id", partner.id);
-      }
+      const kq = nested.error
+        ? await sb
+            .from("installatie_partner_koppels")
+            .select(KOPPEL_SELECT_FLAT)
+            .eq("partner_id", partner.id)
+        : nested;
       if (!kq.error) {
-        koppels = (kq.data || []) as InstallatiePartnerKoppel[];
+        koppels = (kq.data || []) as unknown as InstallatiePartnerKoppel[];
       }
     }
     const koppelById = new Map(koppels.map((k) => [k.id, k]));
     const installaties = rows.map((r) => {
       const koppelId = resolveInstallatieKoppelId(
         {
-          installatie_koppel_id: (
-            r as { installatie_koppel_id?: string | null }
-          ).installatie_koppel_id,
+          installatie_koppel_id:
+            typeof r.installatie_koppel_id === "string"
+              ? r.installatie_koppel_id
+              : null,
           installatie_partner_id: partner.id,
         },
         koppels
@@ -137,7 +149,11 @@ export async function GET(
         installatie_koppel_id: koppelId,
         installatie_koppel: koppelId ? koppelById.get(koppelId) || null : null,
       };
-    });
+    }) as Array<
+      Record<string, unknown> & {
+        monteur_beoordeling_sterren?: number | null;
+      }
+    >;
 
     const openBeoordeling = installaties.filter(
       (r) => r.monteur_beoordeling_sterren == null

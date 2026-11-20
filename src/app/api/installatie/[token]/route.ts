@@ -28,18 +28,26 @@ export async function GET(
 
     const sb = getSupabaseAdmin();
     const scope = await resolveOwnJobsScope(session);
-    const query = applyOwnJobsFilter(
-      sb
-        .from("projecten")
-        .select(
-          "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, installatie_koppel_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))"
-        )
-        .eq("installatie_partner_id", session.partner.id)
-        .order("schouw_at", { ascending: true, nullsFirst: false }),
-      scope
-    );
+    const SELECT_FULL =
+      "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, installatie_koppel_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))";
+    const SELECT_NO_KOPPEL =
+      "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))";
+    let q = sb
+      .from("projecten")
+      .select(SELECT_FULL)
+      .eq("installatie_partner_id", session.partner.id)
+      .order("schouw_at", { ascending: true, nullsFirst: false }) as unknown as {
+        eq: (col: string, val: string) => typeof q;
+        or: (filter: string) => typeof q;
+      };
+    q = applyOwnJobsFilter(q, scope);
 
-    let { data: orders, error } = await query;
+    const first = await (q as unknown as Promise<{
+      data: unknown[] | null;
+      error: { message?: string; code?: string } | null;
+    }>);
+    let orders = first.data;
+    let error = first.error;
 
     if (
       error &&
@@ -49,16 +57,14 @@ export async function GET(
     ) {
       let retry = sb
         .from("projecten")
-        .select(
-          "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))"
-        )
+        .select(SELECT_NO_KOPPEL)
         .eq("installatie_partner_id", session.partner.id)
         .order("schouw_at", { ascending: true, nullsFirst: false });
       if (scopesToOwnJobsOnly(session)) {
         retry = retry.eq("installatie_teamgenoot_id", session.teamgenoot.id);
       }
       const second = await retry;
-      orders = second.data;
+      orders = second.data as unknown[] | null;
       error = second.error;
     }
 

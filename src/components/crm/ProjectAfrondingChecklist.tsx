@@ -181,7 +181,12 @@ export function afterSaleChecklistItems(project: Project): {
   done: boolean;
 }[] {
   const lev = overstapLeverancierLabel(project);
-  const checks = ITEMS.map((item) => {
+  const checks: {
+    id: AfterSaleCheckId;
+    label: string;
+    detail: string;
+    done: boolean;
+  }[] = ITEMS.map((item) => {
     if (item.id === "overstap_dynamische_leverancier_at") {
       return {
         ...item,
@@ -488,11 +493,12 @@ export function ProjectAfrondingChecklist({
                 </Item>
               );
             }
-            const done = item.done || optimisticDone.has(item.id);
-            const checking = busy === item.id;
+            const checkId = item.id;
+            const done = item.done || optimisticDone.has(checkId);
+            const checking = busy === checkId;
             return (
               <Item
-                key={item.id}
+                key={checkId}
                 variant="outline"
                 size="sm"
                 className={cn(
@@ -515,7 +521,7 @@ export function ProjectAfrondingChecklist({
                       disabled={checking}
                       aria-label={`${item.label} check`}
                       onCheckedChange={(checked) => {
-                        if (checked === true) setConfirmId(item.id);
+                        if (checked === true) setConfirmId(checkId);
                       }}
                     />
                   )}
@@ -542,7 +548,7 @@ export function ProjectAfrondingChecklist({
                     type="button"
                     size="sm"
                     disabled={checking}
-                    onClick={() => setConfirmId(item.id)}
+                    onClick={() => setConfirmId(checkId)}
                   >
                     {checking ? "…" : "Check"}
                   </Button>
@@ -610,16 +616,17 @@ export function ProjectAfrondingChecklist({
               </li>
             );
           }
+          const checkId = item.id;
           const done = item.done;
-          const at = project[item.id];
+          const at = project[checkId];
           return (
-            <li key={item.id}>
+            <li key={checkId}>
               <label className="flex cursor-pointer items-start gap-2.5">
                 <input
                   type="checkbox"
                   checked={done}
-                  disabled={busy === item.id}
-                  onChange={() => void toggle(item.id)}
+                  disabled={busy === checkId}
+                  onChange={() => void toggle(checkId)}
                   className="mt-0.5 h-4 w-4 shrink-0"
                 />
                 <span>

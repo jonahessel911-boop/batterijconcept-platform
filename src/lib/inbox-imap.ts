@@ -297,6 +297,7 @@ export async function syncInboxFromImap(
                   cancelAfspraak: false,
                   leadGeenContact: false,
                   leadGeenInteresse: false,
+                  createTerugbel: false,
                 },
               };
             } else {

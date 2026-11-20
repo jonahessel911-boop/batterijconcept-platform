@@ -167,13 +167,14 @@ export async function resolveOwnJobsScope(
 }
 
 /** Schouw via teamgenoot_id; installatie via koppel waar de monteur in zit. */
-export function applyOwnJobsFilter<T extends {
-  eq: (col: string, val: string) => T;
-  or: (filter: string) => T;
-}>(query: T, scope: OwnJobsScope): T {
+export function applyOwnJobsFilter<T>(query: T, scope: OwnJobsScope): T {
+  const q = query as T & {
+    eq: (col: string, val: string) => T;
+    or: (filter: string) => T;
+  };
   if (scope.kind === "none") return query;
-  if (scope.kind === "eq") return query.eq(scope.column, scope.value);
-  return query.or(scope.filter);
+  if (scope.kind === "eq") return q.eq(scope.column, scope.value);
+  return q.or(scope.filter);
 }
 
 function normalizeTgRol(raw: unknown): InstallatieAuthRol {

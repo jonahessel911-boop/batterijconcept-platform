@@ -4433,7 +4433,7 @@ function WeekKoppelMatrix({
   const colCount = Math.max(1, kolommen.length);
 
   function buitenMaand(d: DayCol) {
-    return Boolean(monthPrefix) && !d.key.startsWith(monthPrefix);
+    return Boolean(monthPrefix) && !d.key.startsWith(monthPrefix ?? "");
   }
 
   function jobsOpDag(list: PlanbordBar[], dayKey: string) {

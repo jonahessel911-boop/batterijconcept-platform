@@ -87,7 +87,11 @@ export async function GET() {
 
     let offertes = offertesRaw as OfferteBootstrapRow[];
     let projectenScoped = projecten as {
+      id: string;
       lead_id: string;
+      status?: string | null;
+      oplever_formulier?: unknown;
+      installatie_voltooid_at?: string | null;
       leads?:
         | { adviseur_id?: string | null }
         | { adviseur_id?: string | null }[]
@@ -98,8 +102,8 @@ export async function GET() {
     const { projectMoetNaarAfterSale } = await import(
       "@/lib/project-na-oplevering"
     );
-    const stuckOplever = (projectenScoped as { id: string; status?: string | null; oplever_formulier?: unknown; installatie_voltooid_at?: string | null }[]).filter(
-      (p) => projectMoetNaarAfterSale(p)
+    const stuckOplever = projectenScoped.filter((p) =>
+      projectMoetNaarAfterSale(p)
     );
     if (stuckOplever.length > 0) {
       const now = new Date().toISOString();

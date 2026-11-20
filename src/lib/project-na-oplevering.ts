@@ -103,7 +103,9 @@ export async function maybeAdvanceProjectNaOplevering(
       .select("id, status, project_nummer, installatie_voltooid_at")
       .eq("id", projectId)
       .maybeSingle();
-    project = retry.data;
+    project = retry.data
+      ? { ...retry.data, oplever_formulier: null }
+      : retry.data;
     error = retry.error;
   }
 

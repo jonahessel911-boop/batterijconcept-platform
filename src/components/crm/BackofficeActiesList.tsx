@@ -4068,7 +4068,7 @@ export function BackofficeActiesList({
                     onAgendaPlanned={(iso) =>
                       void updateFinancieringStatusFromActie(
                         actie,
-                        resolveFinancieringStatus(actie.project),
+                        resolveFinancieringStatus(actie.project ?? {}),
                         { warmtefonds_afspraak_at: iso }
                       )
                     }
@@ -6433,7 +6433,7 @@ export function BackofficeActiesList({
                             onPlanned={(iso) =>
                               void updateFinancieringStatusFromActie(
                                 actie,
-                                resolveFinancieringStatus(actie.project),
+                                resolveFinancieringStatus(actie.project ?? {}),
                                 { warmtefonds_afspraak_at: iso }
                               )
                             }

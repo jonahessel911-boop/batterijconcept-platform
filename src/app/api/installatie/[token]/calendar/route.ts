@@ -58,17 +58,34 @@ export async function GET(
     const partner = session.partner;
     const sb = getSupabaseAdmin();
 
-    const query = applyOwnJobsFilter(
-      sb
-        .from("projecten")
-        .select(
-          "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, installatie_teamgenoot_id, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
-        )
-        .eq("installatie_partner_id", partner.id),
-      await resolveOwnJobsScope(session)
-    );
+    let q = sb
+      .from("projecten")
+      .select(
+        "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, installatie_teamgenoot_id, installatie_koppel_id, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
+      )
+      .eq("installatie_partner_id", partner.id) as unknown as {
+      eq: (col: string, val: string) => typeof q;
+      or: (filter: string) => typeof q;
+    };
+    q = applyOwnJobsFilter(q, await resolveOwnJobsScope(session));
 
-    const { data: orders, error } = await query;
+    const { data: orders, error } = await (q as unknown as Promise<{
+      data: Array<{
+        id: string;
+        project_nummer?: string | null;
+        titel?: string | null;
+        schouw_at?: string | null;
+        schouw_notities?: string | null;
+        installatie_at?: string | null;
+        installatie_notities?: string | null;
+        service_at?: string | null;
+        service_notities?: string | null;
+        installatie_teamgenoot_id?: string | null;
+        installatie_koppel_id?: string | null;
+        leads?: unknown;
+      }> | null;
+      error: { message?: string } | null;
+    }>);
 
     if (error) throw error;
 
