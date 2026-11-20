@@ -38,6 +38,7 @@ import {
 } from "@/lib/backoffice-acties";
 import {
   formatSchouwWeekLabel,
+  isSchouwdagDefinitief,
   schouwWeekFromDate,
   schouwWeekToMondayIso,
   schouwWeekValue,
@@ -299,10 +300,13 @@ export function ProjectKickoffChecklist({
     }
     const derived = schouwWeekFromDate(parsed);
     const email = lead?.email?.trim();
+    const wijzigen = isSchouwdagDefinitief(project);
     if (
       !opts?.silent &&
       !confirm(
-        `Schouwdag zetten${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt de schouwdag + knop naar track & trace.`
+        wijzigen
+          ? `Schouwdag wijzigen${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt ‘Wijziging schouwafspraak’ met de nieuwe datum en tijd.`
+          : `Schouwdag zetten${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt de schouwdag + knop naar track & trace.`
       )
     ) {
       return;
@@ -340,10 +344,18 @@ export function ProjectKickoffChecklist({
         hour: "2-digit",
         minute: "2-digit",
       });
+      const wijziging = Boolean(
+        (data as { mails?: { klant?: { wijziging?: boolean } } }).mails?.klant
+          ?.wijziging
+      );
       setActionHint(
         mailOk
-          ? `Schouwdag gezet · ${dagLabel} — klantmail met track & trace verstuurd`
-          : `Schouwdag gezet · ${dagLabel}`
+          ? wijziging
+            ? `Schouwdag gewijzigd · ${dagLabel} — wijzigingsmail naar klant verstuurd`
+            : `Schouwdag gezet · ${dagLabel} — klantmail met track & trace verstuurd`
+          : wijziging
+            ? `Schouwdag gewijzigd · ${dagLabel}`
+            : `Schouwdag gezet · ${dagLabel}`
       );
     } catch (e) {
       setActionError(

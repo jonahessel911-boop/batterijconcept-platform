@@ -48,9 +48,11 @@ import {
   resolveProjectVolgendeStap,
 } from "@/lib/project-volgende-stap";
 import { contextVoorOpenTaak } from "@/lib/project-taak-context";
-import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
+import { AMSTERDAM_TZ, formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import {
   formatSchouwWeekLabel,
+  isSchouwdagDefinitief,
   parseSchouwWeekValue,
   upcomingSchouwWeekOptions,
 } from "@/lib/schouw-week";
@@ -192,8 +194,23 @@ function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd'T'HH:mm");
+}
+
+function datetimeLocalToIso(raw: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(raw);
+  if (!m) return null;
+  return fromZonedTime(
+    new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      0
+    ),
+    AMSTERDAM_TZ
+  ).toISOString();
 }
 
 type PendingMove =
@@ -2638,6 +2655,7 @@ function SchouwdagModal({
     toDatetimeLocalValue(project.schouw_at)
   );
   const [notities, setNotities] = useState(project.schouw_notities || "");
+  const wijzigen = isSchouwdagDefinitief(project);
 
   useEffect(() => {
     let cancelled = false;
@@ -2656,10 +2674,16 @@ function SchouwdagModal({
   }, []);
 
   return (
-    <ModalShell title="Schouwdag plannen + mail" onClose={onClose}>
+    <ModalShell
+      title={
+        wijzigen ? "Schouwdag wijzigen + mail" : "Schouwdag plannen + mail"
+      }
+      onClose={onClose}
+    >
       <p className="text-sm text-muted">
-        Zet datum/tijd voor de schouw. De klant (en partner) krijgen een mail
-        met de afspraak.
+        {wijzigen
+          ? "Pas datum en tijd aan. De klant krijgt een mail ‘Wijziging schouwafspraak’ met de nieuwe datum en tijd."
+          : "Zet datum/tijd voor de schouw. De klant (en partner) krijgen een mail met de afspraak."}
       </p>
       <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted">
         Datum & tijd
@@ -2701,17 +2725,17 @@ function SchouwdagModal({
           type="button"
           disabled={busy || !schouwAt || !partnerId}
           onClick={() => {
-            const d = new Date(schouwAt);
-            if (Number.isNaN(d.getTime())) return;
+            const iso = datetimeLocalToIso(schouwAt);
+            if (!iso) return;
             onSave({
-              schouw_at: d.toISOString(),
+              schouw_at: iso,
               installatie_partner_id: partnerId,
               schouw_notities: notities.trim() || undefined,
             });
           }}
           className="flex-1 bg-orange px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60"
         >
-          Plannen & mailen
+          {wijzigen ? "Wijzigen & mailen" : "Plannen & mailen"}
         </button>
         <button
           type="button"

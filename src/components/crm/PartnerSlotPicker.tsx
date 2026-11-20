@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { addDays, format } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
 import type { PartnerVenster } from "@/lib/partner-slots";
@@ -123,6 +123,29 @@ function dayFullLabel(dk: string): string {
 
 function timeLabel(iso: string): string {
   return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "HH:mm");
+}
+
+function amsterdamDatetimeLocalValue(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd'T'HH:mm");
+}
+
+function amsterdamDatetimeLocalToIso(raw: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(raw);
+  if (!m) return null;
+  return fromZonedTime(
+    new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      0
+    ),
+    AMSTERDAM_TZ
+  ).toISOString();
 }
 
 function stopSoortLabel(soort: "schouw" | "installatie"): string {
@@ -797,6 +820,27 @@ export function PartnerSlotPicker({
           </CollapsibleContent>
         </Collapsible>
       )}
+
+      {soort === "schouw" ? (
+        <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Of kies zelf datum en tijd
+          <input
+            type="datetime-local"
+            disabled={disabled}
+            value={amsterdamDatetimeLocalValue(value)}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (!raw) {
+                onChange(null, null);
+                return;
+              }
+              const iso = amsterdamDatetimeLocalToIso(raw);
+              if (iso) onChange(iso, null);
+            }}
+            className="mt-1 w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+          />
+        </label>
+      ) : null}
     </div>
   );
 }

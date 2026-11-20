@@ -1316,6 +1316,49 @@ export function schouwKlantEmail(opts: {
   });
 }
 
+/** Klant: bestaande schouwafspraak is verzet (nieuwe datum én tijd). */
+export function schouwKlantWijzigingEmail(opts: {
+  naam: string;
+  schouwAt: string | Date;
+  vorigeSchouwAt?: string | Date | null;
+  adres?: string | null;
+  projectNummer?: string | null;
+  trackUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const nieuw = formatDateTimeLongNl(opts.schouwAt);
+  const vorige = opts.vorigeSchouwAt
+    ? formatDateTimeLongNl(opts.vorigeSchouwAt)
+    : null;
+  return emailLayout({
+    title: "Wijziging schouwafspraak — Batterijconcept",
+    preheader: `Je schouw staat nu op ${nieuw}.`,
+    bodyHtml: [
+      emailH1("Wijziging schouwafspraak"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je schouwafspraak is gewijzigd. Noteer de nieuwe datum en tijd hieronder."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Nieuwe schouw</strong><br />${nieuw}</p>
+         ${vorige ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Was eerder</strong><br />${vorige}</p>` : ""}
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
+      ),
+      emailP(
+        "Zorg dat er iemand thuis is op dit moment. Kun je niet? Mail info@batterijconcept.nl of bel 085 800 1645, dan kijken we mee."
+      ),
+      opts.trackUrl
+        ? [
+            emailP("In track &amp; trace zie je altijd de actuele afspraak."),
+            emailButton("Volg je order", opts.trackUrl),
+          ].join("")
+        : "",
+      emailMuted("Tot dan, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 /** Installatiepartner: nieuwe schouw / order */
 export function schouwPartnerEmail(opts: {
   partnerNaam: string;
@@ -1330,6 +1373,7 @@ export function schouwPartnerEmail(opts: {
   notities?: string | null;
   fotoCount?: number;
   portalUrl: string;
+  wijziging?: boolean;
 }) {
   const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
   const weekLabel = formatSchouwWeekLabel(opts.schouwJaar, opts.schouwWeek);
@@ -1345,17 +1389,23 @@ export function schouwPartnerEmail(opts: {
         ? "1 foto (zie bijlage / portaal)"
         : `${fotoCount} foto's (zie bijlagen / portaal)`;
   return emailLayout({
-    title: "Nieuwe schouw ingepland",
+    title: opts.wijziging
+      ? "Schouwafspraak gewijzigd"
+      : "Nieuwe schouw ingepland",
     preheader: hasExact
-      ? `Schouw bij ${opts.klantNaam} op ${exactLabel}.`
+      ? `${opts.wijziging ? "Gewijzigd: schouw" : "Schouw"} bij ${opts.klantNaam} op ${exactLabel}.`
       : `Schouw bij ${opts.klantNaam} in ${weekLabel}.`,
     bodyHtml: [
-      emailH1("Nieuwe schouw ingepland"),
+      emailH1(
+        opts.wijziging ? "Schouwafspraak gewijzigd" : "Nieuwe schouw ingepland"
+      ),
       emailP(`Hoi ${first},`),
       emailP(
-        hasExact
-          ? "Er is een nieuwe schouw voor je ingepland met exacte datum/tijd. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
-          : "Er is een nieuwe schouw voor je ingepland. Exacte dag en tijd volgt ongeveer één week van tevoren na contact met de klant. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
+        opts.wijziging && hasExact
+          ? "De schouwafspraak is verzet. Noteer de nieuwe datum en tijd hieronder. In het installatieportaal zie je de volledige order."
+          : hasExact
+            ? "Er is een nieuwe schouw voor je ingepland met exacte datum/tijd. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
+            : "Er is een nieuwe schouw voor je ingepland. Exacte dag en tijd volgt ongeveer één week van tevoren na contact met de klant. Hieronder vind je de klant- en schouwgegevens. In het installatieportaal zie je de volledige order."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Klant</strong><br />${opts.klantNaam}</p>

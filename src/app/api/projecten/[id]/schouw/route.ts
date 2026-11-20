@@ -4,8 +4,13 @@ import { errMessage } from "@/lib/errors";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { appBaseUrl, monteurCcEmail, sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
-import { schouwKlantEmail, schouwPartnerEmail } from "@/lib/email/templates";
 import {
+  schouwKlantEmail,
+  schouwKlantWijzigingEmail,
+  schouwPartnerEmail,
+} from "@/lib/email/templates";
+import {
+  isSchouwdagDefinitief,
   isValidSchouwWeek,
   schouwWeekFromDate,
   schouwWeekToMondayIso,
@@ -89,7 +94,7 @@ export async function POST(
     const { data: project, error: projErr } = await sb
       .from("projecten")
       .select(
-        "id, status, installatie_partner_id, betaalwijze, lead_id, offertes(financiering_voorbehoud), leads(status)"
+        "id, status, installatie_partner_id, betaalwijze, lead_id, schouw_at, schouw_jaar, schouw_week, offertes(financiering_voorbehoud), leads(status)"
       )
       .eq("id", id)
       .single();
@@ -163,6 +168,21 @@ export async function POST(
     }
 
     const exacteDag = Boolean(exactSchouwAt);
+    const vorigeSchouwAt =
+      (project as { schouw_at?: string | null }).schouw_at || null;
+    const vorigeWasExact = isSchouwdagDefinitief({
+      schouw_at: vorigeSchouwAt,
+      schouw_jaar: (project as { schouw_jaar?: number | null }).schouw_jaar,
+      schouw_week: (project as { schouw_week?: number | null }).schouw_week,
+    });
+    const isWijziging =
+      exacteDag &&
+      vorigeWasExact &&
+      Boolean(vorigeSchouwAt) &&
+      Math.abs(
+        new Date(vorigeSchouwAt as string).getTime() -
+          new Date(schouwAtIso).getTime()
+      ) > 60_000;
     const nextStatus = statusNaSchouwInplannen({
       exacteDag,
       warmtefonds: warmtefondsForStatus,
@@ -400,7 +420,12 @@ export async function POST(
     const mailSchouwAt = exactSchouwAt;
 
     const mails: {
-      klant: { ok: boolean; skipped?: boolean; error?: string };
+      klant: {
+        ok: boolean;
+        skipped?: boolean;
+        error?: string;
+        wijziging?: boolean;
+      };
       partner: { ok: boolean; skipped?: boolean; error?: string };
     } = {
       klant: { ok: false, skipped: true },
@@ -430,30 +455,45 @@ export async function POST(
       } catch {
         /* track optioneel */
       }
-      const klantHtml = schouwKlantEmail({
-        naam: lead.naam || "klant",
-        schouwJaar,
-        schouwWeek,
-        schouwAt: mailSchouwAt,
-        adres,
-        projectNummer: updated.project_nummer,
-        warmtefonds,
-        trackUrl,
-      });
+      const klantHtml = isWijziging
+        ? schouwKlantWijzigingEmail({
+            naam: lead.naam || "klant",
+            schouwAt: mailSchouwAt as string,
+            vorigeSchouwAt,
+            adres,
+            projectNummer: updated.project_nummer,
+            trackUrl,
+          })
+        : schouwKlantEmail({
+            naam: lead.naam || "klant",
+            schouwJaar,
+            schouwWeek,
+            schouwAt: mailSchouwAt,
+            adres,
+            projectNummer: updated.project_nummer,
+            warmtefonds,
+            trackUrl,
+          });
       const sent = await sendEmail({
         to: lead.email.trim(),
-        subject: hasExactDay
-          ? "Schouw gepland — Batterijconcept"
-          : "Schouwweek gepland — Batterijconcept",
+        subject: isWijziging
+          ? "Wijziging schouwafspraak — Batterijconcept"
+          : hasExactDay
+            ? "Schouw gepland — Batterijconcept"
+            : "Schouwweek gepland — Batterijconcept",
         html: klantHtml,
-        tag: hasExactDay ? "schouw-klant-dag" : "schouw-klant-week",
+        tag: isWijziging
+          ? "schouw-klant-wijziging"
+          : hasExactDay
+            ? "schouw-klant-dag"
+            : "schouw-klant-week",
         replyTo: await replyToForLeadAdviseur(
           sb,
           updated.lead_id as string | null
         ),
       });
       mails.klant = sent.ok
-        ? { ok: true }
+        ? { ok: true, wijziging: isWijziging }
         : { ok: false, error: sent.error || "Versturen mislukt" };
       if (sent.ok) {
         mailPatch.schouw_mail_klant_verstuurd = true;
@@ -509,6 +549,7 @@ export async function POST(
         projectNummer: updated.project_nummer,
         notities: schouwNotities,
         portalUrl,
+        wijziging: isWijziging,
       });
       const to = partnerEmail?.trim() || monteurCc!;
       const cc =
@@ -516,9 +557,11 @@ export async function POST(
       const sent = await sendEmail({
         to,
         cc,
-        subject: "Nieuwe schouw gepland — Batterijconcept",
+        subject: isWijziging
+          ? "Schouwafspraak gewijzigd — Batterijconcept"
+          : "Nieuwe schouw gepland — Batterijconcept",
         html: partnerHtml,
-        tag: "schouw-partner",
+        tag: isWijziging ? "schouw-partner-wijziging" : "schouw-partner",
       });
       mails.partner = sent.ok
         ? { ok: true }
@@ -543,10 +586,18 @@ export async function POST(
       await logLeadEvent({
         leadId: updated.lead_id,
         soort: "schouw",
-        titel: exactSchouwAt
-          ? "Schouwdatum gepland"
-          : `Schouwweek gezet (W${schouwWeek})`,
-        detail: exactSchouwAt
+        titel: isWijziging
+          ? "Schouwafspraak gewijzigd"
+          : exactSchouwAt
+            ? "Schouwdatum gepland"
+            : `Schouwweek gezet (W${schouwWeek})`,
+        detail: isWijziging
+          ? `Schouw verzet naar ${formatDateTimeNl(schouwAtIso)}${
+              vorigeSchouwAt
+                ? ` (was ${formatDateTimeNl(vorigeSchouwAt)})`
+                : ""
+            }`
+          : exactSchouwAt
           ? `Schouwdatum is gepland op ${formatDateTimeNl(schouwAtIso)}`
           : [
               schouwJaar && schouwWeek

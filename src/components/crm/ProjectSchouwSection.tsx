@@ -120,7 +120,9 @@ export function ProjectSchouwSection({
   const [uploadingOplevering, setUploadingOplevering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [planOpen, setPlanOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(() =>
+    isSchouwdagDefinitief(project)
+  );
   const [opleverFormOpen, setOpleverFormOpen] = useState(false);
 
   const loadPartnersAndFotos = useCallback(async () => {
@@ -253,20 +255,35 @@ export function ProjectSchouwSection({
       const mailOk = data.mails?.klant?.ok;
       const mailSkipped = data.mails?.klant?.skipped;
       const mailErr = data.mails?.klant?.error as string | undefined;
+      const wijziging = Boolean(data.mails?.klant?.wijziging);
       if (mailOk) {
         setOkMsg(
-          schouwAtIso
-            ? "Schouwdag gezet — bevestiging naar klant verstuurd."
-            : "Schouwweek ingepland — bevestiging naar klant verstuurd."
+          wijziging
+            ? "Schouwdag gewijzigd — wijzigingsmail naar klant verstuurd."
+            : schouwAtIso
+              ? "Schouwdag gezet — bevestiging naar klant verstuurd."
+              : "Schouwweek ingepland — bevestiging naar klant verstuurd."
         );
       } else if (mailSkipped) {
-        setOkMsg(schouwAtIso ? "Schouwdag gezet." : "Schouwweek ingepland.");
+        setOkMsg(
+          wijziging
+            ? "Schouwdag gewijzigd."
+            : schouwAtIso
+              ? "Schouwdag gezet."
+              : "Schouwweek ingepland."
+        );
         setError(
           mailErr ||
             "Geen bevestigingsmail: vul een e-mailadres in bij de lead."
         );
       } else {
-        setOkMsg(schouwAtIso ? "Schouwdag gezet." : "Schouwweek ingepland.");
+        setOkMsg(
+          wijziging
+            ? "Schouwdag gewijzigd."
+            : schouwAtIso
+              ? "Schouwdag gezet."
+              : "Schouwweek ingepland."
+        );
         setError(mailErr || "Bevestigingsmail naar klant is mislukt.");
       }
       onChanged();
@@ -499,16 +516,22 @@ export function ProjectSchouwSection({
         onClick={() => setPlanOpen((o) => !o)}
         className="mb-3 text-xs font-semibold text-green-dark hover:underline"
       >
-        {planOpen ? "Plannen verbergen" : "Schouw / installatie plannen of wijzigen"}
+        {planOpen
+          ? "Plannen verbergen"
+          : dagDefinitief
+            ? "Schouwdag of tijd wijzigen"
+            : "Schouw / installatie plannen of wijzigen"}
       </button>
 
       {planOpen ? (
         <>
           <form onSubmit={planSchouw} className="space-y-4 px-1 py-2">
             <p className="text-sm text-muted">
-              {isWarmtefondsProject(project)
-                ? "Sale met financiering: eerst een week (±5 wkn vooruit). Exacte dag ±1 week van tevoren. Bij inplannen krijgt de klant een bevestigingsmail."
-                : "Eigen middelen: schouwweek pas ná 50% betaling. Daarna kun je meteen een exacte schouwdag zetten. Bij inplannen krijgt de klant een bevestigingsmail."}
+              {dagDefinitief
+                ? "Kies een nieuwe schouwdag én tijd. De klant krijgt een mail ‘Wijziging schouwafspraak’ met de nieuwe datum en tijd."
+                : isWarmtefondsProject(project)
+                  ? "Sale met financiering: eerst een week (±5 wkn vooruit). Exacte dag ±1 week van tevoren. Bij inplannen krijgt de klant een bevestigingsmail."
+                  : "Eigen middelen: schouwweek pas ná 50% betaling. Daarna kun je meteen een exacte schouwdag zetten. Bij inplannen krijgt de klant een bevestigingsmail."}
             </p>
             {isWarmtefondsProject(project) ? (
               <p className="text-sm text-muted">
@@ -587,11 +610,13 @@ export function ProjectSchouwSection({
             >
               {saving
                 ? "Bezig…"
-                : schouwAtIso
-                  ? "Schouwdag opslaan"
-                  : weekGepland
-                    ? "Schouwweek bijwerken"
-                    : "Schouwweek inplannen"}
+                : dagDefinitief && schouwAtIso
+                  ? "Schouwdag wijzigen en klant mailen"
+                  : schouwAtIso
+                    ? "Schouwdag opslaan"
+                    : weekGepland
+                      ? "Schouwweek bijwerken"
+                      : "Schouwweek inplannen"}
             </button>
           </form>
 

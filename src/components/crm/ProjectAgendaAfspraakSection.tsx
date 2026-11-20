@@ -37,12 +37,20 @@ function initialWeekValue(project: Project): string {
 }
 
 function mailSummary(mails: {
-  klant?: { ok?: boolean; skipped?: boolean; error?: string };
+  klant?: {
+    ok?: boolean;
+    skipped?: boolean;
+    error?: string;
+    wijziging?: boolean;
+  };
   partner?: { ok?: boolean; skipped?: boolean; error?: string };
 }): { ok: string; warn: string | null } {
   const parts: string[] = [];
   const warns: string[] = [];
-  if (mails.klant?.ok) parts.push("klant");
+  if (mails.klant?.ok)
+    parts.push(
+      mails.klant.wijziging ? "klant (wijziging schouwafspraak)" : "klant"
+    );
   else if (mails.klant?.skipped)
     warns.push(mails.klant.error || "geen klantmail");
   else if (mails.klant?.error) warns.push(`klant: ${mails.klant.error}`);
@@ -293,7 +301,14 @@ export function ProjectAgendaAfspraakSection({
           (data as { mails?: Parameters<typeof mailSummary>[0] }).mails || {}
         );
         setOkMsg(
-          `${soort === "schouwdag" ? "Schouwdag" : "Schouwweek"} ingepland. ${summary.ok}`
+          `${
+            soort === "schouwdag"
+              ? (data as { mails?: { klant?: { wijziging?: boolean } } }).mails
+                  ?.klant?.wijziging
+                ? "Schouwdag gewijzigd"
+                : "Schouwdag ingepland"
+              : "Schouwweek ingepland"
+          }. ${summary.ok}`
         );
         if (summary.warn) setError(summary.warn);
         setOpen(false);
@@ -387,7 +402,13 @@ export function ProjectAgendaAfspraakSection({
         <button
           type="button"
           onClick={() => {
-            setOpen((v) => !v);
+            setOpen((v) => {
+              const next = !v;
+              if (next && isSchouwdagDefinitief(project)) {
+                setSoort("schouwdag");
+              }
+              return next;
+            });
             setError(null);
             setOkMsg(null);
           }}
@@ -412,8 +433,9 @@ export function ProjectAgendaAfspraakSection({
           className="space-y-3 border-b border-line px-4 py-4"
         >
           <p className="text-xs text-muted">
-            Plan een schouw of installatie. Klant en installateur krijgen een
-            bevestigingsmail.
+            {soort === "schouwdag" && isSchouwdagDefinitief(project)
+              ? "Pas datum en tijd van de schouw aan. De klant krijgt een mail ‘Wijziging schouwafspraak’."
+              : "Plan een schouw of installatie. Klant en installateur krijgen een bevestigingsmail."}
           </p>
 
           <label className="block text-[10px] font-semibold uppercase text-muted">
@@ -584,7 +606,9 @@ export function ProjectAgendaAfspraakSection({
                 : soort === "schouwweek"
                   ? "Schouwweek inplannen"
                   : soort === "schouwdag"
-                    ? "Schouwdag inplannen"
+                    ? isSchouwdagDefinitief(project)
+                      ? "Schouwdag wijzigen en klant mailen"
+                      : "Schouwdag inplannen"
                     : soort === "service"
                       ? "Service inplannen"
                       : "Installatie inplannen"}
@@ -608,6 +632,7 @@ export function ProjectAgendaAfspraakSection({
                   Installateur
                 </th>
                 <th className="px-3 py-2.5 font-semibold text-ink">Notitie</th>
+                <th className="px-3 py-2.5" />
               </tr>
             </thead>
             <tbody>
@@ -631,6 +656,22 @@ export function ProjectAgendaAfspraakSection({
                     ) : (
                       "—"
                     )}
+                  </td>
+                  <td className="px-3 py-3 align-top text-right">
+                    {r.key === "schouwdag" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSoort("schouwdag");
+                          setOpen(true);
+                          setError(null);
+                          setOkMsg(null);
+                        }}
+                        className="text-xs font-semibold text-green-dark hover:underline"
+                      >
+                        Wijzigen
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}
