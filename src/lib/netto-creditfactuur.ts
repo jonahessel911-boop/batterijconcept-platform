@@ -802,7 +802,7 @@ export async function ensureAdviseurCommissieTrancheB(
       )
       .eq("id", projectId)
       .maybeSingle();
-    project = retry.data;
+    project = retry.data as typeof project;
     pErr = retry.error;
   }
 

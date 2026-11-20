@@ -18,6 +18,7 @@ import {
   resolveNettoCommissie,
   resolveNettoVorm,
   orderCommissiePctVanOfferte,
+  resolveOrderCommissiePct,
   summarizeFases,
   type NettoBoardRow,
 } from "@/lib/netto-boord";
@@ -134,24 +135,24 @@ export async function GET(req: NextRequest) {
     const OFFERTES_SELECT_CORE =
       "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, notities, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam, commissie_pct))";
 
-    let offertesRes = await sb
+    const offertesFull = await sb
       .from("offertes")
       .select(OFFERTES_SELECT_FULL)
       .in("status", ["ondertekend", "afgewezen"])
       .order("ondertekend_op", { ascending: false, nullsFirst: false })
       .limit(800);
-    if (
-      offertesRes.error?.code === "42703" ||
-      offertesRes.error?.message?.includes("commissie_pct")
-    ) {
-      offertesRes = await sb
-        .from("offertes")
-        .select(OFFERTES_SELECT_CORE)
-        .in("status", ["ondertekend", "afgewezen"])
-        .order("ondertekend_op", { ascending: false, nullsFirst: false })
-        .limit(800);
-    }
-    const { data: offertes, error: offErr } = offertesRes;
+    const offertesCore =
+      offertesFull.error?.code === "42703" ||
+      offertesFull.error?.message?.includes("commissie_pct")
+        ? await sb
+            .from("offertes")
+            .select(OFFERTES_SELECT_CORE)
+            .in("status", ["ondertekend", "afgewezen"])
+            .order("ondertekend_op", { ascending: false, nullsFirst: false })
+            .limit(800)
+        : null;
+    const offertes = (offertesCore ?? offertesFull).data;
+    const offErr = (offertesCore ?? offertesFull).error;
 
     if (offErr) {
       return NextResponse.json(

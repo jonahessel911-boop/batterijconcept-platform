@@ -206,7 +206,7 @@ export async function buildToekomstigeVerkoperCreditfacturen(
             .from("offertes")
             .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, commissie_pct, notities")
             .in("id", offIds)
-        : Promise.resolve({ data: [] as OfferteRow[] }),
+        : Promise.resolve({ data: [] as OfferteRow[], error: null }),
       leadIds.length
         ? sb
             .from("projecten")
