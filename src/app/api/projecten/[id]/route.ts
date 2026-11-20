@@ -12,9 +12,11 @@ import {
   type FinancieringStatus,
 } from "@/lib/financiering-status";
 import {
+  isSchouwdagDefinitief,
   isValidSchouwWeek,
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
+import { maybePromoteToSchouwInplannen } from "@/lib/project-volgende-stap";
 import { logLeadEvent, logProjectKlantMail } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
@@ -54,6 +56,64 @@ function isTeamgenootSelectError(error: {
     (error.code === "42703" &&
       error.message.includes("installatie_teamgenoot_id"))
   );
+}
+
+/** PostgREST/Postgres: welke kolom ontbreekt (42703 / PGRST204). */
+function postgresUndefinedColumn(error: {
+  message?: string;
+  code?: string;
+} | null): string | null {
+  const msg = error?.message || "";
+  if (!msg) return null;
+  const m =
+    msg.match(/column\s+"([a-z][a-z0-9_]*)"/i) ||
+    msg.match(
+      /column\s+(?:[\w]+\.)?["']?([a-z][a-z0-9_]*)["']?\s+does not exist/i
+    ) ||
+    msg.match(/could not find the ['"]([a-z][a-z0-9_]*)['"] column/i);
+  return m?.[1] ?? null;
+}
+
+function messageHasExactColumn(message: string | undefined, column: string): boolean {
+  if (!message) return false;
+  return postgresUndefinedColumn({ message }) === column || message.includes(column);
+}
+
+/** Kolommen die we mogen weglaten bij retry; de rest van de PATCH blijft staan. */
+const OPTIONAL_PATCH_COLUMNS = new Set([
+  "financiering_status_at",
+  "backoffice_notitie_door",
+  "hold_sales_deadline_at",
+]);
+
+function migrationHintForProjectColumn(column: string | null): string | null {
+  if (!column) return null;
+  if (column === "bel_schouw_aanbetaling_at") {
+    return "Voer supabase/migrate-bel-schouw-actie.sql uit in Supabase.";
+  }
+  if (column === "installatie_voltooid_at") {
+    return "Voer supabase/migrate-installatie-voltooid-at.sql uit in Supabase.";
+  }
+  if (column === "financiering_status_at") {
+    return "Voer supabase/migrate-financiering-status-at.sql uit in Supabase.";
+  }
+  if (
+    column === "btw_terugvragen_aangevraagd_at" ||
+    column === "overstap_dynamische_leverancier_at" ||
+    column === "review_gevraagd_at"
+  ) {
+    return "Voer supabase/migrate-project-afronding.sql uit in Supabase.";
+  }
+  if (column === "aangetekende_brief_verstuurd_at") {
+    return "Voer supabase/migrate-aangetekende-brief.sql uit in Supabase.";
+  }
+  if (column.startsWith("monteur_beoordeling")) {
+    return "Voer supabase/migrate-monteur-beoordeling.sql uit in Supabase.";
+  }
+  if (column.startsWith("klantvriendelijkheid")) {
+    return "Voer supabase/migrate-klantvriendelijkheid.sql uit in Supabase.";
+  }
+  return `Databasekolom ${column} ontbreekt. Voer de bijbehorende supabase/migrate-*.sql uit.`;
 }
 
 /** WF kickoff klaar maar status nog Opstarten → DB repareren vóór response. */
@@ -731,8 +791,7 @@ export async function PATCH(
       .maybeSingle();
     if (
       beforeQuery.error &&
-      (beforeQuery.error.message?.includes("bel_schouw_aanbetaling_at") ||
-        beforeQuery.error.code === "42703")
+      postgresUndefinedColumn(beforeQuery.error) === "bel_schouw_aanbetaling_at"
     ) {
       beforeQuery = await sb
         .from("projecten")
@@ -1086,6 +1145,38 @@ export async function PATCH(
       }
     }
 
+    // WF aanbod ondertekenen (goedgekeurd) → orderstatus Schouw inplannen
+    {
+      const mergedFs =
+        patch.financiering_status !== undefined
+          ? (patch.financiering_status as string | null)
+          : ((before as { financiering_status?: string | null } | null)
+              ?.financiering_status ?? null);
+      const currentForPromote =
+        (typeof patch.status === "string" ? patch.status : null) ||
+        (before as { status?: string } | null)?.status ||
+        null;
+      const promoted = maybePromoteToSchouwInplannen({
+        currentStatus: currentForPromote,
+        financieringStatus: mergedFs,
+        exacteSchouwdag: isSchouwdagDefinitief(
+          (before as {
+            schouw_at?: string | null;
+            schouw_jaar?: number | null;
+            schouw_week?: number | null;
+          }) || {}
+        ),
+      });
+      if (
+        promoted &&
+        (body.status === undefined ||
+          patch.status === "opstarten_voltooid_afwachten_wf" ||
+          patch.status === "schouwweek_inplannen")
+      ) {
+        patch.status = promoted;
+      }
+    }
+
     // Bewaar schouw/inkoop-meta (__…) als client alleen regelstatussen stuurt.
     if (
       patch.materiaal_checks &&
@@ -1155,15 +1246,18 @@ export async function PATCH(
 
     if (error && isTeamgenootSelectError(error)) {
       const fallbackPatch = { ...patch };
+      const missingTg = postgresUndefinedColumn(error);
       if (
-        error.message?.includes("installatie_teamgenoot_id") ||
-        error.message?.includes("installatie_koppel_id") ||
-        error.code === "42703"
+        missingTg === "installatie_teamgenoot_id" ||
+        error.message?.includes("installatie_teamgenoot_id")
       ) {
         delete fallbackPatch.installatie_teamgenoot_id;
-        if (error.message?.includes("installatie_koppel_id")) {
-          delete fallbackPatch.installatie_koppel_id;
-        }
+      }
+      if (
+        missingTg === "installatie_koppel_id" ||
+        error.message?.includes("installatie_koppel_id")
+      ) {
+        delete fallbackPatch.installatie_koppel_id;
       }
       const retryTg = await sb
         .from("projecten")
@@ -1175,11 +1269,7 @@ export async function PATCH(
       error = retryTg.error;
     }
 
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("backoffice_notitie_door"))
-    ) {
+    if (error && messageHasExactColumn(error.message, "backoffice_notitie_door")) {
       const { backoffice_notitie_door: _dropDoor, ...restDoor } = patch;
       void _dropDoor;
       const retryDoor = await sb
@@ -1193,11 +1283,7 @@ export async function PATCH(
     }
 
     // Kolom hold_sales_deadline_at nog niet gemigreerd.
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("hold_sales_deadline_at"))
-    ) {
+    if (error && messageHasExactColumn(error.message, "hold_sales_deadline_at")) {
       const { hold_sales_deadline_at: _drop, ...rest } = patch;
       void _drop;
       const retryHold = await sb
@@ -1229,22 +1315,20 @@ export async function PATCH(
     }
 
     // Kolommen monteur_beoordeling_* / klantvriendelijkheid_* nog niet gemigreerd.
-    if (
-      error &&
-      (error.code === "42703" ||
-        error.message?.includes("monteur_beoordeling") ||
-        error.message?.includes("klantvriendelijkheid"))
-    ) {
-      const kv = error.message?.includes("klantvriendelijkheid");
-      return NextResponse.json(
-        {
-          error: kv
-            ? "Voer supabase/migrate-klantvriendelijkheid.sql uit in Supabase."
-            : "Voer supabase/migrate-monteur-beoordeling.sql uit in Supabase.",
-          migration_required: true,
-        },
-        { status: 503 }
-      );
+    if (error) {
+      const missingBeoordeling = postgresUndefinedColumn(error);
+      if (
+        missingBeoordeling?.startsWith("monteur_beoordeling") ||
+        missingBeoordeling?.startsWith("klantvriendelijkheid")
+      ) {
+        return NextResponse.json(
+          {
+            error: migrationHintForProjectColumn(missingBeoordeling),
+            migration_required: true,
+          },
+          { status: 503 }
+        );
+      }
     }
 
     // Kolom materiaal_leverdatum nog niet gemigreerd → bewaar in materiaal_checks.
@@ -1332,80 +1416,43 @@ export async function PATCH(
       }
     }
 
-    // Ontbrekende optionele kolommen: retry zonder die velden (status-update mag niet falen)
-    if (
-      error &&
-      (error.message?.includes("bel_schouw_aanbetaling_at") ||
-        error.message?.includes("financiering_geschakeld_at") ||
-        error.message?.includes("warmtefonds_aangevraagd_at") ||
-        error.message?.includes("warmtefonds_afspraak_ingepland") ||
-        error.message?.includes("financiering_status") ||
-        error.message?.includes("financiering_status_at") ||
-        error.message?.includes("warmtefonds_afspraak_at") ||
-        error.message?.includes("btw_terugvragen_aangevraagd_at") ||
-        error.message?.includes("overstap_dynamische_leverancier_at") ||
-        error.message?.includes("review_gevraagd_at") ||
-        error.message?.includes("installatie_voltooid_at") ||
-        error.code === "42703")
-    ) {
-      const softPatch = { ...patch };
-      const dropKeys = [
-        "bel_schouw_aanbetaling_at",
-        "financiering_geschakeld_at",
-        "warmtefonds_aangevraagd_at",
-        "warmtefonds_afspraak_at",
-        "btw_terugvragen_aangevraagd_at",
-        "overstap_dynamische_leverancier_at",
-        "review_gevraagd_at",
-        "installatie_voltooid_at",
-        "financiering_status",
-        "financiering_status_at",
-      ] as const;
-      for (const k of dropKeys) {
-        if (error.message?.includes(k) || error.code === "42703") {
-          delete softPatch[k];
+    // Ontbrekende optionele kolommen: retry zonder die ene kolom (niet de hele PATCH).
+    if (error) {
+      const missingCol = postgresUndefinedColumn(error);
+      const looksLikeMissingColumn =
+        Boolean(missingCol) ||
+        error.code === "42703" ||
+        error.code === "PGRST204";
+      if (looksLikeMissingColumn) {
+        const softPatch = { ...patch };
+        if (missingCol && OPTIONAL_PATCH_COLUMNS.has(missingCol)) {
+          delete softPatch[missingCol];
         }
-      }
-      // Als alleen optionele timestamp-velden faalden: opnieuw met status e.d.
-      if (Object.keys(softPatch).length > 0) {
-        const retrySoft = await sb
-          .from("projecten")
-          .update(softPatch)
-          .eq("id", id)
-          .select(PROJECT_PATCH_SELECT_NO_TG)
-          .single();
-        if (!retrySoft.error && retrySoft.data) {
-          data = retrySoft.data;
-          error = null;
-        } else if (!softPatch.status && patch.status) {
-          // Laatste redmiddel: alleen status zetten
-          const retryStatus = await sb
+        const droppedOptional =
+          missingCol != null &&
+          Object.keys(softPatch).length < Object.keys(patch).length;
+        if (droppedOptional && Object.keys(softPatch).length > 0) {
+          const retrySoft = await sb
             .from("projecten")
-            .update({ status: patch.status })
+            .update(softPatch)
             .eq("id", id)
             .select(PROJECT_PATCH_SELECT_NO_TG)
             .single();
-          data = retryStatus.data;
-          error = retryStatus.error;
-        } else {
-          return NextResponse.json(
-            {
-              error:
-                "Voer supabase/migrate-bel-schouw-actie.sql (en evt. migrate-installatie-voltooid-at.sql) uit in Supabase.",
-              detail: error.message,
-            },
-            { status: 500 }
-          );
+          if (!retrySoft.error && retrySoft.data) {
+            data = retrySoft.data;
+            error = null;
+          } else {
+            error = retrySoft.error || error;
+          }
+        } else if (missingCol) {
+          const hint = migrationHintForProjectColumn(missingCol);
+          if (hint) {
+            return NextResponse.json(
+              { error: hint, detail: error.message, column: missingCol },
+              { status: 500 }
+            );
+          }
         }
-      } else {
-        return NextResponse.json(
-          {
-            error:
-              "Voer supabase/migrate-bel-schouw-actie.sql (en evt. migrate-installatie-voltooid-at.sql) uit in Supabase.",
-            detail: error.message,
-          },
-          { status: 500 }
-        );
       }
     }
 

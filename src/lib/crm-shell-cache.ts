@@ -93,3 +93,16 @@ export function clearCrmShellCache(): void {
     /* ignore */
   }
 }
+
+export const CRM_RELOAD_EVENT = "bc-crm-reload";
+
+/** Wis bootstrap-cache en laat CrmShell opnieuw laden. */
+export function requestCrmReload(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(BOOTSTRAP_KEY);
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(CRM_RELOAD_EVENT));
+}

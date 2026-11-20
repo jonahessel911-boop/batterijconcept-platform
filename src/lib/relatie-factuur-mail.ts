@@ -3,6 +3,17 @@ import { relatieFactuurAanBcEmail } from "@/lib/email/templates";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import { relatieFactuurVervaldatum } from "@/lib/pdf-relatie-factuur";
 
+/** Factuurmailbox; valt terug op gewone e-mail. */
+export function relatieFactuurToEmail(row: {
+  factuur_email?: string | null;
+  email?: string | null;
+}): string | null {
+  const dedicated = row.factuur_email?.trim().toLowerCase() || "";
+  const login = row.email?.trim().toLowerCase() || "";
+  const pick = dedicated || login;
+  return pick.includes("@") ? pick : null;
+}
+
 export async function mailRelatieFactuur(opts: {
   to: string | null | undefined;
   naam: string;
@@ -35,7 +46,7 @@ export async function mailRelatieFactuur(opts: {
     to: email,
     subject:
       variant === "goedgekeurd"
-        ? `Factuur ${opts.factuurNummer} goedgekeurd`
+        ? `Factuur ${opts.factuurNummer} te betalen`
         : `Factuur ${opts.factuurNummer} aan Batterijconcept`,
     html,
     tag:

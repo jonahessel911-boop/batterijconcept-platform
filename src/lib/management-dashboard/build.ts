@@ -2315,6 +2315,7 @@ export function buildManagementDashboard(
         { id: "warmtefonds_afgewezen", label: "Warmtefonds afgewezen" },
         { id: "warmtefonds_goedgekeurd", label: "Warmtefonds goedgekeurd" },
         { id: "opstarten_voltooid_afwachten_wf", label: "Afwachten WF" },
+        { id: "schouw_inplannen", label: "Schouw inplannen" },
         { id: "schouwdag_ingepland", label: "Schouw gepland" },
         { id: "schouw_voltooid", label: "Schouw voltooid" },
         { id: "restfactuur_verstuurd", label: "WF declaratie / Restfactuur" },

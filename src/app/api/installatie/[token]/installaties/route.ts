@@ -151,13 +151,15 @@ export async function GET(
       };
     }) as Array<
       Record<string, unknown> & {
-        monteur_beoordeling_sterren?: number | null;
+        installatie_koppel?: { beoordeling_sterren?: number | null } | null;
       }
     >;
 
-    const openBeoordeling = installaties.filter(
-      (r) => r.monteur_beoordeling_sterren == null
-    ).length;
+    const openBeoordeling = installaties.filter((r) => {
+      const k = r.installatie_koppel;
+      const koppel = Array.isArray(k) ? k[0] : k;
+      return typeof koppel?.beoordeling_sterren !== "number";
+    }).length;
 
     return NextResponse.json({
       partner: { id: partner.id, naam: partner.naam },

@@ -158,7 +158,11 @@ export async function planProjectAgenda(
                   financieringVoorbehoud: offRaw?.financiering_voorbehoud,
                 });
     const exacteDag = input.type === 2;
-    const nextStatus = statusNaSchouwInplannen({ exacteDag, warmtefonds });
+    const nextStatus = statusNaSchouwInplannen({
+      exacteDag,
+      warmtefonds,
+      currentStatus: (project as { status?: string | null }).status,
+    });
 
     const patch: Record<string, unknown> = {
       schouw_jaar: schouwJaar,

@@ -5,12 +5,12 @@ import { OPLEVERINGSRAPPORT_OMSCHRIJVING } from "@/lib/project-documenten";
 import { maybeAdvanceProjectNaOplevering } from "@/lib/project-na-oplevering";
 import {
   OPLEVER_PUNTEN,
-  formatServiceVvNotitie,
   snapshotOpleverFormulier,
   type OpleverFormulierData,
   type OpleverPuntId,
   validateOpleverFormulier,
 } from "@/lib/oplever-formulier";
+import { setServiceInkoopRegels } from "@/lib/project-inkoop-checklist";
 import {
   resolveMonteurNaamVoorPdf,
   syncProjectMedewerkerVanNaam,
@@ -176,8 +176,8 @@ export async function generateAndUploadOpleverFormulier(
 
   let projectAfter = statusAdvance?.project || null;
   if (data.vervolgNodig) {
-    const booked = await bookServiceVvVanOplever(sb, projectId, data);
-    if (booked.project) projectAfter = booked.project;
+    const applied = await applyOpleverServiceInkoop(sb, projectId, data);
+    if (applied.project) projectAfter = applied.project;
   }
 
   return {
@@ -187,114 +187,39 @@ export async function generateAndUploadOpleverFormulier(
   };
 }
 
-async function bookServiceVvVanOplever(
+async function applyOpleverServiceInkoop(
   sb: SupabaseClient,
   projectId: string,
   data: OpleverFormulierData
 ): Promise<{ project?: Record<string, unknown> | null }> {
-  const rawAt = data.vervolgAt.trim();
-  const asIso = rawAt.includes("T") && !rawAt.endsWith("Z") && !rawAt.includes("+")
-    ? rawAt.length === 16
-      ? `${rawAt}:00`
-      : rawAt
-    : rawAt;
-  const at = new Date(asIso);
-  if (Number.isNaN(at.getTime())) {
-    console.error("oplever service_at ongeldig:", rawAt);
-    return {};
-  }
-
-  const { data: project } = await sb
+  const { data: row, error: loadErr } = await sb
     .from("projecten")
-    .select("id, installatie_partner_id")
+    .select("id, materiaal_checks")
     .eq("id", projectId)
     .maybeSingle();
-  const partnerId =
-    (project as { installatie_partner_id?: string | null } | null)
-      ?.installatie_partner_id || null;
-
-  let tgId = data.vervolgMonteurId.trim() || null;
-  let tgNaam = data.vervolgMonteurNaam.trim() || null;
-  if (tgId && partnerId) {
-    let tgQ = await sb
-      .from("installatie_partner_teamgenoten")
-      .select("id, naam, actief, kan_service")
-      .eq("id", tgId)
-      .eq("partner_id", partnerId)
-      .maybeSingle();
-    if (
-      tgQ.error &&
-      (tgQ.error.code === "42703" ||
-        tgQ.error.message?.includes("kan_service"))
-    ) {
-      tgQ = await sb
-        .from("installatie_partner_teamgenoten")
-        .select("id, naam, actief")
-        .eq("id", tgId)
-        .eq("partner_id", partnerId)
-        .maybeSingle();
-    }
-    const tg = tgQ.data as {
-      id: string;
-      naam: string;
-      actief?: boolean | null;
-      kan_service?: boolean | null;
-    } | null;
-    if (!tg || tg.actief === false) {
-      console.error("oplever service: monteur niet gevonden");
-      return {};
-    }
-    if ("kan_service" in (tg as object) && tg.kan_service !== true) {
-      console.error("oplever service: geen Service-vinkje");
-      return {};
-    }
-    tgId = tg.id;
-    tgNaam = tg.naam;
+  if (loadErr || !row) {
+    if (loadErr) console.error("oplever service inkoop load:", loadErr.message);
+    return {};
   }
-
-  const patch: Record<string, unknown> = {
-    service_at: at.toISOString(),
-    service_notities: formatServiceVvNotitie(data.vervolgActie),
-  };
-  if (tgNaam) patch.monteur = tgNaam;
-  if (tgId) patch.service_teamgenoot_id = tgId;
-
-  let { data: updated, error } = await sb
+  const nextChecks = setServiceInkoopRegels(
+    (row as { materiaal_checks?: Record<string, unknown> | null })
+      .materiaal_checks as Parameters<typeof setServiceInkoopRegels>[0],
+    (data.vervolgMaterialen || []).map((m, i) => ({
+      id: m.id || `svc-${i + 1}`,
+      label: m.label,
+      aantal: m.aantal,
+    }))
+  );
+  const { data: updated, error } = await sb
     .from("projecten")
-    .update(patch)
+    .update({ materiaal_checks: nextChecks })
     .eq("id", projectId)
     .select("*")
     .single();
-
-  if (
-    error &&
-    (error.message?.includes("service_teamgenoot_id") ||
-      error.code === "42703")
-  ) {
-    const fallback = { ...patch };
-    delete fallback.service_teamgenoot_id;
-    const retry = await sb
-      .from("projecten")
-      .update(fallback)
-      .eq("id", projectId)
-      .select("*")
-      .single();
-    updated = retry.data;
-    error = retry.error;
-  }
-
   if (error) {
-    console.error("oplever service boeken:", error.message);
+    console.error("oplever service inkoop:", error.message);
     return {};
   }
-
-  try {
-    const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
-    await syncAutoTakenVoorProject(sb, projectId, "after_sale");
-  } catch {
-    /* best-effort */
-  }
-
   return { project: updated };
 }
 
@@ -333,6 +258,21 @@ export function parseOpleverFormulierBody(
       form.vervolgNodig === "true" ||
       form.vervolgNodig === 1,
     vervolgActie: str("vervolgActie"),
+    vervolgMaterialen: Array.isArray(form.vervolgMaterialen)
+      ? form.vervolgMaterialen
+          .map((row, i) => {
+            const r =
+              row && typeof row === "object"
+                ? (row as Record<string, unknown>)
+                : {};
+            return {
+              id: String(r.id ?? "").trim() || `svc-${i + 1}`,
+              label: String(r.label ?? r.omschrijving ?? "").trim(),
+              aantal: Math.max(1, Math.round(Number(r.aantal) || 1)),
+            };
+          })
+          .filter((r) => r.label)
+      : [],
     vervolgAt: str("vervolgAt"),
     vervolgMonteurId: str("vervolgMonteurId"),
     vervolgMonteurNaam: str("vervolgMonteurNaam"),

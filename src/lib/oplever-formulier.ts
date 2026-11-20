@@ -48,6 +48,28 @@ export const OPLEVER_AKKOORD_TEKST =
 
 /** Planbord-soort + kop op het opleverformulier bij restpunten na installatie. */
 export const SERVICE_VV_INSTALLATIE = "Service - VV Installatie";
+export const VERVOLG_BACKOFFICE_LABEL = "Vervolg Backoffice";
+
+export type OpleverVervolgMateriaal = {
+  id: string;
+  label: string;
+  aantal: number;
+};
+
+export function normalizeOpleverVervolgMaterialen(
+  raw: unknown
+): OpleverVervolgMateriaal[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((row, i) => {
+      const r = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+      const label = String(r.label ?? r.omschrijving ?? "").trim();
+      const aantal = Math.max(1, Math.round(Number(r.aantal) || 1));
+      const id = String(r.id ?? "").trim() || `svc-${i + 1}`;
+      return { id, label, aantal };
+    })
+    .filter((r) => r.label);
+}
 
 export function isServiceVvInstallatie(
   notities?: string | null
@@ -74,10 +96,12 @@ export type OpleverFormulierData = {
   /** data:image/png;base64,… */
   handtekeningDataUrl: string;
   opmerkingen: string;
-  /** Restpunt na oplevering → inplannen als Service - VV Installatie. */
+  /** Restpunt → backoffice belt om een service-afspraak in te plannen. */
   vervolgNodig: boolean;
   vervolgActie: string;
-  /** ISO datetime of datetime-local. */
+  /** Materiaal dat purchasing moet inkopen voor dit serviceverzoek. */
+  vervolgMaterialen: OpleverVervolgMateriaal[];
+  /** Legacy: werd direct ingepland; BO plant nu later. */
   vervolgAt: string;
   vervolgMonteurId: string;
   vervolgMonteurNaam: string;
@@ -93,6 +117,7 @@ export type OpleverFormulierSnapshot = {
   akkoord: boolean;
   vervolgNodig: boolean;
   vervolgActie: string;
+  vervolgMaterialen: OpleverVervolgMateriaal[];
   vervolgAt: string;
   vervolgMonteurNaam: string;
 };
@@ -109,6 +134,7 @@ export function snapshotOpleverFormulier(
     akkoord: data.akkoord,
     vervolgNodig: data.vervolgNodig === true,
     vervolgActie: data.vervolgActie.trim(),
+    vervolgMaterialen: normalizeOpleverVervolgMaterialen(data.vervolgMaterialen),
     vervolgAt: data.vervolgAt.trim(),
     vervolgMonteurNaam: data.vervolgMonteurNaam.trim(),
   };
@@ -133,6 +159,7 @@ export function parseOpleverFormulierSnapshot(
     akkoord: o.akkoord === true || o.akkoord === "true",
     vervolgNodig: o.vervolgNodig === true || o.vervolgNodig === "true",
     vervolgActie: String(o.vervolgActie || "").trim(),
+    vervolgMaterialen: normalizeOpleverVervolgMaterialen(o.vervolgMaterialen),
     vervolgAt: String(o.vervolgAt || "").trim(),
     vervolgMonteurNaam: String(o.vervolgMonteurNaam || "").trim(),
   };
@@ -171,6 +198,7 @@ export function emptyOpleverFormulier(
     opmerkingen: "",
     vervolgNodig: false,
     vervolgActie: "",
+    vervolgMaterialen: [],
     vervolgAt: "",
     vervolgMonteurId: "",
     vervolgMonteurNaam: "",
@@ -207,12 +235,6 @@ export function validateOpleverFormulier(
   if (data.vervolgNodig) {
     if (!data.vervolgActie.trim()) {
       return "Beschrijf wat er nog gefixt moet worden";
-    }
-    if (!data.vervolgAt.trim()) {
-      return "Kies datum en tijd voor de service (VV Installatie)";
-    }
-    if (!data.vervolgMonteurNaam.trim() && !data.vervolgMonteurId.trim()) {
-      return "Kies een monteur met Service in het account";
     }
   }
   return null;

@@ -83,6 +83,8 @@ export type ProjectStatusKey =
   | "warmtefonds_afgewezen"
   | "warmtefonds_goedgekeurd"
   | "opstarten_voltooid_afwachten_wf"
+  /** WF ná goedkeuring (aanbod ondertekenen): exacte schouwdag inplannen. */
+  | "schouw_inplannen"
   | "schouwdag_ingepland"
   | "schouw_voltooid"
   | "restfactuur_verstuurd"
@@ -213,6 +215,15 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
     fase: "voorbereiding",
     scope: "warmtefonds",
     inPipeline: true,
+    taak: null,
+  },
+  {
+    key: "schouw_inplannen",
+    label: "Schouw inplannen",
+    fase: "schouw",
+    scope: "warmtefonds",
+    inPipeline: true,
+    /** Actie via openSchouwInplannenActies + sync-auto-taken, geen tweede auto-taak. */
     taak: null,
   },
   {
@@ -429,6 +440,7 @@ export function projectPipelineFor(
   return [
     "schouwweek_inplannen",
     "opstarten_voltooid_afwachten_wf",
+    "schouw_inplannen",
     "restfactuur_verstuurd",
     "schouwdag_ingepland",
     "schouw_voltooid",
@@ -472,9 +484,10 @@ export function toOperationalStatus(
     case "warmtefonds_afspraak_ingepland":
     case "warmtefonds_aangevraagd":
     case "warmtefonds_in_behandeling":
-    case "warmtefonds_goedgekeurd":
     case "warmtefonds_afgewezen":
       return "schouwweek_inplannen";
+    case "warmtefonds_goedgekeurd":
+      return "schouw_inplannen";
     default:
       return key;
   }
@@ -525,6 +538,7 @@ export function remapLegacyProjectStatus(
     case "warmtefonds_afgewezen":
     case "warmtefonds_goedgekeurd":
     case "opstarten_voltooid_afwachten_wf":
+    case "schouw_inplannen":
     case "schouwdag_ingepland":
     case "schouw_voltooid":
     case "restfactuur_verstuurd":
@@ -541,7 +555,6 @@ export function remapLegacyProjectStatus(
 
     // Huidige pipeline (vóór deze migratie)
     case "schouw_aanbetaling":
-    case "schouw_inplannen":
       return "schouwweek_inplannen";
     case "schouwweek_gepland":
       return "aanbetaling_verstuurd";
@@ -579,9 +592,37 @@ export function statusNaSchouwInplannen(opts: {
   exacteDag: boolean;
   /** @deprecated Week-only blijft altijd in Opstarten; WF-voltooid via kickoff-complete. */
   warmtefonds?: boolean;
+  /** Huidige orderstatus — week-only mag niet terugvallen naar Opstarten. */
+  currentStatus?: string | null;
 }): ProjectStatusKey {
   if (opts.exacteDag) return "schouwdag_ingepland";
+  const current = toOperationalStatus(opts.currentStatus);
+  if (
+    current === "schouw_inplannen" ||
+    current === "opstarten_voltooid_afwachten_wf"
+  ) {
+    return current;
+  }
   // Alleen week: blijf in Opstarten — aanbetaling / Edwin kunnen nog open.
-  // `opstarten_voltooid_afwachten_wf` volgt pas als kickoff echt compleet is.
   return "schouwweek_inplannen";
+}
+
+/**
+ * WF-goedkeuring (aanbod ondertekenen+): orderstatus → Schouw inplannen,
+ * tenzij er al een exacte schouwdag is of de order verder is.
+ */
+export function orderStatusNaWfGoedkeuring(opts: {
+  currentStatus: string | null | undefined;
+  exacteSchouwdag: boolean;
+}): ProjectStatusKey | null {
+  if (opts.exacteSchouwdag) return null;
+  const op = toOperationalStatus(opts.currentStatus);
+  if (
+    op === "schouwweek_inplannen" ||
+    op === "opstarten_voltooid_afwachten_wf" ||
+    op === "schouw_inplannen"
+  ) {
+    return "schouw_inplannen";
+  }
+  return null;
 }

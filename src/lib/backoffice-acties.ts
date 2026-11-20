@@ -83,6 +83,7 @@ import {
   holdSalesTerugEigenaarNaam,
   isHoldSalesTerugOpen,
 } from "@/lib/hold-sales";
+import { parseOpleverFormulierSnapshot } from "@/lib/oplever-formulier";
 
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
@@ -99,7 +100,8 @@ export type BackofficeActieSoort =
   | "schouw_inplannen"
   | "wacht_warmtefonds"
   | "eindafrekening"
-  | "after_sale";
+  | "after_sale"
+  | "service_vervolg";
 
 export type HerplanBron = "klant" | "adviseur" | "deur_niet_open";
 
@@ -1733,9 +1735,9 @@ export function openSchouwInplannenActies(
     if (!kanWfSchouwdagInplannen(project, related)) continue;
 
     const deadlineAt = softDueOverWerkdagen(now, 2);
-    const detail = "WF goedgekeurd — declaratie + exacte schouwdag";
+    const detail = "WF goedgekeurd (aanbod ondertekenen) — plan de schouw";
     const reden =
-      "Warmtefonds is goedgekeurd; stuur de declaratie door en plan de schouwdag. Schouwweek was alleen een indicatie.";
+      "Warmtefonds is goedgekeurd (aanbod ondertekenen). Plan de exacte schouwdag. Schouwweek was alleen een indicatie.";
 
     const lead = leadFromProject(project);
     const offerte = projectOfferte(project);
@@ -1746,7 +1748,7 @@ export function openSchouwInplannenActies(
     items.push({
       id: `schouw-inplannen-${project.id}`,
       soort: "schouw_inplannen",
-      titel: "Schouwdag inplannen",
+      titel: "Schouw inplannen",
       detail,
       reden,
       deadlineAt: deadlineAt.toISOString(),
@@ -1969,6 +1971,53 @@ export function openAfterSaleActies(
   return items;
 }
 
+export function isServiceVervolgActieOpen(project: Project): boolean {
+  if (isProjectBuitenActies(project)) return false;
+  if (project.service_at) return false;
+  const snap = parseOpleverFormulierSnapshot(project.oplever_formulier);
+  return Boolean(snap?.vervolgNodig);
+}
+
+export function openServiceVervolgActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isServiceVervolgActieOpen(project)) continue;
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const snap = parseOpleverFormulierSnapshot(project.oplever_formulier);
+    const anchor =
+      project.installatie_voltooid_at ||
+      project.installatie_at ||
+      now.toISOString();
+    const deadlineAt = nextWeekdayAmsterdamAfter(anchor);
+    const wat = snap?.vervolgActie?.trim() || "Restpunt na oplevering.";
+    items.push({
+      id: `service-vervolg-${project.id}`,
+      soort: "service_vervolg",
+      titel: "Vervolg Backoffice — service inplannen",
+      detail: `Bel de klant om een service-afspraak in te plannen. ${wat}`,
+      reden: wat,
+      deadlineAt: deadlineAt.toISOString(),
+      overdue: deadlineAt.getTime() < now.getTime(),
+      prio: isPrioDeadline(deadlineAt, now),
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
 export function openBackofficeActies(
   projecten: Project[],
   facturen: Factuur[] = [],
@@ -2004,6 +2053,7 @@ export function openBackofficeActies(
   return [
     ...opstart,
     ...openAfterSaleActies(projecten, now),
+    ...openServiceVervolgActies(projecten, now),
     ...schouw,
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
@@ -2043,6 +2093,7 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "wf_aanbetaling_herinnering",
   "eindafrekening",
   "after_sale",
+  "service_vervolg",
   "wacht_warmtefonds",
 ]);
 
@@ -2077,7 +2128,13 @@ export function actieTabVoorSoort(
   if (soort === "schouw_inplannen" || soort === "bel_schouw_aanbetaling") {
     return "projecten";
   }
-  if (soort === "eindafrekening" || soort === "after_sale") return "nazorg";
+  if (
+    soort === "eindafrekening" ||
+    soort === "after_sale" ||
+    soort === "service_vervolg"
+  ) {
+    return "nazorg";
+  }
   if (soort === "wacht_warmtefonds") return "projecten";
   if (
     soort === "nabellen_factuur" ||

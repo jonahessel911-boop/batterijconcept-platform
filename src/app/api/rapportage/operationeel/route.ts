@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 const PIPELINE_ORDER: ProjectStatusKey[] = [
   "schouwweek_inplannen",
   "opstarten_voltooid_afwachten_wf",
+  "schouw_inplannen",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -31,6 +32,7 @@ const PIPELINE_ORDER: ProjectStatusKey[] = [
 const SHORT_LABEL: Partial<Record<ProjectStatusKey, string>> = {
   schouwweek_inplannen: "Opstarten",
   opstarten_voltooid_afwachten_wf: "Afwachten WF",
+  schouw_inplannen: "Schouw inplannen",
   schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",

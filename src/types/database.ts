@@ -50,6 +50,8 @@ export type ProjectStatus =
   | "warmtefonds_goedgekeurd"
   /** WF: kickoff klaar, schouwweek staat — wacht op Warmtefonds (nog geen echte schouwdag) */
   | "opstarten_voltooid_afwachten_wf"
+  /** WF ná aanbod ondertekenen: exacte schouwdag inplannen */
+  | "schouw_inplannen"
   | "schouwdag_ingepland"
   | "schouw_voltooid"
   | "restfactuur_verstuurd"
@@ -213,6 +215,8 @@ export interface Adviseur {
   factuur_adres?: string | null;
   factuur_postcode?: string | null;
   factuur_plaats?: string | null;
+  /** E-mail voor creditfacturen (Te betalen). Leeg = login-email. */
+  factuur_email?: string | null;
   iban?: string | null;
   /** Max bedrag per creditfactuur (excl. btw); null = geen limiet */
   max_factuur_bedrag?: number | null;
@@ -534,6 +538,8 @@ export interface InstallatiePartner {
   factuur_adres?: string | null;
   factuur_postcode?: string | null;
   factuur_plaats?: string | null;
+  /** E-mail voor partner-creditfacturen (Te betalen). Leeg = contact-email. */
+  factuur_email?: string | null;
   iban?: string | null;
   /** Ondertekend samenwerkingscontract */
   contract_storage_path?: string | null;
@@ -729,6 +735,7 @@ export interface Project {
     akkoord?: boolean;
     vervolgNodig?: boolean;
     vervolgActie?: string;
+    vervolgMaterialen?: { id?: string; label: string; aantal: number }[];
     vervolgAt?: string;
     vervolgMonteurNaam?: string;
   } | null;

@@ -330,13 +330,14 @@ export function MaakOfferteModal({
 
   function addCustomLine() {
     const omschrijving = customOmschrijving.trim();
-    const prijs = Number(customPrijs.replace(",", "."));
+    const rawPrijs = customPrijs.trim().replace(",", ".");
+    const prijs = rawPrijs === "" ? 0 : Number(rawPrijs);
     if (!omschrijving) {
       setError("Vul een omschrijving in voor de eigen regel.");
       return;
     }
     if (Number.isNaN(prijs)) {
-      setError("Vul een geldige prijs excl. btw in.");
+      setError("Vul een geldige prijs excl. btw in (of laat leeg voor €0).");
       return;
     }
     setError(null);
@@ -576,9 +577,16 @@ export function MaakOfferteModal({
               </p>
               <p className="mt-1 text-xs text-muted">
                 Vrije regel die ook op de offerte bij de klant verschijnt (PDF +
-                ondertekenpagina).
+                ondertekenpagina). Prijs mag €0 zijn.
               </p>
-              <div className="mt-2 space-y-2">
+              <div
+                className="mt-2 space-y-2"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  addCustomLine();
+                }}
+              >
                 <label className="block text-xs font-medium text-muted">
                   Omschrijving
                   <input
@@ -609,7 +617,7 @@ export function MaakOfferteModal({
                       inputMode="decimal"
                       value={customPrijs}
                       onChange={(e) => setCustomPrijs(e.target.value)}
-                      placeholder="Bijv. 125,00"
+                      placeholder="0,00"
                       className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
                     />
                   </label>
@@ -617,7 +625,7 @@ export function MaakOfferteModal({
                     <button
                       type="button"
                       onClick={addCustomLine}
-                      disabled={!customOmschrijving.trim() || customPrijs === ""}
+                      disabled={!customOmschrijving.trim()}
                       className="w-full border border-green bg-white px-3 py-2 text-sm font-semibold text-green-dark hover:bg-green-soft disabled:opacity-50"
                     >
                       Regel toevoegen

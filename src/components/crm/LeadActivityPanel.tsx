@@ -97,6 +97,7 @@ const PROJECT_STATUS_LABEL: Record<string, string> = {
   warmtefonds_afgewezen: "Warmtefonds afgewezen",
   warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
   opstarten_voltooid_afwachten_wf: "Opstarten voltooid — afwachten WF",
+  schouw_inplannen: "Schouw inplannen",
   schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",

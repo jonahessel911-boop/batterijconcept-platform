@@ -81,12 +81,26 @@ function leadOf(row: InstallatieRow) {
 }
 
 function koppelOf(row: InstallatieRow) {
-  const raw = row.installatie_koppel;
-  const koppel = Array.isArray(raw) ? raw[0] : raw;
+  const koppel = koppelRow(row);
   if (!koppel) return "Zonder koppel";
   const naam = (koppel.naam || "").trim();
   if (naam) return naam;
   return koppelWeergaveNaam(koppel);
+}
+
+function koppelRow(row: InstallatieRow): InstallatiePartnerKoppel | null {
+  const raw = row.installatie_koppel;
+  const koppel = Array.isArray(raw) ? raw[0] : raw;
+  return koppel || null;
+}
+
+function koppelSterren(row: InstallatieRow): number | null {
+  const n = koppelRow(row)?.beoordeling_sterren;
+  return typeof n === "number" ? n : null;
+}
+
+function koppelNotitie(row: InstallatieRow): string {
+  return koppelRow(row)?.beoordeling_notitie || "";
 }
 
 function StarsInput({
@@ -325,7 +339,6 @@ function DocRow({
 
 export function PartnerInstallatiesPanel({
   portalToken,
-  authorNaam,
 }: Props) {
   const [items, setItems] = useState<InstallatieRow[]>([]);
   const [openBeoordeling, setOpenBeoordeling] = useState(0);
@@ -381,7 +394,7 @@ export function PartnerInstallatiesPanel({
 
   const visible = useMemo(() => {
     if (filter === "open") {
-      return items.filter((r) => r.monteur_beoordeling_sterren == null);
+      return items.filter((r) => koppelSterren(r) == null);
     }
     return items;
   }, [items, filter]);
@@ -393,12 +406,8 @@ export function PartnerInstallatiesPanel({
     }
     const row = items.find((r) => r.id === selectedId);
     if (row) {
-      setSheetSterren(
-        typeof row.monteur_beoordeling_sterren === "number"
-          ? row.monteur_beoordeling_sterren
-          : null
-      );
-      setSheetNotitie(row.monteur_beoordeling_notitie || "");
+      setSheetSterren(koppelSterren(row));
+      setSheetNotitie(koppelNotitie(row));
     }
     let cancelled = false;
     setFotosLoading(true);
@@ -440,9 +449,8 @@ export function PartnerInstallatiesPanel({
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            monteur_beoordeling_sterren: sterren,
-            monteur_beoordeling_notitie: (notitie ?? "").trim() || null,
-            monteur_beoordeling_door: authorNaam || null,
+            koppel_beoordeling_sterren: sterren,
+            koppel_beoordeling_notitie: (notitie ?? "").trim() || null,
           }),
         }
       );
@@ -453,21 +461,30 @@ export function PartnerInstallatiesPanel({
         );
       }
       const updated = (data as { order?: InstallatieRow }).order;
+      const note = (notitie ?? "").trim() || null;
       setItems((list) =>
-        list.map((r) =>
-          r.id === projectId
-            ? {
-                ...r,
-                ...(updated || {}),
-                monteur_beoordeling_sterren: sterren,
-                monteur_beoordeling_notitie: (notitie ?? "").trim() || null,
-              }
-            : r
-        )
+        list.map((r) => {
+          if (r.id !== projectId) return r;
+          const prev = koppelRow(r);
+          const fromOrder = koppelRow({
+            ...r,
+            ...(updated || {}),
+          } as InstallatieRow);
+          const nextKoppel = {
+            ...(fromOrder || prev || { id: "", partner_id: "", naam: "", created_at: "", updated_at: "" }),
+            beoordeling_sterren: sterren,
+            beoordeling_notitie: note,
+          };
+          return {
+            ...r,
+            ...(updated || {}),
+            installatie_koppel: nextKoppel,
+          };
+        })
       );
       setOpenBeoordeling((n) => {
         const wasOpen = items.find(
-          (r) => r.id === projectId && r.monteur_beoordeling_sterren == null
+          (r) => r.id === projectId && koppelSterren(r) == null
         );
         return wasOpen ? Math.max(0, n - 1) : n;
       });
@@ -694,32 +711,32 @@ export function PartnerInstallatiesPanel({
 
               <section className="space-y-2 rounded-xl border border-line bg-wash/40 p-4 shadow-xs sm:p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  Klantvriendelijkheid (Batterijconcept)
+                  Batterijconcept First Contact Rapport
                 </p>
-                {typeof selected.klantvriendelijkheid_sterren === "number" ? (
+                {typeof selected.monteur_beoordeling_sterren === "number" ? (
                   <>
                     <StarsDisplay
-                      value={selected.klantvriendelijkheid_sterren}
+                      value={selected.monteur_beoordeling_sterren}
                     />
-                    {selected.klantvriendelijkheid_notitie?.trim() ? (
+                    {selected.monteur_beoordeling_notitie?.trim() ? (
                       <p className="whitespace-pre-wrap text-sm text-ink">
-                        {selected.klantvriendelijkheid_notitie.trim()}
+                        {selected.monteur_beoordeling_notitie.trim()}
                       </p>
                     ) : (
                       <p className="text-sm text-muted">Geen notitie.</p>
                     )}
-                    {selected.klantvriendelijkheid_op ? (
+                    {selected.monteur_beoordeling_op ? (
                       <p className="text-[11px] text-muted">
-                        {formatDateShort(selected.klantvriendelijkheid_op)}
-                        {selected.klantvriendelijkheid_door
-                          ? ` · ${selected.klantvriendelijkheid_door}`
+                        {formatDateShort(selected.monteur_beoordeling_op)}
+                        {selected.monteur_beoordeling_door
+                          ? ` · ${selected.monteur_beoordeling_door}`
                           : ""}
                       </p>
                     ) : null}
                   </>
                 ) : (
                   <p className="text-sm text-muted">
-                    Nog geen klantvriendelijkheid-score van Batterijconcept.
+                    Nog geen First Contact Rapport van Batterijconcept.
                   </p>
                 )}
               </section>
@@ -739,7 +756,8 @@ export function PartnerInstallatiesPanel({
               <CardTitle className="font-display text-lg">Installaties</CardTitle>
               <CardDescription>
                 Alleen voltooide installaties vanaf 16 november 2026.
-                Beoordeling hoort bij het koppel.
+                Beoordeling van het koppel. First Contact Rapport komt van
+                Batterijconcept.
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -816,7 +834,7 @@ export function PartnerInstallatiesPanel({
                 {visible.map((row) => {
                   const lead = leadOf(row);
                   const busy = busyId === row.id;
-                  const needs = row.monteur_beoordeling_sterren == null;
+                  const needs = koppelSterren(row) == null;
                   return (
                     <TableRow
                       key={row.id}
@@ -861,14 +879,14 @@ export function PartnerInstallatiesPanel({
                         onClick={(e) => e.stopPropagation()}
                       >
                         <StarsInput
-                          value={row.monteur_beoordeling_sterren}
+                          value={koppelSterren(row)}
                           disabled={busy}
                           size="sm"
                           onPick={(n) =>
                             void saveBeoordeling(
                               row.id,
                               n,
-                              row.monteur_beoordeling_notitie || ""
+                              koppelNotitie(row)
                             )
                           }
                         />

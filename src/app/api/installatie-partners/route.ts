@@ -7,7 +7,11 @@ import { logRelatieActiviteit } from "@/lib/relatie-activiteit";
 export const runtime = "nodejs";
 
 const PUBLIC_FIELDS =
-  "id, naam, email, telefoon, actief, portal_token, start_adres, reistijd_buffer_min, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, interne_notities, created_at, updated_at";
+  "id, naam, email, factuur_email, telefoon, actief, portal_token, start_adres, reistijd_buffer_min, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, google_connected_email, google_connected_at, interne_notities, created_at, updated_at";
+const PUBLIC_FIELDS_NO_FACTUUR_EMAIL = PUBLIC_FIELDS.replace(
+  "email, factuur_email, ",
+  "email, "
+);
 const PUBLIC_FIELDS_FALLBACK =
   "id, naam, email, telefoon, actief, portal_token, created_at, updated_at";
 const PUBLIC_FIELDS_NO_AGENDA =
@@ -59,6 +63,16 @@ export async function GET(req: NextRequest) {
     }
 
     let { data, error } = await query;
+    if (error && /factuur_email/i.test(error.message || "")) {
+      let qMail = sb
+        .from("installatie_partners")
+        .select(PUBLIC_FIELDS_NO_FACTUUR_EMAIL)
+        .order("naam");
+      if (!includeInactive) qMail = qMail.eq("actief", true);
+      const mailRes = await qMail;
+      data = (mailRes.data || null) as typeof data;
+      error = mailRes.error;
+    }
     if (
       error &&
       (isMissingAgendaCols(error) ||
@@ -114,6 +128,7 @@ export async function POST(req: NextRequest) {
     factuur_adres?: string | null;
     factuur_postcode?: string | null;
     factuur_plaats?: string | null;
+    factuur_email?: string | null;
     iban?: string | null;
   };
   try {
@@ -138,6 +153,7 @@ export async function POST(req: NextRequest) {
     factuur_adres: body.factuur_adres?.trim() || null,
     factuur_postcode: body.factuur_postcode?.trim() || null,
     factuur_plaats: body.factuur_plaats?.trim() || null,
+    factuur_email: body.factuur_email?.trim().toLowerCase() || null,
     iban: body.iban?.trim().toUpperCase() || null,
   };
 
@@ -156,6 +172,25 @@ export async function POST(req: NextRequest) {
       })
       .select(PUBLIC_FIELDS)
       .single();
+
+    if (error && /factuur_email/i.test(error.message || "")) {
+      const { factuur_email: _drop, ...kvkRest } = kvkFields;
+      void _drop;
+      const retryMail = await sb
+        .from("installatie_partners")
+        .insert({
+          naam,
+          email,
+          telefoon: body.telefoon?.trim() || null,
+          portal_token,
+          actief: true,
+          ...kvkRest,
+        })
+        .select(PUBLIC_FIELDS_NO_FACTUUR_EMAIL)
+        .single();
+      data = retryMail.data as typeof data;
+      error = retryMail.error;
+    }
 
     if (error && isMissingCompanyCols(error)) {
       const retry = await sb
@@ -206,6 +241,7 @@ export async function PATCH(req: NextRequest) {
     factuur_adres?: string | null;
     factuur_postcode?: string | null;
     factuur_plaats?: string | null;
+    factuur_email?: string | null;
     iban?: string | null;
     interne_notities?: string | null;
   };
@@ -249,6 +285,20 @@ export async function PATCH(req: NextRequest) {
         Number.isFinite(n) && n >= 0 ? Math.round(n) : 30;
     }
 
+    if (body.factuur_email !== undefined) {
+      const raw =
+        typeof body.factuur_email === "string"
+          ? body.factuur_email.trim().toLowerCase()
+          : "";
+      if (raw && !raw.includes("@")) {
+        return NextResponse.json(
+          { error: "Factuur-e-mail is ongeldig" },
+          { status: 400 }
+        );
+      }
+      patch.factuur_email = raw || null;
+    }
+
     const companyKeys = [
       "bedrijfsnaam",
       "kvk_nummer",
@@ -290,6 +340,27 @@ export async function PATCH(req: NextRequest) {
       .eq("id", body.id)
       .select(PUBLIC_FIELDS)
       .single();
+
+    if (error && /factuur_email/i.test(error.message || "")) {
+      if (patch.factuur_email !== undefined) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer supabase/migrate-factuur-email.sql uit in Supabase",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+      const mailRetry = await sb
+        .from("installatie_partners")
+        .update(patch)
+        .eq("id", body.id)
+        .select(PUBLIC_FIELDS_NO_FACTUUR_EMAIL)
+        .single();
+      data = (mailRetry.data || null) as typeof data;
+      error = mailRetry.error;
+    }
 
     if (error && (isMissingCompanyCols(error) || isMissingAgendaCols(error))) {
       if (

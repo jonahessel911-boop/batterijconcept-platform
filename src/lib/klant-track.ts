@@ -232,6 +232,28 @@ function schouwweekContactTekst(jaar: number, week: number): string {
   return `Ongeveer een week van tevoren (week ${prev.week}) nemen we contact op om de exacte schouwdag in te plannen.`;
 }
 
+function isWarmtefondsTrack(project: ProjectLite | null | undefined): boolean {
+  if (!project) return false;
+  if (project.betaalwijze === "eigen_middelen") return false;
+  if (project.betaalwijze === "warmtefonds") return true;
+  return Boolean(project.financiering_voorbehoud);
+}
+
+/** WF: schouwweek is geen harde afspraak tot goedkeuring. */
+const WF_SCHOUWWEEK_INDICATIE =
+  "Dit is slechts een indicatie. Zodra het Warmtefonds is goedgekeurd, nemen we contact met je op om de schouw in te plannen.";
+
+function withWfSchouwweekIndicatie(
+  project: ProjectLite | null | undefined,
+  tekst: string,
+  opts?: { schouwdagDefinitief?: boolean }
+): string {
+  if (!isWarmtefondsTrack(project)) return tekst;
+  if (opts?.schouwdagDefinitief) return tekst;
+  if (project?.schouw_formulier_geupload) return tekst;
+  return `${tekst} ${WF_SCHOUWWEEK_INDICATIE}`;
+}
+
 const INSTALLATIE_WACHT_DETAIL =
   "Na een geslaagde schouw en de Warmtefonds-declaratie kopen we je batterij in. Eén dag na de schouw plannen we je installatiedatum in.";
 
@@ -425,7 +447,11 @@ function buildAgenda(project: ProjectLite | null): KlantAgendaItem[] {
       month: parts?.month ?? String(project.schouw_week),
       weekday: "Week",
       timeLabel: `Week ${project.schouw_week}`,
-      detail: `Je schouw valt in ${weekLabel}. ${contact}`,
+      detail: withWfSchouwweekIndicatie(
+        project,
+        `Je schouw valt in ${weekLabel}. ${contact}`,
+        { schouwdagDefinitief: schouwDef }
+      ),
     });
   } else {
     items.push({
@@ -438,8 +464,10 @@ function buildAgenda(project: ProjectLite | null): KlantAgendaItem[] {
       month: null,
       weekday: null,
       timeLabel: null,
-      detail:
-        "Nog niet ingepland. We sturen je een mail zodra de schouwweek bekend is.",
+      detail: withWfSchouwweekIndicatie(
+        project,
+        "Nog niet ingepland. We sturen je een mail zodra de schouwweek bekend is."
+      ),
     });
   }
 
@@ -643,10 +671,13 @@ export function buildKlantTrack(opts: {
       {
         id: "schouwweek",
         title: "Schouwweek",
-        detail:
+        detail: withWfSchouwweekIndicatie(
+          opts.project,
           weekLabel && opts.project?.schouw_jaar && opts.project?.schouw_week
             ? `Gepland in ${weekLabel}. ${schouwweekContactTekst(opts.project.schouw_jaar, opts.project.schouw_week)}`
             : "We plannen eerst een week in waarin de schouw plaatsvindt. Via de mail krijg je ook toegang tot track & trace.",
+          { schouwdagDefinitief: schouwDef }
+        ),
       },
       {
         id: "schouwdag",

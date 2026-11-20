@@ -83,6 +83,7 @@ const COLUMN_ACCENT: Partial<Record<ProjectStatus, string>> = {
   warmtefonds_afgewezen: "#C62828",
   warmtefonds_goedgekeurd: "#0D5C32",
   opstarten_voltooid_afwachten_wf: "#CA8A04",
+  schouw_inplannen: "#1565C0",
   schouwdag_ingepland: "#1565C0",
   schouw_voltooid: "#1565C0",
   restfactuur_verstuurd: "#C45A12",
@@ -462,6 +463,11 @@ function kanbanStatusCopy(
       return {
         label: "Installatie voltooid",
         hint: "(Restfactuur bij EM versturen)",
+      };
+    case "schouw_inplannen":
+      return {
+        label: "Schouw inplannen",
+        hint: "WF goedgekeurd (aanbod ondertekenen) · plan de exacte schouwdag",
       };
     case "schouwdag_ingepland":
       return {

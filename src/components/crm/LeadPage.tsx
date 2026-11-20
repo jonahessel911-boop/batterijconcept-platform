@@ -37,6 +37,7 @@ import {
 } from "./DetailChrome";
 import { useCrmSession } from "@/hooks/useCrmSession";
 import { alleenEigenLeads, magBekijkAls } from "@/lib/rollen";
+import { requestCrmReload } from "@/lib/crm-shell-cache";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -1387,6 +1388,7 @@ export function LeadPage() {
         onCreated={(offerteId) => {
           setMaakOfferteOpen(false);
           setActivityKey((k) => k + 1);
+          requestCrmReload();
           router.push(`/offertes/${offerteId}`);
         }}
       />

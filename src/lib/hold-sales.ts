@@ -65,8 +65,14 @@ export function inferResumeStatusAfterHold(
   const wf = isWarmtefondsResume(project);
   if (wf) {
     const fs = project.financiering_status;
-    if (fs === "uitbetaald" || fs === "aanvraag_goedgekeurd") {
-      return "warmtefonds_goedgekeurd";
+    if (
+      fs === "uitbetaald" ||
+      fs === "aanvraag_goedgekeurd" ||
+      fs === "aanbod_ondertekenen" ||
+      fs === "declaratie_indienen" ||
+      fs === "wacht_op_betaling"
+    ) {
+      return "schouw_inplannen";
     }
     if (fs === "in_behandeling") return "warmtefonds_in_behandeling";
     if (project.warmtefonds_aangevraagd_at || fs === "aanvraag_gedaan") {
@@ -175,6 +181,23 @@ export function holdSalesDeadlineLabel(
 const HOLD_TERUG_NOTITIE_RE = /^HOLD teruggestuurd\b/im;
 const HOLD_TERUG_AFGEHANDELD_RE = /HOLD teruggestuurd afgehandeld/i;
 const HOLD_TERUG_DOOR_RE = /^HOLD teruggestuurd door ([^:\n]+)/im;
+
+export function isHoldTerugNotitieTekst(
+  text: string | null | undefined
+): boolean {
+  return HOLD_TERUG_NOTITIE_RE.test((text || "").trim());
+}
+
+/**
+ * HOLD-terug wordt zowel op `backoffice_notitie` als als gestempelde
+ * projectnotitie gezet — in de UI één keer tonen.
+ */
+export function withoutDuplicateHoldTerugNotities<
+  T extends { text: string },
+>(entries: T[], backofficeNotitie: string | null | undefined): T[] {
+  if (!isHoldTerugNotitieTekst(backofficeNotitie)) return entries;
+  return entries.filter((e) => !isHoldTerugNotitieTekst(e.text));
+}
 
 /** Sales heeft HOLD teruggestuurd; BO moet de notitie opvolgen. */
 export function isHoldSalesTerugOpen(project: {

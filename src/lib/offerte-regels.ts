@@ -20,31 +20,20 @@ export const EXTRA_NOODSTROOM_SKU = "EXTRA-NOODSTROOM";
 export const EXTRA_METERKAST_NAAM = "Meterkast vervangen";
 export const EXTRA_NOODSTROOM_NAAM = "Noodstroom";
 
-/** Extra’s die intern meetellen, maar niet op de klantofferte (PDF/tekenen). */
-export function isVerborgenOfferteProduct(p: {
+/**
+ * Eerder: meterkast/noodstroom alleen intern. Adviseurs zetten die regels
+ * (en eigen regels) expres op de klantofferte — niks meer verbergen.
+ */
+export function isVerborgenOfferteProduct(_p: {
   sku?: string | null;
   naam?: string | null;
 }): boolean {
-  const sku = (p.sku || "").trim().toUpperCase();
-  if (sku === EXTRA_METERKAST_SKU || sku === EXTRA_NOODSTROOM_SKU) return true;
-  const n = normalizeOmschrijving(p.naam || "").trim();
-  return n === "meterkast vervangen" || n === "noodstroom";
+  return false;
 }
 
-export function isVerborgenOfferteRegel(r: {
+export function isVerborgenOfferteRegel(_r: {
   omschrijving?: string | null;
 }): boolean {
-  const o = normalizeOmschrijving(r.omschrijving || "").trim();
-  if (o === "meterkast vervangen" || o.startsWith("meterkast vervangen ")) {
-    return true;
-  }
-  if (o === "noodstroom" || o.startsWith("noodstroom ")) return true;
-  if (o === "korting meterkast vervangen" || o.startsWith("korting meterkast")) {
-    return true;
-  }
-  if (o === "korting noodstroom" || o.startsWith("korting noodstroom")) {
-    return true;
-  }
   return false;
 }
 

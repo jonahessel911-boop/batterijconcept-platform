@@ -45,7 +45,11 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, start_vanaf_huis_maandag, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, profielfoto_path, created_at, updated_at";
+  "id, naam, email, factuur_email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, start_vanaf_huis_maandag, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, profielfoto_path, created_at, updated_at";
+const ADVISEUR_PUBLIC_NO_FACTUUR_EMAIL = ADVISEUR_PUBLIC.replace(
+  "email, factuur_email, ",
+  "email, "
+);
 /** Zonder geblokkeerd — tot migrate-adviseur-geblokkeerd.sql is gedraaid. */
 const ADVISEUR_PUBLIC_FALLBACK =
   "id, naam, email, telefoon, actief, werktijd_start, werktijd_eind, start_adres, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, created_at, updated_at";
@@ -136,6 +140,16 @@ export async function GET(req: NextRequest) {
     }
 
     let { data: adviseurs, error } = await query;
+    if (error && isMissingColumn(error, "factuur_email")) {
+      let retryMail = sb
+        .from("adviseurs")
+        .select(ADVISEUR_PUBLIC_NO_FACTUUR_EMAIL)
+        .order("naam");
+      if (!includeInactive) retryMail = retryMail.eq("actief", true);
+      const mailRes = await retryMail;
+      adviseurs = (mailRes.data || null) as typeof adviseurs;
+      error = mailRes.error;
+    }
     if (
       error &&
       (error.code === "42703" ||
@@ -317,6 +331,7 @@ export async function POST(req: NextRequest) {
     factuur_adres?: string | null;
     factuur_postcode?: string | null;
     factuur_plaats?: string | null;
+    factuur_email?: string | null;
     iban?: string | null;
   };
   try {
@@ -362,6 +377,7 @@ export async function POST(req: NextRequest) {
     factuur_adres: body.factuur_adres?.trim() || null,
     factuur_postcode: body.factuur_postcode?.trim() || null,
     factuur_plaats: body.factuur_plaats?.trim() || null,
+    factuur_email: body.factuur_email?.trim().toLowerCase() || null,
     iban: body.iban?.trim().toUpperCase() || null,
   };
 
@@ -407,6 +423,16 @@ export async function POST(req: NextRequest) {
       .insert(baseRow)
       .select(ADVISEUR_PUBLIC)
       .single();
+
+    if (insert.error && isMissingColumn(insert.error, "factuur_email")) {
+      const withoutMail = { ...baseRow };
+      delete withoutMail.factuur_email;
+      insert = await sb
+        .from("adviseurs")
+        .insert(withoutMail)
+        .select(ADVISEUR_PUBLIC_NO_FACTUUR_EMAIL)
+        .single();
+    }
 
     // Select/insert faalt op ontbrekende startdatum-kolom → retry zonder die kolom
     if (
@@ -580,6 +606,7 @@ export async function PATCH(req: NextRequest) {
     factuur_adres?: string | null;
     factuur_postcode?: string | null;
     factuur_plaats?: string | null;
+    factuur_email?: string | null;
     iban?: string | null;
     max_factuur_bedrag?: number | null;
     interne_notities?: string | null;
@@ -776,6 +803,19 @@ export async function PATCH(req: NextRequest) {
         patch.max_factuur_bedrag = Math.round(max * 100) / 100;
       }
     }
+    if (body.factuur_email !== undefined) {
+      const raw =
+        typeof body.factuur_email === "string"
+          ? body.factuur_email.trim().toLowerCase()
+          : "";
+      if (raw && !raw.includes("@")) {
+        return NextResponse.json(
+          { error: "Factuur-e-mail is ongeldig" },
+          { status: 400 }
+        );
+      }
+      patch.factuur_email = raw || null;
+    }
     if (body.interne_notities !== undefined) {
       patch.interne_notities =
         typeof body.interne_notities === "string"
@@ -849,6 +889,20 @@ export async function PATCH(req: NextRequest) {
           {
             error:
               "Voer eerst supabase/migrate-adviseur-beschikbaarheid.sql uit in Supabase.",
+            detail: error.message,
+          },
+          { status: 503 }
+        );
+      }
+
+      if (
+        patch.factuur_email !== undefined &&
+        isMissingColumn(error, "factuur_email")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Voer eerst supabase/migrate-factuur-email.sql uit in Supabase.",
             detail: error.message,
           },
           { status: 503 }
@@ -943,6 +997,9 @@ export async function PATCH(req: NextRequest) {
       // Strip ook optionele patch-velden die nog niet bestaan.
       const slimPatch = { ...patch };
       for (const k of creditKeys) delete slimPatch[k];
+      if (isMissingColumn(error, "factuur_email")) {
+        delete slimPatch.factuur_email;
+      }
       if (isMissingColumn(error, "commissie_pct")) {
         delete slimPatch.commissie_pct;
       }

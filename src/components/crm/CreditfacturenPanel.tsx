@@ -1881,8 +1881,15 @@ export function CreditfacturenPanel({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Bijwerken mislukt");
       if (status === "goedgekeurd") {
+        const mailSent = Boolean(json.mail_sent);
+        const mailError =
+          typeof json.mail_error === "string" ? json.mail_error : null;
         setOkMsg(
-          `Factuur ${json.factuur.factuur_nummer} bevestigd — staat op te betalen.`
+          mailSent
+            ? `Factuur ${json.factuur.factuur_nummer} bevestigd — te betalen. Mail verstuurd.`
+            : mailError
+              ? `Factuur ${json.factuur.factuur_nummer} bevestigd — te betalen. Mail niet verstuurd: ${mailError}`
+              : `Factuur ${json.factuur.factuur_nummer} bevestigd — staat op te betalen.`
         );
         setTab("te_betalen");
       } else if (status === "verzonden") {

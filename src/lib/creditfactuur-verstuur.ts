@@ -2,7 +2,43 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildAdviseurCreditPdfBytes } from "@/lib/adviseur-creditfactuur-pdf-data";
 import { buildPartnerCreditfactuurPdf } from "@/lib/pdf-partner-creditfactuur";
 import { normalizeRelatieFactuurBedragen } from "@/lib/pdf-relatie-factuur";
-import { mailRelatieFactuur } from "@/lib/relatie-factuur-mail";
+import {
+  mailRelatieFactuur,
+  relatieFactuurToEmail,
+} from "@/lib/relatie-factuur-mail";
+
+const ADVISEUR_FACTUUR_SELECT =
+  "id, naam, email, factuur_email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats, start_adres";
+const ADVISEUR_FACTUUR_SELECT_NO_MAIL =
+  "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats, start_adres";
+const PARTNER_FACTUUR_SELECT =
+  "id, naam, email, factuur_email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats";
+const PARTNER_FACTUUR_SELECT_NO_MAIL =
+  "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats";
+
+function missingFactuurEmailCol(error: { message?: string; code?: string } | null) {
+  const msg = error?.message || "";
+  return (
+    msg.includes("factuur_email") &&
+    (error?.code === "42703" || /does not exist|schema cache/i.test(msg))
+  );
+}
+
+async function loadPartnerVoorFactuur(sb: SupabaseClient, id: string) {
+  let res = await sb
+    .from("installatie_partners")
+    .select(PARTNER_FACTUUR_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+  if (res.error && missingFactuurEmailCol(res.error)) {
+    res = await sb
+      .from("installatie_partners")
+      .select(PARTNER_FACTUUR_SELECT_NO_MAIL)
+      .eq("id", id)
+      .maybeSingle();
+  }
+  return res.data;
+}
 
 /** Verstuur selfbilling-factuur naar adviseur → status verzonden. */
 export async function verstuurAdviseurCreditfactuur(
@@ -29,11 +65,16 @@ export async function verstuurAdviseurCreditfactuur(
 
   let advRes = await sb
     .from("adviseurs")
-    .select(
-      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats, start_adres"
-    )
+    .select(ADVISEUR_FACTUUR_SELECT)
     .eq("id", fac.adviseur_id)
     .maybeSingle();
+  if (advRes.error && missingFactuurEmailCol(advRes.error)) {
+    advRes = await sb
+      .from("adviseurs")
+      .select(ADVISEUR_FACTUUR_SELECT_NO_MAIL)
+      .eq("id", fac.adviseur_id)
+      .maybeSingle();
+  }
   if (
     advRes.error &&
     (advRes.error.message?.includes("start_adres") ||
@@ -52,6 +93,7 @@ export async function verstuurAdviseurCreditfactuur(
         id: string;
         naam: string;
         email?: string | null;
+        factuur_email?: string | null;
         bedrijfsnaam: string | null;
         kvk_nummer: string | null;
         btw_nummer?: string | null;
@@ -65,8 +107,13 @@ export async function verstuurAdviseurCreditfactuur(
   if (!adv) {
     return { ok: false, error: "Adviseur niet gevonden", status: 404 };
   }
-  if (!adv.email?.trim()) {
-    return { ok: false, error: "Adviseur heeft geen e-mailadres", status: 400 };
+  const toEmail = relatieFactuurToEmail(adv);
+  if (!toEmail) {
+    return {
+      ok: false,
+      error: "Vul een factuur-e-mail of login-e-mail in bij de medewerker",
+      status: 400,
+    };
   }
   const zzpCompleet = Boolean(
     adv.bedrijfsnaam && adv.kvk_nummer && adv.iban
@@ -95,7 +142,7 @@ export async function verstuurAdviseurCreditfactuur(
 
   const pdfBytes = await buildAdviseurCreditPdfBytes(sb, fac, adv);
   const mail = await mailRelatieFactuur({
-    to: adv.email,
+    to: toEmail,
     naam: adv.naam,
     factuurNummer: fac.factuur_nummer,
     bedragInc: amounts.bedrag_inc_btw,
@@ -159,18 +206,29 @@ export async function verstuurPartnerCreditfactuur(
     return { ok: false, error: "Factuur is al goedgekeurd", status: 400 };
   }
 
-  const { data: partner } = await sb
+  let partnerQ = await sb
     .from("installatie_partners")
-    .select(
-      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
-    )
+    .select(PARTNER_FACTUUR_SELECT)
     .eq("id", fac.partner_id)
     .maybeSingle();
+  if (partnerQ.error && missingFactuurEmailCol(partnerQ.error)) {
+    partnerQ = await sb
+      .from("installatie_partners")
+      .select(PARTNER_FACTUUR_SELECT_NO_MAIL)
+      .eq("id", fac.partner_id)
+      .maybeSingle();
+  }
+  const partner = partnerQ.data;
   if (!partner) {
     return { ok: false, error: "Partner niet gevonden", status: 404 };
   }
-  if (!partner.email?.trim()) {
-    return { ok: false, error: "Partner heeft geen e-mailadres", status: 400 };
+  const toEmail = relatieFactuurToEmail(partner);
+  if (!toEmail) {
+    return {
+      ok: false,
+      error: "Vul een factuur-e-mail of contact-e-mail in bij de partner",
+      status: 400,
+    };
   }
   if (!partner.bedrijfsnaam || !partner.kvk_nummer || !partner.iban) {
     return {
@@ -214,7 +272,7 @@ export async function verstuurPartnerCreditfactuur(
   });
   const pdfBytes = Buffer.from(await blob.arrayBuffer());
   const mail = await mailRelatieFactuur({
-    to: partner.email,
+    to: toEmail,
     naam: partner.naam,
     factuurNummer: fac.factuur_nummer,
     bedragInc: amounts.bedrag_inc_btw,
@@ -267,16 +325,25 @@ export async function mailGoedgekeurdeAdviseurCreditfactuur(
     .maybeSingle();
   if (!fac) return { ok: false, error: "Factuur niet gevonden" };
 
-  const { data: adv } = await sb
+  let advQ = await sb
     .from("adviseurs")
-    .select(
-      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
-    )
+    .select(ADVISEUR_FACTUUR_SELECT)
     .eq("id", fac.adviseur_id)
     .maybeSingle();
+  if (advQ.error && missingFactuurEmailCol(advQ.error)) {
+    advQ = await sb
+      .from("adviseurs")
+      .select(
+        "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
+      )
+      .eq("id", fac.adviseur_id)
+      .maybeSingle();
+  }
+  const adv = advQ.data;
   if (!adv) return { ok: false, error: "Adviseur niet gevonden" };
-  if (!adv.email?.trim()) {
-    return { ok: false, skipped: true, error: "Geen e-mailadres" };
+  const toEmail = relatieFactuurToEmail(adv);
+  if (!toEmail) {
+    return { ok: false, skipped: true, error: "Geen factuur-e-mailadres" };
   }
 
   const amounts = normalizeRelatieFactuurBedragen(fac);
@@ -286,7 +353,7 @@ export async function mailGoedgekeurdeAdviseurCreditfactuur(
   }
   const pdfBytes = await buildAdviseurCreditPdfBytes(sb, fac, adv);
   return mailRelatieFactuur({
-    to: adv.email,
+    to: toEmail,
     naam: adv.naam,
     factuurNummer: fac.factuur_nummer,
     bedragInc: amounts.bedrag_inc_btw,
@@ -310,16 +377,11 @@ export async function mailGoedgekeurdePartnerCreditfactuur(
     .maybeSingle();
   if (!fac) return { ok: false, error: "Factuur niet gevonden" };
 
-  const { data: partner } = await sb
-    .from("installatie_partners")
-    .select(
-      "id, naam, email, bedrijfsnaam, kvk_nummer, btw_nummer, iban, factuur_adres, factuur_postcode, factuur_plaats"
-    )
-    .eq("id", fac.partner_id)
-    .maybeSingle();
+  const partner = await loadPartnerVoorFactuur(sb, fac.partner_id);
   if (!partner) return { ok: false, error: "Partner niet gevonden" };
-  if (!partner.email?.trim()) {
-    return { ok: false, skipped: true, error: "Geen e-mailadres" };
+  const partnerTo = relatieFactuurToEmail(partner);
+  if (!partnerTo) {
+    return { ok: false, skipped: true, error: "Geen factuur-e-mailadres" };
   }
 
   const amounts = normalizeRelatieFactuurBedragen(fac);
@@ -357,7 +419,7 @@ export async function mailGoedgekeurdePartnerCreditfactuur(
   });
   const pdfBytes = Buffer.from(await blob.arrayBuffer());
   return mailRelatieFactuur({
-    to: partner.email,
+    to: partnerTo,
     naam: partner.naam,
     factuurNummer: fac.factuur_nummer,
     bedragInc: amounts.bedrag_inc_btw,

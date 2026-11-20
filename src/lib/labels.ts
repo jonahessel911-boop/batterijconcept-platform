@@ -188,6 +188,7 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   warmtefonds_afgewezen: "Warmtefonds afgewezen",
   warmtefonds_goedgekeurd: "Warmtefonds goedgekeurd",
   opstarten_voltooid_afwachten_wf: "Opstarten voltooid — afwachten WF",
+  schouw_inplannen: "Schouw inplannen",
   schouwdag_ingepland: "Schouw gepland",
   schouw_voltooid: "Schouw voltooid",
   restfactuur_verstuurd: "Restfactuur verstuurd",
@@ -290,6 +291,7 @@ export const PROJECT_PIPELINE: ProjectStatus[] = [
   "warmtefonds_in_behandeling",
   "warmtefonds_goedgekeurd",
   "opstarten_voltooid_afwachten_wf",
+  "schouw_inplannen",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -486,6 +488,8 @@ export function statusTone(
         "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
       opstarten_voltooid_afwachten_wf:
         "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
+      schouw_inplannen:
+        "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
       schouwdag_ingepland:
         "border border-[#1565C0]/30 bg-[#E3F2FD] text-[#0D47A1]",
       schouw_voltooid:
@@ -520,8 +524,6 @@ export function statusTone(
         "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
       materiaal_installatie:
         "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
-      schouw_inplannen:
-        "border border-[#1A4A6E]/25 bg-[#E8F0F6] text-[#1A4A6E]",
       schouwdag_plannen:
         "border border-[#CA8A04]/35 bg-[#FEF9C3] text-[#854D0E]",
       schouw_gepland:

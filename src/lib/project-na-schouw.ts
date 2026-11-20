@@ -29,6 +29,7 @@ const PIPELINE_RANK: Record<string, number> = {
   aanbetaling_verstuurd: 2,
   aanbetaling_betaald: 3,
   opstarten_voltooid_afwachten_wf: 3.5,
+  schouw_inplannen: 3.7,
   schouwdag_ingepland: 4,
   schouw_voltooid: 5,
   restfactuur_verstuurd: 6,

@@ -407,10 +407,11 @@ export function ProjectInstallatiesTab({
 
       <section className="border border-line bg-white px-4 py-5 sm:px-5">
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-          Beoordeling monteur
+          First Contact Rapport
         </h2>
         <p className="mt-1 text-sm text-muted">
-          Interne kwaliteitsscore (0–5) + notitie.
+          Batterijconcept First Contact Rapport (0–5) + notitie — zichtbaar voor
+          de installatiepartner.
         </p>
 
         {!medewerker ? (

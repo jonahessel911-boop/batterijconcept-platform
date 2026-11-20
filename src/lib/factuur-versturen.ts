@@ -262,7 +262,6 @@ export async function verstuurFactuurNaarKlant(
         "schouwweek_gepland",
         "schouw_aanbetaling",
         "schouw_in_afwachting",
-        "schouw_inplannen",
         "schouw_gepland",
         "btw_factuur_eruit",
       ]);

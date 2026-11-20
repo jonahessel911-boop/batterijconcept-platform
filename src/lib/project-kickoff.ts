@@ -15,7 +15,7 @@ import {
   isEersteFactuurBetaald,
   isEersteFactuurVerstuurd,
 } from "@/lib/aanbetaling";
-import { isWarmtefondsProject } from "@/lib/backoffice-acties";
+import { isWarmtefondsGoedgekeurd, isWarmtefondsProject } from "@/lib/backoffice-acties";
 import { resolveFinancieringStatus } from "@/lib/financiering-status";
 import {
   toOperationalStatus,
@@ -31,6 +31,7 @@ import {
  * hier níet bij — die is juist één kickoff-stap.
  */
 const PAST_KICKOFF_STATUS: ReadonlySet<ProjectStatusKey> = new Set([
+  "schouw_inplannen",
   "schouw_voltooid",
   "restfactuur_verstuurd",
   "restfactuur_betaald",
@@ -301,7 +302,7 @@ export function isKickoffComplete(
 
 /**
  * Patch wanneer kickoff klaar is (alle stappen) óf al afgevinkt.
- * WF → status `opstarten_voltooid_afwachten_wf` (niet blijven hangen op Opstarten).
+ * WF → `opstarten_voltooid_afwachten_wf`, of `schouw_inplannen` als WF al goedgekeurd is.
  * EM → alleen bel_schouw_aanbetaling_at (blijft Opstarten tot schouwdag).
  *
  * Repareert ook stuck state: bel_schouw gezet / kickoff compleet maar status
@@ -313,7 +314,7 @@ export function kickoffCompletionPatch(
   now = new Date()
 ): {
   bel_schouw_aanbetaling_at?: string;
-  status?: "opstarten_voltooid_afwachten_wf";
+  status?: "opstarten_voltooid_afwachten_wf" | "schouw_inplannen";
 } | null {
   if (isSchouwdagDefinitief(project)) return null;
   if (project.status === "annulering" || project.status === "hold_sales_actie") {
@@ -335,7 +336,15 @@ export function kickoffCompletionPatch(
 
   return {
     ...(needBel ? { bel_schouw_aanbetaling_at: now.toISOString() } : {}),
-    ...(needWfStatus ? { status: "opstarten_voltooid_afwachten_wf" as const } : {}),
+    ...(needWfStatus
+      ? {
+          status: (isWarmtefondsGoedgekeurd(project)
+            ? "schouw_inplannen"
+            : "opstarten_voltooid_afwachten_wf") as
+            | "schouw_inplannen"
+            | "opstarten_voltooid_afwachten_wf",
+        }
+      : {}),
   };
 }
 

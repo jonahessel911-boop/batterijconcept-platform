@@ -218,6 +218,8 @@ export async function PATCH(
     monteur_beoordeling_sterren?: number | string | null;
     monteur_beoordeling_notitie?: string | null;
     monteur_beoordeling_door?: string | null;
+    koppel_beoordeling_sterren?: number | string | null;
+    koppel_beoordeling_notitie?: string | null;
   };
   try {
     body = await req.json();
@@ -426,57 +428,48 @@ export async function PATCH(
       }
     }
 
-    // Beoordeling: alleen beheerder/partner (niet solo monteur-scope)
-    if (
-      body.monteur_beoordeling_sterren !== undefined ||
-      body.monteur_beoordeling_notitie !== undefined
-    ) {
+    // Koppel-beoordeling is van de partner. First Contact (monteur_beoordeling_*)
+    // blijft van Batterijconcept-backoffice — partner mag die niet overschrijven.
+    const koppelSterrenIn =
+      body.koppel_beoordeling_sterren !== undefined
+        ? body.koppel_beoordeling_sterren
+        : body.monteur_beoordeling_sterren;
+    const koppelNotitieIn =
+      body.koppel_beoordeling_notitie !== undefined
+        ? body.koppel_beoordeling_notitie
+        : body.monteur_beoordeling_notitie;
+    const koppelPatch: Record<string, unknown> = {};
+    if (koppelSterrenIn !== undefined || koppelNotitieIn !== undefined) {
       if (session.kind === "teamgenoot" && session.authRol !== "beheerder") {
         return NextResponse.json(
           { error: "Alleen beheerders mogen beoordelen" },
           { status: 403 }
         );
       }
-      if (body.monteur_beoordeling_sterren !== undefined) {
-        const raw = body.monteur_beoordeling_sterren;
-        if (raw === null || raw === "") {
-          patch.monteur_beoordeling_sterren = null;
-          patch.monteur_beoordeling_op = null;
-          patch.monteur_beoordeling_door = null;
+      koppelPatch.updated_at = new Date().toISOString();
+      if (koppelSterrenIn !== undefined) {
+        if (koppelSterrenIn === null || koppelSterrenIn === "") {
+          koppelPatch.beoordeling_sterren = null;
         } else {
-          const n = Number(raw);
+          const n = Number(koppelSterrenIn);
           if (!Number.isFinite(n) || n < 0 || n > 5) {
             return NextResponse.json(
               { error: "Beoordeling moet 0 t/m 5 sterren zijn" },
               { status: 400 }
             );
           }
-          patch.monteur_beoordeling_sterren = Math.round(n);
-          patch.monteur_beoordeling_op = new Date().toISOString();
-          const door =
-            typeof body.monteur_beoordeling_door === "string"
-              ? body.monteur_beoordeling_door.trim() || null
-              : session.kind === "partner"
-                ? partner.naam
-                : session.teamgenoot?.naam || partner.naam;
-          patch.monteur_beoordeling_door = door;
+          koppelPatch.beoordeling_sterren = Math.round(n);
         }
       }
-      if (body.monteur_beoordeling_notitie !== undefined) {
-        patch.monteur_beoordeling_notitie =
-          typeof body.monteur_beoordeling_notitie === "string"
-            ? body.monteur_beoordeling_notitie.trim() || null
+      if (koppelNotitieIn !== undefined) {
+        koppelPatch.beoordeling_notitie =
+          typeof koppelNotitieIn === "string"
+            ? koppelNotitieIn.trim() || null
             : null;
-        if (
-          body.monteur_beoordeling_sterren === undefined &&
-          patch.monteur_beoordeling_notitie
-        ) {
-          patch.monteur_beoordeling_op = new Date().toISOString();
-        }
       }
     }
 
-    if (Object.keys(patch).length === 0) {
+    if (Object.keys(patch).length === 0 && Object.keys(koppelPatch).length === 0) {
       return NextResponse.json(
         { error: "Niets om bij te werken" },
         { status: 400 }
@@ -495,11 +488,21 @@ export async function PATCH(
       return q.select(select).single();
     }
 
-    let { data: order, error } = await doUpdate(ORDER_SELECT, patch);
+    let order: Record<string, unknown> | null = existing as Record<
+      string,
+      unknown
+    > | null;
+    let error: { message?: string; code?: string } | null = null;
+    if (Object.keys(patch).length > 0) {
+      const updated = await doUpdate(ORDER_SELECT, patch);
+      order = updated.data as typeof order;
+      error = updated.error;
+    }
 
     // Kolom installatie_teamgenoot_id ontbreekt → alleen monteur-tekst
     if (
       error &&
+      Object.keys(patch).length > 0 &&
       body.installatie_teamgenoot_id !== undefined &&
       (error.code === "42703" ||
         error.message?.includes("installatie_teamgenoot_id") ||
@@ -513,22 +516,25 @@ export async function PATCH(
       if (error.message?.includes("service_teamgenoot_id")) {
         delete fallbackPatch.service_teamgenoot_id;
       }
-      ({ data: order, error } = await doUpdate(
-        ORDER_SELECT_FALLBACK,
-        fallbackPatch
-      ));
+      const fb = await doUpdate(ORDER_SELECT_FALLBACK, fallbackPatch);
+      order = fb.data as typeof order;
+      error = fb.error;
     }
 
     if (
       error &&
+      Object.keys(patch).length > 0 &&
       (error.message?.includes("installatie_teamgenoot") ||
         error.message?.includes("installatie_partner_teamgenoten"))
     ) {
-      ({ data: order, error } = await doUpdate(ORDER_SELECT_NO_TG_JOIN, patch));
+      const retryTg = await doUpdate(ORDER_SELECT_NO_TG_JOIN, patch);
+      order = retryTg.data as typeof order;
+      error = retryTg.error;
     }
 
     if (
       error &&
+      Object.keys(patch).length > 0 &&
       (error.message?.includes("installateur_notitie") ||
         error.message?.includes("offertes") ||
         error.code === "42703" ||
@@ -539,7 +545,7 @@ export async function PATCH(
       error = retry.error;
     }
 
-    if (error || !order) {
+    if ((error && Object.keys(patch).length > 0) || !order) {
       return NextResponse.json(
         {
           error: "Opslaan mislukt",
@@ -549,10 +555,7 @@ export async function PATCH(
       );
     }
 
-    if (
-      patch.monteur_beoordeling_sterren !== undefined ||
-      patch.monteur_beoordeling_notitie !== undefined
-    ) {
+    if (Object.keys(koppelPatch).length > 0) {
       const { data: partnerKoppels } = await sb
         .from("installatie_partner_koppels")
         .select("id, partner_id, actief")
@@ -572,31 +575,33 @@ export async function PATCH(
           actief?: boolean | null;
         }[]
       );
-      if (koppelId) {
-        const koppelPatch: Record<string, unknown> = {
-          updated_at: new Date().toISOString(),
-        };
-        if (patch.monteur_beoordeling_sterren !== undefined) {
-          koppelPatch.beoordeling_sterren = patch.monteur_beoordeling_sterren;
-        }
-        if (patch.monteur_beoordeling_notitie !== undefined) {
-          koppelPatch.beoordeling_notitie = patch.monteur_beoordeling_notitie;
-        }
+      if (!koppelId) {
+        return NextResponse.json(
+          { error: "Geen koppel gekoppeld aan deze installatie" },
+          { status: 400 }
+        );
+      }
+      const { data: koppelUpdated } = await sb
+        .from("installatie_partner_koppels")
+        .update(koppelPatch)
+        .eq("id", koppelId)
+        .eq("partner_id", partner.id)
+        .select(
+          "id, partner_id, naam, monteur_1_id, monteur_2_id, beoordeling_sterren, beoordeling_notitie, actief"
+        )
+        .maybeSingle();
+      if (koppelUpdated) {
+        order = { ...order, installatie_koppel: koppelUpdated };
+      }
+      if (
+        !(existing as { installatie_koppel_id?: string | null })
+          .installatie_koppel_id
+      ) {
         await sb
-          .from("installatie_partner_koppels")
-          .update(koppelPatch)
-          .eq("id", koppelId)
-          .eq("partner_id", partner.id);
-        if (
-          !(existing as { installatie_koppel_id?: string | null })
-            .installatie_koppel_id
-        ) {
-          await sb
-            .from("projecten")
-            .update({ installatie_koppel_id: koppelId })
-            .eq("id", projectId)
-            .eq("installatie_partner_id", partner.id);
-        }
+          .from("projecten")
+          .update({ installatie_koppel_id: koppelId })
+          .eq("id", projectId)
+          .eq("installatie_partner_id", partner.id);
       }
     }
 

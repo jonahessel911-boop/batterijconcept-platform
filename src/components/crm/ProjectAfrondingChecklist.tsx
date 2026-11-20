@@ -200,9 +200,9 @@ export function afterSaleChecklistItems(project: Project): {
   });
   checks.push({
     id: "monteur_beoordeling",
-    label: "Beoordeling monteur",
+    label: "First Contact Rapport",
     detail:
-      "0–5 sterren + notitie. De installatiepartner ziet dit.",
+      "Batterijconcept First Contact Rapport — sterren + notitie. De installatiepartner ziet dit.",
     done: isMonteurBeoordelingGezet(project),
   });
   return checks;

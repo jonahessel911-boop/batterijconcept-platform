@@ -12,6 +12,13 @@ export function parseBoView(raw: string | null | undefined): BoView {
   if (raw === "agenda") return "agenda";
   if (raw === "taken_agenda" || raw === "taken-agenda") return "taken_agenda";
   if (raw === "acties") return "acties";
+  if (
+    raw === "acties_kanban" ||
+    raw === "actiekanban" ||
+    raw === "acties-kanban"
+  ) {
+    return "acties";
+  }
   if (raw === "service") return "service";
   if (raw === "kanban" || raw === "bord") return "kanban";
   if (raw === "bel_rapportage" || raw === "bel-rapportage") {

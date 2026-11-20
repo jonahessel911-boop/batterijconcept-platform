@@ -37,6 +37,7 @@ import {
   orderBetalingProgress,
 } from "@/lib/aanbetaling";
 import {
+  orderStatusNaWfGoedkeuring,
   resolveBetaalwijze,
   resolveStatusTaak,
   toOperationalStatus,
@@ -194,6 +195,26 @@ function isWarmtefondsGoedgekeurdVoorSchouw(project: Project): boolean {
   const idx = FINANCIERING_PIPELINE.indexOf(n);
   const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
   return idx >= 0 && from >= 0 && idx >= from;
+}
+
+/** Orderstatus Schouw inplannen zodra WF op aanbod ondertekenen (of verder) staat. */
+export function maybePromoteToSchouwInplannen(opts: {
+  currentStatus: string | null | undefined;
+  financieringStatus: string | null | undefined;
+  exacteSchouwdag: boolean;
+}): ProjectStatusKey | null {
+  if (
+    !isWarmtefondsGoedgekeurdVoorSchouw({
+      status: opts.currentStatus,
+      financiering_status: opts.financieringStatus,
+    } as Project)
+  ) {
+    return null;
+  }
+  return orderStatusNaWfGoedkeuring({
+    currentStatus: opts.currentStatus,
+    exacteSchouwdag: opts.exacteSchouwdag,
+  });
 }
 
 export type VolgendeStapActie =
@@ -545,6 +566,8 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
   switch (status) {
     case "opstarten_voltooid_afwachten_wf":
       return "Opstarten klaar — wacht op Warmtefonds. Schouwdag pas plannen na goedkeuring (of in het schouwvenster).";
+    case "schouw_inplannen":
+      return "Warmtefonds is goedgekeurd (aanbod ondertekenen). Plan nu de exacte schouwdag.";
     case "schouwdag_ingepland":
       return "Schouwdag staat gepland. Na de schouw volgt de volgende stap automatisch.";
     case "schouw_voltooid":
@@ -717,9 +740,9 @@ function volgendeStapNaOpstarten(
           FINANCIERING_PIPELINE.indexOf("declaratie_indienen"));
     return {
       eyebrow: "Volgende stap",
-      titel: "Schouwdag inplannen + WF-declaratie",
+      titel: "Schouw inplannen",
       reden:
-        "Warmtefonds is goedgekeurd — stuur de declaratie door en plan de exacte schouwdag met de klant.",
+        "Warmtefonds is goedgekeurd (aanbod ondertekenen) — plan de exacte schouwdag met de klant.",
       uiterlijkLabel: formatUiterlijkAt(due),
       uiterlijkAt: due,
       urgent: true,
@@ -845,6 +868,7 @@ function volgendeStapVanTaak(
 const OP_RANK: ProjectStatusKey[] = [
   "schouwweek_inplannen",
   "opstarten_voltooid_afwachten_wf",
+  "schouw_inplannen",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",
@@ -905,7 +929,8 @@ export function effectiveOperationalStatus(
     if (
       opRank(status) < opRank(min) &&
       (status === "schouwweek_inplannen" ||
-        status === "opstarten_voltooid_afwachten_wf")
+        status === "opstarten_voltooid_afwachten_wf" ||
+        status === "schouw_inplannen")
     ) {
       // Alleen bump binnen opstart — verdere pipeline blijft via expliciete status
       status = min;
@@ -989,6 +1014,10 @@ export function resolveProjectVolgendeStap(
         project,
         now
       );
+    }
+
+    if (status === "schouw_inplannen") {
+      return volgendeStapNaOpstarten(project, now, facturen);
     }
 
     // Afwachten WF (nog geen dag) — schouwweek-indicatie stuurt geen actie

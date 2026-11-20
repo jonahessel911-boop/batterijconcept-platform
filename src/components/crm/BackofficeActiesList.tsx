@@ -27,8 +27,11 @@ import {
   recommendedSchouwWeekForProject,
   saleMomentVanProject,
   warmtefondsWachtFaseVanActie,
+  isServiceVervolgActieOpen,
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
+import { ServiceVervolgActiePanel } from "./ServiceVervolgActiePanel";
+import { BackofficeActiesKanban } from "./BackofficeActiesKanban";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
 import {
   applyActieSnoozes,
@@ -41,6 +44,7 @@ import {
 import {
   HOLD_SALES_VERLENG_DAGEN,
   stampHoldSalesTerugAfgehandeld,
+  withoutDuplicateHoldTerugNotities,
 } from "@/lib/hold-sales";
 import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
@@ -165,6 +169,7 @@ type TaskRow = {
     | "hold_sales_terug"
     | "eindafrekening"
     | "nazorg"
+    | "service_vervolg"
     | "terugbel";
   titel: string;
   klant: string;
@@ -184,6 +189,11 @@ function actieNogNietEchtAfgerond(row: TaskRow): boolean {
     const op = toOperationalStatus(p.status);
     if (op === "afgerond" || op === "service") return false;
     return !isAfterSaleChecklistCompleet(p);
+  }
+  if (soort === "service_vervolg") {
+    const p = row.actie.project;
+    if (!p) return true;
+    return isServiceVervolgActieOpen(p);
   }
   return (
     soort === "schouw_inplannen" ||
@@ -255,8 +265,8 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       className: "bg-[#FFF0E6] text-[#C45A12]",
     },
     schouw_inplannen: {
-      label: "Schouw",
-      className: "bg-[#E8F0F6] text-[#1A4A6E]",
+      label: "Schouw inplannen",
+      className: "bg-[#E3F2FD] text-[#0D47A1]",
     },
     volgende_stap: {
       label: "Installatie",
@@ -285,6 +295,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     nazorg: {
       label: "After sale",
       className: "bg-[#F3F0FF] text-[#5B21B6]",
+    },
+    service_vervolg: {
+      label: "Service",
+      className: "bg-[#FFF0E6] text-[#C45A12]",
     },
     schouw_week: {
       label: "Opstarten",
@@ -354,6 +368,7 @@ type ActiesFiltersStored = {
   zoek?: string;
   /** yyyy-MM-dd — welke dag de focus-werklijst toont */
   focusDayKey?: string;
+  layout?: "lijst" | "kanban";
 };
 
 function readActiesFilters(): ActiesFiltersStored {
@@ -531,7 +546,12 @@ function isAfterSaleFocus(
   titel: string | null | undefined,
   status: string | null | undefined
 ): boolean {
-  if (kind === "nazorg" || kind === "eindafrekening") return true;
+  if (
+    kind === "nazorg" ||
+    kind === "eindafrekening" ||
+    kind === "service_vervolg"
+  )
+    return true;
   const t = (titel || "").toLowerCase();
   if (
     /overstap|btw.?terug|review vragen|nazorg|after.?sale|dynamische/.test(t)
@@ -1142,9 +1162,12 @@ function SaleNotitiesAside({
 
   const backoffice = project.backoffice_notitie?.trim() || "";
   const installateur = project.installateur_notitie?.trim() || "";
-  const projectNotities = parseProjectNotitieEntries(
-    project.notities,
-    project.updated_at || project.created_at
+  const projectNotities = withoutDuplicateHoldTerugNotities(
+    parseProjectNotitieEntries(
+      project.notities,
+      project.updated_at || project.created_at
+    ),
+    backoffice
   );
   const hasEnergie =
     project.elektra_verbruik_kwh != null ||
@@ -1289,9 +1312,12 @@ function SaleNotitiesAside({
 function OpstartenProjectNotities({ project }: { project: Project }) {
   const backoffice = project.backoffice_notitie?.trim() || "";
   const installateur = project.installateur_notitie?.trim() || "";
-  const entries = parseProjectNotitieEntries(
-    project.notities,
-    project.updated_at || project.created_at
+  const entries = withoutDuplicateHoldTerugNotities(
+    parseProjectNotitieEntries(
+      project.notities,
+      project.updated_at || project.created_at
+    ),
+    backoffice
   );
   const hasAny = Boolean(backoffice || installateur || entries.length > 0);
 
@@ -1604,6 +1630,23 @@ function buildTaskRows(
       });
       continue;
     }
+    if (actie.soort === "service_vervolg") {
+      if (!actie.project) continue;
+      rows.push({
+        key: `${actie.id}-service-vervolg`,
+        section: "volgende",
+        actie,
+        kind: "service_vervolg",
+        titel: "Vervolg Backoffice",
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
+        done: false,
+      });
+      continue;
+    }
   }
   return rows;
 }
@@ -1706,6 +1749,7 @@ export function BackofficeActiesList({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [bucket, setBucket] = useState<ActieBucket>("vandaag");
   const [soortFilter, setSoortFilter] = useState<SoortFilter>("alle");
+  const [layout, setLayout] = useState<"lijst" | "kanban">("lijst");
   const [zoek, setZoek] = useState("");
   /**
    * Filter medewerker. Leeg = alle acties.
@@ -1786,6 +1830,9 @@ export function BackofficeActiesList({
     if (s.soortFilter && SOORT_FILTER_ORDER.includes(s.soortFilter)) {
       setSoortFilter(s.soortFilter);
     }
+    if (s.layout === "lijst" || s.layout === "kanban") {
+      setLayout(s.layout);
+    }
     if (typeof s.zoek === "string") setZoek(s.zoek);
     if (typeof s.medewerkerId === "string") {
       hadStoredMedewerkerFilter.current = true;
@@ -1830,8 +1877,17 @@ export function BackofficeActiesList({
       soortFilter,
       zoek,
       focusDayKey,
+      layout,
     });
-  }, [filtersHydrated, medewerkerId, bucket, soortFilter, zoek, focusDayKey]);
+  }, [
+    filtersHydrated,
+    medewerkerId,
+    bucket,
+    soortFilter,
+    zoek,
+    focusDayKey,
+    layout,
+  ]);
   useEffect(() => {
     if (!newPersonId && (adviseurId || defaultEigenaarId)) {
       setNewPersonId(adviseurId || defaultEigenaarId || "");
@@ -3552,6 +3608,7 @@ export function BackofficeActiesList({
         row.kind === "volgende_stap" ||
         row.kind === "schouw_inplannen" ||
         row.kind === "bestel_materiaal" ||
+        row.kind === "service_vervolg" ||
         row.kind === "wacht_warmtefonds"
       ) {
         // Afgeleide acties verdwijnen vanzelf bij statuswijziging; log alleen
@@ -4148,6 +4205,14 @@ export function BackofficeActiesList({
               ) : null}
             </div>
           </div>
+        ) : null}
+
+        {row.kind === "service_vervolg" && actie.project ? (
+          <ServiceVervolgActiePanel
+            project={actie.project}
+            telefoon={actie.telefoon}
+            onUpdated={(p) => onProjectUpdated?.(p)}
+          />
         ) : null}
 
         {row.kind === "nazorg" ? (
@@ -5001,6 +5066,25 @@ export function BackofficeActiesList({
     setActionView(true);
   }
 
+  function openActieFromKanban(actie: BackofficeActie) {
+    const row =
+      openRows.find((r) => r.actie.id === actie.id) ||
+      nazorgRows.find((r) => r.actie.id === actie.id) ||
+      openRows.find(
+        (r) =>
+          Boolean(actie.projectId) &&
+          r.actie.projectId === actie.projectId &&
+          r.actie.soort === actie.soort
+      ) ||
+      null;
+    if (!row) {
+      setError("Deze actie staat niet in de lijst.");
+      return;
+    }
+    setJumpPinnedKey(row.key);
+    openActionView(row.key);
+  }
+
   function goPrevActie() {
     if (jumpPinnedKey) {
       exitJumpPin();
@@ -5259,6 +5343,28 @@ export function BackofficeActiesList({
           <p className="mt-0.5 text-sm text-muted">
             Overzicht — open focusmodus om per dag te werken
           </p>
+          <div className="mt-2 inline-flex border border-line">
+            {(
+              [
+                { id: "lijst" as const, label: "Lijst" },
+                { id: "kanban" as const, label: "Kanban" },
+              ]
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setLayout(tab.id)}
+                className={[
+                  "px-3 py-1.5 text-xs font-semibold",
+                  layout === tab.id
+                    ? "bg-ink text-white"
+                    : "bg-white text-muted hover:text-ink",
+                ].join(" ")}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-xs text-muted">
@@ -5291,7 +5397,7 @@ export function BackofficeActiesList({
       </div>
       )}
 
-      {actionView ? null : (
+      {actionView || layout === "kanban" ? null : (
       <div className="-mx-1 flex gap-1 overflow-x-auto border-b border-line px-1">
         {ACTIE_BUCKETS.map((b) => {
           const active = bucket === b.id;
@@ -5348,7 +5454,7 @@ export function BackofficeActiesList({
       </div>
       )}
 
-      {actionView ? null : (
+      {actionView || layout === "kanban" ? null : (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
             Soort
@@ -5495,7 +5601,20 @@ export function BackofficeActiesList({
         </div>
       ) : null}
 
-      {actionView ? null : (
+      {!actionView && layout === "kanban" ? (
+        <div className="-mx-5">
+          <BackofficeActiesKanban
+            projecten={projecten}
+            facturen={facturen}
+            leads={leads}
+            afspraken={afspraken}
+            adviseurs={adviseurs}
+            onSelectActie={openActieFromKanban}
+          />
+        </div>
+      ) : null}
+
+      {actionView || layout === "kanban" ? null : (
       <div className="min-w-0 space-y-3">
       {tabEmpty ? (
         <div className="border border-line bg-white px-4 py-14 text-center text-sm text-muted">
@@ -5970,17 +6089,32 @@ export function BackofficeActiesList({
             <div className="shrink-0 space-y-1.5 border-b border-line px-3 py-2 sm:px-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJumpPinnedKey(null);
-                      setFocusJumpQ("");
-                      setActionView(false);
-                    }}
-                    className="text-xs font-semibold text-muted hover:text-ink"
-                  >
-                    ← Lijst
-                  </button>
+                  <div className="inline-flex border border-line">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJumpPinnedKey(null);
+                        setFocusJumpQ("");
+                        setLayout("lijst");
+                        setActionView(false);
+                      }}
+                      className="px-2.5 py-1 text-xs font-semibold text-muted hover:bg-wash hover:text-ink"
+                    >
+                      Lijst
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJumpPinnedKey(null);
+                        setFocusJumpQ("");
+                        setLayout("kanban");
+                        setActionView(false);
+                      }}
+                      className="border-l border-line px-2.5 py-1 text-xs font-semibold text-muted hover:bg-wash hover:text-ink"
+                    >
+                      Kanban
+                    </button>
+                  </div>
                   <span
                     className="hidden h-4 w-px bg-line sm:block"
                     aria-hidden

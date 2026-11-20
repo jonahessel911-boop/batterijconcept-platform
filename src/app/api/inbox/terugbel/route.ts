@@ -5,7 +5,10 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { normalizeRol } from "@/lib/rollen";
 import { errMessage } from "@/lib/errors";
 import { isSimonBeller } from "@/lib/ops-namen";
-import { parseInboxTerugbelSuggestie } from "@/lib/inbox-terugbel";
+import {
+  formatInboxTerugbelLabel,
+  inboxTerugbelMoment,
+} from "@/lib/inbox-terugbel";
 import { planAfspraak } from "@/lib/plan-afspraak";
 import { logLeadEvent } from "@/lib/lead-events";
 
@@ -30,6 +33,7 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       lead_id?: string;
       start_at?: string | null;
+      adviseur_id?: string | null;
       notitie?: string | null;
       subject?: string | null;
       body_text?: string | null;
@@ -43,15 +47,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const parsed = parseInboxTerugbelSuggestie({
+    const parsed = inboxTerugbelMoment({
       subject: body.subject,
       bodyText: body.body_text,
       aiSummary: body.ai_summary,
     });
-    const startAt = (body.start_at || parsed?.startAt || "").trim();
-    if (!startAt) {
+    const startAt = (body.start_at || parsed.startAt || "").trim();
+    if (!startAt || Number.isNaN(new Date(startAt).getTime())) {
       return NextResponse.json(
-        { error: "Geen terugbelmoment herkend" },
+        { error: "Kies een geldige datum en tijd" },
         { status: 400 }
       );
     }
@@ -63,25 +67,27 @@ export async function POST(req: NextRequest) {
       .eq("actief", true);
     if (advErr) throw advErr;
     const rows = adviseurs || [];
-    const simon =
+    const wantedId = (body.adviseur_id || "").trim();
+    const gekozen =
+      (wantedId ? rows.find((a) => a.id === wantedId) : null) ||
       rows.find((a) => isSimonBeller(a) && normalizeRol(a.rol) === "beller") ||
       rows.find((a) => isSimonBeller(a)) ||
       rows.find((a) => normalizeRol(a.rol) === "beller");
-    if (!simon?.id) {
+    if (!gekozen?.id) {
       return NextResponse.json(
-        { error: "Geen beller (Simon) gevonden" },
+        { error: "Geen medewerker gevonden voor het terugbelverzoek" },
         { status: 500 }
       );
     }
 
     const note =
       (body.notitie || "").trim() ||
-      parsed?.hint ||
+      parsed.hint ||
       "Terugbelverzoek via inbox";
 
     const result = await planAfspraak(sb, {
       lead_id: leadId,
-      adviseur_id: simon.id,
+      adviseur_id: gekozen.id,
       start_at: startAt,
       notities: `Via inbox: ${note}`.slice(0, 500),
       soort: "bel",
@@ -99,7 +105,7 @@ export async function POST(req: NextRequest) {
       .update({
         terugbellen: true,
         terugbel_notitie: note.slice(0, 400),
-        beller_id: simon.id,
+        beller_id: gekozen.id,
       })
       .eq("id", leadId);
 
@@ -107,10 +113,10 @@ export async function POST(req: NextRequest) {
       leadId,
       soort: "terugbel",
       titel: "Terugbelverzoek via inbox",
-      detail: `${note} · ${simon.naam} · ${startAt.replace("T", " ").slice(0, 16)}`,
+      detail: `${note} · ${gekozen.naam} · ${formatInboxTerugbelLabel(startAt)}`,
       meta: {
         bron: "inbox",
-        adviseur_id: simon.id,
+        adviseur_id: gekozen.id,
         start_at: startAt,
       },
     });
@@ -118,9 +124,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       afspraak: result.afspraak,
-      beller: { id: simon.id, naam: simon.naam },
+      beller: { id: gekozen.id, naam: gekozen.naam },
       start_at: startAt,
-      label: parsed?.label || null,
+      label: formatInboxTerugbelLabel(startAt),
     });
   } catch (e) {
     return NextResponse.json(

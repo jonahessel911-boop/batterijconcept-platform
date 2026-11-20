@@ -285,7 +285,7 @@ export async function syncAutoTakenVoorProject(
     ) {
       defs.push({
         autoKey: SCHOUWDAG_INPLAN_KEY,
-        titel: "Schouwdag inplannen met de klant",
+        titel: "Schouw inplannen met de klant",
         afdeling: "Planning",
         dueInDays: 2,
       });

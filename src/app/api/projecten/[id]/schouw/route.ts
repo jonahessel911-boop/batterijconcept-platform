@@ -166,6 +166,7 @@ export async function POST(
     const nextStatus = statusNaSchouwInplannen({
       exacteDag,
       warmtefonds: warmtefondsForStatus,
+      currentStatus: project.status,
     });
 
     let partnerId =

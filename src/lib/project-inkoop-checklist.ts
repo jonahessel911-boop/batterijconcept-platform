@@ -41,6 +41,78 @@ export type MontageAccessoire = "baseplate" | "wallbracket";
 export const SCHOUW_MONTAGE_CHECK_KEY = "__schouw_montage";
 export const INKOOP_EXTRA_NOTITIES_KEY = "__inkoop_extra_notities";
 export const INKOOP_NOTE_PREFIX = "__note:";
+export const SERVICE_INKOOP_META_KEY = "__service_inkoop";
+export const SERVICE_INKOOP_KEY_PREFIX = "svc:";
+
+export type ServiceInkoopRegel = {
+  id: string;
+  label: string;
+  aantal: number;
+};
+
+export function parseServiceInkoopRegels(
+  checks: MateriaalChecks | null | undefined
+): ServiceInkoopRegel[] {
+  const raw = checks?.[SERVICE_INKOOP_META_KEY];
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row) => {
+        const r =
+          row && typeof row === "object"
+            ? (row as Record<string, unknown>)
+            : {};
+        return {
+          id: String(r.id || "").trim(),
+          label: String(r.label || "").trim(),
+          aantal: Math.max(1, Math.round(Number(r.aantal) || 1)),
+        };
+      })
+      .filter((r) => r.id && r.label);
+  } catch {
+    return [];
+  }
+}
+
+export function serviceInkoopItemKey(id: string): string {
+  return `${SERVICE_INKOOP_KEY_PREFIX}${id}`;
+}
+
+export function setServiceInkoopRegels(
+  checks: MateriaalChecks | null | undefined,
+  regels: ServiceInkoopRegel[]
+): MateriaalChecks {
+  const next: MateriaalChecks = { ...(checks || {}) };
+  const prev = parseServiceInkoopRegels(checks);
+  const keep = new Set(regels.map((r) => r.id));
+  for (const old of prev) {
+    if (keep.has(old.id)) continue;
+    const key = serviceInkoopItemKey(old.id);
+    delete next[key];
+    delete next[inkoopNoteKey(key)];
+  }
+  const clean = regels.filter((r) => r.label.trim());
+  if (clean.length === 0) {
+    // Lege JSON i.p.v. delete: PATCH bewaart ontbrekende `__`-keys.
+    next[SERVICE_INKOOP_META_KEY] = "[]";
+    return next;
+  }
+  next[SERVICE_INKOOP_META_KEY] = JSON.stringify(
+    clean.map((r) => ({
+      id: r.id,
+      label: r.label.trim(),
+      aantal: Math.max(1, r.aantal || 1),
+    }))
+  );
+  for (const r of clean) {
+    const key = serviceInkoopItemKey(r.id);
+    if (next[key] == null) next[key] = "te_kopen";
+    next[inkoopNoteKey(key)] = "Nodig voor service-vervolg";
+  }
+  return next;
+}
 
 export const SCHOUW_MONTAGE_NA_SCHOUW_NOTE =
   "Na schouw blijkt dat deze nodig is.";
@@ -114,7 +186,9 @@ export function batterijPurchasingStatus(
 ): { besteld: boolean; geleverd: boolean } {
   const entries = Object.entries(checks || {}).filter(
     ([k, v]) =>
-      !k.startsWith("__") && parseInkoopRegelStatus(v) !== "geannuleerd"
+      !k.startsWith("__") &&
+      !k.startsWith(SERVICE_INKOOP_KEY_PREFIX) &&
+      parseInkoopRegelStatus(v) !== "geannuleerd"
   );
   const batterij = entries.filter(([k]) => /batterij/i.test(k));
   const source = batterij.length > 0 ? batterij : entries;
@@ -206,7 +280,7 @@ export type InkoopChecklistItem = {
   sku: string | null;
   aantal: number;
   inkoopExBtw: number;
-  bron: "offerte" | "standaard";
+  bron: "offerte" | "standaard" | "service";
   /** Offerte-regel id indien van toepassing. */
   regelId?: string;
   /** Toelichting (bijv. na schouw) — niet op offerte. */
@@ -543,6 +617,20 @@ export function buildInkoopChecklist(
         notitie: getInkoopItemNote(checks, a.key),
       });
     }
+  }
+
+  for (const r of parseServiceInkoopRegels(checks)) {
+    items.push({
+      key: serviceInkoopItemKey(r.id),
+      label: `Service · ${r.label}`,
+      sku: null,
+      aantal: r.aantal,
+      inkoopExBtw: 0,
+      bron: "service",
+      notitie:
+        getInkoopItemNote(checks, serviceInkoopItemKey(r.id)) ||
+        "Nodig voor service-vervolg",
+    });
   }
 
   return items;

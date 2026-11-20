@@ -236,6 +236,7 @@ const PIPELINE: ProjectStatus[] = [
   "warmtefonds_in_behandeling",
   "warmtefonds_goedgekeurd",
   "opstarten_voltooid_afwachten_wf",
+  "schouw_inplannen",
   "schouwdag_ingepland",
   "schouw_voltooid",
   "restfactuur_verstuurd",

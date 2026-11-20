@@ -1764,21 +1764,21 @@ export function relatieFactuurAanBcEmail(opts: {
   const goedgekeurd = opts.variant === "goedgekeurd";
   return emailLayout({
     title: goedgekeurd
-      ? `Factuur ${opts.factuurNummer} goedgekeurd`
+      ? `Factuur ${opts.factuurNummer} te betalen`
       : `Factuur ${opts.factuurNummer}`,
     preheader: goedgekeurd
-      ? `Je hebt factuur ${opts.factuurNummer} goedgekeurd · uitbetaling binnen 14 dagen.`
+      ? `Factuur ${opts.factuurNummer} staat op te betalen · uitbetaling binnen 14 dagen.`
       : `Factuur ${opts.factuurNummer} aan Batterijconcept · uitbetaling binnen 14 dagen.`,
     bodyHtml: [
       emailH1(
         goedgekeurd
-          ? `Factuur ${opts.factuurNummer} goedgekeurd`
+          ? `Factuur ${opts.factuurNummer} te betalen`
           : `Factuur ${opts.factuurNummer}`
       ),
       emailP(`Hoi ${first},`),
       emailP(
         goedgekeurd
-          ? `Bedankt voor je goedkeuring. Hierbij nogmaals de factuur die uit jouw naam als ${rol} is opgesteld, gericht aan Batterijconcept (selfbilling). De PDF zit in de bijlage.`
+          ? `Je factuur als ${rol} aan Batterijconcept (selfbilling) staat op te betalen. De PDF zit in de bijlage.`
           : `Hierbij ontvang je de factuur die uit jouw naam als ${rol} is opgesteld, gericht aan Batterijconcept (selfbilling). De PDF zit in de bijlage.`
       ),
       emailBox(

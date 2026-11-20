@@ -1,8 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { fromZonedTime } from "date-fns-tz";
-import { AMSTERDAM_TZ } from "@/lib/format";
+import { useCallback, useEffect, useState } from "react";
 import type {
   InstallatiePartnerTeamgenoot,
   Lead,
@@ -14,7 +12,7 @@ import {
   formatOpleverAdres,
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
-  SERVICE_VV_INSTALLATIE,
+  VERVOLG_BACKOFFICE_LABEL,
   type OpleverFormulierData,
   type OpleverPuntId,
   validateOpleverFormulier,
@@ -39,20 +37,11 @@ type TeamOptie = Pick<
   "id" | "naam" | "email" | "telefoon" | "kan_service"
 >;
 
-function defaultVervolgDatetimeLocal(): string {
-  const now = new Date();
-  const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  d.setHours(10, 0, 0, 0);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function datetimeLocalToIso(value: string): string {
-  const t = value.trim();
-  if (!t) return "";
-  const d = fromZonedTime(t, AMSTERDAM_TZ);
-  if (Number.isNaN(d.getTime())) return t;
-  return d.toISOString();
+function newMateriaalId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `svc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function leadFromProject(project: Project): PrefillLead | null {
@@ -118,10 +107,6 @@ export function OpleverFormulierModal({
   }) => void;
 }) {
   const gekoppeld = teamgenootVanProject(project);
-  const serviceMonteuren = useMemo(
-    () => teamgenoten.filter((t) => t.kan_service === true),
-    [teamgenoten]
-  );
   const [form, setForm] = useState<OpleverFormulierData>(() =>
     buildPrefill(project, monteurOverride)
   );
@@ -173,15 +158,11 @@ export function OpleverFormulierModal({
       setError("Kies wie de installatie heeft uitgevoerd.");
       return;
     }
-    if (form.vervolgNodig && serviceMonteuren.length > 0 && !form.vervolgMonteurId) {
-      setError("Kies een monteur met Service in het account.");
-      return;
-    }
     const payload: OpleverFormulierData = {
       ...form,
-      vervolgAt: form.vervolgNodig
-        ? datetimeLocalToIso(form.vervolgAt)
-        : "",
+      vervolgMaterialen: form.vervolgNodig
+        ? (form.vervolgMaterialen || []).filter((m) => m.label.trim())
+        : [],
     };
     const invalid = validateOpleverFormulier(payload);
     if (invalid) {
@@ -403,7 +384,8 @@ export function OpleverFormulierModal({
                 Vervolg
               </p>
               <p className="mt-0.5 text-xs text-muted">
-                Iets dat nog gefixt moet worden? Boek als {SERVICE_VV_INSTALLATIE}.
+                Iets dat nog gefixt moet worden? {VERVOLG_BACKOFFICE_LABEL}:
+                backoffice belt om een service-afspraak in te plannen.
               </p>
             </div>
             <div className="space-y-3 px-3 py-3">
@@ -416,15 +398,16 @@ export function OpleverFormulierModal({
                     setForm((p) => ({
                       ...p,
                       vervolgNodig: on,
-                      vervolgAt: on
-                        ? p.vervolgAt || defaultVervolgDatetimeLocal()
-                        : p.vervolgAt,
+                      vervolgMaterialen:
+                        on && (p.vervolgMaterialen || []).length === 0
+                          ? [{ id: newMateriaalId(), label: "", aantal: 1 }]
+                          : p.vervolgMaterialen,
                     }));
                   }}
                   className="mt-0.5 h-5 w-5 shrink-0 accent-[#1A8A3E]"
                 />
                 <span className="text-sm leading-snug text-ink">
-                  Ja, plan een vervolg in ({SERVICE_VV_INSTALLATIE})
+                  Ja, {VERVOLG_BACKOFFICE_LABEL} (bellen voor service)
                 </span>
               </label>
               {form.vervolgNodig ? (
@@ -443,51 +426,82 @@ export function OpleverFormulierModal({
                       className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
                     />
                   </label>
-                  <label className="block space-y-1">
+                  <div className="space-y-1.5">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
-                      Wanneer *
+                      In te kopen voor dit serviceverzoek
                     </span>
-                    <input
-                      type="datetime-local"
-                      value={form.vervolgAt}
-                      onChange={(e) =>
-                        setForm((p) => ({ ...p, vervolgAt: e.target.value }))
+                    {(form.vervolgMaterialen || []).map((row, i) => (
+                      <div key={row.id || i} className="flex gap-2">
+                        <input
+                          value={row.label}
+                          onChange={(e) =>
+                            setForm((p) => ({
+                              ...p,
+                              vervolgMaterialen: (p.vervolgMaterialen || []).map(
+                                (m, j) =>
+                                  j === i ? { ...m, label: e.target.value } : m
+                              ),
+                            }))
+                          }
+                          placeholder="Bijv. kabelgoot, extra aardlek, DIN-rail…"
+                          className="min-w-0 flex-1 border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          value={row.aantal}
+                          onChange={(e) =>
+                            setForm((p) => ({
+                              ...p,
+                              vervolgMaterialen: (p.vervolgMaterialen || []).map(
+                                (m, j) =>
+                                  j === i
+                                    ? {
+                                        ...m,
+                                        aantal: Math.max(
+                                          1,
+                                          Number(e.target.value) || 1
+                                        ),
+                                      }
+                                    : m
+                              ),
+                            }))
+                          }
+                          className="w-16 border border-line bg-white px-2 py-1.5 text-sm tabular-nums text-ink outline-none focus:border-[#0D9488]"
+                          aria-label="Aantal"
+                        />
+                        <button
+                          type="button"
+                          className="shrink-0 px-2 text-xs font-semibold text-muted hover:text-ink"
+                          onClick={() =>
+                            setForm((p) => ({
+                              ...p,
+                              vervolgMaterialen: (p.vervolgMaterialen || []).filter(
+                                (_, j) => j !== i
+                              ),
+                            }))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-green-dark hover:underline"
+                      onClick={() =>
+                        setForm((p) => ({
+                          ...p,
+                          vervolgMaterialen: [
+                            ...(p.vervolgMaterialen || []),
+                            { id: newMateriaalId(), label: "", aantal: 1 },
+                          ],
+                        }))
                       }
-                      className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
-                      Monteur (Service) *
-                    </span>
-                    {serviceMonteuren.length > 0 ? (
-                      <select
-                        value={form.vervolgMonteurId}
-                        onChange={(e) => {
-                          const id = e.target.value;
-                          const tg = serviceMonteuren.find((t) => t.id === id);
-                          setForm((p) => ({
-                            ...p,
-                            vervolgMonteurId: id,
-                            vervolgMonteurNaam: tg?.naam || "",
-                          }));
-                        }}
-                        className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
-                      >
-                        <option value="">Kies iemand met Service…</option>
-                        {serviceMonteuren.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.naam}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <p className="text-sm text-[#C45A12]">
-                        Niemand heeft Service aangevinkt in het account. Zet dat
-                        vinkje eerst bij de medewerker.
-                      </p>
-                    )}
-                  </label>
+                    >
+                      + Regel toevoegen
+                    </button>
+                  </div>
                 </>
               ) : null}
             </div>

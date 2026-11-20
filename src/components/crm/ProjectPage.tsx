@@ -3017,24 +3017,6 @@ export function ProjectPage() {
         </div>
       ) : null}
 
-      {boNotitieIsHoldTerug ? (
-        <div className="mb-4 border border-[#5A4A6E]/30 bg-[#F0ECF5] px-4 py-3">
-          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#4A3A5C]">
-            HOLD teruggestuurd door sales
-          </p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
-            {boNotitie
-              .replace(/^HOLD teruggestuurd door [^:\n]+:\s*/i, "")
-              .trim() || boNotitie}
-          </p>
-          {project.backoffice_notitie_door?.trim() ? (
-            <p className="mt-1 text-xs text-[#4A3A5C]">
-              Door {project.backoffice_notitie_door.trim()}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
       {openTerugbel[0] ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-[#C45A12]/30 bg-[#FFF8F3] px-4 py-3">
           <div className="min-w-0">

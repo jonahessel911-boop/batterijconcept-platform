@@ -32,6 +32,7 @@ import {
   writeCrmBootstrapCache,
   writeCrmSessionCache,
   clearCrmShellCache,
+  CRM_RELOAD_EVENT,
 } from "@/lib/crm-shell-cache";
 import { LeadsTable } from "./LeadsTable";
 import { SalesReferralActies } from "./SalesReferralActies";
@@ -672,6 +673,14 @@ export function CrmShell() {
       void load();
     });
     return () => cancelAnimationFrame(id);
+  }, [load]);
+
+  useEffect(() => {
+    const onReload = () => {
+      void load();
+    };
+    window.addEventListener(CRM_RELOAD_EVENT, onReload);
+    return () => window.removeEventListener(CRM_RELOAD_EVENT, onReload);
   }, [load]);
 
   const scopedLeads = useMemo(() => {
@@ -1343,7 +1352,7 @@ export function CrmShell() {
       title: "Offertes",
       sub: filterLabel
         ? `Sales van ${filterLabel}`
-        : "Verstuurde en ondertekende offertes",
+        : "Concept, verzonden en ondertekende offertes",
     },
     netto: {
       title: "Netto-boord",

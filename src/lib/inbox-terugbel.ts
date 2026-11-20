@@ -117,6 +117,69 @@ function formatNl(iso: string): string {
   });
 }
 
+export function formatInboxTerugbelLabel(iso: string): string {
+  return formatNl(iso);
+}
+
+/** datetime-local waarde in Europe/Amsterdam. */
+export function isoToDatetimeLocal(iso: string): string {
+  const d = toZonedTime(new Date(iso), AMSTERDAM_TZ);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+export function datetimeLocalToIso(value: string): string | null {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  return isoAt(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5])
+  );
+}
+
+/** Eerstvolgend belmoment als de mail geen tijdstip noemt. */
+export function defaultInboxTerugbelMoment(now = new Date()): InboxTerugbelSuggestie {
+  const p = localParts(now);
+  let iso: string;
+  if (p.dow === 0) {
+    const n = addDaysYmd(p.y, p.m, p.d, 1);
+    iso = isoAt(n.y, n.m, n.d, 10, 0);
+  } else if (p.dow === 6) {
+    const n = addDaysYmd(p.y, p.m, p.d, 2);
+    iso = isoAt(n.y, n.m, n.d, 10, 0);
+  } else if (p.h < 16) {
+    iso = isoAt(p.y, p.m, p.d, Math.max(10, p.h + 1), 0);
+  } else {
+    const add = p.dow === 5 ? 3 : 1;
+    const n = addDaysYmd(p.y, p.m, p.d, add);
+    iso = isoAt(n.y, n.m, n.d, 10, 0);
+  }
+  return {
+    startAt: iso,
+    label: formatNl(iso),
+    hint: "terugbellen",
+  };
+}
+
+/** Altijd een moment: uit de mailtekst, anders eerstvolgende belmoment. */
+export function inboxTerugbelMoment(
+  input: {
+    subject?: string | null;
+    bodyText?: string | null;
+    aiSummary?: string | null;
+  },
+  now = new Date()
+): InboxTerugbelSuggestie {
+  return parseInboxTerugbelSuggestie(input, now) || defaultInboxTerugbelMoment(now);
+}
+
 function hasIntent(text: string): boolean {
   const t = text.toLowerCase();
   if (NEGATIVE.test(t) && !AVAIL.test(t) && !/vanmiddag|morgen|maandag/.test(t)) {
@@ -204,21 +267,7 @@ export function parseInboxTerugbelSuggestie(
     }
     hint = `${hour}:${String(minute).padStart(2, "0")}`;
   } else {
-    // Alleen “bel me” — eerstvolgende werkdag 10:00 (of vandaag als het ochtend is)
-    if (p.dow === 0) {
-      const n = addDaysYmd(p.y, p.m, p.d, 1);
-      iso = isoAt(n.y, n.m, n.d, 10, 0);
-    } else if (p.dow === 6) {
-      const n = addDaysYmd(p.y, p.m, p.d, 2);
-      iso = isoAt(n.y, n.m, n.d, 10, 0);
-    } else if (p.h < 16) {
-      iso = isoAt(p.y, p.m, p.d, Math.max(10, p.h + 1), 0);
-    } else {
-      const add = p.dow === 5 ? 3 : 1;
-      const n = addDaysYmd(p.y, p.m, p.d, add);
-      iso = isoAt(n.y, n.m, n.d, 10, 0);
-    }
-    hint = "terugbellen";
+    return defaultInboxTerugbelMoment(now);
   }
 
   return {

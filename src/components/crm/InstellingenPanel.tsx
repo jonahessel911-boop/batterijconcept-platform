@@ -51,21 +51,16 @@ function isSalesRol(rol: string | null | undefined): boolean {
   return normalizeRol(rol) === "adviseur";
 }
 
-/** ZZP/factuurvelden: sales + iedereen met bel-/opscommissie-uitbetaling. */
+/** ZZP/factuurvelden: iedereen die een creditfactuur kan krijgen. */
 function needsFactuurgegevens(opts: {
   rol: string | null | undefined;
   id: string;
   naam?: string | null;
   email?: string | null;
 }): boolean {
-  if (isSalesRol(opts.rol)) return true;
-  if (normalizeRol(opts.rol) === "beller") return true;
-  return isOpsManagerAdviseur({
-    id: opts.id,
-    naam: opts.naam,
-    email: opts.email,
-    rol: opts.rol,
-  });
+  const rol = normalizeRol(opts.rol);
+  if (rol === "warmtefonds" || rol === "installateur") return false;
+  return true;
 }
 
 function portalBase(): string {
@@ -363,6 +358,7 @@ export function InstellingenPanel({
       factuur_adres: a.factuur_adres ?? "",
       factuur_postcode: a.factuur_postcode ?? "",
       factuur_plaats: a.factuur_plaats ?? "",
+      factuur_email: a.factuur_email ?? "",
       iban: a.iban ?? "",
       max_factuur_bedrag: a.max_factuur_bedrag ?? null,
       contract_storage_path: a.contract_storage_path ?? null,
@@ -398,6 +394,7 @@ export function InstellingenPanel({
       factuur_adres: p.factuur_adres ?? "",
       factuur_postcode: p.factuur_postcode ?? "",
       factuur_plaats: p.factuur_plaats ?? "",
+      factuur_email: p.factuur_email ?? "",
       iban: p.iban ?? "",
       contract_storage_path: p.contract_storage_path ?? null,
       contract_bestandsnaam: p.contract_bestandsnaam ?? null,
@@ -585,6 +582,8 @@ export function InstellingenPanel({
         id: selectedAdviseur.id,
         naam: (draft.naam || "").trim(),
         email: draft.email?.toString().trim().toLowerCase() || null,
+        factuur_email:
+          draft.factuur_email?.toString().trim().toLowerCase() || null,
         telefoon: draft.telefoon?.toString().trim() || null,
         unite_lijn: draft.unite_lijn?.toString().trim() || null,
         unite_ext: draft.unite_ext?.toString().trim() || null,
@@ -659,6 +658,9 @@ export function InstellingenPanel({
           id: selectedPartner.id,
           naam: (partnerDraft.naam || "").trim(),
           email: partnerDraft.email?.toString().trim().toLowerCase() || null,
+          factuur_email:
+            partnerDraft.factuur_email?.toString().trim().toLowerCase() ||
+            null,
           telefoon: partnerDraft.telefoon?.toString().trim() || null,
           actief: partnerDraft.actief !== false,
           bedrijfsnaam: partnerDraft.bedrijfsnaam?.toString().trim() || null,
@@ -1241,6 +1243,17 @@ export function InstellingenPanel({
                   className={inputCls}
                 />
               </Field>
+              <Field label="Factuur e-mail">
+                <input
+                  type="email"
+                  value={draft.factuur_email || ""}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, factuur_email: e.target.value }))
+                  }
+                  placeholder="Leeg = login e-mail"
+                  className={inputCls}
+                />
+              </Field>
               <Field label="Telefoon">
                 <input
                   value={draft.telefoon || ""}
@@ -1768,6 +1781,20 @@ export function InstellingenPanel({
                 onChange={(e) =>
                   setPartnerDraft((d) => ({ ...d, email: e.target.value }))
                 }
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Factuur e-mail">
+              <input
+                type="email"
+                value={partnerDraft.factuur_email || ""}
+                onChange={(e) =>
+                  setPartnerDraft((d) => ({
+                    ...d,
+                    factuur_email: e.target.value,
+                  }))
+                }
+                placeholder="Leeg = contact e-mail"
                 className={inputCls}
               />
             </Field>

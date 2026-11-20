@@ -41,7 +41,13 @@ import {
   type InboxFolderId,
   type InboxMail,
 } from "@/lib/inbox";
-import { parseInboxTerugbelSuggestie } from "@/lib/inbox-terugbel";
+import {
+  datetimeLocalToIso,
+  inboxTerugbelMoment,
+  isoToDatetimeLocal,
+} from "@/lib/inbox-terugbel";
+import { isSimonBeller } from "@/lib/ops-namen";
+import { normalizeRol } from "@/lib/rollen";
 import {
   buildMailConversations,
   isOutboundMail,
@@ -567,6 +573,11 @@ export function InboxPanel({
   const [terugbelGezetVoor, setTerugbelGezetVoor] = useState<string | null>(
     null
   );
+  const [terugbelAt, setTerugbelAt] = useState("");
+  const [terugbelAdviseurId, setTerugbelAdviseurId] = useState("");
+  const [terugbelAdviseurs, setTerugbelAdviseurs] = useState<
+    Array<{ id: string; naam: string; rol?: string | null }>
+  >([]);
   const skipAutoReadForKey = useRef<string | null>(null);
 
   const loadInbox = useCallback(async (opts?: { silent?: boolean }) => {
@@ -710,9 +721,47 @@ export function InboxPanel({
   );
 
   const terugbelSuggestie = useMemo(
-    () => (selected ? parseInboxTerugbelSuggestie(selected) : null),
+    () => (selected ? inboxTerugbelMoment(selected) : null),
     [selected]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/adviseurs");
+        const data = (await res.json().catch(() => ({}))) as {
+          adviseurs?: Array<{ id: string; naam: string; rol?: string | null }>;
+        };
+        if (cancelled || !Array.isArray(data.adviseurs)) return;
+        const rows = data.adviseurs.filter((a) => a.id && a.naam);
+        setTerugbelAdviseurs(rows);
+      } catch {
+        /* bel-lijst optioneel */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!terugbelSuggestie) return;
+    setTerugbelAt(isoToDatetimeLocal(terugbelSuggestie.startAt));
+  }, [selected?.id, terugbelSuggestie?.startAt]);
+
+  useEffect(() => {
+    if (terugbelAdviseurId || terugbelAdviseurs.length === 0) return;
+    const simon =
+      terugbelAdviseurs.find(
+        (a) => isSimonBeller(a) && normalizeRol(a.rol) === "beller"
+      ) ||
+      terugbelAdviseurs.find((a) => isSimonBeller(a)) ||
+      terugbelAdviseurs.find((a) => normalizeRol(a.rol) === "beller") ||
+      terugbelAdviseurs.find((a) => a.id === session?.adviseurId) ||
+      terugbelAdviseurs[0];
+    if (simon?.id) setTerugbelAdviseurId(simon.id);
+  }, [terugbelAdviseurs, terugbelAdviseurId, session?.adviseurId]);
 
   async function loadLeadContext(
     leadId: string,
@@ -1130,7 +1179,8 @@ export function InboxPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead_id: matchedLead.id,
-          start_at: terugbelSuggestie?.startAt || null,
+          start_at: datetimeLocalToIso(terugbelAt) || terugbelSuggestie?.startAt || null,
+          adviseur_id: terugbelAdviseurId || null,
           notitie:
             selected.aiSummary?.trim() ||
             displayBodyText(selected).split("\n").filter(Boolean).slice(0, 4).join(" ").slice(0, 280),
@@ -1886,34 +1936,70 @@ export function InboxPanel({
                     />
                   ) : null}
 
-                  {(selected.aiEffects?.createTerugbel ||
-                    terugbelSuggestie) &&
-                  !mailSuggestsGeenContact(selected) ? (
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#34C759]/25 bg-[#F1FBF4] px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[13px] font-medium text-[#1D1D1F]">
-                          Terugbelverzoek voor Simon
-                        </p>
-                        <p className="mt-0.5 text-[12px] text-[#6E6E73]">
-                          {terugbelSuggestie
-                            ? `Klant lijkt bereikbaar ${terugbelSuggestie.hint} · ${terugbelSuggestie.label}`
-                            : "Klant wil teruggebeld worden"}
-                        </p>
+                  {matchedLead ? (
+                    <div className="rounded-xl border border-[#34C759]/25 bg-[#F1FBF4] px-3 py-2.5">
+                      <p className="text-[13px] font-medium text-[#1D1D1F]">
+                        Terugbelverzoek
+                      </p>
+                      <p className="mt-0.5 text-[12px] text-[#6E6E73]">
+                        {terugbelSuggestie?.hint &&
+                        terugbelSuggestie.hint !== "terugbellen"
+                          ? `Uit de mail: ${terugbelSuggestie.hint} · ${terugbelSuggestie.label}`
+                          : "Lead herkend — kies datum, tijd en medewerker"}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-end gap-2">
+                        <label className="min-w-[11.5rem] flex-1">
+                          <span className="mb-1 block text-[11px] font-medium text-[#6E6E73]">
+                            Datum en tijd
+                          </span>
+                          <input
+                            type="datetime-local"
+                            value={terugbelAt}
+                            onChange={(e) => setTerugbelAt(e.target.value)}
+                            className="h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-[12px] text-[#1D1D1F] outline-none focus:border-[#34C759]"
+                          />
+                        </label>
+                        <label className="min-w-[10rem] flex-1">
+                          <span className="mb-1 block text-[11px] font-medium text-[#6E6E73]">
+                            Medewerker
+                          </span>
+                          <select
+                            value={terugbelAdviseurId}
+                            onChange={(e) =>
+                              setTerugbelAdviseurId(e.target.value)
+                            }
+                            className="h-8 w-full rounded-lg border border-black/10 bg-white px-2 text-[12px] text-[#1D1D1F] outline-none focus:border-[#34C759]"
+                          >
+                            {terugbelAdviseurs.length === 0 ? (
+                              <option value="">Laden…</option>
+                            ) : null}
+                            {terugbelAdviseurs.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.naam}
+                                {normalizeRol(a.rol) === "beller"
+                                  ? " · beller"
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          disabled={
+                            actionBusy ||
+                            terugbelGezetVoor === selected.id ||
+                            !terugbelAt ||
+                            !terugbelAdviseurId
+                          }
+                          onClick={() => void createTerugbelFromMail()}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#34C759] px-3 text-[12px] font-semibold text-white hover:bg-[#2FB350] disabled:opacity-50"
+                        >
+                          <Phone className="size-3.5" />
+                          {terugbelGezetVoor === selected.id
+                            ? "Gezet"
+                            : INBOX_ACTION_LABEL.maak_terugbel}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        disabled={
-                          actionBusy ||
-                          terugbelGezetVoor === selected.id
-                        }
-                        onClick={() => void createTerugbelFromMail()}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#34C759] px-3 text-[12px] font-semibold text-white hover:bg-[#2FB350] disabled:opacity-50"
-                      >
-                        <Phone className="size-3.5" />
-                        {terugbelGezetVoor === selected.id
-                          ? "Gezet"
-                          : INBOX_ACTION_LABEL.maak_terugbel}
-                      </button>
                     </div>
                   ) : null}
 

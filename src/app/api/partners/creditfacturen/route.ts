@@ -560,7 +560,28 @@ export async function PATCH(req: NextRequest) {
         { status: 500 }
       );
     }
-    return NextResponse.json({ factuur: data });
+
+    let mail_sent = false;
+    let mail_error: string | null = null;
+    if (body.status === "goedgekeurd") {
+      try {
+        const { mailGoedgekeurdePartnerCreditfactuur } = await import(
+          "@/lib/creditfactuur-verstuur"
+        );
+        const mail = await mailGoedgekeurdePartnerCreditfactuur(sb, body.id);
+        mail_sent = mail.ok;
+        mail_error = mail.ok ? null : mail.error || "Mail mislukt";
+      } catch (mailErr) {
+        mail_error =
+          mailErr instanceof Error ? mailErr.message : "Mail mislukt";
+      }
+    }
+
+    return NextResponse.json({
+      factuur: data,
+      mail_sent,
+      mail_error,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Bijwerken mislukt") },

@@ -399,6 +399,24 @@ export async function PATCH(
             ? null
             : new Date().toISOString();
       }
+      const { maybePromoteToSchouwInplannen } = await import(
+        "@/lib/project-volgende-stap"
+      );
+      const { isSchouwdagDefinitief } = await import("@/lib/schouw-week");
+      const promoted = maybePromoteToSchouwInplannen({
+        currentStatus: (before as { status?: string | null }).status,
+        financieringStatus: patch.financiering_status as string | null,
+        exacteSchouwdag: isSchouwdagDefinitief(
+          before as {
+            schouw_at?: string | null;
+            schouw_jaar?: number | null;
+            schouw_week?: number | null;
+          }
+        ),
+      });
+      if (promoted && patch.status === undefined) {
+        patch.status = promoted;
+      }
     }
 
     if (Object.keys(patch).length > 0) {

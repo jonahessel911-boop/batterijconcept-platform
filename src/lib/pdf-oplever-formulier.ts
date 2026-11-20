@@ -7,7 +7,7 @@ import {
 import {
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
-  SERVICE_VV_INSTALLATIE,
+  VERVOLG_BACKOFFICE_LABEL,
   type OpleverFormulierData,
 } from "@/lib/oplever-formulier";
 
@@ -246,28 +246,32 @@ export async function buildOpleverFormulierPdf(
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.setTextColor(...CHARCOAL);
-    doc.text(SERVICE_VV_INSTALLATIE, margin, y);
+    doc.text(VERVOLG_BACKOFFICE_LABEL, margin, y);
     y += 5;
-    const wanneer = data.vervolgAt.trim()
-      ? formatDatumNl(data.vervolgAt.slice(0, 10)) +
-        (data.vervolgAt.includes("T")
-          ? ` · ${data.vervolgAt.slice(11, 16)}`
-          : "")
-      : "—";
-    const vvMeta = [
-      `Wanneer: ${wanneer}`,
-      `Monteur: ${dash(data.vervolgMonteurNaam)}`,
-    ];
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    for (const line of vvMeta) {
-      doc.text(line, margin, y);
-      y += 4.5;
-    }
+    const toelichting = doc.splitTextToSize(
+      "Backoffice belt de klant om een service-afspraak in te plannen.",
+      contentW
+    );
+    doc.text(toelichting, margin, y);
+    y += toelichting.length * 4.2 + 2;
     if (data.vervolgActie.trim()) {
       const actie = doc.splitTextToSize(data.vervolgActie.trim(), contentW);
       doc.text(actie, margin, y);
       y += actie.length * 4.2 + 3;
+    }
+    const mats = (data.vervolgMaterialen || []).filter((m) => m.label.trim());
+    if (mats.length > 0) {
+      doc.setFont("helvetica", "bold");
+      doc.text("In te kopen voor dit serviceverzoek", margin, y);
+      y += 4.5;
+      doc.setFont("helvetica", "normal");
+      for (const m of mats) {
+        doc.text(`• ${m.aantal}× ${m.label.trim()}`, margin, y);
+        y += 4.5;
+      }
+      y += 1;
     }
   } else {
     doc.setFont("helvetica", "normal");
