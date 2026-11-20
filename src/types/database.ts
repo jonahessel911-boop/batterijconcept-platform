@@ -663,6 +663,8 @@ export interface Offerte {
   actie_required?: boolean | null;
   backoffice_afgerond_at?: string | null;
   aanbetaling_te_innen_inc?: number | null;
+  /** Override commissie-% voor deze order. Null = adviseur. 0 = geen commissie. */
+  commissie_pct?: number | null;
   backoffice_notitie?: string | null;
   installateur_notitie?: string | null;
   backoffice_notitie_door?: string | null;
@@ -735,6 +737,7 @@ export interface Project {
     akkoord?: boolean;
     vervolgNodig?: boolean;
     vervolgActie?: string;
+    vervolgServiceVerzoekId?: string;
     vervolgMaterialen?: { id?: string; label: string; aantal: number }[];
     vervolgAt?: string;
     vervolgMonteurNaam?: string;

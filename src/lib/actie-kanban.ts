@@ -43,7 +43,7 @@ export const ACTIE_KANBAN_LANES: {
   { id: "factuur", label: "Factuur", accent: "#C45A12" },
   { id: "eindafrekening", label: "Eindafrekening / WF-declaratie", accent: "#C45A12" },
   { id: "after_sale", label: "After sale", accent: "#0D7A6F" },
-  { id: "service_vervolg", label: "Vervolg Backoffice", accent: "#C45A12" },
+  { id: "service_vervolg", label: "Service (oplevering)", accent: "#C45A12" },
   { id: "hold", label: "HOLD sales", accent: "#4A3A5C" },
   { id: "aangetekend", label: "Bedenktijd", accent: "#9A3B1A" },
   { id: "volgende", label: "Installatie / volgende stap", accent: "#2E7D32" },
@@ -164,7 +164,7 @@ export function actieKanbanCardsFromActies(
         pushCard(out, "eindafrekening", actie, actie.titel);
         break;
       case "service_vervolg":
-        pushCard(out, "service_vervolg", actie, "Vervolg Backoffice");
+        pushCard(out, "service_vervolg", actie, actie.titel || "Service (oplevering)");
         break;
       case "hold_sales_verlopen":
       case "hold_sales_terug":

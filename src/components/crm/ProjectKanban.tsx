@@ -43,7 +43,10 @@ import {
   isWarmtefondsGoedgekeurd,
   isWarmtefondsProject,
 } from "@/lib/backoffice-acties";
-import { resolveProjectVolgendeStap } from "@/lib/project-volgende-stap";
+import {
+  resolveOrderboardStatus,
+  resolveProjectVolgendeStap,
+} from "@/lib/project-volgende-stap";
 import { contextVoorOpenTaak } from "@/lib/project-taak-context";
 import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
 import {
@@ -617,12 +620,12 @@ export function ProjectKanban({
     const map = new Map<ProjectStatus, Project[]>();
     for (const s of PROJECT_STATUSES) map.set(s, []);
     for (const p of filteredProjecten) {
-      const key = resolveDisplayProjectStatus(p);
+      const key = resolveOrderboardStatus(p, facturen);
       const list = map.get(key) || map.get("schouwweek_inplannen")!;
       list.push(p);
     }
     return map;
-  }, [filteredProjecten]);
+  }, [filteredProjecten, facturen]);
 
   const wfProjecten = useMemo(
     () =>

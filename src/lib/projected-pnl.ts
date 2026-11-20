@@ -24,7 +24,10 @@ import {
   EDERGY_PER_AANVRAAG_EXCL,
   leesEdergyTarief,
 } from "@/lib/edergy-tarief";
-import { commissiePctToFraction } from "@/lib/netto-boord";
+import {
+  commissiePctToFraction,
+  orderCommissiePctVanOfferte,
+} from "@/lib/netto-boord";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
   computeOpsCommissieForWindow,
@@ -114,6 +117,8 @@ type OfferteRow = {
   status: string;
   ondertekend_op: string | null;
   subtotaal_ex_btw: number | null;
+  commissie_pct?: number | null;
+  notities?: string | null;
   leads?:
     | { adviseur_id?: string | null }
     | { adviseur_id?: string | null }[]
@@ -431,7 +436,7 @@ export async function buildProjectedPnl(
         sb
           .from("offertes")
           .select(
-            "id, lead_id, status, ondertekend_op, subtotaal_ex_btw, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
+            "id, lead_id, status, ondertekend_op, subtotaal_ex_btw, notities, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
           )
           .eq("status", "ondertekend")
           .not("ondertekend_op", "is", null)
@@ -612,9 +617,13 @@ export async function buildProjectedPnl(
     );
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
     const aid = leadJoin?.adviseur_id || null;
-    const frac = aid
-      ? commissieMap.get(aid) ?? commissiePctToFraction(null)
-      : commissiePctToFraction(null);
+    const orderPct = orderCommissiePctVanOfferte(o);
+    const frac =
+      orderPct != null
+        ? commissiePctToFraction(orderPct)
+        : aid
+          ? commissieMap.get(aid) ?? commissiePctToFraction(null)
+          : commissiePctToFraction(null);
     const commissie = omzet * frac;
 
     wa.orders += 1;

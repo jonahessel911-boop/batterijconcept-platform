@@ -5,6 +5,8 @@ import {
   commissieTrancheA,
   commissieTrancheB,
   isAanbetalingFactuur,
+  orderCommissiePctVanOfferte,
+  resolveOrderCommissiePct,
 } from "@/lib/netto-boord";
 import {
   creditWeekByYearWeek,
@@ -35,6 +37,42 @@ function offerteRefTag(offerteNummer: string) {
 
 function offerteTrancheBTag(offerteNummer: string) {
   return `ref_offerte_tranche_b:${offerteNummer}`;
+}
+
+async function fetchOfferteVoorCommissie(
+  sb: SupabaseClient,
+  offerteId: string
+): Promise<{
+  id: string;
+  offerte_nummer?: string | null;
+  subtotaal_ex_btw?: number | null;
+  totaal_inc_btw?: number | null;
+  commissie_pct?: number | null;
+  notities?: string | null;
+} | null> {
+  const full = await sb
+    .from("offertes")
+    .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, commissie_pct, notities")
+    .eq("id", offerteId)
+    .maybeSingle();
+  if (
+    !full.error &&
+    full.data
+  ) {
+    return full.data;
+  }
+  if (
+    full.error?.code === "42703" ||
+    full.error?.message?.includes("commissie_pct")
+  ) {
+    const core = await sb
+      .from("offertes")
+      .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, notities")
+      .eq("id", offerteId)
+      .maybeSingle();
+    return core.data;
+  }
+  return full.data;
 }
 
 async function omzetExFromOfferte(
@@ -564,13 +602,9 @@ export async function ensureNettoAanbetalingCreditfactuur(
   }
   // Concept mag zonder ZZP; versturen (Bevestig) vereist wel KvK/IBAN.
 
-  const { data: off } = fac.offerte_id
-    ? await sb
-        .from("offertes")
-        .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw")
-        .eq("id", fac.offerte_id)
-        .maybeSingle()
-    : { data: null };
+  const off = fac.offerte_id
+    ? await fetchOfferteVoorCommissie(sb, fac.offerte_id)
+    : null;
 
   const { data: project } = await sb
     .from("projecten")
@@ -592,7 +626,10 @@ export async function ensureNettoAanbetalingCreditfactuur(
   }
 
   const omzetEx = await omzetExFromOfferte(sb, fac.offerte_id, off || undefined);
-  const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
+  const pct = resolveOrderCommissiePct(
+    off ? orderCommissiePctVanOfferte(off) : null,
+    (adv as { commissie_pct?: number | null }).commissie_pct
+  );
   let fee =
     omzetEx > 0
       ? commissieTrancheA(omzetEx, pct)
@@ -747,13 +784,27 @@ export async function ensureAdviseurCommissieTrancheB(
   bedrag?: number;
 }> {
   const autoVerstuur = opts?.autoVerstuur === true;
-  const { data: project, error: pErr } = await sb
+  let { data: project, error: pErr } = await sb
     .from("projecten")
     .select(
-      "id, project_nummer, status, lead_id, offerte_id, installatie_voltooid_at, leads(id, naam, adviseur_id), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw)"
+      "id, project_nummer, status, lead_id, offerte_id, installatie_voltooid_at, leads(id, naam, adviseur_id), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, commissie_pct, notities)"
     )
     .eq("id", projectId)
     .maybeSingle();
+  if (
+    pErr?.code === "42703" ||
+    pErr?.message?.includes("commissie_pct")
+  ) {
+    const retry = await sb
+      .from("projecten")
+      .select(
+        "id, project_nummer, status, lead_id, offerte_id, installatie_voltooid_at, leads(id, naam, adviseur_id), offertes(id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, notities)"
+      )
+      .eq("id", projectId)
+      .maybeSingle();
+    project = retry.data;
+    pErr = retry.error;
+  }
 
   if (pErr || !project) {
     return { ok: false, error: pErr?.message || "Project niet gevonden" };
@@ -784,12 +835,16 @@ export async function ensureAdviseurCommissieTrancheB(
         offerte_nummer?: string | null;
         subtotaal_ex_btw?: number | null;
         totaal_inc_btw?: number | null;
+        commissie_pct?: number | null;
+        notities?: string | null;
       }
     | {
         id: string;
         offerte_nummer?: string | null;
         subtotaal_ex_btw?: number | null;
         totaal_inc_btw?: number | null;
+        commissie_pct?: number | null;
+        notities?: string | null;
       }[]
     | null
     | undefined;
@@ -812,7 +867,10 @@ export async function ensureAdviseurCommissieTrancheB(
   }
   // Concept mag zonder ZZP; versturen (Bevestig) vereist wel KvK/IBAN.
 
-  const pct = (adv as { commissie_pct?: number | null }).commissie_pct;
+  const pct = resolveOrderCommissiePct(
+    orderCommissiePctVanOfferte(off),
+    (adv as { commissie_pct?: number | null }).commissie_pct
+  );
   const omzetEx = await omzetExFromOfferte(sb, off.id || project.offerte_id, off);
   let fee = commissieTrancheB(omzetEx, pct);
   if (!(fee > 0)) return { ok: true, skipped: "geen_tranche_b", bedrag: 0 };

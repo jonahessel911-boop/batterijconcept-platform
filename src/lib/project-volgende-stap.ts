@@ -8,6 +8,7 @@ import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
+import { resolveDisplayProjectStatus } from "@/lib/labels";
 import {
   bestelDeadlineVoorInstallatie,
   INKOOP_DAGEN_VOOR_INSTALLATIE,
@@ -49,7 +50,7 @@ import type { Factuur, Project } from "@/types/database";
 /** Warmtefonds: installatie-actie pas vanaf dit % betaald (gemarkeerd). */
 export const WF_INSTALLATIE_MIN_BETAALD_PCT = 95;
 
-function facturenVoorProject(project: Project, facturen: Factuur[]): Factuur[] {
+export function facturenVoorProject(project: Project, facturen: Factuur[]): Factuur[] {
   return facturen.filter(
     (f) =>
       f.project_id === project.id ||
@@ -167,6 +168,42 @@ export function kanEmInstallatieInplannen(
     orderBetalingPctTegenOfferte(project, facturen) >=
     WF_INSTALLATIE_MIN_BETAALD_PCT
   );
+}
+
+const NA_KLAAR_VOOR_INSTALLATIE: ProjectStatusKey[] = [
+  "restfactuur_betaald",
+  "materiaal_besteld",
+  "installatie_ingepland",
+  "installatie_voltooid",
+  "after_sale",
+  "review_gevraagd",
+  "afgerond",
+  "service",
+  "annulering",
+  "hold_sales_actie",
+];
+
+/**
+ * Orderbord-kolom: zelfde poort als Acties “Installatiedatum inplannen”
+ * (schouw geweest + ≥95%), niet alleen opgeslagen `restfactuur_betaald`.
+ */
+export function resolveOrderboardStatus(
+  project: Project,
+  facturen: Factuur[] = [],
+  now: Date = new Date()
+): ReturnType<typeof resolveDisplayProjectStatus> {
+  const displayed = resolveDisplayProjectStatus(project);
+  const op = toOperationalStatus(displayed);
+  if (NA_KLAAR_VOOR_INSTALLATIE.includes(op)) return displayed;
+  if (project.installatie_at || project.installatie_voltooid_at) {
+    return displayed;
+  }
+  const related = facturenVoorProject(project, facturen);
+  const ready =
+    betaalwijzeVanProject(project) === "warmtefonds"
+      ? kanWfInstallatieInplannen(project, related, now)
+      : kanEmInstallatieInplannen(project, related);
+  return ready ? "restfactuur_betaald" : displayed;
 }
 
 function betaalwijzeVanProject(project: Project): Betaalwijze {
@@ -429,7 +466,7 @@ function wfWachtTotInstallatie(
   // Schouwdag nog niet gezet: na WF-goedkeuring is dat een actie, geen wacht.
   if (!schouwOk && !schouwdagInplannenNietMeerNodig(project)) {
     if (isWarmtefondsGoedgekeurdVoorSchouw(project)) {
-      const due = dueEndOfDayInDays(2, now);
+      const due = dueEndOfDayInDays(0, now);
       const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
       const declaratieOk =
         !!n &&
@@ -729,7 +766,7 @@ function volgendeStapNaOpstarten(
   }
 
   if (wf && !schouwdagInplannenNietMeerNodig(project)) {
-    const due = dueEndOfDayInDays(2, now);
+    const due = dueEndOfDayInDays(0, now);
     const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
     const declaratieOk =
       !!n &&

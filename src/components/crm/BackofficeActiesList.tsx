@@ -32,6 +32,7 @@ import {
 } from "@/lib/backoffice-acties";
 import { ServiceVervolgActiePanel } from "./ServiceVervolgActiePanel";
 import { BackofficeActiesKanban } from "./BackofficeActiesKanban";
+import { EnergieFrankCard } from "./EnergieFrankCard";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
 import {
   applyActieSnoozes,
@@ -297,7 +298,7 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       className: "bg-[#F3F0FF] text-[#5B21B6]",
     },
     service_vervolg: {
-      label: "Service",
+      label: "Oplevering",
       className: "bg-[#FFF0E6] text-[#C45A12]",
     },
     schouw_week: {
@@ -1147,11 +1148,13 @@ function SaleNotitiesAside({
   actie,
   projecten,
   forceShow = false,
+  onProjectUpdated,
 }: {
   actie: BackofficeActie;
   projecten: Project[];
   /** Toon paneel ook zonder notitie (lege staat) */
   forceShow?: boolean;
+  onProjectUpdated?: (project: Project) => void;
 }) {
   const project =
     actie.project ||
@@ -1183,68 +1186,14 @@ function SaleNotitiesAside({
   )
     return null;
 
-  const overstapLabel =
-    project.energie_overstap_leverancier === "frank"
-      ? "Frank Energie"
-      : project.energie_overstap_leverancier === "next_energy"
-        ? "Next Energy"
-        : null;
-
   return (
     <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-0 lg:w-[16.5rem] xl:w-[18rem]">
       {hasEnergie || forceShow ? (
-        <div className="overflow-hidden rounded-2xl border border-[#0a4727]/20 bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
-          <div className="border-b border-line bg-white px-3.5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#0a4727]">
-              Energie-overstap
-            </p>
-            <p className="mt-0.5 font-display text-sm font-semibold text-ink">
-              {overstapLabel || "Energieverbruik"}
-            </p>
-          </div>
-          <div className="space-y-2 px-3.5 py-3 text-[12px]">
-            {overstapLabel ? (
-              <p>
-                <span className="text-muted">Leverancier · </span>
-                <span className="font-semibold text-ink">{overstapLabel}</span>
-              </p>
-            ) : null}
-            <p>
-              <span className="text-muted">Elektra · </span>
-              <span className="font-semibold tabular-nums text-ink">
-                {project.elektra_verbruik_kwh != null
-                  ? `${Number(project.elektra_verbruik_kwh).toLocaleString("nl-NL")} kWh`
-                  : "—"}
-              </span>
-            </p>
-            <p>
-              <span className="text-muted">Gas · </span>
-              <span className="font-semibold tabular-nums text-ink">
-                {project.gas_verbruik_m3 != null
-                  ? `${Number(project.gas_verbruik_m3).toLocaleString("nl-NL")} m³`
-                  : "geen / —"}
-              </span>
-            </p>
-            <p>
-              <span className="text-muted">Teruglever · </span>
-              <span className="font-semibold tabular-nums text-ink">
-                {project.teruglevering_kwh != null
-                  ? `${Number(project.teruglevering_kwh).toLocaleString("nl-NL")} kWh`
-                  : "—"}
-              </span>
-            </p>
-            <p>
-              <span className="text-muted">Contract · </span>
-              <span className="font-semibold text-ink">
-                {project.energie_contract_type || "—"}
-                {project.energie_contract_type === "vast" &&
-                project.energie_contract_einddatum
-                  ? ` · eind ${project.energie_contract_einddatum}`
-                  : ""}
-              </span>
-            </p>
-          </div>
-        </div>
+        <EnergieFrankCard
+          compact
+          project={project}
+          onUpdated={onProjectUpdated}
+        />
       ) : null}
       <div className="overflow-hidden rounded-2xl border border-line bg-[#F7F9F7] shadow-[0_1px_0_rgba(10,71,39,0.04)]">
         <div className="border-b border-line bg-white px-3.5 py-3">
@@ -1637,7 +1586,7 @@ function buildTaskRows(
         section: "volgende",
         actie,
         kind: "service_vervolg",
-        titel: "Vervolg Backoffice",
+        titel: actie.titel || "Contact opnemen: service inplannen (oplevering)",
         klant: actie.leadNaam,
         meta: actie.projectNummer || undefined,
         dueAt: actie.deadlineAt,
@@ -4211,6 +4160,7 @@ export function BackofficeActiesList({
           <ServiceVervolgActiePanel
             project={actie.project}
             telefoon={actie.telefoon}
+            serviceVerzoekId={actie.serviceVerzoekId}
             onUpdated={(p) => onProjectUpdated?.(p)}
           />
         ) : null}
@@ -6758,6 +6708,7 @@ export function BackofficeActiesList({
                           actie={actie}
                           projecten={projecten}
                           forceShow
+                          onProjectUpdated={onProjectUpdated}
                         />
                       </div>
                     ) : null}

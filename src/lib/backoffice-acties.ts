@@ -163,6 +163,8 @@ export type BackofficeActie = {
   planSchouwweek?: boolean;
   /** Volgende-stap nog niet urgent (belweek ligt in de toekomst) */
   later?: boolean;
+  /** Open serviceverzoek (oplever-vervolg). */
+  serviceVerzoekId?: string | null;
 };
 
 type ProjectOfferteJoin = {
@@ -1734,7 +1736,8 @@ export function openSchouwInplannenActies(
     if (!wfGoedgekeurd) continue;
     if (!kanWfSchouwdagInplannen(project, related)) continue;
 
-    const deadlineAt = softDueOverWerkdagen(now, 2);
+    // Zelfde dag in Acties (Vandaag), niet pas over 2 werkdagen.
+    const deadlineAt = softDueOverWerkdagen(now, 0);
     const detail = "WF goedgekeurd (aanbod ondertekenen) — plan de schouw";
     const reden =
       "Warmtefonds is goedgekeurd (aanbod ondertekenen). Plan de exacte schouwdag. Schouwweek was alleen een indicatie.";
@@ -1971,6 +1974,17 @@ export function openAfterSaleActies(
   return items;
 }
 
+/** Deadline: 1 kalenderdag na oplevering, 17:00 Amsterdam. */
+function dueOneDayAfter(from: Date | string): Date {
+  const z = toZonedTime(
+    typeof from === "string" ? new Date(from) : from,
+    AMSTERDAM_TZ
+  );
+  const d = addDays(z, 1);
+  d.setHours(17, 0, 0, 0);
+  return fromZonedTime(d, AMSTERDAM_TZ);
+}
+
 export function isServiceVervolgActieOpen(project: Project): boolean {
   if (isProjectBuitenActies(project)) return false;
   if (project.service_at) return false;
@@ -1992,13 +2006,13 @@ export function openServiceVervolgActies(
       project.installatie_voltooid_at ||
       project.installatie_at ||
       now.toISOString();
-    const deadlineAt = nextWeekdayAmsterdamAfter(anchor);
+    const deadlineAt = dueOneDayAfter(anchor);
     const wat = snap?.vervolgActie?.trim() || "Restpunt na oplevering.";
     items.push({
       id: `service-vervolg-${project.id}`,
       soort: "service_vervolg",
-      titel: "Vervolg Backoffice — service inplannen",
-      detail: `Bel de klant om een service-afspraak in te plannen. ${wat}`,
+      titel: "Contact opnemen: service inplannen (oplevering)",
+      detail: `Serviceverzoek Vervolg Opleverformulier — bel de klant om een service-moment in te plannen. ${wat}`,
       reden: wat,
       deadlineAt: deadlineAt.toISOString(),
       overdue: deadlineAt.getTime() < now.getTime(),
@@ -2013,6 +2027,7 @@ export function openServiceVervolgActies(
       projectNummer: project.project_nummer,
       href: `/projecten/${project.id}`,
       project,
+      serviceVerzoekId: snap?.vervolgServiceVerzoekId || null,
     });
   }
   return items;
@@ -2037,11 +2052,11 @@ export function openBackofficeActies(
     (a) => {
       // Geen “later” (nog niet belweek) in de actieve lijst
       if (a.later) return false;
-      // Geen dubbele schouwdag-actie naast schouw_inplannen
+      // Geen dubbele schouw-actie naast schouw_inplannen
       if (
         a.projectId &&
         schouwProjectIds.has(a.projectId) &&
-        /schouwdag/i.test(a.titel)
+        /schouw/i.test(a.titel)
       ) {
         return false;
       }

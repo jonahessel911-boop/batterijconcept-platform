@@ -144,6 +144,27 @@ export async function PATCH(
       body.installateur_notitie_door?.trim() || null;
   }
 
+  if (body.actie_required !== false) {
+    const energieKeys = [
+      "elektra_verbruik_kwh",
+      "gas_verbruik_m3",
+      "teruglevering_kwh",
+      "energie_contract_type",
+      "energie_contract_einddatum",
+      "energie_overstap_leverancier",
+    ] as const;
+    if (energieKeys.some((k) => k in body && body[k] !== undefined)) {
+      const { parseEnergieVerbruikBody } = await import(
+        "@/lib/energie-contract"
+      );
+      const energie = parseEnergieVerbruikBody(body);
+      if (!energie.ok) {
+        return NextResponse.json({ error: energie.error }, { status: 400 });
+      }
+      Object.assign(patch, energie.data);
+    }
+  }
+
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "Niets om bij te werken" }, { status: 400 });
   }

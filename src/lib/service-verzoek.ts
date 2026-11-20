@@ -1,4 +1,81 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { logLeadEvent } from "@/lib/lead-events";
+import { VERVOLG_OPLEVERFORMULIER_LABEL } from "@/lib/oplever-formulier";
+
+/** Onderwerp van het verzoek dat het opleverformulier aanmaakt. */
+export const VERVOLG_OPLEVERFORMULIER_ONDERWERP =
+  VERVOLG_OPLEVERFORMULIER_LABEL;
+
+/**
+ * Open serviceverzoek na restpunt op het opleverformulier.
+ * Geen klantmail. Zet de orderstatus niet op `service` (after sale blijft lopen).
+ */
+export async function ensureOpleverVervolgServiceVerzoek(
+  sb: SupabaseClient,
+  opts: {
+    projectId: string;
+    leadId: string | null | undefined;
+    omschrijving: string;
+    bestaandeId?: string | null;
+  }
+): Promise<string | null> {
+  const bestaande = opts.bestaandeId?.trim() || "";
+  if (bestaande) {
+    const { data } = await sb
+      .from("service_verzoeken")
+      .select("id")
+      .eq("id", bestaande)
+      .eq("project_id", opts.projectId)
+      .maybeSingle();
+    if (data?.id) return data.id;
+  }
+
+  const { data: open } = await sb
+    .from("service_verzoeken")
+    .select("id")
+    .eq("project_id", opts.projectId)
+    .eq("onderwerp", VERVOLG_OPLEVERFORMULIER_ONDERWERP)
+    .eq("status", "open")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (open?.id) return open.id;
+
+  const leadId = opts.leadId?.trim() || "";
+  if (!leadId) return null;
+
+  const insertRow = {
+    project_id: opts.projectId,
+    lead_id: leadId,
+    onderwerp: VERVOLG_OPLEVERFORMULIER_ONDERWERP,
+    omschrijving: opts.omschrijving.trim() || null,
+    status: "open" as const,
+  };
+
+  const { data, error } = await sb
+    .from("service_verzoeken")
+    .insert(insertRow)
+    .select("id")
+    .single();
+  if (error || !data?.id) {
+    console.error("oplever serviceverzoek:", error?.message);
+    return null;
+  }
+
+  await logLeadEvent({
+    leadId,
+    soort: "service",
+    titel: `Serviceverzoek: ${VERVOLG_OPLEVERFORMULIER_ONDERWERP}`,
+    detail: opts.omschrijving.trim() || null,
+    meta: {
+      service_verzoek_id: data.id,
+      project_id: opts.projectId,
+      bron: "opleverformulier",
+    },
+  });
+
+  return data.id;
+}
 
 /** Zet project op Service zolang er open verzoeken zijn, anders Installatie voltooid. */
 export async function syncProjectServiceStatus(

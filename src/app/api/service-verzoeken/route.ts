@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
+  VERVOLG_OPLEVERFORMULIER_ONDERWERP,
   findProjectByKlantEmail,
   syncProjectServiceStatus,
 } from "@/lib/service-verzoek";
@@ -144,7 +145,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await syncProjectServiceStatus(sb, projectId);
+    if (onderwerp !== VERVOLG_OPLEVERFORMULIER_ONDERWERP) {
+      await syncProjectServiceStatus(sb, projectId);
+    }
 
     if (leadId) {
       await logLeadEvent({

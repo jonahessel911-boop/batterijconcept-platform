@@ -5,6 +5,7 @@ import { fromZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import type { Project } from "@/types/database";
 import {
+  VERVOLG_OPLEVERFORMULIER_LABEL,
   formatServiceVvNotitie,
   parseOpleverFormulierSnapshot,
 } from "@/lib/oplever-formulier";
@@ -32,13 +33,17 @@ function datetimeLocalToIso(value: string): string {
 export function ServiceVervolgActiePanel({
   project,
   telefoon,
+  serviceVerzoekId,
   onUpdated,
 }: {
   project: Project;
   telefoon?: string | null;
+  serviceVerzoekId?: string | null;
   onUpdated?: (p: Project) => void;
 }) {
   const snap = parseOpleverFormulierSnapshot(project.oplever_formulier);
+  const verzoekId =
+    serviceVerzoekId || snap?.vervolgServiceVerzoekId || null;
   const [rows, setRows] = useState<ServiceInkoopRegel[]>(() =>
     parseServiceInkoopRegels(project.materiaal_checks)
   );
@@ -113,6 +118,24 @@ export function ServiceVervolgActiePanel({
     setError(null);
     setMsg(null);
     try {
+      let verzoek = verzoekId;
+      if (!verzoek) {
+        const created = await fetch("/api/service-verzoeken", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_id: project.id,
+            onderwerp: VERVOLG_OPLEVERFORMULIER_LABEL,
+            omschrijving: wat,
+          }),
+        });
+        const createdData = await created.json().catch(() => ({}));
+        if (created.ok) {
+          verzoek =
+            (createdData as { verzoek?: { id?: string } }).verzoek?.id ||
+            null;
+        }
+      }
       const res = await fetch(`/api/projecten/${project.id}/service`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -120,6 +143,7 @@ export function ServiceVervolgActiePanel({
           service_at: iso,
           installatie_partner_id: project.installatie_partner_id,
           service_notities: formatServiceVvNotitie(wat),
+          service_verzoek_id: verzoek,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -143,10 +167,11 @@ export function ServiceVervolgActiePanel({
     <div className="space-y-3 rounded-sm border border-line bg-white px-3.5 py-3">
       <div>
         <p className="text-sm font-semibold text-ink">
-          Vervolg Backoffice
+          Serviceverzoek · Vervolg Opleverformulier
         </p>
         <p className="mt-0.5 text-[12px] leading-relaxed text-muted">
-          Bel de klant om een nieuwe service-afspraak in te plannen.
+          Restpunt na oplevering. Bel de klant om een service-moment in te
+          plannen (geen mail).
         </p>
         <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{wat}</p>
         {tel ? (

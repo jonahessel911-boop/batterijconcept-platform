@@ -84,6 +84,12 @@ const OPTIONAL_PATCH_COLUMNS = new Set([
   "financiering_status_at",
   "backoffice_notitie_door",
   "hold_sales_deadline_at",
+  "elektra_verbruik_kwh",
+  "gas_verbruik_m3",
+  "teruglevering_kwh",
+  "energie_contract_type",
+  "energie_contract_einddatum",
+  "energie_overstap_leverancier",
 ]);
 
 function migrationHintForProjectColumn(column: string | null): string | null {
@@ -106,6 +112,16 @@ function migrationHintForProjectColumn(column: string | null): string | null {
   }
   if (column === "aangetekende_brief_verstuurd_at") {
     return "Voer supabase/migrate-aangetekende-brief.sql uit in Supabase.";
+  }
+  if (
+    column === "elektra_verbruik_kwh" ||
+    column === "gas_verbruik_m3" ||
+    column === "teruglevering_kwh" ||
+    column === "energie_contract_type" ||
+    column === "energie_contract_einddatum" ||
+    column === "energie_overstap_leverancier"
+  ) {
+    return "Voer supabase/migrate-energie-verbruik-contract.sql uit in Supabase.";
   }
   if (column.startsWith("monteur_beoordeling")) {
     return "Voer supabase/migrate-monteur-beoordeling.sql uit in Supabase.";
@@ -348,6 +364,12 @@ export async function PATCH(
     review_gevraagd_at?: string | null;
     aangetekende_brief_verstuurd_at?: string | null;
     annulering_keuze_gecontroleerd_at?: string | null;
+    elektra_verbruik_kwh?: number | string | null;
+    gas_verbruik_m3?: number | string | null;
+    teruglevering_kwh?: number | string | null;
+    energie_contract_type?: string | null;
+    energie_contract_einddatum?: string | null;
+    energie_overstap_leverancier?: string | null;
   };
   try {
     body = await req.json();
@@ -1226,6 +1248,25 @@ export async function PATCH(
       beforeStatus === "hold_sales_actie"
     ) {
       patch.hold_sales_deadline_at = null;
+    }
+
+    const energieKeys = [
+      "elektra_verbruik_kwh",
+      "gas_verbruik_m3",
+      "teruglevering_kwh",
+      "energie_contract_type",
+      "energie_contract_einddatum",
+      "energie_overstap_leverancier",
+    ] as const;
+    if (energieKeys.some((k) => k in body && body[k] !== undefined)) {
+      const { parseEnergieVerbruikBody } = await import(
+        "@/lib/energie-contract"
+      );
+      const energie = parseEnergieVerbruikBody(body);
+      if (!energie.ok) {
+        return NextResponse.json({ error: energie.error }, { status: 400 });
+      }
+      Object.assign(patch, energie.data);
     }
 
     if (Object.keys(patch).length === 0) {

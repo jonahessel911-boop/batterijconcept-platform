@@ -7,7 +7,7 @@ import {
 import {
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
-  VERVOLG_BACKOFFICE_LABEL,
+  VERVOLG_OPLEVERFORMULIER_LABEL,
   type OpleverFormulierData,
 } from "@/lib/oplever-formulier";
 
@@ -246,12 +246,12 @@ export async function buildOpleverFormulierPdf(
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.setTextColor(...CHARCOAL);
-    doc.text(VERVOLG_BACKOFFICE_LABEL, margin, y);
+    doc.text(VERVOLG_OPLEVERFORMULIER_LABEL, margin, y);
     y += 5;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     const toelichting = doc.splitTextToSize(
-      "Backoffice belt de klant om een service-afspraak in te plannen.",
+      "Serviceverzoek: backoffice neemt contact op om een service-moment in te plannen.",
       contentW
     );
     doc.text(toelichting, margin, y);

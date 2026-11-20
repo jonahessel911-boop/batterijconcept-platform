@@ -19,7 +19,10 @@ import {
   hardwareKostenVoorRegelsMetProducten,
   pnlInstallatieVoorOrder,
 } from "@/lib/project-kosten";
-import { commissiePctToFraction } from "@/lib/netto-boord";
+import {
+  commissiePctToFraction,
+  orderCommissiePctVanOfferte,
+} from "@/lib/netto-boord";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
   computeOpsCommissieForWindow,
@@ -76,6 +79,8 @@ type OfferteRow = {
   id: string;
   lead_id: string | null;
   subtotaal_ex_btw: number | null;
+  commissie_pct?: number | null;
+  notities?: string | null;
   leads?:
     | { adviseur_id?: string | null }
     | { adviseur_id?: string | null }[]
@@ -408,7 +413,7 @@ export async function buildCurrentPnl(
         sb
           .from("offertes")
           .select(
-            "id, lead_id, subtotaal_ex_btw, ondertekend_op, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
+            "id, lead_id, subtotaal_ex_btw, ondertekend_op, notities, leads(adviseur_id), offerte_regels(omschrijving, aantal, product_id)"
           )
           .in("id", chunk)
           .order("id", { ascending: true })
@@ -579,10 +584,15 @@ export async function buildCurrentPnl(
       ? offerte?.leads[0]
       : offerte?.leads;
     const aid = (leadJoin?.adviseur_id || "").trim() || null;
-    const frac = aid
-      ? commissieMap.get(aid) ?? commissiePctToFraction(null)
-      : commissiePctToFraction(null);
-    // Commissie over betaalde omzet × verkoper-%
+    const orderPct = offerte
+      ? orderCommissiePctVanOfferte(offerte)
+      : null;
+    const frac =
+      orderPct != null
+        ? commissiePctToFraction(orderPct)
+        : aid
+          ? commissieMap.get(aid) ?? commissiePctToFraction(null)
+          : commissiePctToFraction(null);
     const commissie = paid * frac;
 
     if (!isCredit) {

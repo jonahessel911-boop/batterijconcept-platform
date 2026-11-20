@@ -3489,7 +3489,12 @@ export function ProjectPage() {
                 </div>
               </div>
 
-              <EnergieFrankCard project={project} />
+              <EnergieFrankCard
+                project={project}
+                onUpdated={(p) => {
+                  setProject((prev) => (prev ? { ...prev, ...p } : p));
+                }}
+              />
 
               <ProjectKickoffChecklist
                 project={project}

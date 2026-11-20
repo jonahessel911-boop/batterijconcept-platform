@@ -48,7 +48,7 @@ export const OPLEVER_AKKOORD_TEKST =
 
 /** Planbord-soort + kop op het opleverformulier bij restpunten na installatie. */
 export const SERVICE_VV_INSTALLATIE = "Service - VV Installatie";
-export const VERVOLG_BACKOFFICE_LABEL = "Vervolg Backoffice";
+export const VERVOLG_OPLEVERFORMULIER_LABEL = "Vervolg Opleverformulier";
 
 export type OpleverVervolgMateriaal = {
   id: string;
@@ -96,7 +96,7 @@ export type OpleverFormulierData = {
   /** data:image/png;base64,… */
   handtekeningDataUrl: string;
   opmerkingen: string;
-  /** Restpunt → backoffice belt om een service-afspraak in te plannen. */
+  /** Restpunt → serviceverzoek Vervolg Opleverformulier + BO-actie (bellen). */
   vervolgNodig: boolean;
   vervolgActie: string;
   /** Materiaal dat purchasing moet inkopen voor dit serviceverzoek. */
@@ -105,6 +105,7 @@ export type OpleverFormulierData = {
   vervolgAt: string;
   vervolgMonteurId: string;
   vervolgMonteurNaam: string;
+  vervolgServiceVerzoekId?: string;
 };
 
 /** Opgeslagen opleverdata zonder handtekening (te groot / niet nodig in CRM). */
@@ -120,6 +121,7 @@ export type OpleverFormulierSnapshot = {
   vervolgMaterialen: OpleverVervolgMateriaal[];
   vervolgAt: string;
   vervolgMonteurNaam: string;
+  vervolgServiceVerzoekId?: string;
 };
 
 export function snapshotOpleverFormulier(
@@ -137,6 +139,9 @@ export function snapshotOpleverFormulier(
     vervolgMaterialen: normalizeOpleverVervolgMaterialen(data.vervolgMaterialen),
     vervolgAt: data.vervolgAt.trim(),
     vervolgMonteurNaam: data.vervolgMonteurNaam.trim(),
+    ...(data.vervolgServiceVerzoekId
+      ? { vervolgServiceVerzoekId: data.vervolgServiceVerzoekId }
+      : {}),
   };
 }
 
@@ -162,6 +167,7 @@ export function parseOpleverFormulierSnapshot(
     vervolgMaterialen: normalizeOpleverVervolgMaterialen(o.vervolgMaterialen),
     vervolgAt: String(o.vervolgAt || "").trim(),
     vervolgMonteurNaam: String(o.vervolgMonteurNaam || "").trim(),
+    vervolgServiceVerzoekId: String(o.vervolgServiceVerzoekId || "").trim() || undefined,
   };
 }
 

@@ -23,11 +23,68 @@ export const NETTO_AANBETALING_COMMISSIE = 250;
 export function commissiePctToFraction(
   pct: number | null | undefined
 ): number {
+  if (pct == null) return NETTO_COMMISSIE_PCT;
   const n = Number(pct);
-  if (!Number.isFinite(n) || n <= 0) return NETTO_COMMISSIE_PCT;
+  if (!Number.isFinite(n) || n < 0) return NETTO_COMMISSIE_PCT;
+  // Expliciet 0% = geen commissie (niet terugvallen op 10%).
+  if (n === 0) return 0;
   // Al als fractie opgeslagen (0.12) óf als procent (12)
   if (n > 0 && n <= 1) return n;
   return Math.min(n, 100) / 100;
+}
+
+/**
+ * Order-override wint (incl. 0). `null` op de order = adviseur-%.
+ */
+export function resolveOrderCommissiePct(
+  orderPct: number | null | undefined,
+  adviseurPct: number | null | undefined
+): number | null {
+  if (orderPct != null && Number.isFinite(Number(orderPct))) {
+    return Number(orderPct);
+  }
+  if (adviseurPct != null && Number.isFinite(Number(adviseurPct))) {
+    return Number(adviseurPct);
+  }
+  return null;
+}
+
+/** Fallback tot `offertes.commissie_pct` bestaat: `COMMISSIE_PCT:0` in notities. */
+export function commissiePctFromNotities(
+  notities: string | null | undefined
+): number | null {
+  const m = (notities || "").match(
+    /(?:^|\n)COMMISSIE_PCT:(-?\d+(?:\.\d+)?)(?:\n|$)/
+  );
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Per-order commissie tot de DB-kolom `offertes.commissie_pct` live is. */
+export const ORDER_COMMISSIE_OVERRIDES: Record<string, number> = {
+  // Joeri Denekamp (Ramon) — geen salescommissie
+  "42da0fff-6d19-4c19-901a-1704293bc630": 0,
+};
+
+export function orderCommissiePctVanOfferte(offerte: {
+  id?: string | null;
+  commissie_pct?: number | null;
+  notities?: string | null;
+}): number | null {
+  if (
+    offerte.id &&
+    Object.prototype.hasOwnProperty.call(ORDER_COMMISSIE_OVERRIDES, offerte.id)
+  ) {
+    return ORDER_COMMISSIE_OVERRIDES[offerte.id];
+  }
+  if (
+    offerte.commissie_pct != null &&
+    Number.isFinite(Number(offerte.commissie_pct))
+  ) {
+    return Number(offerte.commissie_pct);
+  }
+  return commissiePctFromNotities(offerte.notities);
 }
 
 export type NettoVorm = "EM" | "WF";

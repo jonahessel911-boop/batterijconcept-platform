@@ -15,6 +15,8 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   commissieTrancheA,
   NETTO_AANBETALING_COMMISSIE,
+  orderCommissiePctVanOfferte,
+  resolveOrderCommissiePct,
 } from "@/lib/netto-boord";
 import { isProjectHoldSales } from "@/lib/backoffice-acties";
 import { isUitgeslotenVanSalesCommissie } from "@/lib/rollen";
@@ -168,6 +170,8 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     offerte_nummer: string | null;
     subtotaal_ex_btw: number | null;
     totaal_inc_btw: number | null;
+    commissie_pct?: number | null;
+    notities?: string | null;
   };
   type AlreadyRow = {
     factuur_id: string;
@@ -184,7 +188,7 @@ export async function buildToekomstigeVerkoperCreditfacturen(
     status: string | null;
   };
 
-  const [{ data: already }, { data: leads }, { data: offertes }, { data: projects }] =
+  let [{ data: already }, { data: leads }, { data: offertes, error: offErr }, { data: projects }] =
     await Promise.all([
       facIds.length
         ? sb
@@ -200,7 +204,7 @@ export async function buildToekomstigeVerkoperCreditfacturen(
       offIds.length
         ? sb
             .from("offertes")
-            .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw")
+            .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, commissie_pct, notities")
             .in("id", offIds)
         : Promise.resolve({ data: [] as OfferteRow[] }),
       leadIds.length
@@ -210,6 +214,16 @@ export async function buildToekomstigeVerkoperCreditfacturen(
             .in("lead_id", leadIds)
         : Promise.resolve({ data: [] as ProjectRow[] }),
     ]);
+  if (
+    offIds.length &&
+    (offErr?.code === "42703" || offErr?.message?.includes("commissie_pct"))
+  ) {
+    const retry = await sb
+      .from("offertes")
+      .select("id, offerte_nummer, subtotaal_ex_btw, totaal_inc_btw, notities")
+      .in("id", offIds);
+    offertes = retry.data;
+  }
 
   /** lead_id / offerte_id → hold of annulering */
   const blockedLeadIds = new Set<string>();
@@ -321,7 +335,13 @@ export async function buildToekomstigeVerkoperCreditfacturen(
 
     let fee =
       omzetEx > 0
-        ? commissieTrancheA(omzetEx, adv.commissie_pct)
+        ? commissieTrancheA(
+            omzetEx,
+            resolveOrderCommissiePct(
+              off ? orderCommissiePctVanOfferte(off) : null,
+              adv.commissie_pct
+            )
+          )
         : NETTO_AANBETALING_COMMISSIE;
     const max =
       adv.max_factuur_bedrag != null && Number(adv.max_factuur_bedrag) > 0

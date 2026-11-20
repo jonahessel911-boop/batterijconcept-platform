@@ -17,6 +17,7 @@ import {
   isNettoGeannuleerd,
   resolveNettoCommissie,
   resolveNettoVorm,
+  orderCommissiePctVanOfferte,
   summarizeFases,
   type NettoBoardRow,
 } from "@/lib/netto-boord";
@@ -128,14 +129,29 @@ export async function GET(req: NextRequest) {
   try {
     const sb = getSupabaseAdmin();
 
-    const { data: offertes, error: offErr } = await sb
+    const OFFERTES_SELECT_FULL =
+      "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, commissie_pct, notities, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam, commissie_pct))";
+    const OFFERTES_SELECT_CORE =
+      "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, notities, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam, commissie_pct))";
+
+    let offertesRes = await sb
       .from("offertes")
-      .select(
-        "id, offerte_nummer, lead_id, status, subtotaal_ex_btw, totaal_inc_btw, financiering_voorbehoud, ondertekend_op, created_at, updated_at, leads(id, naam, plaats, adviseur_id, status, adviseurs!adviseur_id(id, naam, commissie_pct))"
-      )
+      .select(OFFERTES_SELECT_FULL)
       .in("status", ["ondertekend", "afgewezen"])
       .order("ondertekend_op", { ascending: false, nullsFirst: false })
       .limit(800);
+    if (
+      offertesRes.error?.code === "42703" ||
+      offertesRes.error?.message?.includes("commissie_pct")
+    ) {
+      offertesRes = await sb
+        .from("offertes")
+        .select(OFFERTES_SELECT_CORE)
+        .in("status", ["ondertekend", "afgewezen"])
+        .order("ondertekend_op", { ascending: false, nullsFirst: false })
+        .limit(800);
+    }
+    const { data: offertes, error: offErr } = offertesRes;
 
     if (offErr) {
       return NextResponse.json(
@@ -376,13 +392,19 @@ export async function GET(req: NextRequest) {
       if (adviseurId && adviseurNaam) {
         adviseursMap.set(adviseurId, adviseurNaam);
       }
-      const rawCommissiePct =
+      const adviseurCommissiePct =
         (adviseurId && commissiePctByAdviseur.has(adviseurId)
           ? commissiePctByAdviseur.get(adviseurId)
           : undefined) ??
         (adv?.commissie_pct != null && Number.isFinite(Number(adv.commissie_pct))
           ? Number(adv.commissie_pct)
           : null);
+      const rawCommissiePct = resolveOrderCommissiePct(
+        orderCommissiePctVanOfferte(
+          o as { commissie_pct?: number | null; notities?: string | null }
+        ),
+        adviseurCommissiePct
+      );
       const commissiePct = Math.round(
         commissiePctToFraction(rawCommissiePct) * 100
       );

@@ -10,10 +10,7 @@ import {
   nogTeFacturerenRestant,
 } from "@/lib/aanbetaling";
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
-import {
-  isFotoMeterkast,
-  isSchouwFormulier,
-} from "@/lib/project-documenten";
+import { isSchouwFormulier } from "@/lib/project-documenten";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import type { ProjectStatus } from "@/types/database";
 
@@ -160,11 +157,8 @@ export async function maybeAdvanceProjectNaSchouw(
   const hasSchouwForm = (fotos || []).some((f) =>
     isSchouwFormulier(f.omschrijving)
   );
-  const hasFotoMeterkast = (fotos || []).some((f) =>
-    isFotoMeterkast(f.omschrijving)
-  );
-  // Schouw pas afronden als formulier én foto meterkast er zijn.
-  if (!hasSchouwForm || !hasFotoMeterkast) {
+  // Meterkastfoto is partner-bewijs, geen BO-poort voor installatie inplannen.
+  if (!hasSchouwForm) {
     return {
       advanced: false,
       from: current,

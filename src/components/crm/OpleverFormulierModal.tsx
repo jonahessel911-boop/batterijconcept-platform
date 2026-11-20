@@ -12,7 +12,7 @@ import {
   formatOpleverAdres,
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
-  VERVOLG_BACKOFFICE_LABEL,
+  VERVOLG_OPLEVERFORMULIER_LABEL,
   type OpleverFormulierData,
   type OpleverPuntId,
   validateOpleverFormulier,
@@ -384,8 +384,10 @@ export function OpleverFormulierModal({
                 Vervolg
               </p>
               <p className="mt-0.5 text-xs text-muted">
-                Iets dat nog gefixt moet worden? {VERVOLG_BACKOFFICE_LABEL}:
-                backoffice belt om een service-afspraak in te plannen.
+                Iets dat nog gefixt moet worden? Dan komt er een
+                serviceverzoek {VERVOLG_OPLEVERFORMULIER_LABEL}. Backoffice
+                belt binnen 1 dag om een service-moment in te plannen (geen
+                mail naar de klant).
               </p>
             </div>
             <div className="space-y-3 px-3 py-3">
@@ -407,7 +409,7 @@ export function OpleverFormulierModal({
                   className="mt-0.5 h-5 w-5 shrink-0 accent-[#1A8A3E]"
                 />
                 <span className="text-sm leading-snug text-ink">
-                  Ja, {VERVOLG_BACKOFFICE_LABEL} (bellen voor service)
+                  Ja, {VERVOLG_OPLEVERFORMULIER_LABEL} (serviceverzoek)
                 </span>
               </label>
               {form.vervolgNodig ? (

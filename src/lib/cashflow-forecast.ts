@@ -13,7 +13,10 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
 import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
 import { normalizeProjectStatus, projectStatusLabel } from "@/lib/labels";
-import { commissiePctToFraction } from "@/lib/netto-boord";
+import {
+  commissiePctToFraction,
+  orderCommissiePctVanOfferte,
+} from "@/lib/netto-boord";
 import {
   formatSchouwWeekLabel,
   schouwWeekFromDate,
@@ -103,6 +106,8 @@ type OfferteRow = {
   ondertekend_op: string | null;
   subtotaal_ex_btw: number | null;
   financiering_voorbehoud?: boolean | null;
+  commissie_pct?: number | null;
+  notities?: string | null;
   leads?:
     | { naam?: string | null; adviseur_id?: string | null }
     | { naam?: string | null; adviseur_id?: string | null }[]
@@ -192,7 +197,7 @@ export async function buildCashflowForecast(
       sb
         .from("offertes")
         .select(
-          "id, ondertekend_op, subtotaal_ex_btw, financiering_voorbehoud, leads(naam, adviseur_id), offerte_regels(omschrijving, aantal)"
+          "id, ondertekend_op, subtotaal_ex_btw, financiering_voorbehoud, notities, leads(naam, adviseur_id), offerte_regels(omschrijving, aantal)"
         )
         .eq("status", "ondertekend")
         .not("ondertekend_op", "is", null)
@@ -318,9 +323,13 @@ export async function buildCashflowForecast(
       Boolean(project?.installatie_voltooid_at) ||
       (status != null && GEINSTALLEERD.has(status));
 
-    const frac = lead?.adviseur_id
-      ? commissieMap.get(lead.adviseur_id) ?? commissiePctToFraction(null)
-      : commissiePctToFraction(null);
+    const orderPct = orderCommissiePctVanOfferte(offerte);
+    const frac =
+      orderPct != null
+        ? commissiePctToFraction(orderPct)
+        : lead?.adviseur_id
+          ? commissieMap.get(lead.adviseur_id) ?? commissiePctToFraction(null)
+          : commissiePctToFraction(null);
     const commissie =
       uitsluiting || geinstalleerd ? 0 : round2(omzetEx * frac);
     const installatie =

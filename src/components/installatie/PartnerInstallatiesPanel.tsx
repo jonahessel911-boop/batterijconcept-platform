@@ -150,9 +150,16 @@ function StarsInput({
   );
 }
 
-function StarsDisplay({ value }: { value: number | null | undefined }) {
+function StarsDisplay({
+  value,
+  size = "sm",
+}: {
+  value: number | null | undefined;
+  size?: "sm" | "md";
+}) {
+  const icon = size === "md" ? "size-4" : "size-3.5";
   if (value == null) {
-    return <span className="text-xs text-muted">Nog niet beoordeeld</span>;
+    return <span className="text-xs text-muted">—</span>;
   }
   return (
     <div className="inline-flex items-center gap-0.5" aria-label={`${value} sterren`}>
@@ -160,7 +167,7 @@ function StarsDisplay({ value }: { value: number | null | undefined }) {
         <Star
           key={n}
           className={cn(
-            "size-3.5",
+            icon,
             value >= n
               ? "fill-[#F59E0B] text-[#F59E0B]"
               : "fill-transparent text-[#D1D5DB]"
@@ -670,7 +677,7 @@ export function PartnerInstallatiesPanel({
             <aside className="space-y-4 lg:sticky lg:top-4">
               <section className="space-y-3 rounded-xl border border-line bg-white p-4 shadow-xs sm:p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <Label>Beoordeling koppel</Label>
+                  <Label>Montage-expert (koppel)</Label>
                   <StarsDisplay value={sheetSterren} />
                 </div>
                 <StarsInput
@@ -709,36 +716,66 @@ export function PartnerInstallatiesPanel({
                 </Button>
               </section>
 
-              <section className="space-y-2 rounded-xl border border-line bg-wash/40 p-4 shadow-xs sm:p-5">
+              <section className="space-y-3 rounded-xl border border-line bg-wash/40 p-4 shadow-xs sm:p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  Batterijconcept First Contact Rapport
+                  Beoordeling Batterijconcept
                 </p>
-                {typeof selected.monteur_beoordeling_sterren === "number" ? (
-                  <>
-                    <StarsDisplay
-                      value={selected.monteur_beoordeling_sterren}
-                    />
-                    {selected.monteur_beoordeling_notitie?.trim() ? (
-                      <p className="whitespace-pre-wrap text-sm text-ink">
-                        {selected.monteur_beoordeling_notitie.trim()}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-muted">Geen notitie.</p>
-                    )}
-                    {selected.monteur_beoordeling_op ? (
-                      <p className="text-[11px] text-muted">
-                        {formatDateShort(selected.monteur_beoordeling_op)}
-                        {selected.monteur_beoordeling_door
-                          ? ` · ${selected.monteur_beoordeling_door}`
-                          : ""}
-                      </p>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="text-sm text-muted">
-                    Nog geen First Contact Rapport van Batterijconcept.
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    First Contact
                   </p>
-                )}
+                  {typeof selected.monteur_beoordeling_sterren === "number" ? (
+                    <>
+                      <StarsDisplay
+                        value={selected.monteur_beoordeling_sterren}
+                        size="md"
+                      />
+                      {selected.monteur_beoordeling_notitie?.trim() ? (
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
+                          {selected.monteur_beoordeling_notitie.trim()}
+                        </p>
+                      ) : null}
+                      {selected.monteur_beoordeling_op ? (
+                        <p className="text-[11px] text-muted">
+                          {formatDateShort(selected.monteur_beoordeling_op)}
+                          {selected.monteur_beoordeling_door
+                            ? ` · ${selected.monteur_beoordeling_door}`
+                            : ""}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted">Nog niet beoordeeld.</p>
+                  )}
+                </div>
+                <div className="border-t border-line pt-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Backoffice (klantvriendelijkheid)
+                  </p>
+                  {typeof selected.klantvriendelijkheid_sterren === "number" ? (
+                    <>
+                      <StarsDisplay
+                        value={selected.klantvriendelijkheid_sterren}
+                        size="md"
+                      />
+                      {selected.klantvriendelijkheid_notitie?.trim() ? (
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
+                          {selected.klantvriendelijkheid_notitie.trim()}
+                        </p>
+                      ) : null}
+                      {selected.klantvriendelijkheid_op ? (
+                        <p className="text-[11px] text-muted">
+                          {formatDateShort(selected.klantvriendelijkheid_op)}
+                          {selected.klantvriendelijkheid_door
+                            ? ` · ${selected.klantvriendelijkheid_door}`
+                            : ""}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted">Nog niet beoordeeld.</p>
+                  )}
+                </div>
               </section>
             </aside>
           </div>
@@ -756,8 +793,8 @@ export function PartnerInstallatiesPanel({
               <CardTitle className="font-display text-lg">Installaties</CardTitle>
               <CardDescription>
                 Alleen voltooide installaties vanaf 16 november 2026.
-                Beoordeling van het koppel. First Contact Rapport komt van
-                Batterijconcept.
+                Montage-expert is de beoordeling van het koppel. Backoffice
+                (First Contact + klantvriendelijkheid) komt van Batterijconcept.
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -823,7 +860,10 @@ export function PartnerInstallatiesPanel({
                     Status
                   </TableHead>
                   <TableHead className="h-9 px-3 text-[11px] font-medium text-muted">
-                    Sterren
+                    Montage-expert
+                  </TableHead>
+                  <TableHead className="h-9 px-3 text-[11px] font-medium text-muted">
+                    Backoffice
                   </TableHead>
                   <TableHead className="h-9 px-4 text-right text-[11px] font-medium text-muted">
                     Actie
@@ -890,6 +930,26 @@ export function PartnerInstallatiesPanel({
                             )
                           }
                         />
+                      </TableCell>
+                      <TableCell className="px-3 py-2.5 align-middle">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-10 shrink-0 text-[10px] text-muted">
+                              FC
+                            </span>
+                            <StarsDisplay
+                              value={row.monteur_beoordeling_sterren}
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-10 shrink-0 text-[10px] text-muted">
+                              BO
+                            </span>
+                            <StarsDisplay
+                              value={row.klantvriendelijkheid_sterren}
+                            />
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell
                         className="px-4 py-2.5 text-right align-middle"

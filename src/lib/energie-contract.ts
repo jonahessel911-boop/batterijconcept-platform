@@ -61,6 +61,35 @@ export const EMPTY_ENERGIE_FORM: EnergieVerbruikFormValues = {
   energieOverstapLeverancier: "",
 };
 
+export function energieFormFromRow(row: {
+  elektra_verbruik_kwh?: number | null;
+  gas_verbruik_m3?: number | null;
+  teruglevering_kwh?: number | null;
+  energie_contract_type?: string | null;
+  energie_contract_einddatum?: string | null;
+  energie_overstap_leverancier?: string | null;
+}): EnergieVerbruikFormValues {
+  return {
+    elektraVerbruikKwh:
+      row.elektra_verbruik_kwh != null ? String(row.elektra_verbruik_kwh) : "",
+    gasVerbruikM3:
+      row.gas_verbruik_m3 != null ? String(row.gas_verbruik_m3) : "",
+    terugleveringKwh:
+      row.teruglevering_kwh != null ? String(row.teruglevering_kwh) : "",
+    energieContractType: isEnergieContractType(row.energie_contract_type)
+      ? row.energie_contract_type
+      : "",
+    energieContractEinddatum: row.energie_contract_einddatum
+      ? String(row.energie_contract_einddatum).slice(0, 10)
+      : "",
+    energieOverstapLeverancier: isEnergieOverstapLeverancier(
+      row.energie_overstap_leverancier
+    )
+      ? row.energie_overstap_leverancier
+      : "",
+  };
+}
+
 export function isEnergieContractType(
   v: unknown
 ): v is EnergieContractType {

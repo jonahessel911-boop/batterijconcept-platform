@@ -37,7 +37,9 @@ import {
 } from "@/lib/schouw-week";
 import {
   adviseurHeeftSlotUur,
+  overlapsRange,
   slotHoursForAdviseur,
+  slotRangeForDayHour,
   unionSlotHours,
 } from "@/lib/slots";
 import {
@@ -145,6 +147,24 @@ function nearestSlotIndex(startAt: string, rows: SlotRow[]): number {
     }
   });
   return best;
+}
+
+function afspraakEndIso(a: Pick<Afspraak, "start_at" | "end_at">): string {
+  if (a.end_at) return a.end_at;
+  return new Date(new Date(a.start_at).getTime() + 120 * 60 * 1000).toISOString();
+}
+
+/** Fysieke afspraak raakt dit 2u-blok (ook 13:00-team op Marcel 12:00 én 14:00). */
+function fysiekBezetSlot(
+  a: Pick<Afspraak, "start_at" | "end_at" | "status" | "soort">,
+  dayKey: string,
+  hour: number
+): boolean {
+  if (a.status === "geannuleerd") return false;
+  if (!afspraakBlokkeertAgenda(a.soort)) return false;
+  if (dayKeyAmsterdam(a.start_at) !== dayKey) return false;
+  const { start, end } = slotRangeForDayHour(dayKey, hour);
+  return overlapsRange(a.start_at, afspraakEndIso(a), start, end);
 }
 
 function isoForDaySlot(dayKey: string, hour: number, minute: number): string {
@@ -643,13 +663,11 @@ export function AgendaPanel({
             continue;
           }
           beschikbaarN += 1;
-          const bezet = afspraken.some((a) => {
-            if (a.status === "geannuleerd") return false;
-            if (a.adviseur_id !== adv.id) return false;
-            if (!afspraakBlokkeertAgenda(a.soort)) return false;
-            if (dayKeyAmsterdam(a.start_at) !== day.key) return false;
-            return nearestSlotIndex(a.start_at, advRows) === slotIdx;
-          });
+          const bezet = afspraken.some(
+            (a) =>
+              a.adviseur_id === adv.id &&
+              fysiekBezetSlot(a, day.key, row.hour)
+          );
           if (bezet) geplandN += 1;
         }
       }
@@ -1113,13 +1131,26 @@ export function AgendaPanel({
     const row = SLOT_ROWS[slotIdx];
     if (!row || !adviseurHeeftSlotUur(adviseurId, row.hour)) return [];
     const advRows = slotRowsFromHours(slotHoursForAdviseur(adviseurId));
+    const homeIdx = advRows.findIndex((r) => r.hour === row.hour);
     return afspraken.filter((a) => {
       if (a.adviseur_id !== adviseurId) return false;
       if (!afspraakZichtbaarInAgenda(a, afspraken)) return false;
       if (dayKeyAmsterdam(a.start_at) !== dayKey) return false;
-      return nearestSlotIndex(a.start_at, advRows) ===
-        advRows.findIndex((r) => r.hour === row.hour);
+      if (afspraakBlokkeertAgenda(a.soort)) {
+        return fysiekBezetSlot(a, dayKey, row.hour);
+      }
+      return nearestSlotIndex(a.start_at, advRows) === homeIdx;
     });
+  }
+
+  function isHomeSlotForAfspraak(
+    a: Afspraak,
+    adviseurId: string,
+    hour: number
+  ): boolean {
+    const advRows = slotRowsFromHours(slotHoursForAdviseur(adviseurId));
+    const home = advRows[nearestSlotIndex(a.start_at, advRows)];
+    return home?.hour === hour;
   }
 
   async function planAfspraak(e: React.FormEvent) {
@@ -1763,6 +1794,16 @@ export function AgendaPanel({
                       const cancelledItems = items.filter(
                         (a) => a.status === "geannuleerd"
                       );
+                      const homeActive = activeItems.filter(
+                        (a) =>
+                          !afspraakBlokkeertAgenda(a.soort) ||
+                          isHomeSlotForAfspraak(a, adv.id, row.hour)
+                      );
+                      const spillOnly =
+                        homeActive.length === 0 &&
+                        activeItems.some((a) =>
+                          afspraakBlokkeertAgenda(a.soort)
+                        );
                       const slotVrijVoorAfblok = activeItems.length === 0;
 
                       const renderStickers = (
@@ -1921,9 +1962,26 @@ export function AgendaPanel({
                                   })
                                 : null}
                             </div>
+                          ) : spillOnly ? (
+                            <button
+                              type="button"
+                              className="flex h-full min-h-[2.25rem] w-full items-center justify-center rounded bg-[#F3F4F6] text-[10px] font-semibold uppercase tracking-wide text-muted"
+                              title="Dit blok overlapt een huisbezoek (bijv. 13:00 op Marcel 12:00/14:00)"
+                              onClick={() => {
+                                const a = activeItems[0];
+                                if (a) {
+                                  setSelected(a);
+                                  setPlanOpen(false);
+                                }
+                              }}
+                            >
+                              Bezet
+                            </button>
                           ) : activeItems.length > 0 ? (
                             <div className="space-y-1">
-                              {renderStickers(items)}
+                              {renderStickers(
+                                homeActive.length > 0 ? homeActive : items
+                              )}
                             </div>
                           ) : cancelledItems.length > 0 ? (
                             <div className="space-y-1">

@@ -11,6 +11,7 @@ import {
   validateOpleverFormulier,
 } from "@/lib/oplever-formulier";
 import { setServiceInkoopRegels } from "@/lib/project-inkoop-checklist";
+import { ensureOpleverVervolgServiceVerzoek } from "@/lib/service-verzoek";
 import {
   resolveMonteurNaamVoorPdf,
   syncProjectMedewerkerVanNaam,
@@ -178,6 +179,8 @@ export async function generateAndUploadOpleverFormulier(
   if (data.vervolgNodig) {
     const applied = await applyOpleverServiceInkoop(sb, projectId, data);
     if (applied.project) projectAfter = applied.project;
+    const verzoek = await applyOpleverServiceVerzoek(sb, projectId, data);
+    if (verzoek.project) projectAfter = verzoek.project;
   }
 
   return {
@@ -218,6 +221,72 @@ async function applyOpleverServiceInkoop(
     .single();
   if (error) {
     console.error("oplever service inkoop:", error.message);
+    return {};
+  }
+  return { project: updated };
+}
+
+function opleverVervolgOmschrijving(data: OpleverFormulierData): string {
+  const regels: string[] = [
+    "Restpunt na oplevering. Backoffice neemt contact op om een service-moment in te plannen.",
+  ];
+  const actie = data.vervolgActie.trim();
+  if (actie) regels.push(actie);
+  const mats = (data.vervolgMaterialen || []).filter((m) => m.label.trim());
+  if (mats.length > 0) {
+    regels.push(
+      "In te kopen: " +
+        mats.map((m) => `${m.aantal}× ${m.label.trim()}`).join(", ")
+    );
+  }
+  return regels.join("\n\n");
+}
+
+async function applyOpleverServiceVerzoek(
+  sb: SupabaseClient,
+  projectId: string,
+  data: OpleverFormulierData
+): Promise<{ project?: Record<string, unknown> | null }> {
+  const { data: row, error: loadErr } = await sb
+    .from("projecten")
+    .select("id, lead_id, oplever_formulier")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (loadErr || !row) {
+    if (loadErr) console.error("oplever serviceverzoek load:", loadErr.message);
+    return {};
+  }
+
+  const snap = (row as { oplever_formulier?: Record<string, unknown> | null })
+    .oplever_formulier;
+  const bestaandeId =
+    (typeof snap?.vervolgServiceVerzoekId === "string" &&
+      snap.vervolgServiceVerzoekId) ||
+    data.vervolgServiceVerzoekId ||
+    null;
+
+  const verzoekId = await ensureOpleverVervolgServiceVerzoek(sb, {
+    projectId,
+    leadId: (row as { lead_id?: string }).lead_id,
+    omschrijving: opleverVervolgOmschrijving(data),
+    bestaandeId,
+  });
+  if (!verzoekId) return {};
+
+  const nextSnap = {
+    ...(snap && typeof snap === "object" ? snap : {}),
+    vervolgNodig: true,
+    vervolgActie: data.vervolgActie.trim(),
+    vervolgServiceVerzoekId: verzoekId,
+  };
+  const { data: updated, error } = await sb
+    .from("projecten")
+    .update({ oplever_formulier: nextSnap })
+    .eq("id", projectId)
+    .select("*")
+    .single();
+  if (error) {
+    console.error("oplever serviceverzoek snapshot:", error.message);
     return {};
   }
   return { project: updated };

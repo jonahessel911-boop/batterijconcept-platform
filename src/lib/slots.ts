@@ -166,18 +166,26 @@ export function generateAvailableSlots(opts: {
     .map(({ start, end }) => ({ start, end }));
 }
 
+/** Start/eind van één vast inplanblok (yyyy-MM-dd + uur, Amsterdam). */
+export function slotRangeForDayHour(
+  dayKey: string,
+  hour: number
+): { start: Date; end: Date } {
+  const start = fromZonedTime(
+    `${dayKey}T${String(hour).padStart(2, "0")}:00:00`,
+    AMSTERDAM_TZ
+  );
+  return { start, end: addMinutes(start, SLOT_MINUTES) };
+}
+
 /** De vaste blokken voor één dag (yyyy-MM-dd in Amsterdam). */
 export function blocksForDayKey(
   dayKey: string,
   adviseurId?: string | null
 ): { start: Date; end: Date }[] {
-  return slotHoursForAdviseur(adviseurId).map((hour) => {
-    const start = fromZonedTime(
-      `${dayKey}T${String(hour).padStart(2, "0")}:00:00`,
-      AMSTERDAM_TZ
-    );
-    return { start, end: addMinutes(start, SLOT_MINUTES) };
-  });
+  return slotHoursForAdviseur(adviseurId).map((hour) =>
+    slotRangeForDayHour(dayKey, hour)
+  );
 }
 
 export function overlapsRange(
