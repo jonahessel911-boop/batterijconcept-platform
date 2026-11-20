@@ -1160,6 +1160,62 @@ export function factuurWarmtefondsAanbetalingHerinneringEmail(opts: {
   });
 }
 
+/**
+ * Klant: Warmtefonds-declaratie is als betaald gemarkeerd.
+ * Tekst hangt af van of het schouwformulier al binnen is.
+ */
+export function wfDeclaratieBetaaldEmail(opts: {
+  naam: string;
+  factuurNummer: string;
+  bedrag: string;
+  trackUrl?: string | null;
+  /** Datum waarop het schouwformulier is geüpload (Europe/Amsterdam). */
+  schouwFormulierGeuploadAt?: string | Date | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const schouwDatum = opts.schouwFormulierGeuploadAt
+    ? formatDateNl(opts.schouwFormulierGeuploadAt)
+    : null;
+  const schouwGeweest = Boolean(schouwDatum && schouwDatum !== "—");
+
+  const volgendeStap = schouwGeweest
+    ? [
+        emailP(`De schouw is geweest op ${schouwDatum}.`),
+        emailP(
+          "We nemen binnen 2 werkdagen contact met u op om de installatie in te plannen."
+        ),
+      ].join("")
+    : emailP(
+        "We nemen in 2 werkdagen contact met u op om de schouw in te plannen. Hierna nemen we binnen 2 werkdagen weer contact met u op om de installatie in te plannen."
+      );
+
+  return emailLayout({
+    title: `Warmtefonds-declaratie betaald — ${opts.factuurNummer}`,
+    preheader: schouwGeweest
+      ? "Declaratie betaald. We plannen binnen 2 werkdagen de installatie in."
+      : "Declaratie betaald. We plannen binnen 2 werkdagen de schouw in.",
+    bodyHtml: [
+      emailH1("Warmtefonds-declaratie betaald"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Goed nieuws: de Warmtefonds-declaratie is betaald. Hieronder zie je de bevestiging."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
+         <p style="margin:0;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>`
+      ),
+      volgendeStap,
+      opts.trackUrl
+        ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
+        : "",
+      emailP(
+        "Heb je vragen? Mail ons op info@batterijconcept.nl of bel 085 800 1645."
+      ),
+      emailMuted("Met vriendelijke groet, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 /** Klant: factuur is als betaald gemarkeerd */
 export function factuurBetaaldEmail(opts: {
   naam: string;
