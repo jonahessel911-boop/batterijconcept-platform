@@ -758,10 +758,10 @@ export function InboxPanel({
       ) ||
       terugbelAdviseurs.find((a) => isSimonBeller(a)) ||
       terugbelAdviseurs.find((a) => normalizeRol(a.rol) === "beller") ||
-      terugbelAdviseurs.find((a) => a.id === session?.adviseurId) ||
+      terugbelAdviseurs.find((a) => a.id === session?.id) ||
       terugbelAdviseurs[0];
     if (simon?.id) setTerugbelAdviseurId(simon.id);
-  }, [terugbelAdviseurs, terugbelAdviseurId, session?.adviseurId]);
+  }, [terugbelAdviseurs, terugbelAdviseurId, session?.id]);
 
   async function loadLeadContext(
     leadId: string,

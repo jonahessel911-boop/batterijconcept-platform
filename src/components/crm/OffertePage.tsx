@@ -18,7 +18,6 @@ import {
 } from "@/lib/format";
 import {
   isKortingRegel,
-  isVerborgenOfferteRegel,
   kortingIncVanRegels,
 } from "@/lib/offerte-regels";
 import {
@@ -705,11 +704,6 @@ export function OffertePage() {
                 <tr key={r.id}>
                   <td>
                     {r.omschrijving}
-                    {isVerborgenOfferteRegel(r) ? (
-                      <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        Niet op klantofferte
-                      </span>
-                    ) : null}
                   </td>
                   <td>{r.aantal}</td>
                   <td>{formatEuro(r.prijs_ex_btw)}</td>

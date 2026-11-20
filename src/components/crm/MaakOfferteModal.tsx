@@ -7,7 +7,6 @@ import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import {
   extraKortingOmschrijving,
   isAlphaEssMetOmvormerRegel,
-  isVerborgenOfferteProduct,
   isVerborgenOfferteRegel,
   omvormerOmschrijvingVoor,
 } from "@/lib/offerte-regels";
@@ -498,10 +497,7 @@ export function MaakOfferteModal({
                             ? "3-fase"
                             : null;
                         const selected = productId === p.id;
-                        const verborgen = isVerborgenOfferteProduct(p);
                         const ex = Number(p.prijs_ex_btw);
-                        const pct = Number(p.btw_percentage ?? 21);
-                        const inc = Math.round(ex * (1 + pct / 100) * 100) / 100;
                         return (
                           <li key={p.id}>
                             <button
@@ -523,21 +519,9 @@ export function MaakOfferteModal({
                                     </span>
                                   ) : null}
                                 </span>
-                                {verborgen ? (
-                                  <span className="mt-0.5 block text-[11px] font-normal text-muted">
-                                    Niet op klantofferte · korting per regel
-                                  </span>
-                                ) : null}
                               </span>
                               <span className="shrink-0 tabular-nums text-xs font-semibold text-muted">
-                                {verborgen
-                                  ? `${formatEuro(inc)} incl.`
-                                  : formatEuro(ex)}
-                                {verborgen ? (
-                                  <span className="mt-0.5 block text-[10px] font-normal">
-                                    {formatEuro(ex)} excl.
-                                  </span>
-                                ) : null}
+                                {formatEuro(ex)}
                               </span>
                             </button>
                           </li>
@@ -638,8 +622,6 @@ export function MaakOfferteModal({
             {lines.length > 0 && (
               <ul className="divide-y divide-line border border-line">
                 {lines.map((l) => {
-                  const verborgen = isVerborgenOfferteRegel(l);
-                  const maxKorting = lineIncBtw(l);
                   return (
                   <li
                     key={l.key}
@@ -653,52 +635,11 @@ export function MaakOfferteModal({
                             Eigen
                           </span>
                         )}
-                        {verborgen ? (
-                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                            Niet op offerte
-                          </span>
-                        ) : null}
                       </p>
                       <p className="text-xs text-muted">
                         {l.aantal} × {formatEuro(l.prijs_ex_btw)} excl. →{" "}
                         {formatEuro(lineIncBtw(l))} incl.
                       </p>
-                      {verborgen ? (
-                        <label className="mt-2 block text-xs font-medium text-muted">
-                          Korting incl. btw (€)
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={
-                              l.kortingInc
-                                ? String(l.kortingInc).replace(".", ",")
-                                : ""
-                            }
-                            onChange={(e) => {
-                              const n =
-                                Number(e.target.value.replace(",", ".")) || 0;
-                              setLines((prev) =>
-                                prev.map((x) =>
-                                  x.key === l.key
-                                    ? {
-                                        ...x,
-                                        kortingInc: Math.min(
-                                          Math.max(0, Math.round(n * 100) / 100),
-                                          maxKorting
-                                        ),
-                                      }
-                                    : x
-                                )
-                              );
-                            }}
-                            placeholder="0"
-                            className="mt-1 w-full max-w-[10rem] border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-green"
-                          />
-                          <span className="mt-1 block font-normal text-muted">
-                            Volledig weggeven: {formatEuro(maxKorting)}
-                          </span>
-                        </label>
-                      ) : null}
                     </div>
                     <button
                       type="button"

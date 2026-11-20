@@ -89,7 +89,7 @@ export async function POST(
     const { data: project, error: projErr } = await sb
       .from("projecten")
       .select(
-        "id, installatie_partner_id, betaalwijze, lead_id, offertes(financiering_voorbehoud), leads(status)"
+        "id, status, installatie_partner_id, betaalwijze, lead_id, offertes(financiering_voorbehoud), leads(status)"
       )
       .eq("id", id)
       .single();
