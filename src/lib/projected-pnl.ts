@@ -1,6 +1,7 @@
 /**
  * Projected P&L op bruto getekende orders (ondertekend_op):
- * omzet − inkoop − installatie − salescommissie − commissie ops − ad spend − Edergy.
+ * omzet − inkoop (catalogus: batterijpakketten + warmtepomp) − installatie
+ * − salescommissie − commissie ops − ad spend − Edergy.
  * Onafhankelijk van of de order al geïnstalleerd/betaald is.
  */
 
@@ -10,10 +11,17 @@ import { nl } from "date-fns/locale";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { findDefaultBackofficeMedewerkerId } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
-import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
+import {
+  DEFAULT_INSTALLATIE_STANDAARD,
+  loadProductenInkoop,
+} from "@/lib/inkoop";
+import {
+  hardwareKostenVoorRegelsMetProducten,
+  pnlInstallatieVoorOrder,
+} from "@/lib/project-kosten";
 import {
   EDERGY_VANAF_YMD,
+  EDERGY_PER_AANVRAAG_EXCL,
   leesEdergyTarief,
 } from "@/lib/edergy-tarief";
 import { commissiePctToFraction } from "@/lib/netto-boord";
@@ -249,7 +257,7 @@ function opsChildrenFromDetail(
 export function linesFromMetrics(
   m: PnlMetrics,
   opsDetail?: OpsCommissieBreakdown | null,
-  edergyPerAanvraag = 150
+  edergyPerAanvraag = EDERGY_PER_AANVRAAG_EXCL
 ): PnlLine[] {
   const opsKids = opsChildrenFromDetail(opsDetail);
   return [
@@ -417,6 +425,7 @@ export async function buildProjectedPnl(
     instRes,
     afsprakenRaw,
     edergyTarief,
+    producten,
   ] = await Promise.all([
       fetchAllRows<OfferteRow>((fromIdx, toIdx) =>
         sb
@@ -482,8 +491,9 @@ export async function buildProjectedPnl(
           .range(fromIdx, toIdx)
       ).catch(() => [] as OpsCommissieAfspraak[]),
       leesEdergyTarief(),
+      loadProductenInkoop(sb),
     ]);
-  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
+  const edergyPerAanvraag = edergyTarief.perAanvraagExcl;
 
   // P&L = totale adkosten: alle campagnes (niet alleen lead-campagne).
   // Fallback: account-level als campaign-rijen leeg/0 zijn.
@@ -589,12 +599,17 @@ export async function buildProjectedPnl(
     const ma = monthAcc.get(mk)!;
 
     const omzet = Number(o.subtotaal_ex_btw) || 0;
-    const inkoop = hardwareKostenVoorRegels(o.offerte_regels || []).totaal;
+    const hw = hardwareKostenVoorRegelsMetProducten(
+      o.offerte_regels || [],
+      producten
+    );
+    const inkoop = hw.totaal;
     const proj = projectByOfferte.get(o.id);
-    const installatie =
-      proj && Number(proj.projectkosten) > 0
-        ? Number(proj.projectkosten)
-        : standaardInstallatie;
+    const installatie = pnlInstallatieVoorOrder(
+      proj?.projectkosten,
+      standaardInstallatie,
+      hw
+    );
     const leadJoin = Array.isArray(o.leads) ? o.leads[0] : o.leads;
     const aid = leadJoin?.adviseur_id || null;
     const frac = aid

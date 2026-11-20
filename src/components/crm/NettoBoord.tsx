@@ -788,7 +788,7 @@ function DetailDrawer({
                     <dt className="text-muted">
                       <span className="font-medium text-ink">Tranche B</span>
                       <span className="block text-[11px]">
-                        Restcommissie · restfactuur / installatie voltooid
+                        Restcommissie · na opleverformulier (after sale)
                       </span>
                     </dt>
                     <dd
@@ -818,7 +818,7 @@ function DetailDrawer({
                         {formatEuro(row.commissie_rest_open)}
                       </span>
                       {!row.commissie_tranche_b_triggered
-                        ? " · volgt bij installatie voltooid"
+                        ? " · volgt na opleverformulier"
                         : row.commissie_tranche_b_uitbetaald
                           ? ""
                           : " · wacht op uitbetaling"}
@@ -886,7 +886,7 @@ function DetailDrawer({
                               {row.creditfactuur_b_nummer ||
                                 (row.commissie_tranche_b_triggered
                                   ? "Nog niet aangemaakt"
-                                  : "Wacht op installatie voltooid")}
+                                  : "Wacht op opleverformulier")}
                             </p>
                           </div>
                           {row.creditfactuur_b_id ? (

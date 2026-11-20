@@ -8,6 +8,7 @@ import {
   DEFAULT_OMVORMER,
   inkoopKostenVoorRegels,
   type HardwareKosten as InkoopHardware,
+  type OfferteInkoopRegel,
   type ProductInkoop,
 } from "@/lib/inkoop";
 
@@ -25,6 +26,8 @@ export type HardwareKosten = {
   omvormer: number;
   totaal: number;
   aantal: number;
+  aantalBatterijPakket: number;
+  aantalWarmtepomp: number;
 };
 
 function round2(n: number): number {
@@ -59,12 +62,25 @@ export function hardwareKostenVoorRegels(
     omvormer,
     totaal: round2(batterij + omvormer),
     aantal,
+    aantalBatterijPakket: aantal,
+    aantalWarmtepomp: 0,
   };
+}
+
+/** Standaard installatie alleen bij batterijpakket; WP-only telt 0 tenzij projectkosten. */
+export function pnlInstallatieVoorOrder(
+  projectkosten: number | null | undefined,
+  standaard: number,
+  kosten: HardwareKosten
+): number {
+  if (Number(projectkosten) > 0) return Number(projectkosten);
+  if (kosten.aantalBatterijPakket > 0) return standaard;
+  return 0;
 }
 
 /** Inkoop uit productcatalogus (batterij + omvormer + warmtefonds). */
 export function hardwareKostenVoorRegelsMetProducten(
-  regels: { omschrijving?: string | null; aantal?: number | null }[],
+  regels: OfferteInkoopRegel[],
   producten: ProductInkoop[]
 ): HardwareKosten {
   if (!producten.length) return hardwareKostenVoorRegels(regels);
@@ -77,5 +93,7 @@ export function hardwareKostenVoorRegelsMetProducten(
     omvormer: round2(k.omvormer + k.warmtefonds),
     totaal: k.hardware,
     aantal: k.aantal,
+    aantalBatterijPakket: k.aantalBatterijPakket,
+    aantalWarmtepomp: k.aantalWarmtepomp,
   };
 }

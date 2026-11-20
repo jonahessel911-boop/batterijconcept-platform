@@ -15,7 +15,7 @@ import {
   isValidSchouwWeek,
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
-import { logLeadEvent } from "@/lib/lead-events";
+import { logLeadEvent, logProjectKlantMail } from "@/lib/lead-events";
 import { resolveBetaalwijze } from "@/lib/project-status-config";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import {
@@ -107,6 +107,42 @@ async function applyKickoffStatusRepair(
   }
 }
 
+/** Opleverformulier aanwezig maar status nog niet doorgeschakeld. */
+async function applyOpleveringStatusRepair(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  project: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const status = String(project.status || "");
+  if (
+    status === "annulering" ||
+    status === "hold_sales_actie" ||
+    status === "after_sale" ||
+    status === "afgerond"
+  ) {
+    return project;
+  }
+  try {
+    const { maybeAdvanceProjectNaOplevering } = await import(
+      "@/lib/project-na-oplevering"
+    );
+    const result = await maybeAdvanceProjectNaOplevering(
+      sb,
+      String(project.id || ""),
+      { sendKlantMail: !project.installatie_voltooid_at }
+    );
+    if (!result.advanced || !result.to) return project;
+    const next = (result.project || {}) as Record<string, unknown>;
+    return {
+      ...project,
+      status: result.to,
+      installatie_voltooid_at:
+        next.installatie_voltooid_at ?? new Date().toISOString(),
+    };
+  } catch {
+    return project;
+  }
+}
+
 /** GET /api/projecten/[id] — projectdetail (ook via lead_id als fallback). */
 export async function GET(
   _req: NextRequest,
@@ -140,10 +176,11 @@ export async function GET(
       );
     }
     if (byId.data) {
-      const repaired = await applyKickoffStatusRepair(
+      const afterKickoff = await applyKickoffStatusRepair(
         sb,
         byId.data as Record<string, unknown>
       );
+      const repaired = await applyOpleveringStatusRepair(sb, afterKickoff);
       return NextResponse.json({ project: repaired });
     }
 
@@ -173,10 +210,11 @@ export async function GET(
       );
     }
     if (byLead.data) {
-      const repaired = await applyKickoffStatusRepair(
+      const afterKickoff = await applyKickoffStatusRepair(
         sb,
         byLead.data as Record<string, unknown>
       );
+      const repaired = await applyOpleveringStatusRepair(sb, afterKickoff);
       return NextResponse.json({
         project: repaired,
         redirectTo: (repaired as { id: string }).id,
@@ -222,12 +260,16 @@ export async function PATCH(
     notities?: string | null;
     titel?: string | null;
     backoffice_notitie?: string | null;
+    backoffice_notitie_door?: string | null;
     installateur_notitie?: string | null;
     afdeling?: string | null;
     verantwoordelijke_id?: string | null;
     installatie_partner_id?: string | null;
     /** Monteur van de gekozen installatiepartner. */
     installatie_teamgenoot_id?: string | null;
+    /** Koppel voor de installatie (niet de schouw). */
+    installatie_koppel_id?: string | null;
+    service_teamgenoot_id?: string | null;
     betaalwijze?: Betaalwijze;
     betaalwijze_reden?: string | null;
     schouw_notities?: string | null;
@@ -258,7 +300,8 @@ export async function PATCH(
     if (!PROJECT_STATUSES.includes(body.status)) {
       return NextResponse.json({ error: "Ongeldige status" }, { status: 400 });
     }
-    patch.status = body.status;
+    patch.status =
+      body.status === "installatie_voltooid" ? "after_sale" : body.status;
     // Annulering → van planbord af (schouw/installatie wissen)
     if (body.status === "annulering") {
       patch.schouw_at = null;
@@ -380,6 +423,8 @@ export async function PATCH(
     } else {
       patch.financiering_status = body.financiering_status;
     }
+    patch.financiering_status_at =
+      body.financiering_status === null ? null : new Date().toISOString();
   }
   if (body.warmtefonds_afspraak_at !== undefined) {
     if (body.warmtefonds_afspraak_at === null) {
@@ -483,6 +528,10 @@ export async function PATCH(
   if (body.backoffice_notitie !== undefined) {
     patch.backoffice_notitie = body.backoffice_notitie?.trim() || null;
   }
+  if (body.backoffice_notitie_door !== undefined) {
+    patch.backoffice_notitie_door =
+      body.backoffice_notitie_door?.trim() || null;
+  }
   if (body.installateur_notitie !== undefined) {
     patch.installateur_notitie = body.installateur_notitie?.trim() || null;
   }
@@ -492,14 +541,22 @@ export async function PATCH(
   if (body.installatie_partner_id !== undefined) {
     patch.installatie_partner_id =
       body.installatie_partner_id?.trim() || null;
-    // Partner-wissel: medewerker opnieuw laten kiezen
+    // Partner-wissel: schouw-persoon én installatie-koppel opnieuw kiezen
     patch.installatie_teamgenoot_id = null;
+    patch.installatie_koppel_id = null;
+    patch.service_teamgenoot_id = null;
     patch.monteur = null;
   }
   if (body.installatie_teamgenoot_id !== undefined) {
     // Wordt hieronder gevalideerd t.o.v. partner (na before-load).
     patch.installatie_teamgenoot_id =
       body.installatie_teamgenoot_id?.trim() || null;
+  }
+  if (body.installatie_koppel_id !== undefined) {
+    patch.installatie_koppel_id = body.installatie_koppel_id?.trim() || null;
+  }
+  if (body.service_teamgenoot_id !== undefined) {
+    patch.service_teamgenoot_id = body.service_teamgenoot_id?.trim() || null;
   }
   if (body.schouw_notities !== undefined) {
     patch.schouw_notities = body.schouw_notities?.trim() || null;
@@ -668,7 +725,7 @@ export async function PATCH(
     let beforeQuery = await sb
       .from("projecten")
       .select(
-        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
+        "id, lead_id, status, project_nummer, betaalwijze, materiaal_checks, warmtefonds_aangevraagd_at, warmtefonds_afspraak_at, financiering_status, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, installatie_voltooid_at, review_gevraagd_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, monteur_beoordeling_sterren, installatie_partner_id, leads(status), offertes(financiering_voorbehoud)"
       )
       .eq("id", id)
       .maybeSingle();
@@ -707,23 +764,154 @@ export async function PATCH(
             { status: 400 }
           );
         }
-        const { data: tg } = await sb
+        let tgQ = await sb
           .from("installatie_partner_teamgenoten")
-          .select("id, naam, actief")
+          .select("id, naam, actief, kan_schouw")
           .eq("id", tgId)
           .eq("partner_id", partnerIdForTg)
           .maybeSingle();
+        if (
+          tgQ.error &&
+          (tgQ.error.code === "42703" ||
+            tgQ.error.message?.includes("kan_schouw"))
+        ) {
+          tgQ = await sb
+            .from("installatie_partner_teamgenoten")
+            .select("id, naam, actief")
+            .eq("id", tgId)
+            .eq("partner_id", partnerIdForTg)
+            .maybeSingle();
+        }
+        const tg = tgQ.data as {
+          id: string;
+          naam: string;
+          actief?: boolean | null;
+          kan_schouw?: boolean | null;
+        } | null;
         if (!tg || tg.actief === false) {
           return NextResponse.json(
             { error: "Medewerker niet gevonden bij deze installateur" },
             { status: 400 }
           );
         }
+        if ("kan_schouw" in (tg as object) && tg.kan_schouw !== true) {
+          return NextResponse.json(
+            { error: "Kies iemand die mag schouwen (vinkje Schouw)" },
+            { status: 400 }
+          );
+        }
         patch.installatie_teamgenoot_id = tg.id;
-        patch.monteur = tg.naam;
+        if (body.installatie_koppel_id === undefined) {
+          patch.monteur = tg.naam;
+        }
       } else {
         patch.installatie_teamgenoot_id = null;
-        patch.monteur = null;
+        if (body.installatie_koppel_id === undefined) {
+          patch.monteur = null;
+        }
+      }
+    }
+
+    if (body.installatie_koppel_id !== undefined) {
+      const koppelId =
+        typeof patch.installatie_koppel_id === "string"
+          ? patch.installatie_koppel_id
+          : null;
+      const partnerIdForKoppel =
+        (typeof patch.installatie_partner_id === "string"
+          ? patch.installatie_partner_id
+          : null) ||
+        (before as { installatie_partner_id?: string | null } | null)
+          ?.installatie_partner_id ||
+        null;
+      if (koppelId) {
+        if (!partnerIdForKoppel) {
+          return NextResponse.json(
+            { error: "Kies eerst een installateur" },
+            { status: 400 }
+          );
+        }
+        const { resolveKoppelVanPartner, koppelWeergaveNaam } = await import(
+          "@/lib/installatie-koppel"
+        );
+        const koppel = await resolveKoppelVanPartner(
+          partnerIdForKoppel,
+          koppelId
+        );
+        if (!koppel) {
+          return NextResponse.json(
+            { error: "Koppel niet gevonden bij deze installateur" },
+            { status: 400 }
+          );
+        }
+        patch.installatie_koppel_id = koppel.id;
+        patch.monteur = koppelWeergaveNaam(koppel);
+      } else {
+        patch.installatie_koppel_id = null;
+      }
+    }
+
+    if (body.service_teamgenoot_id !== undefined) {
+      const tgId =
+        typeof patch.service_teamgenoot_id === "string"
+          ? patch.service_teamgenoot_id
+          : null;
+      const partnerIdForSvc =
+        (typeof patch.installatie_partner_id === "string"
+          ? patch.installatie_partner_id
+          : null) ||
+        (before as { installatie_partner_id?: string | null } | null)
+          ?.installatie_partner_id ||
+        null;
+      if (tgId) {
+        if (!partnerIdForSvc) {
+          return NextResponse.json(
+            { error: "Kies eerst een installateur" },
+            { status: 400 }
+          );
+        }
+        let tgQ = await sb
+          .from("installatie_partner_teamgenoten")
+          .select("id, naam, actief, kan_service")
+          .eq("id", tgId)
+          .eq("partner_id", partnerIdForSvc)
+          .maybeSingle();
+        if (
+          tgQ.error &&
+          (tgQ.error.code === "42703" ||
+            tgQ.error.message?.includes("kan_service"))
+        ) {
+          tgQ = await sb
+            .from("installatie_partner_teamgenoten")
+            .select("id, naam, actief")
+            .eq("id", tgId)
+            .eq("partner_id", partnerIdForSvc)
+            .maybeSingle();
+        }
+        const tg = tgQ.data as {
+          id: string;
+          naam: string;
+          actief?: boolean | null;
+          kan_service?: boolean | null;
+        } | null;
+        if (!tg || tg.actief === false) {
+          return NextResponse.json(
+            { error: "Medewerker niet gevonden bij deze installateur" },
+            { status: 400 }
+          );
+        }
+        if ("kan_service" in (tg as object) && tg.kan_service !== true) {
+          return NextResponse.json(
+            { error: "Kies iemand die Service heeft aangevinkt" },
+            { status: 400 }
+          );
+        }
+        patch.service_teamgenoot_id = tg.id;
+        if (body.installatie_koppel_id === undefined) {
+          patch.monteur = tg.naam;
+        }
+      } else {
+        patch.service_teamgenoot_id = null;
       }
     }
 
@@ -773,12 +961,13 @@ export async function PATCH(
       }
     }
 
-    // After sale: pas als BTW + overstap + review allemaal gezet zijn
+    // After sale: pas als BTW + overstap + review + monteurbeoordeling gezet zijn
     const beforeRow = before as {
       status?: string | null;
       btw_terugvragen_aangevraagd_at?: string | null;
       overstap_dynamische_leverancier_at?: string | null;
       review_gevraagd_at?: string | null;
+      monteur_beoordeling_sterren?: number | null;
     } | null;
     const mergedBtw =
       patch.btw_terugvragen_aangevraagd_at !== undefined
@@ -796,8 +985,21 @@ export async function PATCH(
     const reviewAtComing = Boolean(
       mergedReview && !beforeRow?.review_gevraagd_at
     );
+    /** Eerste keer overstap afgevinkt → Batterijconcept × Frank-mail. */
+    const overstapAtComing = Boolean(
+      mergedOverstap && !beforeRow?.overstap_dynamische_leverancier_at
+    );
+    const mergedSterren =
+      patch.monteur_beoordeling_sterren !== undefined
+        ? patch.monteur_beoordeling_sterren
+        : beforeRow?.monteur_beoordeling_sterren;
+    const beoordelingOk =
+      typeof mergedSterren === "number" &&
+      Number.isFinite(mergedSterren) &&
+      mergedSterren >= 0 &&
+      mergedSterren <= 5;
     const allAfterSaleDone = Boolean(
-      mergedBtw && mergedOverstap && mergedReview
+      mergedBtw && mergedOverstap && mergedReview && beoordelingOk
     );
     if (
       allAfterSaleDone &&
@@ -809,12 +1011,10 @@ export async function PATCH(
     ) {
       patch.status = "afgerond";
     }
-    // Handmatig/legacy "review_gevraagd" zonder volledige checklist → blijf
-    // op after-sale-installatie-voltooid tot alle drie klaar zijn.
-    if (patch.status === "review_gevraagd" && !allAfterSaleDone) {
-      patch.status = "installatie_voltooid";
+    if (patch.status === "review_gevraagd") {
+      patch.status = allAfterSaleDone ? "afgerond" : "after_sale";
     }
-    if (patch.status === "review_gevraagd" && allAfterSaleDone) {
+    if (patch.status === "after_sale" && allAfterSaleDone) {
       patch.status = "afgerond";
     }
 
@@ -905,8 +1105,10 @@ export async function PATCH(
     }
 
     if (
-      body.status === "installatie_voltooid" &&
-      before?.status !== "installatie_voltooid"
+      (body.status === "installatie_voltooid" ||
+        body.status === "after_sale") &&
+      before?.status !== "installatie_voltooid" &&
+      before?.status !== "after_sale"
     ) {
       if (
         !(before as { installatie_voltooid_at?: string | null } | null)
@@ -955,9 +1157,13 @@ export async function PATCH(
       const fallbackPatch = { ...patch };
       if (
         error.message?.includes("installatie_teamgenoot_id") ||
+        error.message?.includes("installatie_koppel_id") ||
         error.code === "42703"
       ) {
         delete fallbackPatch.installatie_teamgenoot_id;
+        if (error.message?.includes("installatie_koppel_id")) {
+          delete fallbackPatch.installatie_koppel_id;
+        }
       }
       const retryTg = await sb
         .from("projecten")
@@ -967,6 +1173,23 @@ export async function PATCH(
         .single();
       data = retryTg.data;
       error = retryTg.error;
+    }
+
+    if (
+      error &&
+      (error.code === "42703" ||
+        error.message?.includes("backoffice_notitie_door"))
+    ) {
+      const { backoffice_notitie_door: _dropDoor, ...restDoor } = patch;
+      void _dropDoor;
+      const retryDoor = await sb
+        .from("projecten")
+        .update(restDoor)
+        .eq("id", id)
+        .select(PROJECT_PATCH_SELECT_NO_TG)
+        .single();
+      data = retryDoor.data;
+      error = retryDoor.error;
     }
 
     // Kolom hold_sales_deadline_at nog niet gemigreerd.
@@ -985,6 +1208,24 @@ export async function PATCH(
         .single();
       data = retryHold.data;
       error = retryHold.error;
+    }
+
+    if (
+      error &&
+      patch.status === "after_sale" &&
+      (error.code === "23514" ||
+        error.message?.includes("after_sale") ||
+        error.message?.includes("projecten_status_check"))
+    ) {
+      const fallbackPatch = { ...patch, status: "installatie_voltooid" };
+      const retryAs = await sb
+        .from("projecten")
+        .update(fallbackPatch)
+        .eq("id", id)
+        .select(PROJECT_PATCH_SELECT_NO_TG)
+        .single();
+      data = retryAs.data;
+      error = retryAs.error;
     }
 
     // Kolommen monteur_beoordeling_* / klantvriendelijkheid_* nog niet gemigreerd.
@@ -1099,6 +1340,7 @@ export async function PATCH(
         error.message?.includes("warmtefonds_aangevraagd_at") ||
         error.message?.includes("warmtefonds_afspraak_ingepland") ||
         error.message?.includes("financiering_status") ||
+        error.message?.includes("financiering_status_at") ||
         error.message?.includes("warmtefonds_afspraak_at") ||
         error.message?.includes("btw_terugvragen_aangevraagd_at") ||
         error.message?.includes("overstap_dynamische_leverancier_at") ||
@@ -1117,6 +1359,7 @@ export async function PATCH(
         "review_gevraagd_at",
         "installatie_voltooid_at",
         "financiering_status",
+        "financiering_status_at",
       ] as const;
       for (const k of dropKeys) {
         if (error.message?.includes(k) || error.code === "42703") {
@@ -1190,6 +1433,42 @@ export async function PATCH(
       );
     }
 
+    // Overstap afgevinkt → Batterijconcept × Frank Energie-mail
+    if (overstapAtComing) {
+      try {
+        const { sendOverstapFrankKlantMail } = await import(
+          "@/lib/overstap-frank-mail"
+        );
+        const sent = await sendOverstapFrankKlantMail(
+          sb,
+          id,
+          data as Record<string, unknown>
+        );
+        const leadIdForOverstap =
+          (before?.lead_id || (data as { lead_id?: string }).lead_id) as
+            | string
+            | undefined;
+        await logProjectKlantMail({
+          leadId: leadIdForOverstap,
+          projectId: id,
+          projectNummer: (data as { project_nummer?: string }).project_nummer,
+          to: sent.to,
+          subject: sent.subject,
+          bericht: sent.ok
+            ? "Batterijconcept × Frank Energie-uitnodiging"
+            : sent.error || "Onbekende fout",
+          ok: sent.ok,
+          messageId: sent.messageId,
+          tag: "overstap-frank",
+          titel: sent.ok
+            ? "Overstap-mail verstuurd (Frank Energie)"
+            : "Overstap-mail mislukt",
+        });
+      } catch (e) {
+        console.error("sendOverstapFrankKlantMail:", e);
+      }
+    }
+
     // Review afgevinkt → aparte review-mail + Trustpilot AFS (verified)
     if (reviewAtComing) {
       try {
@@ -1205,34 +1484,54 @@ export async function PATCH(
           (before?.lead_id || (data as { lead_id?: string }).lead_id) as
             | string
             | undefined;
-        if (leadIdForReview) {
-          await logLeadEvent({
-            leadId: leadIdForReview,
-            soort: sent.ok ? "email" : "status",
-            titel: sent.ok
-              ? "Reviewverzoek verstuurd (Trustpilot)"
-              : "Reviewverzoek mail mislukt",
-            detail: sent.ok
-              ? "Klantmail + BCC Trustpilot AFS (verified review)"
-              : sent.error || "Onbekende fout",
-            meta: {
-              project_id: id,
-              project_nummer: (data as { project_nummer?: string })
-                .project_nummer,
-              tag: "review-verzoek",
-              message_id: sent.messageId || null,
-              trustpilot_afs: true,
-            },
-          });
-        }
+        await logProjectKlantMail({
+          leadId: leadIdForReview,
+          projectId: id,
+          projectNummer: (data as { project_nummer?: string }).project_nummer,
+          to: sent.to,
+          subject: sent.subject,
+          bericht: sent.ok
+            ? "Klantmail + BCC Trustpilot AFS (verified review)"
+            : sent.error || "Onbekende fout",
+          ok: sent.ok,
+          messageId: sent.messageId,
+          tag: "review-verzoek",
+          titel: sent.ok
+            ? "Reviewverzoek verstuurd (Trustpilot)"
+            : "Reviewverzoek mail mislukt",
+        });
       } catch (e) {
         console.error("sendReviewVerzoekKlantMail:", e);
       }
     }
 
     if (
-      body.status === "installatie_voltooid" &&
-      before?.status !== "installatie_voltooid"
+      body.btw_terugvragen_aangevraagd_at !== undefined ||
+      body.overstap_dynamische_leverancier_at !== undefined ||
+      body.review_gevraagd_at !== undefined
+    ) {
+      try {
+        const { syncAutoTakenVoorProject } = await import(
+          "@/lib/sync-auto-taken"
+        );
+        await syncAutoTakenVoorProject(
+          sb,
+          id,
+          (data as { status?: string }).status ||
+            (before as { status?: string } | null)?.status ||
+            "after_sale"
+        );
+      } catch (e) {
+        console.error("syncAutoTakenVoorProject after-sale:", e);
+      }
+    }
+
+    if (
+      (body.status === "installatie_voltooid" ||
+        patch.status === "after_sale" ||
+        body.status === "after_sale") &&
+      before?.status !== "installatie_voltooid" &&
+      before?.status !== "after_sale"
     ) {
       try {
         await ensurePartnerInstallatieCreditfactuur(sb, id);

@@ -36,6 +36,7 @@ const PIPELINE_RANK: Record<string, number> = {
   materiaal_besteld: 8,
   installatie_ingepland: 9,
   installatie_voltooid: 10,
+  after_sale: 11,
   review_gevraagd: 11,
   afgerond: 12,
 };

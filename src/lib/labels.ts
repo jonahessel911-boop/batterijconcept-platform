@@ -194,8 +194,9 @@ export const projectStatusLabel: Record<ProjectStatus, string> = {
   restfactuur_betaald: "Restfactuur betaald — installatie plannen",
   materiaal_besteld: "Materiaal ingekocht — wachten op levering",
   installatie_ingepland: "Installatie ingepland",
-  installatie_voltooid: "After sale - installatie voltooid",
-  review_gevraagd: "After sale - review gevraagd",
+  installatie_voltooid: "Installatie voltooid",
+  after_sale: "After sale",
+  review_gevraagd: "After sale",
   afgerond: "Afgerond",
   service: "Service",
   annulering: "Annulering",
@@ -263,6 +264,7 @@ export function resolveInstallateurStatusLabel(
   const st = normalizeProjectStatus(status);
   if (
     st === "installatie_voltooid" ||
+    st === "after_sale" ||
     st === "review_gevraagd" ||
     st === "afgerond" ||
     st === "service" ||
@@ -295,6 +297,7 @@ export const PROJECT_PIPELINE: ProjectStatus[] = [
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
 ];
@@ -323,6 +326,7 @@ export function resolveDisplayProjectStatus(project: {
   schouw_at?: string | null;
   schouw_jaar?: number | null;
   schouw_week?: number | null;
+  installatie_voltooid_at?: string | null;
   betaalwijze?: string | null;
   leads?: { status?: string | null } | null;
   offertes?:
@@ -331,6 +335,9 @@ export function resolveDisplayProjectStatus(project: {
     | null;
 }): ProjectStatus {
   const st = normalizeProjectStatus(project.status);
+  if (st === "review_gevraagd" || st === "installatie_voltooid") {
+    return "after_sale";
+  }
   if (st !== "schouwdag_ingepland") return st;
   if (isSchouwdagDefinitief(project)) return st;
   const leadStatus = project.leads?.status ?? null;
@@ -486,13 +493,15 @@ export function statusTone(
       restfactuur_verstuurd:
         "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
       restfactuur_betaald:
-        "border border-[#C9A227]/40 bg-[#FFF8D6] text-[#8A6D00]",
+        "border border-[#DB2777]/35 bg-[#FCE7F3] text-[#9D174D]",
       materiaal_besteld:
         "border border-[#7C3AED]/30 bg-[#F5F3FF] text-[#5B21B6]",
       installatie_ingepland:
         "border border-[#C45A12]/30 bg-[#FFF0E6] text-[#C45A12]",
       installatie_voltooid:
         "border border-[#0D5C32]/30 bg-[#E8F6EC] text-[#0D5C32]",
+      after_sale:
+        "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
       review_gevraagd:
         "border border-[#0D7A6F]/30 bg-[#E6F7F5] text-[#0D5C54]",
       afgerond:

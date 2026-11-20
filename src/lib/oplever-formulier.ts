@@ -46,6 +46,20 @@ export type OpleverPuntId = (typeof OPLEVER_PUNTEN)[number]["id"];
 export const OPLEVER_AKKOORD_TEKST =
   "Ik ga akkoord met de installatie zoals die opgeleverd is.";
 
+/** Planbord-soort + kop op het opleverformulier bij restpunten na installatie. */
+export const SERVICE_VV_INSTALLATIE = "Service - VV Installatie";
+
+export function isServiceVvInstallatie(
+  notities?: string | null
+): boolean {
+  return (notities || "").trim().startsWith(SERVICE_VV_INSTALLATIE);
+}
+
+export function formatServiceVvNotitie(actie: string): string {
+  const t = actie.trim();
+  return t ? `${SERVICE_VV_INSTALLATIE}\n\n${t}` : SERVICE_VV_INSTALLATIE;
+}
+
 export type OpleverFormulierData = {
   klantNaam: string;
   adres: string;
@@ -60,7 +74,83 @@ export type OpleverFormulierData = {
   /** data:image/png;base64,… */
   handtekeningDataUrl: string;
   opmerkingen: string;
+  /** Restpunt na oplevering → inplannen als Service - VV Installatie. */
+  vervolgNodig: boolean;
+  vervolgActie: string;
+  /** ISO datetime of datetime-local. */
+  vervolgAt: string;
+  vervolgMonteurId: string;
+  vervolgMonteurNaam: string;
 };
+
+/** Opgeslagen opleverdata zonder handtekening (te groot / niet nodig in CRM). */
+export type OpleverFormulierSnapshot = {
+  datum: string;
+  monteurNaam: string;
+  sin: string;
+  afgevinkt: OpleverPuntId[];
+  opmerkingen: string;
+  akkoord: boolean;
+  vervolgNodig: boolean;
+  vervolgActie: string;
+  vervolgAt: string;
+  vervolgMonteurNaam: string;
+};
+
+export function snapshotOpleverFormulier(
+  data: OpleverFormulierData
+): OpleverFormulierSnapshot {
+  return {
+    datum: data.datum,
+    monteurNaam: data.monteurNaam.trim(),
+    sin: data.sin,
+    afgevinkt: [...data.afgevinkt],
+    opmerkingen: data.opmerkingen.trim(),
+    akkoord: data.akkoord,
+    vervolgNodig: data.vervolgNodig === true,
+    vervolgActie: data.vervolgActie.trim(),
+    vervolgAt: data.vervolgAt.trim(),
+    vervolgMonteurNaam: data.vervolgMonteurNaam.trim(),
+  };
+}
+
+export function parseOpleverFormulierSnapshot(
+  raw: unknown
+): OpleverFormulierSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const afgevinkt = (
+    Array.isArray(o.afgevinkt) ? o.afgevinkt.map((x) => String(x)) : []
+  ).filter((id): id is OpleverPuntId =>
+    OPLEVER_PUNTEN.some((p) => p.id === id)
+  );
+  return {
+    datum: String(o.datum || "").trim(),
+    monteurNaam: String(o.monteurNaam || "").trim(),
+    sin: String(o.sin || "").trim(),
+    afgevinkt,
+    opmerkingen: String(o.opmerkingen || "").trim(),
+    akkoord: o.akkoord === true || o.akkoord === "true",
+    vervolgNodig: o.vervolgNodig === true || o.vervolgNodig === "true",
+    vervolgActie: String(o.vervolgActie || "").trim(),
+    vervolgAt: String(o.vervolgAt || "").trim(),
+    vervolgMonteurNaam: String(o.vervolgMonteurNaam || "").trim(),
+  };
+}
+
+/** Alleen de oplever-opmerking, niet de planningsnotitie van de installatie. */
+export function relevanteOpleverNotitie(opts: {
+  snapshot?: OpleverFormulierSnapshot | null;
+  installatieNotities?: string | null;
+}): string | null {
+  const fromForm = opts.snapshot?.opmerkingen?.trim();
+  if (fromForm) return fromForm;
+  const n = (opts.installatieNotities || "").trim();
+  if (!n) return null;
+  const match = n.match(/(?:^|\n)\s*Oplever:\s*([\s\S]+)/i);
+  const extracted = match?.[1]?.trim();
+  return extracted || null;
+}
 
 export function emptyOpleverFormulier(
   prefill?: Partial<OpleverFormulierData>
@@ -79,6 +169,11 @@ export function emptyOpleverFormulier(
     akkoord: false,
     handtekeningDataUrl: "",
     opmerkingen: "",
+    vervolgNodig: false,
+    vervolgActie: "",
+    vervolgAt: "",
+    vervolgMonteurId: "",
+    vervolgMonteurNaam: "",
     ...prefill,
   };
 }
@@ -108,6 +203,17 @@ export function validateOpleverFormulier(
     !data.handtekeningDataUrl.startsWith("data:image")
   ) {
     return "Handtekening van de installateur is verplicht";
+  }
+  if (data.vervolgNodig) {
+    if (!data.vervolgActie.trim()) {
+      return "Beschrijf wat er nog gefixt moet worden";
+    }
+    if (!data.vervolgAt.trim()) {
+      return "Kies datum en tijd voor de service (VV Installatie)";
+    }
+    if (!data.vervolgMonteurNaam.trim() && !data.vervolgMonteurId.trim()) {
+      return "Kies een monteur met Service in het account";
+    }
   }
   return null;
 }

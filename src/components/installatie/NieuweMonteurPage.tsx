@@ -40,8 +40,8 @@ export function NieuweMonteurPage({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!naam.trim() || !email.trim()) return;
-    if (!draft.kan_schouw && !draft.kan_installatie) {
-      setError("Vink minstens Schouw of Installatie aan.");
+    if (!draft.kan_schouw && !draft.kan_installatie && !draft.kan_service) {
+      setError("Vink minstens Schouw, Installatie of Service aan.");
       return;
     }
     setSaving(true);
@@ -59,6 +59,7 @@ export function NieuweMonteurPage({
             rol: draft.rol,
             kan_schouw: draft.kan_schouw,
             kan_installatie: draft.kan_installatie,
+            kan_service: draft.kan_service,
             regios: draft.regios,
           }),
         }

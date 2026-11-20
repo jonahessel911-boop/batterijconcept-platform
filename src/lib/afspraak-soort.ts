@@ -172,6 +172,7 @@ export function isTerugbelSoort(soort: string | null | undefined): boolean {
 }
 
 export function afspraakDuurMinuten(soort: string | null | undefined): number {
+  if (isWarmtefondsAanvraagSoort(soort)) return AFSPRAAK_DUUR_MINUTEN;
   return afspraakBlokkeertAgenda(soort) ? AFSPRAAK_DUUR_MINUTEN : 30;
 }
 

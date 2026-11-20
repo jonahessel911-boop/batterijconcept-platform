@@ -95,3 +95,5 @@ export function emailMuted(text: string): string {
 export function emailBox(html: string): string {
   return `<div style="margin:18px 0;padding:16px;background:${WASH};border:1px solid #e2e8e4;">${html}</div>`;
 }
+
+export { GREEN_DARK as GREEN, ORANGE };

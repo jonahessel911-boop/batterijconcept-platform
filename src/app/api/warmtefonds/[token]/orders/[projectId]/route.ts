@@ -390,6 +390,17 @@ export async function PATCH(
       }
     }
 
+    if ("financiering_status" in patch) {
+      const prevFs = (before as { financiering_status?: string | null })
+        .financiering_status;
+      if (patch.financiering_status !== prevFs) {
+        patch.financiering_status_at =
+          patch.financiering_status == null
+            ? null
+            : new Date().toISOString();
+      }
+    }
+
     if (Object.keys(patch).length > 0) {
       const { error: updErr } = await sb
         .from("projecten")
@@ -409,6 +420,9 @@ export async function PATCH(
           }
           if (updErr.message?.includes("warmtefonds_contact_pogingen")) {
             delete slim.warmtefonds_contact_pogingen;
+          }
+          if (updErr.message?.includes("financiering_status_at")) {
+            delete slim.financiering_status_at;
           }
           if (Object.keys(slim).length === 0) {
             /* optionele kolom — update overslaan */

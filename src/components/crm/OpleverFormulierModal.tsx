@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fromZonedTime } from "date-fns-tz";
+import { AMSTERDAM_TZ } from "@/lib/format";
 import type {
   InstallatiePartnerTeamgenoot,
   Lead,
@@ -12,6 +14,7 @@ import {
   formatOpleverAdres,
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
+  SERVICE_VV_INSTALLATIE,
   type OpleverFormulierData,
   type OpleverPuntId,
   validateOpleverFormulier,
@@ -33,8 +36,24 @@ type PrefillLead = Pick<
 
 type TeamOptie = Pick<
   InstallatiePartnerTeamgenoot,
-  "id" | "naam" | "email" | "telefoon"
+  "id" | "naam" | "email" | "telefoon" | "kan_service"
 >;
+
+function defaultVervolgDatetimeLocal(): string {
+  const now = new Date();
+  const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  d.setHours(10, 0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function datetimeLocalToIso(value: string): string {
+  const t = value.trim();
+  if (!t) return "";
+  const d = fromZonedTime(t, AMSTERDAM_TZ);
+  if (Number.isNaN(d.getTime())) return t;
+  return d.toISOString();
+}
 
 function leadFromProject(project: Project): PrefillLead | null {
   const raw = Array.isArray(project.leads) ? project.leads[0] : project.leads;
@@ -99,6 +118,10 @@ export function OpleverFormulierModal({
   }) => void;
 }) {
   const gekoppeld = teamgenootVanProject(project);
+  const serviceMonteuren = useMemo(
+    () => teamgenoten.filter((t) => t.kan_service === true),
+    [teamgenoten]
+  );
   const [form, setForm] = useState<OpleverFormulierData>(() =>
     buildPrefill(project, monteurOverride)
   );
@@ -150,7 +173,17 @@ export function OpleverFormulierModal({
       setError("Kies wie de installatie heeft uitgevoerd.");
       return;
     }
-    const invalid = validateOpleverFormulier(form);
+    if (form.vervolgNodig && serviceMonteuren.length > 0 && !form.vervolgMonteurId) {
+      setError("Kies een monteur met Service in het account.");
+      return;
+    }
+    const payload: OpleverFormulierData = {
+      ...form,
+      vervolgAt: form.vervolgNodig
+        ? datetimeLocalToIso(form.vervolgAt)
+        : "",
+    };
+    const invalid = validateOpleverFormulier(payload);
     if (invalid) {
       setError(invalid);
       return;
@@ -162,7 +195,7 @@ export function OpleverFormulierModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          form,
+          form: payload,
           teamgenootId: teamgenootId || null,
         }),
       });
@@ -204,8 +237,8 @@ export function OpleverFormulierModal({
               Opleverformulier
             </p>
             <p className="mt-0.5 text-xs text-muted">
-              Vink alle punten af en zet je handtekening. Upload daarnaast de
-              foto batterij op de order — beide zijn verplicht.
+              Vink alle punten af en zet je handtekening. Upload daarnaast
+              foto batterij en installatievideo op de order.
             </p>
           </div>
           <button
@@ -363,6 +396,102 @@ export function OpleverFormulierModal({
               {OPLEVER_AKKOORD_TEKST}
             </span>
           </label>
+
+          <div className="border border-line">
+            <div className="border-b border-line bg-wash px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                Vervolg
+              </p>
+              <p className="mt-0.5 text-xs text-muted">
+                Iets dat nog gefixt moet worden? Boek als {SERVICE_VV_INSTALLATIE}.
+              </p>
+            </div>
+            <div className="space-y-3 px-3 py-3">
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={form.vervolgNodig}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setForm((p) => ({
+                      ...p,
+                      vervolgNodig: on,
+                      vervolgAt: on
+                        ? p.vervolgAt || defaultVervolgDatetimeLocal()
+                        : p.vervolgAt,
+                    }));
+                  }}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-[#1A8A3E]"
+                />
+                <span className="text-sm leading-snug text-ink">
+                  Ja, plan een vervolg in ({SERVICE_VV_INSTALLATIE})
+                </span>
+              </label>
+              {form.vervolgNodig ? (
+                <>
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                      Wat moet er nog gefixt worden *
+                    </span>
+                    <textarea
+                      value={form.vervolgActie}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, vervolgActie: e.target.value }))
+                      }
+                      rows={3}
+                      placeholder="Bijv. kabelgoot afwerken, app koppelen, extra aardlek…"
+                      className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                      Wanneer *
+                    </span>
+                    <input
+                      type="datetime-local"
+                      value={form.vervolgAt}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, vervolgAt: e.target.value }))
+                      }
+                      className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                      Monteur (Service) *
+                    </span>
+                    {serviceMonteuren.length > 0 ? (
+                      <select
+                        value={form.vervolgMonteurId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          const tg = serviceMonteuren.find((t) => t.id === id);
+                          setForm((p) => ({
+                            ...p,
+                            vervolgMonteurId: id,
+                            vervolgMonteurNaam: tg?.naam || "",
+                          }));
+                        }}
+                        className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                      >
+                        <option value="">Kies iemand met Service…</option>
+                        {serviceMonteuren.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.naam}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-sm text-[#C45A12]">
+                        Niemand heeft Service aangevinkt in het account. Zet dat
+                        vinkje eerst bij de medewerker.
+                      </p>
+                    )}
+                  </label>
+                </>
+              ) : null}
+            </div>
+          </div>
 
           <label className="block space-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">

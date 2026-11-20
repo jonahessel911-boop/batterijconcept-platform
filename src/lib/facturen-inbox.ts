@@ -9,6 +9,11 @@ import {
   type FactuurExtract,
 } from "@/lib/facturen-inbox-parse";
 import { extractTextFromMailPdfs } from "@/lib/facturen-inbox-pdf";
+import { downloadInboxAttachment } from "@/lib/inbox-attachments";
+import {
+  extractInvoiceFromFiles,
+  openaiConfigured,
+} from "@/lib/inkomende-factuur-ai";
 import type { InboxMail } from "@/lib/inbox";
 import { rowToInboxMail, type InboxDbRow } from "@/lib/inbox-persist";
 
@@ -35,6 +40,7 @@ export type FacturenInboxItem = {
   extract_raw: Record<string, unknown>;
   goedgekeurd_door: string | null;
   goedgekeurd_op: string | null;
+  betaald_op: string | null;
   notities: string | null;
   created_at: string;
   updated_at: string;
@@ -78,6 +84,95 @@ export function extractFromMail(
   });
 }
 
+function extractIsThin(e: FactuurExtract): boolean {
+  const amounts =
+    e.bedrag_inc_btw != null ||
+    e.bedrag_ex_btw != null ||
+    e.btw_bedrag != null;
+  return !amounts || !e.factuur_nummer;
+}
+
+function mergeAiOntoExtract(
+  base: FactuurExtract,
+  ai: {
+    leverancier: string | null;
+    factuurnummer: string | null;
+    factuurdatum: string | null;
+    bedrag_ex_btw: number | null;
+    btw_bedrag: number | null;
+    bedrag_inc_btw: number | null;
+    iban: string | null;
+    referentie: string | null;
+    vervaldatum: string | null;
+    omschrijving: string | null;
+  }
+): FactuurExtract {
+  const pick = <T>(cur: T | null, next: T | null): T | null =>
+    cur != null && cur !== ("" as unknown) ? cur : next;
+  return {
+    factuur_nummer: pick(base.factuur_nummer, ai.factuurnummer),
+    bedrijfsnaam: pick(base.bedrijfsnaam, ai.leverancier),
+    iban: pick(base.iban, ai.iban),
+    bedrag_ex_btw: pick(base.bedrag_ex_btw, ai.bedrag_ex_btw),
+    bedrag_inc_btw: pick(base.bedrag_inc_btw, ai.bedrag_inc_btw),
+    btw_bedrag: pick(base.btw_bedrag, ai.btw_bedrag),
+    vervaldatum: pick(base.vervaldatum, ai.vervaldatum),
+    factuurdatum: pick(base.factuurdatum, ai.factuurdatum),
+    referentie: pick(
+      base.referentie,
+      ai.referentie || ai.omschrijving
+    ),
+  };
+}
+
+async function enrichExtractWithOpenAi(
+  mail: InboxMail,
+  base: FactuurExtract
+): Promise<FactuurExtract> {
+  if (!openaiConfigured()) return base;
+  if (!extractIsThin(base) && base.bedrijfsnaam) return base;
+  const files: { bytes: Buffer; mimeType: string | null; filename: string }[] =
+    [];
+  for (const a of (mail.attachments || []).slice(0, 2)) {
+    if (!a.storagePath) continue;
+    const pdf =
+      /pdf/i.test(a.contentType || "") || /\.pdf$/i.test(a.filename || "");
+    const img =
+      /^image\//i.test(a.contentType || "") ||
+      /\.(jpe?g|png|webp|gif)$/i.test(a.filename || "");
+    if (!pdf && !img) continue;
+    const file = await downloadInboxAttachment(a.storagePath);
+    if (!file?.bytes?.length) continue;
+    files.push({
+      bytes: file.bytes,
+      mimeType: a.contentType || file.contentType,
+      filename: a.filename || "bijlage",
+    });
+    if (files.length >= 1) break;
+  }
+  if (!files.length) return base;
+  try {
+    const extraText = [
+      mail.subject ? `Onderwerp: ${mail.subject}` : null,
+      mail.fromName || mail.fromEmail
+        ? `Afzender: ${mail.fromName || ""} ${mail.fromEmail || ""}`.trim()
+        : null,
+      "Wij zijn Batterijconcept (klant). Vul leverancier, factuurnr, bedragen excl/btw/incl, IBAN, datum.",
+      mail.bodyText ? `Body:\n${mail.bodyText.slice(0, 1200)}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const ai = await extractInvoiceFromFiles({ files, extraText });
+    return mergeAiOntoExtract(base, ai);
+  } catch (e) {
+    console.warn(
+      "facturen-inbox OpenAI:",
+      e instanceof Error ? e.message : e
+    );
+    return base;
+  }
+}
+
 function isMissingTable(error: { code?: string; message?: string } | null) {
   if (!error) return false;
   return (
@@ -87,6 +182,7 @@ function isMissingTable(error: { code?: string; message?: string } | null) {
     )
   );
 }
+
 
 export async function listFacturenInboxItems(
   sb: SupabaseClient,
@@ -161,7 +257,8 @@ export async function ensureFacturenInboxItem(
   mail: InboxMail,
   opts?: { pdfText?: string | null }
 ): Promise<{ item: FacturenInboxItem | null; hint?: string }> {
-  const extract = extractFromMail(mail, opts?.pdfText);
+  let extract = extractFromMail(mail, opts?.pdfText);
+  extract = await enrichExtractWithOpenAi(mail, extract);
   const existing = await getFacturenInboxItemByMail(sb, mail.id);
   const merged = mergeExtractOntoItem(extract, existing);
 
@@ -189,6 +286,31 @@ export async function ensureFacturenInboxItem(
       const next = merged[k];
       if ((cur == null || cur === "") && next != null && next !== "") {
         patch[k] = next;
+        continue;
+      }
+      // Foute eerdere parse: onze naam als leverancier, of ontbrekende bedragen
+      if (
+        k === "bedrijfsnaam" &&
+        typeof cur === "string" &&
+        typeof extracted === "string" &&
+        extracted &&
+        /batterij\s*concept|jona\s+hessel/i.test(cur) &&
+        !/batterij\s*concept|jona\s+hessel/i.test(extracted)
+      ) {
+        patch[k] = extracted;
+        continue;
+      }
+      if (
+        (k === "bedrag_inc_btw" ||
+          k === "bedrag_ex_btw" ||
+          k === "btw_bedrag" ||
+          k === "factuur_nummer" ||
+          k === "factuurdatum") &&
+        (cur == null || cur === "") &&
+        extracted != null &&
+        extracted !== ""
+      ) {
+        patch[k] = extracted;
         continue;
       }
       // Verbeteringen t.o.v. eerdere heuristiek (altijd extract, niet merge)
@@ -344,7 +466,8 @@ export async function buildFacturenInboxEntries(
       (typeof existing.factuur_nummer === "string" &&
         /[.\s]$/.test(existing.factuur_nummer)) ||
       (typeof existing.bedrijfsnaam === "string" &&
-        existing.bedrijfsnaam === (mail.fromName || "").trim());
+        (existing.bedrijfsnaam === (mail.fromName || "").trim() ||
+          /batterij\s*concept|jona\s+hessel/i.test(existing.bedrijfsnaam)));
     if (needsPdf && pdfAttachments.length) {
       pdfText = await extractTextFromMailPdfs(pdfAttachments);
     }
@@ -354,7 +477,19 @@ export async function buildFacturenInboxEntries(
     entries.push({
       mail,
       item: ensured.item,
-      extract,
+      extract: ensured.item
+        ? {
+            factuur_nummer: ensured.item.factuur_nummer,
+            bedrijfsnaam: ensured.item.bedrijfsnaam,
+            iban: ensured.item.iban,
+            bedrag_ex_btw: ensured.item.bedrag_ex_btw,
+            bedrag_inc_btw: ensured.item.bedrag_inc_btw,
+            btw_bedrag: ensured.item.btw_bedrag,
+            vervaldatum: ensured.item.vervaldatum,
+            factuurdatum: ensured.item.factuurdatum,
+            referentie: ensured.item.referentie,
+          }
+        : extract,
       pdfAttachments,
     });
   }
@@ -429,19 +564,40 @@ export async function patchFacturenInboxItem(
       patch.goedgekeurd_door = opts.adviseurId || null;
       patch.betaal_woensdag = dichtstbijzijndeBetaalWoensdag();
     }
-    if (p.status === "betaald" && !item.goedgekeurd_op) {
-      patch.goedgekeurd_op = new Date().toISOString();
+    if (p.status === "betaald") {
+      const now = new Date().toISOString();
+      if (!item.goedgekeurd_op) {
+        patch.goedgekeurd_op = now;
+        patch.goedgekeurd_door = opts.adviseurId || null;
+      }
+      patch.betaald_op = now;
     }
   }
 
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from("facturen_inbox_items")
     .update(patch)
     .eq("id", item.id)
     .select(ITEM_COLS)
     .maybeSingle();
+  if (error && /betaald_op|42703/i.test(error.message || "")) {
+    const { betaald_op: _drop, ...withoutCol } = patch;
+    const retry = await sb
+      .from("facturen_inbox_items")
+      .update(withoutCol)
+      .eq("id", item.id)
+      .select(ITEM_COLS)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
   if (error) throw error;
-  const updated = data as FacturenInboxItem;
+  const updated = {
+    ...(data as FacturenInboxItem),
+    betaald_op:
+      (data as FacturenInboxItem)?.betaald_op ||
+      (typeof patch.betaald_op === "string" ? patch.betaald_op : null),
+  };
 
   if (p.status === "goedgekeurd" || p.status === "betaald") {
     await upsertFinanceFromFacturenInbox(sb, updated);
@@ -482,11 +638,16 @@ async function upsertFinanceFromFacturenInbox(
     bedrag_inc_btw: bedragInc,
     status,
     goedgekeurd_op: item.goedgekeurd_op,
-    betaald_op: item.status === "betaald" ? new Date().toISOString() : null,
+    betaald_op:
+      item.status === "betaald"
+        ? item.betaald_op || new Date().toISOString()
+        : null,
     meta: {
       betaal_woensdag: item.betaal_woensdag,
       inbox_mail_id: item.inbox_mail_id,
       vervaldatum: item.vervaldatum,
+      factuurdatum: item.factuurdatum,
+      factuur_nummer: item.factuur_nummer,
     },
     updated_at: new Date().toISOString(),
   };

@@ -9,7 +9,10 @@ import {
   SERVICE_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
 import {
+  applyOwnJobsFilter,
+  koppelIdsVoorMonteur,
   resolveInstallatiePortal,
+  resolveOwnJobsScope,
   scopesToOwnJobsOnly,
 } from "@/lib/installatie-portal";
 
@@ -55,19 +58,15 @@ export async function GET(
     const partner = session.partner;
     const sb = getSupabaseAdmin();
 
-    let query = sb
-      .from("projecten")
-      .select(
-        "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, installatie_teamgenoot_id, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
-      )
-      .eq("installatie_partner_id", partner.id);
-
-    if (scopesToOwnJobsOnly(session)) {
-      query = query.eq(
-        "installatie_teamgenoot_id",
-        session.teamgenoot!.id
-      );
-    }
+    const query = applyOwnJobsFilter(
+      sb
+        .from("projecten")
+        .select(
+          "id, project_nummer, titel, status, schouw_at, schouw_notities, installatie_at, installatie_notities, service_at, service_notities, installatie_teamgenoot_id, leads(naam, telefoon, email, straat, huisnummer, toevoeging, postcode, plaats, lead_number)"
+        )
+        .eq("installatie_partner_id", partner.id),
+      await resolveOwnJobsScope(session)
+    );
 
     const { data: orders, error } = await query;
 
@@ -75,6 +74,11 @@ export async function GET(
 
     const events: IcsEvent[] = [];
     const now = new Date();
+    const ownOnly = scopesToOwnJobsOnly(session);
+    const tgId = ownOnly ? session.teamgenoot.id : null;
+    const ownKoppelIds = ownOnly
+      ? new Set(await koppelIdsVoorMonteur(partner.id, session.teamgenoot.id))
+      : null;
 
     for (const row of orders || []) {
       const lead = leadFromRow(row.leads);
@@ -90,7 +94,10 @@ export async function GET(
         .filter(Boolean)
         .join("\n");
 
-      if (row.schouw_at) {
+      if (
+        row.schouw_at &&
+        (!ownOnly || row.installatie_teamgenoot_id === tgId)
+      ) {
         const start = new Date(row.schouw_at);
         if (!Number.isNaN(start.getTime())) {
           events.push({
@@ -107,7 +114,14 @@ export async function GET(
         }
       }
 
-      if (row.installatie_at) {
+      if (
+        row.installatie_at &&
+        (!ownOnly ||
+          (row.installatie_koppel_id &&
+            ownKoppelIds?.has(row.installatie_koppel_id)) ||
+          (!row.installatie_koppel_id &&
+            row.installatie_teamgenoot_id === tgId))
+      ) {
         const start = new Date(row.installatie_at);
         if (!Number.isNaN(start.getTime())) {
           events.push({
@@ -129,7 +143,11 @@ export async function GET(
         if (!Number.isNaN(start.getTime())) {
           events.push({
             uid: `service-${row.id}@batterijconcept.nl`,
-            summary: `Service · ${klant}`,
+            summary: `${
+              (row.service_notities || "").trim().startsWith("Service - VV Installatie")
+                ? "Service - VV Installatie"
+                : "Service"
+            } · ${klant}`,
             description: [baseDesc, row.service_notities || null]
               .filter(Boolean)
               .join("\n\n"),

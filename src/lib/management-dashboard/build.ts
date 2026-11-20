@@ -2322,6 +2322,7 @@ export function buildManagementDashboard(
         { id: "materiaal_besteld", label: "Materiaal besteld" },
         { id: "installatie_ingepland", label: "Installatie ingepland" },
         { id: "installatie_voltooid", label: "Installatie voltooid" },
+        { id: "after_sale", label: "After sale" },
         { id: "review_gevraagd", label: "Review gevraagd" },
         { id: "afgerond", label: "Afgerond" },
         { id: "service", label: "Service" },

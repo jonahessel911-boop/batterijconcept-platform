@@ -15,6 +15,8 @@ import type {
 import { formatDateShort, formatTimeNl } from "@/lib/format";
 import { normalizePostcode } from "@/lib/postcode";
 import {
+  PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF,
+  PROJECT_STATUS_LABEL_RESTFACTUUR_WF,
   projectStatusLabel,
   resolveDisplayProjectStatus,
 } from "@/lib/labels";
@@ -108,7 +110,12 @@ const STATUS_FILTER_OPTIONS: ProjectStatusKey[] = [
 ];
 
 function statusFilterLabel(st: ProjectStatusKey): string {
-  if (st === "restfactuur_verstuurd") return "WF declaratie / Restfactuur";
+  if (st === "restfactuur_verstuurd") {
+    return `${PROJECT_STATUS_LABEL_RESTFACTUUR_WF} / Restfactuur`;
+  }
+  if (st === "restfactuur_betaald") {
+    return PROJECT_STATUS_LABEL_RESTFACTUUR_BETAALD_WF;
+  }
   return projectStatusLabel[st] || st;
 }
 
@@ -555,7 +562,9 @@ export function BackofficeTable({
         return false;
       } else if (
         actief === "actief" &&
+        !statusFilter &&
         (st === "installatie_voltooid" ||
+          st === "after_sale" ||
           st === "review_gevraagd" ||
           st === "afgerond" ||
           st === "service")
@@ -565,6 +574,7 @@ export function BackofficeTable({
         // After sale: na oplevering, nog niet volledig klaar
         if (
           st !== "installatie_voltooid" &&
+          st !== "after_sale" &&
           st !== "review_gevraagd" &&
           st !== "service"
         ) {

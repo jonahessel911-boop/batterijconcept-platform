@@ -21,6 +21,7 @@ export type InboxMailStatus =
 
 export type InboxActionId =
   | "maak_service_verzoek"
+  | "maak_terugbel"
   | "annuleer_afspraak"
   | "mark_geen_interesse"
   | "mark_geen_contact"
@@ -101,6 +102,7 @@ export type InboxMail = {
     cancelAfspraak: boolean;
     leadGeenContact: boolean;
     leadGeenInteresse: boolean;
+    createTerugbel?: boolean;
   } | null;
   leadId?: string | null;
   leadNaam?: string | null;
@@ -268,7 +270,7 @@ export function extractInboxFacts(input: {
 
   let huisbezoek: InboxHuisbezoek | null = null;
   if (
-    /huis\s*bezoek\s*wil\s*ik\s*niet|geen\s*huis\s*bezoek|liever\s*geen\s*huisbezoek|zonder\s*huisbezoek|huisbezoek\s*niet\b/.test(
+    /huis\s*bezoek\s*wil\s*ik\s*niet|geen\s*(huis\s*)?bezoek(\s+aan\s+huis)?|liever\s*geen\s*huisbezoek|zonder\s*huisbezoek|huisbezoek\s*niet\b|hoef\s+geen\s+bezoek/.test(
       lower
     )
   ) {
@@ -288,9 +290,13 @@ export function extractInboxFacts(input: {
   }
 
   const afspraakAfzeggen =
-    /(afspraak|bezoek).{0,50}(cancel|annul|afzeg)|\bcancelen\b|\bafzeggen\b/.test(
+    (/(afspraak|bezoek).{0,50}(cancel|annul|afzeg)|\bcancelen\b|\bafzeggen\b/.test(
       lower
-    ) && !/\b(order|project|contract)\b/.test(lower);
+    ) ||
+      /\ber van af\b|\bafzien van\b|\bniet meer\s+(te\s+)?bellen\b|\bhoeft?\s+mij\s+niet\s+meer\b/.test(
+        lower
+      )) &&
+    !/\b(order|project|contract)\b/.test(lower);
 
   return {
     emails,
@@ -326,6 +332,7 @@ export function actionsForFolder(
       if (effects?.leadGeenInteresse)
         return ["mark_geen_interesse", "open_lead"];
       if (effects?.leadGeenContact) return ["mark_geen_contact", "open_lead"];
+      if (effects?.createTerugbel) return ["maak_terugbel", "open_lead"];
       return ["open_lead"];
     default:
       return [];
@@ -392,6 +399,7 @@ export const INBOX_FOLDERS: {
 
 export const INBOX_ACTION_LABEL: Record<InboxActionId, string> = {
   maak_service_verzoek: "Serviceverzoek maken",
+  maak_terugbel: "Terugbelverzoek",
   annuleer_afspraak: "Definitief afzeggen",
   mark_geen_interesse: 'Markeer lead als "Geen interesse"',
   mark_geen_contact: 'Markeer lead als "Geen contact"',
@@ -499,12 +507,41 @@ export function unreadCount(
   ).length;
 }
 
+/** Mails waar nog niet op geklikt is (status nieuw, niet archief/verzonden). */
+export function unreadInboundCount(mails: InboxMail[]): number {
+  return mails.filter(
+    (m) =>
+      m.status === "nieuw" &&
+      m.folder !== "verzonden" &&
+      m.folder !== "archief"
+  ).length;
+}
+
 export function templatesForFolder(
   folder: InboxFolderId
 ): InboxReplyTemplate[] {
   return INBOX_REPLY_TEMPLATES.filter(
-    (t) => !t.folders || t.folders.includes(folder) || t.folders.includes("inbox")
+    (t) => t.folders?.includes(folder)
   );
+}
+
+/** Alleen de templates die bij díe mail horen — niet alle inbox-snelknoppen. */
+export function templatesForMail(mail: InboxMail): InboxReplyTemplate[] {
+  const folder: InboxFolderId =
+    mail.aiEffects?.cancelAfspraak
+      ? "afzegging_afspraak"
+      : mail.aiEffects?.createServiceVerzoek
+        ? "service"
+        : mail.suggestedFolder && mail.suggestedFolder !== "inbox"
+          ? mail.suggestedFolder
+          : mail.folder;
+  const specific = templatesForFolder(
+    folder === "inbox" || folder === "archief" || folder === "verzonden"
+      ? "algemeen"
+      : folder
+  );
+  if (specific.length > 0) return specific;
+  return INBOX_REPLY_TEMPLATES.filter((t) => t.id === "algemeen_bedankt");
 }
 
 /** Pas AI-boeking (function call) toe op een mail. */
@@ -520,6 +557,7 @@ export function applyInboxBooking(
       cancelAfspraak?: boolean;
       leadGeenContact?: boolean;
       leadGeenInteresse?: boolean;
+      createTerugbel?: boolean;
     };
   }
 ): InboxMail {
@@ -529,6 +567,7 @@ export function applyInboxBooking(
         cancelAfspraak: Boolean(result.effects.cancelAfspraak),
         leadGeenContact: Boolean(result.effects.leadGeenContact),
         leadGeenInteresse: Boolean(result.effects.leadGeenInteresse),
+        createTerugbel: Boolean(result.effects.createTerugbel),
       }
     : null;
   return {

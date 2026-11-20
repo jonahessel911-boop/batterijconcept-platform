@@ -90,6 +90,7 @@ const COLUMN_ACCENT: Partial<Record<ProjectStatus, string>> = {
   materiaal_besteld: "#7C3AED",
   installatie_ingepland: "#C45A12",
   installatie_voltooid: "#0D5C32",
+  after_sale: "#0D7A6F",
   review_gevraagd: "#0D7A6F",
   afgerond: "#0D5C32",
   service: "#00695C",

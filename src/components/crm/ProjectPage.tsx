@@ -91,7 +91,10 @@ import {
   type AnnuleringKeuze,
 } from "./AnnuleringBedenktijdModal";
 import { bedenktijdVanOndertekening } from "@/lib/bedenktijd";
-import { HOLD_SALES_VERLENG_DAGEN } from "@/lib/hold-sales";
+import {
+  HOLD_SALES_VERLENG_DAGEN,
+  stampHoldSalesTerugAfgehandeld,
+} from "@/lib/hold-sales";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -1919,6 +1922,24 @@ export function ProjectPage() {
         }
         const updated = (data as { project?: Project }).project;
         if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
+      } else if (soort === "hold_sales_terug") {
+        const res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            backoffice_notitie: stampHoldSalesTerugAfgehandeld(
+              project.backoffice_notitie
+            ),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Voltooien mislukt"
+          );
+        }
+        const updated = (data as { project?: Project }).project;
+        if (updated) setProject((p) => (p ? { ...p, ...updated } : p));
       } else if (soort === "nabellen_factuur") {
         const actie = openActiesVoorProject(project, facturen).find(
           (a) => a.id === actieId
@@ -2275,7 +2296,8 @@ export function ProjectPage() {
       a.soort === "schakel_financiering" ||
       a.soort === "aangetekende_brief" ||
       a.soort === "annulering_keuze_controle" ||
-      a.soort === "hold_sales_verlopen"
+      a.soort === "hold_sales_verlopen" ||
+      a.soort === "hold_sales_terug"
   );
   const openTerugbel = afspraken
     .filter(isActieveTerugbel)
@@ -2468,6 +2490,7 @@ export function ProjectPage() {
 
   if (
     project.status === "installatie_voltooid" ||
+    project.status === "after_sale" ||
     project.status === "review_gevraagd" ||
     project.status === "afgerond" ||
     project.status === "service"
@@ -3498,9 +3521,11 @@ export function ProjectPage() {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
                   setOkMsg(
-                    p.status === "opstarten_voltooid_afwachten_wf"
-                      ? "Opstarten voltooid — afwachten WF"
-                      : "Schouwweek gezet."
+                    p.status === "hold_sales_actie"
+                      ? "HOLD sales — order terug naar de verkoper."
+                      : p.status === "opstarten_voltooid_afwachten_wf"
+                        ? "Opstarten voltooid — afwachten WF"
+                        : "Schouwweek gezet."
                   );
                 }}
                 onFacturenChanged={() => {
@@ -3551,6 +3576,7 @@ export function ProjectPage() {
 
               <ProjectAfrondingChecklist
                 project={project}
+                authorNaam={session?.naam || null}
                 onUpdated={(p) => {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
@@ -3995,6 +4021,11 @@ export function ProjectPage() {
                           {a.detail ? (
                             <p className="mt-0.5 text-[11px] text-muted">
                               {a.detail}
+                            </p>
+                          ) : null}
+                          {a.soort === "hold_sales_terug" && a.eigenaarNaam ? (
+                            <p className="mt-0.5 text-[11px] font-medium text-ink">
+                              Eigenaar: {a.eigenaarNaam}
                             </p>
                           ) : null}
                         </div>

@@ -2,6 +2,8 @@
 
 Salesforce-achtige CRM voor leads, offertes, projecten en facturen — alles gekoppeld via één **lead ID**.
 
+**Overdracht (hoe het product in elkaar zit, waar code leeft, deploy, wat je niet moet doen):** [`docs/OVERDRACHT.md`](docs/OVERDRACHT.md). Deze README is vooral stack, starten en API’s.
+
 ## Stack
 
 - Next.js (App Router) + TypeScript + Tailwind

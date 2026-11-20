@@ -6,6 +6,7 @@ import {
   isAanbetalingFactuurOmschrijving,
   isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
+import { normalizeHouseNumber, normalizePostcode } from "@/lib/postcode";
 import type { FinancieringStatus } from "@/lib/financiering-status";
 import {
   FINANCIERING_PIPELINE,
@@ -14,8 +15,7 @@ import {
   isFinancieringStatus,
   normalizeFinancieringStatus,
 } from "@/lib/financiering-status";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
-import { warmtefondsWelkomEmail } from "@/lib/email/templates";
+import { appBaseUrl } from "@/lib/email/postmark";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type WarmtefondsOperator = {
@@ -25,7 +25,7 @@ export type WarmtefondsOperator = {
   telefoon: string | null;
   actief: boolean;
   portal_token: string;
-  /** Vergoeding per aanvraag (opgeslagen incl. btw). Null = standaard €150 excl. */
+  /** Vergoeding per aanvraag (opgeslagen incl. btw). Null = standaard €300 excl. */
   tarief_inc?: number | null;
 };
 
@@ -42,6 +42,8 @@ export async function verstuurWarmtefondsAccountInvite(opts: {
   const email = opts.email.trim().toLowerCase();
   if (!email) return { ok: false, error: "E-mail ontbreekt" };
   try {
+    const { sendEmail } = await import("@/lib/email/postmark");
+    const { warmtefondsWelkomEmail } = await import("@/lib/email/templates");
     await sendEmail({
       to: email,
       subject: "Je Warmtefonds-account — Batterijconcept",
@@ -226,7 +228,11 @@ export const WF_PORTAL_PROJECT_SELECT_MIN = `
 
 export type WarmtefondsPortalBedragen = {
   totaalInc: number | null;
+  /** Aanbetaling = BTW van de batterij. */
   aanbetalingInc: number | null;
+  /** Te financieren via WF: order − BTW-aanbetaling (niet het € 8.500-plafond). */
+  teFinancierenInc: number | null;
+  /** Alias van teFinancierenInc voor bestaande UI. */
   warmtefondsInc: number | null;
   offerteGetekend: boolean;
 };
@@ -249,6 +255,7 @@ export function warmtefondsPortalBedragen(
   const leeg: WarmtefondsPortalBedragen = {
     totaalInc: null,
     aanbetalingInc: null,
+    teFinancierenInc: null,
     warmtefondsInc: null,
     offerteGetekend: false,
   };
@@ -271,10 +278,13 @@ export function warmtefondsPortalBedragen(
     handmatigIncBtw: off.aanbetaling_bedrag_inc,
     financieringVoorbehoud: true,
   });
+  const aanbetalingInc = off.aanbetaling_te_innen_inc ?? a.bedragIncBtw;
+  const teFinancierenInc = a.restantIncBtw;
   return {
     totaalInc: a.orderIncBtw,
-    aanbetalingInc: off.aanbetaling_te_innen_inc ?? a.bedragIncBtw,
-    warmtefondsInc: a.warmtefondsIncBtw,
+    aanbetalingInc,
+    teFinancierenInc,
+    warmtefondsInc: teFinancierenInc,
     offerteGetekend,
   };
 }
@@ -369,33 +379,240 @@ export function isWarmtefondsStopStatus(
   );
 }
 
-/**
- * Pas in het WF-portaal nadat BO heeft doorgestuurd
- * (`financiering_status` gezet, start = doorgestuurd_naar_edwin).
- * Alleen `betaalwijze=warmtefonds` is niet genoeg.
- */
-export function isWarmtefondsRelatedProject(row: {
+type WarmtefondsRelatedRow = {
   betaalwijze?: string | null;
   financiering_status?: string | null;
-}): boolean {
-  // Eigen middelen hoort nooit in het WF-portaal.
+  warmtefonds_aangevraagd_at?: string | null;
+};
+
+/**
+ * Pas in het WF-portaal nadat BO heeft doorgestuurd
+ * (`financiering_status` in de pipeline). Alleen `betaalwijze=warmtefonds`
+ * is niet genoeg. Eigen middelen nooit.
+ */
+export function isWarmtefondsRelatedProject(row: WarmtefondsRelatedRow): boolean {
   if (row.betaalwijze === "eigen_middelen") return false;
-  // Nog niet doorgestuurd naar Edwin → niet in portaal.
-  if (!row.financiering_status) return false;
-  if (row.betaalwijze === "warmtefonds") return true;
-  // Legacy: betaalwijze nog leeg, wél financieringspipeline → WF
-  if (!row.betaalwijze) return true;
-  return false;
+  if (row.betaalwijze && row.betaalwijze !== "warmtefonds") return false;
+  const n = normalizeFinancieringStatus(row.financiering_status);
+  if (n) return true;
+  return Boolean(row.warmtefonds_aangevraagd_at);
 }
 
 /** Open werk in het Warmtefonds-portaal (geen hold/annulering). */
-export function isWarmtefondsPortalProject(row: {
-  betaalwijze?: string | null;
-  financiering_status?: string | null;
+export function isWarmtefondsPortalProject(row: WarmtefondsRelatedRow & {
   status?: string | null;
 }): boolean {
   if (isWarmtefondsStopStatus(row.status)) return false;
   return isWarmtefondsRelatedProject(row);
+}
+
+type PortalAdresLead = {
+  postcode?: string | null;
+  huisnummer?: string | null;
+  toevoeging?: string | null;
+  telefoon?: string | null;
+};
+
+function leadVanPortalRow(row: { leads?: unknown }): PortalAdresLead | null {
+  const raw = row.leads;
+  if (!raw) return null;
+  const lead = Array.isArray(raw) ? raw[0] : raw;
+  return lead && typeof lead === "object" ? (lead as PortalAdresLead) : null;
+}
+
+/**
+ * Zelfde woning = zelfde Warmtefonds-aanvraag.
+ * Postcode + huisnummer + toevoeging; leeg adres wordt niet gegroepeerd.
+ */
+export function warmtefondsAdresSleutel(lead: {
+  postcode?: string | null;
+  huisnummer?: string | null;
+  toevoeging?: string | null;
+} | null | undefined): string | null {
+  if (!lead) return null;
+  const pc = normalizePostcode(lead.postcode || "");
+  const nrRaw = String(lead.huisnummer || "").trim();
+  if (!pc || pc.length < 4 || !nrRaw) return null;
+  const nr = normalizeHouseNumber(nrRaw);
+  if (!nr) return null;
+  const toev = (lead.toevoeging || "").trim().toUpperCase().replace(/\s+/g, "");
+  return `${pc}|${nr}|${toev}`;
+}
+
+export type WarmtefondsSamengevoegdProject = {
+  id: string;
+  project_nummer: string;
+};
+
+const AANBETALING_STATUS_RANK: Record<string, number> = {
+  concept: 0,
+  verzonden: 1,
+  deels_betaald: 2,
+  betaald: 3,
+};
+
+function pipelineRank(status: string | null | undefined): number {
+  const n = normalizeFinancieringStatus(status);
+  if (!n) return -1;
+  if (n === "afgewezen") return FINANCIERING_PIPELINE.length + 1;
+  const idx = FINANCIERING_PIPELINE.indexOf(n);
+  return idx >= 0 ? idx : 0;
+}
+
+function earliestIso(
+  values: (string | null | undefined)[]
+): string | null {
+  let best: string | null = null;
+  let bestMs = Infinity;
+  for (const v of values) {
+    if (!v) continue;
+    const ms = new Date(v).getTime();
+    if (!Number.isFinite(ms) || ms >= bestMs) continue;
+    bestMs = ms;
+    best = v;
+  }
+  return best;
+}
+
+function sumNum(values: (number | null | undefined)[]): number | null {
+  let sum = 0;
+  let any = false;
+  for (const v of values) {
+    if (v == null || !Number.isFinite(v)) continue;
+    sum += v;
+    any = true;
+  }
+  return any ? Math.round(sum * 100) / 100 : null;
+}
+
+function slechtsteAanbetalingStatus(
+  statuses: (string | null | undefined)[]
+): string | null {
+  let worst: string | null = null;
+  let rank = 99;
+  for (const s of statuses) {
+    const key = (s || "").trim();
+    const r = key ? (AANBETALING_STATUS_RANK[key] ?? 4) : 4;
+    if (r < rank) {
+      rank = r;
+      worst = key || null;
+    }
+  }
+  return worst;
+}
+
+function kiesTelefoon(leads: (PortalAdresLead | null)[]): string | null {
+  const nums = leads
+    .map((l) => (l?.telefoon || "").trim())
+    .filter(Boolean);
+  const intl = nums.find((n) => n.startsWith("+"));
+  return intl || nums[0] || null;
+}
+
+export type WarmtefondsAdresMergeRow = {
+  id: string;
+  project_nummer?: string | null;
+  financiering_status?: string | null;
+  warmtefonds_afspraak_at?: string | null;
+  warmtefonds_contact_pogingen?: number | null;
+  doorgestuurd_at?: string | null;
+  aanbetaling_factuur_status?: string | null;
+  leads?: unknown;
+  bedragen?: {
+    totaalInc?: number | null;
+    aanbetalingInc?: number | null;
+    teFinancierenInc?: number | null;
+    warmtefondsInc?: number | null;
+    offerteGetekend?: boolean;
+  } | null;
+  samengevoegd?: WarmtefondsSamengevoegdProject[];
+};
+
+/**
+ * Meerdere orders op hetzelfde adres → één Warmtefonds-aanvraag.
+ * Te financieren = som van (order − BTW-aanbetaling) per batterij.
+ */
+export function mergeWarmtefondsAanvragenOpAdres<
+  T extends WarmtefondsAdresMergeRow,
+>(rows: T[]): T[] {
+  const groepen = new Map<string, T[]>();
+  const rest: T[] = [];
+  for (const row of rows) {
+    const key = warmtefondsAdresSleutel(leadVanPortalRow(row));
+    if (!key) {
+      rest.push(row);
+      continue;
+    }
+    const g = groepen.get(key);
+    if (g) g.push(row);
+    else groepen.set(key, [row]);
+  }
+
+  const out: T[] = [...rest];
+  for (const groep of groepen.values()) {
+    if (groep.length === 1) {
+      out.push(groep[0]!);
+      continue;
+    }
+    const sorted = [...groep].sort((a, b) => {
+      const pr = pipelineRank(b.financiering_status) - pipelineRank(a.financiering_status);
+      if (pr !== 0) return pr;
+      const aw = a.bedragen?.warmtefondsInc ?? 0;
+      const bw = b.bedragen?.warmtefondsInc ?? 0;
+      if (bw !== aw) return bw - aw;
+      return String(a.project_nummer || "").localeCompare(
+        String(b.project_nummer || ""),
+        "nl"
+      );
+    });
+    const primary = sorted[0]!;
+    const teFinancierenSom = sumNum(
+      sorted.map(
+        (r) =>
+          r.bedragen?.teFinancierenInc ?? r.bedragen?.warmtefondsInc ?? null
+      )
+    );
+    const aanbetalingSom = sumNum(sorted.map((r) => r.bedragen?.aanbetalingInc));
+    const totaalSom = sumNum(sorted.map((r) => r.bedragen?.totaalInc));
+    const tel = kiesTelefoon(sorted.map(leadVanPortalRow));
+    const primaryLead = leadVanPortalRow(primary);
+    const leadsNext =
+      tel && primaryLead && primaryLead.telefoon !== tel
+        ? Array.isArray(primary.leads)
+          ? [{ ...(primary.leads[0] as object), telefoon: tel }]
+          : primary.leads && typeof primary.leads === "object"
+            ? { ...(primary.leads as object), telefoon: tel }
+            : primary.leads
+        : primary.leads;
+
+    out.push({
+      ...primary,
+      leads: leadsNext,
+      doorgestuurd_at: earliestIso(sorted.map((r) => r.doorgestuurd_at)),
+      warmtefonds_afspraak_at:
+        earliestIso(sorted.map((r) => r.warmtefonds_afspraak_at)) ??
+        primary.warmtefonds_afspraak_at,
+      warmtefonds_contact_pogingen: Math.max(
+        0,
+        ...sorted.map((r) => Number(r.warmtefonds_contact_pogingen) || 0)
+      ),
+      aanbetaling_factuur_status: slechtsteAanbetalingStatus(
+        sorted.map((r) => r.aanbetaling_factuur_status)
+      ),
+      bedragen: {
+        ...(primary.bedragen || {}),
+        totaalInc: totaalSom,
+        aanbetalingInc: aanbetalingSom,
+        teFinancierenInc: teFinancierenSom,
+        warmtefondsInc: teFinancierenSom,
+      },
+      samengevoegd: sorted.map((r) => ({
+        id: r.id,
+        project_nummer: String(r.project_nummer || r.id),
+      })),
+    });
+  }
+  return out;
 }
 
 export type PortalBetalingKey =

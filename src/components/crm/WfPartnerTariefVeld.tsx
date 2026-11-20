@@ -8,7 +8,7 @@ import {
 import { formatEuro } from "@/lib/format";
 
 type Props = {
-  /** Eigen tarief incl. btw (DB). Null/leeg → standaard (€150 excl.). */
+  /** Eigen tarief incl. btw (DB). Null/leeg → standaard (€300 excl.). */
   value: number | null;
   /** Slaat incl. btw op (null = standaard). */
   onChange: (next: number | null) => void;

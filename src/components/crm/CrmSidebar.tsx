@@ -553,11 +553,20 @@ export function CrmSidebar({
                           >
                             <span
                               className={[
-                                "shrink-0",
+                                "relative shrink-0",
                                 isActive ? "text-green-deeper" : "text-muted",
                               ].join(" ")}
                             >
                               {item.icon}
+                              {iconOnly &&
+                              typeof counts?.[item.id] === "number" &&
+                              (counts[item.id] || 0) > 0 ? (
+                                <span className="absolute -top-1.5 -right-2 inline-flex min-w-[1.05rem] items-center justify-center rounded-full bg-green px-1 text-[9px] font-bold leading-4 text-white tabular-nums">
+                                  {(counts[item.id] || 0) > 99
+                                    ? "99+"
+                                    : counts[item.id]}
+                                </span>
+                              ) : null}
                             </span>
                             {!iconOnly ? (
                               <>

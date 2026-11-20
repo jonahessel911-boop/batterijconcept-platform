@@ -190,6 +190,7 @@ type InboxFactuurRow = {
   betaal_woensdag: string | null;
   factuurdatum: string | null;
   goedgekeurd_op: string | null;
+  betaald_op?: string | null;
   referentie: string | null;
   inbox_mail_id: string;
 };
@@ -941,7 +942,7 @@ export function CreditfacturenPanel({
         bedragInc,
         status: f.status,
         goedgekeurd_op: f.goedgekeurd_op ?? null,
-        betaald_op: null,
+        betaald_op: f.betaald_op ?? (f.status === "betaald" ? f.goedgekeurd_op : null),
         factuurdatum: f.factuurdatum || f.betaal_woensdag || "",
         weekJaar: null,
         weekNummer: null,

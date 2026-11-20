@@ -32,7 +32,10 @@ import {
   factuurOpvolgActie,
   vervaldatumEndOfDay,
 } from "@/lib/factuur-betaling";
-import { isAnnuleringsFactuur } from "@/lib/factuur-soort";
+import {
+  isAnnuleringsFactuur,
+  isWarmtefondsFactuurContext,
+} from "@/lib/factuur-soort";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
 import {
   annuleringsDoorFromAfspraak,
@@ -56,6 +59,7 @@ import {
   kanEmInstallatieInplannen,
   kanWfInstallatieInplannen,
   kanWfSchouwdagInplannen,
+  schouwdagInplannenNietMeerNodig,
   resolveProjectVolgendeStap,
 } from "@/lib/project-volgende-stap";
 import { toOperationalStatus } from "@/lib/project-status-config";
@@ -63,15 +67,22 @@ import {
   bestelDeadlineVoorInstallatie,
   INKOOP_DAGEN_VOOR_INSTALLATIE,
   materiaalNogTeBestellen,
+  nextWeekdayAmsterdamAfter,
 } from "@/lib/inkoop-sla";
 import {
   FINANCIERING_PIPELINE,
   FINANCIERING_STATUS_LABEL,
-  FINANCIERING_STATUS_TAAK,
+  financieringFaseGewijzigdAt,
+  isFinancieringNogBezig,
+  isFinancieringWachtOpUitbetaling,
   normalizeFinancieringStatus,
   resolveFinancieringStatus,
   type FinancieringStatus,
 } from "@/lib/financiering-status";
+import {
+  holdSalesTerugEigenaarNaam,
+  isHoldSalesTerugOpen,
+} from "@/lib/hold-sales";
 
 export type BackofficeActieSoort =
   | "bel_schouw_aanbetaling"
@@ -84,9 +95,11 @@ export type BackofficeActieSoort =
   | "aangetekende_brief"
   | "annulering_keuze_controle"
   | "hold_sales_verlopen"
+  | "hold_sales_terug"
   | "schouw_inplannen"
   | "wacht_warmtefonds"
-  | "eindafrekening";
+  | "eindafrekening"
+  | "after_sale";
 
 export type HerplanBron = "klant" | "adviseur" | "deur_niet_open";
 
@@ -137,6 +150,9 @@ export type BackofficeActie = {
   afspraakStartAt?: string | null;
   /** Klant-annulering vs adviseur/CRM-herplan */
   herplanBron?: HerplanBron;
+  /** Actie-eigenaar (bijv. verkoper bij HOLD teruggestuurd). */
+  eigenaarId?: string | null;
+  eigenaarNaam?: string | null;
   /** Volgende-stap: waarom dit nu moet */
   reden?: string | null;
   /** Volgende-stap: toon planner voor exacte schouwdag */
@@ -408,6 +424,11 @@ export function isAangetekendeBriefActieOpen(
   if (heeftGecrediteerdeAanbetaling(project, facturen)) return false;
   if (heeftMinimaalEenBetaaldeFactuur(project, facturen)) return false;
 
+  // WF nog bezig: geen annuleringskosten — wachten op Warmtefonds.
+  if (isWarmtefondsProject(project) && isFinancieringNogBezig(project)) {
+    return false;
+  }
+
   return true;
 }
 
@@ -452,6 +473,10 @@ export function isAnnuleringKeuzeControleOpen(
   if (heeftAnnuleringskostenFactuur(project, facturen)) return false;
   // Betaalde aanbetaling = traject loopt → geen annuleringsfactuur-actie
   if (heeftMinimaalEenBetaaldeFactuur(project, facturen)) return false;
+
+  if (isWarmtefondsProject(project) && isFinancieringNogBezig(project)) {
+    return false;
+  }
 
   return true;
 }
@@ -578,8 +603,8 @@ export function openBelSchouwActies(
       titel: belSchouwActieTitel(project),
       detail: warmtefonds
         ? geenAanbetaling
-          ? `Opstarten: geen aanbetaling, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
-          : `Opstarten: aanbetalingsfactuur, gegevens naar Edwin, schouwweek (${schouwWeekLabel}).`
+          ? `Opstarten: WF-portaal + schouwweek (${schouwWeekLabel}).`
+          : `Opstarten: BTW-factuur, WF-portaal, schouwweek (${schouwWeekLabel}).`
         : geenAanbetaling
           ? `Opstarten: geen aanbetaling — schouwdag inplannen (${schouwWeekLabel}).`
           : schouwActionable
@@ -736,6 +761,62 @@ export function openHoldSalesVerlopenActies(
   return items;
 }
 
+export function openHoldSalesTerugActies(
+  projecten: Project[],
+  now = new Date(),
+  adviseurs: Pick<{ id: string; naam: string }, "id" | "naam">[] = []
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isHoldSalesTerugOpen(project)) continue;
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const notitie = project.backoffice_notitie?.trim() || "";
+    const reply = notitie
+      .replace(/^HOLD teruggestuurd door [^:\n]+:\s*/i, "")
+      .trim();
+    const eigenaarNaam = holdSalesTerugEigenaarNaam(project);
+    const eigenaarId =
+      eigenaarNaam && adviseurs.length
+        ? adviseurs.find(
+            (a) =>
+              (a.naam || "").trim().toLowerCase() ===
+              eigenaarNaam.trim().toLowerCase()
+          )?.id || null
+        : null;
+    const terugAt = new Date(project.updated_at || now);
+    const deadlineAt = Number.isNaN(terugAt.getTime()) ? now : terugAt;
+    items.push({
+      id: `hold-sales-terug-${project.id}`,
+      soort: "hold_sales_terug",
+      titel: "HOLD teruggestuurd — opvolgen",
+      detail: reply
+        ? `Sales: ${reply}`
+        : "Sales heeft de HOLD teruggestuurd. Neem de klant over of zet opnieuw HOLD.",
+      reden: eigenaarNaam
+        ? `Teruggestuurd door ${eigenaarNaam}.`
+        : "Teruggestuurd door sales.",
+      deadlineAt: deadlineAt.toISOString(),
+      saleAt: saleMomentVanProject(project).toISOString(),
+      overdue: deadlineAt.getTime() <= now.getTime(),
+      prio: true,
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+      eigenaarId,
+      eigenaarNaam,
+    });
+  }
+  return items;
+}
+
 export function openAnnuleringKeuzeControleActies(
   projecten: Project[],
   facturen: Factuur[] = [],
@@ -814,6 +895,7 @@ export function openNabellenFactuurActies(
   for (const f of facturen) {
     if (f.credit_van_factuur_id) continue;
     if (metCredit.has(f.id)) continue;
+    if ((f.status || "").toLowerCase() === "concept") continue;
 
     // HOLD sales / annulering → bij adviseur, niet in BO-acties
     const linkedProject =
@@ -822,16 +904,13 @@ export function openNabellenFactuurActies(
       (f.lead_id ? projectByLead.get(f.lead_id) : undefined);
     if (linkedProject && isProjectBuitenActies(linkedProject)) continue;
 
-    // Warmtefonds-restfactuur: betaalroute via fonds, geen BO-opvolging
+    // Warmtefonds: betaling via fonds / geen BO-opvolging (aanbetaling, intern, declaratie)
     if (
-      linkedProject &&
-      isWarmtefondsProject(linkedProject) &&
-      isRestantFactuurOmschrijving(f.omschrijving)
+      (linkedProject && isWarmtefondsProject(linkedProject)) ||
+      isWarmtefondsFactuurContext({ project: linkedProject })
     ) {
       continue;
     }
-    // Afspraak ingepland + aanbetaling Verzonden → eigen WF-opvolgactie
-    if (linkedProject && isWfAanbetalingOpvolgen(linkedProject, f)) continue;
 
     const fase = factuurOpvolgActie({
       status: f.status,
@@ -910,95 +989,15 @@ export function isWfAanbetalingOpvolgen(
 }
 
 /**
- * Warmtefonds: openstaande aanbetaling → vriendelijke herinneringsmail,
- * zodat we pas na betaling Warmtefonds kunnen aanvragen.
- * Staat de afspraak op Afspraak ingepland en de factuur nog op Verzonden,
- * dan heet de actie “Factuur opvolgen aanbetaling Warmtefonds”.
+ * Warmtefonds-facturen (aanbetaling, intern, declaratie) worden niet
+ * opgevolgd in BO-acties — betaling loopt via het fonds / geen nabellen.
  */
 export function openWarmtefondsAanbetalingHerinneringActies(
-  facturen: Factuur[],
-  now = new Date(),
-  projecten: Project[] = []
+  _facturen: Factuur[] = [],
+  _now = new Date(),
+  _projecten: Project[] = []
 ): BackofficeActie[] {
-  const projectById = new Map(projecten.map((p) => [p.id, p]));
-  const projectByLead = new Map<string, Project>();
-  const projectByOfferte = new Map<string, Project>();
-  for (const p of projecten) {
-    if (p.lead_id && !projectByLead.has(p.lead_id)) {
-      projectByLead.set(p.lead_id, p);
-    }
-    if (p.offerte_id) projectByOfferte.set(p.offerte_id, p);
-  }
-
-  const metCredit = new Set(
-    facturen
-      .map((f) => f.credit_van_factuur_id)
-      .filter((id): id is string => Boolean(id))
-  );
-  const items: BackofficeActie[] = [];
-
-  for (const f of facturen) {
-    if (f.credit_van_factuur_id) continue;
-    if (metCredit.has(f.id)) continue;
-    if (!f.lead_id) continue;
-    if (!isAanbetalingFactuurOmschrijving(f.omschrijving)) continue;
-    if (f.status !== "verzonden" && f.status !== "deels_betaald") continue;
-
-    const project =
-      (f.project_id ? projectById.get(f.project_id) : undefined) ||
-      (f.offerte_id ? projectByOfferte.get(f.offerte_id) : undefined) ||
-      (f.lead_id ? projectByLead.get(f.lead_id) : undefined);
-    if (!project) continue;
-    if (isProjectBuitenActies(project)) continue;
-    if (!isWarmtefondsProject(project)) continue;
-    const opvolgen = isWfAanbetalingOpvolgen(project, f);
-    // Na WF-aanvraag is de losse herinnering niet meer de juiste actie.
-    // Opvolgen blijft zolang de afspraak ingepland is en de factuur Verzonden.
-    if (!opvolgen && project.warmtefonds_aangevraagd_at) continue;
-
-    const lead = leadFromFactuur(f);
-    const deadline =
-      factuurEffectieveDeadline({
-        vervaldatum: f.vervaldatum,
-        afgesproken_betaaldatum: f.afgesproken_betaaldatum,
-      }) || f.vervaldatum;
-    const deadlineAt = deadline
-      ? vervaldatumEndOfDay(deadline)
-      : now;
-    const overdue = now.getTime() > deadlineAt.getTime();
-    const msTot = deadlineAt.getTime() - now.getTime();
-    const prio = overdue || msTot <= 2 * 24 * 60 * 60 * 1000;
-
-    items.push({
-      id: `wf-aanbetaling-herinnering-${f.id}`,
-      soort: "wf_aanbetaling_herinnering",
-      titel: opvolgen
-        ? "Factuur opvolgen aanbetaling Warmtefonds"
-        : "Herinneringsmail aanbetaling (Warmtefonds)",
-      detail: opvolgen
-        ? `Afspraak staat op Afspraak ingepland. Aanbetaling ${f.factuur_nummer} is verzonden en nog niet betaald.`
-        : `Aanbetaling ${f.factuur_nummer} openstaand — nodig vóór Warmtefonds-aanvraag. Stuur vriendelijke herinnering met factuur-PDF.`,
-      reden: opvolgen
-        ? `Warmtefonds: afspraak ingepland, aanbetaling ${f.factuur_nummer} nog Verzonden.`
-        : `Warmtefonds: aanbetaling ${f.factuur_nummer} nog niet (volledig) betaald.`,
-      deadlineAt: deadlineAt.toISOString(),
-      overdue,
-      prio,
-      leadId: f.lead_id,
-      leadNaam: lead?.naam || "—",
-      telefoon: (lead as { telefoon?: string | null } | null)?.telefoon || null,
-      offerteNummer:
-        f.offertes?.offerte_nummer ||
-        (f.omschrijving?.match(/OFF-[\w-]+/i)?.[0] ?? null),
-      projectId: project.id,
-      projectNummer: project.project_nummer,
-      factuurId: f.id,
-      factuurNummer: f.factuur_nummer,
-      href: `/facturen/${f.id}`,
-      project,
-    });
-  }
-  return items;
+  return [];
 }
 
 /**
@@ -1276,6 +1275,8 @@ export function openVolgendeStapActies(
     const op = toOperationalStatus(project.status);
     // Review/referrals = sales-actie (SalesReferralActies), niet backoffice.
     if (op === "review_gevraagd" || op === "afgerond") continue;
+    // After sale: één checklist-actie (openAfterSaleActies), geen aparte volgende-stap.
+    if (op === "after_sale" || op === "installatie_voltooid") continue;
     if (
       op === "schouwweek_inplannen" &&
       !isKickoffComplete(project, related)
@@ -1288,6 +1289,15 @@ export function openVolgendeStapActies(
     if (/vraag referrals|project is afgerond/i.test(stap.titel)) continue;
     // Legacy: “betaling WF controleren” is geen actie meer
     if (/betaling warmtefonds controleren/i.test(stap.titel)) continue;
+    // WF-portaal: afspraak voltooien, documenten, wachten op goedkeuring
+    if (stap.actie?.kind === "financiering") continue;
+    if (
+      /voltooi wf|wf-afspraak|rond wf af|wacht op wf|wf-goedkeuring|goedkeuring warmtefonds|opstarten \/ warmtefonds|wf-declaratie/i.test(
+        stap.titel
+      )
+    ) {
+      continue;
+    }
 
     // Feiten winnen: geen “inplannen”-actie als de datum al staat.
     if (
@@ -1346,6 +1356,7 @@ export function openVolgendeStapActies(
       (stap.actie?.kind === "anchor" &&
         stap.actie.openSoort === "schouwdag") ||
       /schouwdag/i.test(stap.titel);
+    if (planSchouwdag && schouwdagInplannenNietMeerNodig(project)) continue;
     const planSchouwweek =
       !planSchouwdag &&
       stap.actie?.kind === "anchor" &&
@@ -1500,10 +1511,11 @@ export function isProjectFilterWachtExtern(actie: BackofficeActie): boolean {
 export function isWarmtefondsWachtOpExtern(project: Project): boolean {
   if (!isWarmtefondsProject(project)) return false;
   if (isProjectBuitenActies(project)) return false;
-  if (isWarmtefondsGoedgekeurd(project)) return false;
   const raw = resolveFinancieringStatus(project);
   const n = normalizeFinancieringStatus(raw);
-  if (!n || n === "afgewezen") return false;
+  if (!n || n === "afgewezen" || n === "uitbetaald") return false;
+  if (isFinancieringWachtOpUitbetaling(project)) return true;
+  if (isWarmtefondsGoedgekeurd(project)) return false;
   const idx = FINANCIERING_PIPELINE.indexOf(n);
   const from = FINANCIERING_PIPELINE.indexOf("aanbod_ondertekenen");
   return idx >= 0 && from >= 0 && idx < from;
@@ -1552,15 +1564,9 @@ export function warmtefondsWachtFaseVanActie(
   return "afspraak_inplannen";
 }
 
-function warmtefondsWachtTitel(status: FinancieringStatus): string {
-  return warmtefondsWachtFaseVanStatus(status) === "goedkeuring"
-    ? "Wachten op goedkeuring WF"
-    : "Wachten Afspraak Inplannen WF";
-}
-
 /**
- * Warmtefonds vóór goedkeuring: zichtbaar onder “Wacht op extern”.
- * Na goedkeuring verdwijnt deze actie en verschijnt “Schouw inplannen”.
+ * Warmtefonds in doorgestuurd / behandeling / ondertekenen / declaratie /
+ * wachten: “Wachten op Warmtefonds-uitbetaling”. Geen escalatie.
  */
 export function openWarmtefondsWachtActies(
   projecten: Project[],
@@ -1568,40 +1574,34 @@ export function openWarmtefondsWachtActies(
 ): BackofficeActie[] {
   const items: BackofficeActie[] = [];
   for (const project of projecten) {
-    if (!isWarmtefondsWachtOpExtern(project)) continue;
+    if (isProjectBuitenActies(project)) continue;
+    if (!isWarmtefondsProject(project)) continue;
+    if (!isFinancieringWachtOpUitbetaling(project)) continue;
+
     const raw = resolveFinancieringStatus(project);
     if (!raw) continue;
     const n = normalizeFinancieringStatus(raw) || raw;
-    const taak = FINANCIERING_STATUS_TAAK[raw] || FINANCIERING_STATUS_TAAK[n];
-    const dueDays = taak?.dueDays ?? 5;
     const sale = saleMomentVanProject(project);
-    const deadlineAt = softDueOverWerkdagen(sale, dueDays);
-    // Soft: niet “te laat” forceren terwijl we echt op extern wachten —
-    // gebruik max(sale+due, now+2wd) zodat nieuwe dossiers niet meteen rood zijn
-    const softFromNow = softDueOverWerkdagen(now, Math.min(dueDays, 5));
-    const due =
-      deadlineAt.getTime() < now.getTime() ? softFromNow : deadlineAt;
+    const faseIso = financieringFaseGewijzigdAt(project);
+    const faseAt = faseIso ? new Date(faseIso) : sale;
+    const faseLabel = Number.isNaN(faseAt.getTime())
+      ? null
+      : formatDateNl(faseAt);
 
     const lead = leadFromProject(project);
     const offerte = projectOfferte(project);
-    const fase = warmtefondsWachtFaseVanStatus(raw);
-    const titel = warmtefondsWachtTitel(raw);
     const statusLabel =
       FINANCIERING_STATUS_LABEL[n] || FINANCIERING_STATUS_LABEL[raw] || n;
 
     items.push({
       id: `wacht-wf-${project.id}`,
       soort: "wacht_warmtefonds",
-      titel,
-      detail:
-        fase === "goedkeuring"
-          ? `Status: ${statusLabel} — zodra goedgekeurd → schouw inplannen`
-          : `Status: ${statusLabel} — documenten/afspraak afronden, daarna wachten op goedkeuring`,
-      reden:
-        fase === "goedkeuring"
-          ? "Warmtefonds beoordeelt de aanvraag. Check portaal/Edwin; bij goedkeuring plan je de schouw."
-          : `Warmtefonds-fase “${statusLabel}”: documenten opvragen of afspraak inplannen.`,
-      deadlineAt: due.toISOString(),
+      titel: "Wachten op Warmtefonds-uitbetaling",
+      detail: faseLabel
+        ? `Financiering: ${statusLabel}. Laatste fasewijziging: ${faseLabel}. Geen escalatie — wachten op Warmtefonds.`
+        : `Financiering: ${statusLabel}. Geen escalatie — wachten op Warmtefonds.`,
+      reden: "Warmtefonds-fase loopt; geen annuleringskosten zolang WF bezig is.",
+      deadlineAt: (Number.isNaN(faseAt.getTime()) ? now : faseAt).toISOString(),
       saleAt: sale.toISOString(),
       overdue: false,
       prio: false,
@@ -1713,7 +1713,7 @@ export function openSchouwInplannenActies(
 
   for (const project of projecten) {
     if (isProjectBuitenActies(project)) continue;
-    if (isSchouwdagDefinitief(project)) continue;
+    if (schouwdagInplannenNietMeerNodig(project)) continue;
 
     const jaar = project.schouw_jaar ?? null;
     const week = project.schouw_week ?? null;
@@ -1875,6 +1875,100 @@ export function openEindafrekeningActies(
   return items;
 }
 
+export function isMonteurBeoordelingGezet(
+  project: Pick<Project, "monteur_beoordeling_sterren">
+): boolean {
+  const n = project.monteur_beoordeling_sterren;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 5;
+}
+
+export function isAfterSaleDrieChecksCompleet(
+  project: Pick<
+    Project,
+    | "btw_terugvragen_aangevraagd_at"
+    | "overstap_dynamische_leverancier_at"
+    | "review_gevraagd_at"
+  >
+): boolean {
+  return Boolean(
+    project.btw_terugvragen_aangevraagd_at &&
+      project.overstap_dynamische_leverancier_at &&
+      project.review_gevraagd_at
+  );
+}
+
+export function isAfterSaleChecklistCompleet(
+  project: Pick<
+    Project,
+    | "btw_terugvragen_aangevraagd_at"
+    | "overstap_dynamische_leverancier_at"
+    | "review_gevraagd_at"
+    | "monteur_beoordeling_sterren"
+  >
+): boolean {
+  return (
+    isAfterSaleDrieChecksCompleet(project) &&
+    isMonteurBeoordelingGezet(project)
+  );
+}
+
+export function isAfterSaleActieOpen(project: Project): boolean {
+  if (isProjectBuitenActies(project)) return false;
+  if (isAfterSaleChecklistCompleet(project)) return false;
+  const op = toOperationalStatus(project.status);
+  // Al afgerond/service: niet in Acties houden om ontbrekende vinkjes.
+  if (op === "afgerond" || op === "service") return false;
+  if (
+    op === "after_sale" ||
+    op === "installatie_voltooid" ||
+    op === "review_gevraagd"
+  ) {
+    return true;
+  }
+  return (
+    Boolean(project.installatie_voltooid_at) &&
+    !isAfterSaleDrieChecksCompleet(project)
+  );
+}
+
+export function openAfterSaleActies(
+  projecten: Project[],
+  now = new Date()
+): BackofficeActie[] {
+  const items: BackofficeActie[] = [];
+  for (const project of projecten) {
+    if (!isAfterSaleActieOpen(project)) continue;
+    const lead = leadFromProject(project);
+    const offerte = projectOfferte(project);
+    const anchor =
+      project.installatie_at ||
+      project.installatie_voltooid_at ||
+      now.toISOString();
+    const deadlineAt = nextWeekdayAmsterdamAfter(anchor);
+    items.push({
+      id: `after-sale-${project.id}`,
+      soort: "after_sale",
+      titel: "After sale",
+      detail:
+        "Dynamische energie-overstap, BTW terugvragen, review vragen, beoordeling monteur.",
+      deadlineAt: deadlineAt.toISOString(),
+      overdue: deadlineAt.getTime() < now.getTime(),
+      prio: isPrioDeadline(deadlineAt, now),
+      leadId: project.lead_id,
+      leadNaam: lead?.naam || project.titel || "—",
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      offerteId: offerte?.id || project.offerte_id,
+      offerteNummer: offerte?.offerte_nummer || null,
+      projectId: project.id,
+      projectNummer: project.project_nummer,
+      href: `/projecten/${project.id}`,
+      project,
+    });
+  }
+  return items;
+}
+
 export function openBackofficeActies(
   projecten: Project[],
   facturen: Factuur[] = [],
@@ -1906,23 +2000,16 @@ export function openBackofficeActies(
     }
   );
 
-  // Klant-afzegging / deur-niet-open → Bel-wachtrij.
-  // Adviseur/CRM-annulering → wel als BO-actie (herplannen).
-  const herplanAdviseur = openHerplanAfspraakActies(
-    opts?.leads || [],
-    opts?.afspraken || [],
-    now,
-    opts?.adviseurs || []
-  ).filter((a) => a.herplanBron === "adviseur");
-
+  // Afspraak herplannen hoort in Bel / agenda, niet in project-acties.
   return [
     ...opstart,
+    ...openAfterSaleActies(projecten, now),
     ...schouw,
-    ...herplanAdviseur,
     ...openWarmtefondsWachtActies(projecten, now),
     ...openAangetekendeBriefActies(projecten, facturen, now),
     ...openAnnuleringKeuzeControleActies(projecten, facturen, now),
     ...openHoldSalesVerlopenActies(projecten, now),
+    ...openHoldSalesTerugActies(projecten, now, opts?.adviseurs),
     ...openSchakelFinancieringActies(projecten, now),
     ...openBestelMateriaalActies(projecten, facturen, now),
     ...openNabellenFactuurActies(facturen, now, projecten),
@@ -1950,12 +2037,13 @@ export const ACTIES_TAB_SOORTEN: ReadonlySet<BackofficeActieSoort> = new Set([
   "aangetekende_brief",
   "annulering_keuze_controle",
   "hold_sales_verlopen",
+  "hold_sales_terug",
   "schakel_financiering",
-  "wacht_warmtefonds",
   "nabellen_factuur",
   "wf_aanbetaling_herinnering",
-  "herplan_afspraak",
   "eindafrekening",
+  "after_sale",
+  "wacht_warmtefonds",
 ]);
 
 export type ActiesTabId =
@@ -1974,8 +2062,8 @@ export function actieTabVoorSoort(
     soort === "aangetekende_brief" ||
     soort === "annulering_keuze_controle" ||
     soort === "hold_sales_verlopen" ||
-    soort === "schakel_financiering" ||
-    soort === "wacht_warmtefonds"
+    soort === "hold_sales_terug" ||
+    soort === "schakel_financiering"
   ) {
     return "nazorg";
   }
@@ -1989,11 +2077,11 @@ export function actieTabVoorSoort(
   if (soort === "schouw_inplannen" || soort === "bel_schouw_aanbetaling") {
     return "projecten";
   }
-  if (soort === "eindafrekening") return "nazorg";
+  if (soort === "eindafrekening" || soort === "after_sale") return "nazorg";
+  if (soort === "wacht_warmtefonds") return "projecten";
   if (
     soort === "nabellen_factuur" ||
-    soort === "wf_aanbetaling_herinnering" ||
-    soort === "herplan_afspraak"
+    soort === "wf_aanbetaling_herinnering"
   ) {
     return "afspraken";
   }

@@ -6,6 +6,14 @@ import { formatInTimeZone } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
 import type { PartnerVenster } from "@/lib/partner-slots";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { cn } from "cn";
+import { ChevronDown } from "lucide-react";
 
 export type PartnerSlotOption = {
   start_at: string;
@@ -13,6 +21,8 @@ export type PartnerSlotOption = {
   venster: PartnerVenster;
   beschikbaar: boolean;
   reason?: string;
+  bezet?: number;
+  capaciteit?: number;
   reistijd_min?: number | null;
   reistijd_vanaf?:
     | "vorige_installatie"
@@ -22,17 +32,35 @@ export type PartnerSlotOption = {
   reistijd_label?: string | null;
 };
 
+export type PartnerDagStopInfo = {
+  soort: "schouw" | "installatie";
+  start_at: string;
+  naam: string | null;
+  plaats: string | null;
+  adres: string | null;
+  project_nummer: string | null;
+};
+
 export type BestPartnerSlotOption = {
   slot_id: string;
   start_at: string;
   end_at: string;
   venster: PartnerVenster;
   label_kort: string;
+  label_nl?: string;
   partner_id: string;
   partner_naam: string;
   reistijd_min: number | null;
   reistijd_vanaf_startadres: boolean;
+  reistijd_vanaf?:
+    | "vorige_schouw"
+    | "vorige_installatie"
+    | "startadres"
+    | null;
+  reistijd_naar_volgende_min?: number | null;
   start_adres_fallback?: boolean;
+  vorige?: PartnerDagStopInfo | null;
+  volgende?: PartnerDagStopInfo | null;
 };
 
 type Props = {
@@ -58,7 +86,7 @@ type Props = {
   lockBestToPartner?: boolean;
   /** Compacte layout (focusmodus Acties — past in één viewport) */
   compact?: boolean;
-  /** Max aantal beste-momenten (default 8, compact 3) */
+  /** Max aantal beste-momenten (default 5) */
   bestLimit?: number;
 };
 
@@ -68,6 +96,18 @@ function dayKeyOf(iso: string): string {
 
 function dayChipLabel(dk: string): string {
   return formatInTimeZone(new Date(`${dk}T12:00:00`), AMSTERDAM_TZ, "EEE d MMM", {
+    locale: nl,
+  });
+}
+
+function dayWeekday(dk: string): string {
+  return formatInTimeZone(new Date(`${dk}T12:00:00`), AMSTERDAM_TZ, "EEE", {
+    locale: nl,
+  });
+}
+
+function dayNumber(dk: string): string {
+  return formatInTimeZone(new Date(`${dk}T12:00:00`), AMSTERDAM_TZ, "d", {
     locale: nl,
   });
 }
@@ -85,18 +125,59 @@ function timeLabel(iso: string): string {
   return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "HH:mm");
 }
 
-function reistijdHint(s: PartnerSlotOption): string | null {
-  if (s.reistijd_min == null) return null;
-  if (s.reistijd_vanaf === "vorige_installatie") {
-    return `~${s.reistijd_min} min vanaf vorige installatie`;
+function stopSoortLabel(soort: "schouw" | "installatie"): string {
+  return soort === "installatie" ? "installatie" : "schouw";
+}
+
+function stopRegel(
+  prefix: string,
+  stop: PartnerDagStopInfo | null | undefined
+): string | null {
+  if (!stop) return null;
+  const who = [stop.naam, stop.plaats].filter(Boolean).join(" · ");
+  const nr = !who && stop.project_nummer ? stop.project_nummer : null;
+  const label = who || nr || stop.adres || "andere klus";
+  return `${prefix} ${stopSoortLabel(stop.soort)} · ${label} · ${timeLabel(stop.start_at)}`;
+}
+
+function reistijdRegel(opts: {
+  min: number | null | undefined;
+  vanaf?:
+    | "vorige_schouw"
+    | "vorige_installatie"
+    | "startadres"
+    | null;
+  vanafStart?: boolean;
+  vorige?: PartnerDagStopInfo | null;
+}): string | null {
+  if (opts.min == null) return null;
+  if (opts.vorige) {
+    const waar = opts.vorige.plaats || opts.vorige.naam || "vorige klus";
+    return `~${opts.min} min vanaf vorige ${stopSoortLabel(opts.vorige.soort)} (${waar})`;
   }
-  if (s.reistijd_vanaf === "vorige_schouw") {
-    return `~${s.reistijd_min} min vanaf vorige schouw`;
+  if (opts.vanaf === "startadres" || opts.vanafStart) {
+    return `~${opts.min} min vanaf startadres`;
   }
-  if (s.reistijd_vanaf === "startadres") {
-    return `~${s.reistijd_min} min vanaf startadres`;
+  if (opts.vanaf === "vorige_installatie") {
+    return `~${opts.min} min vanaf vorige installatie`;
   }
-  return `~${s.reistijd_min} min reistijd`;
+  if (opts.vanaf === "vorige_schouw") {
+    return `~${opts.min} min vanaf vorige schouw`;
+  }
+  return `~${opts.min} min rijden`;
+}
+
+async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 export function PartnerSlotPicker({
@@ -117,7 +198,7 @@ export function PartnerSlotPicker({
   compact = false,
   bestLimit,
 }: Props) {
-  const bestCap = bestLimit ?? (compact ? 3 : 8);
+  const bestCap = bestLimit ?? 5;
   const [slots, setSlots] = useState<PartnerSlotOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,10 +206,14 @@ export function PartnerSlotPicker({
     dayKey || null
   );
   const [bestSlots, setBestSlots] = useState<BestPartnerSlotOption[]>([]);
-  const [bestLoading, setBestLoading] = useState(false);
+  const [bestLoading, setBestLoading] = useState(
+    () => showBest ?? Boolean((projectId || leadId) && !dayKey)
+  );
   const [bestNote, setBestNote] = useState<string | null>(null);
+  const [kalenderOpen, setKalenderOpen] = useState(Boolean(dayKey));
   const wantBest =
     showBest ?? Boolean((projectId || leadId) && !dayKey);
+  const delayKalender = wantBest && !dayKey;
 
   const range = useMemo(() => {
     if (dayKey) return { van: dayKey, tot: dayKey };
@@ -140,6 +225,9 @@ export function PartnerSlotPicker({
   const load = useCallback(async () => {
     if (!partnerId) {
       setSlots([]);
+      return;
+    }
+    if (delayKalender && !kalenderOpen) {
       return;
     }
     setLoading(true);
@@ -156,17 +244,34 @@ export function PartnerSlotPicker({
       const res = await fetch(
         `/api/installatie-partners/slots?${params.toString()}`
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Slots laden mislukt");
-      // Alle slots (vrij + bezet) — bezet mag overschreven worden na bevestiging
-      setSlots((data.slots || data.beschikbaar || []) as PartnerSlotOption[]);
+      const data = await readJsonSafe(res);
+      if (!res.ok) {
+        throw new Error(
+          (typeof data.error === "string" && data.error) ||
+            "Slots laden mislukt. Probeer opnieuw."
+        );
+      }
+      setSlots(
+        ((data.slots || data.beschikbaar || []) as PartnerSlotOption[])
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Slots laden mislukt");
+      setError(
+        e instanceof Error ? e.message : "Slots laden mislukt. Probeer opnieuw."
+      );
       setSlots([]);
     } finally {
       setLoading(false);
     }
-  }, [partnerId, range.van, range.tot, soort, leadId, excludeProjectId]);
+  }, [
+    partnerId,
+    range.van,
+    range.tot,
+    soort,
+    leadId,
+    excludeProjectId,
+    delayKalender,
+    kalenderOpen,
+  ]);
 
   useEffect(() => {
     void load();
@@ -192,16 +297,14 @@ export function PartnerSlotPicker({
       }
       if (afterIso) params.set("after", afterIso);
       const res = await fetch(`/api/best-partner-slots?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
+      const data = await readJsonSafe(res);
       if (!res.ok) {
         setBestSlots([]);
-        setBestNote((data as { error?: string }).error || null);
+        setBestNote(null);
         return;
       }
-      setBestSlots(
-        ((data as { slots?: BestPartnerSlotOption[] }).slots || []) as BestPartnerSlotOption[]
-      );
-      setBestNote((data as { note?: string | null }).note || null);
+      setBestSlots((data.slots || []) as BestPartnerSlotOption[]);
+      setBestNote(typeof data.note === "string" ? data.note : null);
     } catch {
       setBestSlots([]);
       setBestNote(null);
@@ -238,7 +341,15 @@ export function PartnerSlotPicker({
       venster: b.venster,
       beschikbaar: true,
       reistijd_min: b.reistijd_min,
-      reistijd_vanaf: b.reistijd_vanaf_startadres ? "startadres" : null,
+      reistijd_vanaf:
+        b.reistijd_vanaf ||
+        (b.reistijd_vanaf_startadres ? "startadres" : null),
+      reistijd_label: reistijdRegel({
+        min: b.reistijd_min,
+        vanaf: b.reistijd_vanaf,
+        vanafStart: b.reistijd_vanaf_startadres,
+        vorige: b.vorige,
+      }),
     });
   }
 
@@ -326,249 +437,81 @@ export function PartnerSlotPicker({
   }
 
   const lockedToDay = Boolean(dayKey);
-  const hasSelection = Boolean(value);
+  const selectedBest =
+    bestSlots.find((b) => b.start_at === value) || null;
+  const gekozenReis =
+    reistijdRegel({
+      min: selectedSlot?.reistijd_min ?? selectedBest?.reistijd_min,
+      vanaf: selectedSlot?.reistijd_vanaf ?? selectedBest?.reistijd_vanaf,
+      vanafStart: selectedBest?.reistijd_vanaf_startadres,
+      vorige: selectedBest?.vorige,
+    }) || selectedSlot?.reistijd_label;
 
-  return (
-    <div className={compact ? "space-y-2" : "space-y-3"}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            {hasSelection
-              ? "Gekozen slot"
-              : lockedToDay
-                ? "Kies een tijd"
-                : selectedDay
-                  ? "Kies een dag · daarna een tijd"
-                  : soort === "installatie"
-                    ? "Installatie inplannen"
-                    : "Schouw inplannen"}
-          </p>
-          {!compact ? (
-            <p className="mt-0.5 text-[11px] text-muted">
-              {soort === "installatie"
-                ? "Max. 1 ochtend + 1 middag per dag · bezet overschrijfbaar"
-                : "Slots van 30 min · rood = bezet (overschrijfbaar)"}
-            </p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void load();
-            void loadBest();
-          }}
-          disabled={loading || disabled}
-          className="text-xs font-medium text-green-dark hover:underline disabled:opacity-50"
-        >
-          Vernieuwen
-        </button>
-      </div>
-
-      {value && selectedSlot ? (
-        <div
-          className={
-            selectedSlot.beschikbaar === false
-              ? "border border-[#C62828]/30 bg-[#FDECEA] px-3 py-2.5 text-sm text-[#C62828]"
-              : "border border-green/30 bg-green-soft px-3 py-2.5 text-sm text-green-dark"
-          }
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <p className="font-semibold">
-                {formatDateTimeNl(value)}
-                <span
-                  className={[
-                    "ml-1.5 font-normal",
-                    selectedSlot.beschikbaar === false
-                      ? "text-[#C62828]/80"
-                      : "text-green-dark/80",
-                  ].join(" ")}
-                >
-                  · {selectedSlot.venster === "ochtend" ? "ochtend" : "middag"}
-                  {selectedSlot.beschikbaar === false
-                    ? " · overschrijving"
-                    : ""}
-                </span>
-              </p>
-              {selectedSlot.beschikbaar === false && selectedSlot.reason ? (
-                <p className="mt-1 text-xs font-medium">{selectedSlot.reason}</p>
-              ) : null}
-              {reistijdHint(selectedSlot) ? (
-                <p className="mt-1 text-xs font-medium">
-                  {reistijdHint(selectedSlot)}
-                  {selectedSlot.reistijd_label
-                    ? ` · ${selectedSlot.reistijd_label}`
-                    : ""}
-                </p>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange(null, null)}
-              className="text-xs font-semibold underline"
-            >
-              Wissen
-            </button>
-          </div>
-        </div>
-      ) : value ? (
-        <p className="border border-green/30 bg-green-soft px-3 py-2 text-sm text-green-dark">
-          Gekozen: {formatDateTimeNl(value)}{" "}
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange(null, null)}
-            className="ml-2 text-xs font-semibold underline"
-          >
-            Wissen
-          </button>
-        </p>
-      ) : null}
-
-      {wantBest && !value ? (
-        <div
-          className={
-            compact
-              ? "border border-line bg-wash/60 px-2 py-1.5"
-              : "border border-line bg-wash/60 px-3 py-2.5"
-          }
-        >
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-            {compact ? "Top slots" : "Beste momenten (2 weken)"}
-          </p>
-          {bestLoading ? (
-            <p className="mt-1 text-xs text-muted">Laden…</p>
-          ) : bestSlots.length === 0 ? (
-            <p className="mt-1 text-xs text-muted">
-              {bestNote || "Geen top-opties gevonden."}
-            </p>
-          ) : compact ? (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {bestSlots.map((b) => (
-                <button
-                  key={b.slot_id}
-                  type="button"
-                  disabled={disabled}
-                  title={`${b.partner_naam}${b.reistijd_min != null ? ` · ~${b.reistijd_min} min` : ""}`}
-                  onClick={() => pickBest(b)}
-                  className="border border-line bg-white px-2 py-1.5 text-left text-[11px] font-semibold text-ink transition hover:border-green"
-                >
-                  {b.label_kort}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <ul className="mt-2 space-y-1.5">
-              {bestSlots.map((b) => (
-                <li key={b.slot_id}>
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => pickBest(b)}
-                    className="flex w-full items-start justify-between gap-2 border border-line bg-white px-2.5 py-2 text-left text-sm transition hover:border-green"
-                  >
-                    <span className="min-w-0">
-                      <span className="block font-semibold text-ink">
-                        {b.label_kort}
-                      </span>
-                      <span className="mt-0.5 block truncate text-[11px] text-muted">
-                        {b.partner_naam}
-                        {b.venster === "ochtend" ? " · ochtend" : " · middag"}
-                        {b.start_adres_fallback ? " · via Cabrondom" : ""}
-                      </span>
-                    </span>
-                    {b.reistijd_min != null ? (
-                      <span className="shrink-0 text-[11px] font-medium tabular-nums text-green-dark">
-                        ~{b.reistijd_min} min
-                      </span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <p className="text-sm text-muted">Slots laden…</p>
-      ) : error ? (
-        <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-          {error}
-        </p>
-      ) : slots.length === 0 ? (
-        <p className="text-sm text-muted">
-          Geen slots
-          {dayKey ? " op deze dag" : ` in de komende ${daysAhead} dagen`}. Check
-          afblokkingen of kies een andere partner.
-        </p>
-      ) : (
-        <div className={compact ? "space-y-2" : "space-y-3"}>
-          {/* Stap 1: dag */}
+  const kalender = loading ? (
+    <p className="text-sm text-muted-foreground">Slots laden…</p>
+  ) : error ? (
+    <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      {error}
+    </p>
+  ) : slots.length === 0 ? (
+    <p className="text-sm text-muted-foreground">
+      Geen slots
+      {dayKey ? " op deze dag" : ` in de komende ${daysAhead} dagen`}.
+    </p>
+  ) : (
+        <div className="space-y-3">
           {!lockedToDay ? (
-            <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                1. Dag
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {(compact ? days.slice(0, 10) : days).map((d) => {
+            <div className="-mx-0.5 overflow-x-auto px-0.5">
+              <div className="flex gap-1">
+                {days.map((d) => {
                   const active = selectedDay === d.dayKey;
+                  const empty = d.freeCount === 0;
                   return (
                     <button
                       key={d.dayKey}
                       type="button"
                       disabled={disabled}
                       onClick={() => pickDay(d.dayKey)}
-                      className={[
-                        "shrink-0 border text-left transition",
-                        compact ? "px-2 py-1.5" : "px-2.5 py-2",
+                      className={cn(
+                        "flex w-11 shrink-0 flex-col items-center rounded-lg border py-1.5 transition",
                         active
-                          ? "border-green bg-green text-white"
-                          : "border-line bg-white text-ink hover:border-green",
-                      ].join(" ")}
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : empty
+                            ? "border-border bg-wash/50 text-muted-foreground"
+                            : "border-border bg-background text-foreground hover:border-primary"
+                      )}
                     >
-                      <span
-                        className={[
-                          "block font-semibold capitalize",
-                          compact ? "text-[11px]" : "text-xs",
-                        ].join(" ")}
-                      >
-                        {dayChipLabel(d.dayKey)}
+                      <span className="text-[10px] font-medium capitalize leading-none">
+                        {dayWeekday(d.dayKey)}
                       </span>
-                      {!compact ? (
-                        <span
-                          className={[
-                            "mt-0.5 block text-[10px] font-medium",
-                            active ? "text-white/85" : "text-muted",
-                          ].join(" ")}
-                        >
-                          {d.freeCount}/{d.slots.length} vrij
-                        </span>
-                      ) : null}
+                      <span className="mt-1 text-sm font-semibold leading-none tabular-nums">
+                        {dayNumber(d.dayKey)}
+                      </span>
+                      <span
+                        className={cn(
+                          "mt-1.5 size-1.5 rounded-full",
+                          active
+                            ? "bg-primary-foreground/90"
+                            : empty
+                              ? "bg-border"
+                              : "bg-primary"
+                        )}
+                      />
                     </button>
                   );
                 })}
               </div>
             </div>
           ) : selectedDay ? (
-            <p className="text-xs font-medium text-ink capitalize">
+            <p className="text-sm font-medium capitalize text-foreground">
               {dayFullLabel(selectedDay)}
             </p>
           ) : null}
 
-          {/* Stap 2: tijd */}
           {selectedDay ? (
             <div>
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {lockedToDay ? "Tijd" : "2. Tijd"}
-                <span className="ml-1.5 font-normal normal-case tracking-normal text-muted">
-                  {dayChipLabel(selectedDay)}
-                </span>
-              </p>
-
               {soort === "installatie" ? (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="grid grid-cols-2 gap-2">
                   {daySlots.map((s) => {
                     const selected = value === s.start_at;
                     const busySlot = s.beschikbaar === false;
@@ -583,33 +526,33 @@ export function PartnerSlotPicker({
                             : undefined
                         }
                         onClick={() => pickSlot(s)}
-                        className={[
-                          "border px-3 py-3 text-left transition",
+                        className={cn(
+                          "rounded-lg border px-3 py-3 text-left transition",
                           selected
-                            ? "border-green bg-green text-white"
+                            ? "border-primary bg-primary text-primary-foreground"
                             : busySlot
-                              ? "border-[#C62828]/35 bg-[#FDECEA] text-[#C62828] hover:border-[#C62828]"
-                              : "border-line bg-white text-ink hover:border-green",
-                        ].join(" ")}
+                              ? "border-destructive/30 bg-destructive/10 text-destructive hover:border-destructive"
+                              : "border-border bg-background hover:border-primary"
+                        )}
                       >
                         <span className="block text-sm font-semibold">
                           {s.venster === "ochtend" ? "Ochtend" : "Middag"}
-                          {busySlot ? " · bezet" : ""}
+                          {busySlot ? " · vol" : ""}
                         </span>
                         <span
-                          className={[
-                            "mt-0.5 block text-xs font-medium",
+                          className={cn(
+                            "mt-0.5 block text-xs",
                             selected
-                              ? "text-white/85"
-                              : busySlot
-                                ? "text-[#C62828]/80"
-                                : "text-muted",
-                          ].join(" ")}
+                              ? "text-primary-foreground/80"
+                              : "text-muted-foreground"
+                          )}
                         >
-                          Start {timeLabel(s.start_at)}
                           {s.venster === "ochtend"
-                            ? " · tot 12:00"
-                            : " · tot 17:00"}
+                            ? "08:00–12:00"
+                            : "13:00–17:00"}
+                          {s.capaciteit
+                            ? ` · ${s.bezet ?? 0}/${s.capaciteit} bezet`
+                            : ""}
                         </span>
                       </button>
                     );
@@ -625,23 +568,19 @@ export function PartnerSlotPicker({
                   ).map(([id, label, list]) =>
                     list.length === 0 ? null : (
                       <div key={id}>
-                        <p className="mb-1.5 text-[11px] font-semibold text-muted">
+                        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">
                           {label}
                         </p>
-                        <div
-                          className={
-                            compact
-                              ? "grid grid-cols-4 gap-1 sm:grid-cols-6"
-                              : "grid grid-cols-3 gap-1.5 sm:grid-cols-4"
-                          }
-                        >
+                        <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
                           {list.map((s) => {
                             const selected = value === s.start_at;
                             const busySlot = s.beschikbaar === false;
                             return (
-                              <button
+                              <Button
                                 key={s.start_at}
                                 type="button"
+                                variant={selected ? "default" : "outline"}
+                                size="sm"
                                 disabled={disabled}
                                 title={
                                   busySlot
@@ -649,20 +588,15 @@ export function PartnerSlotPicker({
                                     : undefined
                                 }
                                 onClick={() => pickSlot(s)}
-                                className={[
-                                  "border text-center font-semibold tabular-nums transition",
-                                  compact
-                                    ? "px-1.5 py-1.5 text-xs"
-                                    : "px-2 py-2 text-sm",
-                                  selected
-                                    ? "border-green bg-green text-white"
-                                    : busySlot
-                                      ? "border-[#C62828]/35 bg-[#FDECEA] text-[#C62828] hover:border-[#C62828]"
-                                      : "border-line bg-white text-ink hover:border-green",
-                                ].join(" ")}
+                                className={cn(
+                                  "tabular-nums",
+                                  busySlot &&
+                                    !selected &&
+                                    "border-destructive/30 bg-destructive/10 text-destructive"
+                                )}
                               >
                                 {timeLabel(s.start_at)}
-                              </button>
+                              </Button>
                             );
                           })}
                         </div>
@@ -673,13 +607,195 @@ export function PartnerSlotPicker({
               )}
 
               {daySlots.length === 0 ? (
-                <p className="text-sm text-muted">
+                <p className="text-sm text-muted-foreground">
                   Geen slots op deze dag.
                 </p>
               ) : null}
             </div>
           ) : null}
         </div>
+  );
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <p className="min-w-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {soort === "installatie"
+            ? "Beste momenten"
+            : "Beste 5 schouwmomenten"}
+        </p>
+        <button
+          type="button"
+          disabled={loading || bestLoading || disabled}
+          onClick={() => {
+            void load();
+            void loadBest();
+          }}
+          className="shrink-0 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40"
+        >
+          {loading || bestLoading ? "Laden…" : "Vernieuwen"}
+        </button>
+      </div>
+
+      {value ? (
+        <div
+          className={cn(
+            "flex items-start justify-between gap-2 rounded-lg border px-3 py-2.5",
+            selectedSlot?.beschikbaar === false
+              ? "border-destructive/30 bg-destructive/10 text-destructive"
+              : "border-primary/25 bg-primary/5 text-foreground"
+          )}
+        >
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">
+              {formatDateTimeNl(value)}
+              <span className="ml-1.5 font-normal text-muted-foreground">
+                {selectedSlot?.venster === "ochtend" ||
+                selectedBest?.venster === "ochtend"
+                  ? "ochtend"
+                  : "middag"}
+                {selectedSlot?.beschikbaar === false ? " · overschrijving" : ""}
+              </span>
+            </p>
+            {gekozenReis ? (
+              <p className="mt-0.5 text-xs text-muted-foreground">{gekozenReis}</p>
+            ) : null}
+            {stopRegel("Ervoor:", selectedBest?.vorige) ? (
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {stopRegel("Ervoor:", selectedBest?.vorige)}
+              </p>
+            ) : null}
+            {selectedSlot?.beschikbaar === false && selectedSlot.reason ? (
+              <p className="mt-0.5 text-xs">{selectedSlot.reason}</p>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            disabled={disabled}
+            onClick={() => onChange(null, null)}
+          >
+            Wissen
+          </Button>
+        </div>
+      ) : null}
+
+      {wantBest ? (
+        <div>
+          {bestLoading ? (
+            <p className="text-sm text-muted-foreground">
+              Beste momenten berekenen (reistijd + dagroute)…
+            </p>
+          ) : bestSlots.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {bestNote || "Geen slimme opties — open andere tijden hieronder."}
+            </p>
+          ) : (
+            <ul className="space-y-1.5">
+              {bestSlots.map((b, idx) => {
+                const selected = value === b.start_at;
+                const reis = reistijdRegel({
+                  min: b.reistijd_min,
+                  vanaf: b.reistijd_vanaf,
+                  vanafStart: b.reistijd_vanaf_startadres,
+                  vorige: b.vorige,
+                });
+                const na = stopRegel("Ervoor:", b.vorige);
+                const daarna = stopRegel("Daarna:", b.volgende);
+                return (
+                  <li key={b.slot_id}>
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => pickBest(b)}
+                      className={cn(
+                        "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition",
+                        selected
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-background hover:border-primary/50"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-xs font-bold",
+                          selected
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-wash text-muted-foreground"
+                        )}
+                      >
+                        {idx + 1}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-foreground">
+                          {b.label_kort || b.label_nl}
+                          <span className="ml-1.5 font-normal text-muted-foreground">
+                            {b.venster === "ochtend" ? "ochtend" : "middag"}
+                          </span>
+                        </span>
+                        {reis ? (
+                          <span className="mt-0.5 block text-[12px] font-medium text-foreground">
+                            {reis}
+                          </span>
+                        ) : null}
+                        {na ? (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            {na}
+                          </span>
+                        ) : (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            Eerste klus van de dag
+                            {b.start_adres_fallback
+                              ? " · vanaf startadres"
+                              : ""}
+                          </span>
+                        )}
+                        {daarna ? (
+                          <span className="block text-[11px] text-muted-foreground">
+                            {daarna}
+                            {b.reistijd_naar_volgende_min != null
+                              ? ` · ~${b.reistijd_naar_volgende_min} min erna`
+                              : ""}
+                          </span>
+                        ) : null}
+                        {!lockBestToPartner ? (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            {b.partner_naam}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
+      {lockedToDay ? (
+        kalender
+      ) : (
+        <Collapsible open={kalenderOpen} onOpenChange={setKalenderOpen}>
+          <CollapsibleTrigger
+            disabled={disabled}
+            className="flex w-full items-center justify-between rounded-lg border border-border bg-wash/40 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-wash"
+            onClick={() => {
+              if (!kalenderOpen) setLoading(true);
+            }}
+          >
+            Andere tijden
+            <ChevronDown
+              className={cn(
+                "size-4 text-muted-foreground transition",
+                kalenderOpen && "rotate-180"
+              )}
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-3">
+            {kalenderOpen ? kalender : null}
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </div>
   );

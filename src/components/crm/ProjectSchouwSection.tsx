@@ -26,8 +26,8 @@ import { Panel } from "./DetailChrome";
 import { OpleverFormulierModal } from "@/components/crm/OpleverFormulierModal";
 import { PartnerSlotPicker } from "@/components/crm/PartnerSlotPicker";
 import {
-  isOpleveringsrapport,
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
@@ -317,7 +317,7 @@ export function ProjectSchouwSection({
       const res = await fetch(`/api/projecten/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "installatie_voltooid" }),
+        body: JSON.stringify({ status: "after_sale" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Status bijwerken mislukt");
@@ -348,7 +348,7 @@ export function ProjectSchouwSection({
       setFotos((prev) => [...prev, data.foto]);
       if (data.status_advance?.advanced) {
         setOkMsg(
-          "Opleveringsrapport geüpload · installatie gemarkeerd als voltooid."
+          "Opleveringsrapport geüpload · After sale."
         );
       } else {
         setOkMsg("Opleveringsrapport geüpload.");
@@ -435,15 +435,19 @@ export function ProjectSchouwSection({
   }
 
   const schouwFormulieren = fotos.filter((f) =>
-    isSchouwFormulier(f.omschrijving)
+    isSchouwFormulierBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
   );
   const opleveringsrapporten = fotos.filter((f) =>
-    isOpleveringsrapport(f.omschrijving)
+    isOpleveringsrapportBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
   );
   const normaleFotos = fotos.filter(
     (f) =>
-      !isSchouwFormulier(f.omschrijving) &&
-      !isOpleveringsrapport(f.omschrijving)
+      !isSchouwFormulierBewijs(
+        f.omschrijving,
+        f.bestandsnaam,
+        f.storage_path
+      ) &&
+      !isOpleveringsrapportBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
   );
   const heeftOplevering = opleveringsrapporten.length > 0;
 

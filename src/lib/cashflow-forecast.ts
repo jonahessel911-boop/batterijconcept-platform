@@ -35,6 +35,7 @@ const GELD_BINNEN = new Set<ProjectStatus>([
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",
@@ -42,6 +43,7 @@ const GELD_BINNEN = new Set<ProjectStatus>([
 
 const GEINSTALLEERD = new Set<ProjectStatus>([
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",

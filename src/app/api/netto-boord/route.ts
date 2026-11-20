@@ -472,7 +472,9 @@ export async function GET(req: NextRequest) {
       const progressDone = geannuleerd ? 0 : progress.done;
       const progressPct = geannuleerd ? 0 : progress.pct;
       const installatieVoltooid =
+        Boolean(project?.installatie_voltooid_at) ||
         projStatus === "installatie_voltooid" ||
+        projStatus === "after_sale" ||
         projStatus === "review_gevraagd" ||
         projStatus === "afgerond" ||
         projStatus === "service";
@@ -480,10 +482,7 @@ export async function GET(req: NextRequest) {
         omzetExBtw: bedragEx,
         geannuleerd,
         aanbetalingBetaald: Boolean(aanbetalingBetaald),
-        restOfInstallatieDone:
-          Boolean(restBetaald) ||
-          installatieVoltooid ||
-          projStatus === "restfactuur_betaald",
+        restOfInstallatieDone: installatieVoltooid,
         // Ruwe DB-waarde (12 of 0.12) — niet het display-%
         commissiePct: rawCommissiePct,
       });
@@ -517,7 +516,11 @@ export async function GET(req: NextRequest) {
             : 0)
       );
       const commissieRestOpen = round2(
-        creditBBetaald || commissie.tranche_b <= 0 ? 0 : commissie.tranche_b
+        creditBBetaald ||
+          !commissie.tranche_b_triggered ||
+          commissie.tranche_b <= 0
+          ? 0
+          : commissie.tranche_b
       );
 
       const statusSinds = geannuleerd

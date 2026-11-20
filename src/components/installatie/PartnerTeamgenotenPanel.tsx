@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { EllipsisIcon, Plus } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
 import type { InstallatiePartnerTeamgenoot } from "@/types/database";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -14,21 +14,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { MedewerkerInstallatiesPanel } from "@/components/crm/MedewerkerInstallatiesPanel";
 import {
   emptyMonteurProfielDraft,
@@ -37,6 +28,7 @@ import {
 } from "@/components/installatie/MonteurProfielFields";
 import { NieuweMonteurPage } from "@/components/installatie/NieuweMonteurPage";
 import { PartnerKoppelsPanel } from "@/components/installatie/PartnerKoppelsPanel";
+import { cn } from "@/lib/utils";
 import { normalizeMerkenErvaring } from "@/lib/installatie-merken";
 import { normalizeMonteurRegios } from "@/lib/postcode-provincie";
 
@@ -140,6 +132,7 @@ function draftFromTeamgenoot(t: InstallatiePartnerTeamgenoot): MonteurProfielDra
     rol: t.rol === "beheerder" ? "beheerder" : "monteur",
     kan_schouw: t.kan_schouw === true,
     kan_installatie: t.kan_installatie !== false,
+    kan_service: t.kan_service === true,
     leeftijd: t.leeftijd != null ? String(t.leeftijd) : "",
     merken: normalizeMerkenErvaring(t.merken_ervaring),
     regios: normalizeMonteurRegios(t.regios),
@@ -173,6 +166,8 @@ export function PartnerTeamgenotenPanel({
   const [uploadBusy, setUploadBusy] = useState<DocKey | null>(null);
 
   const [showNieuw, setShowNieuw] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(true);
+  const [openLidId, setOpenLidId] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -231,8 +226,8 @@ export function PartnerTeamgenotenPanel({
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!editingId) return;
-    if (!editDraft.kan_schouw && !editDraft.kan_installatie) {
-      setError("Vink minstens Schouw of Installatie aan.");
+    if (!editDraft.kan_schouw && !editDraft.kan_installatie && !editDraft.kan_service) {
+      setError("Vink minstens Schouw, Installatie of Service aan.");
       return;
     }
     setSaving(true);
@@ -252,6 +247,7 @@ export function PartnerTeamgenotenPanel({
             rol: editDraft.rol,
             kan_schouw: editDraft.kan_schouw,
             kan_installatie: editDraft.kan_installatie,
+            kan_service: editDraft.kan_service,
             regios: editDraft.regios,
           }),
         }
@@ -650,46 +646,6 @@ export function PartnerTeamgenotenPanel({
 
   return (
     <div className={compact ? "space-y-3" : "space-y-5"}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          {!compact ? (
-            <>
-              <h2 className="font-display text-lg font-semibold text-ink">
-                Team
-              </h2>
-              <p className="mt-0.5 text-sm text-muted">
-                Monteurs en beheerders · inlogmail bij toevoegen
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                Teamleden
-              </p>
-              <p className="text-[12px] text-muted">
-                {actief.length} actief
-                {inactief.length > 0 ? ` · ${inactief.length} inactief` : ""}
-                {adminBeoordeling
-                  ? " · klik op een naam voor klussen"
-                  : " · klik op een naam om te bewerken"}
-              </p>
-            </>
-          )}
-        </div>
-        <Button
-          type="button"
-          size={compact ? "sm" : "default"}
-          onClick={() => {
-            setError(null);
-            setShowNieuw(true);
-          }}
-          className="gap-1.5"
-        >
-          <Plus className="size-4" />
-          Nieuwe monteur
-        </Button>
-      </div>
-
       {migrationHint ? (
         <Notice tone="warn" compact={compact}>
           {migrationHint}
@@ -706,226 +662,220 @@ export function PartnerTeamgenotenPanel({
         </Notice>
       ) : null}
 
-      {loading ? (
-        <p
-          className={[
-            "text-center text-sm text-muted",
-            compact ? "py-6" : "py-12",
-          ].join(" ")}
-        >
-          Laden…
-        </p>
-      ) : items.length === 0 ? (
-        <Card className="gap-0 py-0">
-          <CardContent
-            className={[
-              "text-center",
-              compact ? "px-4 py-6" : "px-5 py-10",
-            ].join(" ")}
+      <Collapsible open={teamOpen} onOpenChange={setTeamOpen}>
+        <Card className="gap-0 overflow-hidden py-0 shadow-xs">
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              compact ? "px-3 py-2" : "px-4 py-2.5"
+            )}
           >
-            <p className="font-display text-base font-semibold text-ink">
-              Nog geen teamleden
-            </p>
-            <p className="mt-1 text-sm text-muted">
-              Klik op Nieuwe monteur om de eerste toe te voegen.
-            </p>
+            <CollapsibleTrigger className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:opacity-80">
+              <span className="min-w-0">
+                <span
+                  className={cn(
+                    "block font-semibold text-ink",
+                    compact
+                      ? "text-[11px] uppercase tracking-wide text-muted"
+                      : "font-display text-base"
+                  )}
+                >
+                  Teamleden
+                </span>
+                <span className="mt-0.5 block text-[12px] text-muted">
+                  {actief.length} actief
+                  {inactief.length > 0 ? ` · ${inactief.length} inactief` : ""}
+                </span>
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 shrink-0 text-muted transition-transform",
+                  teamOpen && "rotate-180"
+                )}
+              />
+            </CollapsibleTrigger>
             <Button
               type="button"
-              className="mt-4 gap-1.5"
-              onClick={() => setShowNieuw(true)}
+              size="sm"
+              className="shrink-0 gap-1.5"
+              onClick={() => {
+                setError(null);
+                setShowNieuw(true);
+              }}
             >
               <Plus className="size-4" />
               Nieuwe monteur
             </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="h-9 w-[40%] px-3 text-[11px] font-medium text-muted">
-                  Monteur
-                </TableHead>
-                <TableHead className="hidden h-9 px-3 text-[11px] font-medium text-muted md:table-cell">
-                  Contact
-                </TableHead>
-                <TableHead className="h-9 px-3 text-[11px] font-medium text-muted">
-                  Status
-                </TableHead>
-                <TableHead className="h-9 w-[14rem] px-3 text-right text-[11px] font-medium text-muted">
-                  Acties
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((t) => {
-                const inactive = t.actief === false;
-                const regios = normalizeMonteurRegios(t.regios);
-                const meta = [
-                  t.rol === "beheerder" ? "Beheerder" : "Monteur",
-                  t.kan_schouw ? "schouw" : null,
-                  t.kan_installatie !== false ? "installatie" : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ");
-                return (
-                  <TableRow
-                    key={t.id}
-                    role="button"
-                    tabIndex={0}
-                    className={[
-                      "cursor-pointer",
-                      inactive ? "bg-wash/40 text-muted" : "",
-                    ].join(" ")}
-                    onClick={() => openMonteur(t.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        openMonteur(t.id);
-                      }
-                    }}
-                  >
-                    <TableCell className="max-w-0 px-3 py-2.5 whitespace-normal">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openMonteur(t.id);
-                        }}
-                        className={[
-                          "w-full text-left",
-                          inactive ? "opacity-70" : "",
-                        ].join(" ")}
+          </div>
+          <CollapsibleContent>
+            <div className="border-t border-line">
+              {loading ? (
+                <p
+                  className={cn(
+                    "text-center text-sm text-muted",
+                    compact ? "py-6" : "py-10"
+                  )}
+                >
+                  Laden…
+                </p>
+              ) : items.length === 0 ? (
+                <div
+                  className={cn(
+                    "text-center",
+                    compact ? "px-4 py-6" : "px-5 py-10"
+                  )}
+                >
+                  <p className="font-display text-base font-semibold text-ink">
+                    Nog geen teamleden
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    Klik op Nieuwe monteur om de eerste toe te voegen.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-line">
+                  {rows.map((t) => {
+                    const inactive = t.actief === false;
+                    const regios = normalizeMonteurRegios(t.regios);
+                    const meta = [
+                      t.rol === "beheerder" ? "Beheerder" : "Monteur",
+                      t.kan_schouw ? "schouw" : null,
+                      t.kan_installatie !== false ? "installatie" : null,
+                      t.kan_service ? "service" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+                    const lidOpen = openLidId === t.id;
+                    return (
+                      <Collapsible
+                        key={t.id}
+                        open={lidOpen}
+                        onOpenChange={(next) =>
+                          setOpenLidId(next ? t.id : null)
+                        }
                       >
-                        <span
-                          className={[
-                            "block truncate text-sm font-medium text-green-deeper",
-                            inactive ? "line-through" : "",
-                          ].join(" ")}
-                        >
-                          {t.naam}
-                        </span>
-                        <span className="mt-0.5 block truncate text-[11px] text-muted">
-                          {meta}
-                          {regios.length > 0
-                            ? ` · ${regios.slice(0, 2).join(", ")}${
-                                regios.length > 2
-                                  ? ` +${regios.length - 2}`
-                                  : ""
-                              }`
-                            : ""}
-                        </span>
-                        <span className="mt-0.5 block truncate text-[11px] text-muted md:hidden">
-                          {[t.email, t.telefoon].filter(Boolean).join(" · ") ||
-                            "—"}
-                        </span>
-                      </button>
-                    </TableCell>
-                    <TableCell className="hidden max-w-[12rem] px-3 py-2.5 md:table-cell">
-                      <span className="block truncate text-sm text-muted">
-                        {t.email || "—"}
-                      </span>
-                      {t.telefoon ? (
-                        <span className="mt-0.5 block truncate text-[11px] text-muted">
-                          {t.telefoon}
-                        </span>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className="px-3 py-2.5">
-                      {inactive ? (
-                        <Badge variant="outline" className="text-muted">
-                          Inactief
-                        </Badge>
-                      ) : t.invite_sent_at ? (
-                        <Badge className="bg-green-soft text-green-dark">
-                          Mail verstuurd
-                        </Badge>
-                      ) : t.email ? (
-                        <Badge className="bg-[#FFF7F0] text-[#C45A12]">
-                          Geen mail
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">Actief</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell
-                      className="w-[14rem] px-3 py-2.5"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="ml-auto grid w-[12.75rem] grid-cols-[4.75rem_6.25rem_1.75rem] items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          className="w-full justify-center"
-                          onClick={() => openMonteur(t.id)}
-                        >
-                          {adminBeoordeling ? "Klussen" : "Profiel"}
-                        </Button>
-                        {!inactive && t.email ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="xs"
-                            className="w-full justify-center"
-                            disabled={inviteBusy === t.id}
-                            onClick={() => void resendInvite(t.id)}
-                          >
-                            {inviteBusy === t.id
-                              ? "Bezig…"
-                              : t.invite_sent_at
-                                ? "Mail opnieuw"
-                                : "Stuur mail"}
-                          </Button>
-                        ) : (
-                          <span aria-hidden className="block h-7" />
-                        )}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                className="justify-self-end"
-                                aria-label={`Meer acties voor ${t.naam}`}
+                        <div className={inactive ? "bg-wash/40" : ""}>
+                          <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-wash/50">
+                            <span className="min-w-0 text-left">
+                              <span
+                                className={cn(
+                                  "block truncate text-sm font-medium text-ink",
+                                  inactive && "text-muted line-through"
+                                )}
+                              >
+                                {t.naam}
+                              </span>
+                              <span className="mt-0.5 block truncate text-[11px] text-muted">
+                                {meta}
+                                {regios.length > 0
+                                  ? ` · ${regios.slice(0, 2).join(", ")}${
+                                      regios.length > 2
+                                        ? ` +${regios.length - 2}`
+                                        : ""
+                                    }`
+                                  : ""}
+                              </span>
+                            </span>
+                            <span className="flex shrink-0 items-center gap-2">
+                              {inactive ? (
+                                <Badge variant="outline" className="text-muted">
+                                  Inactief
+                                </Badge>
+                              ) : t.invite_sent_at ? (
+                                <Badge className="bg-green-soft text-green-dark">
+                                  Mail verstuurd
+                                </Badge>
+                              ) : t.email ? (
+                                <Badge className="bg-[#FFF7F0] text-[#C45A12]">
+                                  Geen mail
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary">Actief</Badge>
+                              )}
+                              <ChevronDown
+                                className={cn(
+                                  "size-4 text-muted transition-transform",
+                                  lidOpen && "rotate-180"
+                                )}
                               />
-                            }
-                          >
-                            <EllipsisIcon />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="min-w-40">
-                            {inactive ? (
-                              <DropdownMenuItem
-                                onClick={() => void setActief(t.id, true)}
-                              >
-                                Activeren
-                              </DropdownMenuItem>
-                            ) : (
-                              <DropdownMenuItem
-                                onClick={() => void setActief(t.id, false)}
-                              >
-                                Deactiveren
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onClick={() => void remove(t.id, t.naam)}
-                            >
-                              Verwijderen
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                            </span>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="space-y-3 border-t border-line px-3 py-3">
+                              <p className="text-sm text-muted">
+                                {[t.email, t.telefoon]
+                                  .filter(Boolean)
+                                  .join(" · ") || "Geen contactgegevens"}
+                              </p>
+                              {regios.length > 0 ? (
+                                <p className="text-[12px] text-muted">
+                                  Regio’s: {regios.join(", ")}
+                                </p>
+                              ) : null}
+                              <div className="flex flex-wrap items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => openMonteur(t.id)}
+                                >
+                                  {adminBeoordeling ? "Klussen" : "Profiel"}
+                                </Button>
+                                {!inactive && t.email ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="xs"
+                                    disabled={inviteBusy === t.id}
+                                    onClick={() => void resendInvite(t.id)}
+                                  >
+                                    {inviteBusy === t.id
+                                      ? "Bezig…"
+                                      : t.invite_sent_at
+                                        ? "Mail opnieuw"
+                                        : "Stuur mail"}
+                                  </Button>
+                                ) : null}
+                                {inactive ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => void setActief(t.id, true)}
+                                  >
+                                    Activeren
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => void setActief(t.id, false)}
+                                  >
+                                    Deactiveren
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  size="xs"
+                                  onClick={() => void remove(t.id, t.naam)}
+                                >
+                                  Verwijderen
+                                </Button>
+                              </div>
+                            </div>
+                          </CollapsibleContent>
+                        </div>
+                      </Collapsible>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </CollapsibleContent>
         </Card>
-      )}
+      </Collapsible>
 
       {!adminBeoordeling ? (
         <PartnerKoppelsPanel

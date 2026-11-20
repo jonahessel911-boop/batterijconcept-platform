@@ -23,6 +23,7 @@ import {
   SOLLICITATIE_STATUS_MET_TRAINING,
   SOLLICITATIE_STATUS_MET_VERVOLG,
   SOLLICITATIE_STATUSES,
+  sollicitatieHeeftInfoToegestuurd,
 } from "@/lib/sollicitatie";
 import { formatDateShort, formatDateTimeNl, formatTimeNl } from "@/lib/format";
 import { parseProjectNotitieEntries } from "@/lib/lead-notitie";
@@ -59,6 +60,7 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { SollicitatieAntwoordenRows } from "@/components/crm/recruitment/SollicitatieAntwoordenRows";
+import { RecruitmentKandidaatMailModal } from "@/components/crm/recruitment/RecruitmentKandidaatMailModal";
 
 const STATUS_TONE: Record<
   SollicitatieStatus,
@@ -441,6 +443,8 @@ export function RecruitmentKandidaatDetail({
   const [noteDraft, setNoteDraft] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
+  const [mailOpen, setMailOpen] = useState(false);
+  const [mailTemplateId, setMailTemplateId] = useState("ontvangen_sollicitatie");
 
   useEffect(() => {
     setNoteDraft("");
@@ -673,12 +677,13 @@ export function RecruitmentKandidaatDetail({
                       E-mail
                     </p>
                     {kandidaat.email ? (
-                      <a
-                        href={`mailto:${kandidaat.email}`}
-                        className="mt-0.5 block break-all text-sm font-semibold text-ink hover:text-green-deeper hover:underline"
+                      <button
+                        type="button"
+                        onClick={() => setMailOpen(true)}
+                        className="mt-0.5 block break-all text-left text-sm font-semibold text-ink hover:text-green-deeper hover:underline"
                       >
                         {kandidaat.email}
-                      </a>
+                      </button>
                     ) : (
                       <p className="mt-0.5 text-sm text-muted">—</p>
                     )}
@@ -781,16 +786,38 @@ export function RecruitmentKandidaatDetail({
                     </a>
                   ) : null}
                   {kandidaat.email ? (
-                    <a
-                      href={`mailto:${kandidaat.email}`}
-                      className={cn(
-                        buttonVariants({ variant: "outline", size: "sm" }),
-                        "gap-1.5"
-                      )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => {
+                        setMailTemplateId("ontvangen_sollicitatie");
+                        setMailOpen(true);
+                      }}
                     >
                       <Mail className="size-3.5" />
                       Mailen
-                    </a>
+                    </Button>
+                  ) : null}
+                  {kandidaat.email &&
+                  !sollicitatieHeeftInfoToegestuurd(kandidaat.notitie) ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setMailTemplateId("info_toegestuurd");
+                        setMailOpen(true);
+                      }}
+                    >
+                      Info toesturen
+                    </Button>
+                  ) : null}
+                  {sollicitatieHeeftInfoToegestuurd(kandidaat.notitie) ? (
+                    <span className="inline-flex h-8 items-center rounded-md bg-green-soft px-2.5 text-xs font-semibold text-green-dark">
+                      Info toegestuurd
+                    </span>
                   ) : null}
                 </div>
               )}
@@ -1136,6 +1163,14 @@ export function RecruitmentKandidaatDetail({
           </Card>
         </aside>
       </div>
+      <RecruitmentKandidaatMailModal
+        kandidaat={mailOpen ? kandidaat : null}
+        initialTemplateId={mailTemplateId}
+        onClose={() => {
+          setMailOpen(false);
+          setMailTemplateId("ontvangen_sollicitatie");
+        }}
+      />
     </div>
   );
 }

@@ -172,6 +172,50 @@ export function holdSalesDeadlineLabel(
  * Cron/rapportage: lijst HOLD's waarvan sales-deadline verlopen is.
  * Geen auto-statuswijziging — BO kiest via Acties (verlengen / bedenktijd / annulering).
  */
+const HOLD_TERUG_NOTITIE_RE = /^HOLD teruggestuurd\b/im;
+const HOLD_TERUG_AFGEHANDELD_RE = /HOLD teruggestuurd afgehandeld/i;
+const HOLD_TERUG_DOOR_RE = /^HOLD teruggestuurd door ([^:\n]+)/im;
+
+/** Sales heeft HOLD teruggestuurd; BO moet de notitie opvolgen. */
+export function isHoldSalesTerugOpen(project: {
+  status?: string | null;
+  backoffice_notitie?: string | null;
+}): boolean {
+  const s = (project.status || "").toLowerCase();
+  if (s === "hold_sales_actie" || s === "hold_sales") return false;
+  if (s === "annulering" || s === "geannuleerd") return false;
+  const n = project.backoffice_notitie?.trim() || "";
+  if (!HOLD_TERUG_NOTITIE_RE.test(n)) return false;
+  if (HOLD_TERUG_AFGEHANDELD_RE.test(n)) return false;
+  return true;
+}
+
+/** Verkoper die HOLD teruggestuurd heeft (voor Acties-eigenaar). */
+export function holdSalesTerugEigenaarNaam(project: {
+  backoffice_notitie?: string | null;
+  backoffice_notitie_door?: string | null;
+}): string | null {
+  const door = project.backoffice_notitie_door?.trim();
+  if (door) return door;
+  const m = (project.backoffice_notitie || "").match(HOLD_TERUG_DOOR_RE);
+  const parsed = m?.[1]?.trim();
+  return parsed || null;
+}
+
+export function stampHoldSalesTerugAfgehandeld(
+  notitie: string | null | undefined
+): string {
+  const base = (notitie || "").trim();
+  if (HOLD_TERUG_AFGEHANDELD_RE.test(base)) return base;
+  return base
+    ? `${base}\n\nHOLD teruggestuurd afgehandeld`
+    : "HOLD teruggestuurd afgehandeld";
+}
+
+/**
+ * Cron/rapportage: lijst HOLD's waarvan sales-deadline verlopen is.
+ * Geen auto-statuswijziging — BO kiest via Acties (verlengen / bedenktijd / annulering).
+ */
 export async function verwerkVerlopenHoldSales(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sb: { from: (table: string) => any }

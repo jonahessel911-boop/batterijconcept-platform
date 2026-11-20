@@ -5,6 +5,8 @@ import { OPLEVERINGSRAPPORT_OMSCHRIJVING } from "@/lib/project-documenten";
 import { maybeAdvanceProjectNaOplevering } from "@/lib/project-na-oplevering";
 import {
   OPLEVER_PUNTEN,
+  formatServiceVvNotitie,
+  snapshotOpleverFormulier,
   type OpleverFormulierData,
   type OpleverPuntId,
   validateOpleverFormulier,
@@ -94,13 +96,32 @@ export async function generateAndUploadOpleverFormulier(
     /* best-effort */
   }
 
-  // SIN op project zetten (voor Alpha-portaal e.d.)
+  // SIN + oplever-snapshot (zonder handtekening) op project zetten
   {
+    const snapshot = snapshotOpleverFormulier(pdfData);
     const { error: sinUpdErr } = await sb
       .from("projecten")
-      .update({ systeem_sin: sin })
+      .update({ systeem_sin: sin, oplever_formulier: snapshot })
       .eq("id", projectId);
     if (
+      sinUpdErr &&
+      (sinUpdErr.code === "42703" ||
+        sinUpdErr.message?.includes("oplever_formulier"))
+    ) {
+      const { error: fallbackErr } = await sb
+        .from("projecten")
+        .update({ systeem_sin: sin })
+        .eq("id", projectId);
+      if (
+        fallbackErr &&
+        !(
+          fallbackErr.code === "42703" ||
+          fallbackErr.message?.includes("systeem_sin")
+        )
+      ) {
+        console.error("systeem_sin update:", fallbackErr.message);
+      }
+    } else if (
       sinUpdErr &&
       !(
         sinUpdErr.code === "42703" ||
@@ -109,7 +130,35 @@ export async function generateAndUploadOpleverFormulier(
     ) {
       console.error("systeem_sin update:", sinUpdErr.message);
     }
+
+    const opmerking = snapshot.opmerkingen;
+    if (opmerking) {
+      const { data: row } = await sb
+        .from("projecten")
+        .select("installatie_notities")
+        .eq("id", projectId)
+        .maybeSingle();
+      const existing = String(
+        (row as { installatie_notities?: string | null } | null)
+          ?.installatie_notities || ""
+      ).trim();
+      if (!existing.includes(opmerking)) {
+        const next = existing
+          ? `${existing}\n\nOplever: ${opmerking}`
+          : `Oplever: ${opmerking}`;
+        const { error: noteErr } = await sb
+          .from("projecten")
+          .update({ installatie_notities: next })
+          .eq("id", projectId);
+        if (noteErr) {
+          console.error("oplever notitie:", noteErr.message);
+        }
+      }
+    }
   }
+
+  // Snapshot staat al op het project → After sale, ook als de PDF-upload hapert.
+  await maybeAdvanceProjectNaOplevering(sb, projectId);
 
   const blob = await buildOpleverFormulierPdf(pdfData);
   const filename = `opleverformulier-${(data.projectNummer || projectId).replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`;
@@ -122,15 +171,131 @@ export async function generateAndUploadOpleverFormulier(
     OPLEVERINGSRAPPORT_OMSCHRIJVING,
     { allowPdf: true }
   );
+  const statusAdvance = await maybeAdvanceProjectNaOplevering(sb, projectId);
   if ("error" in result) return result;
 
-  const statusAdvance = await maybeAdvanceProjectNaOplevering(sb, projectId);
+  let projectAfter = statusAdvance?.project || null;
+  if (data.vervolgNodig) {
+    const booked = await bookServiceVvVanOplever(sb, projectId, data);
+    if (booked.project) projectAfter = booked.project;
+  }
 
   return {
     foto: result.foto,
     status_advance: statusAdvance,
-    project: statusAdvance?.project || null,
+    project: projectAfter,
   };
+}
+
+async function bookServiceVvVanOplever(
+  sb: SupabaseClient,
+  projectId: string,
+  data: OpleverFormulierData
+): Promise<{ project?: Record<string, unknown> | null }> {
+  const rawAt = data.vervolgAt.trim();
+  const asIso = rawAt.includes("T") && !rawAt.endsWith("Z") && !rawAt.includes("+")
+    ? rawAt.length === 16
+      ? `${rawAt}:00`
+      : rawAt
+    : rawAt;
+  const at = new Date(asIso);
+  if (Number.isNaN(at.getTime())) {
+    console.error("oplever service_at ongeldig:", rawAt);
+    return {};
+  }
+
+  const { data: project } = await sb
+    .from("projecten")
+    .select("id, installatie_partner_id")
+    .eq("id", projectId)
+    .maybeSingle();
+  const partnerId =
+    (project as { installatie_partner_id?: string | null } | null)
+      ?.installatie_partner_id || null;
+
+  let tgId = data.vervolgMonteurId.trim() || null;
+  let tgNaam = data.vervolgMonteurNaam.trim() || null;
+  if (tgId && partnerId) {
+    let tgQ = await sb
+      .from("installatie_partner_teamgenoten")
+      .select("id, naam, actief, kan_service")
+      .eq("id", tgId)
+      .eq("partner_id", partnerId)
+      .maybeSingle();
+    if (
+      tgQ.error &&
+      (tgQ.error.code === "42703" ||
+        tgQ.error.message?.includes("kan_service"))
+    ) {
+      tgQ = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, naam, actief")
+        .eq("id", tgId)
+        .eq("partner_id", partnerId)
+        .maybeSingle();
+    }
+    const tg = tgQ.data as {
+      id: string;
+      naam: string;
+      actief?: boolean | null;
+      kan_service?: boolean | null;
+    } | null;
+    if (!tg || tg.actief === false) {
+      console.error("oplever service: monteur niet gevonden");
+      return {};
+    }
+    if ("kan_service" in (tg as object) && tg.kan_service !== true) {
+      console.error("oplever service: geen Service-vinkje");
+      return {};
+    }
+    tgId = tg.id;
+    tgNaam = tg.naam;
+  }
+
+  const patch: Record<string, unknown> = {
+    service_at: at.toISOString(),
+    service_notities: formatServiceVvNotitie(data.vervolgActie),
+  };
+  if (tgNaam) patch.monteur = tgNaam;
+  if (tgId) patch.service_teamgenoot_id = tgId;
+
+  let { data: updated, error } = await sb
+    .from("projecten")
+    .update(patch)
+    .eq("id", projectId)
+    .select("*")
+    .single();
+
+  if (
+    error &&
+    (error.message?.includes("service_teamgenoot_id") ||
+      error.code === "42703")
+  ) {
+    const fallback = { ...patch };
+    delete fallback.service_teamgenoot_id;
+    const retry = await sb
+      .from("projecten")
+      .update(fallback)
+      .eq("id", projectId)
+      .select("*")
+      .single();
+    updated = retry.data;
+    error = retry.error;
+  }
+
+  if (error) {
+    console.error("oplever service boeken:", error.message);
+    return {};
+  }
+
+  try {
+    const { syncAutoTakenVoorProject } = await import("@/lib/sync-auto-taken");
+    await syncAutoTakenVoorProject(sb, projectId, "after_sale");
+  } catch {
+    /* best-effort */
+  }
+
+  return { project: updated };
 }
 
 /** Parse JSON-body → OpleverFormulierData. */
@@ -163,6 +328,14 @@ export function parseOpleverFormulierBody(
     akkoord: form.akkoord === true || form.akkoord === "true" || form.akkoord === 1,
     handtekeningDataUrl: str("handtekeningDataUrl"),
     opmerkingen: str("opmerkingen"),
+    vervolgNodig:
+      form.vervolgNodig === true ||
+      form.vervolgNodig === "true" ||
+      form.vervolgNodig === 1,
+    vervolgActie: str("vervolgActie"),
+    vervolgAt: str("vervolgAt"),
+    vervolgMonteurId: str("vervolgMonteurId"),
+    vervolgMonteurNaam: str("vervolgMonteurNaam"),
   };
 
   const invalid = validateOpleverFormulier(data);

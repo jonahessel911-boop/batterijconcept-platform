@@ -11,8 +11,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { findDefaultBackofficeMedewerkerId } from "@/lib/admin-adviseur";
 import { factuurIsBetaald } from "@/lib/aanbetaling";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
-import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
+import {
+  DEFAULT_INSTALLATIE_STANDAARD,
+  loadProductenInkoop,
+} from "@/lib/inkoop";
+import {
+  hardwareKostenVoorRegelsMetProducten,
+  pnlInstallatieVoorOrder,
+} from "@/lib/project-kosten";
 import { commissiePctToFraction } from "@/lib/netto-boord";
 import { normalizeProjectStatus } from "@/lib/labels";
 import {
@@ -308,6 +314,7 @@ export async function buildCurrentPnl(
     instRes,
     afsprakenRaw,
     edergyTarief,
+    producten,
   ] = await Promise.all([
       // Breed ophalen op factuurdatum/betaald_op-prefix; exacte betaal-ymd filteren we in JS
       fetchAllRows<FactuurRow>((fromIdx, toIdx) =>
@@ -374,8 +381,9 @@ export async function buildCurrentPnl(
           .range(fromIdx, toIdx)
       ).catch(() => [] as OpsCommissieAfspraak[]),
       leesEdergyTarief(),
+      loadProductenInkoop(sb),
     ]);
-  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
+  const edergyPerAanvraag = edergyTarief.perAanvraagExcl;
 
   const facturen = facturenRaw.filter((f) => {
     const ymd = factuurBetaalYmd(f);
@@ -540,14 +548,26 @@ export async function buildCurrentPnl(
     const geannuleerd = oid ? geannuleerdOfferteIds.has(oid) : false;
 
     const orderOmzet = Number(offerte?.subtotaal_ex_btw) || 0;
-    const fullInkoop = offerte
-      ? hardwareKostenVoorRegels(offerte.offerte_regels || []).totaal
-      : 0;
+    const hw = offerte
+      ? hardwareKostenVoorRegelsMetProducten(
+          offerte.offerte_regels || [],
+          producten
+        )
+      : null;
+    const fullInkoop = hw?.totaal ?? 0;
     const proj = oid ? projectByOfferte.get(oid) : undefined;
-    const fullInstallatie =
-      proj && Number(proj.projectkosten) > 0
-        ? Number(proj.projectkosten)
-        : standaardInstallatie;
+    const fullInstallatie = pnlInstallatieVoorOrder(
+      proj?.projectkosten,
+      standaardInstallatie,
+      hw ?? {
+        batterij: 0,
+        omvormer: 0,
+        totaal: 0,
+        aantal: 0,
+        aantalBatterijPakket: 0,
+        aantalWarmtepomp: 0,
+      }
+    );
 
     // Pro-rata COGS obv betaald aandeel van de order (credits = negatief)
     const share =

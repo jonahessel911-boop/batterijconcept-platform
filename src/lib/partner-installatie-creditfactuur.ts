@@ -110,6 +110,21 @@ export async function ensurePartnerInstallatieCreditfactuur(
     .limit(1)
     .maybeSingle();
 
+  if (!weekExisting?.id) {
+    const { data: held } = await sb
+      .from("partner_creditfacturen")
+      .select("id")
+      .eq("partner_id", partner.id)
+      .eq("week_jaar", weekInfo.jaar)
+      .eq("week_nummer", weekInfo.week)
+      .eq("status", "geannuleerd")
+      .limit(1)
+      .maybeSingle();
+    if (held?.id) {
+      return { ok: true, skipped: "week_on_hold", creditfactuur_id: held.id };
+    }
+  }
+
   if (weekExisting?.id) {
     const hay = `${weekExisting.omschrijving || ""}\n${weekExisting.notities || ""}`;
     if (hay.includes(projectNr)) {
@@ -415,6 +430,29 @@ export async function syncPartnerWeekCreditfacturen(opts: {
       .neq("status", "geannuleerd")
       .limit(1)
       .maybeSingle();
+
+    if (!existing?.id) {
+      const { data: held } = await sb
+        .from("partner_creditfacturen")
+        .select("id, factuur_nummer")
+        .eq("partner_id", partner.id)
+        .eq("week_jaar", bucket.jaar)
+        .eq("week_nummer", bucket.week)
+        .eq("status", "geannuleerd")
+        .limit(1)
+        .maybeSingle();
+      if (held?.id) {
+        results.push({
+          partner: issuerNaam,
+          week: weekLabel,
+          projecten: projectNrs,
+          factuur_nummer: held.factuur_nummer,
+          action: "skipped",
+          error: "geannuleerd",
+        });
+        continue;
+      }
+    }
 
     if (existing?.id && existing.status !== "concept") {
       results.push({

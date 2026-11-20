@@ -83,4 +83,19 @@ Dank voor je mail. Wanneer ben je het beste telefonisch bereikbaar? Dan plannen 
 Met vriendelijke groet,
 BatterijConcept Recruitment`,
   },
+  {
+    id: "info_toegestuurd",
+    label: "Info toesturen",
+    subject: "Informatie over BatterijConcept",
+    body: `Beste {{voornaam}},
+
+Zoals beloofd stuur ik je hierbij de informatie over BatterijConcept en de functie.
+
+Op https://platform.batterijconcept.nl/werkenbij lees je meer over de vacatures en hoe wij werken.
+
+Heb je vragen of wil je een gesprek inplannen? Reageer gerust op deze mail, dan nemen we contact met je op.
+
+Met vriendelijke groet,
+BatterijConcept Recruitment`,
+  },
 ];

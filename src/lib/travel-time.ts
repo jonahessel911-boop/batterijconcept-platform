@@ -98,9 +98,7 @@ async function geocodeOnce(
     if (opts.country) {
       url.searchParams.set("components", `country:${opts.country.toUpperCase()}`);
     }
-    const res = await fetch(url.toString(), {
-      next: { revalidate: 86400 },
-    });
+    const res = await fetch(url.toString());
     const data = (await res.json()) as {
       status?: string;
       results?: { geometry: { location: { lat: number; lng: number } } }[];

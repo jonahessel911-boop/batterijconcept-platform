@@ -8,6 +8,7 @@ import {
 } from "@/lib/factuur-omschrijving";
 import {
   COMPANY_IBAN_DISPLAY,
+  FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
   FACTUUR_BETAALTERMIJN_DAGEN,
   amsterdamDatePlusDays,
   parseBetaaltermijnDagen,
@@ -153,7 +154,7 @@ export async function POST(
         : productLabel || "Factuur Batterijconcept");
 
     const betaaltermijnDagen = creditVan
-      ? FACTUUR_BETAALTERMIJN_DAGEN
+      ? FACTUUR_BETAALTERMIJN_CREDIT_DAGEN
       : parseBetaaltermijnDagen(
           body.betaaltermijn_dagen,
           FACTUUR_BETAALTERMIJN_DAGEN

@@ -1,7 +1,43 @@
 import { getSupabaseAdmin } from "@/lib/supabase";
 import type { LeadEventSoort } from "@/types/database";
 
-/** Log een gebeurtenis op de lead-tijdlijn (best-effort, faalt stil). */
+/** Uitgaande klantmail op de project-tijdlijn (lead_events + project_id). */
+export async function logProjectKlantMail(opts: {
+  leadId?: string | null;
+  projectId: string;
+  projectNummer?: string | null;
+  to?: string | null;
+  subject?: string | null;
+  bericht?: string | null;
+  ok: boolean;
+  messageId?: string | null;
+  tag?: string | null;
+  titel?: string | null;
+  by?: string | null;
+}): Promise<void> {
+  if (!opts.leadId) return;
+  const titel =
+    opts.titel?.trim() ||
+    (opts.ok ? "Contactmail verstuurd" : "Contactmail mislukt");
+  await logLeadEvent({
+    leadId: opts.leadId,
+    soort: "email",
+    titel,
+    detail: opts.bericht?.trim() || opts.subject || titel,
+    meta: {
+      to: opts.to || null,
+      subject: opts.subject || null,
+      bericht: opts.bericht || null,
+      project_id: opts.projectId,
+      project_nummer: opts.projectNummer || null,
+      message_id: opts.messageId || null,
+      tag: opts.tag || null,
+      ok: opts.ok,
+      by: opts.by || null,
+    },
+  });
+}
+
 export async function logLeadEvent(opts: {
   leadId: string;
   soort: LeadEventSoort | string;

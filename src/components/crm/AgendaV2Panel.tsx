@@ -1834,10 +1834,11 @@ export function AgendaPanel({
                         >
                           {notHisSlot ? (
                             <div
-                              className="h-full min-h-[2.25rem] w-full"
+                              className="flex h-full min-h-[2.25rem] w-full items-center justify-center text-[10px] font-medium text-muted/70"
                               title="Geen inplanuur voor deze adviseur"
-                              aria-hidden
-                            />
+                            >
+                              n.v.t.
+                            </div>
                           ) : blocked && slotVrijVoorAfblok ? (
                             <div className="space-y-1">
                               <GeblokkeerdCell

@@ -4,18 +4,12 @@ import { errMessage } from "@/lib/errors";
 import { requirePartnerPortal } from "@/lib/installatie-portal";
 import {
   aggregateForecast,
-  buildWeeksUntil,
+  buildPipelineWeeks,
+  pipelineHorizonEnd,
   FORECAST_WEEKEN_NA_ONDERTEKENING,
 } from "@/lib/installatie-verwachting";
 
 export const runtime = "nodejs";
-
-function nextJan1(from = new Date()) {
-  const y = from.getFullYear();
-  const thisYear = new Date(Date.UTC(y, 0, 1));
-  if (from.getTime() < thisYear.getTime()) return thisYear;
-  return new Date(Date.UTC(y + 1, 0, 1));
-}
 
 /** GET — partner pipeline: verkochte orders per week/regio (definitief vs concept) */
 export async function GET(
@@ -33,10 +27,9 @@ export async function GET(
     }
 
     const now = new Date();
-    const jan1 = nextJan1(now);
-    const weeks = buildWeeksUntil(jan1, now);
+    const weeks = buildPipelineWeeks(now);
     const fromIso = weeks[0] ? weeks[0].key : now.toISOString();
-    const toIso = jan1.toISOString();
+    const toIso = pipelineHorizonEnd(now).toISOString();
 
     const sb = getSupabaseAdmin();
     const { data, error } = await sb
@@ -48,7 +41,7 @@ export async function GET(
       .not(
         "status",
         "in",
-        "(annulering,hold_sales_actie,installatie_voltooid,afgerond,review_gevraagd)"
+        "(annulering,hold_sales_actie,installatie_voltooid,after_sale,afgerond,review_gevraagd)"
       );
 
     if (error) throw error;

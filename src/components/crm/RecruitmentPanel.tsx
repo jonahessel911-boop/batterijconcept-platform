@@ -26,6 +26,7 @@ import {
   Briefcase,
   ChartColumn,
   Trash2,
+  X,
 } from "lucide-react";
 import type {
   Sollicitatie,
@@ -38,6 +39,7 @@ import {
   SOLLICITATIE_STATUS_LABEL,
   SOLLICITATIE_STATUS_MET_VERVOLG,
   SOLLICITATIE_STATUSES,
+  sollicitatieHeeftInfoToegestuurd,
 } from "@/lib/sollicitatie";
 import {
   extractAdresFromNotitie,
@@ -45,7 +47,15 @@ import {
   mergeSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
 import { formatDateShort, formatDateTimeNl } from "@/lib/format";
-import { provincieVanPostcode } from "@/lib/postcode-provincie";
+import {
+  NL_PROVINCIES,
+  provincieVanPostcode,
+} from "@/lib/postcode-provincie";
+import {
+  collectKwalificatieFilterVragen,
+  kandidaatMatchtKwalificatieFilter,
+  parseSollicitatieAntwoordRows,
+} from "@/lib/sollicitatie-antwoorden";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -94,6 +104,7 @@ import { RecruitmentJobsView } from "@/components/crm/recruitment/RecruitmentJob
 import { RecruitmentBelPanel } from "@/components/crm/recruitment/RecruitmentBelPanel";
 import { RecruitmentInboxPanel } from "@/components/crm/recruitment/RecruitmentInboxPanel";
 import { RecruitmentKaartView } from "@/components/crm/recruitment/RecruitmentKaartView";
+import { RecruitmentKandidaatMailModal } from "@/components/crm/recruitment/RecruitmentKandidaatMailModal";
 import { cn } from "@/lib/utils";
 
 type ViewMode =
@@ -195,14 +206,11 @@ function StatusPill({ status }: { status: SollicitatieStatus }) {
 
 function PhoneCopyCell({ telefoon }: { telefoon: string | null }) {
   const [copied, setCopied] = useState(false);
-
-  if (!telefoon?.trim()) {
-    return <span className="text-muted">—</span>;
-  }
+  const value = telefoon?.trim() || "";
 
   async function copy(e: ReactMouseEvent) {
     e.stopPropagation();
-    const value = telefoon!.trim();
+    if (!value) return;
     try {
       await navigator.clipboard.writeText(value);
     } catch {
@@ -221,22 +229,33 @@ function PhoneCopyCell({ telefoon }: { telefoon: string | null }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      <span className="tabular-nums text-ink">{telefoon}</span>
-      <button
-        type="button"
-        onClick={(e) => void copy(e)}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted hover:bg-wash hover:text-green-dark"
-        title={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
-        aria-label={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
-      >
-        {copied ? (
-          <Check className="size-3.5 text-green-dark" strokeWidth={2.5} />
-        ) : (
-          <Copy className="size-3.5" strokeWidth={2.25} />
+    <>
+      <span
+        className={cn(
+          "w-[13ch] shrink-0 truncate tabular-nums",
+          value ? "text-ink" : "text-muted"
         )}
-      </button>
-    </span>
+      >
+        {value || "—"}
+      </span>
+      {value ? (
+        <button
+          type="button"
+          onClick={(e) => void copy(e)}
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-muted hover:bg-wash hover:text-green-dark"
+          title={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
+          aria-label={copied ? "Gekopieerd" : "Kopieer telefoonnummer"}
+        >
+          {copied ? (
+            <Check className="size-3.5 text-green-dark" strokeWidth={2.5} />
+          ) : (
+            <Copy className="size-3.5" strokeWidth={2.25} />
+          )}
+        </button>
+      ) : (
+        <span className="size-7 shrink-0" aria-hidden />
+      )}
+    </>
   );
 }
 
@@ -251,6 +270,10 @@ export function RecruitmentPanel() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"" | SollicitatieStatus>("");
   const [functieFilter, setFunctieFilter] = useState("");
+  const [provincieFilter, setProvincieFilter] = useState("");
+  const [kwalificatieFilters, setKwalificatieFilters] = useState<
+    Record<string, string>
+  >({});
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -281,6 +304,16 @@ export function RecruitmentPanel() {
   const [beoordelingNotitie, setBeoordelingNotitie] = useState("");
   const [beoordelingSaving, setBeoordelingSaving] = useState(false);
   const [inboxUnread, setInboxUnread] = useState(0);
+  const [mailKandidaat, setMailKandidaat] = useState<Sollicitatie | null>(null);
+  const [mailTemplateId, setMailTemplateId] = useState("ontvangen_sollicitatie");
+
+  function openKandidaatMail(
+    s: Sollicitatie,
+    templateId = "ontvangen_sollicitatie"
+  ) {
+    setMailTemplateId(templateId);
+    setMailKandidaat(s);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -407,6 +440,40 @@ export function RecruitmentPanel() {
     return [...set].sort((a, b) => a.localeCompare(b, "nl"));
   }, [items]);
 
+  const antwoordRowsById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof parseSollicitatieAntwoordRows>>();
+    for (const s of items) {
+      map.set(s.id, parseSollicitatieAntwoordRows(s.notitie));
+    }
+    return map;
+  }, [items]);
+
+  const kwalificatieVragen = useMemo(() => {
+    const functieQ = functieFilter.trim().toLowerCase();
+    const rows: ReturnType<typeof parseSollicitatieAntwoordRows>[] = [];
+    for (const s of items) {
+      if (functieQ) {
+        const f = (s.functie || "").trim().toLowerCase();
+        if (f !== functieQ) continue;
+      }
+      rows.push(antwoordRowsById.get(s.id) || []);
+    }
+    return collectKwalificatieFilterVragen(rows);
+  }, [items, functieFilter, antwoordRowsById]);
+
+  const activeKwalificatie = useMemo(
+    () =>
+      Object.entries(kwalificatieFilters).filter(([, v]) => v.trim().length > 0),
+    [kwalificatieFilters]
+  );
+
+  const hasExtraFilters =
+    Boolean(provincieFilter) ||
+    activeKwalificatie.length > 0 ||
+    Boolean(statusFilter) ||
+    Boolean(functieFilter) ||
+    Boolean(search.trim());
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const functieQ = functieFilter.trim().toLowerCase();
@@ -417,6 +484,18 @@ export function RecruitmentPanel() {
         const f = (s.functie || "").trim().toLowerCase();
         if (f !== functieQ) return false;
       }
+      const provincie = provincieOf(s);
+      if (provincieFilter === "__onbekend__") {
+        if (provincie) return false;
+      } else if (provincieFilter && provincie !== provincieFilter) {
+        return false;
+      }
+      const rows = antwoordRowsById.get(s.id) || [];
+      for (const [vraag, antwoord] of activeKwalificatie) {
+        if (!kandidaatMatchtKwalificatieFilter(rows, vraag, antwoord)) {
+          return false;
+        }
+      }
       if (!q) return true;
       const hay = [
         s.naam,
@@ -425,7 +504,7 @@ export function RecruitmentPanel() {
         s.functie,
         s.notitie,
         plaatsOf(s),
-        provincieOf(s),
+        provincie,
         SOLLICITATIE_STATUS_LABEL[st],
       ]
         .filter(Boolean)
@@ -433,11 +512,42 @@ export function RecruitmentPanel() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [items, search, statusFilter, functieFilter]);
+  }, [
+    items,
+    search,
+    statusFilter,
+    functieFilter,
+    provincieFilter,
+    activeKwalificatie,
+    antwoordRowsById,
+  ]);
 
   useEffect(() => {
     setAanmeldPage(1);
-  }, [search, statusFilter, functieFilter, aanmeldLayout]);
+  }, [
+    search,
+    statusFilter,
+    functieFilter,
+    provincieFilter,
+    kwalificatieFilters,
+    aanmeldLayout,
+  ]);
+
+  useEffect(() => {
+    const known = new Set(kwalificatieVragen.map((v) => v.vraag));
+    setKwalificatieFilters((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (!known.has(k)) {
+          changed = true;
+          continue;
+        }
+        next[k] = v;
+      }
+      return changed ? next : prev;
+    });
+  }, [kwalificatieVragen]);
 
   const aanmeldPageCount = Math.max(
     1,
@@ -695,7 +805,7 @@ export function RecruitmentPanel() {
     if (t?.closest("button, select, a")) e.stopPropagation();
   };
 
-  const showListTools = view === "tabel";
+  const showListTools = view === "tabel" || view === "bellen";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -777,47 +887,110 @@ export function RecruitmentPanel() {
         </div>
 
         {showListTools ? (
-          <div className="flex flex-col gap-2 border-t border-line px-3 py-2.5 sm:flex-row sm:items-center sm:px-4">
-            <div className="relative w-full min-w-0 flex-1 sm:max-w-md">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Zoek naam, telefoon, plaats, functie…"
-                className="bg-background pl-8"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <NativeSelect
-                value={functieFilter}
-                onChange={(e) => setFunctieFilter(e.target.value)}
-                className="min-w-[9rem]"
-                aria-label="Filter op functie"
-              >
-                <NativeSelectOption value="">Alle functies</NativeSelectOption>
-                {functieOpties.map((f) => (
-                  <NativeSelectOption key={f} value={f}>
-                    {f}
+          <div className="flex flex-col gap-2 border-t border-line px-3 py-2.5 sm:px-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="relative w-full min-w-0 flex-1 sm:max-w-md">
+                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Zoek naam, telefoon, plaats, functie…"
+                  className="bg-background pl-8"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <NativeSelect
+                  value={functieFilter}
+                  onChange={(e) => setFunctieFilter(e.target.value)}
+                  className="min-w-[9rem]"
+                  aria-label="Filter op functie"
+                >
+                  <NativeSelectOption value="">Alle functies</NativeSelectOption>
+                  {functieOpties.map((f) => (
+                    <NativeSelectOption key={f} value={f}>
+                      {f}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <NativeSelect
+                  value={statusFilter}
+                  onChange={(e) =>
+                    setStatusFilter(e.target.value as "" | SollicitatieStatus)
+                  }
+                  className="min-w-[9rem]"
+                  aria-label="Filter op status"
+                >
+                  <NativeSelectOption value="">Alle statussen</NativeSelectOption>
+                  {SOLLICITATIE_STATUSES.map((st) => (
+                    <NativeSelectOption key={st} value={st}>
+                      {SOLLICITATIE_STATUS_LABEL[st]}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <NativeSelect
+                  value={provincieFilter}
+                  onChange={(e) => setProvincieFilter(e.target.value)}
+                  className="min-w-[10rem]"
+                  aria-label="Filter op provincie"
+                >
+                  <NativeSelectOption value="">
+                    Alle provincies
                   </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <NativeSelect
-                value={statusFilter}
-                onChange={(e) =>
-                  setStatusFilter(e.target.value as "" | SollicitatieStatus)
-                }
-                className="min-w-[9rem]"
-                aria-label="Filter op status"
-              >
-                <NativeSelectOption value="">Alle statussen</NativeSelectOption>
-                {SOLLICITATIE_STATUSES.map((st) => (
-                  <NativeSelectOption key={st} value={st}>
-                    {SOLLICITATIE_STATUS_LABEL[st]}
+                  {NL_PROVINCIES.map((p) => (
+                    <NativeSelectOption key={p} value={p}>
+                      {p}
+                    </NativeSelectOption>
+                  ))}
+                  <NativeSelectOption value="__onbekend__">
+                    Onbekend
                   </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                </NativeSelect>
+                {hasExtraFilters ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setFunctieFilter("");
+                      setStatusFilter("");
+                      setProvincieFilter("");
+                      setKwalificatieFilters({});
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[12px] font-semibold text-muted hover:bg-wash hover:text-ink"
+                  >
+                    <X className="size-3.5" aria-hidden />
+                    Wis filters
+                  </button>
+                ) : null}
+              </div>
             </div>
+            {kwalificatieVragen.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {kwalificatieVragen.map((v) => (
+                  <NativeSelect
+                    key={v.vraag}
+                    value={kwalificatieFilters[v.vraag] || ""}
+                    onChange={(e) =>
+                      setKwalificatieFilters((prev) => ({
+                        ...prev,
+                        [v.vraag]: e.target.value,
+                      }))
+                    }
+                    className="min-w-[9.5rem] max-w-[16rem]"
+                    aria-label={`Filter op ${v.label}`}
+                  >
+                    <NativeSelectOption value="">
+                      {v.label}: alle
+                    </NativeSelectOption>
+                    {v.opties.map((opt) => (
+                      <NativeSelectOption key={opt} value={opt}>
+                        {v.label}: {opt}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -845,6 +1018,19 @@ export function RecruitmentPanel() {
                 {statusFilter
                   ? ` · ${SOLLICITATIE_STATUS_LABEL[statusFilter]}`
                   : ""}
+                {provincieFilter
+                  ? ` · ${
+                      provincieFilter === "__onbekend__"
+                        ? "provincie onbekend"
+                        : provincieFilter
+                    }`
+                  : ""}
+                {activeKwalificatie.map(([vraag, antwoord]) => {
+                  const label =
+                    kwalificatieVragen.find((v) => v.vraag === vraag)?.label ||
+                    vraag;
+                  return ` · ${label}: ${antwoord}`;
+                }).join("")}
                 {search.trim() ? ` · zoek “${search.trim()}”` : ""}
               </p>
             </div>
@@ -893,7 +1079,7 @@ export function RecruitmentPanel() {
           </div>
         ) : view === "bellen" ? (
           <RecruitmentBelPanel
-            kandidaten={items}
+            kandidaten={filtered}
             advanceAfterPlanKey={belAdvanceKey}
             onOpenKandidaat={openDetail}
             onPlanGesprek={(id) => {
@@ -1016,8 +1202,35 @@ export function RecruitmentPanel() {
                         <td className="text-muted whitespace-nowrap">
                           {provincieOf(s) || "—"}
                         </td>
-                        <td onClick={stopBtn}>
-                          <PhoneCopyCell telefoon={s.telefoon} />
+                        <td onClick={stopBtn} className="whitespace-nowrap">
+                          <span className="grid grid-cols-[13ch_1.75rem_1.75rem_auto] items-center gap-x-0.5">
+                            <PhoneCopyCell telefoon={s.telefoon} />
+                            <button
+                              type="button"
+                              disabled={!s.email?.trim()}
+                              onClick={() => openKandidaatMail(s)}
+                              className="inline-flex size-7 shrink-0 items-center justify-center rounded text-muted hover:bg-wash hover:text-green-dark disabled:cursor-not-allowed disabled:opacity-35"
+                              title={
+                                s.email?.trim()
+                                  ? `Mail ${s.naam} via het portaal`
+                                  : "Geen e-mailadres"
+                              }
+                              aria-label={
+                                s.email?.trim()
+                                  ? `Mail ${s.naam} via het portaal`
+                                  : "Geen e-mailadres"
+                              }
+                            >
+                              <Mail className="size-3.5" strokeWidth={2.25} />
+                            </button>
+                            {sollicitatieHeeftInfoToegestuurd(s.notitie) ? (
+                              <span className="justify-self-start text-[11px] font-semibold text-green-dark">
+                                Info toegestuurd
+                              </span>
+                            ) : (
+                              <span />
+                            )}
+                          </span>
                         </td>
                         <td className="text-muted whitespace-nowrap">
                           {formatDateShort(s.created_at)}
@@ -1185,16 +1398,33 @@ export function RecruitmentPanel() {
                     </a>
                   ) : null}
                   {selected.email ? (
-                    <a
-                      href={`mailto:${selected.email}`}
-                      className={buttonVariants({
-                        variant: "outline",
-                        size: "sm",
-                      })}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openKandidaatMail(selected)}
                     >
                       <Mail data-icon="inline-start" />
                       Mail
-                    </a>
+                    </Button>
+                  ) : null}
+                  {selected.email &&
+                  !sollicitatieHeeftInfoToegestuurd(selected.notitie) ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        openKandidaatMail(selected, "info_toegestuurd")
+                      }
+                    >
+                      Info toesturen
+                    </Button>
+                  ) : null}
+                  {sollicitatieHeeftInfoToegestuurd(selected.notitie) ? (
+                    <span className="inline-flex h-8 items-center rounded-md bg-green-soft px-2.5 text-xs font-semibold text-green-dark">
+                      Info toegestuurd
+                    </span>
                   ) : null}
                   <Button
                     type="button"
@@ -1617,6 +1847,26 @@ export function RecruitmentPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <RecruitmentKandidaatMailModal
+        kandidaat={mailKandidaat}
+        initialTemplateId={mailTemplateId}
+        onClose={() => {
+          setMailKandidaat(null);
+          setMailTemplateId("ontvangen_sollicitatie");
+        }}
+        onSent={() => {
+          setOkMsg(
+            mailKandidaat
+              ? mailTemplateId === "info_toegestuurd"
+                ? `Info toegestuurd aan ${mailKandidaat.naam}`
+                : `Mail verstuurd naar ${mailKandidaat.naam}`
+              : "Mail verstuurd"
+          );
+          window.setTimeout(() => setOkMsg(null), 2800);
+          void load();
+        }}
+      />
     </div>
   );
 }

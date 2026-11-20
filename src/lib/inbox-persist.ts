@@ -12,6 +12,11 @@ import {
   type InboxMailStatus,
 } from "@/lib/inbox";
 import { logInboxMailNotitie } from "@/lib/inbox-notitie";
+import { appendStampedNotitie } from "@/lib/lead-notitie";
+import {
+  messageIdVariants,
+  storePostmarkMessageId,
+} from "@/lib/inbox-message-id";
 
 export type InboxDbRow = {
   id: string;
@@ -151,13 +156,13 @@ export async function findInboxMailByMessageId(
   sb: SupabaseClient,
   messageId: string
 ): Promise<InboxDbRow | null> {
-  const id = messageId.trim();
-  if (!id) return null;
+  const variants = messageIdVariants(messageId);
+  if (!variants.length) return null;
   const { data, error } = await sb
     .from("inbox_mails")
     .select(SELECT_COLS)
-    .eq("message_id", id)
-    .maybeSingle();
+    .in("message_id", variants)
+    .limit(1);
   if (error) {
     if (
       error.code === "42P01" ||
@@ -167,7 +172,7 @@ export async function findInboxMailByMessageId(
     }
     throw error;
   }
-  return (data as InboxDbRow) || null;
+  return ((data || [])[0] as InboxDbRow) || null;
 }
 
 export async function getInboxMail(
@@ -250,7 +255,10 @@ export async function insertBookedInboxMail(
     mailbox?: "info" | "facturen" | null;
   }
 ): Promise<{ row: InboxDbRow | null; inserted: boolean; skipped?: boolean }> {
-  const messageId = (opts?.messageId || "").trim() || null;
+  const messageId =
+    storePostmarkMessageId(opts?.messageId) ||
+    (opts?.messageId || "").trim() ||
+    null;
   if (messageId) {
     const existing = await findInboxMailByMessageId(sb, messageId);
     if (existing) {
@@ -269,6 +277,45 @@ export async function insertBookedInboxMail(
     inReplyTo,
     fallbackThreadId: mail.threadId || null,
   });
+
+  const fromEmailNorm = (mail.fromEmail || "").trim().toLowerCase();
+  let sollicitatie: { id: string; notitie: string | null } | null = null;
+  if (fromEmailNorm && !fromEmailNorm.endsWith("@batterijconcept.nl")) {
+    try {
+      const { data: solRows } = await sb
+        .from("sollicitaties")
+        .select("id, notitie")
+        .ilike("email", fromEmailNorm)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const sol = (solRows || [])[0] as
+        | { id: string; notitie: string | null }
+        | undefined;
+      if (sol?.id) {
+        sollicitatie = {
+          id: sol.id,
+          notitie: sol.notitie || null,
+        };
+      }
+    } catch {
+      /* tabel mag ontbreken */
+    }
+  }
+  let recruitmentReply = Boolean(sollicitatie);
+  if (!recruitmentReply && inReplyTo) {
+    const parent = await findInboxMailByMessageId(sb, inReplyTo);
+    const tag =
+      parent && typeof parent.raw_headers?.postmark_tag === "string"
+        ? parent.raw_headers.postmark_tag
+        : "";
+    if (
+      parent &&
+      (/recruitment|sollicitatie/i.test(tag) ||
+        /BatterijConcept Recruitment/i.test(parent.from_name || ""))
+    ) {
+      recruitmentReply = true;
+    }
+  }
 
   const mailboxTag =
     opts?.mailbox === "facturen" || opts?.mailbox === "info"
@@ -303,6 +350,7 @@ export async function insertBookedInboxMail(
       ai_function: opts?.aiFunction || null,
       ai_effects: mail.aiEffects || null,
       mailbox: mailboxTag,
+      ...(recruitmentReply ? { postmark_tag: "recruitment-reply" } : {}),
       attachments: opts?.attachments?.length
         ? opts.attachments
         : mail.attachments?.length
@@ -365,6 +413,22 @@ export async function insertBookedInboxMail(
   }
 
   const row = (data as InboxDbRow) || null;
+  if (row && sollicitatie) {
+    try {
+      const note = appendStampedNotitie(
+        sollicitatie.notitie,
+        `E-mail ontvangen van ${row.from_email}: ${
+          (row.body_text || "").trim().slice(0, 280) || row.subject
+        }${(row.body_text || "").trim().length > 280 ? "…" : ""}`
+      );
+      await sb
+        .from("sollicitaties")
+        .update({ notitie: note, updated_at: new Date().toISOString() })
+        .eq("id", sollicitatie.id);
+    } catch (err) {
+      console.error("sollicitatie inbound mail notitie:", err);
+    }
+  }
   if (row) {
     try {
       const linked = await logInboxMailNotitie(sb, {
@@ -408,7 +472,7 @@ export async function listInboxMails(
     limit?: number;
   }
 ): Promise<InboxDbRow[]> {
-  const limit = Math.min(Math.max(opts?.limit || 100, 1), 300);
+  const limit = Math.min(Math.max(opts?.limit || 100, 1), 800);
   const mailbox = opts?.mailbox || null;
 
   let query = sb
@@ -478,6 +542,86 @@ export async function listInboxMails(
     throw error;
   }
   return (data || []) as InboxDbRow[];
+}
+
+/** Mails van/naar deze adressen (reacties op info@-recruitment). */
+export async function listInboxMailsTouchingEmails(
+  sb: SupabaseClient,
+  emails: string[],
+  opts?: { limit?: number }
+): Promise<InboxDbRow[]> {
+  const uniq = [
+    ...new Set(
+      emails
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
+    ),
+  ];
+  if (!uniq.length) return [];
+  const cap = Math.min(Math.max(opts?.limit || 400, 1), 800);
+  const out = new Map<string, InboxDbRow>();
+  for (let i = 0; i < uniq.length; i += 20) {
+    const chunk = uniq.slice(i, i + 20);
+    const orFilter = chunk
+      .flatMap((e) => [`from_email.eq.${e}`, `to_email.eq.${e}`])
+      .join(",");
+    const { data, error } = await sb
+      .from("inbox_mails")
+      .select(SELECT_COLS)
+      .or(orFilter)
+      .order("received_at", { ascending: false })
+      .limit(cap);
+    if (error) {
+      if (
+        error.code === "42P01" ||
+        /inbox_mails|does not exist|relation/i.test(error.message || "")
+      ) {
+        return [];
+      }
+      throw error;
+    }
+    for (const row of (data || []) as InboxDbRow[]) {
+      out.set(row.id, row);
+    }
+  }
+  return Array.from(out.values()).sort(
+    (a, b) =>
+      new Date(b.received_at).getTime() - new Date(a.received_at).getTime()
+  );
+}
+
+/** Aantal mails waarop nog niet geklikt is (status nieuw). */
+export async function countUnreadInboxMails(
+  sb: SupabaseClient
+): Promise<number> {
+  const run = (withMailbox: boolean) => {
+    let query = sb
+      .from("inbox_mails")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "nieuw")
+      .not("folder", "in", "(archief,verzonden)");
+    if (withMailbox) {
+      query = query.or("mailbox.is.null,mailbox.eq.info");
+    }
+    return query;
+  };
+
+  let { count, error } = await run(true);
+  if (
+    error &&
+    (error.code === "42703" || /mailbox|column/i.test(error.message || ""))
+  ) {
+    ({ count, error } = await run(false));
+  }
+  if (
+    error &&
+    (error.code === "42P01" ||
+      /inbox_mails|does not exist|relation/i.test(error.message || ""))
+  ) {
+    return 0;
+  }
+  if (error) throw error;
+  return count || 0;
 }
 
 /** Hard delete — weg uit de mailbox. */

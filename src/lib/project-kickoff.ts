@@ -37,6 +37,7 @@ const PAST_KICKOFF_STATUS: ReadonlySet<ProjectStatusKey> = new Set([
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",
@@ -180,44 +181,40 @@ export function projectKickoffItems(
   if (!geenAanbetaling) {
     items.push({
       id: "aanbetaling",
-      label: wf ? "BTW-factuur versturen" : "50% aanbetaling versturen",
+      label: wf ? "BTW-factuur" : "50% aanbetaling",
       done: aanbetalingDone,
-      detail: aanbetalingBetaald
-        ? "Verstuurd én betaald"
-        : aanbetalingDone
-          ? "Verstuurd — wacht op betaling"
-          : wf
-            ? "Nog te versturen"
-            : "50% vooraf · 50% na installatie",
+      detail: aanbetalingDone
+        ? "Taak afgevinkt"
+        : wf
+          ? "Check als de factuur is verstuurd"
+          : "Check als de 50%-factuur is verstuurd",
     });
   }
 
   if (wf) {
     items.push({
       id: "wf_afspraak",
-      label: "Gegevens doorsturen naar Edwin",
+      label: "WF-portaal",
       done: wfDone,
       detail: wfDone
-        ? "Doorgestuurd naar Edwin"
-        : "WhatsApp met klantgegevens + afspraak laten inplannen",
+        ? "Taak afgevinkt"
+        : "Zet de klant in het Warmtefonds-portaal, daarna check",
     });
   }
 
   items.push({
     id: "schouwweek",
-    label: wf ? "Schouwweek-indicatie zetten" : "Schouwdag inplannen",
+    label: wf ? "Schouwweek" : "Schouwdag",
     done: schouwDone,
     blocked: schouwBlocked || undefined,
     blockedReason: schouwBlocked
       ? "Eerst eerste factuur als betaald markeren"
       : undefined,
     detail: schouwDone
-      ? formatProjectSchouwWeek(project) || "Ingepland"
+      ? formatProjectSchouwWeek(project) || "Taak afgevinkt"
       : schouwBlocked
         ? "Eerst eerste factuur als betaald markeren"
-        : wf
-          ? "Alleen inschatting voor de klant (±5 weken) + track & trace — geen echte planningsactie"
-          : "Incl. track & trace-mail · zo snel mogelijk een vaste dag",
+        : "Check als dit is gezet",
   });
 
   return items;

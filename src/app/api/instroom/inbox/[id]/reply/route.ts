@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/postmark";
 import { inboxReplyHtml } from "@/lib/email/reply-html";
 import { errMessage } from "@/lib/errors";
 import { getInboxMail, rowToInboxMail } from "@/lib/inbox-persist";
+import { storePostmarkMessageId } from "@/lib/inbox-message-id";
 import { appendStampedNotitie } from "@/lib/lead-notitie";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -124,7 +125,7 @@ export async function POST(
         folder: "verzonden",
         status: "afgehandeld",
         direction: "outbound",
-        message_id: sent.messageId || null,
+        message_id: storePostmarkMessageId(sent.messageId),
         in_reply_to: parentId,
         thread_id: threadId,
         from_name: "BatterijConcept Recruitment",

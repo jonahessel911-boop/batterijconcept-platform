@@ -126,7 +126,7 @@ const VENSTER_META: Record<
   PartnerVenster,
   { title: string; hours: string; short: string }
 > = {
-  ochtend: { title: "Ochtend", hours: "09:00–12:00", short: "Ochtend" },
+  ochtend: { title: "Ochtend", hours: "08:00–12:00", short: "Ochtend" },
   middag: { title: "Middag", hours: "13:00–17:00", short: "Middag" },
 };
 

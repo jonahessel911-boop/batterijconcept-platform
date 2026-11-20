@@ -169,6 +169,7 @@ function isKlaarzettenPurchasing(
     status === "materiaal_besteld" ||
     status === "installatie_ingepland" ||
     status === "installatie_voltooid" ||
+    status === "after_sale" ||
     status === "review_gevraagd" ||
     status === "afgerond" ||
     status === "service"
@@ -242,7 +243,12 @@ function isGeinstalleerd(
   p: ProjectLite
 ): boolean {
   if (p.installatie_voltooid_at) return true;
-  if (status === "installatie_voltooid" || status === "review_gevraagd" || status === "afgerond") {
+  if (
+    status === "installatie_voltooid" ||
+    status === "after_sale" ||
+    status === "review_gevraagd" ||
+    status === "afgerond"
+  ) {
     return true;
   }
   return false;

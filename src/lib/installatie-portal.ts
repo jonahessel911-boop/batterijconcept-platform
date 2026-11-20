@@ -4,8 +4,7 @@
 import { randomBytes } from "crypto";
 import type { NextRequest } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
-import { teamgenootPortaalWelkomEmail } from "@/lib/email/templates";
+import { appBaseUrl } from "@/lib/email/postmark";
 import {
   readInstallatieSessionCookieFromRequest,
   verifyInstallatieSessionToken,
@@ -36,6 +35,7 @@ export type InstallatiePortalTeamgenoot = {
   rol?: InstallatieAuthRol | null;
   kan_schouw?: boolean | null;
   kan_installatie?: boolean | null;
+  kan_service?: boolean | null;
 };
 
 export type InstallatiePortalSession =
@@ -93,6 +93,89 @@ export function scopesToOwnJobsOnly(
   return session.kind === "teamgenoot" && session.authRol === "monteur";
 }
 
+let projectenKoppelKolom: boolean | null = null;
+let projectenServiceTgKolom: boolean | null = null;
+
+export async function projectenHeeftKoppelKolom(): Promise<boolean> {
+  if (projectenKoppelKolom != null) return projectenKoppelKolom;
+  const sb = getSupabaseAdmin();
+  const { error } = await sb
+    .from("projecten")
+    .select("installatie_koppel_id")
+    .limit(1);
+  projectenKoppelKolom = !error;
+  return projectenKoppelKolom;
+}
+
+export async function projectenHeeftServiceTeamgenootKolom(): Promise<boolean> {
+  if (projectenServiceTgKolom != null) return projectenServiceTgKolom;
+  const sb = getSupabaseAdmin();
+  const { error } = await sb
+    .from("projecten")
+    .select("service_teamgenoot_id")
+    .limit(1);
+  projectenServiceTgKolom = !error;
+  return projectenServiceTgKolom;
+}
+
+export async function koppelIdsVoorMonteur(
+  partnerId: string,
+  teamgenootId: string
+): Promise<string[]> {
+  const sb = getSupabaseAdmin();
+  const { data, error } = await sb
+    .from("installatie_partner_koppels")
+    .select("id")
+    .eq("partner_id", partnerId)
+    .or(
+      `monteur_1_id.eq.${teamgenootId},monteur_2_id.eq.${teamgenootId}`
+    );
+  if (error) return [];
+  return (data || []).map((r) => r.id as string).filter(Boolean);
+}
+
+export type OwnJobsScope =
+  | { kind: "none" }
+  | { kind: "eq"; column: "installatie_teamgenoot_id"; value: string }
+  | { kind: "or"; filter: string };
+
+/**
+ * Filterplan voor monteurs. Niet de query zelf: een thenable builder
+ * teruggeven uit `async` voert de query al uit (geen .maybeSingle meer).
+ */
+export async function resolveOwnJobsScope(
+  session: InstallatiePortalSession
+): Promise<OwnJobsScope> {
+  if (!scopesToOwnJobsOnly(session)) return { kind: "none" };
+  const tgId = session.teamgenoot.id;
+  const hasKoppel = await projectenHeeftKoppelKolom();
+  const hasServiceTg = await projectenHeeftServiceTeamgenootKolom();
+  const koppelIds = hasKoppel
+    ? await koppelIdsVoorMonteur(session.partner.id, tgId)
+    : [];
+  const parts = [`installatie_teamgenoot_id.eq.${tgId}`];
+  if (koppelIds.length > 0) {
+    parts.push(`installatie_koppel_id.in.(${koppelIds.join(",")})`);
+  }
+  if (hasServiceTg) {
+    parts.push(`service_teamgenoot_id.eq.${tgId}`);
+  }
+  if (parts.length === 1) {
+    return { kind: "eq", column: "installatie_teamgenoot_id", value: tgId };
+  }
+  return { kind: "or", filter: parts.join(",") };
+}
+
+/** Schouw via teamgenoot_id; installatie via koppel waar de monteur in zit. */
+export function applyOwnJobsFilter<T extends {
+  eq: (col: string, val: string) => T;
+  or: (filter: string) => T;
+}>(query: T, scope: OwnJobsScope): T {
+  if (scope.kind === "none") return query;
+  if (scope.kind === "eq") return query.eq(scope.column, scope.value);
+  return query.or(scope.filter);
+}
+
 function normalizeTgRol(raw: unknown): InstallatieAuthRol {
   return raw === "beheerder" ? "beheerder" : "monteur";
 }
@@ -101,7 +184,7 @@ const PARTNER_SELECT =
   "id, naam, email, telefoon, actief, portal_token, bedrijfsnaam, kvk_nummer, iban";
 
 const TG_SELECT_FULL =
-  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie";
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, kan_service";
 
 const TG_SELECT_MIN =
   "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at";
@@ -282,15 +365,15 @@ export async function assertPortalOrderAccess(
   if (!session) return null;
 
   const sb = getSupabaseAdmin();
-  let query = sb
-    .from("projecten")
-    .select(select)
-    .eq("id", projectId)
-    .eq("installatie_partner_id", session.partner.id);
-
-  if (scopesToOwnJobsOnly(session)) {
-    query = query.eq("installatie_teamgenoot_id", session.teamgenoot.id);
-  }
+  const scope = await resolveOwnJobsScope(session);
+  const query = applyOwnJobsFilter(
+    sb
+      .from("projecten")
+      .select(select)
+      .eq("id", projectId)
+      .eq("installatie_partner_id", session.partner.id),
+    scope
+  );
 
   const { data: order, error } = await query.maybeSingle();
   if (error || !order || typeof order !== "object") return null;
@@ -381,15 +464,18 @@ export async function verstuurTeamgenootPortaalInvite(opts: {
   if (!email) return { ok: false, error: "E-mail ontbreekt" };
 
   const portalUrl = installatiePortalUrl(opts.teamgenoot.portal_token);
-  const html = teamgenootPortaalWelkomEmail({
-    naam: opts.teamgenoot.naam,
-    partnerNaam: opts.partnerNaam,
-    email,
-    portalUrl,
-    password: opts.password || null,
-  });
-
   try {
+    const { teamgenootPortaalWelkomEmail } = await import(
+      "@/lib/email/templates"
+    );
+    const { sendEmail } = await import("@/lib/email/postmark");
+    const html = teamgenootPortaalWelkomEmail({
+      naam: opts.teamgenoot.naam,
+      partnerNaam: opts.partnerNaam,
+      email,
+      portalUrl,
+      password: opts.password || null,
+    });
     await sendEmail({
       to: email,
       subject: `Je installatieportaal — ${opts.partnerNaam}`,

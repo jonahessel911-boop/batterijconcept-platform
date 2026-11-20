@@ -8,6 +8,7 @@ export const maxDuration = 300;
 /** Projecten waarbij de batterij staat — alles moet dan gefactureerd zijn. */
 const OPGELEVERD_STATUSSEN = [
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",

@@ -2,16 +2,36 @@
 
 import { useMemo, useState } from "react";
 import type { Factuur, Project } from "@/types/database";
+import { Check } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { cn } from "@/lib/utils";
 import {
   kickoffCompletionPatch,
   kickoffWarmtefondsBedragen,
   projectKickoffItems,
   showProjectKickoff,
+  type KickoffItemId,
 } from "@/lib/project-kickoff";
 import {
-  FINANCIERINGSMAN_NAAM,
-  edwinWarmtefondsWhatsappBericht,
-  edwinWhatsappUrl,
   isWarmtefondsProject,
   recommendedSchouwWeekForProject,
   saleMomentVanProject,
@@ -48,14 +68,6 @@ function defaultSchouwdagLocal(
   }
 }
 
-function WhatsAppIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden>
-      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.85 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-    </svg>
-  );
-}
-
 function aanbetalingConcept(facturen: Factuur[]): Factuur | null {
   const list = facturen.filter(
     (f) =>
@@ -83,21 +95,28 @@ export function ProjectKickoffChecklist({
   onFinancieringUpdated,
   onProjectUpdated,
   onFacturenChanged,
+  onFactuurUpdated,
+  compact = false,
 }: {
   project: Project;
   facturen: Factuur[];
   onFinancieringUpdated?: (project: Project) => void;
   onProjectUpdated?: (project: Project) => void;
   onFacturenChanged?: () => void;
+  onFactuurUpdated?: (factuur: Factuur) => void;
+  compact?: boolean;
 }) {
-  const [waBusy, setWaBusy] = useState(false);
   const [afvinkBusy, setAfvinkBusy] = useState(false);
-  const [edwinGestuurd, setEdwinGestuurd] = useState(false);
   const [waHint, setWaHint] = useState<string | null>(null);
   const [facBusy, setFacBusy] = useState(false);
   const [weekBusy, setWeekBusy] = useState(false);
   const [actionHint, setActionHint] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [optimisticDone, setOptimisticDone] = useState<Set<KickoffItemId>>(
+    () => new Set()
+  );
+  const [checkingId, setCheckingId] = useState<KickoffItemId | null>(null);
+  const [confirmId, setConfirmId] = useState<KickoffItemId | null>(null);
 
   const weekOptions = useMemo(() => upcomingSchouwWeekOptions(40), []);
   const recommended = useMemo(
@@ -124,61 +143,6 @@ export function ProjectKickoffChecklist({
   const draftAanbetaling = aanbetalingConcept(facturen);
   const wf = isWarmtefondsProject(project);
 
-  async function downloadOffertePdf(): Promise<boolean> {
-    if (!offerteId) return false;
-    const res = await fetch(`/api/offertes/${offerteId}/pdf`);
-    if (!res.ok) return false;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${off?.offerte_nummer || project.project_nummer || "offerte"}-ondertekend.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    return true;
-  }
-
-  async function stuurNaarEdwin() {
-    setWaBusy(true);
-    setWaHint(null);
-    try {
-      const bedragen = kickoffWarmtefondsBedragen(project, facturen);
-      const bericht = edwinWarmtefondsWhatsappBericht({
-        leadNaam: lead?.naam || project.titel || "Klant",
-        telefoon: lead?.telefoon,
-        straat: lead?.straat,
-        postcode: lead?.postcode,
-        huisnummer: lead?.huisnummer,
-        toevoeging: lead?.toevoeging,
-        plaats: lead?.plaats,
-        offerteNummer: off?.offerte_nummer,
-        projectNummer: project.project_nummer,
-        aanbetalingInc: bedragen.aanbetalingInc,
-        warmtefondsInc: bedragen.warmtefondsInc,
-      });
-
-      try {
-        await navigator.clipboard.writeText(bericht);
-      } catch {
-        /* ignore */
-      }
-
-      const pdfOk = await downloadOffertePdf();
-      window.open(edwinWhatsappUrl(bericht), "_blank", "noopener,noreferrer");
-      setEdwinGestuurd(true);
-
-      setWaHint(
-        pdfOk
-          ? `Bericht naar ${FINANCIERINGSMAN_NAAM} klaar · PDF gedownload — voeg die toe in WhatsApp. Vink daarna de taak af.`
-          : `Bericht in klembord. Voeg de offerte-PDF handmatig toe in WhatsApp. Vink daarna de taak af.`
-      );
-    } finally {
-      setWaBusy(false);
-    }
-  }
-
   async function afvinkEdwinIntake() {
     setAfvinkBusy(true);
     setWaHint(null);
@@ -192,11 +156,11 @@ export function ProjectKickoffChecklist({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setWaHint(
+        const msg =
           (data as { error?: string }).error ||
-            "Afvinken mislukt. Probeer opnieuw."
-        );
-        return;
+          "Afvinken mislukt. Probeer opnieuw.";
+        setWaHint(msg);
+        throw new Error(msg);
       }
       const updated = (data as { project?: Project }).project;
       const base = updated || {
@@ -238,7 +202,7 @@ export function ProjectKickoffChecklist({
     return null;
   }
 
-  async function verstuurAanbetaling() {
+  async function verstuurAanbetaling(opts?: { silent?: boolean }) {
     setFacBusy(true);
     setActionError(null);
     setActionHint(null);
@@ -281,6 +245,7 @@ export function ProjectKickoffChecklist({
       const email = lead?.email?.trim();
       const facLabel = wf ? "BTW-factuur" : "50%-aanbetaling";
       if (
+        !opts?.silent &&
         !confirm(
           `${facLabel}${nummer ? ` ${nummer}` : ""} mailen${
             email ? ` naar ${email}` : " naar de klant"
@@ -302,6 +267,7 @@ export function ProjectKickoffChecklist({
         );
       }
       const sentFac = (data as { factuur?: Factuur }).factuur;
+      if (sentFac) onFactuurUpdated?.(sentFac);
       const nextFac = sentFac
         ? [
             ...facturen.filter((f) => f.id !== sentFac.id),
@@ -319,12 +285,13 @@ export function ProjectKickoffChecklist({
       onFacturenChanged?.();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Versturen mislukt");
+      throw e;
     } finally {
       setFacBusy(false);
     }
   }
 
-  async function planSchouwdag() {
+  async function planSchouwdag(opts?: { silent?: boolean }) {
     const parsed = new Date(schouwdagLocal);
     if (!schouwdagLocal.trim() || Number.isNaN(parsed.getTime())) {
       setActionError("Kies een geldige schouwdag en tijd");
@@ -333,6 +300,7 @@ export function ProjectKickoffChecklist({
     const derived = schouwWeekFromDate(parsed);
     const email = lead?.email?.trim();
     if (
+      !opts?.silent &&
       !confirm(
         `Schouwdag zetten${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt de schouwdag + knop naar track & trace.`
       )
@@ -381,12 +349,13 @@ export function ProjectKickoffChecklist({
       setActionError(
         e instanceof Error ? e.message : "Schouwdag opslaan mislukt"
       );
+      throw e;
     } finally {
       setWeekBusy(false);
     }
   }
 
-  async function planSchouwweek() {
+  async function planSchouwweek(opts?: { silent?: boolean }) {
     const opt = weekOptions.find((o) => o.value === schouwWeek);
     if (!opt) {
       setActionError("Kies een geldige schouwweek");
@@ -394,6 +363,7 @@ export function ProjectKickoffChecklist({
     }
     const email = lead?.email?.trim();
     if (
+      !opts?.silent &&
       !confirm(
         `Schouwweek zetten${email ? ` en mail sturen naar ${email}` : ""}?\n\nDe klant krijgt de schouwweek + knop naar track & trace.`
       )
@@ -438,12 +408,188 @@ export function ProjectKickoffChecklist({
       setActionError(
         e instanceof Error ? e.message : "Schouwweek opslaan mislukt"
       );
+      throw e;
     } finally {
       setWeekBusy(false);
     }
   }
 
   const bedragen = kickoffWarmtefondsBedragen(project, facturen);
+  const email = lead?.email?.trim();
+
+  function confirmTekst(id: KickoffItemId): {
+    title: string;
+    description: string;
+  } {
+    const naar = email ? ` naar ${email}` : " naar de klant";
+    if (id === "aanbetaling") {
+      return {
+        title: "Weet je zeker dat je dit wilt versturen?",
+        description: wf
+          ? `De BTW-factuur wordt nu gemaild${naar}.`
+          : `De 50%-aanbetaling wordt nu gemaild${naar}.`,
+      };
+    }
+    if (id === "wf_afspraak") {
+      return {
+        title: "Weet je zeker dat je dit wilt afvinken?",
+        description:
+          "Je vinkt af dat de klant in het Warmtefonds-portaal staat. Er gaat geen mail de deur uit.",
+      };
+    }
+    return {
+      title: "Weet je zeker dat je dit wilt zetten?",
+      description: wf
+        ? `De schouwweek wordt gezet en de klantmail wordt verstuurd${naar}.`
+        : `De schouwdag wordt gezet en de klantmail wordt verstuurd${naar}.`,
+    };
+  }
+
+  function vraagBevestiging(id: KickoffItemId) {
+    const item = items.find((i) => i.id === id);
+    if (!item || item.done || item.blocked || optimisticDone.has(id)) return;
+    setConfirmId(id);
+  }
+
+  async function checkItem(id: KickoffItemId) {
+    const item = items.find((i) => i.id === id);
+    if (!item || item.done || item.blocked || optimisticDone.has(id)) return;
+    setOptimisticDone((prev) => new Set(prev).add(id));
+    setCheckingId(id);
+    setActionError(null);
+    try {
+      if (id === "aanbetaling") {
+        await verstuurAanbetaling({ silent: true });
+      } else if (id === "wf_afspraak") {
+        await afvinkEdwinIntake();
+      } else if (id === "schouwweek") {
+        if (wf) await planSchouwweek({ silent: true });
+        else await planSchouwdag({ silent: true });
+      }
+    } catch {
+      setOptimisticDone((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } finally {
+      setCheckingId(null);
+    }
+  }
+
+  const confirmCopy = confirmId ? confirmTekst(confirmId) : null;
+
+  const confirmDialog = (
+    <AlertDialog
+      open={confirmId != null}
+      onOpenChange={(open) => {
+        if (!open) setConfirmId(null);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {confirmCopy?.title ?? "Weet je zeker?"}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {confirmCopy?.description}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Nee</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              const id = confirmId;
+              setConfirmId(null);
+              if (id) void checkItem(id);
+            }}
+          >
+            Ja, doe het
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
+  if (compact) {
+    return (
+      <div className="flex flex-col gap-2">
+        {actionError ? (
+          <p className="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">
+            {actionError}
+          </p>
+        ) : null}
+        <ItemGroup className="min-h-0 gap-2 overflow-y-auto pr-0.5">
+          {items.map((item) => {
+            const done = item.done || optimisticDone.has(item.id);
+            const busy = checkingId === item.id;
+            return (
+              <Item
+                key={item.id}
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "transition-colors duration-200",
+                  done && "border-primary/30 bg-primary/5",
+                  !done && !item.blocked && "border-primary/30 bg-primary/5"
+                )}
+              >
+                <ItemMedia>
+                  {done ? (
+                    <span
+                      className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground"
+                      aria-label={`${item.label} voltooid`}
+                    >
+                      <Check className="size-3.5" strokeWidth={2.5} />
+                    </span>
+                  ) : (
+                    <Checkbox
+                      checked={false}
+                      disabled={item.blocked || busy}
+                      aria-label={`${item.label} check`}
+                      onCheckedChange={(checked) => {
+                        if (checked === true) vraagBevestiging(item.id);
+                      }}
+                    />
+                  )}
+                </ItemMedia>
+                <ItemContent>
+                  <ItemTitle className="text-[15px]">{item.label}</ItemTitle>
+                  {done ? (
+                    <ItemDescription className="flex items-center gap-1.5 font-medium text-primary">
+                      <Check className="size-3.5" aria-hidden />
+                      Actie voltooid
+                    </ItemDescription>
+                  ) : (
+                    <ItemDescription className="text-[13px]">
+                      {item.blocked && item.blockedReason
+                        ? item.blockedReason
+                        : item.detail}
+                    </ItemDescription>
+                  )}
+                </ItemContent>
+                {done ? (
+                  <span className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="size-4" strokeWidth={2.5} aria-hidden />
+                  </span>
+                ) : !item.blocked ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => vraagBevestiging(item.id)}
+                  >
+                    {busy ? "…" : "Check"}
+                  </Button>
+                ) : null}
+              </Item>
+            );
+          })}
+        </ItemGroup>
+        {confirmDialog}
+      </div>
+    );
+  }
 
   return (
     <section
@@ -506,134 +652,20 @@ export function ProjectKickoffChecklist({
                 </span>
               </div>
 
-              {item.id === "aanbetaling" ? (
-                <div className="flex shrink-0 flex-col gap-2 sm:items-end">
-                  <button
-                    type="button"
-                    disabled={facBusy || !offerteId}
-                    onClick={() => void verstuurAanbetaling()}
-                    className="inline-flex items-center gap-1.5 bg-[#C45A12] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#9A4510] disabled:opacity-60"
-                  >
-                    {facBusy
-                      ? "Bezig…"
-                      : draftAanbetaling
-                        ? "Verstuur factuur"
-                        : "Maak & verstuur"}
-                  </button>
-                  {!lead?.email ? (
-                    <p className="max-w-[14rem] text-right text-[11px] text-[#C45A12]">
-                      Let op: geen e-mail op de lead
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {item.id === "wf_afspraak" ? (
-                <div className="flex shrink-0 flex-col gap-2 sm:items-end">
-                  <button
-                    type="button"
-                    disabled={waBusy}
-                    onClick={() => void stuurNaarEdwin()}
-                    className="inline-flex items-center gap-1.5 bg-[#25D366] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#1ebe57] disabled:opacity-60"
-                    title={`WhatsApp naar ${FINANCIERINGSMAN_NAAM}`}
-                  >
-                    <WhatsAppIcon />
-                    {waBusy
-                      ? "Bezig…"
-                      : edwinGestuurd
-                        ? "Opnieuw sturen"
-                        : "Stuur naar Edwin"}
-                  </button>
-                  {edwinGestuurd ? (
-                    <button
-                      type="button"
-                      disabled={afvinkBusy}
-                      onClick={() => void afvinkEdwinIntake()}
-                      className="inline-flex items-center gap-1.5 border border-[#0D9488] bg-[#F0FDFA] px-3 py-2 text-[12px] font-semibold text-[#115E59] hover:bg-[#CCFBF1] disabled:opacity-60"
-                      title="Intake afronden — start fase Financiering"
-                    >
-                      <svg
-                        viewBox="0 0 12 12"
-                        className="h-3 w-3"
-                        aria-hidden
-                      >
-                        <path
-                          d="M2.5 6.2 4.8 8.5 9.5 3.5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                      {afvinkBusy ? "Bezig…" : "Afvinken — intake klaar"}
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {item.id === "schouwweek" ? (
-                item.blocked ? (
-                  <p className="shrink-0 text-[12px] font-medium text-muted sm:max-w-[14rem] sm:text-right">
-                    Beschikbaar na 50% betaling
-                  </p>
-                ) : wf ? (
-                  <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
-                    <select
-                      value={schouwWeek}
-                      onChange={(e) => setSchouwWeek(e.target.value)}
-                      className="border border-line bg-white px-3 py-2 text-[12px] font-medium text-ink outline-none focus:border-green"
-                    >
-                      {weekOptions.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                          {o.value ===
-                          schouwWeekValue(recommended.jaar, recommended.week)
-                            ? " · voorstel +5w"
-                            : ""}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={weekBusy || !schouwWeek}
-                      onClick={() => void planSchouwweek()}
-                      className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-                    >
-                      {weekBusy ? "Bezig…" : "Zet schouwweek + mail"}
-                    </button>
-                    {!lead?.email ? (
-                      <p className="max-w-[16rem] text-[11px] text-[#C45A12]">
-                        Let op: geen e-mail op de lead — track & trace-mail kan
-                        niet
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:min-w-[16rem] sm:items-stretch">
-                    <input
-                      type="datetime-local"
-                      value={schouwdagLocal}
-                      onChange={(e) => setSchouwdagLocal(e.target.value)}
-                      className="border border-line bg-white px-3 py-2 text-[12px] font-medium text-ink outline-none focus:border-green"
-                    />
-                    <button
-                      type="button"
-                      disabled={weekBusy || !schouwdagLocal}
-                      onClick={() => void planSchouwdag()}
-                      className="bg-[#0a4727] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#0D5C32] disabled:opacity-60"
-                    >
-                      {weekBusy ? "Bezig…" : "Zet schouwdag + mail"}
-                    </button>
-                    {!lead?.email ? (
-                      <p className="max-w-[16rem] text-[11px] text-[#C45A12]">
-                        Let op: geen e-mail op de lead — track & trace-mail kan
-                        niet
-                      </p>
-                    ) : null}
-                  </div>
-                )
-              ) : null}
+              {item.blocked ? (
+                <p className="shrink-0 text-[12px] font-medium text-muted sm:max-w-[14rem] sm:text-right">
+                  {item.blockedReason}
+                </p>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={checkingId === item.id}
+                  onClick={() => vraagBevestiging(item.id)}
+                >
+                  {checkingId === item.id ? "…" : "Check"}
+                </Button>
+              )}
             </li>
           ))}
         </ul>
@@ -667,6 +699,7 @@ export function ProjectKickoffChecklist({
           ))}
         </ul>
       ) : null}
+      {confirmDialog}
     </section>
   );
 }

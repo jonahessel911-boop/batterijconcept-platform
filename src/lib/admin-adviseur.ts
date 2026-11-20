@@ -60,7 +60,7 @@ export function isAdminAdviseur(a: {
   naam: string;
   email?: string | null;
 }): boolean {
-  if (a.naam.trim().toLowerCase() === "admin") return true;
+  if ((a.naam || "").trim().toLowerCase() === "admin") return true;
   const email = a.email?.trim().toLowerCase();
   return Boolean(email && email === adminEmail());
 }
@@ -139,7 +139,7 @@ export function findAdminAdviseurId(
   );
   if (byEmail) return byEmail.id;
   const byName = adviseurs.find(
-    (a) => a.naam.trim().toLowerCase() === "admin"
+    (a) => (a.naam || "").trim().toLowerCase() === "admin"
   );
   return byName?.id ?? null;
 }

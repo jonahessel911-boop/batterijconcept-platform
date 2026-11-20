@@ -302,6 +302,19 @@ export async function POST(req: NextRequest) {
           { status: 503 }
         );
       }
+      if (
+        error.code === "23514" ||
+        /slot_hour|check constraint/i.test(error.message || "")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "12:00/14:00 (Marcel) staan nog niet in de database-check. Run supabase/migrate-adviseur-afblokkingen-marcel-slots.sql in Supabase.",
+            migration_required: true,
+          },
+          { status: 503 }
+        );
+      }
       throw error;
     }
 

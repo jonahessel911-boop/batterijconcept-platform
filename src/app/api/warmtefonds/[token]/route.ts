@@ -7,6 +7,7 @@ import {
   doorgestuurdAtVoorProjecten,
   isWarmtefondsPortalProject,
   isWarmtefondsRelatedProject,
+  mergeWarmtefondsAanvragenOpAdres,
   resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
@@ -31,8 +32,9 @@ export async function GET(
       );
     }
 
-    // Alleen doorgestuurde WF-aanvragen (financiering_status gezet).
-    // Eigen middelen worden in isWarmtefondsRelatedProject uitgefilterd.
+    // Alleen doorgestuurde WF-aanvragen. Zelfde adres wordt daarna
+    // tot één aanvraag samengevoegd. Eigen middelen vallen af in
+    // isWarmtefondsRelatedProject.
     const primary = await sb
       .from("projecten")
       .select(WF_PORTAL_PROJECT_SELECT)
@@ -118,6 +120,10 @@ export async function GET(
     }
     const metDoorgestuurd = orders.map(enrichRow);
     const archiefEnrich = archief.map(enrichRow);
+    const samengevoegd = mergeWarmtefondsAanvragenOpAdres([
+      ...metDoorgestuurd,
+      ...archiefEnrich,
+    ]);
 
     return NextResponse.json({
       operator: {
@@ -125,8 +131,8 @@ export async function GET(
         naam: operator.naam,
         email: operator.email,
       },
-      orders: metDoorgestuurd,
-      archief: archiefEnrich,
+      orders: samengevoegd.filter(isWarmtefondsPortalProject),
+      archief: samengevoegd.filter((row) => !isWarmtefondsPortalProject(row)),
     });
   } catch (e) {
     return NextResponse.json(

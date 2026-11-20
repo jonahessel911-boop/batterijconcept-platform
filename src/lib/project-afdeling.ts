@@ -45,6 +45,7 @@ export function defaultAfdelingVoorStatus(status: string): ProjectAfdeling {
     case "warmtefonds_in_behandeling":
     case "warmtefonds_afgewezen":
     case "installatie_voltooid":
+    case "after_sale":
     case "service":
     default:
       return "Backoffice";

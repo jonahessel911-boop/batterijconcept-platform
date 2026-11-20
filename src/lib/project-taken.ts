@@ -31,7 +31,10 @@ export type AutoTaakDef = {
   dueAt?: string | null;
 };
 
-/** Nazorg na oplevering: overstap / BTW / review. */
+/** Nazorg na oplevering: overstap / BTW / review (één taak). */
+export const OPLEVERING_AFTER_SALE_TAK_AUTO_KEY =
+  "installatie_voltooid:after_sale";
+/** Legacy-key (vóór samengevoegde After sale-taak). */
 export const OPLEVERING_REVIEW_TAK_AUTO_KEY =
   "installatie_voltooid:review_vragen";
 
@@ -109,7 +112,7 @@ export function autoTakenVoorStatus(
   }
 
   // Na oplevering: overstap + BTW + review — deadline = eerstvolgende werkdag na installatie
-  if (key === "installatie_voltooid") {
+  if (key === "installatie_voltooid" || key === "after_sale") {
     const anchor =
       ctx.installatieAt || ctx.installatieVoltooidAt || null;
     const dueAt = anchor
@@ -118,22 +121,8 @@ export function autoTakenVoorStatus(
     const dueInDays = dueAt ? null : 1;
     return [
       {
-        autoKey: "installatie_voltooid:overstap_leverancier",
-        titel: "Overstappen dynamische leverancier",
-        afdeling: "Backoffice",
-        dueInDays,
-        dueAt,
-      },
-      {
-        autoKey: "installatie_voltooid:btw_terugvragen",
-        titel: "BTW terugvrage starten",
-        afdeling: "Backoffice",
-        dueInDays,
-        dueAt,
-      },
-      {
-        autoKey: OPLEVERING_REVIEW_TAK_AUTO_KEY,
-        titel: "Review vragen",
+        autoKey: OPLEVERING_AFTER_SALE_TAK_AUTO_KEY,
+        titel: "After sale",
         afdeling: "Backoffice",
         dueInDays,
         dueAt,

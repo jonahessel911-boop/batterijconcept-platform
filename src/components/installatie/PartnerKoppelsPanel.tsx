@@ -15,21 +15,22 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { koppelWeergaveNaam } from "@/lib/installatie-koppel";
 
 function Notice({
   tone,
@@ -82,6 +83,8 @@ export function PartnerKoppelsPanel({
   const [m1, setM1] = useState("");
   const [m2, setM2] = useState("");
   const [open, setOpen] = useState(true);
+  const [nieuwOpen, setNieuwOpen] = useState(false);
+  const [openKoppelId, setOpenKoppelId] = useState<string | null>(null);
 
   const actieveMonteurs = teamgenoten.filter(
     (t) => t.actief !== false && t.kan_installatie !== false
@@ -112,7 +115,18 @@ export function PartnerKoppelsPanel({
 
   async function addKoppel(e: React.FormEvent) {
     e.preventDefault();
-    if (!naam.trim()) return;
+    if (!m1 || !m2) {
+      setError("Kies twee monteurs");
+      return;
+    }
+    if (m1 === m2) {
+      setError("Kies twee verschillende monteurs");
+      return;
+    }
+    const n1 = actieveMonteurs.find((t) => t.id === m1)?.naam || "";
+    const n2 = actieveMonteurs.find((t) => t.id === m2)?.naam || "";
+    const koppelNaam =
+      naam.trim() || (n1 && n2 ? `${n1} · ${n2}` : n1 || n2 || "Koppel");
     setSaving(true);
     setError(null);
     setOkMsg(null);
@@ -123,7 +137,7 @@ export function PartnerKoppelsPanel({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            naam: naam.trim(),
+            naam: koppelNaam,
             monteur_1_id: m1 || null,
             monteur_2_id: m2 || null,
           }),
@@ -134,6 +148,7 @@ export function PartnerKoppelsPanel({
       setNaam("");
       setM1("");
       setM2("");
+      setNieuwOpen(false);
       setOkMsg(`Koppel “${data.koppel.naam}” toegevoegd`);
       setOpen(true);
       await load();
@@ -193,115 +208,74 @@ export function PartnerKoppelsPanel({
 
   const actiefCount = items.filter((k) => k.actief !== false).length;
 
+  function koppelLabel(k: InstallatiePartnerKoppel) {
+    const fromMons = koppelWeergaveNaam(k);
+    if (fromMons && fromMons !== "Koppel") return fromMons;
+    return (k.naam || "").trim() || "Koppel";
+  }
+
   return (
+    <>
     <Collapsible open={open} onOpenChange={setOpen}>
       <Card className="gap-0 overflow-hidden py-0 shadow-xs">
-        <CollapsibleTrigger
+        <div
           className={cn(
-            "flex w-full items-center justify-between gap-3 text-left transition hover:bg-wash/50",
-            compact ? "px-3 py-2.5" : "px-4 py-3"
+            "flex items-center gap-2",
+            compact ? "px-3 py-2" : "px-4 py-2.5"
           )}
         >
-          <span className="min-w-0">
-            <span
-              className={cn(
-                "block font-semibold text-ink",
-                compact
-                  ? "text-[11px] uppercase tracking-wide text-muted"
-                  : "font-display text-base"
-              )}
-            >
-              Installatiekoppels
-            </span>
-            {!compact ? (
-              <span className="mt-0.5 block text-sm text-muted">
-                Twee monteurs vormen één koppel · telt mee voor capaciteit
+          <CollapsibleTrigger className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left transition hover:opacity-80">
+            <span className="min-w-0">
+              <span
+                className={cn(
+                  "block font-semibold text-ink",
+                  compact
+                    ? "text-[11px] uppercase tracking-wide text-muted"
+                    : "font-display text-base"
+                )}
+              >
+                Installatiekoppels
               </span>
-            ) : null}
-          </span>
-          <span className="flex shrink-0 items-center gap-2">
-            {!loading ? (
-              <Badge variant="secondary" className="rounded-full text-[11px]">
-                {actiefCount} actief
-              </Badge>
-            ) : null}
-            <ChevronDown
-              className={cn(
-                "size-4 text-muted transition-transform",
-                open && "rotate-180"
-              )}
-            />
-          </span>
-        </CollapsibleTrigger>
+              {!compact ? (
+                <span className="mt-0.5 block text-sm text-muted">
+                  Twee monteurs vormen één koppel · telt mee voor capaciteit
+                </span>
+              ) : null}
+            </span>
+            <span className="flex shrink-0 items-center gap-2">
+              {!loading ? (
+                <Badge variant="secondary" className="rounded-full text-[11px]">
+                  {actiefCount} actief
+                </Badge>
+              ) : null}
+              <ChevronDown
+                className={cn(
+                  "size-4 text-muted transition-transform",
+                  open && "rotate-180"
+                )}
+              />
+            </span>
+          </CollapsibleTrigger>
+          <Button
+            type="button"
+            size="sm"
+            className="shrink-0 gap-1.5"
+            onClick={() => {
+              setError(null);
+              setNieuwOpen(true);
+            }}
+          >
+            Nieuw koppel
+          </Button>
+        </div>
 
         <CollapsibleContent>
           <CardContent
             className={cn(
-              "space-y-4 border-t border-line",
+              "space-y-3 border-t border-line",
               compact ? "p-3" : "px-4 py-4"
             )}
           >
-            <form
-              onSubmit={(e) => void addKoppel(e)}
-              className="grid gap-3 sm:grid-cols-2"
-            >
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="kp-naam">Naam koppel *</Label>
-                <Input
-                  id="kp-naam"
-                  required
-                  value={naam}
-                  onChange={(e) => setNaam(e.target.value)}
-                  placeholder="Bijv. Team Noord · Ahmed & Youssef"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="kp-m1">Monteur 1</Label>
-                <NativeSelect
-                  id="kp-m1"
-                  className="w-full"
-                  value={m1}
-                  onChange={(e) => setM1(e.target.value)}
-                >
-                  <NativeSelectOption value="">— Kies —</NativeSelectOption>
-                  {actieveMonteurs.map((t) => (
-                    <NativeSelectOption
-                      key={t.id}
-                      value={t.id}
-                      disabled={t.id === m2}
-                    >
-                      {t.naam}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="kp-m2">Monteur 2</Label>
-                <NativeSelect
-                  id="kp-m2"
-                  className="w-full"
-                  value={m2}
-                  onChange={(e) => setM2(e.target.value)}
-                >
-                  <NativeSelectOption value="">— Kies —</NativeSelectOption>
-                  {actieveMonteurs.map((t) => (
-                    <NativeSelectOption
-                      key={t.id}
-                      value={t.id}
-                      disabled={t.id === m1}
-                    >
-                      {t.naam}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </div>
-              <div className="sm:col-span-2">
-                <Button type="submit" disabled={saving || !naam.trim()}>
-                  {saving ? "Bezig…" : "+ Koppel toevoegen"}
-                </Button>
-              </div>
-            </form>
-
             {hint ? (
               <Notice tone="warn" compact>
                 {hint}
@@ -314,61 +288,133 @@ export function PartnerKoppelsPanel({
               <p className="py-4 text-center text-sm text-muted">Laden…</p>
             ) : items.length === 0 ? (
               <p className="py-2 text-sm text-muted">
-                Nog geen koppels — voeg eerst monteurs toe, daarna een koppel
-                van twee.
+                Nog geen koppels — klik op Nieuw koppel.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-lg border border-line">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="h-8 px-3 text-[11px] font-medium text-muted">
-                        Koppel
-                      </TableHead>
-                      <TableHead className="h-8 px-3 text-[11px] font-medium text-muted">
-                        Monteurs
-                      </TableHead>
-                      <TableHead className="h-8 px-3 text-right text-[11px] font-medium text-muted">
-                        Acties
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((k) => {
-                      const inactive = k.actief === false;
-                      const n1 =
-                        k.monteur_1?.naam ||
-                        teamgenoten.find((t) => t.id === k.monteur_1_id)
-                          ?.naam ||
-                        "—";
-                      const n2 =
-                        k.monteur_2?.naam ||
-                        teamgenoten.find((t) => t.id === k.monteur_2_id)
-                          ?.naam ||
-                        "—";
-                      return (
-                        <TableRow
-                          key={k.id}
-                          className={inactive ? "bg-wash/40 text-muted" : ""}
-                        >
-                          <TableCell className="px-3 py-2.5 font-medium whitespace-normal text-ink">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span>{k.naam}</span>
-                              {inactive ? (
-                                <Badge
-                                  variant="outline"
-                                  className="text-muted"
+              <div className="space-y-2">
+                {items.map((k) => {
+                  const inactive = k.actief === false;
+                  const itemOpen = openKoppelId === k.id;
+                  return (
+                    <Collapsible
+                      key={k.id}
+                      open={itemOpen}
+                      onOpenChange={(next) =>
+                        setOpenKoppelId(next ? k.id : null)
+                      }
+                    >
+                      <div
+                        className={cn(
+                          "overflow-hidden rounded-lg border border-line",
+                          inactive && "bg-wash/40"
+                        )}
+                      >
+                        <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-wash/50">
+                          <span className="min-w-0">
+                            <span
+                              className={cn(
+                                "block text-sm font-medium text-ink",
+                                inactive && "text-muted line-through"
+                              )}
+                            >
+                              {koppelLabel(k)}
+                            </span>
+                            {k.naam?.trim() &&
+                            koppelLabel(k) !== k.naam.trim() ? (
+                              <span className="mt-0.5 block truncate text-[11px] text-muted">
+                                {k.naam}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-2">
+                            {inactive ? (
+                              <Badge variant="outline" className="text-muted">
+                                Inactief
+                              </Badge>
+                            ) : null}
+                            <ChevronDown
+                              className={cn(
+                                "size-4 text-muted transition-transform",
+                                itemOpen && "rotate-180"
+                              )}
+                            />
+                          </span>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="space-y-3 border-t border-line px-3 py-3">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="space-y-1.5 sm:col-span-2">
+                                <Label>Naam</Label>
+                                <Input
+                                  defaultValue={k.naam}
+                                  onBlur={(e) => {
+                                    const next = e.target.value.trim();
+                                    if (next && next !== k.naam) {
+                                      void patchKoppel(
+                                        k.id,
+                                        { naam: next },
+                                        "Naam opgeslagen"
+                                      );
+                                    }
+                                  }}
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label>Monteur 1</Label>
+                                <NativeSelect
+                                  className="w-full"
+                                  value={k.monteur_1_id || ""}
+                                  onChange={(e) =>
+                                    void patchKoppel(
+                                      k.id,
+                                      { monteur_1_id: e.target.value || null },
+                                      "Monteur 1 opgeslagen"
+                                    )
+                                  }
                                 >
-                                  Inactief
-                                </Badge>
-                              ) : null}
+                                  <NativeSelectOption value="">
+                                    — Kies —
+                                  </NativeSelectOption>
+                                  {actieveMonteurs.map((t) => (
+                                    <NativeSelectOption
+                                      key={t.id}
+                                      value={t.id}
+                                      disabled={t.id === k.monteur_2_id}
+                                    >
+                                      {t.naam}
+                                    </NativeSelectOption>
+                                  ))}
+                                </NativeSelect>
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label>Monteur 2</Label>
+                                <NativeSelect
+                                  className="w-full"
+                                  value={k.monteur_2_id || ""}
+                                  onChange={(e) =>
+                                    void patchKoppel(
+                                      k.id,
+                                      { monteur_2_id: e.target.value || null },
+                                      "Monteur 2 opgeslagen"
+                                    )
+                                  }
+                                >
+                                  <NativeSelectOption value="">
+                                    — Kies —
+                                  </NativeSelectOption>
+                                  {actieveMonteurs.map((t) => (
+                                    <NativeSelectOption
+                                      key={t.id}
+                                      value={t.id}
+                                      disabled={t.id === k.monteur_1_id}
+                                    >
+                                      {t.naam}
+                                    </NativeSelectOption>
+                                  ))}
+                                </NativeSelect>
+                              </div>
                             </div>
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5 whitespace-normal text-muted">
-                            {n1} + {n2}
-                          </TableCell>
-                          <TableCell className="px-3 py-2.5">
-                            <div className="flex flex-wrap items-center justify-end gap-1">
+                            <div className="flex flex-wrap justify-end gap-1">
                               {inactive ? (
                                 <Button
                                   type="button"
@@ -404,22 +450,117 @@ export function PartnerKoppelsPanel({
                                 type="button"
                                 variant="destructive"
                                 size="xs"
-                                onClick={() => void remove(k.id, k.naam)}
+                                onClick={() =>
+                                  void remove(k.id, koppelLabel(k))
+                                }
                               >
                                 Verwijderen
                               </Button>
                             </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                          </div>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
               </div>
             )}
           </CardContent>
         </CollapsibleContent>
       </Card>
     </Collapsible>
+
+    <Dialog
+      open={nieuwOpen}
+      onOpenChange={(next) => {
+        setNieuwOpen(next);
+        if (!next) {
+          setNaam("");
+          setM1("");
+          setM2("");
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-md" showCloseButton={!saving}>
+        <form
+          onSubmit={(e) => void addKoppel(e)}
+          className="grid gap-4"
+        >
+          <DialogHeader>
+            <DialogTitle>Nieuw koppel</DialogTitle>
+            <DialogDescription>
+              Kies twee monteurs. De naam mag leeg — dan gebruiken we hun namen.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="kp-naam">Naam (optioneel)</Label>
+            <Input
+              id="kp-naam"
+              value={naam}
+              onChange={(e) => setNaam(e.target.value)}
+              placeholder="Bijv. Team Noord"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="kp-m1">Monteur 1 *</Label>
+              <NativeSelect
+                id="kp-m1"
+                className="w-full"
+                value={m1}
+                onChange={(e) => setM1(e.target.value)}
+                required
+              >
+                <NativeSelectOption value="">Kies…</NativeSelectOption>
+                {actieveMonteurs.map((t) => (
+                  <NativeSelectOption
+                    key={t.id}
+                    value={t.id}
+                    disabled={t.id === m2}
+                  >
+                    {t.naam}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="kp-m2">Monteur 2 *</Label>
+              <NativeSelect
+                id="kp-m2"
+                className="w-full"
+                value={m2}
+                onChange={(e) => setM2(e.target.value)}
+                required
+              >
+                <NativeSelectOption value="">Kies…</NativeSelectOption>
+                {actieveMonteurs.map((t) => (
+                  <NativeSelectOption
+                    key={t.id}
+                    value={t.id}
+                    disabled={t.id === m1}
+                  >
+                    {t.naam}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={() => setNieuwOpen(false)}
+            >
+              Annuleren
+            </Button>
+            <Button type="submit" disabled={saving || !m1 || !m2}>
+              {saving ? "Bezig…" : "Koppel maken"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

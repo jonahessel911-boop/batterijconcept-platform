@@ -57,6 +57,7 @@ export type ProjectStatus =
   | "materiaal_besteld"
   | "installatie_ingepland"
   | "installatie_voltooid"
+  | "after_sale"
   | "review_gevraagd"
   | "afgerond"
   | "service"
@@ -578,6 +579,7 @@ export interface InstallatiePartnerTeamgenoot {
   rol?: "beheerder" | "monteur" | null;
   kan_schouw?: boolean | null;
   kan_installatie?: boolean | null;
+  kan_service?: boolean | null;
   leeftijd?: number | null;
   /** JSON array merknamen, bijv. ["Tesla","BYD"] */
   merken_ervaring?: string[] | null;
@@ -713,8 +715,23 @@ export interface Project {
   monteur: string | null;
   /** Gekoppelde monteur (teamgenoot) van de installatiepartner. */
   installatie_teamgenoot_id?: string | null;
+  /** Koppel dat de installatie uitvoert (niet de schouw). */
+  installatie_koppel_id?: string | null;
   /** AlphaESS systeem SIN (15 tekens, start met AL) — via oplevering. */
   systeem_sin?: string | null;
+  /** Snapshot opleverformulier (zonder handtekening). */
+  oplever_formulier?: {
+    datum?: string;
+    monteurNaam?: string;
+    sin?: string;
+    afgevinkt?: string[];
+    opmerkingen?: string;
+    akkoord?: boolean;
+    vervolgNodig?: boolean;
+    vervolgActie?: string;
+    vervolgAt?: string;
+    vervolgMonteurNaam?: string;
+  } | null;
   /** Admin-beoordeling 0–5 sterren voor de monteur op deze klus. */
   monteur_beoordeling_sterren?: number | null;
   /** Interne notitie bij monteur-beoordeling. */
@@ -756,6 +773,8 @@ export interface Project {
   /** Geplande service-afspraak (na oplevering / serviceverzoek). */
   service_at?: string | null;
   service_notities?: string | null;
+  /** Monteur met kan_service voor de service-afspraak. */
+  service_teamgenoot_id?: string | null;
   /** Geplande overstap-afspraak (klantportaal of BO). */
   overstap_afspraak_at?: string | null;
   schouw_herinnering_verstuurd?: boolean;
@@ -790,6 +809,8 @@ export interface Project {
    * Aparte Warmtefonds-financieringfase (parallel aan status).
    * Alleen relevant bij voorbehoud Warmtefonds.
    */
+  /** Moment van de laatste financiering_status-wijziging. */
+  financiering_status_at?: string | null;
   financiering_status?:
     | "doorgestuurd_naar_edwin"
     | "documenten_aanleveren"
@@ -887,7 +908,9 @@ export interface Project {
     | "track_mail_verstuurd_at"
     | "track_last_seen_at"
     | "track_view_count"
-  > | null;
+  > & {
+    offerte_regels?: { omschrijving?: string | null; aantal?: number | null }[];
+  } | null;
 }
 
 export interface SollicitatieBestand {
@@ -1133,7 +1156,8 @@ export type BackofficeActieEventSoort =
   | "herplan_afspraak"
   | "aangetekende_brief"
   | "annulering_keuze_controle"
-  | "hold_sales_verlopen";
+  | "hold_sales_verlopen"
+  | "hold_sales_terug";
 
 export interface BackofficeActieEvent {
   id: string;

@@ -3,8 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
   Mail,
+  MailOpen,
+  Phone,
   RefreshCw,
   Reply,
   Search,
@@ -30,11 +35,13 @@ import {
   mailInFolder,
   mailSuggestsGeenContact,
   mailSuggestsGeenInteresse,
-  templatesForFolder,
+  templatesForMail,
   unreadCount,
+  unreadInboundCount,
   type InboxFolderId,
   type InboxMail,
 } from "@/lib/inbox";
+import { parseInboxTerugbelSuggestie } from "@/lib/inbox-terugbel";
 import {
   buildMailConversations,
   isOutboundMail,
@@ -466,80 +473,74 @@ function AfspraakActieKaart({
   return (
     <div
       className={cn(
-        "w-full overflow-hidden rounded-2xl border shadow-sm",
+        "flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2",
         cancelled
-          ? "border-[#FF3B30]/25 bg-[#FFF5F5]"
+          ? "border-[#FF3B30]/20 bg-[#FFF5F5]"
           : canCancel
-            ? "border-[#FF9500]/30 bg-[#FFF9F0]"
+            ? "border-[#FF9500]/25 bg-[#FFF9F0]"
             : "border-black/8 bg-[#F2F2F7]"
       )}
     >
-      <div className="flex items-start gap-4 px-4 py-3.5">
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-            {wanneer.weekdag} · actie
-          </p>
-          <p className="mt-1 text-[20px] font-semibold tracking-tight text-[#1D1D1F]">
-            {wanneer.datum}
-            <span className="ml-2 tabular-nums text-[#007AFF]">
-              {wanneer.tijd}
-            </span>
-          </p>
-          <p className="mt-1 text-[13px] text-[#6E6E73]">
-            {soort}
-            {afspraak.adviseurNaam ? ` · ${afspraak.adviseurNaam}` : ""}
-          </p>
-        </div>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-            cancelled
-              ? "bg-[#FF3B30]/15 text-[#C62828]"
-              : "bg-[#34C759]/15 text-[#1B7A3D]"
-          )}
-        >
-          {status}
-        </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-[#1D1D1F]">
+          {wanneer.datum}{" "}
+          <span className="tabular-nums text-[#007AFF]">{wanneer.tijd}</span>
+          <span
+            className={cn(
+              "ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              cancelled
+                ? "bg-[#FF3B30]/15 text-[#C62828]"
+                : "bg-[#34C759]/15 text-[#1B7A3D]"
+            )}
+          >
+            {status}
+          </span>
+        </p>
+        <p className="truncate text-[12px] text-[#6E6E73]">
+          {soort}
+          {afspraak.adviseurNaam ? ` · ${afspraak.adviseurNaam}` : ""}
+        </p>
       </div>
-      <div className="flex flex-col gap-2 border-t border-black/5 bg-white/70 px-4 py-3 sm:flex-row">
-        {canCancel && open ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCancel}
-            className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-[#FF9500] px-4 text-[13px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
-          >
-            {busy ? "Bezig…" : "Afspraak afzeggen"}
-          </button>
-        ) : null}
-        {cancelled && leadId ? (
-          <Link
-            href={`/leads/${leadId}?plan=huisbezoek`}
-            className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-[#007AFF] px-4 text-[13px] font-semibold text-white hover:bg-[#0066D6]"
-          >
-            Opnieuw inplannen
-          </Link>
-        ) : null}
+      {canCancel && open ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+          className="inline-flex h-8 items-center rounded-lg bg-[#FF9500] px-3 text-[12px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
+        >
+          {busy ? "Bezig…" : "Afzeggen"}
+        </button>
+      ) : null}
+      {cancelled && leadId ? (
         <Link
-          href={`/?tab=agenda&afspraak=${afspraak.id}`}
-          className={cn(
-            "inline-flex h-10 items-center justify-center rounded-xl border border-black/10 bg-white px-4 text-[13px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03]",
-            canCancel && open ? "sm:flex-none" : "flex-1"
-          )}
+          href={`/leads/${leadId}?plan=huisbezoek`}
+          className="inline-flex h-8 items-center rounded-lg bg-[#007AFF] px-3 text-[12px] font-semibold text-white hover:bg-[#0066D6]"
         >
-          Open in agenda
+          Opnieuw inplannen
         </Link>
-      </div>
+      ) : null}
+      <Link
+        href={`/?tab=agenda&afspraak=${afspraak.id}`}
+        className="inline-flex h-8 items-center rounded-lg border border-black/10 bg-white px-3 text-[12px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03]"
+      >
+        Agenda
+      </Link>
     </div>
   );
 }
 
-export function InboxPanel() {
+export function InboxPanel({
+  onUnreadChange,
+}: {
+  onUnreadChange?: (n: number) => void;
+}) {
   const { session } = useCrmSession();
   const [mails, setMails] = useState<InboxMail[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
   const [folder, setFolder] = useState<InboxFolderId>("inbox");
+  const [unreadOnly, setUnreadOnly] = useState(true);
+  const [listPage, setListPage] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
@@ -547,6 +548,7 @@ export function InboxPanel() {
   const [replyBody, setReplyBody] = useState("");
   const [replyToEmail, setReplyToEmail] = useState("");
   const replyToTouched = useRef(false);
+  const replyBodyRef = useRef<HTMLTextAreaElement>(null);
   const [templateId, setTemplateId] = useState("");
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
@@ -562,6 +564,10 @@ export function InboxPanel() {
   );
   const [contextBusy, setContextBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [terugbelGezetVoor, setTerugbelGezetVoor] = useState<string | null>(
+    null
+  );
+  const skipAutoReadForKey = useRef<string | null>(null);
 
   const loadInbox = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -572,7 +578,9 @@ export function InboxPanel() {
         mails?: InboxMail[];
       };
       if (!res.ok) throw new Error(data.error || "Inbox laden mislukt");
-      setMails(Array.isArray(data.mails) ? data.mails : []);
+      const next = Array.isArray(data.mails) ? data.mails : [];
+      setMails(next);
+      onUnreadChange?.(unreadInboundCount(next));
     } catch (e) {
       if (!opts?.silent) {
         setActionMsg(e instanceof Error ? e.message : "Inbox laden mislukt");
@@ -580,7 +588,7 @@ export function InboxPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onUnreadChange]);
 
   useEffect(() => {
     void loadInbox();
@@ -638,6 +646,15 @@ export function InboxPanel() {
     const needle = q.trim().toLowerCase();
     return conversations.filter((c) => {
       if (!c.messages.some((m) => listMailIds.has(m.id))) return false;
+      if (
+        unreadOnly &&
+        folder !== "archief" &&
+        folder !== "verzonden" &&
+        c.key !== selectedKey &&
+        !c.messages.some((m) => m.status === "nieuw" && !isOutboundMail(m))
+      ) {
+        return false;
+      }
       if (!needle) return true;
       return [
         c.peerName,
@@ -651,7 +668,25 @@ export function InboxPanel() {
         .toLowerCase()
         .includes(needle);
     });
-  }, [conversations, listMailIds, q]);
+  }, [conversations, listMailIds, q, unreadOnly, folder, selectedKey]);
+
+  const LIST_PAGE_SIZE = 10;
+  const listPageCount = Math.max(
+    1,
+    Math.ceil(filteredConversations.length / LIST_PAGE_SIZE)
+  );
+  const pagedConversations = useMemo(() => {
+    const start = listPage * LIST_PAGE_SIZE;
+    return filteredConversations.slice(start, start + LIST_PAGE_SIZE);
+  }, [filteredConversations, listPage]);
+
+  useEffect(() => {
+    setListPage(0);
+  }, [folder, q, unreadOnly]);
+
+  useEffect(() => {
+    setListPage((p) => Math.min(p, listPageCount - 1));
+  }, [listPageCount]);
 
   useEffect(() => {
     if (!filteredConversations.length) {
@@ -660,7 +695,7 @@ export function InboxPanel() {
     }
     setSelectedKey((prev) => {
       if (prev && filteredConversations.some((c) => c.key === prev)) return prev;
-      return filteredConversations[0]!.key;
+      return null;
     });
   }, [filteredConversations]);
 
@@ -671,6 +706,11 @@ export function InboxPanel() {
 
   const extracted = useMemo(
     () => (selected ? extractInboxFacts(selected) : null),
+    [selected]
+  );
+
+  const terugbelSuggestie = useMemo(
+    () => (selected ? parseInboxTerugbelSuggestie(selected) : null),
     [selected]
   );
 
@@ -940,6 +980,7 @@ export function InboxPanel() {
     );
     setReplySubject(normalizeReplySubject(mail.subject));
     setReplyBody(defaultReplyBody(klant, agent));
+    window.requestAnimationFrame(() => replyBodyRef.current?.focus());
   }
 
   async function cancelLinkedAfspraak() {
@@ -1075,6 +1116,49 @@ export function InboxPanel() {
     }
   }
 
+  async function createTerugbelFromMail() {
+    if (!selected) return;
+    if (!matchedLead?.id) {
+      setActionMsg("Koppel eerst een lead, daarna kun je het terugbelverzoek zetten.");
+      return;
+    }
+    setActionBusy(true);
+    setActionMsg(null);
+    try {
+      const res = await fetch("/api/inbox/terugbel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lead_id: matchedLead.id,
+          start_at: terugbelSuggestie?.startAt || null,
+          notitie:
+            selected.aiSummary?.trim() ||
+            displayBodyText(selected).split("\n").filter(Boolean).slice(0, 4).join(" ").slice(0, 280),
+          subject: selected.subject,
+          body_text: selected.bodyText,
+          ai_summary: selected.aiSummary,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        beller?: { naam?: string };
+        label?: string | null;
+        start_at?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "Terugbelverzoek mislukt");
+      setTerugbelGezetVoor(selected.id);
+      const when = data.label || terugbelSuggestie?.label || "ingepland";
+      const wie = data.beller?.naam || "Simon";
+      setActionMsg(`Terugbelverzoek gezet voor ${wie} · ${when}.`);
+    } catch (e) {
+      setActionMsg(
+        e instanceof Error ? e.message : "Terugbelverzoek mislukt"
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   async function deleteMail(mailId: string) {
     // Soft-delete → archief, blijft vindbaar via zoeken
     const prev = mails;
@@ -1106,9 +1190,38 @@ export function InboxPanel() {
     }
   }
 
+  async function markConversationUnread() {
+    if (!selectedConversation) return;
+    const ids = selectedConversation.messages
+      .filter((m) => !isOutboundMail(m) && m.status !== "nieuw")
+      .map((m) => m.id);
+    if (!ids.length) return;
+    skipAutoReadForKey.current = selectedConversation.key;
+    setMails((prev) => {
+      const next = prev.map((m) =>
+        ids.includes(m.id) ? { ...m, status: "nieuw" as const } : m
+      );
+      onUnreadChange?.(unreadInboundCount(next));
+      return next;
+    });
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/inbox/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "nieuw" }),
+          })
+        )
+      );
+    } catch {
+      /* lokaal al unread; sync volgt bij vernieuwen */
+    }
+  }
+
   function applyTemplate(id: string) {
     if (!selected) return;
-    const t = templatesForFolder(selected.folder).find((x) => x.id === id);
+    const t = templatesForMail(selected).find((x) => x.id === id);
     setTemplateId(id);
     if (!t) return;
     setComposeOpen(true);
@@ -1140,15 +1253,22 @@ export function InboxPanel() {
     setTemplateId("");
     setComposeOpen(true);
 
+    if (skipAutoReadForKey.current === selectedConversation.key) {
+      return;
+    }
+    skipAutoReadForKey.current = null;
+
     const unreadIds = selectedConversation.messages
       .filter((m) => m.status === "nieuw" && !isOutboundMail(m))
       .map((m) => m.id);
     if (!unreadIds.length) return;
-    setMails((prev) =>
-      prev.map((m) =>
+    setMails((prev) => {
+      const next = prev.map((m) =>
         unreadIds.includes(m.id) ? { ...m, status: "gelezen" as const } : m
-      )
-    );
+      );
+      onUnreadChange?.(unreadInboundCount(next));
+      return next;
+    });
     for (const id of unreadIds) {
       void fetch(`/api/inbox/${encodeURIComponent(id)}`, {
         method: "PATCH",
@@ -1166,6 +1286,10 @@ export function InboxPanel() {
     setDraftBusy(true);
     setActionMsg(null);
     try {
+      const threadMails =
+        selectedConversation?.messages?.length
+          ? selectedConversation.messages
+          : [mail];
       const res = await fetch("/api/inbox/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1179,6 +1303,40 @@ export function InboxPanel() {
             replyToEmail.trim() ||
             mail.fromEmail,
           agentNaam: session?.naam || undefined,
+          thread: threadMails.slice(-12).map((m) => ({
+            fromUs: isOutboundMail(m),
+            fromName: m.fromName,
+            at: m.receivedAt,
+            subject: m.subject,
+            body: displayBodyText(m),
+          })),
+          context: {
+            folder: mail.suggestedFolder || mail.folder,
+            aiSummary: mail.aiSummary || null,
+            cancelAfspraak: Boolean(
+              mail.aiEffects?.cancelAfspraak || extracted?.afspraakAfzeggen
+            ),
+            leadGeenContact: Boolean(mail.aiEffects?.leadGeenContact),
+            leadGeenInteresse: Boolean(mail.aiEffects?.leadGeenInteresse),
+            createServiceVerzoek: Boolean(
+              mail.aiEffects?.createServiceVerzoek
+            ),
+            leadNaam: matchedLead?.naam || mail.leadNaam || null,
+            leadStatus: matchedLead?.status || null,
+            leadPlaats: matchedLead?.plaats || null,
+            leadNumber: matchedLead?.lead_number || null,
+            projectNummer:
+              linkedProject?.project_nummer || mail.projectNummer || null,
+            projectStatus: linkedProject?.status || null,
+            afspraak: linkedAfspraak
+              ? {
+                  startAt: linkedAfspraak.start_at,
+                  status: linkedAfspraak.status,
+                  soort: linkedAfspraak.soort || null,
+                  adviseurNaam: linkedAfspraak.adviseurNaam || null,
+                }
+              : null,
+          },
         }),
       });
       const data = (await res.json().catch(() => ({}))) as {
@@ -1290,18 +1448,39 @@ export function InboxPanel() {
 
   const threadMessages = selectedConversation?.messages || [];
   const templates = selected
-    ? templatesForFolder(selected.folder)
-    : templatesForFolder(folder);
+    ? templatesForMail(
+      extracted?.afspraakAfzeggen ||
+      selected.folder === "afzegging_afspraak" ||
+      selected.aiEffects?.cancelAfspraak
+        ? { ...selected, folder: "afzegging_afspraak" }
+        : selected
+      )
+    : [];
+  const inboxUnread = unreadInboundCount(mails);
+  const canMarkUnread = Boolean(
+    selectedConversation?.messages.some(
+      (m) => !isOutboundMail(m) && m.status !== "nieuw"
+    )
+  );
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-1 flex-col overflow-hidden bg-[#F5F5F7] lg:h-[calc(100dvh-3.75rem)]">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#F5F5F7]">
       <div className="flex shrink-0 items-center gap-2 border-b border-black/10 bg-white/80 px-3 py-2 backdrop-blur-md sm:px-4">
         <p className="text-[13px] font-semibold tracking-tight text-[#1D1D1F]">
           Inbox
         </p>
-        <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] font-medium tabular-nums text-[#6E6E73]">
-          {filteredConversations.length}
-        </span>
+        {inboxUnread > 0 ? (
+          <span
+            className="rounded-full bg-[#007AFF] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white"
+            aria-label={`${inboxUnread} ongelezen`}
+          >
+            {inboxUnread > 99 ? "99+" : inboxUnread}
+          </span>
+        ) : (
+          <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] font-medium tabular-nums text-[#6E6E73]">
+            {filteredConversations.length}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             type="button"
@@ -1312,6 +1491,7 @@ export function InboxPanel() {
             onClick={() => {
               if (!selected) return;
               prepareReply(selected);
+              replyBodyRef.current?.focus();
             }}
           >
             <Reply className="size-3.5" />
@@ -1348,8 +1528,13 @@ export function InboxPanel() {
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-b border-black/10 bg-white lg:border-b-0 lg:border-r">
+      <div className="grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
+        <aside
+          className={cn(
+            "min-h-0 flex-col border-b border-black/10 bg-white lg:border-b-0 lg:border-r",
+            selected ? "hidden lg:flex" : "flex"
+          )}
+        >
           <div className="shrink-0 space-y-2 border-b border-black/5 px-3 py-2">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-[#8E8E93]" />
@@ -1361,6 +1546,34 @@ export function InboxPanel() {
                 className="h-8 w-full rounded-lg border-0 bg-[#F2F2F7] pr-3 pl-8 text-[13px] text-[#1D1D1F] outline-none placeholder:text-[#8E8E93] focus:ring-2 focus:ring-[#007AFF]/30"
               />
             </div>
+            {folder !== "archief" && folder !== "verzonden" ? (
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setUnreadOnly(true)}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-[11px] font-semibold",
+                    unreadOnly
+                      ? "bg-[#1D1D1F] text-white"
+                      : "bg-[#F2F2F7] text-[#6E6E73] hover:text-[#1D1D1F]"
+                  )}
+                >
+                  Ongelezen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnreadOnly(false)}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-[11px] font-semibold",
+                    !unreadOnly
+                      ? "bg-[#1D1D1F] text-white"
+                      : "bg-[#F2F2F7] text-[#6E6E73] hover:text-[#1D1D1F]"
+                  )}
+                >
+                  Alle
+                </button>
+              </div>
+            ) : null}
             <div className="flex gap-1 overflow-x-auto pb-0.5">
               {INBOX_FOLDERS.map((f) => {
                 const active = folder === f.id;
@@ -1372,6 +1585,9 @@ export function InboxPanel() {
                     title={f.hint}
                     onClick={() => {
                       setFolder(f.id);
+                      if (f.id === "archief" || f.id === "verzonden") {
+                        setUnreadOnly(false);
+                      }
                     }}
                     className={cn(
                       "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold transition",
@@ -1388,7 +1604,7 @@ export function InboxPanel() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto">
+          <div className="min-h-0 flex-1 overflow-hidden">
             {loading && filteredConversations.length === 0 ? (
               <p className="px-4 py-10 text-center text-[13px] text-[#8E8E93]">
                 Laden…
@@ -1397,12 +1613,25 @@ export function InboxPanel() {
               <div className="px-4 py-14 text-center">
                 <Mail className="mx-auto mb-2 size-7 text-[#C7C7CC]" />
                 <p className="text-[13px] text-[#8E8E93]">
-                  {q.trim() ? "Geen mails gevonden" : "Geen mails in deze map"}
+                  {q.trim()
+                    ? "Geen mails gevonden"
+                    : unreadOnly
+                      ? "Geen ongelezen mails"
+                      : "Geen mails in deze map"}
                 </p>
+                {unreadOnly && !q.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => setUnreadOnly(false)}
+                    className="mt-2 text-[12px] font-semibold text-[#007AFF] hover:underline"
+                  >
+                    Toon alle mails
+                  </button>
+                ) : null}
               </div>
             ) : (
-              <ul>
-                {filteredConversations.map((c) => {
+              <ul className="h-full overflow-hidden">
+                {pagedConversations.map((c) => {
                   const active = selectedKey === c.key;
                   const n = c.messages.length;
                   const unread = c.messages.some(
@@ -1493,9 +1722,50 @@ export function InboxPanel() {
               </ul>
             )}
           </div>
+          {filteredConversations.length > 0 ? (
+            <div className="flex shrink-0 items-center justify-between border-t border-black/5 px-3 py-2">
+              <p className="text-[11px] tabular-nums text-[#8E8E93]">
+                {filteredConversations.length === 0
+                  ? "0"
+                  : `${listPage * LIST_PAGE_SIZE + 1}–${Math.min(
+                      (listPage + 1) * LIST_PAGE_SIZE,
+                      filteredConversations.length
+                    )}`}
+                {" van "}
+                {filteredConversations.length}
+              </p>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={listPage <= 0}
+                  aria-label="Vorige pagina"
+                  onClick={() => setListPage((p) => Math.max(0, p - 1))}
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <span className="min-w-[3.5rem] text-center text-[11px] font-medium tabular-nums text-[#6E6E73]">
+                  {listPage + 1}/{listPageCount}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={listPage >= listPageCount - 1}
+                  aria-label="Volgende pagina"
+                  onClick={() =>
+                    setListPage((p) => Math.min(listPageCount - 1, p + 1))
+                  }
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </aside>
 
-        <section className="flex min-h-0 flex-col bg-white">
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
           {!selected || !selectedConversation ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 text-[#8E8E93]">
               <Mail className="size-10 opacity-40" />
@@ -1503,96 +1773,106 @@ export function InboxPanel() {
             </div>
           ) : (
             <>
-              <div className="shrink-0 border-b border-black/5 px-4 py-3 sm:px-5">
+              <div className="shrink-0 border-b border-black/5 px-4 py-2.5 sm:px-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h2 className="truncate text-[17px] font-semibold tracking-tight text-[#1D1D1F] sm:text-[19px]">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="mb-1 h-7 px-2 text-[12px] lg:hidden"
+                      onClick={() => setSelectedKey(null)}
+                    >
+                      <ArrowLeft className="size-3.5" />
+                      Inbox
+                    </Button>
+                    <h2 className="truncate text-[16px] font-semibold tracking-tight text-[#1D1D1F]">
                       {selectedConversation.subject || "(geen onderwerp)"}
                     </h2>
-                    <p className="mt-0.5 text-[12px] text-[#8E8E93]">
-                      {threadMessages.length} bericht
-                      {threadMessages.length === 1 ? "" : "en"} ·{" "}
+                    <p className="mt-0.5 truncate text-[12px] text-[#8E8E93]">
                       {selectedConversation.peerEmail || "onbekend"}
-                      {selected.aiSummary
-                        ? ` · ${selected.aiSummary}`
-                        : ""}
+                      {selected.aiSummary ? ` · ${selected.aiSummary}` : ""}
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 gap-1.5 shrink-0 text-[12px] text-[#8E8E93]"
-                    onClick={() => void deleteMail(selected.id)}
-                  >
-                    <Trash2 className="size-3.5" />
-                    Verwijderen
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 gap-1.5 text-[12px] text-[#8E8E93]"
+                      disabled={!canMarkUnread}
+                      onClick={() => void markConversationUnread()}
+                    >
+                      <MailOpen className="size-3.5" />
+                      Unread
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 gap-1.5 text-[12px] text-[#8E8E93]"
+                      onClick={() => void deleteMail(selected.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                      Verwijderen
+                    </Button>
+                  </div>
                 </div>
 
                 {matchedLead ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-[#F2F2F7] px-3 py-2.5">
-                    <User className="size-4 text-[#007AFF]" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-semibold text-[#1D1D1F]">
-                        {matchedLead.naam}
-                      </p>
-                      <p className="text-[12px] text-[#8E8E93]">
-                        {[
-                          matchedLead.lead_number,
-                          matchedLead.plaats,
-                          matchedLead.status
-                            ? leadStatusLabel[
-                                matchedLead.status as LeadStatus
-                              ] || matchedLead.status
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "Lead"}
-                      </p>
-                    </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <User className="size-3.5 text-[#007AFF]" />
+                    <span className="truncate text-[13px] font-medium text-[#1D1D1F]">
+                      {matchedLead.naam}
+                    </span>
+                    <span className="truncate text-[12px] text-[#8E8E93]">
+                      {[
+                        matchedLead.lead_number,
+                        matchedLead.plaats,
+                        matchedLead.status
+                          ? leadStatusLabel[matchedLead.status as LeadStatus] ||
+                            matchedLead.status
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
                     <Link
                       href={`/leads/${matchedLead.id}`}
-                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-black/10 bg-white px-2.5 text-[12px] font-medium text-[#1D1D1F] hover:bg-black/[0.03]"
+                      className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-black/10 bg-white px-2 text-[12px] font-medium text-[#1D1D1F] hover:bg-black/[0.03]"
                     >
-                      Open
+                      Lead
                       <ArrowUpRight className="size-3.5" />
                     </Link>
+                    {linkedProject?.id ? (
+                      <Link
+                        href={`/projecten/${linkedProject.id}`}
+                        className="inline-flex h-7 items-center gap-1 rounded-lg border border-black/10 bg-white px-2 text-[12px] font-medium text-[#1D1D1F] hover:bg-black/[0.03]"
+                      >
+                        Project
+                        <ArrowUpRight className="size-3.5" />
+                      </Link>
+                    ) : null}
                   </div>
                 ) : leadLookupBusy || contextBusy ? (
-                  <p className="mt-3 text-[12px] text-[#8E8E93]">
-                    Klant zoeken…
-                  </p>
+                  <p className="mt-2 text-[12px] text-[#8E8E93]">Klant zoeken…</p>
                 ) : leadCandidates.length > 0 ? (
-                  <div className="mt-3 space-y-1.5 rounded-xl bg-[#F2F2F7] px-3 py-2.5">
-                    <p className="text-[12px] text-[#8E8E93]">
-                      Meerdere mogelijke klanten — kies er één:
-                    </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
                     {leadCandidates.map((lead) => (
                       <button
                         key={lead.id}
                         type="button"
                         onClick={() => chooseLead(lead)}
-                        className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-left text-[12px] hover:bg-black/[0.03]"
+                        className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-[12px] font-medium hover:bg-black/[0.03]"
                       >
-                        <span className="block font-semibold text-[#1D1D1F]">
-                          {lead.naam}
-                          {lead.plaats ? ` · ${lead.plaats}` : ""}
-                        </span>
-                        <span className="block text-[#8E8E93]">
-                          {lead.email || lead.telefoon || lead.lead_number}
-                        </span>
+                        {lead.naam}
+                        {lead.plaats ? ` · ${lead.plaats}` : ""}
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <p className="mt-3 text-[12px] text-[#8E8E93]">
-                    Geen gekoppelde lead
-                  </p>
-                )}
+                ) : null}
 
-                {/* Actiekaart(en) — full width, direct bruikbaar */}
-                <div className="mt-3 space-y-2">
+                <div className="mt-2 space-y-1.5">
                   {linkedAfspraak ? (
                     <AfspraakActieKaart
                       afspraak={linkedAfspraak}
@@ -1606,57 +1886,71 @@ export function InboxPanel() {
                     />
                   ) : null}
 
+                  {(selected.aiEffects?.createTerugbel ||
+                    terugbelSuggestie) &&
+                  !mailSuggestsGeenContact(selected) ? (
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#34C759]/25 bg-[#F1FBF4] px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-[#1D1D1F]">
+                          Terugbelverzoek voor Simon
+                        </p>
+                        <p className="mt-0.5 text-[12px] text-[#6E6E73]">
+                          {terugbelSuggestie
+                            ? `Klant lijkt bereikbaar ${terugbelSuggestie.hint} · ${terugbelSuggestie.label}`
+                            : "Klant wil teruggebeld worden"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={
+                          actionBusy ||
+                          terugbelGezetVoor === selected.id
+                        }
+                        onClick={() => void createTerugbelFromMail()}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#34C759] px-3 text-[12px] font-semibold text-white hover:bg-[#2FB350] disabled:opacity-50"
+                      >
+                        <Phone className="size-3.5" />
+                        {terugbelGezetVoor === selected.id
+                          ? "Gezet"
+                          : INBOX_ACTION_LABEL.maak_terugbel}
+                      </button>
+                    </div>
+                  ) : null}
+
                   {selected.folder === "service" ||
                   selected.aiEffects?.createServiceVerzoek ? (
-                    <div className="w-full overflow-hidden rounded-2xl border border-[#007AFF]/20 bg-[#F0F7FF] shadow-sm">
-                      <div className="px-4 py-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-                          Service · actie
-                        </p>
-                        <p className="mt-1 text-[15px] font-semibold text-[#1D1D1F]">
-                          Serviceverzoek aanmaken
-                        </p>
-                        <p className="mt-0.5 text-[13px] text-[#6E6E73]">
-                          Zet deze mail om in een service-ticket.
-                        </p>
-                      </div>
-                      <div className="border-t border-[#007AFF]/10 bg-white/70 px-4 py-3">
-                        <button
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() => void createServiceFromMail()}
-                          className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-[#007AFF] px-4 text-[13px] font-semibold text-white hover:bg-[#0066D6] disabled:opacity-50"
-                        >
-                          {actionBusy
-                            ? "Bezig…"
-                            : INBOX_ACTION_LABEL.maak_service_verzoek}
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#007AFF]/20 bg-[#F0F7FF] px-3 py-2">
+                      <p className="min-w-0 flex-1 text-[13px] font-medium text-[#1D1D1F]">
+                        Serviceverzoek aanmaken
+                      </p>
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => void createServiceFromMail()}
+                        className="inline-flex h-8 items-center rounded-lg bg-[#007AFF] px-3 text-[12px] font-semibold text-white hover:bg-[#0066D6] disabled:opacity-50"
+                      >
+                        {actionBusy
+                          ? "Bezig…"
+                          : INBOX_ACTION_LABEL.maak_service_verzoek}
+                      </button>
                     </div>
                   ) : null}
 
                   {matchedLead &&
                   mailSuggestsGeenInteresse(selected) &&
                   matchedLead.status !== "geen_interesse" ? (
-                    <div className="w-full overflow-hidden rounded-2xl border border-[#FF9500]/25 bg-[#FFF9F0] shadow-sm">
-                      <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-                            Lead · actie
-                          </p>
-                          <p className="mt-0.5 text-[14px] font-semibold text-[#1D1D1F]">
-                            Klant lijkt geen interesse te hebben
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() => void markLeadStatus("geen_interesse")}
-                          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl bg-[#FF9500] px-4 text-[13px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
-                        >
-                          {INBOX_ACTION_LABEL.mark_geen_interesse}
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#FF9500]/25 bg-[#FFF9F0] px-3 py-2">
+                      <p className="min-w-0 flex-1 text-[13px] font-medium text-[#1D1D1F]">
+                        Klant lijkt geen interesse te hebben
+                      </p>
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => void markLeadStatus("geen_interesse")}
+                        className="inline-flex h-8 items-center rounded-lg bg-[#FF9500] px-3 text-[12px] font-semibold text-white hover:bg-[#E68600] disabled:opacity-50"
+                      >
+                        {INBOX_ACTION_LABEL.mark_geen_interesse}
+                      </button>
                     </div>
                   ) : null}
 
@@ -1664,54 +1958,24 @@ export function InboxPanel() {
                   mailSuggestsGeenContact(selected) &&
                   matchedLead.status !== "geen_contact" &&
                   matchedLead.status !== "geen_interesse" ? (
-                    <div className="w-full overflow-hidden rounded-2xl border border-black/8 bg-[#F2F2F7] shadow-sm">
-                      <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-                            Lead · actie
-                          </p>
-                          <p className="mt-0.5 text-[14px] font-semibold text-[#1D1D1F]">
-                            Geen contact meer gewenst
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() => void markLeadStatus("geen_contact")}
-                          className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white px-4 text-[13px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03] disabled:opacity-50"
-                        >
-                          {INBOX_ACTION_LABEL.mark_geen_contact}
-                        </button>
-                      </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/8 bg-[#F2F2F7] px-3 py-2">
+                      <p className="min-w-0 flex-1 text-[13px] font-medium text-[#1D1D1F]">
+                        Geen contact meer gewenst
+                      </p>
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => void markLeadStatus("geen_contact")}
+                        className="inline-flex h-8 items-center rounded-lg border border-black/10 bg-white px-3 text-[12px] font-semibold text-[#1D1D1F] hover:bg-black/[0.03] disabled:opacity-50"
+                      >
+                        {INBOX_ACTION_LABEL.mark_geen_contact}
+                      </button>
                     </div>
-                  ) : null}
-
-                  {linkedProject?.id ? (
-                    <Link
-                      href={`/projecten/${linkedProject.id}`}
-                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-black/8 bg-white px-4 py-3 text-[13px] font-semibold text-[#1D1D1F] shadow-sm hover:bg-black/[0.02]"
-                    >
-                      <span>
-                        Open project
-                        {linkedProject.project_nummer
-                          ? ` · ${linkedProject.project_nummer}`
-                          : ""}
-                      </span>
-                      <ArrowUpRight className="size-4 text-[#007AFF]" />
-                    </Link>
                   ) : null}
                 </div>
               </div>
 
-              <div
-                className="min-h-0 flex-1 overflow-auto bg-[#F5F5F7] px-4 py-3 sm:px-6"
-                ref={(el) => {
-                  if (!el || !selectedConversation) return;
-                  requestAnimationFrame(() => {
-                    el.scrollTop = el.scrollHeight;
-                  });
-                }}
-              >
+              <div className="min-h-0 flex-1 overflow-auto bg-[#FAFAFA] px-4 py-3 sm:px-6">
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
                   {threadMessages.length === 0 ? (
                     <p className="py-10 text-center text-[13px] text-[#8E8E93]">
@@ -1811,22 +2075,19 @@ export function InboxPanel() {
                 </div>
               </div>
 
-              <div className="shrink-0 border-t border-black/10 bg-[#FAFAFA]">
-                <div className="px-4 py-3">
+              <div className="shrink-0 border-t border-black/10 bg-white">
+                <div className="px-4 py-2.5">
                   <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                    <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-                      Snel
-                    </span>
-                    {templates.slice(0, 4).map((t) => (
+                    {templates.map((t) => (
                       <button
                         key={t.id}
                         type="button"
                         onClick={() => applyTemplate(t.id)}
                         className={cn(
-                          "rounded-full border px-3 py-1.5 text-[12px] font-medium transition",
+                          "rounded-full border px-3 py-1 text-[12px] font-medium transition",
                           templateId === t.id
                             ? "border-[#007AFF] bg-[#007AFF]/10 text-[#007AFF]"
-                            : "border-black/10 bg-white text-[#1D1D1F] hover:bg-black/[0.03]"
+                            : "border-black/10 bg-[#F5F5F7] text-[#1D1D1F] hover:bg-black/[0.03]"
                         )}
                       >
                         {t.label}
@@ -1837,14 +2098,14 @@ export function InboxPanel() {
                       title="AI-concept"
                       disabled={draftBusy}
                       onClick={() => void draftReply(selected)}
-                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-semibold text-[#007AFF] hover:bg-[#007AFF]/10 disabled:opacity-40"
+                      className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-full px-2 text-[12px] font-semibold text-[#007AFF] hover:bg-[#007AFF]/10 disabled:opacity-40"
                     >
                       <AiMark className="h-4 w-4" />
                       {draftBusy ? "Schrijven…" : "AI"}
                     </button>
                   </div>
-                  <div className="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm">
-                    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-2 border-b border-black/5 px-3 py-2">
+                  <div className="overflow-hidden rounded-xl border border-black/10 bg-white">
+                    <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-x-2 border-b border-black/5 px-3 py-1.5">
                       <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
                         Aan
                       </span>
@@ -1859,32 +2120,26 @@ export function InboxPanel() {
                         placeholder="klant@email.nl"
                       />
                     </div>
-                    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-x-2 border-b border-black/5 px-3 py-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8E8E93]">
-                        Onderwerp
-                      </span>
+                    <textarea
+                      ref={replyBodyRef}
+                      value={replyBody}
+                      onChange={(e) => setReplyBody(e.target.value)}
+                      rows={8}
+                      placeholder="Typ hier je antwoord…"
+                      className="min-h-[180px] max-h-[38vh] w-full resize-none border-0 bg-white px-4 py-3 text-[15px] leading-relaxed text-[#1D1D1F] outline-none"
+                    />
+                    <div className="flex items-center justify-between gap-2 border-t border-black/5 bg-[#FAFAFA] px-3 py-2">
                       <input
                         type="text"
                         value={replySubject}
                         onChange={(e) => setReplySubject(e.target.value)}
-                        className="min-w-0 w-full border-0 bg-transparent text-[13px] text-[#1D1D1F] outline-none"
+                        className="min-w-0 flex-1 border-0 bg-transparent text-[12px] text-[#8E8E93] outline-none"
+                        placeholder="Onderwerp"
                       />
-                    </div>
-                    <textarea
-                      value={replyBody}
-                      onChange={(e) => setReplyBody(e.target.value)}
-                      rows={6}
-                      placeholder="Typ hier je antwoord…"
-                      className="min-h-[120px] w-full resize-y border-0 bg-white px-3 py-3 text-[15px] leading-relaxed text-[#1D1D1F] outline-none"
-                    />
-                    <div className="flex items-center justify-between gap-2 border-t border-black/5 bg-[#FAFAFA] px-3 py-2.5">
-                      <p className="truncate text-[12px] text-[#8E8E93]">
-                        Antwoord naar {replyToEmail || "…"}
-                      </p>
                       <Button
                         type="button"
                         size="sm"
-                        className="h-9 gap-1.5 bg-[#007AFF] px-5 text-[13px] text-white hover:bg-[#0066D6]"
+                        className="h-8 gap-1.5 bg-[#007AFF] px-4 text-[13px] text-white hover:bg-[#0066D6]"
                         disabled={
                           sendBusy ||
                           !replyBody.trim() ||

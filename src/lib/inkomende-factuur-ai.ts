@@ -16,10 +16,14 @@ export type InvoiceExtract = {
   valuta: string | null;
   /** Korte omschrijving: waarvoor de factuur is */
   omschrijving: string | null;
+  iban: string | null;
+  referentie: string | null;
+  vervaldatum: string | null;
   confidence: number;
 };
 
-const EXTRACT_PROMPT = `Je bent een Nederlandse boekhouder-assistent. Je leest facturen, bonnetjes en kassabonnen uit foto's of PDF's.
+const EXTRACT_PROMPT = `Je bent de boekhouder-assistent van Batterijconcept (ook: BatterijConcept, Batterij Concept).
+Wij zijn de ONTVANGER / KLANT op elke inkomende factuur. Jij leest de factuur van de LEVERANCIER uit.
 
 Geef ALLEEN geldige JSON terug (geen markdown) met dit schema:
 {
@@ -33,22 +37,27 @@ Geef ALLEEN geldige JSON terug (geen markdown) met dit schema:
   "btw_pct": number|null,
   "valuta": "EUR"|string|null,
   "omschrijving": string|null,
+  "iban": string|null,
+  "referentie": string|null,
+  "vervaldatum": "YYYY-MM-DD"|null,
   "confidence": number
 }
 
 Regels (strikt):
-1. Lees ALLE bedragen die je ziet: subtotaal excl. btw, btw-regel(s), en totaal incl. btw.
-2. bedrag_inc_btw = te betalen totaal (incl. btw). bedrag_ex_btw = excl. btw. btw_bedrag = som van alle btw.
-3. Als je alleen "totaal" ziet zonder btw-splitsing: zet bedrag_inc_btw. Vul ex/btw in als btw-percentage (21/9/0) zichtbaar is.
-4. Als je excl. + btw ziet: bereken incl. Als je incl. + btw% ziet: bereken excl. en btw.
-5. btw_pct = 21, 9 of 0 als duidelijk; anders null. Bij gemengde tarieven: null en vul wel btw_bedrag.
-6. factuurdatum = document-/factuurdatum (niet vandaag, niet ontvangstdatum e-mail).
-7. boekperiode = maand waarin dit geboekt moet worden = YYYY-MM van de factuurdatum. Gebruik factuurdatum, nooit de scan-datum.
-8. omschrijving = kort (max ~120 tekens) waarvóór: product/dienst/regel (bijv. "Installatiemateriaal", "Benzine tankstation", "Hosting Q3").
-9. leverancier = bedrijfs-/winkelnaam van de leverancier.
-10. Bedragen als numbers met max 2 decimalen (punt als decimaalteken). Nederlandse notatie zoals 1.234,56 omzetten.
-11. confidence 0–1: hoog alleen als datum + totaal betrouwbaar zijn.
-12. Bij onleesbaar: null + lagere confidence. Verzin nooit bedragen.`;
+1. leverancier = wie de factuur STUURT (Autohopper, JDJ, Finc Accountants, …). NOOIT Batterijconcept / BatterijConcept / Jona Hessel / onze Daltonlaan-adresregel. Dat is WIJ (klant). Als het document "Batterijconcept" als geadresseerde toont, is dat niet de leverancier.
+2. factuurnummer = factuurnr / invoice number / reserveringsnummer / bevestigingsnummer (bijv. 1459746). Gebruik # of "Betreft" als er geen aparte factuurnr-regel is.
+3. Lees ALLE bedragen: Prijs excl. BTW, BTW 21%/9%, Prijs incl. BTW. bedrag_inc_btw = te betalen totaal (niet borg, niet extra km, niet eigen risico — tenzij dat het enige totaal is).
+4. Voorbeeld Autohopper: "Prijs excl. BTW 506,00" + "BTW 21% 106,26" + "Prijs incl. BTW 612,26" → ex=506, btw=106.26, inc=612.26. Borg 1362,26 is GEEN factuurtotaal.
+5. Als je alleen totaal ziet: zet bedrag_inc_btw. Vul ex/btw als percentage zichtbaar is (21/9/0).
+6. Als je excl. + btw ziet: bereken incl. Als je incl. + btw% ziet: bereken excl. en btw.
+7. factuurdatum = documentdatum (Den Bosch, 09-10-2026 → 2026-10-09). Niet vandaag, niet mail-ontvangst.
+8. boekperiode = YYYY-MM van factuurdatum.
+9. iban = IBAN van de LEVERANCIER om naartoe te betalen (NL + 16 tekens, spaties eruit). Niet onze Batterijconcept-IBAN tenzij dat expliciet de begunstigde is.
+10. referentie = betalingskenmerk / reserveringsnummer / "Betreft".
+11. vervaldatum indien aanwezig.
+12. omschrijving kort (max ~120 tekens): waarvoor (bijv. "Autohopper huurauto BSUVA").
+13. Bedragen als numbers, max 2 decimalen, punt als decimaal. NL 1.234,56 → 1234.56.
+14. confidence 0–1. Verzin nooit bedragen of namen.`;
 
 function getClient(): OpenAI {
   const key = process.env.OPENAI_API_KEY?.trim();
@@ -208,10 +217,13 @@ function parseExtractJson(raw: string): InvoiceExtract {
   }
 
   return {
-    leverancier:
-      typeof obj.leverancier === "string" && obj.leverancier.trim()
-        ? obj.leverancier.trim()
-        : null,
+    leverancier: (() => {
+      const raw =
+        typeof obj.leverancier === "string" && obj.leverancier.trim()
+          ? obj.leverancier.trim()
+          : null;
+      return isOnzeBedrijfsnaam(raw) ? null : raw;
+    })(),
     factuurdatum,
     boekperiode: parseBoekperiode(obj.boekperiode, factuurdatum),
     factuurnummer:
@@ -230,8 +242,30 @@ function parseExtractJson(raw: string): InvoiceExtract {
       typeof obj.omschrijving === "string" && obj.omschrijving.trim()
         ? obj.omschrijving.trim().slice(0, 200)
         : null,
+    iban: normalizeExtractIban(obj.iban),
+    referentie:
+      typeof obj.referentie === "string" && obj.referentie.trim()
+        ? obj.referentie.trim().slice(0, 120)
+        : null,
+    vervaldatum: parseDateYmd(obj.vervaldatum),
     confidence,
   };
+}
+
+function normalizeExtractIban(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const iban = value.replace(/\s+/g, "").toUpperCase();
+  if (iban.startsWith("NL")) {
+    const clipped = iban.slice(0, 18);
+    return /^NL\d{2}[A-Z]{4}\d{10}$/.test(clipped) ? clipped : null;
+  }
+  if (iban.length >= 15 && iban.length <= 34) return iban;
+  return null;
+}
+
+function isOnzeBedrijfsnaam(naam: string | null): boolean {
+  if (!naam) return false;
+  return /batterij\s*concept|jona\s+hessel/i.test(naam);
 }
 
 type ScanFile = {

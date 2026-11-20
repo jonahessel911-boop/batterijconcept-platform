@@ -10,6 +10,7 @@ export const INKOOP_DAGEN_VOOR_INSTALLATIE = 5;
 
 const KLAAR_ZONDER_INKOOP = new Set([
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",

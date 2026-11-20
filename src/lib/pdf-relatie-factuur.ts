@@ -9,8 +9,9 @@ import {
 
 export { RELATIE_BTW_PCT, bedragenMetBtw } from "@/lib/relatie-btw";
 
-export const RELATIE_FACTUUR_BETAALTERMIJN_DAGEN = 7;
-/** Partner/monteur selfbilling: betaaltermijn 14 dagen. */
+/** Adviseur/partner selfbilling (creditfactuur aan BC): 14 dagen. */
+export const RELATIE_FACTUUR_BETAALTERMIJN_DAGEN = 14;
+/** Partner/monteur selfbilling: zelfde termijn. */
 export const PARTNER_FACTUUR_BETAALTERMIJN_DAGEN = 14;
 
 /** Herbereken BTW vanuit bedrag_ex_btw (corrigeert oude verlegd-facturen). */
@@ -96,7 +97,7 @@ export type RelatieFactuurInput = {
   /** "adviseur" | "installatiepartner" — voor titelregel */
   issuerLabel: string;
   regels: RelatieFactuurRegel[];
-  /** Override betaaltermijn (default 7; partner = 14) */
+  /** Override betaaltermijn (default 14) */
   betaaltermijnDagen?: number;
 };
 

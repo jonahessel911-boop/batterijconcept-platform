@@ -4,6 +4,14 @@ Alle noemenswaardige wijzigingen in dit project, per review-item.
 
 ## 2026-11-16
 
+### Facturen Inbox: knop BETAALD
+- Groene, dikgedrukte **BETAALD** in de inbox — gaat direct naar Uitbetalingen → **Betaald**, niet naar Uit te betalen.
+- Goedkeuren blijft de woensdag-ronde (Uit te betalen).
+
+### Facturen Inbox: OpenAI-uitlees
+- Factuurvelden (leverancier, nr, excl/btw/incl, IBAN, datum) via OpenAI als heuristiek tekortschiet.
+- Prompt: **Batterijconcept is wij (klant)**, nooit de leverancier. Autohopper-achtige “Prijs incl. BTW” + reserveringsnr worden herkend. Borg is geen totaal.
+
 ### Marcel Klaasman: eigen inplantijden
 - Alleen voor Marcel Klaasman: vaste slots **10:00 / 12:00 / 14:00 / 16:00** (i.p.v. 10/13/16/19).
 - Geldt in agenda, bel-plannen, capaciteit en afblokkingen; overige adviseurs ongewijzigd.

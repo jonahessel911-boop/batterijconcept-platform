@@ -133,6 +133,7 @@ export function MedewerkerInstallatiesPanel({
       return (
         Boolean(r.installatie_voltooid_at) ||
         s === "installatie_voltooid" ||
+        s === "after_sale" ||
         s === "review_gevraagd" ||
         s === "afgerond" ||
         s === "service" ||

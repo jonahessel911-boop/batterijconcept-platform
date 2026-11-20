@@ -43,6 +43,10 @@ function parseNlDate(raw: string): string | null {
   return null;
 }
 
+function isOnzeNaam(s: string | null | undefined): boolean {
+  return /batterij\s*concept|jona\s+hessel/i.test(s || "");
+}
+
 function firstMatch(text: string, patterns: RegExp[]): string | null {
   for (const re of patterns) {
     const m = re.exec(text);
@@ -114,6 +118,8 @@ export function extractFactuurFromText(
       /invoice\s*(?:number|no\.?|#)[:\s]*([A-Z0-9][-A-Z0-9/.]{2,40})/i,
       /\b(FAC[-/]?\d{4}[-/]\d{3,})\b/i,
       /\bF[-\s]?(\d{4}[-/]\d{3,})\b/i,
+      /(?:reserverings(?:bevestiging|nummer)|bevestiging)\s*#?\s*[:\s]*([A-Z0-9-]{4,20})/i,
+      /betreft[:\s][^#\n]*#\s*([A-Z0-9-]{4,20})/i,
       // Bestandsnaam / subject: 202602850-jdj-investments-…
       /^(\d{6,12})[-_]/m,
     ]) ||
@@ -124,15 +130,18 @@ export function extractFactuurFromText(
 
   // Let op: geen "totaal" matchen in "subtotaal"
   const bedragInc = firstMatch(hay, [
+    /prijs\s*incl\.?\s*btw[:\s]*€?\s*([\d.,]+)/i,
     /(?:^|[^\w])(?:totaal(?:\s*incl\.?\s*btw)?|te\s*betalen|amount\s*due)[:\s]*€?\s*([\d.,]+)/im,
     /(?:^|[^\w])bedrag[:\s]*€?\s*([\d.,]+)/im,
     /€\s*([\d.,]+)\s*(?:incl\.?\s*btw|(?<!sub)totaal)/i,
   ]);
   const bedragEx = firstMatch(hay, [
+    /prijs\s*excl\.?\s*btw[:\s]*€?\s*([\d.,]+)/i,
     /(?:subtotaal|excl\.?\s*btw|ex\.?\s*btw|subtotal)[:\s]*€?\s*([\d.,]+)/i,
     /€\s*([\d.,]+)\s*(?:excl\.?\s*btw|ex\.?\s*btw)/i,
   ]);
   const btw = firstMatch(hay, [
+    /btw\s*21\s*%[:\s]*€?\s*([\d.,]+)/i,
     /(?:^|[^\w])(?:btw|vat)\s*(?:\d+\s*%?)?[:\s]*€?\s*([\d.,]+)/im,
   ]);
 
@@ -177,6 +186,7 @@ export function extractFactuurFromText(
   const factuurRaw = firstMatch(hay, [
     /factuurdatum[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
     /invoice\s*date[:\s]*([0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{1,4})/i,
+    /(?:den\s+bosch|utrecht|amsterdam|eindhoven|rotterdam|tilburg)[,\s]+([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})/i,
   ]);
 
   const firstLine = (text || "")
@@ -194,28 +204,39 @@ export function extractFactuurFromText(
     return t.replace(/[.\s]+$/g, "") || null;
   };
 
-  const bedrijfsnaam = cleanName(
+  const vestiging = firstMatch(hay, [
+    /(?:jouw|je)\s+vestiging[:\s]*\n+\s*([A-Za-z][^\n]{3,80})/i,
+    /(?:autohopper(?:\s+van\s+dongen)?[^\n]{0,40})/i,
+  ]);
+
+  const rawName = cleanName(
     firstMatch(hay, [
       /statutaire\s*naam\s+([A-Za-z0-9][^\n|]{2,70}?)(?=\s+KvK|\s+BTW|\s+IBAN|$)/i,
       /(?:bedrijfsnaam|leverancier|crediteur)[:\s]*([^\n]{3,80})/i,
     ]) ||
+      (vestiging && !isOnzeNaam(vestiging) ? vestiging.slice(0, 80) : null) ||
       (firstLine &&
       /\b(b\.?v\.?|n\.?v\.?|vof|eenmanszaak|holding|accountants)\b/i.test(
         firstLine
       ) &&
-      !/\binvestments\b/i.test(firstLine)
+      !/\binvestments\b/i.test(firstLine) &&
+      !isOnzeNaam(firstLine)
         ? firstLine.slice(0, 80)
         : null) ||
       (firstLine &&
       /\b(b\.?v\.?|n\.?v\.?|vof|eenmanszaak|holding|investments)\b/i.test(
         firstLine
-      )
+      ) &&
+      !isOnzeNaam(firstLine)
         ? firstLine.slice(0, 80)
         : null) ||
-      (opts?.fromName && !/@/.test(opts.fromName)
+      (opts?.fromName &&
+      !/@/.test(opts.fromName) &&
+      !isOnzeNaam(opts.fromName)
         ? opts.fromName.trim()
         : null)
   );
+  const bedrijfsnaam = isOnzeNaam(rawName) ? null : rawName;
 
   const referentie = firstMatch(hay, [
     /(?:kenmerk|referentie|betalingskenmerk|omschrijving|betreft|payment\s*reference)[:\s]*([A-Z0-9][-A-Z0-9/ ]{2,80})/i,

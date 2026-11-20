@@ -31,8 +31,8 @@ const TZ = "Europe/Amsterdam";
 const MS_DAY = 24 * 60 * 60 * 1000;
 /** Restbetaling / 100% betaald: modelmatig 5 weken na ondertekenen. */
 const FULL_PAY_AFTER_MS = 5 * 7 * MS_DAY;
-/** Partner-installatie: betalen binnen 7 dagen na installatie (= relatie-betaaltermijn). */
-const INSTALL_PAY_AFTER_DAYS = 7;
+/** Partner-installatie: betalen binnen 14 dagen na installatie (= relatie-betaaltermijn). */
+const INSTALL_PAY_AFTER_DAYS = 14;
 /** Vooruitblik: huidige week + 7 weken (~2 maanden). */
 const CASHFLOW_WEEK_COUNT = 8;
 
@@ -1177,6 +1177,7 @@ export function buildFreeCashflow(
 
       const installVoltooid =
         project?.status === "installatie_voltooid" ||
+        project?.status === "after_sale" ||
         project?.status === "review_gevraagd" ||
         project?.status === "afgerond" ||
         project?.status === "service" ||

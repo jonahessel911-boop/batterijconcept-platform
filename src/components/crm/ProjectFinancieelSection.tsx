@@ -710,17 +710,23 @@ export function ProjectFinancieelSection({
                                 >
                                   PDF
                                 </button>
-                                {(c.status === "concept" ||
-                                  c.status === "verzonden") && (
-                                  <button
-                                    type="button"
-                                    disabled={Boolean(cBusy) || !leadEmail}
-                                    onClick={() => void sendFactuur(c)}
-                                    className="border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-wash disabled:opacity-50"
-                                  >
-                                    Versturen
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  disabled={Boolean(cBusy) || !leadEmail}
+                                  title={
+                                    leadEmail
+                                      ? `Mail naar ${leadEmail}`
+                                      : "Lead heeft geen e-mail"
+                                  }
+                                  onClick={() => void sendFactuur(c)}
+                                  className="bg-orange px-2 py-1 text-[11px] font-semibold text-white hover:bg-[#e0651c] disabled:opacity-50"
+                                >
+                                  {cBusy && busy === `send-${c.id}`
+                                    ? "Versturen…"
+                                    : c.status === "concept"
+                                      ? "Versturen"
+                                      : "Opnieuw versturen"}
+                                </button>
                                 {c.status === "concept" ? (
                                   <button
                                     type="button"

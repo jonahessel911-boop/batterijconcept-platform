@@ -7,6 +7,7 @@ import {
 import {
   OPLEVER_AKKOORD_TEKST,
   OPLEVER_PUNTEN,
+  SERVICE_VV_INSTALLATIE,
   type OpleverFormulierData,
 } from "@/lib/oplever-formulier";
 
@@ -233,6 +234,47 @@ export async function buildOpleverFormulierPdf(
     const opm = doc.splitTextToSize(data.opmerkingen.trim(), contentW);
     doc.text(opm, margin, y);
     y += opm.length * 4.2 + 4;
+  }
+
+  y += 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(...DARK);
+  doc.text("Vervolg", margin, y);
+  y += 6;
+  if (data.vervolgNodig) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(...CHARCOAL);
+    doc.text(SERVICE_VV_INSTALLATIE, margin, y);
+    y += 5;
+    const wanneer = data.vervolgAt.trim()
+      ? formatDatumNl(data.vervolgAt.slice(0, 10)) +
+        (data.vervolgAt.includes("T")
+          ? ` · ${data.vervolgAt.slice(11, 16)}`
+          : "")
+      : "—";
+    const vvMeta = [
+      `Wanneer: ${wanneer}`,
+      `Monteur: ${dash(data.vervolgMonteurNaam)}`,
+    ];
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    for (const line of vvMeta) {
+      doc.text(line, margin, y);
+      y += 4.5;
+    }
+    if (data.vervolgActie.trim()) {
+      const actie = doc.splitTextToSize(data.vervolgActie.trim(), contentW);
+      doc.text(actie, margin, y);
+      y += actie.length * 4.2 + 3;
+    }
+  } else {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...MUTED);
+    doc.text("Geen vervolg — installatie afgerond.", margin, y);
+    y += 6;
   }
 
   y += 4;

@@ -6,7 +6,7 @@ import {
   primaireProductOmschrijving,
 } from "@/lib/factuur-omschrijving";
 import {
-  FACTUUR_BETAALTERMIJN_DAGEN,
+  FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
   amsterdamDatePlusDays,
 } from "@/lib/factuur-betaling";
 import { verstuurFactuurNaarKlant } from "@/lib/factuur-versturen";
@@ -127,7 +127,10 @@ async function maakConceptCredit(
       btw_bedrag: split.btw,
       bedrag_inc_btw: split.inc,
       factuurdatum: amsterdamDatePlusDays(today, 0),
-      vervaldatum: amsterdamDatePlusDays(today, FACTUUR_BETAALTERMIJN_DAGEN),
+      vervaldatum: amsterdamDatePlusDays(
+        today,
+        FACTUUR_BETAALTERMIJN_CREDIT_DAGEN
+      ),
       notities,
       credit_van_factuur_id: orig.id,
     })

@@ -10,6 +10,7 @@ import {
   User,
 } from "lucide-react";
 import { formatDateTimeNl } from "@/lib/format";
+import { splitMailBody } from "@/lib/mail-body-split";
 import {
   fillRecruitmentTemplate,
   RECRUITMENT_INBOX_TEMPLATES,
@@ -62,7 +63,36 @@ function replySubjectOf(subject: string) {
 }
 
 function previewText(body: string) {
-  return (body || "").replace(/\s+/g, " ").trim().slice(0, 90);
+  const main = splitMailBody(body || "").main;
+  return (main || "").replace(/\s+/g, " ").trim().slice(0, 90);
+}
+
+function RecMailBody({ text }: { text: string }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const { main, quoted } = useMemo(() => splitMailBody(text), [text]);
+  return (
+    <div className="mt-3">
+      <div className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-[#1D1D1F]">
+        {main}
+      </div>
+      {quoted ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setShowQuoted((v) => !v)}
+            className="text-[12px] font-medium text-[#007AFF] hover:underline"
+          >
+            {showQuoted ? "Verberg eerdere berichten" : "Toon eerdere berichten"}
+          </button>
+          {showQuoted ? (
+            <div className="mt-2 whitespace-pre-wrap border-l-2 border-black/10 pl-3 text-[13px] leading-relaxed text-[#6E6E73]">
+              {quoted}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function initials(naam: string) {
@@ -273,7 +303,7 @@ export function RecruitmentInboxPanel({
         const res = await fetch("/api/instroom/inbox", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recent: false, max: 25 }),
+          body: JSON.stringify({ recent: true, max: 40 }),
         });
         if (!cancelled && res.ok) await load();
       } catch {
@@ -727,9 +757,7 @@ export function RecruitmentInboxPanel({
                                 {m.subject}
                               </p>
                             ) : null}
-                            <div className="mt-3 whitespace-pre-wrap text-[14.5px] leading-relaxed text-[#1D1D1F]">
-                              {m.bodyText?.trim() || "(geen tekst)"}
-                            </div>
+                            <RecMailBody text={m.bodyText?.trim() || ""} />
                           </div>
                         </div>
                       </article>

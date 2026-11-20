@@ -101,6 +101,28 @@ export function orderBetalingPctTegenOfferte(
 }
 
 /**
+ * Schouwdag-actie is klaar of achterhaald: datum staat, of de order is al
+ * verder (installatie / after sale / afgerond) — ook zonder schouw_at.
+ */
+export function schouwdagInplannenNietMeerNodig(project: Project): boolean {
+  if (isSchouwdagDefinitief(project)) return true;
+  if (project.installatie_at || project.installatie_voltooid_at) return true;
+  const op = effectiveOperationalStatus(project);
+  return (
+    op === "schouw_voltooid" ||
+    op === "restfactuur_verstuurd" ||
+    op === "restfactuur_betaald" ||
+    op === "materiaal_besteld" ||
+    op === "installatie_ingepland" ||
+    op === "installatie_voltooid" ||
+    op === "after_sale" ||
+    op === "review_gevraagd" ||
+    op === "afgerond" ||
+    op === "service"
+  );
+}
+
+/**
  * WF: exacte schouwdag plannen zodra Warmtefonds is goedgekeurd.
  * Schouwweek-indicatie en ≥95% betaling sturen dit niet; 95% geldt voor installatie.
  */
@@ -108,7 +130,7 @@ export function kanWfSchouwdagInplannen(
   project: Project,
   _facturen: Factuur[] = []
 ): boolean {
-  if (isSchouwdagDefinitief(project)) return false;
+  if (schouwdagInplannenNietMeerNodig(project)) return false;
   return isWarmtefondsGoedgekeurdVoorSchouw(project);
 }
 
@@ -384,7 +406,7 @@ function wfWachtTotInstallatie(
   const fsWacht = wfFinancieringWachtLabel(project);
 
   // Schouwdag nog niet gezet: na WF-goedkeuring is dat een actie, geen wacht.
-  if (!schouwOk && !isSchouwdagDefinitief(project)) {
+  if (!schouwOk && !schouwdagInplannenNietMeerNodig(project)) {
     if (isWarmtefondsGoedgekeurdVoorSchouw(project)) {
       const due = dueEndOfDayInDays(2, now);
       const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
@@ -540,6 +562,7 @@ function redenVoorStatus(status: ProjectStatusKey, wf: boolean): string {
     case "materiaal_besteld":
       return "Materiaal besteld. Staat de installatie nog niet? Plan die nu in (uiterlijk volgende werkdag).";
     case "installatie_voltooid":
+    case "after_sale":
       return "Afronden: BTW terugvragen, overstap dynamische leverancier, daarna review.";
     case "review_gevraagd":
     case "afgerond":
@@ -682,7 +705,7 @@ function volgendeStapNaOpstarten(
     });
   }
 
-  if (wf) {
+  if (wf && !schouwdagInplannenNietMeerNodig(project)) {
     const due = dueEndOfDayInDays(2, now);
     const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
     const declaratieOk =
@@ -829,6 +852,7 @@ const OP_RANK: ProjectStatusKey[] = [
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
 ];
 
@@ -912,6 +936,7 @@ export function resolveProjectVolgendeStap(
   const status = effectiveOperationalStatus(project);
   // Referrals vragen = sales-actie (Verkoop-taak + SalesReferralActies), geen BO-stap.
   if (status === "review_gevraagd" || status === "afgerond") return null;
+  // after_sale: overstap / BTW / review via auto-taken.
 
   const betaalwijze = betaalwijzeVanProject(project);
 

@@ -3,7 +3,7 @@
  */
 
 import { addMinutes } from "date-fns";
-import { fromZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
@@ -12,7 +12,7 @@ import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
 } from "@/lib/email/afspraak-sequence";
-import { hasBlockingOverlap } from "@/lib/afspraak-busy";
+import { hasBlockingOverlap, hasWfAdviseurOverlap } from "@/lib/afspraak-busy";
 import {
   afspraakBlokkeertAgenda,
   afspraakDuurMinuten,
@@ -21,6 +21,7 @@ import {
   afspraakStuurtMail,
   isInterneAfspraakSoort,
   isTerugbelSoort,
+  isWarmtefondsAanvraagSoort,
   leadStatusVoorAfspraakSoort,
   normalizeAfspraakSoort,
 } from "@/lib/afspraak-soort";
@@ -36,6 +37,11 @@ import {
 import type { AfspraakSoort } from "@/types/database";
 import { isFinancieringStatus } from "@/lib/financiering-status";
 import { normalizeRol } from "@/lib/rollen";
+import {
+  adviseurHeeftSlotUur,
+  isKnownSlotHour,
+  slotHoursForAdviseur,
+} from "@/lib/slots";
 
 export const AFSPRAAK_SELECT =
   "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)";
@@ -241,6 +247,23 @@ export async function planAfspraak(
   }
 
   if (!softSlot && afspraakBlokkeertAgenda(soort)) {
+    const hour = Number(formatInTimeZone(start, AMSTERDAM_TZ, "H"));
+    const minute = Number(formatInTimeZone(start, AMSTERDAM_TZ, "m"));
+    if (
+      minute === 0 &&
+      isKnownSlotHour(hour) &&
+      !adviseurHeeftSlotUur(input.adviseur_id, hour)
+    ) {
+      const uren = slotHoursForAdviseur(input.adviseur_id)
+        .map((h) => `${String(h).padStart(2, "0")}:00`)
+        .join(", ");
+      return {
+        ok: false,
+        status: 409,
+        error: `Deze adviseur plant op ${uren}`,
+      };
+    }
+
     const overlap = await hasBlockingOverlap(sb, {
       adviseurId: input.adviseur_id,
       start,
@@ -251,6 +274,38 @@ export async function planAfspraak(
         ok: false,
         status: 409,
         error: "Dit tijdslot is al bezet voor deze adviseur",
+      };
+    }
+  }
+
+  if (soort === "warmtefonds_aanvraag") {
+    const { data: oudeWf } = await sb
+      .from("afspraken")
+      .select("id, soort, status")
+      .eq("lead_id", input.lead_id)
+      .eq("adviseur_id", input.adviseur_id)
+      .in("status", ["gepland", "bevestigd", "verzet"]);
+    const oudeWfIds = (oudeWf || [])
+      .filter((a) => isWarmtefondsAanvraagSoort(a.soort as string | null))
+      .map((a) => a.id as string);
+    if (oudeWfIds.length > 0) {
+      await sb
+        .from("afspraken")
+        .update({ status: "voltooid" })
+        .in("id", oudeWfIds);
+    }
+
+    const overlap = await hasWfAdviseurOverlap(sb, {
+      adviseurId: input.adviseur_id,
+      start,
+      end,
+      excludeLeadId: input.lead_id,
+    });
+    if (overlap) {
+      return {
+        ok: false,
+        status: 409,
+        error: "Dit tijdslot is al bezet in de Warmtefonds-agenda",
       };
     }
   }

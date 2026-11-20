@@ -18,7 +18,10 @@ import {
 } from "@/lib/adviseur-beschikbaarheid";
 import { countPlanbareSlotsBreakdown } from "@/lib/dashboard-v2/capacity";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { DEFAULT_INSTALLATIE_STANDAARD } from "@/lib/inkoop";
+import {
+  DEFAULT_INSTALLATIE_STANDAARD,
+  loadProductenInkoop,
+} from "@/lib/inkoop";
 import { commissiePctToFraction } from "@/lib/netto-boord";
 import { leesEdergyTarief } from "@/lib/edergy-tarief";
 import { normalizeProjectStatus } from "@/lib/labels";
@@ -27,7 +30,10 @@ import {
   OPS_MANAGER_FIXED_PER_WEEK,
   OPS_MANAGER_PER_INGEPLANDE_AFSPRAAK,
 } from "@/lib/ops-commissie";
-import { hardwareKostenVoorRegels } from "@/lib/project-kosten";
+import {
+  hardwareKostenVoorRegelsMetProducten,
+  pnlInstallatieVoorOrder,
+} from "@/lib/project-kosten";
 import {
   formatSchouwWeekLabel,
   schouwWeekFromDate,
@@ -261,7 +267,7 @@ export async function buildPnlMonthForecast(
     ).toISOString();
   })();
 
-  const [adviseursRes, doelenRes, afspraken, offertes, projects, leadsHist, metaRaw] =
+  const [adviseursRes, doelenRes, afspraken, offertes, projects, leadsHist, metaRaw, producten] =
     await Promise.all([
       sb
         .from("adviseurs")
@@ -291,12 +297,16 @@ export async function buildPnlMonthForecast(
       fetchAllRows<{
         id: string;
         subtotaal_ex_btw: number | null;
-        offerte_regels?: { omschrijving?: string | null; aantal?: number | null }[];
+        offerte_regels?: {
+          omschrijving?: string | null;
+          aantal?: number | null;
+          product_id?: string | null;
+        }[];
       }>((from, to) =>
         sb
           .from("offertes")
           .select(
-            "id, subtotaal_ex_btw, offerte_regels(omschrijving, aantal)"
+            "id, subtotaal_ex_btw, offerte_regels(omschrijving, aantal, product_id)"
           )
           .eq("status", "ondertekend")
           .not("ondertekend_op", "is", null)
@@ -334,6 +344,7 @@ export async function buildPnlMonthForecast(
           .in("level", ["campaign", "account"])
           .range(from, to)
       ).catch(() => [] as { level: string; spend: number }[]),
+      loadProductenInkoop(sb),
     ]);
 
   const adviseurs: AdviseurRow[] = (adviseursRes.data || [])
@@ -395,11 +406,16 @@ export async function buildPnlMonthForecast(
       histWarmtefonds += 1;
     }
     histOmzet += omzet;
-    histInkoop += hardwareKostenVoorRegels(o.offerte_regels || []).totaal;
-    histInstallatie +=
-      proj && Number(proj.projectkosten) > 0
-        ? Number(proj.projectkosten)
-        : standaardInstallatie;
+    const hw = hardwareKostenVoorRegelsMetProducten(
+      o.offerte_regels || [],
+      producten
+    );
+    histInkoop += hw.totaal;
+    histInstallatie += pnlInstallatieVoorOrder(
+      proj?.projectkosten,
+      standaardInstallatie,
+      hw
+    );
   }
   const inkoopRatio = histOmzet > 0 ? histInkoop / histOmzet : 0;
   const installatiePerOrder =
@@ -433,7 +449,7 @@ export async function buildPnlMonthForecast(
       }),
       leesEdergyTarief(),
     ]);
-  const edergyPerAanvraag = edergyTarief.perAanvraagInc;
+  const edergyPerAanvraag = edergyTarief.perAanvraagExcl;
 
   const planned = new Map<string, number>();
   for (const a of afspraken) {

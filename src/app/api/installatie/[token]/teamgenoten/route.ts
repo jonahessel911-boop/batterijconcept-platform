@@ -44,13 +44,13 @@ function normalizeRol(raw: unknown): "beheerder" | "monteur" {
 }
 
 const SELECT =
-  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, cv_storage_path, cv_bestandsnaam, cv_uploaded_at, dossier_compleet, created_at, updated_at";
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, kan_service, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, certificaten_storage_path, certificaten_bestandsnaam, certificaten_uploaded_at, cv_storage_path, cv_bestandsnaam, cv_uploaded_at, dossier_compleet, created_at, updated_at";
 const SELECT_MIN =
   "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, created_at, updated_at";
 const SELECT_NO_DOSSIER =
-  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, kan_service, leeftijd, merken_ervaring, regios, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
 const SELECT_NO_REGIOS =
-  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
+  "id, partner_id, naam, email, telefoon, actief, portal_token, invite_sent_at, rol, kan_schouw, kan_installatie, kan_service, leeftijd, merken_ervaring, foto_storage_path, foto_bestandsnaam, foto_uploaded_at, created_at, updated_at";
 
 function publicTeamgenoot(row: Record<string, unknown>) {
   const { password_hash: _ph, ...rest } = row as {
@@ -157,6 +157,7 @@ export async function POST(
       rol?: string;
       kan_schouw?: boolean;
       kan_installatie?: boolean;
+      kan_service?: boolean;
       leeftijd?: number | string | null;
       merken_ervaring?: unknown;
       regios?: unknown;
@@ -183,6 +184,7 @@ export async function POST(
     const kan_schouw = body.kan_schouw === true;
     const kan_installatie =
       body.kan_installatie === undefined ? true : body.kan_installatie === true;
+    const kan_service = body.kan_service === true;
     const leeftijdRaw =
       body.leeftijd === null || body.leeftijd === undefined || body.leeftijd === ""
         ? null
@@ -216,6 +218,7 @@ export async function POST(
       rol,
       kan_schouw,
       kan_installatie,
+      kan_service,
       leeftijd,
       merken_ervaring,
       regios,
@@ -369,6 +372,7 @@ export async function PATCH(
       rol?: string;
       kan_schouw?: boolean;
       kan_installatie?: boolean;
+      kan_service?: boolean;
       leeftijd?: number | string | null;
       merken_ervaring?: unknown;
       regios?: unknown;
@@ -478,6 +482,9 @@ export async function PATCH(
     if (typeof body.kan_installatie === "boolean") {
       patch.kan_installatie = body.kan_installatie;
     }
+    if (typeof body.kan_service === "boolean") {
+      patch.kan_service = body.kan_service;
+    }
     if ("leeftijd" in body) {
       const leeftijdRaw =
         body.leeftijd === null ||
@@ -539,6 +546,7 @@ export async function PATCH(
       delete fallbackPatch.rol;
       delete fallbackPatch.kan_schouw;
       delete fallbackPatch.kan_installatie;
+      delete fallbackPatch.kan_service;
       delete fallbackPatch.leeftijd;
       delete fallbackPatch.merken_ervaring;
       delete fallbackPatch.regios;

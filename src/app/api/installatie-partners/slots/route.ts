@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { addMinutes, differenceInCalendarDays, parseISO } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { errMessage } from "@/lib/errors";
 import { AMSTERDAM_TZ, adresRegel } from "@/lib/format";
 import {
   installatieDuurVoorVenster,
@@ -18,10 +19,12 @@ import {
   type BusySlot,
   type PartnerSlotSoort,
   type PartnerVenster,
+  MAX_INSTALLATIES_PER_DAG,
 } from "@/lib/partner-slots";
 import { loadPartnerAfblokkingen } from "@/lib/partner-afblokkingen-db";
 import { travelTimeBetween } from "@/lib/travel-time";
 import { resolvePartnerStartAdres } from "@/lib/start-adres";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export const runtime = "nodejs";
 
@@ -118,7 +121,7 @@ export async function GET(req: NextRequest) {
     const { data: projects, error: projErr } = await sb
       .from("projecten")
       .select(
-        "id, schouw_at, installatie_at, installatie_partner_id, leads(straat, huisnummer, toevoeging, postcode, plaats)"
+        "id, project_nummer, titel, schouw_at, schouw_jaar, schouw_week, installatie_at, installatie_partner_id, leads(naam, straat, huisnummer, toevoeging, postcode, plaats)"
       )
       .eq("installatie_partner_id", partnerId)
       .or(
@@ -147,15 +150,32 @@ export async function GET(req: NextRequest) {
       const address = leadObj ? adresRegel(leadObj) : null;
       const usableAddress =
         address && address !== "—" ? address : null;
+      const stopMeta = {
+        naam:
+          (leadObj as { naam?: string | null } | null)?.naam?.trim() ||
+          (row.titel as string | null) ||
+          null,
+        plaats:
+          (leadObj as { plaats?: string | null } | null)?.plaats?.trim() ||
+          null,
+        project_nummer: (row.project_nummer as string | null) || null,
+      };
 
-      if (row.schouw_at) {
-        const start = new Date(row.schouw_at);
+      if (
+        isSchouwdagDefinitief({
+          schouw_at: row.schouw_at,
+          schouw_jaar: row.schouw_jaar as number | null,
+          schouw_week: row.schouw_week as number | null,
+        })
+      ) {
+        const start = new Date(row.schouw_at as string);
         if (!Number.isNaN(start.getTime())) {
           busy.push({
             start_at: start.toISOString(),
             end_at: addMinutes(start, SCHOUW_DUUR_MINUTEN).toISOString(),
             address: usableAddress,
             kind: "schouw",
+            ...stopMeta,
           });
         }
       }
@@ -168,6 +188,7 @@ export async function GET(req: NextRequest) {
             end_at: addMinutes(start, duur).toISOString(),
             address: usableAddress,
             kind: "installatie",
+            ...stopMeta,
           });
         }
       }
@@ -305,23 +326,29 @@ export async function GET(req: NextRequest) {
           end_at: slot.end.toISOString(),
           venster: slot.venster,
           beschikbaar: false,
-          reason: "Bezet of afgeblokt",
+          reason: slot.reason || "Bezet of afgeblokt",
         });
         continue;
       }
 
       const dayKey = dayKeyAmsterdam(slot.start);
-      const dayStops = (byDay.get(dayKey) || []).map((b) => {
+      const dayStopsAll = (byDay.get(dayKey) || []).map((b) => {
         const meta = busyMetaByStart.get(b.start_at);
         return {
           start: new Date(b.start_at),
           end: new Date(b.end_at),
           address: b.address || null,
-          kind: meta?.kind || null,
+          kind: meta?.kind || b.kind || null,
+          naam: b.naam || meta?.naam || null,
+          plaats: b.plaats || meta?.plaats || null,
         };
       });
+      const travelStops =
+        soort === "schouw"
+          ? dayStopsAll.filter((s) => s.kind === "schouw")
+          : dayStopsAll;
 
-      // Reistijd: vorige stop (of startadres) → target → volgende stop
+      // Reistijd: vorige echte schouw (of startadres) → target → volgende schouw
       let travelBefore = bufferMin;
       let travelAfter = bufferMin;
       let reistijdShown: number | null = null;
@@ -333,10 +360,10 @@ export async function GET(req: NextRequest) {
       let reistijdLabel: string | null = null;
 
       if (targetAddress) {
-        const prev = [...dayStops]
+        const prev = [...travelStops]
           .filter((s) => s.end.getTime() <= slot.start.getTime())
           .sort((a, b) => b.end.getTime() - a.end.getTime())[0];
-        const next = [...dayStops]
+        const next = [...travelStops]
           .filter((s) => s.start.getTime() >= slot.end.getTime())
           .sort((a, b) => a.start.getTime() - b.start.getTime())[0];
 
@@ -348,21 +375,24 @@ export async function GET(req: NextRequest) {
           ? await travelMin(targetAddress, next.address)
           : bufferMin;
         reistijdShown = travelBefore;
+        const prevWho = [prev?.naam, prev?.plaats || prev?.address]
+          .filter(Boolean)
+          .join(" · ");
         if (prev?.kind === "installatie") {
           reistijdVanaf = "vorige_installatie";
-          reistijdLabel = prev.address
-            ? `Vorige installatie · ${prev.address}`
+          reistijdLabel = prevWho
+            ? `Vorige installatie · ${prevWho}`
             : "Vorige installatie";
         } else if (prev?.kind === "schouw") {
           reistijdVanaf = "vorige_schouw";
-          reistijdLabel = prev.address
-            ? `Vorige schouw · ${prev.address}`
+          reistijdLabel = prevWho
+            ? `Vorige schouw · ${prevWho}`
             : "Vorige schouw";
         } else if (startAdres && fromAddr === startAdres) {
           reistijdVanaf = "startadres";
           reistijdLabel = `Startadres · ${startAdres}`;
         }
-      } else if (dayStops.length > 0) {
+      } else if (travelStops.length > 0) {
         // Geen lead-adres: vaste buffer tussen stops
         travelBefore = bufferMin;
         travelAfter = bufferMin;
@@ -374,7 +404,7 @@ export async function GET(req: NextRequest) {
       const fits = fitsWithTravelGap({
         candidateStart: slot.start,
         candidateEnd: slot.end,
-        sameDayStops: dayStops.map((s) => ({ start: s.start, end: s.end })),
+        sameDayStops: dayStopsAll.map((s) => ({ start: s.start, end: s.end })),
         travelMinBefore: travelBefore,
         travelMinAfter: travelAfter,
       });
@@ -416,13 +446,13 @@ export async function GET(req: NextRequest) {
       start_adres: startAdres,
       start_adres_label: resolvedStart.label,
       start_adres_fallback: resolvedStart.isFallback,
-      max_installaties_per_dag: 2,
+      max_installaties_per_dag: MAX_INSTALLATIES_PER_DAG,
       slots: slotsOut,
       beschikbaar,
     });
   } catch (e) {
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Fout" },
+      { error: errMessage(e, "Slots laden mislukt") },
       { status: 500 }
     );
   }

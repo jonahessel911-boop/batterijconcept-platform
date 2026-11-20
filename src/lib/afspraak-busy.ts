@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import {
+  afspraakBlokkeertAgenda,
+  isWarmtefondsAanvraagSoort,
+} from "@/lib/afspraak-soort";
 import type { BusySlot } from "@/lib/slots";
 
 const SOORT_MISSING = (error: { message?: string; code?: string } | null) =>
@@ -80,4 +83,39 @@ export async function hasBlockingOverlap(
   }
   if (error) throw error;
   return (data || []).some((r) => afspraakBlokkeertAgenda(r.soort));
+}
+
+/** Overlap op de WF-adviseur-agenda (Warmtefonds-aanvraag of fysiek). */
+export async function hasWfAdviseurOverlap(
+  sb: SupabaseClient,
+  opts: {
+    adviseurId: string;
+    start: Date;
+    end: Date;
+    excludeId?: string;
+    excludeLeadId?: string;
+  }
+): Promise<boolean> {
+  let q = sb
+    .from("afspraken")
+    .select("id, soort, status, lead_id")
+    .eq("adviseur_id", opts.adviseurId)
+    .neq("status", "geannuleerd")
+    .neq("status", "voltooid")
+    .lt("start_at", opts.end.toISOString())
+    .gt("end_at", opts.start.toISOString());
+  if (opts.excludeId) q = q.neq("id", opts.excludeId);
+  if (opts.excludeLeadId) q = q.neq("lead_id", opts.excludeLeadId);
+
+  const { data, error } = await q;
+  if (error) {
+    if (SOORT_MISSING(error)) {
+      return hasBlockingOverlap(sb, opts);
+    }
+    throw error;
+  }
+  return (data || []).some(
+    (r) =>
+      isWarmtefondsAanvraagSoort(r.soort) || afspraakBlokkeertAgenda(r.soort)
+  );
 }

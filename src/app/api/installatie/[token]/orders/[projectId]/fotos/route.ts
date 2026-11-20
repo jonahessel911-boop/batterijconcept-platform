@@ -5,7 +5,7 @@ import { uploadProjectFotoFile } from "@/lib/project-fotos";
 import {
   isFotoBatterij,
   isFotoMeterkast,
-  isOpleveringsrapport,
+  isOpleveringsrapportBewijs,
   isProjectDocumentUpload,
   isSchouwFormulier,
   isVideoInstallatie,
@@ -138,7 +138,10 @@ export async function POST(
         projectId
       );
     } else if (
-      isOpleveringsrapport(omschrijving) ||
+      isOpleveringsrapportBewijs(
+        omschrijving,
+        file instanceof File ? file.name : null
+      ) ||
       isFotoBatterij(omschrijving) ||
       isVideoInstallatie(omschrijving)
     ) {

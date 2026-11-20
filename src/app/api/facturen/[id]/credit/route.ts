@@ -7,7 +7,7 @@ import {
   primaireProductOmschrijving,
 } from "@/lib/factuur-omschrijving";
 import {
-  FACTUUR_BETAALTERMIJN_DAGEN,
+  FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
   amsterdamDatePlusDays,
 } from "@/lib/factuur-betaling";
 
@@ -120,7 +120,7 @@ export async function POST(
     const factuurdatum = amsterdamDatePlusDays(today, 0);
     const vervaldatum = amsterdamDatePlusDays(
       today,
-      FACTUUR_BETAALTERMIJN_DAGEN
+      FACTUUR_BETAALTERMIJN_CREDIT_DAGEN
     );
 
     const { data: nummer, error: numErr } = await sb.rpc(

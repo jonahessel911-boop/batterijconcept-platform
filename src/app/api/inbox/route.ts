@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { errMessage } from "@/lib/errors";
-import { listInboxMails, rowToInboxMail } from "@/lib/inbox-persist";
+import {
+  countUnreadInboxMails,
+  listInboxMails,
+  rowToInboxMail,
+} from "@/lib/inbox-persist";
 import { normalizeRol } from "@/lib/rollen";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
@@ -34,6 +38,8 @@ export async function GET(req: NextRequest) {
     const leadId = (sp.get("lead_id") || "").trim();
     const folder = (sp.get("folder") || "").trim() || null;
     const limit = Number(sp.get("limit") || 100) || 100;
+    const unreadOnly =
+      sp.get("unread_only") === "1" || sp.get("unread_only") === "true";
 
     // Per-klant view mag met email/lead; volledige inbox alleen admin/BO
     if (!email && !leadId && rol === "sales_manager") {
@@ -44,6 +50,11 @@ export async function GET(req: NextRequest) {
     }
 
     const sb = getSupabaseAdmin();
+    const unread_count = await countUnreadInboxMails(sb);
+    if (unreadOnly) {
+      return NextResponse.json({ unread_count });
+    }
+
     const rows = await listInboxMails(sb, {
       folder,
       email: email || null,
@@ -54,6 +65,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       mails: rows.map(rowToInboxMail),
       count: rows.length,
+      unread_count,
     });
   } catch (e) {
     return NextResponse.json(

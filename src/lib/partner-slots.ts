@@ -1,8 +1,9 @@
 /**
  * Partner-planvensters:
- * - Ochtend 09–12: schouw (30m) of installatie 1 (4u)
+ * - Ochtend 08–12: schouw (30m) of één installatie (4u)
  * - 12–13: pauze / reistijd (geen slots)
- * - Middag 13–17: schouw (30m) of installatie 2 (4u)
+ * - Middag 13–17: schouw (30m) of één installatie (4u)
+ * Max. 1 installatie per dag (ochtend of middag, niet allebei).
  */
 import {
   addDays,
@@ -18,6 +19,7 @@ import {
   installatieDuurVoorVenster,
   SCHOUW_DUUR_MINUTEN,
 } from "@/lib/planning-duur";
+import { isNlFeestdag } from "@/lib/nl-feestdagen";
 
 export type PartnerVenster = "ochtend" | "middag";
 export type PartnerSlotSoort = "schouw" | "installatie";
@@ -29,27 +31,34 @@ export const PARTNER_VENSTER_BOUNDS: Record<
   { startHour: number; startMin: number; endHour: number; endMin: number; label: string }
 > = {
   ochtend: {
-    startHour: 9,
+    startHour: 8,
     startMin: 0,
     endHour: 12,
     endMin: 0,
-    label: "Ochtend 09:00–12:00 (installatie 1 / schouw)",
+    label: "Ochtend 08:00–12:00 (installatie)",
   },
   middag: {
     startHour: 13,
     startMin: 0,
     endHour: 17,
     endMin: 0,
-    label: "Middag 13:00–17:00 (installatie 2 / schouw)",
+    label: "Middag 13:00–17:00 (installatie)",
   },
 };
 
 export const DEFAULT_PARTNER_REISTIJD_BUFFER_MIN = 30;
 
+/** Max. installaties per partner per kalenderdag. */
+export const MAX_INSTALLATIES_PER_DAG = 1;
+
 export type BusySlot = {
   start_at: string;
   end_at: string;
   address?: string | null;
+  kind?: "schouw" | "installatie";
+  naam?: string | null;
+  plaats?: string | null;
+  project_nummer?: string | null;
 };
 
 export type PartnerDaySlot = {
@@ -58,7 +67,15 @@ export type PartnerDaySlot = {
   venster: PartnerVenster;
   busy: boolean;
   soort: PartnerSlotSoort;
+  occupancy?: number;
+  capaciteit?: number;
+  reason?: string;
 };
+
+/** Minstens 1 parallelle installatie per blok, anders 1 per actief koppel. */
+export function installatieCapaciteitVanKoppels(koppelCount: number): number {
+  return Math.max(1, koppelCount);
+}
 
 export function isPartnerVenster(v: string): v is PartnerVenster {
   return v === "ochtend" || v === "middag";
@@ -123,8 +140,26 @@ export function vensterForStart(start: Date): PartnerVenster | null {
 }
 
 /**
+ * Installatie duurt tot het einde van het venster (12:00 of 17:00),
+ * ook als die om 09:00 begint i.p.v. 08:00.
+ */
+export function installatieDuurMinutenVanaf(
+  start: Date | string
+): number {
+  const s = typeof start === "string" ? new Date(start) : start;
+  if (Number.isNaN(s.getTime())) {
+    return installatieDuurVoorVenster("middag");
+  }
+  const venster = vensterForStart(s);
+  if (!venster) return installatieDuurVoorVenster("middag");
+  const { end } = vensterBoundsUtc(dayKeyAmsterdam(s), venster);
+  const mins = Math.round((end.getTime() - s.getTime()) / 60_000);
+  return Math.max(30, Math.min(installatieDuurVoorVenster(venster), mins));
+}
+
+/**
  * Schouw-starts: elke 30 min binnen open vensters.
- * Ochtend 09:00…11:30, middag 13:00…16:30.
+ * Ochtend 08:00…11:30, middag 13:00…16:30.
  */
 export function schouwSlotStartsForDay(dayKey: string): Date[] {
   const starts: Date[] = [];
@@ -140,13 +175,41 @@ export function schouwSlotStartsForDay(dayKey: string): Date[] {
 }
 
 /**
- * Installatie: max 2 per dag — ochtend 09:00–12:00 (3u) + middag 13:00–17:00 (4u).
+ * Installatie: ochtend 08:00 of middag 13:00 (max. 1 per dag).
  * 12:00–13:00 is pauze/reistijd (geen slot).
  */
 export function installatieSlotStartsForDay(dayKey: string): Date[] {
   return PARTNER_VENSTERS.map(
     (venster) => vensterBoundsUtc(dayKey, venster).start
   );
+}
+
+export function installatieOccupancyInVenster(
+  busy: BusySlot[],
+  startUtc: Date,
+  endUtc: Date
+): number {
+  const a = startUtc.getTime();
+  const b = endUtc.getTime();
+  return busy.filter((item) => {
+    if (item.kind && item.kind !== "installatie") return false;
+    const s = new Date(item.start_at).getTime();
+    const e = new Date(item.end_at).getTime();
+    return a < e && b > s;
+  }).length;
+}
+
+export function installatieOccupancyOnDay(
+  busy: BusySlot[],
+  dayKey: string
+): number {
+  return busy.filter((item) => {
+    if (item.kind && item.kind !== "installatie") return false;
+    return (
+      formatInTimeZone(new Date(item.start_at), AMSTERDAM_TZ, "yyyy-MM-dd") ===
+      dayKey
+    );
+  }).length;
 }
 
 function afblokBusyForDay(
@@ -172,10 +235,15 @@ export function generatePartnerDaySlots(opts: {
   /** Map dayKey → set van geblokkeerde vensters */
   afblokkingen?: Map<string, Set<PartnerVenster>>;
   fromDate?: Date;
+  /** Parallelle installaties per blok (koppels). Default 1. */
+  installatieCapaciteit?: number;
 }): PartnerDaySlot[] {
   const daysAhead = opts.daysAhead ?? 28;
   const from = opts.fromDate ?? new Date();
   const slots: PartnerDaySlot[] = [];
+  const capaciteit = installatieCapaciteitVanKoppels(
+    opts.installatieCapaciteit ?? 1
+  );
 
   for (let d = 0; d <= daysAhead; d++) {
     const dayLocal = toZonedTime(addDays(from, d), AMSTERDAM_TZ);
@@ -186,11 +254,11 @@ export function generatePartnerDaySlots(opts: {
       0
     );
     const dayKey = formatInTimeZone(dayBase, AMSTERDAM_TZ, "yyyy-MM-dd");
+    if (isNlFeestdag(dayKey)) continue;
     const blocked = opts.afblokkingen?.get(dayKey) || new Set<PartnerVenster>();
-    const dayBusy = [
-      ...opts.busy,
-      ...afblokBusyForDay(dayKey, blocked),
-    ];
+    const afblokBusy = afblokBusyForDay(dayKey, blocked);
+    const dayBusy = [...opts.busy, ...afblokBusy];
+    const instOpDag = installatieOccupancyOnDay(opts.busy, dayKey);
 
     const starts =
       opts.soort === "installatie"
@@ -213,12 +281,31 @@ export function generatePartnerDaySlots(opts: {
       ) {
         continue;
       }
+      const occupancy =
+        opts.soort === "installatie"
+          ? installatieOccupancyInVenster(opts.busy, startUtc, endUtc)
+          : 0;
+      const blockedVenster = blocked.has(venster);
+      const dagVol =
+        opts.soort === "installatie" && instOpDag >= MAX_INSTALLATIES_PER_DAG;
+      const busy =
+        opts.soort === "installatie"
+          ? blockedVenster || occupancy >= capaciteit || dagVol
+          : overlapsBusy(startUtc, endUtc, dayBusy);
+      const reason = !busy
+        ? undefined
+        : dagVol
+          ? "Max. 1 installatie per dag"
+          : "Bezet of afgeblokt";
       slots.push({
         start: startUtc,
         end: endUtc,
         venster,
         soort: opts.soort,
-        busy: overlapsBusy(startUtc, endUtc, dayBusy),
+        busy,
+        occupancy: opts.soort === "installatie" ? occupancy : undefined,
+        capaciteit: opts.soort === "installatie" ? capaciteit : undefined,
+        reason,
       });
     }
   }
@@ -232,6 +319,7 @@ export function generateAvailablePartnerSlots(opts: {
   busy: BusySlot[];
   afblokkingen?: Map<string, Set<PartnerVenster>>;
   fromDate?: Date;
+  installatieCapaciteit?: number;
 }): { start: Date; end: Date; venster: PartnerVenster }[] {
   return generatePartnerDaySlots(opts)
     .filter((s) => !s.busy)

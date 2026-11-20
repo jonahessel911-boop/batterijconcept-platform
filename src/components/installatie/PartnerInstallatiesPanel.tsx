@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronDown, Star } from "lucide-react";
-import type { Project } from "@/types/database";
+import type { InstallatiePartnerKoppel, Project } from "@/types/database";
 import { formatDateShort } from "@/lib/format";
 import { resolveInstallateurStatusLabel } from "@/lib/labels";
+import { koppelWeergaveNaam } from "@/lib/installatie-koppel";
 import {
   isFotoBatterij,
   isFotoMeterkast,
-  isOpleveringsrapport,
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   isVideoInstallatie,
 } from "@/lib/project-documenten";
 import { AdresSatellietKaart } from "@/components/installatie/AdresSatellietKaart";
@@ -58,12 +59,14 @@ type InstallatieRow = Project & {
     | { id?: string; naam?: string | null }
     | { id?: string; naam?: string | null }[]
     | null;
+  installatie_koppel?: InstallatiePartnerKoppel | null;
 };
 
 type FotoDoc = {
   id: string;
   omschrijving?: string | null;
   bestandsnaam?: string | null;
+  storage_path?: string | null;
   url?: string | null;
   created_at?: string;
 };
@@ -77,11 +80,13 @@ function leadOf(row: InstallatieRow) {
   return Array.isArray(row.leads) ? row.leads[0] : row.leads;
 }
 
-function monteurOf(row: InstallatieRow) {
-  const tg = Array.isArray(row.installatie_teamgenoot)
-    ? row.installatie_teamgenoot[0]
-    : row.installatie_teamgenoot;
-  return tg?.naam || row.monteur || "—";
+function koppelOf(row: InstallatieRow) {
+  const raw = row.installatie_koppel;
+  const koppel = Array.isArray(raw) ? raw[0] : raw;
+  if (!koppel) return "Zonder koppel";
+  const naam = (koppel.naam || "").trim();
+  if (naam) return naam;
+  return koppelWeergaveNaam(koppel);
 }
 
 function StarsInput({
@@ -154,29 +159,39 @@ function StarsDisplay({ value }: { value: number | null | undefined }) {
 
 function pickLatest(
   fotos: FotoDoc[],
-  pred: (o: string | null | undefined) => boolean
+  pred: (f: FotoDoc) => boolean
 ): FotoDoc | null {
   const docs = fotos
-    .filter((f) => pred(f.omschrijving) && f.url)
+    .filter((f) => pred(f) && f.url)
     .sort((a, b) =>
       String(a.created_at || "").localeCompare(String(b.created_at || ""))
     );
   return docs[docs.length - 1] || null;
 }
 
+function isSchouwDoc(f: FotoDoc): boolean {
+  return isSchouwFormulierBewijs(f.omschrijving, f.bestandsnaam, f.storage_path);
+}
+
 function docBucket(fotos: FotoDoc[]) {
   return {
-    schouw: pickLatest(fotos, isSchouwFormulier),
-    meterkast: pickLatest(fotos, isFotoMeterkast),
-    oplevering: pickLatest(fotos, isOpleveringsrapport),
-    batterij: pickLatest(fotos, isFotoBatterij),
-    video: pickLatest(fotos, isVideoInstallatie),
+    schouw: pickLatest(fotos, isSchouwDoc),
+    meterkast: pickLatest(fotos, (f) => isFotoMeterkast(f.omschrijving)),
+    oplevering: pickLatest(fotos, (f) =>
+      isOpleveringsrapportBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
+    ),
+    batterij: pickLatest(fotos, (f) => isFotoBatterij(f.omschrijving)),
+    video: pickLatest(fotos, (f) => isVideoInstallatie(f.omschrijving)),
     overig: fotos.filter(
       (f) =>
         f.url &&
-        !isSchouwFormulier(f.omschrijving) &&
+        !isSchouwDoc(f) &&
         !isFotoMeterkast(f.omschrijving) &&
-        !isOpleveringsrapport(f.omschrijving) &&
+        !isOpleveringsrapportBewijs(
+          f.omschrijving,
+          f.bestandsnaam,
+          f.storage_path
+        ) &&
         !isFotoBatterij(f.omschrijving) &&
         !isVideoInstallatie(f.omschrijving)
     ),
@@ -515,7 +530,7 @@ export function PartnerInstallatiesPanel({
                 {selected.project_nummer || "project"}
               </h1>
               <p className="truncate text-xs text-muted">
-                {lead?.naam || "Klant"} · monteur {monteurOf(selected)}
+                {lead?.naam || "Klant"} · koppel {koppelOf(selected)}
                 {selected.installatie_at
                   ? ` · ${formatDateShort(selected.installatie_at)}`
                   : ""}
@@ -638,7 +653,7 @@ export function PartnerInstallatiesPanel({
             <aside className="space-y-4 lg:sticky lg:top-4">
               <section className="space-y-3 rounded-xl border border-line bg-white p-4 shadow-xs sm:p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <Label>Beoordeling hele installatie</Label>
+                  <Label>Beoordeling koppel</Label>
                   <StarsDisplay value={sheetSterren} />
                 </div>
                 <StarsInput
@@ -653,7 +668,7 @@ export function PartnerInstallatiesPanel({
                     rows={4}
                     value={sheetNotitie}
                     onChange={(e) => setSheetNotitie(e.target.value)}
-                    placeholder="Feedback voor head installatie / monteur…"
+                    placeholder="Feedback voor het koppel…"
                   />
                 </div>
                 <Button
@@ -723,7 +738,8 @@ export function PartnerInstallatiesPanel({
             <div>
               <CardTitle className="font-display text-lg">Installaties</CardTitle>
               <CardDescription>
-                Klik een installatie voor full-screen beoordeling met 3D-kaart
+                Alleen voltooide installaties vanaf 16 november 2026.
+                Beoordeling hoort bij het koppel.
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -770,7 +786,7 @@ export function PartnerInstallatiesPanel({
             <p className="px-5 py-10 text-center text-sm text-muted">
               {filter === "open"
                 ? "Geen openstaande beoordelingen."
-                : "Nog geen installaties in dit portaal."}
+                : "Nog geen voltooide installaties om te beoordelen."}
             </p>
           ) : (
             <Table className="text-[13px]">
@@ -780,7 +796,7 @@ export function PartnerInstallatiesPanel({
                     Project
                   </TableHead>
                   <TableHead className="h-9 px-3 text-[11px] font-medium text-muted">
-                    Monteur
+                    Koppel
                   </TableHead>
                   <TableHead className="h-9 px-3 text-[11px] font-medium text-muted">
                     Datum
@@ -825,7 +841,7 @@ export function PartnerInstallatiesPanel({
                         </p>
                       </TableCell>
                       <TableCell className="px-3 py-2.5 align-middle text-muted">
-                        {monteurOf(row)}
+                        {koppelOf(row)}
                       </TableCell>
                       <TableCell className="px-3 py-2.5 align-middle text-muted">
                         {row.installatie_at

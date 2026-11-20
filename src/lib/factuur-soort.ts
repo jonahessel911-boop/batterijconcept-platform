@@ -100,15 +100,20 @@ export function resolveFactuurSoort(
 }
 
 /**
- * WF-intern / declaratie: geen “verlopen”-alarm in de lijst —
- * betaling komt vaak later via Warmtefonds.
+ * Warmtefonds-facturen: geen “verlopen”-alarm / nabellen —
+ * betaling via het fonds of geen BO-opvolging.
  */
 export function isFactuurWfLaterBetaald(
   factuur: Pick<Factuur, "omschrijving" | "credit_van_factuur_id">,
   opts?: { isWarmtefonds?: boolean }
 ): boolean {
+  if (!opts?.isWarmtefonds) return false;
   const soort = resolveFactuurSoort(factuur, opts);
-  return soort === "wf_intern" || soort === "wf_declaratie";
+  return (
+    soort === "wf_intern" ||
+    soort === "wf_declaratie" ||
+    soort === "aanbetaling"
+  );
 }
 
 export function factuurSoortTone(soort: FactuurSoort): string {

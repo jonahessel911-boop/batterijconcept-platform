@@ -5,7 +5,10 @@ import type { Product } from "@/types/database";
 import { formatEuro } from "@/lib/format";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import {
+  extraKortingOmschrijving,
   isAlphaEssMetOmvormerRegel,
+  isVerborgenOfferteProduct,
+  isVerborgenOfferteRegel,
   omvormerOmschrijvingVoor,
 } from "@/lib/offerte-regels";
 import { productZichtbaarVoorAdviseur } from "@/lib/warmtepomp-producten";
@@ -17,6 +20,8 @@ type Line = {
   aantal: number;
   prijs_ex_btw: number;
   btw_percentage: number;
+  /** Korting incl. btw, alleen bij extra’s die niet op de klantofferte staan. */
+  kortingInc?: number;
 };
 
 type KortingModus = "bedrag" | "nieuw_totaal";
@@ -52,10 +57,12 @@ function toIncBtw(bedrag: number, btw: KortingBtw) {
 function applyHiddenKorting(lines: Line[], kortingInc: number): Line[] {
   if (kortingInc <= 0) return lines.map((l) => ({ ...l }));
 
-  const hasPaid = lines.some((l) => l.prijs_ex_btw > 0);
+  const schaalbaar = (l: Line) =>
+    l.prijs_ex_btw > 0 && !isVerborgenOfferteRegel(l);
+  const hasPaid = lines.some(schaalbaar);
   if (!hasPaid) return lines.map((l) => ({ ...l }));
 
-  const paidInc = linesTotaalInc(lines.filter((l) => l.prijs_ex_btw > 0));
+  const paidInc = linesTotaalInc(lines.filter(schaalbaar));
   if (paidInc <= 0) return lines.map((l) => ({ ...l }));
 
   const targetInc =
@@ -63,7 +70,7 @@ function applyHiddenKorting(lines: Line[], kortingInc: number): Line[] {
   const scale = Math.max(0, (paidInc - kortingInc) / paidInc);
 
   const scaled = lines.map((l) => {
-    if (l.prijs_ex_btw <= 0) return { ...l };
+    if (!schaalbaar(l)) return { ...l };
     return {
       ...l,
       prijs_ex_btw: Math.round(l.prijs_ex_btw * scale * 100) / 100,
@@ -151,8 +158,29 @@ export function MaakOfferteModal({
 
   const kortingInput = Number(korting.replace(",", ".")) || 0;
 
-  const basisTotaalInc = useMemo(() => linesTotaalInc(lines), [lines]);
-  const basisTotaalEx = useMemo(() => linesTotaalEx(lines), [lines]);
+  const extraKortingSomInc = useMemo(
+    () =>
+      Math.round(
+        lines.reduce((s, l) => {
+          if (!isVerborgenOfferteRegel(l)) return s;
+          const max = lineIncBtw(l);
+          return s + Math.min(Math.max(0, Number(l.kortingInc) || 0), max);
+        }, 0) * 100
+      ) / 100,
+    [lines]
+  );
+  const basisTotaalInc = useMemo(
+    () =>
+      Math.round((linesTotaalInc(lines) - extraKortingSomInc) * 100) / 100,
+    [lines, extraKortingSomInc]
+  );
+  const basisTotaalEx = useMemo(
+    () =>
+      Math.round(
+        (linesTotaalEx(lines) - extraKortingSomInc / 1.21) * 100
+      ) / 100,
+    [lines, extraKortingSomInc]
+  );
 
   /** Ingevoerd bedrag omgerekend naar incl. btw (voor korting/nieuw totaal). */
   const kortingInputInc = useMemo(
@@ -176,13 +204,31 @@ export function MaakOfferteModal({
   ]);
 
   const previewLines = useMemo(() => {
+    const withExtraKorting: Line[] = [];
+    for (const l of lines) {
+      withExtraKorting.push({ ...l, kortingInc: undefined });
+      if (!isVerborgenOfferteRegel(l)) continue;
+      const maxInc = lineIncBtw(l);
+      const kort = Math.min(Math.max(0, Number(l.kortingInc) || 0), maxInc);
+      if (kort <= 0) continue;
+      const ex = Math.round((kort / (1 + l.btw_percentage / 100)) * 100) / 100;
+      withExtraKorting.push({
+        key: `korting-${l.key}`,
+        product_id: null,
+        omschrijving: extraKortingOmschrijving(l.omschrijving),
+        aantal: 1,
+        prijs_ex_btw: -ex,
+        btw_percentage: l.btw_percentage,
+      });
+    }
+
     let out: Line[];
 
     if (useKorting && kortingInc > 0) {
       if (kortingZichtbaar === "zichtbaar") {
         const ex = Math.round((kortingInc / 1.21) * 100) / 100;
         out = [
-          ...lines,
+          ...withExtraKorting,
           {
             key: "korting",
             product_id: null,
@@ -193,10 +239,10 @@ export function MaakOfferteModal({
           },
         ];
       } else {
-        out = applyHiddenKorting(lines, kortingInc);
+        out = applyHiddenKorting(withExtraKorting, kortingInc);
       }
     } else {
-      out = [...lines];
+      out = withExtraKorting;
     }
 
     if (
@@ -235,6 +281,7 @@ export function MaakOfferteModal({
           aantal: qty,
           prijs_ex_btw: Number(p.prijs_ex_btw),
           btw_percentage: Number(p.btw_percentage ?? 21),
+          kortingInc: 0,
         },
       ];
       if (isAlpha) {
@@ -450,6 +497,10 @@ export function MaakOfferteModal({
                             ? "3-fase"
                             : null;
                         const selected = productId === p.id;
+                        const verborgen = isVerborgenOfferteProduct(p);
+                        const ex = Number(p.prijs_ex_btw);
+                        const pct = Number(p.btw_percentage ?? 21);
+                        const inc = Math.round(ex * (1 + pct / 100) * 100) / 100;
                         return (
                           <li key={p.id}>
                             <button
@@ -471,9 +522,21 @@ export function MaakOfferteModal({
                                     </span>
                                   ) : null}
                                 </span>
+                                {verborgen ? (
+                                  <span className="mt-0.5 block text-[11px] font-normal text-muted">
+                                    Niet op klantofferte · korting per regel
+                                  </span>
+                                ) : null}
                               </span>
                               <span className="shrink-0 tabular-nums text-xs font-semibold text-muted">
-                                {formatEuro(Number(p.prijs_ex_btw))}
+                                {verborgen
+                                  ? `${formatEuro(inc)} incl.`
+                                  : formatEuro(ex)}
+                                {verborgen ? (
+                                  <span className="mt-0.5 block text-[10px] font-normal">
+                                    {formatEuro(ex)} excl.
+                                  </span>
+                                ) : null}
                               </span>
                             </button>
                           </li>
@@ -566,12 +629,15 @@ export function MaakOfferteModal({
 
             {lines.length > 0 && (
               <ul className="divide-y divide-line border border-line">
-                {lines.map((l) => (
+                {lines.map((l) => {
+                  const verborgen = isVerborgenOfferteRegel(l);
+                  const maxKorting = lineIncBtw(l);
+                  return (
                   <li
                     key={l.key}
                     className="flex items-start justify-between gap-3 px-3 py-2.5 text-sm"
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="font-medium text-ink">
                         {l.omschrijving}
                         {!l.product_id && (
@@ -579,11 +645,52 @@ export function MaakOfferteModal({
                             Eigen
                           </span>
                         )}
+                        {verborgen ? (
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                            Niet op offerte
+                          </span>
+                        ) : null}
                       </p>
                       <p className="text-xs text-muted">
                         {l.aantal} × {formatEuro(l.prijs_ex_btw)} excl. →{" "}
                         {formatEuro(lineIncBtw(l))} incl.
                       </p>
+                      {verborgen ? (
+                        <label className="mt-2 block text-xs font-medium text-muted">
+                          Korting incl. btw (€)
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={
+                              l.kortingInc
+                                ? String(l.kortingInc).replace(".", ",")
+                                : ""
+                            }
+                            onChange={(e) => {
+                              const n =
+                                Number(e.target.value.replace(",", ".")) || 0;
+                              setLines((prev) =>
+                                prev.map((x) =>
+                                  x.key === l.key
+                                    ? {
+                                        ...x,
+                                        kortingInc: Math.min(
+                                          Math.max(0, Math.round(n * 100) / 100),
+                                          maxKorting
+                                        ),
+                                      }
+                                    : x
+                                )
+                              );
+                            }}
+                            placeholder="0"
+                            className="mt-1 w-full max-w-[10rem] border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-green"
+                          />
+                          <span className="mt-1 block font-normal text-muted">
+                            Volledig weggeven: {formatEuro(maxKorting)}
+                          </span>
+                        </label>
+                      ) : null}
                     </div>
                     <button
                       type="button"
@@ -593,7 +700,8 @@ export function MaakOfferteModal({
                       Weg
                     </button>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
 

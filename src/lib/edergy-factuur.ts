@@ -170,7 +170,7 @@ export async function zorgEdergyFactuurBijStap(opts: {
   projectId: string;
   van: string | null;
   naar: string | null;
-  /** Eigen tarief van de WF-operator (opgeslagen incl. btw). Null/undefined = globaal €150 excl. */
+  /** Eigen tarief van de WF-operator (opgeslagen incl. btw). Null/undefined = globaal €300 excl. */
   operatorTariefInc?: number | null;
 }): Promise<void> {
   const vanRank = stapRank(opts.van);

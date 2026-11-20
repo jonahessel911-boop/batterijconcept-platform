@@ -224,6 +224,7 @@ export function CrmShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
   const [adviseurFacturenPending, setAdviseurFacturenPending] = useState(0);
+  const [inboxUnread, setInboxUnread] = useState(0);
   const [sessionUser, setSessionUser] = useState<{
     id: string;
     naam: string;
@@ -320,6 +321,36 @@ export function CrmShell() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!userRol || !magTab(userRol, "inbox", { email: sessionUser?.email })) {
+      setInboxUnread(0);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void fetch("/api/inbox?unread_only=1")
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (typeof data.unread_count === "number") {
+            setInboxUnread(data.unread_count);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setInboxUnread(0);
+        });
+    };
+    load();
+    const t = window.setInterval(load, 45_000);
+    const onFocus = () => load();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [userRol, sessionUser?.email]);
 
   // Adviseur: badge op Facturen met openstaande goedkeuringen
   useEffect(() => {
@@ -422,12 +453,7 @@ export function CrmShell() {
     if (!userRol) return;
     if (alleenEigenLeads(userRol)) return;
     if (magBekijkAls(userRol)) {
-      // Admin: alleen ongeldige of eigen-id filter opruimen
       if (!adviseurFilter) return;
-      if (sessionUser && adviseurFilter === sessionUser.id) {
-        changeAdviseurFilter("");
-        return;
-      }
       if (adviseurs.length === 0) return;
       if (!adviseurs.some((a) => a.id === adviseurFilter)) {
         changeAdviseurFilter("");
@@ -892,15 +918,6 @@ export function CrmShell() {
     });
   }, [facturen, adviseurFilter, scopedLeadIds, offertes, userRol, sessionUser]);
 
-  // Admin/backoffice: sticky "Bekijk als" die alles leegmaakt → reset naar iedereen
-  useEffect(() => {
-    if (!userRol || alleenEigenLeads(userRol)) return;
-    if (!adviseurFilter) return;
-    if (projecten.length === 0) return;
-    if (scopedProjecten.length > 0) return;
-    changeAdviseurFilter("");
-  }, [userRol, adviseurFilter, projecten.length, scopedProjecten.length]);
-
   const appointmentLeadIds = useMemo(() => {
     const ids = new Set<string>();
     const now = Date.now();
@@ -952,6 +969,7 @@ export function CrmShell() {
   const counts = {
     bellen: belQueueCount,
     projecten: backofficeActieCount,
+    ...(inboxUnread > 0 ? { inbox: inboxUnread } : {}),
     ...(userRol === "adviseur" && adviseurFacturenPending > 0
       ? { facturen: adviseurFacturenPending }
       : {}),
@@ -1505,7 +1523,10 @@ export function CrmShell() {
         "flex flex-col",
         tab === "sales_cockpit"
           ? "h-dvh max-h-dvh overflow-hidden bg-[var(--wash)]"
-          : tab === "voice_ai" || tab === "instroom" || tab === "partners"
+          : tab === "voice_ai" ||
+              tab === "instroom" ||
+              tab === "partners" ||
+              tab === "inbox"
             ? "h-dvh max-h-dvh overflow-hidden"
             : "min-h-screen",
       ]
@@ -1644,9 +1665,9 @@ export function CrmShell() {
         <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0">
             <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
-              {titles[tab].title}
+              {titles[tab]?.title || "CRM"}
             </h1>
-            <p className="mt-0.5 text-sm text-muted">{titles[tab].sub}</p>
+            <p className="mt-0.5 text-sm text-muted">{titles[tab]?.sub || ""}</p>
           </div>
 
           {tab === "leads" && (
@@ -1722,7 +1743,8 @@ export function CrmShell() {
               tab === "voice_ai" ||
               tab === "leaderboard" ||
               tab === "instroom" ||
-              tab === "partners"
+              tab === "partners" ||
+              tab === "inbox"
                 ? "overflow-hidden"
                 : tab === "sales_cockpit"
                   ? salesCockpitLiveWall
@@ -2000,7 +2022,11 @@ export function CrmShell() {
                     />
                   ))}
                 {tab === "inkomend" && <InkomendPanel />}
-                {tab === "inbox" && <InboxPanel />}
+                {tab === "inbox" && (
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <InboxPanel onUnreadChange={setInboxUnread} />
+                  </div>
+                )}
                 {tab === "purchasing" && <PurchasingPanel />}
                 {tab === "sales_cockpit" && (
                   <SalesCockpitPanel

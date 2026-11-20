@@ -411,7 +411,7 @@ export async function PATCH(req: NextRequest) {
       }
       const sent = await sendEmail({
         to: email,
-        subject: "Afspraak geannuleerd — Batterijconcept",
+        subject: "Bevestiging: afspraak geannuleerd — Batterijconcept",
         html: afspraakGeannuleerdKlantEmail({
           naam: lead?.naam || "klant",
           startAt: afspraak.start_at,

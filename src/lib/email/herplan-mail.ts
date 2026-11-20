@@ -94,9 +94,6 @@ export async function activeerHerplanVoorBellen(
       .eq("id", leadId);
   }
 
-  try {
-    await verstuurHerplanAankondigingMail(sb, lead);
-  } catch {
-    /* non-blocking */
-  }
+  // Geen “we bellen om te herplannen”-mail: bij afzeggen gaat een
+  // annuleringsbevestiging vanuit de cancel-route.
 }

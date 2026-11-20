@@ -218,3 +218,156 @@ export function enrichAntwoordRowsWithAdres(
       : []),
   ];
 }
+
+const SKIP_FILTER_VRAGEN = new Set([
+  ...ADRES_ROW_LABELS,
+  "Naam",
+  "Email",
+  "E-mail",
+  "Telefoon",
+]);
+
+function normalizeVraagKey(vraag: string): string {
+  return vraag.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Splits checkbox-antwoorden (`Batterijen · Isolatie`), niet op komma (KvK-opties). */
+export function splitKwalificatieAntwoord(antwoord: string): string[] {
+  const raw = (antwoord || "").trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(/\s*·\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length ? parts : [raw];
+}
+
+export function isKwalificatieFilterVraag(vraag: string): boolean {
+  const t = (vraag || "").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (SKIP_FILTER_VRAGEN.has(t)) return false;
+  if (/gegevens achter/i.test(t)) return false;
+  return true;
+}
+
+export function shortKwalificatieVraagLabel(vraag: string): string {
+  const t = vraag.replace(/\s+/g, " ").trim();
+  const l = t.toLowerCase();
+  if (l === "uitslag") return "Uitslag";
+  if (l.includes("hoe oud")) return "Leeftijd";
+  if (l.includes("rijbewijs")) return "Rijbewijs";
+  if (l.includes("kvk")) return "KvK";
+  if (/full[- ]?time/.test(l) && /€?\s*10/.test(l)) return "Fulltime / €10k";
+  if (/full[- ]?time/.test(l)) return "Fulltime";
+  if (l.includes("product")) return "Producten";
+  if (l.includes("ervaring")) return "Verduurzaming";
+  if (l.includes("verduurzaming")) return "Verduurzaming";
+  if (l.includes("markt")) return "Markt";
+  if (l.includes("utrecht")) return "Kantoor Utrecht";
+  if (l.includes("appointment") || l.includes("telemarketing")) return "Bellen";
+  if (t.length <= 32) return t;
+  return `${t.slice(0, 30)}…`;
+}
+
+function cleanFilterAntwoord(vraag: string, token: string): string | null {
+  const raw = token.replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  if (shortKwalificatieVraagLabel(vraag) === "Uitslag") {
+    if (/geen match/i.test(raw)) return "Geen match";
+    if (/in aanmerking/i.test(raw)) return "In aanmerking";
+    if (raw.length > 36) return null;
+    return raw;
+  }
+  if (raw.length > 80) return null;
+  return raw;
+}
+
+export type KwalificatieFilterVraag = {
+  /** Stabiele filter-key = korte label (clustered). */
+  vraag: string;
+  label: string;
+  opties: string[];
+  count: number;
+};
+
+export function collectKwalificatieFilterVragen(
+  rowsPerKandidaat: SollicitatieAntwoordRow[][]
+): KwalificatieFilterVraag[] {
+  const map = new Map<
+    string,
+    { label: string; opties: Map<string, number>; count: number }
+  >();
+
+  for (const rows of rowsPerKandidaat) {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (!isKwalificatieFilterVraag(row.vraag)) continue;
+      const label = shortKwalificatieVraagLabel(row.vraag);
+      if (!label || label === "Functie") continue;
+      let entry = map.get(label);
+      if (!entry) {
+        entry = { label, opties: new Map(), count: 0 };
+        map.set(label, entry);
+      }
+      if (!seen.has(label)) {
+        entry.count += 1;
+        seen.add(label);
+      }
+      for (const token of splitKwalificatieAntwoord(row.antwoord)) {
+        const clean = cleanFilterAntwoord(row.vraag, token);
+        if (!clean) continue;
+        entry.opties.set(clean, (entry.opties.get(clean) || 0) + 1);
+      }
+    }
+  }
+
+  const out: KwalificatieFilterVraag[] = [];
+  for (const entry of map.values()) {
+    let opties = [...entry.opties.entries()]
+      .sort(
+        (a, b) =>
+          b[1] - a[1] || a[0].localeCompare(b[0], "nl", { numeric: true })
+      )
+      .map(([label]) => label);
+    const hasJaNee = opties.some((o) => /^(ja|nee)\b/i.test(o));
+    if (hasJaNee) {
+      opties = opties.filter((o) => !/^\d+([.,]\d+)?$/.test(o));
+    }
+    if (opties.length === 0 || opties.length > 40) continue;
+    out.push({
+      vraag: entry.label,
+      label: entry.label,
+      opties,
+      count: entry.count,
+    });
+  }
+
+  out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "nl"));
+  return out.slice(0, 8);
+}
+
+export function kandidaatMatchtKwalificatieFilter(
+  rows: SollicitatieAntwoordRow[],
+  vraagOfLabel: string,
+  gewenst: string
+): boolean {
+  const want = gewenst.trim().toLowerCase();
+  if (!want) return true;
+  const key = normalizeVraagKey(vraagOfLabel);
+  const labelKey = shortKwalificatieVraagLabel(vraagOfLabel);
+  const hits = rows.filter((r) => {
+    if (!isKwalificatieFilterVraag(r.vraag)) return false;
+    if (normalizeVraagKey(r.vraag) === key) return true;
+    return shortKwalificatieVraagLabel(r.vraag) === labelKey;
+  });
+  if (!hits.length) return false;
+  return hits.some((r) => {
+    const tokens = [
+      r.antwoord.trim(),
+      ...splitKwalificatieAntwoord(r.antwoord),
+    ]
+      .map((t) => cleanFilterAntwoord(r.vraag, t) || t.trim())
+      .filter(Boolean);
+    return tokens.some((t) => t.toLowerCase() === want);
+  });
+}

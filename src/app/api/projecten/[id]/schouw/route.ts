@@ -13,6 +13,7 @@ import {
 import { isWarmtefondsSale } from "@/lib/backoffice-acties";
 import { statusNaSchouwInplannen } from "@/lib/project-status-config";
 import { logLeadEvent } from "@/lib/lead-events";
+import { feestdagPlanningFout } from "@/lib/nl-feestdagen";
 
 export const runtime = "nodejs";
 
@@ -48,6 +49,10 @@ export async function POST(
     const parsed = new Date(exactSchouwAt);
     if (Number.isNaN(parsed.getTime())) {
       return NextResponse.json({ error: "Ongeldige schouw_at" }, { status: 400 });
+    }
+    const feestdagFout = feestdagPlanningFout(parsed);
+    if (feestdagFout) {
+      return NextResponse.json({ error: feestdagFout }, { status: 400 });
     }
     const derived = schouwWeekFromDate(parsed);
     schouwJaar = derived.jaar;
@@ -212,15 +217,46 @@ export async function POST(
     let monteurNaam: string | null = null;
     let monteurEmail: string | null = null;
     if (teamgenootId) {
-      const { data: tg } = await sb
+      let tgQuery = await sb
         .from("installatie_partner_teamgenoten")
-        .select("id, naam, email, actief")
+        .select("id, naam, email, actief, kan_schouw")
         .eq("id", teamgenootId)
         .eq("partner_id", partnerId)
         .maybeSingle();
+      if (
+        tgQuery.error &&
+        (tgQuery.error.code === "42703" ||
+          tgQuery.error.message?.includes("kan_schouw"))
+      ) {
+        tgQuery = await sb
+          .from("installatie_partner_teamgenoten")
+          .select("id, naam, email, actief")
+          .eq("id", teamgenootId)
+          .eq("partner_id", partnerId)
+          .maybeSingle();
+      }
+      const tg = tgQuery.data as {
+        id: string;
+        naam: string;
+        email?: string | null;
+        actief?: boolean | null;
+        kan_schouw?: boolean | null;
+      } | null;
       if (!tg || tg.actief === false) {
         return NextResponse.json(
           { error: "Medewerker niet gevonden bij deze installateur" },
+          { status: 400 }
+        );
+      }
+      if (tg.kan_schouw === false) {
+        return NextResponse.json(
+          { error: "Deze medewerker heeft geen Schouw in het account" },
+          { status: 400 }
+        );
+      }
+      if (tg.kan_schouw !== true && "kan_schouw" in tg) {
+        return NextResponse.json(
+          { error: "Kies iemand die mag schouwen (vinkje Schouw)" },
           { status: 400 }
         );
       }

@@ -21,6 +21,7 @@ export async function POST(
     installatie_partner_id?: string;
     service_notities?: string | null;
     service_verzoek_id?: string | null;
+    service_teamgenoot_id?: string | null;
   };
   try {
     body = await req.json();
@@ -93,13 +94,57 @@ export async function POST(
     }
     const whenIso = serviceAt.toISOString();
 
+    let serviceTgId = body.service_teamgenoot_id?.trim() || null;
+    let serviceNaam: string | null = null;
+    if (serviceTgId) {
+      let tgQ = await sb
+        .from("installatie_partner_teamgenoten")
+        .select("id, naam, actief, kan_service")
+        .eq("id", serviceTgId)
+        .eq("partner_id", partner.id)
+        .maybeSingle();
+      if (
+        tgQ.error &&
+        (tgQ.error.code === "42703" ||
+          tgQ.error.message?.includes("kan_service"))
+      ) {
+        tgQ = await sb
+          .from("installatie_partner_teamgenoten")
+          .select("id, naam, actief")
+          .eq("id", serviceTgId)
+          .eq("partner_id", partner.id)
+          .maybeSingle();
+      }
+      const tg = tgQ.data as {
+        id: string;
+        naam: string;
+        actief?: boolean | null;
+        kan_service?: boolean | null;
+      } | null;
+      if (!tg || tg.actief === false) {
+        return NextResponse.json(
+          { error: "Medewerker niet gevonden bij deze installateur" },
+          { status: 400 }
+        );
+      }
+      if ("kan_service" in (tg as object) && tg.kan_service !== true) {
+        return NextResponse.json(
+          { error: "Kies iemand die Service heeft aangevinkt" },
+          { status: 400 }
+        );
+      }
+      serviceTgId = tg.id;
+      serviceNaam = tg.naam;
+    }
+
     const patch: Record<string, unknown> = {
       service_at: whenIso,
       service_notities: serviceNotities,
       installatie_partner_id: partner.id,
-      monteur: partner.naam,
+      monteur: serviceNaam || partner.naam,
       status: "service",
     };
+    if (serviceTgId) patch.service_teamgenoot_id = serviceTgId;
 
     let { data: updated, error: updateErr } = await sb
       .from("projecten")
@@ -109,6 +154,24 @@ export async function POST(
         "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
       )
       .single();
+
+    if (
+      updateErr &&
+      updateErr.message?.includes("service_teamgenoot_id")
+    ) {
+      const fallback = { ...patch };
+      delete fallback.service_teamgenoot_id;
+      const retry = await sb
+        .from("projecten")
+        .update(fallback)
+        .eq("id", id)
+        .select(
+          "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon, portal_token), offertes(id, offerte_nummer, financiering_voorbehoud, aanbetaling_te_innen_inc)"
+        )
+        .single();
+      updated = retry.data;
+      updateErr = retry.error;
+    }
 
     // Fallback als migratie service_at nog niet gedraaid is
     if (

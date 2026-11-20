@@ -4,6 +4,7 @@ import { formatDateShort } from "@/lib/format";
 import {
   FACTUUR_ADRES_OP_PDF_MARKER,
   FACTUUR_BEDRIJFSADRES_OP_PDF,
+  FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
   factuurBetaaltermijnDagen,
   factuurHeeftAdresGegevensOpPdf,
   ibanVoorKlantfactuur,
@@ -360,11 +361,16 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(...CHARCOAL);
+    const creditDagen = factuurBetaaltermijnDagen({
+      factuurdatum: factuur.factuurdatum,
+      vervaldatum: factuur.vervaldatum,
+      fallback: FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
+    });
     const creditLines = [
       creditVan
         ? `Deze creditfactuur hoort bij factuur ${creditVan}.`
         : "Dit is een creditfactuur.",
-      "Er hoeft niets te worden betaald op dit document.",
+      `Betaaltermijn: ${creditDagen} ${creditDagen === 1 ? "dag" : "dagen"} (uiterlijk ${formatDateShort(factuur.vervaldatum) || "—"})`,
     ];
     let py = y + 9;
     for (const line of creditLines) {

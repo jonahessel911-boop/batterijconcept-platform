@@ -33,7 +33,6 @@ import { WarmtefondsCreditfacturen } from "@/components/warmtefonds/WarmtefondsC
 import { cn } from "@/lib/utils";
 import {
   patchVoorWerkStatus,
-  poortVoorWerkStatus,
   WF_ARCHIEF_LABEL,
   WF_ARCHIEF_SOORTEN,
   WF_OPEN_FILTERS,
@@ -92,6 +91,7 @@ type OrderRow = {
   leads?: LeadLite | LeadLite[] | null;
   bedragen?: {
     warmtefondsInc: number | null;
+    teFinancierenInc?: number | null;
     aanbetalingInc?: number | null;
   } | null;
   betaling?: PortalBetalingSamenvatting | null;
@@ -105,13 +105,36 @@ type OrderRow = {
   notities?: string | null;
   hold_sales_deadline_at?: string | null;
   updated_at?: string | null;
+  /** Extra projecten op hetzelfde adres (één WF-aanvraag). */
+  samengevoegd?: { id: string; project_nummer: string }[];
 };
+
+function projectNummersVan(o: OrderRow): string[] {
+  if (o.samengevoegd && o.samengevoegd.length > 1) {
+    return o.samengevoegd.map((s) => s.project_nummer).filter(Boolean);
+  }
+  return o.project_nummer ? [o.project_nummer] : [];
+}
+
+function projectZoekTekst(o: OrderRow): string {
+  return projectNummersVan(o).join(" ");
+}
 
 /** €0–€1 = symbolisch / alles via WF → geen echte aanbetaling nodig. */
 function isSymbolischeAanbetaling(bedragInc: number | null | undefined): boolean {
   return (
     bedragInc != null && Number.isFinite(bedragInc) && bedragInc >= 0 && bedragInc <= 1
   );
+}
+
+function teFinancierenVan(o: {
+  bedragen?: {
+    teFinancierenInc?: number | null;
+    warmtefondsInc?: number | null;
+  } | null;
+}): number | null {
+  const n = o.bedragen?.teFinancierenInc ?? o.bedragen?.warmtefondsInc;
+  return n != null && Number.isFinite(n) ? n : null;
 }
 
 function aanbetalingStatus(
@@ -125,20 +148,20 @@ function aanbetalingStatus(
   if (isSymbolischeAanbetaling(bedragInc)) {
     return {
       ok: true,
-      label: "Geen aanbetaling nodig",
+      label: "Geen BTW-aanbetaling nodig",
       soort: "niet_nodig",
     };
   }
   if (status === "betaald") {
-    return { ok: true, label: "Aanbetaling voldaan", soort: "voldaan" };
+    return { ok: true, label: "BTW-aanbetaling voldaan", soort: "voldaan" };
   }
   if (status === "verzonden" || status === "deels_betaald") {
-    return { ok: false, label: "Aanbetaling open", soort: "open" };
+    return { ok: false, label: "BTW-aanbetaling open", soort: "open" };
   }
   if (status === "concept") {
-    return { ok: false, label: "Aanbetaling concept", soort: "open" };
+    return { ok: false, label: "BTW-aanbetaling concept", soort: "open" };
   }
-  return { ok: null, label: "Geen aanbetaling", soort: "geen" };
+  return { ok: null, label: "Geen BTW-aanbetaling", soort: "geen" };
 }
 
 function AanbetalingRegel({
@@ -161,7 +184,7 @@ function AanbetalingRegel({
           .filter(Boolean)
           .join(" ")}
       >
-        Geen aanbetaling
+        Geen BTW-aanbetaling
       </p>
     );
   }
@@ -190,25 +213,32 @@ function AanbetalingRegel({
         title={info.label}
       >
         {icon}
-        <span>Geen aanbetaling nodig</span>
+        <span>Geen BTW-aanbetaling</span>
       </p>
     );
   }
+  const bedragLabel =
+    bedragInc != null && Number.isFinite(bedragInc)
+      ? formatEuro(bedragInc)
+      : null;
   if (alleenStatus) {
     return (
       <p
         className={[
-          "inline-flex items-center gap-1 text-[12px] font-medium",
+          "inline-flex items-center gap-1 text-[11px] font-medium leading-none",
           className,
         ]
           .filter(Boolean)
           .join(" ")}
-        title={info.label}
+        title="Aanbetaling = BTW van de batterij. De rest gaat via Warmtefonds."
       >
         {icon}
         <span className={info.ok ? "text-green-dark" : "text-[#B91C1C]"}>
-          {info.ok ? "Voldaan" : info.label.replace(/^Aanbetaling\s+/i, "")}
+          {info.ok ? "BTW voldaan" : info.label.replace(/^BTW-aanbetaling\s+/i, "BTW ")}
         </span>
+        {bedragLabel ? (
+          <span className="tabular-nums text-muted">{bedragLabel}</span>
+        ) : null}
       </p>
     );
   }
@@ -217,10 +247,13 @@ function AanbetalingRegel({
       className={["flex items-center gap-1 text-[12px] font-medium", className]
         .filter(Boolean)
         .join(" ")}
-      title={info.label}
+      title="Aanbetaling = BTW van de batterij. De rest gaat via Warmtefonds."
     >
-      <span className="text-muted">Aanbetaling</span>
+      <span className="text-muted">BTW-aanbetaling</span>
       {icon}
+      {bedragLabel ? (
+        <span className="tabular-nums text-ink">{bedragLabel}</span>
+      ) : null}
     </p>
   );
 }
@@ -279,6 +312,45 @@ function werkDot(status: WfWerkStatus | null): string {
   }
   if (status === "afspraak_ingepland") return "bg-[#1D4ED8]";
   return "bg-muted";
+}
+
+function StatusWeergave({
+  order,
+  compact = false,
+}: {
+  order: OrderRow;
+  compact?: boolean;
+}) {
+  const werk = wfWerkStatusVan(order);
+  const label = portalBadgeFor(order);
+  return (
+    <span
+      className={[
+        "inline-flex items-center gap-1.5 font-semibold leading-none",
+        compact ? "text-[11px]" : "text-[12px]",
+        werk === "afgerond" || werk === "goedgekeurd"
+          ? "text-green-dark"
+          : werk === "in_behandeling" || werk === "declaratie"
+            ? "text-[#C45A12]"
+            : werk === "afspraak_ingepland"
+              ? "text-[#1D4ED8]"
+              : werk === "afwachten_contact"
+                ? "text-[#B45309]"
+                : "text-ink",
+      ].join(" ")}
+      title={label}
+    >
+      <span
+        className={[
+          "rounded-full",
+          compact ? "h-1.5 w-1.5" : "h-2 w-2",
+          werkDot(werk),
+        ].join(" ")}
+        aria-hidden
+      />
+      {label}
+    </span>
+  );
 }
 
 const AGENDA_TZ = "Europe/Amsterdam";
@@ -841,7 +913,7 @@ export function WarmtefondsPortalPage() {
         lead?.plaats,
         lead?.straat,
         lead?.postcode,
-        o.project_nummer,
+        projectZoekTekst(o),
         lead?.telefoon,
       ]
         .filter(Boolean)
@@ -880,7 +952,7 @@ export function WarmtefondsPortalPage() {
         lead?.plaats,
         lead?.straat,
         lead?.postcode,
-        o.project_nummer,
+        projectZoekTekst(o),
         lead?.telefoon,
         o.backoffice_notitie,
       ]
@@ -913,7 +985,7 @@ export function WarmtefondsPortalPage() {
       if (o.warmtefonds_afspraak_at) return false;
       if (!q) return true;
       const lead = leadOf(o);
-      const blob = [lead?.naam, lead?.plaats, o.project_nummer, lead?.telefoon]
+      const blob = [lead?.naam, lead?.plaats, projectZoekTekst(o), lead?.telefoon]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -1378,8 +1450,6 @@ export function WarmtefondsPortalPage() {
                   onOpen={(id) =>
                     router.push(`/warmtefonds/${token}/orders/${id}`)
                   }
-                  onContact={(id) => void openContact(id)}
-                  onMaakAfspraak={setAfspraakId}
                 />
                 {openQueue.length > AANVRAGEN_PAGE_SIZE ? (
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-line bg-white px-4 py-3">
@@ -1533,7 +1603,7 @@ export function WarmtefondsPortalPage() {
                             {lead?.naam || o.titel || "Klant"}
                           </p>
                           <p className="truncate text-[12px] text-muted">
-                            {[o.project_nummer, lead?.plaats]
+                            {[projectNummersVan(o).join(" + "), lead?.plaats]
                               .filter(Boolean)
                               .join(" · ")}
                           </p>
@@ -1772,7 +1842,7 @@ function AanvragenArchief({
         <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_5.5rem_minmax(0,1.2fr)] gap-2 border-b border-line bg-[#fafbfa] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted sm:grid">
           <span>Klant</span>
           <span>Status</span>
-          <span className="text-right">Bedrag</span>
+          <span className="text-right">Te financieren</span>
           <span>Toelichting</span>
         </div>
         <ul className="divide-y divide-line">
@@ -1785,8 +1855,8 @@ function AanvragenArchief({
                 ? archiefHoldReden(o)
                 : null;
             const bedrag =
-              o.bedragen?.warmtefondsInc != null
-                ? formatEuro(o.bedragen.warmtefondsInc)
+              teFinancierenVan(o) != null
+                ? formatEuro(teFinancierenVan(o) as number)
                 : "—";
             const deadline =
               soort === "hold_sales" && o.hold_sales_deadline_at
@@ -1804,7 +1874,7 @@ function AanvragenArchief({
                       {lead?.naam || o.titel || "Klant"}
                     </p>
                     <p className="truncate font-mono text-[10px] leading-tight text-muted">
-                      {o.project_nummer}
+                      {projectNummersVan(o).join(" + ")}
                       {lead?.plaats ? ` · ${lead.plaats}` : ""}
                     </p>
                   </div>
@@ -2055,12 +2125,12 @@ function AanvragenKanban({
                             {lead?.naam || o.titel || "Klant"}
                           </p>
                           <p className="truncate font-mono text-[10px] leading-tight text-muted">
-                            {o.project_nummer}
+                            {projectNummersVan(o).join(" + ")}
                             {lead?.plaats ? ` · ${lead.plaats}` : ""}
                             {afspraakLabel
                               ? ` · ${afspraakLabel}`
-                              : o.bedragen?.warmtefondsInc != null
-                                ? ` · ${formatEuro(o.bedragen.warmtefondsInc)}`
+                              : teFinancierenVan(o) != null
+                                ? ` · ${formatEuro(teFinancierenVan(o) as number)}`
                                 : ""}
                           </p>
                         </div>
@@ -2220,20 +2290,12 @@ function AanvragenLijst({
   sortDir,
   onToggleSort,
   onOpen,
-  onContact,
-  onMaakAfspraak,
 }: {
   rows: OrderRow[];
   sortDir: "desc" | "asc";
   onToggleSort: () => void;
   onOpen: (id: string) => void;
-  onContact: (id: string) => void;
-  onMaakAfspraak: (id: string) => void;
 }) {
-  const [whatsappTarget, setWhatsappTarget] = useState<WfWhatsappTarget | null>(
-    null
-  );
-
   if (rows.length === 0) {
     return (
       <div className="border border-line bg-white px-6 py-14 text-center">
@@ -2244,160 +2306,76 @@ function AanvragenLijst({
 
   return (
     <div className="overflow-hidden border border-line bg-white">
-      <WfWhatsappTemplateDialog
-        target={whatsappTarget}
-        onClose={() => setWhatsappTarget(null)}
-      />
       {/* Mobiel: compacte rijen */}
       <div className="divide-y divide-line md:hidden">
         {rows.map((o) => {
           const lead = leadOf(o);
-          const werk = wfWerkStatusVan(o);
           const adres = lead ? adresRegel(lead) : "";
-          const tel = lead?.telefoon?.replace(/\s/g, "") || "";
-          const poort = poortVoorWerkStatus(werk);
           return (
-            <div key={o.id} className="px-4 py-3.5">
+            <div key={o.id} className="px-3 py-2.5">
               <button
                 type="button"
                 onClick={() => onOpen(o.id)}
                 className="flex w-full items-start justify-between gap-2 text-left"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-[15px] font-semibold text-ink">
+                  <p className="truncate text-[14px] font-semibold text-ink">
                     {lead?.naam || o.titel || "Klant"}
                   </p>
-                  <p className="mt-0.5 font-mono text-[12px] text-muted">
-                    {o.project_nummer}
+                  <p className="mt-0.5 font-mono text-[11px] text-muted">
+                    {projectNummersVan(o).join(" + ")}
                   </p>
                   <AanbetalingRegel
                     status={o.aanbetaling_factuur_status}
                     bedragInc={o.bedragen?.aanbetalingInc}
                     className="mt-1"
+                    alleenStatus
                   />
                   {adres && adres !== "—" ? (
-                    <p className="mt-1 truncate text-[12px] text-muted">
+                    <p className="mt-1 truncate text-[11px] text-muted">
                       {adres}
                     </p>
                   ) : null}
                 </div>
-                <span
-                  className={[
-                    "shrink-0 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-                    werkTone(werk),
-                  ].join(" ")}
-                >
-                  <span
-                    className={["h-1.5 w-1.5 rounded-full", werkDot(werk)].join(
-                      " "
-                    )}
-                    aria-hidden
-                  />
-                  {portalBadgeFor(o)}
-                </span>
+                <StatusWeergave order={o} compact />
               </button>
               <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-muted">
                 {lead?.telefoon ? <span>{lead.telefoon}</span> : null}
-                {o.bedragen?.warmtefondsInc != null ? (
+                {teFinancierenVan(o) != null ? (
                   <span className="font-semibold text-ink">
-                    {formatEuro(o.bedragen.warmtefondsInc)}
+                    {formatEuro(teFinancierenVan(o) as number)}
+                    <span className="ml-1 font-medium text-muted">via WF</span>
                   </span>
                 ) : null}
                 <span>{momentLabel(o.doorgestuurd_at)}</span>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {poort.soort === "contact" ? (
-                  <>
-                    {tel ? (
-                      <a
-                        href={`tel:${tel}`}
-                        className="inline-flex h-10 items-center justify-center gap-1.5 bg-green-dark text-[13px] font-semibold text-white"
-                      >
-                        <Phone className="h-3.5 w-3.5" aria-hidden />
-                        Bellen
-                      </a>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => onContact(o.id)}
-                        className="inline-flex h-10 items-center justify-center bg-green-dark text-[13px] font-semibold text-white"
-                      >
-                        Contact
-                      </button>
-                    )}
-                    {tel ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setWhatsappTarget({
-                            telefoon: lead?.telefoon || tel,
-                            naam: lead?.naam || o.titel || "Klant",
-                            afspraakAt: o.warmtefonds_afspraak_at,
-                          })
-                        }
-                        className="inline-flex h-10 items-center justify-center gap-1.5 border border-[#128C7E] bg-white text-[13px] font-semibold text-[#128C7E]"
-                      >
-                        <MessageCircle className="h-3.5 w-3.5" aria-hidden />
-                        WhatsApp
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => onContact(o.id)}
-                        className="inline-flex h-10 items-center justify-center border border-line text-[13px] font-semibold text-ink"
-                      >
-                        Mailen
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => onMaakAfspraak(o.id)}
-                      className="inline-flex h-10 items-center justify-center gap-1.5 bg-green-dark text-[13px] font-semibold text-white"
-                    >
-                      <CalendarPlus className="h-3.5 w-3.5" aria-hidden />
-                      Plan afspraak
-                    </button>
-                    {tel ? (
-                      <a
-                        href={`tel:${tel}`}
-                        className="inline-flex h-10 items-center justify-center gap-1.5 border border-green-dark text-[13px] font-semibold text-green-dark"
-                      >
-                        <Phone className="h-3.5 w-3.5" aria-hidden />
-                        Bellen
-                      </a>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => onOpen(o.id)}
-                        className="inline-flex h-10 items-center justify-center border border-line text-[13px] font-semibold text-ink"
-                      >
-                        Open
-                      </button>
-                    )}
-                  </>
-                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Desktop: echte tabel, nieuwste eerst */}
+      {/* Desktop: compacte tabel */}
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[62rem] border-collapse text-left text-sm">
+        <table className="w-full border-collapse text-left text-[12px]">
           <thead>
-            <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
-              <th className="px-4 py-3 font-semibold text-ink">Project</th>
-              <th className="px-3 py-3 font-semibold text-ink">Klant</th>
-              <th className="px-3 py-3 font-semibold text-ink">Adres</th>
-              <th className="px-3 py-3 font-semibold text-ink">Status</th>
-              <th className="px-3 py-3 font-semibold text-ink">Aanbetaling</th>
-              <th className="px-3 py-3 font-semibold text-ink">Telefoon</th>
-              <th className="px-3 py-3 font-semibold text-ink">Bedrag</th>
-              <th className="px-3 py-3 font-semibold text-ink">
+            <tr className="border-b border-line bg-wash/80 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              <th className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-ink">
+                Project
+              </th>
+              <th className="px-2 py-1.5 font-semibold text-ink">Klant</th>
+              <th className="px-2 py-1.5 font-semibold text-ink">Adres</th>
+              <th className="px-2 py-1.5 font-semibold text-ink">Status</th>
+              <th className="px-2 py-1.5 font-semibold text-ink">
+                Aanbetaling
+                <span className="ml-1 font-medium normal-case tracking-normal text-muted">
+                  BTW
+                </span>
+              </th>
+              <th className="px-2 py-1.5 font-semibold text-ink">Telefoon</th>
+              <th className="px-2 py-1.5 font-semibold text-ink">
+                Te financieren
+              </th>
+              <th className="px-2 py-1.5 font-semibold text-ink">
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 hover:text-green-dark"
@@ -2406,16 +2384,13 @@ function AanvragenLijst({
                   Doorgestuurd {sortDir === "desc" ? "↓" : "↑"}
                 </button>
               </th>
-              <th className="px-3 py-3 font-semibold text-ink">Actie</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((o) => {
               const lead = leadOf(o);
-              const werk = wfWerkStatusVan(o);
               const adres = lead ? adresRegel(lead) : "";
               const tel = lead?.telefoon?.replace(/\s/g, "") || "";
-              const poort = poortVoorWerkStatus(werk);
               return (
                 <tr
                   key={o.id}
@@ -2430,38 +2405,19 @@ function AanvragenLijst({
                   }}
                   className="cursor-pointer border-b border-line last:border-b-0 hover:bg-wash/40"
                 >
-                  <td className="px-4 py-3 align-top font-mono text-[13px] font-semibold text-green-dark">
-                    {o.project_nummer}
+                  <td className="whitespace-nowrap px-2.5 py-1.5 align-middle font-mono text-[11px] font-semibold text-green-dark">
+                    {projectNummersVan(o).join(" · ")}
                   </td>
-                  <td className="px-3 py-3 align-top">
-                    <p className="font-semibold text-ink">
-                      {lead?.naam || o.titel || "Klant"}
-                    </p>
-                    {lead?.plaats ? (
-                      <p className="text-[12px] text-muted">{lead.plaats}</p>
-                    ) : null}
+                  <td className="max-w-[10rem] truncate px-2 py-1.5 align-middle font-semibold text-ink">
+                    {lead?.naam || o.titel || "Klant"}
                   </td>
-                  <td className="max-w-[14rem] px-3 py-3 align-top text-[13px] text-muted">
+                  <td className="max-w-[12rem] truncate px-2 py-1.5 align-middle text-[11px] text-muted">
                     {adres && adres !== "—" ? adres : "—"}
                   </td>
-                  <td className="px-3 py-3 align-top">
-                    <span
-                      className={[
-                        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-                        werkTone(werk),
-                      ].join(" ")}
-                    >
-                      <span
-                        className={[
-                          "h-1.5 w-1.5 rounded-full",
-                          werkDot(werk),
-                        ].join(" ")}
-                        aria-hidden
-                      />
-                      {portalBadgeFor(o)}
-                    </span>
+                  <td className="whitespace-nowrap px-2 py-1.5 align-middle">
+                    <StatusWeergave order={o} compact />
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 align-top">
+                  <td className="whitespace-nowrap px-2 py-1.5 align-middle">
                     <AanbetalingRegel
                       status={o.aanbetaling_factuur_status}
                       bedragInc={o.bedragen?.aanbetalingInc}
@@ -2469,7 +2425,7 @@ function AanvragenLijst({
                     />
                   </td>
                   <td
-                    className="whitespace-nowrap px-3 py-3 align-top"
+                    className="whitespace-nowrap px-2 py-1.5 align-middle"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {tel ? (
@@ -2483,55 +2439,13 @@ function AanvragenLijst({
                       <span className="text-muted">—</span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 align-top font-semibold tabular-nums text-ink">
-                    {o.bedragen?.warmtefondsInc != null
-                      ? formatEuro(o.bedragen.warmtefondsInc)
+                  <td className="whitespace-nowrap px-2 py-1.5 align-middle font-semibold tabular-nums text-ink">
+                    {teFinancierenVan(o) != null
+                      ? formatEuro(teFinancierenVan(o) as number)
                       : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 align-top text-[13px] text-muted">
+                  <td className="whitespace-nowrap px-2 py-1.5 align-middle text-[11px] text-muted">
                     {momentLabel(o.doorgestuurd_at)}
-                  </td>
-                  <td
-                    className="px-3 py-3 align-top"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {poort.soort === "contact" ? (
-                      tel ? (
-                        <a
-                          href={`tel:${tel}`}
-                          className="inline-flex items-center gap-1.5 bg-green-dark px-3 py-2 text-[12px] font-semibold text-white hover:bg-green-deeper"
-                        >
-                          <Phone className="h-3.5 w-3.5" aria-hidden />
-                          Bellen
-                        </a>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onContact(o.id)}
-                          className="inline-flex items-center gap-1.5 bg-green-dark px-3 py-2 text-[12px] font-semibold text-white hover:bg-green-deeper"
-                        >
-                          Contact
-                        </button>
-                      )
-                    ) : poort.soort === "afspraak" ||
-                      !o.warmtefonds_afspraak_at ? (
-                      <button
-                        type="button"
-                        onClick={() => onMaakAfspraak(o.id)}
-                        className="inline-flex items-center gap-1.5 bg-green-dark px-3 py-2 text-[12px] font-semibold text-white hover:bg-green-deeper"
-                      >
-                        <CalendarPlus className="h-3.5 w-3.5" aria-hidden />
-                        Plan afspraak
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => onOpen(o.id)}
-                        className="inline-flex items-center gap-1.5 border border-line bg-white px-3 py-2 text-[12px] font-semibold text-ink hover:bg-wash"
-                      >
-                        Open
-                      </button>
-                    )}
                   </td>
                 </tr>
               );
@@ -2692,7 +2606,7 @@ function AgendaAfspraakRij({
               {lead?.naam || order.titel || "Klant"}
             </p>
             <p className="mt-0.5 font-mono text-[11px] text-muted">
-              {order.project_nummer}
+              {projectNummersVan(order).join(" + ")}
             </p>
             <div className="mt-1.5">
               <AanbetalingRegel

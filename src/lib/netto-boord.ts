@@ -187,6 +187,7 @@ export function resolveNettoCommissie(opts: {
   geannuleerd: boolean;
   aanbetalingBetaald: boolean;
   /** Restfactuur betaald óf installatie voltooid → tranche B. */
+  /** Alleen true na opleverformulier / after sale (niet bij WF-declaratie betaald). */
   restOfInstallatieDone: boolean;
   /** Adviseur.commissie_pct (bijv. 12 voor eerste sales). */
   commissiePct?: number | null;
@@ -242,6 +243,7 @@ const PIPELINE: ProjectStatus[] = [
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
 ];
@@ -325,7 +327,13 @@ function reached(
 ): boolean {
   const st = normalizeProjectStatus(status);
   if (st === "annulering") return false;
-  if (st === "service" || st === "review_gevraagd" || st === "afgerond" || st === "installatie_voltooid") {
+  if (
+    st === "service" ||
+    st === "after_sale" ||
+    st === "review_gevraagd" ||
+    st === "afgerond" ||
+    st === "installatie_voltooid"
+  ) {
     return rank(target) <= rank("installatie_voltooid");
   }
   return rank(st) >= rank(target);

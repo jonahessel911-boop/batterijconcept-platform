@@ -9,6 +9,7 @@ import type {
   InstallatiePartner,
   Lead,
   Project,
+  ProjectFoto,
   ProjectTaak,
 } from "@/types/database";
 import {
@@ -20,6 +21,7 @@ import {
   financieringSchakelBericht,
   isWarmtefondsProject,
   isBackofficeActieWachtExtern,
+  isAfterSaleChecklistCompleet,
   actiesVoorActiesTab,
   openBackofficeActies,
   recommendedSchouwWeekForProject,
@@ -28,10 +30,38 @@ import {
   type BackofficeActie,
 } from "@/lib/backoffice-acties";
 import { logBackofficeActieEvent } from "@/lib/backoffice-actie-events";
-import { HOLD_SALES_VERLENG_DAGEN } from "@/lib/hold-sales";
-import { formatDateShort, formatEuro } from "@/lib/format";
-import { appendLeadNotitie } from "@/lib/lead-notitie";
-import { leadStatusLabel } from "@/lib/labels";
+import {
+  applyActieSnoozes,
+  mergeActieSnoozeMaps,
+  readActieSnoozeLocal,
+  snoozeTotMorgen,
+  writeActieSnoozeLocal,
+  type ActieSnoozeMap,
+} from "@/lib/actie-snooze";
+import {
+  HOLD_SALES_VERLENG_DAGEN,
+  stampHoldSalesTerugAfgehandeld,
+} from "@/lib/hold-sales";
+import { formatDateShort, formatDateTimeNl, formatEuro } from "@/lib/format";
+import {
+  appendLeadNotitie,
+  parseProjectNotitieEntries,
+} from "@/lib/lead-notitie";
+import {
+  factuurStatusLabel,
+  leadStatusLabel,
+  resolveProjectStatusLabel,
+} from "@/lib/labels";
+import { ActieFocusLayout, type ContextBlock, type ContextRegel } from "./ActieFocusLayout";
+import {
+  OPLEVER_PUNTEN,
+  parseOpleverFormulierSnapshot,
+  relevanteOpleverNotitie,
+} from "@/lib/oplever-formulier";
+import {
+  isOpleveringsrapport,
+  isSchouwFormulierBewijs,
+} from "@/lib/project-documenten";
 import { PROJECT_AFDELINGEN } from "@/lib/project-afdeling";
 import {
   findDefaultBackofficeMedewerkerId,
@@ -49,6 +79,7 @@ import {
   kickoffWarmtefondsBedragen,
   projectKickoffItems,
 } from "@/lib/project-kickoff";
+import { toOperationalStatus } from "@/lib/project-status-config";
 import {
   resolveFinancieringStatus,
   type FinancieringStatus,
@@ -57,12 +88,29 @@ import {
   isAanbetalingFactuurOmschrijving,
   isRestantFactuurOmschrijving,
 } from "@/lib/aanbetaling";
+import { Phone } from "lucide-react";
+import { ActiePartyBurst } from "./ActiePartyBurst";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
+import { ProjectKickoffChecklist } from "./ProjectKickoffChecklist";
+import {
+  ProjectAfrondingChecklist,
+  afterSaleChecklistItems,
+} from "./ProjectAfrondingChecklist";
 import { LeadAfspraakPlannen } from "./LeadAfspraakPlannen";
 import { PartnerSlotPicker } from "./PartnerSlotPicker";
+import { WfAdviseurSlotPicker } from "./WfAdviseurSlotPicker";
 import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { KlantContactMailModal } from "./KlantContactMailModal";
-import { ActiesEmailInbox } from "./ActiesEmailInbox";
+import { HoldSalesRedenDialog } from "./HoldSalesRedenDialog";
 import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
 import { apexProductUrl } from "@/lib/apex-product-url";
 import { addDays } from "date-fns";
@@ -108,12 +156,15 @@ type TaskRow = {
     | "factuur_versturen"
     | "schouw_week"
     | "edwin_doorsturen"
+    | "opstarten"
     | "nabellen"
     | "wf_aanbetaling_herinnering"
     | "aangetekende_brief"
     | "annulering_keuze_controle"
     | "hold_sales_verlopen"
+    | "hold_sales_terug"
     | "eindafrekening"
+    | "nazorg"
     | "terugbel";
   titel: string;
   klant: string;
@@ -123,6 +174,25 @@ type TaskRow = {
   prio?: boolean;
   done: boolean;
 };
+
+/** Afronden zonder dat het werk klaar is → doorschuiven i.p.v. fake-compleet. */
+function actieNogNietEchtAfgerond(row: TaskRow): boolean {
+  const soort = row.actie.soort;
+  if (soort === "after_sale") {
+    const p = row.actie.project;
+    if (!p) return true;
+    const op = toOperationalStatus(p.status);
+    if (op === "afgerond" || op === "service") return false;
+    return !isAfterSaleChecklistCompleet(p);
+  }
+  return (
+    soort === "schouw_inplannen" ||
+    soort === "volgende_stap" ||
+    soort === "bestel_materiaal" ||
+    soort === "wacht_warmtefonds" ||
+    soort === "eindafrekening"
+  );
+}
 
 const SECTION_META: Record<
   SectionId,
@@ -212,6 +282,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
       label: "Eindafrekening",
       className: "bg-[#FFF0E6] text-[#C45A12]",
     },
+    nazorg: {
+      label: "After sale",
+      className: "bg-[#F3F0FF] text-[#5B21B6]",
+    },
     schouw_week: {
       label: "Opstarten",
       className: "bg-green-soft text-green-dark",
@@ -219,6 +293,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     edwin_doorsturen: {
       label: "Warmtefonds",
       className: "bg-[#E8F0F6] text-[#1A4A6E]",
+    },
+    opstarten: {
+      label: "Opstarten",
+      className: "bg-green-soft text-green-dark",
     },
     nabellen: {
       label: "Factuur",
@@ -238,6 +316,10 @@ const TYPE_PILL: Record<TaskRow["kind"], { label: string; className: string }> =
     },
     hold_sales_verlopen: {
       label: "HOLD sales",
+      className: "bg-[#F0ECF5] text-[#4A3A5C]",
+    },
+    hold_sales_terug: {
+      label: "HOLD terug",
       className: "bg-[#F0ECF5] text-[#4A3A5C]",
     },
     terugbel: {
@@ -422,6 +504,224 @@ function dueAtFromDayKey(dayKey: string): Date {
   return fromZonedTime(`${dayKey}T17:00:00`, AMSTERDAM_TZ);
 }
 
+function focusFlowGedaan(
+  project: Project | null | undefined,
+  relatedFacturen: Factuur[],
+  kind: TaskRow["kind"]
+): { key: string; label: string }[] {
+  if (!project) return [];
+  // Alleen bij opstarten / after sale: afgevinkte checklist-items.
+  if (kind === "nazorg") {
+    const done: { key: string; label: string }[] = [];
+    for (const item of afterSaleChecklistItems(project)) {
+      if (item.done) done.push({ key: item.id, label: item.label });
+    }
+    return done;
+  }
+  if (kind !== "opstarten") return [];
+  const done: { key: string; label: string }[] = [];
+  for (const item of projectKickoffItems(project, relatedFacturen)) {
+    if (item.done) done.push({ key: item.id, label: item.label });
+  }
+  return done;
+}
+
+function isAfterSaleFocus(
+  kind: TaskRow["kind"],
+  titel: string | null | undefined,
+  status: string | null | undefined
+): boolean {
+  if (kind === "nazorg" || kind === "eindafrekening") return true;
+  const t = (titel || "").toLowerCase();
+  if (
+    /overstap|btw.?terug|review vragen|nazorg|after.?sale|dynamische/.test(t)
+  ) {
+    return true;
+  }
+  return (
+    status === "installatie_voltooid" ||
+    status === "after_sale" ||
+    status === "review_gevraagd" ||
+    status === "afgerond"
+  );
+}
+
+function factuurKopLabel(f: Factuur, wf: boolean): string {
+  if (isAanbetalingFactuurOmschrijving(f.omschrijving)) {
+    return wf ? "BTW-factuur" : "Aanbetaling";
+  }
+  if (isRestantFactuurOmschrijving(f.omschrijving)) {
+    return wf ? "WF-declaratie" : "Restfactuur";
+  }
+  return "Factuur";
+}
+
+function focusContextBlocks(opts: {
+  project: Project | null | undefined;
+  facturen: Factuur[];
+  fotos: ProjectFoto[];
+  kind: TaskRow["kind"];
+  titel?: string | null;
+  installatie: boolean;
+  warmtefonds: boolean;
+}): ContextBlock[] {
+  const blocks: ContextBlock[] = [];
+  const { project, facturen, fotos, kind, titel, installatie, warmtefonds } =
+    opts;
+  const status = project ? toOperationalStatus(project.status) : null;
+  const afterSale = isAfterSaleFocus(kind, titel, status);
+  const toonFacturen =
+    kind === "opstarten" ||
+    kind === "nabellen" ||
+    kind === "factuur_versturen" ||
+    kind === "eindafrekening" ||
+    kind === "wf_aanbetaling_herinnering";
+
+  if (toonFacturen) {
+    for (const f of facturen.filter((x) => !x.credit_van_factuur_id)) {
+      const euroEx = formatEuro(Number(f.bedrag_ex_btw) || 0);
+      const euroBtw = formatEuro(Number(f.btw_bedrag) || 0);
+      const euroInc = formatEuro(Number(f.bedrag_inc_btw) || 0);
+      blocks.push({
+        key: `fac-${f.id}`,
+        titel: `${factuurKopLabel(f, warmtefonds)} ${f.factuur_nummer}`,
+        meta: factuurStatusLabel[f.status] || f.status,
+        done: f.status === "betaald",
+        regels: [
+          {
+            key: `${f.id}-ex`,
+            label: "Excl. btw",
+            value: euroEx,
+            copyValue: euroEx,
+          },
+          {
+            key: `${f.id}-btw`,
+            label: "BTW",
+            value: euroBtw,
+            copyValue: euroBtw,
+          },
+          {
+            key: `${f.id}-inc`,
+            label: "Totaal",
+            value: euroInc,
+            copyValue: euroInc,
+          },
+        ],
+      });
+    }
+  }
+
+  if (project && installatie && !afterSale) {
+    const form = fotos.find((foto) =>
+      isSchouwFormulierBewijs(
+        foto.omschrijving,
+        foto.bestandsnaam,
+        foto.storage_path
+      )
+    );
+    blocks.push({
+      key: "schouw-formulier",
+      titel: "Schouwformulier",
+      meta: form
+        ? `Binnen${form.created_at ? ` · ${formatDateShort(form.created_at)}` : ""}`
+        : "Nog niet binnen",
+      done: Boolean(form),
+      collapsible: true,
+      defaultOpen: false,
+      pdfUrl: form?.url || null,
+      regels: project.schouw_at
+        ? [
+            {
+              key: "schouw-dag",
+              label: "Schouwdag",
+              value: formatDateShort(project.schouw_at),
+            },
+          ]
+        : [],
+    });
+  }
+
+  if (afterSale) {
+    const rapport = fotos.find((foto) =>
+      isOpleveringsrapport(foto.omschrijving)
+    );
+    const snap = parseOpleverFormulierSnapshot(project?.oplever_formulier);
+    const notitie = relevanteOpleverNotitie({
+      snapshot: snap,
+      installatieNotities: project?.installatie_notities,
+    });
+    const sin = (snap?.sin || project?.systeem_sin || "").trim();
+    const monteur = (
+      snap?.monteurNaam ||
+      project?.monteur ||
+      ""
+    ).trim();
+    const opleverDatum =
+      snap?.datum ||
+      project?.installatie_voltooid_at ||
+      project?.opleverdatum ||
+      "";
+    const regels: ContextRegel[] = [];
+    if (sin) {
+      regels.push({
+        key: "oplever-sin",
+        label: "SIN",
+        value: sin,
+        copyValue: sin,
+      });
+    }
+    if (monteur) {
+      regels.push({
+        key: "oplever-monteur",
+        label: "Monteur",
+        value: monteur,
+      });
+    }
+    if (opleverDatum) {
+      regels.push({
+        key: "oplever-datum",
+        label: "Opleverdatum",
+        value: formatDateShort(opleverDatum),
+      });
+    }
+    if (snap && snap.afgevinkt.length > 0) {
+      const ok = snap.afgevinkt.length === OPLEVER_PUNTEN.length;
+      regels.push({
+        key: "oplever-check",
+        label: "Checklist",
+        value: ok
+          ? "Alle punten afgevinkt"
+          : `${snap.afgevinkt.length}/${OPLEVER_PUNTEN.length} afgevinkt`,
+      });
+    }
+    if (notitie) {
+      regels.push({
+        key: "oplever-notitie",
+        label: "Notitie",
+        value: notitie,
+        copyValue: notitie,
+        wide: true,
+      });
+    }
+
+    if (afterSale || rapport || regels.length > 0) {
+      blocks.push({
+        key: "oplever",
+        titel: "Opleverformulier",
+        meta: rapport
+          ? `Binnen${rapport.created_at ? ` · ${formatDateShort(rapport.created_at)}` : ""}`
+          : snap || sin
+            ? "Ingevuld"
+            : "Nog niet binnen",
+        done: Boolean(rapport || snap || sin),
+        regels,
+      });
+    }
+  }
+
+  return blocks;
+}
+
 function digitsOnly(s: string | null | undefined): string {
   return (s || "").replace(/\D/g, "");
 }
@@ -476,6 +776,50 @@ function opvolgTaakToRow(
       titel: t.titel || "Terugbellen",
       detail: t.notities || "Gepland terugbelmoment via Acties",
       reden: t.notities || "Gepland terugbelmoment via Acties",
+      deadlineAt: due,
+      overdue,
+      prio: overdue || calendarDaysUntil(due) <= 1,
+      leadId,
+      leadNaam,
+      telefoon: lead?.telefoon || null,
+      plaats: lead?.plaats || null,
+      projectId: t.project_id || undefined,
+      projectNummer: t.projecten?.project_nummer || null,
+      href: t.project_id ? `/projecten/${t.project_id}` : "#",
+      project,
+    },
+  };
+}
+
+function nazorgTaakToRow(t: ProjectTaak, projecten: Project[]): TaskRow {
+  const due = t.due_at || new Date().toISOString();
+  const overdue =
+    Boolean(t.due_at) && new Date(t.due_at!).getTime() < Date.now();
+  const leadRaw = t.projecten?.leads;
+  const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+  const leadId = t.projecten?.lead_id || "";
+  const leadNaam = lead?.naam || "—";
+  const project =
+    (t.project_id
+      ? projecten.find((p) => p.id === t.project_id)
+      : undefined) || undefined;
+  return {
+    key: `nazorg-${t.id}`,
+    section: "volgende",
+    kind: "nazorg",
+    titel: t.titel || "After sale",
+    klant: leadNaam,
+    meta: t.projecten?.project_nummer || undefined,
+    dueAt: due,
+    overdue,
+    prio: overdue || calendarDaysUntil(due) <= 1,
+    done: false,
+    actie: {
+      id: t.id,
+      soort: "volgende_stap",
+      titel: t.titel || "After sale",
+      detail: t.notities || "Nazorg na oplevering",
+      reden: t.notities || "Nazorg na oplevering",
       deadlineAt: due,
       overdue,
       prio: overdue || calendarDaysUntil(due) <= 1,
@@ -552,6 +896,7 @@ function deadlinePill(opts: {
   dueAt: string;
   overdue: boolean;
   vastgelopen?: boolean;
+  wachtExtern?: boolean;
 }): { when: string; label: string; className: string } {
   const when = formatDeadlineWhen(opts.dueAt);
   if (opts.vastgelopen) {
@@ -559,6 +904,13 @@ function deadlinePill(opts: {
       when,
       label: "Geblokkeerd",
       className: "text-[#5A635C]",
+    };
+  }
+  if (opts.wachtExtern && !opts.overdue) {
+    return {
+      when,
+      label: "Wacht op extern",
+      className: "text-[#1A4A6E]",
     };
   }
   const days = calendarDaysUntil(opts.dueAt);
@@ -639,6 +991,16 @@ function eigenaarVoorActie(
     };
   }
   return { id: null, naam: "Niet toegewezen", initials: "?" };
+}
+
+/** Weergave: bij HOLD-terug de verkoper, anders BO-eigenaar. Filter blijft BO. */
+function actieEigenaarWeergave(
+  actie: BackofficeActie,
+  eigenaar: { naam: string; initials: string }
+): { naam: string; initials: string } {
+  const sales = actie.eigenaarNaam?.trim();
+  if (!sales) return eigenaar;
+  return { naam: sales, initials: initialsVanNaam(sales) };
 }
 
 function BucketIcon({
@@ -780,12 +1142,23 @@ function SaleNotitiesAside({
 
   const backoffice = project.backoffice_notitie?.trim() || "";
   const installateur = project.installateur_notitie?.trim() || "";
+  const projectNotities = parseProjectNotitieEntries(
+    project.notities,
+    project.updated_at || project.created_at
+  );
   const hasEnergie =
     project.elektra_verbruik_kwh != null ||
     project.teruglevering_kwh != null ||
     project.energie_contract_type != null ||
     project.energie_overstap_leverancier != null;
-  if (!backoffice && !installateur && !hasEnergie && !forceShow) return null;
+  if (
+    !backoffice &&
+    !installateur &&
+    projectNotities.length === 0 &&
+    !hasEnergie &&
+    !forceShow
+  )
+    return null;
 
   const overstapLabel =
     project.energie_overstap_leverancier === "frank"
@@ -889,9 +1262,82 @@ function SaleNotitiesAside({
               </p>
             </div>
           ) : null}
+          {projectNotities.length > 0 ? (
+            <div className="mt-3 space-y-2 border-t border-line/70 pt-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Projectnotities
+              </p>
+              {[...projectNotities].reverse().map((e, i) => (
+                <div key={`${e.at}-${i}`}>
+                  <p className="text-[10px] font-medium text-muted">
+                    {formatDateTimeNl(e.at)}
+                    {e.author ? ` · ${e.author}` : ""}
+                  </p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-[12px] leading-relaxed text-ink">
+                    {e.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </aside>
+  );
+}
+
+function OpstartenProjectNotities({ project }: { project: Project }) {
+  const backoffice = project.backoffice_notitie?.trim() || "";
+  const installateur = project.installateur_notitie?.trim() || "";
+  const entries = parseProjectNotitieEntries(
+    project.notities,
+    project.updated_at || project.created_at
+  );
+  const hasAny = Boolean(backoffice || installateur || entries.length > 0);
+
+  return (
+    <div className="rounded-lg border border-line bg-wash/50 px-3 py-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        Projectnotities
+        {project.backoffice_notitie_door?.trim()
+          ? ` · ${project.backoffice_notitie_door.trim()}`
+          : ""}
+      </p>
+      {!hasAny ? (
+        <p className="mt-1 text-[13px] italic text-muted">
+          Geen notities op dit project.
+        </p>
+      ) : (
+        <div className="mt-1.5 max-h-40 space-y-2 overflow-y-auto">
+          {backoffice ? (
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+              {backoffice}
+            </p>
+          ) : null}
+          {installateur ? (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Installateur
+              </p>
+              <p className="mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+                {installateur}
+              </p>
+            </div>
+          ) : null}
+          {[...entries].reverse().map((e, i) => (
+            <div key={`${e.at}-${i}`}>
+              <p className="text-[10px] font-medium text-muted">
+                {formatDateTimeNl(e.at)}
+                {e.author ? ` · ${e.author}` : ""}
+              </p>
+              <p className="mt-0.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+                {e.text}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1023,6 +1469,22 @@ function buildTaskRows(
       });
       continue;
     }
+    if (actie.soort === "hold_sales_terug") {
+      rows.push({
+        key: `${actie.id}-hold-terug`,
+        section: "hold_sales",
+        actie,
+        kind: "hold_sales_terug",
+        titel: actie.titel,
+        klant: actie.leadNaam,
+        meta: actie.eigenaarNaam || actie.offerteNummer || actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: true,
+        done: false,
+      });
+      continue;
+    }
     if (actie.soort === "schakel_financiering") {
       rows.push({
         key: `${actie.id}-fin`,
@@ -1039,11 +1501,15 @@ function buildTaskRows(
       continue;
     }
     if (actie.soort === "wacht_warmtefonds") {
+      const uitbetaling = /uitbetaling/i.test(actie.titel || "");
       const fase = warmtefondsWachtFaseVanActie(actie);
       rows.push({
         key: `${actie.id}-wf-wacht`,
-        section:
-          fase === "goedkeuring" ? "wf_goedkeuring" : "wf_afspraak",
+        section: uitbetaling
+          ? "warmtefonds"
+          : fase === "goedkeuring"
+            ? "wf_goedkeuring"
+            : "wf_afspraak",
         actie,
         kind: "wacht_warmtefonds",
         titel: actie.titel,
@@ -1105,69 +1571,38 @@ function buildTaskRows(
       continue;
     }
     if (actie.soort === "bel_schouw_aanbetaling") {
-      const project = actie.project;
-      if (!project) continue;
-      const related = facturen.filter(
-        (f) =>
-          f.project_id === project.id ||
-          (!f.project_id && f.lead_id === actie.leadId) ||
-          (actie.offerteId != null && f.offerte_id === actie.offerteId)
-      );
-      const items = projectKickoffItems(project, related);
-      for (const item of items) {
-        if (item.done) continue;
-        if (item.id === "aanbetaling") {
-          rows.push({
-            key: `${actie.id}-factuur`,
-            section: "stap1",
-            actie,
-            kind: "factuur_versturen",
-            titel: "Aanbetalingsfactuur versturen",
-            klant: actie.leadNaam,
-            meta: actie.projectNummer || undefined,
-            dueAt: actie.deadlineAt,
-            overdue: actie.overdue,
-            prio: actie.prio || actie.overdue,
-            done: false,
-          });
-        } else if (item.id === "wf_afspraak") {
-          rows.push({
-            key: `${actie.id}-edwin`,
-            section: "stap1",
-            actie,
-            kind: "edwin_doorsturen",
-            titel: "Gegevens doorsturen naar Edwin",
-            klant: actie.leadNaam,
-            meta: actie.projectNummer || undefined,
-            dueAt: actie.deadlineAt,
-            overdue: actie.overdue,
-            prio: actie.prio || actie.overdue,
-            done: false,
-          });
-        } else if (item.id === "schouwweek") {
-          // Eigen middelen: schouwdag pas ná 50% betaling; WF: schouwweek
-          if (item.blocked) continue;
-          const em =
-            actie.project != null && !isWarmtefondsProject(actie.project);
-          rows.push({
-            key: `${actie.id}-schouwweek`,
-            section: "stap1",
-            actie: {
-              ...actie,
-              planSchouwweek: !em,
-              planSchouwdag: em,
-            },
-            kind: em ? "schouw_inplannen" : "schouw_week",
-            titel: em ? "Schouwdag inplannen" : "Schouwweek inplannen",
-            klant: actie.leadNaam,
-            meta: actie.projectNummer || undefined,
-            dueAt: actie.deadlineAt,
-            overdue: actie.overdue,
-            prio: actie.prio || actie.overdue,
-            done: false,
-          });
-        }
-      }
+      if (!actie.project) continue;
+      rows.push({
+        key: `${actie.id}-opstarten`,
+        section: "stap1",
+        actie,
+        kind: "opstarten",
+        titel: "Opstarten",
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
+        done: false,
+      });
+      continue;
+    }
+    if (actie.soort === "after_sale") {
+      if (!actie.project) continue;
+      rows.push({
+        key: `${actie.id}-after-sale`,
+        section: "volgende",
+        actie,
+        kind: "nazorg",
+        titel: "After sale",
+        klant: actie.leadNaam,
+        meta: actie.projectNummer || undefined,
+        dueAt: actie.deadlineAt,
+        overdue: actie.overdue,
+        prio: actie.prio || actie.overdue,
+        done: false,
+      });
+      continue;
     }
   }
   return rows;
@@ -1195,16 +1630,21 @@ export function BackofficeActiesList({
   onFactuurUpdated?: (factuur: Factuur) => void;
   onLeadUpdated?: (id: string, patch: Partial<Lead>) => void;
 }) {
+  const [snoozeMap, setSnoozeMap] = useState<ActieSnoozeMap>({});
+
   const acties = useMemo(
     () =>
-      actiesVoorActiesTab(
-        openBackofficeActies(projecten, facturen, new Date(), {
-          leads,
-          afspraken,
-          adviseurs,
-        })
+      applyActieSnoozes(
+        actiesVoorActiesTab(
+          openBackofficeActies(projecten, facturen, new Date(), {
+            leads,
+            afspraken,
+            adviseurs,
+          })
+        ),
+        snoozeMap
       ),
-    [projecten, facturen, leads, afspraken, adviseurs]
+    [projecten, facturen, leads, afspraken, adviseurs, snoozeMap]
   );
   const rows = useMemo(
     () => buildTaskRows(acties, facturen),
@@ -1244,6 +1684,7 @@ export function BackofficeActiesList({
   const [partners, setPartners] = useState<InstallatiePartner[]>([]);
   /** Open project-taken (handmatig + auto) */
   const [projectTaken, setProjectTaken] = useState<ProjectTaak[]>([]);
+  const [focusFotos, setFocusFotos] = useState<ProjectFoto[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -1280,9 +1721,12 @@ export function BackofficeActiesList({
     ymdAmsterdam(new Date())
   );
   const [notesOpen, setNotesOpen] = useState(false);
+  const [holdSalesProject, setHoldSalesProject] = useState<Project | null>(
+    null
+  );
   const [showWachtExtern, setShowWachtExtern] = useState(false);
-  /** Vervolg: algemeen (dag) of specifiek (datum+tijd+notitie). */
-  const [opvolgMode, setOpvolgMode] = useState<OpvolgMode>("algemeen");
+  /** Vervolg: standaard datum + tijd; optioneel alleen een dag. */
+  const [opvolgMode, setOpvolgMode] = useState<OpvolgMode>("specifiek");
   const [opvolgDate, setOpvolgDate] = useState(
     () => defaultOpvolgDateTime().date
   );
@@ -1297,6 +1741,7 @@ export function BackofficeActiesList({
   /** Welke gekoppelde gesprek-stappen openstaan in de zijkant. */
   const [gesprekOpen, setGesprekOpen] = useState<Record<string, boolean>>({});
   const [edwinGestuurd, setEdwinGestuurd] = useState(false);
+  const [partyNonce, setPartyNonce] = useState(0);
   /** Laatste bel-moment in deze sessie (Action view). */
   const [laatsteContactAt, setLaatsteContactAt] = useState<string | null>(null);
   const [herplanActie, setHerplanActie] = useState<BackofficeActie | null>(
@@ -1431,6 +1876,35 @@ export function BackofficeActiesList({
   }, []);
 
   useEffect(() => {
+    const local = readActieSnoozeLocal();
+    if (Object.keys(local).length > 0) setSnoozeMap(local);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/backoffice-actie-snooze", {
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        const remote = (data as { snoozes?: ActieSnoozeMap }).snoozes || {};
+        if (cancelled) return;
+        setSnoozeMap((prev) => {
+          const merged = mergeActieSnoozeMaps(
+            mergeActieSnoozeMaps(local, prev),
+            remote
+          );
+          writeActieSnoozeLocal(merged);
+          return merged;
+        });
+      } catch {
+        /* lokaal blijft staan */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const frame = requestAnimationFrame(() => void loadProjectTaken());
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -1450,43 +1924,11 @@ export function BackofficeActiesList({
     [rows, opvolgRows]
   );
 
-  const nazorgTaken = useMemo(
-    () =>
-      projectTaken.filter((t) => {
-        if (t.status === "done") return false;
-        // Geannuleerde orders: geen workflow/nazorg-taken meer in Acties
-        const projectStatus = (
-          t.projecten?.status ||
-          (t.project_id
-            ? projecten.find((p) => p.id === t.project_id)?.status
-            : null) ||
-          ""
-        ).toLowerCase();
-        if (
-          projectStatus === "annulering" ||
-          projectStatus === "geannuleerd" ||
-          projectStatus === "hold_sales_actie" ||
-          projectStatus === "hold_sales"
-        ) {
-          return false;
-        }
-        const key = (t.auto_key || "").toLowerCase();
-        const titel = (t.titel || "").toLowerCase();
-        // Referrals = sales (Verkoop), niet in backoffice-Acties.
-        if (key.includes("referral") || titel.includes("vraag referrals")) {
-          return false;
-        }
-        return (
-          key.includes("overstap") ||
-          key.includes("btw_terug") ||
-          key.includes("review_vragen") ||
-          titel.includes("overstap") ||
-          titel.includes("btw terug") ||
-          titel.includes("dynamische") ||
-          titel.includes("review vragen")
-        );
-      }),
-    [projectTaken, projecten]
+  const nazorgTaken = useMemo((): ProjectTaak[] => [], []);
+
+  const nazorgRows = useMemo(
+    () => nazorgTaken.map((t) => nazorgTaakToRow(t, projecten)),
+    [nazorgTaken, projecten]
   );
 
   const bucketCounts = useMemo(() => {
@@ -1549,7 +1991,8 @@ export function BackofficeActiesList({
 
   const visibleRows = useMemo(() => {
     const q = zoek.trim().toLowerCase();
-    const filtered = openRows.filter((r) => {
+    const source = [...openRows, ...nazorgRows];
+    const filtered = source.filter((r) => {
       if (actionView) {
         if (!actieMatchesFocusDay(r.actie, focusDayKey)) return false;
         if (
@@ -1569,7 +2012,7 @@ export function BackofficeActiesList({
         if (soortFilter !== "alle" && r.section !== soortFilter) return false;
       }
       if (medewerkerId) {
-        if (r.kind === "terugbel") {
+        if (r.kind === "terugbel" || r.kind === "nazorg") {
           const taak = projectTaken.find((t) => t.id === r.actie.id);
           const owner =
             taak?.verantwoordelijke_id ||
@@ -1609,6 +2052,7 @@ export function BackofficeActiesList({
     return [...filtered].sort(compareActieRows);
   }, [
     openRows,
+    nazorgRows,
     actionView,
     focusDayKey,
     showWachtExtern,
@@ -1765,20 +2209,22 @@ export function BackofficeActiesList({
   const focusJumpHits = useMemo(() => {
     const q = focusJumpQ.trim();
     if (!actionView || q.length < 2) return [] as TaskRow[];
-    return openRows
+    return [...openRows, ...nazorgRows]
       .filter((r) => actieMatchesJumpQuery(r, q, leads))
       .sort(compareActieRows)
       .slice(0, 12);
-  }, [actionView, focusJumpQ, openRows, leads]);
+  }, [actionView, focusJumpQ, openRows, nazorgRows, leads]);
 
   const selectedRow = useMemo(() => {
     if (jumpPinnedKey) {
       const pinned =
-        openRows.find((r) => r.key === jumpPinnedKey) || null;
+        openRows.find((r) => r.key === jumpPinnedKey) ||
+        nazorgRows.find((r) => r.key === jumpPinnedKey) ||
+        null;
       if (pinned) return pinned;
     }
     return visibleRows.find((r) => r.key === selectedKey) || null;
-  }, [visibleRows, selectedKey, jumpPinnedKey, openRows]);
+  }, [visibleRows, selectedKey, jumpPinnedKey, openRows, nazorgRows]);
 
   const selectedProjectFacturen = useMemo(() => {
     const pid = selectedRow?.actie.projectId;
@@ -1789,11 +2235,34 @@ export function BackofficeActiesList({
     );
   }, [facturen, selectedRow]);
 
+  useEffect(() => {
+    const pid = selectedRow?.actie.projectId;
+    if (!actionView || !pid) {
+      setFocusFotos([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/projecten/${pid}/fotos`)
+      .then((res) => res.json())
+      .then((data: { fotos?: ProjectFoto[] }) => {
+        if (!cancelled) setFocusFotos(data.fotos || []);
+      })
+      .catch(() => {
+        if (!cancelled) setFocusFotos([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actionView, selectedRow?.actie.projectId]);
+
   // Focusmodus: altijd een geldige actie voor de gekozen dag selecteren
   useEffect(() => {
     if (!actionView) return;
     if (jumpPinnedKey) {
-      if (!openRows.some((r) => r.key === jumpPinnedKey)) {
+      if (
+        !openRows.some((r) => r.key === jumpPinnedKey) &&
+        !nazorgRows.some((r) => r.key === jumpPinnedKey)
+      ) {
         setJumpPinnedKey(null);
       } else {
         setSelectedKey(jumpPinnedKey);
@@ -1807,7 +2276,7 @@ export function BackofficeActiesList({
       return visibleRows[0]!.key;
     });
     setNotesOpen(false);
-  }, [actionView, focusDayKey, visibleRows, jumpPinnedKey, openRows]);
+  }, [actionView, focusDayKey, visibleRows, jumpPinnedKey, openRows, nazorgRows]);
 
   // Bij selectie: focus op gekozen actiesoort
   useEffect(() => {
@@ -1943,6 +2412,7 @@ export function BackofficeActiesList({
       } else {
         setMsg(taak.auto_key ? "Auto-taak afgerond." : "Taak afgerond.");
       }
+      burstParty();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Voltooien mislukt");
     } finally {
@@ -2245,6 +2715,8 @@ export function BackofficeActiesList({
         setMsg(
           "Warmtefonds goedgekeurd — actie verdwijnt; daarna schouw plannen."
         );
+      } else if (extra?.warmtefonds_afspraak_at) {
+        setMsg("WF-afspraak ingepland in de agenda van de adviseur.");
       } else {
         setMsg("Warmtefonds-status bijgewerkt.");
       }
@@ -2500,6 +2972,37 @@ export function BackofficeActiesList({
       void loadProjectTaken();
     } catch (e) {
       setError(e instanceof Error ? e.message : "HOLD-escalatie mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function voltooiHoldSalesTerug(actie: BackofficeActie) {
+    if (!actie.projectId) return false;
+    setBusyId(`${actie.id}-hold-terug`);
+    setError(null);
+    try {
+      const stamped = stampHoldSalesTerugAfgehandeld(
+        actie.project?.backoffice_notitie
+      );
+      const project = await patchProject(actie, {
+        backoffice_notitie: stamped,
+      });
+      if (!project) return false;
+      void logBackofficeActieEvent({
+        soort: "hold_sales_terug",
+        leadId: actie.leadId,
+        projectId: actie.projectId,
+        adviseurId,
+        deadlineAt: actie.deadlineAt,
+        completedAt: new Date().toISOString(),
+      });
+      setMsg("HOLD-terug afgevinkt — order loopt weer in het normale pad.");
+      burstParty();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Afronden mislukt");
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -2797,7 +3300,7 @@ export function BackofficeActiesList({
 
   function resetOpvolgDefaults() {
     const d = defaultOpvolgDateTime();
-    setOpvolgMode("algemeen");
+    setOpvolgMode("specifiek");
     setOpvolgDate(d.date);
     setOpvolgTime(d.time);
     setOpvolgNote("");
@@ -2807,11 +3310,22 @@ export function BackofficeActiesList({
    * Niet bereikt → morgen algemeen.
    * Terugbel → gekozen datum (algemeen zonder tijd, of specifiek met tijd + notitie).
    */
+  function projectIdVoorActie(actie: BackofficeActie): string | null {
+    return (
+      actie.projectId ||
+      actie.project?.id ||
+      (actie.leadId
+        ? projecten.find((p) => p.lead_id === actie.leadId)?.id || null
+        : null)
+    );
+  }
+
   async function planOpvolging(
     actie: BackofficeActie,
     soort: "niet_bereikt" | "wacht_klant"
   ) {
-    if (!actie.projectId) {
+    const projectId = projectIdVoorActie(actie);
+    if (!projectId) {
       setError("Geen project om opvolging op te zetten.");
       return;
     }
@@ -2823,7 +3337,11 @@ export function BackofficeActiesList({
     }
 
     const mode: OpvolgMode =
-      soort === "niet_bereikt" ? "algemeen" : opvolgMode;
+      soort === "niet_bereikt"
+        ? "algemeen"
+        : /^\d{2}:\d{2}$/.test(opvolgTime)
+          ? "specifiek"
+          : "algemeen";
     const date =
       soort === "niet_bereikt"
         ? defaultOpvolgDateTime().date
@@ -2859,7 +3377,7 @@ export function BackofficeActiesList({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          project_id: actie.projectId,
+          project_id: projectId,
           titel,
           afdeling: "Backoffice",
           verantwoordelijke_id: ownerId,
@@ -2923,12 +3441,51 @@ export function BackofficeActiesList({
     else setSelectedKey(null);
   }
 
+  function burstParty() {
+    setPartyNonce((n) => n + 1);
+  }
+
+  async function schuifActieNaarMorgen(actieId: string) {
+    const tot = snoozeTotMorgen();
+    setSnoozeMap((prev) => {
+      const next = { ...prev, [actieId]: tot };
+      writeActieSnoozeLocal(next);
+      return next;
+    });
+    try {
+      await fetch("/api/backoffice-actie-snooze", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actie_id: actieId, tot }),
+      });
+    } catch {
+      /* lokaal is genoeg tot de tabel er is */
+    }
+  }
+
   async function afrondenEnVolgende(row: TaskRow) {
     const actie = row.actie;
     setBusyId(`${actie.id}-afronden`);
     setError(null);
     try {
-      if (row.kind === "factuur_versturen") {
+      if (actieNogNietEchtAfgerond(row)) {
+        burstParty();
+        await schuifActieNaarMorgen(actie.id);
+        setMsg("Nog niet afgerond — doorgeschoven naar morgen.");
+        if (jumpPinnedKey) {
+          setJumpPinnedKey(null);
+        } else if (
+          selectedIndex >= 0 &&
+          selectedIndex < visibleRows.length - 1
+        ) {
+          goNextActie();
+        }
+        return;
+      }
+      if (row.kind === "opstarten") {
+        await maybeCompleteStap1(actie, { project: actie.project });
+        setMsg("Opstarten bijgewerkt.");
+      } else if (row.kind === "factuur_versturen") {
         await verstuurAanbetalingsFactuur(actie);
         setMsg("Aanbetalingsfactuur verwerkt.");
       } else if (row.kind === "edwin_doorsturen") {
@@ -2959,9 +3516,15 @@ export function BackofficeActiesList({
         await markFinancieringGeschakeld(actie);
       } else if (row.kind === "aangetekende_brief") {
         await markAangetekendeBriefAfgerond(actie);
+      } else if (row.kind === "hold_sales_terug") {
+        const ok = await voltooiHoldSalesTerug(actie);
+        if (!ok) return;
       } else if (row.kind === "annulering_keuze_controle") {
         await markAnnuleringKeuzeInstallatie(actie);
-      } else if (row.kind === "terugbel") {
+      } else if (row.kind === "nazorg" && actie.soort === "after_sale") {
+        await logBelContact(actie, "After sale afgerond");
+        setMsg("After sale afgerond.");
+      } else if (row.kind === "terugbel" || row.kind === "nazorg") {
         const res = await fetch(`/api/taken/${actie.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -2973,8 +3536,17 @@ export function BackofficeActiesList({
             (data as { error?: string }).error || "Afronden mislukt"
           );
         }
-        await logBelContact(actie, `Terugbel afgerond: ${actie.titel}`);
-        setMsg("Terugbel-actie afgerond.");
+        await logBelContact(
+          actie,
+          row.kind === "nazorg"
+            ? `After sale afgerond: ${actie.titel}`
+            : `Terugbel afgerond: ${actie.titel}`
+        );
+        setMsg(
+          row.kind === "nazorg"
+            ? "After sale-actie afgerond."
+            : "Terugbel-actie afgerond."
+        );
         void loadProjectTaken();
       } else if (
         row.kind === "volgende_stap" ||
@@ -2987,6 +3559,7 @@ export function BackofficeActiesList({
         setMsg("Actie afgerond — ga door naar de volgende.");
       }
 
+      burstParty();
       if (jumpPinnedKey) {
         setJumpPinnedKey(null);
       } else if (
@@ -3099,6 +3672,11 @@ export function BackofficeActiesList({
       /installatiedatum inplannen|installatie inplannen/i.test(t) ||
       (t.includes("installatie") && !t.includes("controleren"))
     );
+  }
+
+  function isInstallatiePlanActie(actie: BackofficeActie): boolean {
+    const t = `${actie.titel || ""} ${actie.detail || ""}`.toLowerCase();
+    return /installatiedatum inplannen|installatie inplannen/i.test(t);
   }
 
   /** Werkpaneel: echte knoppen per actiesoort (lijst + action view). */
@@ -3265,13 +3843,23 @@ export function BackofficeActiesList({
           ) : null}
 
           {row.kind === "bestel_materiaal" ? (
-            <button
-              type="button"
-              onClick={() => setInkoopActie(actie)}
-              className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white hover:opacity-90"
-            >
-              Bestelling vastleggen
-            </button>
+            <Item variant="outline" size="xs" className="w-full">
+              <ItemContent>
+                <ItemTitle>Bestelling vastleggen</ItemTitle>
+                <ItemDescription>
+                  Open purchasing en leg de batterijbestelling vast.
+                </ItemDescription>
+              </ItemContent>
+              <ItemActions>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setInkoopActie(actie)}
+                >
+                  Vastleggen
+                </Button>
+              </ItemActions>
+            </Item>
           ) : null}
 
           {row.kind === "financiering" ? (
@@ -3377,6 +3965,31 @@ export function BackofficeActiesList({
             </>
           ) : null}
 
+          {row.kind === "hold_sales_terug" ? (
+            <>
+              <button
+                type="button"
+                disabled={busyId === `${actie.id}-hold-terug` || busyId === actie.id}
+                onClick={() => void voltooiHoldSalesTerug(actie)}
+                className="inline-flex h-9 items-center gap-1.5 bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark disabled:opacity-50"
+              >
+                <CheckDot done={false} />
+                {busyId === `${actie.id}-hold-terug` || busyId === actie.id
+                  ? "Bezig…"
+                  : "Afvinken"}
+              </button>
+              {actie.project ? (
+                <button
+                  type="button"
+                  onClick={() => setHoldSalesProject(actie.project!)}
+                  className="inline-flex h-9 items-center border border-[#5A4A6E]/30 bg-[#F5F2F8] px-3 text-xs font-semibold text-[#4A3A5C] hover:bg-[#EDE8F3]"
+                >
+                  Opnieuw HOLD
+                </button>
+              ) : null}
+            </>
+          ) : null}
+
           {row.kind === "hold_sales_verlopen" ? (
             <>
               <button
@@ -3449,6 +4062,16 @@ export function BackofficeActiesList({
                     status={resolveFinancieringStatus(actie.project)}
                     afspraakAt={actie.project.warmtefonds_afspraak_at}
                     disabled={busyId === `${actie.id}-wf`}
+                    actiesAgenda
+                    leadId={actie.leadId}
+                    projectId={actie.projectId}
+                    onAgendaPlanned={(iso) =>
+                      void updateFinancieringStatusFromActie(
+                        actie,
+                        resolveFinancieringStatus(actie.project),
+                        { warmtefonds_afspraak_at: iso }
+                      )
+                    }
                     onChange={(s, extra) =>
                       void updateFinancieringStatusFromActie(actie, s, extra)
                     }
@@ -3522,6 +4145,48 @@ export function BackofficeActiesList({
                     Versturen
                   </button>
                 </>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {row.kind === "nazorg" ? (
+          <div className="rounded-sm border border-line bg-white px-3.5 py-3">
+            <p className="text-sm font-semibold text-ink">{row.titel}</p>
+            <p className="mt-0.5 text-[11px] text-muted">
+              Gebruik het opleverformulier hierboven (SIN, checklist, notitie).
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {actie.projectId &&
+              isOverstapNazorgTaak(
+                projectTaken.find((t) => t.id === actie.id) ||
+                  ({
+                    id: actie.id,
+                    auto_key: "",
+                    titel: actie.titel,
+                  } as ProjectTaak)
+              ) ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOverstapMail({
+                      projectId: actie.projectId!,
+                      taakId: actie.id,
+                      klantNaam: actie.leadNaam,
+                      projectNummer: actie.projectNummer || null,
+                    })
+                  }
+                  className="inline-flex h-9 items-center bg-green px-3 text-xs font-semibold text-white hover:bg-green-dark"
+                >
+                  Overstap-mail
+                </button>
+              ) : actie.projectId ? (
+                <Link
+                  href={`/projecten/${actie.projectId}`}
+                  className="inline-flex h-9 items-center border border-line px-3 text-xs font-semibold text-ink"
+                >
+                  Open project
+                </Link>
               ) : null}
             </div>
           </div>
@@ -3965,6 +4630,26 @@ export function BackofficeActiesList({
             })()
           : null}
 
+        {row.kind === "opstarten" && actie.project ? (
+          <div className="flex flex-col gap-2">
+            <OpstartenProjectNotities project={actie.project} />
+          <ProjectKickoffChecklist
+            compact
+            project={actie.project}
+            facturen={facturen.filter(
+              (f) =>
+                f.project_id === actie.projectId ||
+                f.lead_id === actie.leadId ||
+                (actie.offerteId != null && f.offerte_id === actie.offerteId)
+            )}
+            onProjectUpdated={onProjectUpdated}
+            onFinancieringUpdated={onProjectUpdated}
+            onFactuurUpdated={onFactuurUpdated}
+            onFacturenChanged={() => undefined}
+          />
+          </div>
+        ) : null}
+
         {row.kind === "edwin_doorsturen" && actie.project ? (
           <div className="rounded-sm border border-line bg-white px-3.5 py-3">
             <p className="text-sm font-semibold text-ink">
@@ -4339,70 +5024,6 @@ export function BackofficeActiesList({
     setFocusDayKey((prev) => shiftDayKey(prev, delta));
   }
 
-  function focusFactuurKaart(fac: Factuur | null | undefined, actie: BackofficeActie) {
-    const lead = leads.find((l) => l.id === actie.leadId) || null;
-    const straat = [lead?.straat, lead?.huisnummer, lead?.toevoeging]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-    const plaats = [lead?.postcode, lead?.plaats].filter(Boolean).join(" ").trim();
-    const inc = fac ? Number(fac.bedrag_inc_btw) || 0 : null;
-    const factuurId = fac?.id || actie.factuurId || null;
-    const nummer = fac?.factuur_nummer || actie.factuurNummer || "—";
-
-    return (
-      <article className="flex h-full min-h-0 flex-col border border-line bg-white">
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-3 py-2">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Factuur
-            </p>
-            <p className="truncate font-mono text-sm font-semibold text-ink">
-              {nummer}
-            </p>
-          </div>
-          <div className="shrink-0 text-right">
-            <p className="font-display text-base font-semibold tabular-nums text-ink">
-              {inc != null ? formatEuro(inc) : "—"}
-            </p>
-            <p className="text-[11px] font-medium text-muted">
-              {fac?.status || "open"}
-              {fac?.vervaldatum
-                ? ` · vervalt ${formatDateShort(fac.vervaldatum)}`
-                : ""}
-            </p>
-          </div>
-        </div>
-        {factuurId ? (
-          <iframe
-            key={factuurId}
-            title={`Factuur ${nummer}`}
-            src={`/api/facturen/${factuurId}/pdf?inline=1`}
-            className="min-h-0 w-full flex-1 border-0 bg-[#F3F4F3]"
-          />
-        ) : (
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 text-[13px]">
-            <p className="font-semibold text-ink">
-              {lead?.naam || actie.leadNaam}
-            </p>
-            {straat ? <p className="text-muted">{straat}</p> : null}
-            {plaats ? <p className="text-muted">{plaats}</p> : null}
-            {lead?.email ? (
-              <p className="text-muted">{lead.email}</p>
-            ) : null}
-            {fac?.omschrijving ? (
-              <p className="border-t border-line pt-2 text-ink">
-                {fac.omschrijving}
-              </p>
-            ) : (
-              <p className="text-muted">Geen factuur om te tonen.</p>
-            )}
-          </div>
-        )}
-      </article>
-    );
-  }
-
   function focusActieIcoon(
     kind: "check" | "mail" | "calendar" | "phone" | "clock" | "bolt" | "pin"
   ) {
@@ -4509,193 +5130,72 @@ export function BackofficeActiesList({
     disabled?: boolean;
     tone?: "default" | "green" | "orange" | "soft-orange";
   }) {
-    const tone = opts.tone || "default";
-    const shell =
-      tone === "green"
-        ? "border-green/40 bg-green text-white hover:bg-green-dark"
-        : tone === "orange"
-          ? "border-orange/40 bg-orange text-white hover:opacity-90"
-          : tone === "soft-orange"
-            ? "border-[#F3D2B8] bg-[#FFF4EB] text-ink hover:bg-[#FFE8D6]"
-            : "border-line bg-white text-ink hover:bg-wash";
-    const iconWrap =
-      tone === "green" || tone === "orange"
-        ? "bg-white/20 text-white"
-        : tone === "soft-orange"
-          ? "bg-orange/15 text-orange"
-          : "bg-wash text-ink";
-    const uitlegCls =
-      tone === "green" || tone === "orange"
-        ? "text-white/85"
-        : "text-muted";
+    const primary = opts.tone === "green" || opts.tone === "orange";
     return (
-      <button
-        type="button"
-        disabled={opts.disabled}
-        onClick={opts.onClick}
-        className={[
-          "flex w-full items-center gap-2.5 border px-2.5 py-2.5 text-left transition disabled:opacity-45",
-          shell,
-        ].join(" ")}
-      >
-        <span
-          className={[
-            "inline-flex h-9 w-9 shrink-0 items-center justify-center",
-            iconWrap,
-          ].join(" ")}
-        >
-          {focusActieIcoon(opts.icon)}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-semibold leading-snug">
-            {opts.titel}
-          </span>
-          <span className={["mt-0.5 block text-[11px] leading-snug", uitlegCls].join(" ")}>
-            {opts.uitleg}
-          </span>
-        </span>
-        <span className="shrink-0 text-sm opacity-60" aria-hidden>
-          ›
-        </span>
-      </button>
-    );
-  }
-
-  /** Datum/tijd voor vervolg — compact, boven de actiekaarten. */
-  function focusWanneerKiezer() {
-    return (
-      <div className="space-y-1.5 border border-line bg-white px-2.5 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Wanneer?
-        </p>
-        <div className="grid grid-cols-2 gap-1">
-          <button
+      <Item variant="outline" size="xs" className="w-full">
+        <ItemContent>
+          <ItemTitle>{opts.titel}</ItemTitle>
+          <ItemDescription>{opts.uitleg}</ItemDescription>
+        </ItemContent>
+        <ItemActions>
+          <Button
             type="button"
-            onClick={() => setOpvolgMode("algemeen")}
-            className={[
-              "h-8 text-[11px] font-semibold",
-              opvolgMode === "algemeen"
-                ? "bg-ink text-white"
-                : "border border-line bg-white text-ink hover:bg-wash",
-            ].join(" ")}
+            size="sm"
+            variant={primary ? "default" : "outline"}
+            disabled={opts.disabled}
+            onClick={opts.onClick}
           >
-            Algemeen
-          </button>
-          <button
-            type="button"
-            onClick={() => setOpvolgMode("specifiek")}
-            className={[
-              "h-8 text-[11px] font-semibold",
-              opvolgMode === "specifiek"
-                ? "bg-ink text-white"
-                : "border border-line bg-white text-ink hover:bg-wash",
-            ].join(" ")}
-          >
-            Specifiek
-          </button>
-        </div>
-        <p className="text-[11px] leading-snug text-muted">
-          {opvolgMode === "algemeen"
-            ? "Die dag zonder vast tijdstip — tussen de andere acties."
-            : "Vast moment (klant afspraak of zelf gekozen) + optionele notitie."}
-        </p>
-        <div
-          className={
-            opvolgMode === "specifiek"
-              ? "grid grid-cols-2 gap-1.5"
-              : "grid grid-cols-1"
-          }
-        >
-          <label className="block min-w-0">
-            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Datum
-            </span>
-            <input
-              type="date"
-              value={opvolgDate}
-              onChange={(e) => setOpvolgDate(e.target.value)}
-              className="h-9 w-full border border-line bg-white px-2 text-[12px] text-ink"
-            />
-          </label>
-          {opvolgMode === "specifiek" ? (
-            <label className="block min-w-0">
-              <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Tijd
-              </span>
-              <input
-                type="time"
-                value={opvolgTime}
-                onChange={(e) => setOpvolgTime(e.target.value)}
-                className="h-9 w-full border border-line bg-white px-2 text-[12px] text-ink"
-              />
-            </label>
-          ) : null}
-        </div>
-        {opvolgMode === "specifiek" ? (
-          <label className="block">
-            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">
-              Notitie
-            </span>
-            <textarea
-              value={opvolgNote}
-              onChange={(e) => setOpvolgNote(e.target.value)}
-              rows={2}
-              placeholder="Bijv. bel na 14:00 / klant op werk"
-              className="w-full resize-none border border-line bg-white px-2 py-1.5 text-[12px] text-ink placeholder:text-muted"
-            />
-          </label>
-        ) : null}
-      </div>
+            {opts.titel.replace(/\s*→.*$/, "")}
+          </Button>
+        </ItemActions>
+      </Item>
     );
   }
 
   /**
-   * Vervolg-actiekaarten (terugbel / betaalt later).
-   * Datum komt uit focusWanneerKiezer erboven.
+   * Vervolg: rijen — terugbellen (datum+tijd+bel) en niet bereikt.
    */
-  function focusVervolgBlok(
-    actie: BackofficeActie,
-    opts?: { factuurUitkomst?: boolean }
-  ) {
+  function focusVervolgBlok(actie: BackofficeActie) {
     const busyOpvolg = busyId === `${actie.id}-opvolg`;
-    const busyBetaalt = busyId === `${actie.id}-aangegeven`;
-    const whenLabel =
-      opvolgMode === "specifiek"
-        ? `${formatFocusDayLabel(opvolgDate)} ${opvolgTime}`
-        : formatFocusDayLabel(opvolgDate);
+    const projectId = projectIdVoorActie(actie);
+    const rowClass =
+      "flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2 py-2 text-left text-sm font-medium disabled:opacity-50";
 
     return (
       <div className="space-y-1.5">
-        {focusWanneerKiezer()}
-        {opts?.factuurUitkomst ? (
-          focusActieKaart({
-            icon: "calendar",
-            titel: `Betaalt later · ${formatFocusDayLabel(opvolgDate)}`,
-            uitleg:
-              "Klant heeft een betaaldatum doorgegeven. Die dag komt “betaling controleren” terug.",
-            disabled: !actie.factuurId || busyBetaalt,
-            onClick: () => void setAangegevenTeBetalen(actie, opvolgDate),
-          })
-        ) : null}
-        {focusActieKaart({
-          icon: "phone",
-          titel: "Niet bereikt",
-          uitleg: "Geen gehoor — automatisch morgen opnieuw in de actielijst.",
-          disabled: !actie.projectId || busyOpvolg,
-          tone: "soft-orange",
-          onClick: () => void planOpvolging(actie, "niet_bereikt"),
-        })}
-        {focusActieKaart({
-          icon: "clock",
-          titel: `Zet terugbel · ${whenLabel}`,
-          uitleg:
-            opvolgMode === "specifiek"
-              ? "Zet een terugbel-actie op dit exacte moment."
-              : "Zet een terugbel-actie op die dag, zonder vast tijdstip.",
-          disabled: !actie.projectId || busyOpvolg,
-          tone: "orange",
-          onClick: () => void planOpvolging(actie, "wacht_klant"),
-        })}
+        <div className={`${rowClass} flex-wrap`}>
+          <span className="shrink-0">Terugbellen op</span>
+          <div className="flex min-w-[10rem] flex-1 items-center gap-1.5">
+            <input
+              type="date"
+              className="h-9 min-w-0 flex-1 rounded-md border border-border bg-white px-1.5 text-sm"
+              value={opvolgDate}
+              onChange={(e) => setOpvolgDate(e.target.value)}
+            />
+            <input
+              type="time"
+              className="h-9 w-[5.75rem] shrink-0 rounded-md border border-border bg-white px-1.5 text-sm"
+              value={opvolgTime}
+              onChange={(e) => setOpvolgTime(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="h-9 shrink-0 rounded-md border border-border bg-white px-2.5 text-sm font-medium hover:bg-wash disabled:opacity-50"
+            disabled={!projectId || busyOpvolg}
+            onClick={() => void planOpvolging(actie, "wacht_klant")}
+          >
+            {busyOpvolg ? "…" : "Plannen"}
+          </button>
+        </div>
+        <button
+          type="button"
+          className={rowClass}
+          disabled={!projectId || busyOpvolg}
+          onClick={() => void planOpvolging(actie, "niet_bereikt")}
+        >
+          Niet bereikt
+        </button>
       </div>
     );
   }
@@ -4736,6 +5236,9 @@ export function BackofficeActiesList({
           : "space-y-4 px-3 pb-6 pt-4 sm:px-5"
       }
     >
+      {partyNonce > 0 ? (
+        <ActiePartyBurst nonce={partyNonce} onDone={() => setPartyNonce(0)} />
+      ) : null}
       {error && (
         <p className="shrink-0 border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-1.5 text-sm text-[#C45A12]">
           {error}
@@ -5109,6 +5612,7 @@ export function BackofficeActiesList({
               dueAt: row.dueAt,
               overdue: row.overdue,
               vastgelopen: actie.vastgelopen,
+              wachtExtern: isBackofficeActieWachtExtern(actie),
             });
             const eigenaar = eigenaarVoorActie(
               actie,
@@ -5116,6 +5620,7 @@ export function BackofficeActiesList({
               adviseurs,
               defaultEigenaarId
             );
+            const eigenaarWeergave = actieEigenaarWeergave(actie, eigenaar);
             const cat = categoryPillForRow(row);
             return (
               <article key={row.key} className="space-y-2 px-3 py-3">
@@ -5140,7 +5645,7 @@ export function BackofficeActiesList({
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="font-medium text-ink">
-                    {eigenaar.naam.split(" ")[0]}
+                    {eigenaarWeergave.naam.split(" ")[0]}
                   </span>
                   <span
                     className={["font-semibold", duePill.className].join(" ")}
@@ -5148,13 +5653,29 @@ export function BackofficeActiesList({
                     {duePill.when} · {duePill.label}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openActionView(row.key)}
-                  className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white"
-                >
-                  Open
-                </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openActionView(row.key)}
+                    className="inline-flex h-9 items-center bg-orange px-3 text-xs font-semibold text-white"
+                  >
+                    Open
+                  </button>
+                  {row.kind === "hold_sales_terug" ? (
+                    <button
+                      type="button"
+                      disabled={
+                        busyId === `${actie.id}-hold-terug` ||
+                        busyId === actie.id
+                      }
+                      onClick={() => void voltooiHoldSalesTerug(actie)}
+                      className="inline-flex h-9 items-center gap-1.5 border border-green/30 bg-green-soft px-3 text-xs font-semibold text-green-deeper disabled:opacity-50"
+                    >
+                      <CheckDot done={false} />
+                      Afvinken
+                    </button>
+                  ) : null}
+                </div>
               </article>
             );
           })}
@@ -5288,6 +5809,7 @@ export function BackofficeActiesList({
                   dueAt: row.dueAt,
                   overdue: row.overdue,
                   vastgelopen: actie.vastgelopen,
+                  wachtExtern: isBackofficeActieWachtExtern(actie),
                 });
                 const eigenaar = eigenaarVoorActie(
                   actie,
@@ -5295,6 +5817,7 @@ export function BackofficeActiesList({
                   adviseurs,
                   defaultEigenaarId
                 );
+                const eigenaarWeergave = actieEigenaarWeergave(actie, eigenaar);
                 const cat = categoryPillForRow(row);
 
                 return (
@@ -5331,7 +5854,12 @@ export function BackofficeActiesList({
                         {row.titel}
                       </p>
                       <p className="mt-0.5 line-clamp-1 text-[11px] text-muted">
-                        {actie.detail ||
+                        {(row.kind === "hold_sales_verlopen" ||
+                        row.kind === "hold_sales_terug"
+                          ? actie.project?.backoffice_notitie?.trim() ||
+                            actie.detail
+                          : null) ||
+                          actie.detail ||
                           actie.reden ||
                           actie.annuleringsReden ||
                           row.meta ||
@@ -5341,10 +5869,10 @@ export function BackofficeActiesList({
                     <td className="px-3 py-2.5 align-middle">
                       <div className="flex items-center gap-2">
                         <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-green-soft text-[10px] font-bold text-green-deeper">
-                          {eigenaar.initials}
+                          {eigenaarWeergave.initials}
                         </span>
                         <span className="truncate text-xs font-medium text-ink">
-                          {eigenaar.naam.split(" ")[0]}
+                          {eigenaarWeergave.naam.split(" ")[0]}
                         </span>
                       </div>
                     </td>
@@ -5362,16 +5890,36 @@ export function BackofficeActiesList({
                       </p>
                     </td>
                     <td className="px-3 py-2.5 align-middle text-right">
-                      <span
-                        className={[
-                          "inline-flex h-8 items-center px-3 text-[11px] font-semibold",
-                          isSelected
-                            ? "bg-orange text-white"
-                            : "border border-line text-ink",
-                        ].join(" ")}
-                      >
-                        Open →
-                      </span>
+                      <div className="flex items-center justify-end gap-1.5">
+                        {row.kind === "hold_sales_terug" ? (
+                          <button
+                            type="button"
+                            title="Actie voltooien"
+                            aria-label="Actie voltooien"
+                            disabled={
+                              busyId === `${actie.id}-hold-terug` ||
+                              busyId === actie.id
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void voltooiHoldSalesTerug(actie);
+                            }}
+                            className="inline-flex h-8 w-8 items-center justify-center border border-green/30 bg-green-soft hover:bg-[#d4eedc] disabled:opacity-50"
+                          >
+                            <CheckDot done={false} />
+                          </button>
+                        ) : null}
+                        <span
+                          className={[
+                            "inline-flex h-8 items-center px-3 text-[11px] font-semibold",
+                            isSelected
+                              ? "bg-orange text-white"
+                              : "border border-line text-ink",
+                          ].join(" ")}
+                        >
+                          Open →
+                        </span>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -5400,7 +5948,21 @@ export function BackofficeActiesList({
         const tel = actie?.telefoon || lead?.telefoon || null;
         const hasNotes =
           Boolean(project?.backoffice_notitie?.trim()) ||
-          Boolean(project?.installateur_notitie?.trim());
+          Boolean(project?.installateur_notitie?.trim()) ||
+          Boolean(project?.notities?.trim());
+        const leadAdres = lead
+          ? [
+              [lead.straat, lead.huisnummer, lead.toevoeging]
+                .filter(Boolean)
+                .join(" "),
+              [lead.postcode, lead.plaats].filter(Boolean).join(" "),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          : actie?.plaats || null;
+        const orderStatusLabel = project
+          ? resolveProjectStatusLabel(project.status, project)
+          : null;
 
         return (
           <div className="flex flex-col border border-line bg-white lg:min-h-0 lg:flex-1 lg:overflow-hidden">
@@ -5648,20 +6210,6 @@ export function BackofficeActiesList({
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center justify-end gap-1.5">
-                    {tel ? (
-                      <a
-                        href={`tel:${tel.replace(/\s/g, "")}`}
-                        onClick={() =>
-                          void logBelContact(
-                            actie,
-                            `Gebeld via Acties · ${tel}`
-                          )
-                        }
-                        className="inline-flex h-8 items-center bg-green px-2.5 text-xs font-semibold text-white hover:bg-green-dark"
-                      >
-                        Bel
-                      </a>
-                    ) : null}
                     {hasNotes ? (
                       <button
                         type="button"
@@ -5711,21 +6259,117 @@ export function BackofficeActiesList({
                   </div>
                 </div>
 
-                {/* Split: links content · rechts acties */}
-                <div className="grid grid-cols-1 gap-2 px-2 py-2 sm:px-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1.25fr)_minmax(17rem,0.9fr)] lg:overflow-hidden">
-                  {/* LINKS — factuur / agenda */}
-                  <div className="lg:min-h-0 lg:overflow-hidden">
-                    {selectedRow.kind === "nabellen" ||
-                    selectedRow.kind === "wf_aanbetaling_herinnering" ||
-                    selectedRow.kind === "factuur_versturen" ? (
-                      focusFactuurKaart(
-                        (actie.factuurId
-                          ? facturen.find((f) => f.id === actie.factuurId)
-                          : null) ||
-                          aanbetalingDraftsVoorActie(actie, facturen)[0] ||
-                          null,
-                        actie
-                      )
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <ActieFocusLayout
+                  taakTitel={selectedRow.titel}
+                  taakWaarom={actie.reden || actie.detail}
+                  telefoon={tel}
+                  email={lead?.email || null}
+                  adres={leadAdres}
+                  statusLabel={orderStatusLabel}
+                  schouwLabel={
+                    project?.schouw_at
+                      ? formatDateShort(project.schouw_at)
+                      : null
+                  }
+                  installatieLabel={
+                    project?.installatie_at
+                      ? formatDateShort(project.installatie_at)
+                      : null
+                  }
+                  flowGedaan={focusFlowGedaan(
+                    project,
+                    facturen.filter(
+                      (f) =>
+                        f.project_id === actie.projectId ||
+                        f.lead_id === actie.leadId ||
+                        (actie.offerteId != null &&
+                          f.offerte_id === actie.offerteId)
+                    ),
+                    selectedRow.kind
+                  )}
+                  contextBlocks={focusContextBlocks({
+                    project,
+                    facturen: facturen.filter(
+                      (f) =>
+                        f.project_id === actie.projectId ||
+                        f.lead_id === actie.leadId ||
+                        (actie.offerteId != null &&
+                          f.offerte_id === actie.offerteId)
+                    ),
+                    fotos: focusFotos,
+                    kind: selectedRow.kind,
+                    titel: selectedRow.titel,
+                    installatie: isInstallatiePlanActie(actie),
+                    warmtefonds,
+                  })}
+                  nodig={
+                    selectedRow.kind === "hold_sales_verlopen" ||
+                    selectedRow.kind === "hold_sales_terug" ? (
+                      <div className="rounded-lg border border-border bg-wash/40 px-3 py-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {selectedRow.kind === "hold_sales_terug"
+                            ? "Sales-antwoord"
+                            : "Originele reden"}
+                          {project?.backoffice_notitie_door?.trim()
+                            ? ` · ${project.backoffice_notitie_door.trim()}`
+                            : ""}
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                          {project?.backoffice_notitie?.trim() ||
+                            (selectedRow.kind === "hold_sales_terug"
+                              ? "Geen toelichting van sales."
+                              : "Geen reden ingevuld toen HOLD SALES werd gezet.")}
+                        </p>
+                      </div>
+                    ) : selectedRow.kind === "opstarten" ||
+                    selectedRow.kind === "nazorg" ||
+                    selectedRow.kind === "herplan" ||
+                    selectedRow.kind === "schouw_inplannen" ||
+                    selectedRow.kind === "schouw_week" ||
+                    selectedRow.kind === "wacht_warmtefonds" ||
+                    (selectedRow.kind === "volgende_stap" &&
+                      isInstallatieActie(actie))
+                      ? (
+                  <div className="lg:min-h-0">
+                    {selectedRow.kind === "nazorg" && actie.project ? (
+                      <ProjectAfrondingChecklist
+                        compact
+                        authorNaam={
+                          adviseurs.find((a) => a.id === adviseurId)?.naam ||
+                          null
+                        }
+                        project={{
+                          ...actie.project,
+                          leads:
+                            actie.project.leads ||
+                            leads.find((l) => l.id === actie.leadId) ||
+                            null,
+                        }}
+                        onUpdated={(p) => {
+                          onProjectUpdated?.(p);
+                          void loadProjectTaken();
+                        }}
+                      />
+                    ) : selectedRow.kind === "opstarten" && actie.project ? (
+                      <div className="flex flex-col gap-2">
+                        <OpstartenProjectNotities project={actie.project} />
+                      <ProjectKickoffChecklist
+                        compact
+                        project={actie.project}
+                        facturen={facturen.filter(
+                          (f) =>
+                            f.project_id === actie.projectId ||
+                            f.lead_id === actie.leadId ||
+                            (actie.offerteId != null &&
+                              f.offerte_id === actie.offerteId)
+                        )}
+                        onProjectUpdated={onProjectUpdated}
+                        onFinancieringUpdated={onProjectUpdated}
+                        onFactuurUpdated={onFactuurUpdated}
+                        onFacturenChanged={() => undefined}
+                      />
+                      </div>
                     ) : selectedRow.kind === "herplan" ? (
                       <div className="flex flex-col border border-line bg-white lg:h-full lg:min-h-0 lg:overflow-hidden">
                         <div className="shrink-0 border-b border-line px-2.5 py-2">
@@ -5779,16 +6423,28 @@ export function BackofficeActiesList({
                           })()}
                         </div>
                       </div>
+                    ) : selectedRow.kind === "wacht_warmtefonds" ? (
+                      <div className="flex flex-col border border-line bg-white lg:h-full lg:min-h-0 lg:overflow-hidden">
+                        <div className="px-2.5 py-2.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+                          <WfAdviseurSlotPicker
+                            leadId={actie.leadId}
+                            projectId={actie.projectId}
+                            compact
+                            onPlanned={(iso) =>
+                              void updateFinancieringStatusFromActie(
+                                actie,
+                                resolveFinancieringStatus(actie.project),
+                                { warmtefonds_afspraak_at: iso }
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
                     ) : selectedRow.kind === "schouw_inplannen" ||
                       selectedRow.kind === "schouw_week" ||
                       (selectedRow.kind === "volgende_stap" &&
                         isInstallatieActie(actie)) ? (
-                      <div className="flex flex-col border border-line bg-white p-2.5 lg:h-full lg:min-h-0 lg:overflow-hidden">
-                        <p className="mb-1.5 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                          {isInstallatieActie(actie)
-                            ? "Installatie-agenda"
-                            : "Schouw-agenda"}
-                        </p>
+                      <div className="flex flex-col lg:h-full lg:min-h-0 lg:overflow-hidden">
                         <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
                           {(() => {
                             const pid =
@@ -5858,227 +6514,112 @@ export function BackofficeActiesList({
                           })()}
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex h-full items-center justify-center border border-line bg-wash/40 px-4 text-center text-sm text-muted">
-                        {selectedRow.titel}
-                      </div>
-                    )}
+                    ) : null}
                   </div>
-
-                  {/* RECHTS — wat jij doet (actiekaarten met icoon + uitleg) */}
-                  <div className="flex min-h-0 flex-col gap-2 overflow-y-auto border border-line bg-[#FAFBFA] p-2.5">
-                    <div>
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        Wat wil je doen?
-                      </p>
-                      <p className="mt-0.5 text-sm font-semibold leading-snug text-ink">
-                        {selectedRow.titel}
-                      </p>
-                      <p className="mt-0.5 text-[11px] leading-snug text-muted">
-                        Kies één uitkomst. Elke knop legt uit wat er gebeurt.
-                      </p>
-                    </div>
-
-                    {selectedRow.kind === "nabellen" ? (
-                      <div className="space-y-1.5">
-                        {focusActieKaart({
-                          icon: "check",
-                          titel:
-                            busyId === `${actie.id}-betaald`
-                              ? "Bezig…"
-                              : "Is betaald → klaar",
-                          uitleg:
-                            "Betaling is binnen. Factuur wordt gemarkeerd als betaald.",
-                          tone: "green",
-                          disabled: busyId === `${actie.id}-betaald`,
-                          onClick: () => void markFactuurBetaald(actie),
-                        })}
-                        {focusActieKaart({
-                          icon: "mail",
-                          titel:
-                            busyId === `${actie.id}-herstuur`
-                              ? "Bezig…"
-                              : "Factuur opnieuw mailen",
-                          uitleg:
-                            "Stuur de factuur nog eens naar de klant (PDF bijlage).",
-                          disabled: busyId === `${actie.id}-herstuur`,
-                          onClick: () => void opnieuwVerstuurFactuur(actie),
-                        })}
-                        {focusVervolgBlok(actie, { factuurUitkomst: true })}
-                      </div>
-                    ) : selectedRow.kind === "wf_aanbetaling_herinnering" ? (
-                      <div className="space-y-1.5">
-                        {focusActieKaart({
-                          icon: "mail",
-                          titel:
-                            busyId === `${actie.id}-wf-herinnering`
-                              ? "Bezig…"
-                              : "Stuur herinneringsmail",
-                          uitleg:
-                            actie.titel ===
-                            "Factuur opvolgen aanbetaling Warmtefonds"
-                              ? "Afspraak is ingepland en de aanbetaling staat nog op Verzonden. Herinner de klant, of markeer betaald als het binnen is."
-                              : "Vriendelijke herinnering: aanbetaling nodig voor Warmtefonds-aanvraag.",
-                          tone: "orange",
-                          disabled:
-                            busyId === `${actie.id}-wf-herinnering`,
-                          onClick: () =>
-                            void stuurWfAanbetalingHerinnering(actie),
-                        })}
-                        {focusActieKaart({
-                          icon: "check",
-                          titel:
-                            busyId === `${actie.id}-betaald`
-                              ? "Bezig…"
-                              : "Is betaald → klaar",
-                          uitleg:
-                            "Aanbetaling is binnen. Factuur markeren als betaald.",
-                          tone: "green",
-                          disabled: busyId === `${actie.id}-betaald`,
-                          onClick: () => void markFactuurBetaald(actie),
-                        })}
-                        {focusVervolgBlok(actie, { factuurUitkomst: true })}
-                      </div>
-                    ) : selectedRow.kind === "factuur_versturen" ? (
-                      <div className="space-y-1.5">
-                        {focusActieKaart({
-                          icon: "mail",
-                          titel:
-                            busyId === `${actie.id}-factuur`
-                              ? "Bezig…"
-                              : "Versturen naar klant",
-                          uitleg:
-                            "Maak/verstuur de aanbetalingsfactuur naar de klant.",
-                          tone: "green",
-                          disabled: busyId === `${actie.id}-factuur`,
-                          onClick: () =>
-                            void verstuurAanbetalingsFactuur(actie),
-                        })}
-                        {focusVervolgBlok(actie)}
-                      </div>
-                    ) : selectedRow.kind === "schouw_inplannen" ||
-                      selectedRow.kind === "schouw_week" ||
-                      (selectedRow.kind === "volgende_stap" &&
-                        isInstallatieActie(actie)) ? (
+                      ) : null
+                  }
+                  rail={
+                  <div className="space-y-1.5">
+                    {tel ? (
+                      <a
+                        href={`tel:${tel.replace(/\s/g, "")}`}
+                        onClick={() =>
+                          void logBelContact(
+                            actie,
+                            `Gebeld via Acties · ${tel}`
+                          )
+                        }
+                        aria-label={`Bel ${tel}`}
+                        className="flex w-full items-center justify-center gap-2 rounded-lg bg-green px-2 py-2.5 text-sm font-semibold text-white hover:bg-green-dark"
+                      >
+                        <Phone className="size-4" />
+                        Bel
+                      </a>
+                    ) : null}
+                    {(selectedRow.kind === "opstarten" ||
+                      selectedRow.kind === "hold_sales_terug") &&
+                    actie.project ? (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-lg border border-[#5A4A6E]/30 bg-[#F5F2F8] px-2 py-2 text-left text-sm font-medium text-[#4A3A5C]"
+                        onClick={() => setHoldSalesProject(actie.project!)}
+                      >
+                        HOLD sales actie
+                      </button>
+                    ) : null}
+                    {selectedRow.kind === "aangetekende_brief" ? (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2 py-2 text-left text-sm font-medium disabled:opacity-50"
+                        disabled={!actie.project}
+                        onClick={() => {
+                          if (!actie.project) return;
+                          const fromList = leads.find(
+                            (l) => l.id === actie.leadId
+                          );
+                          setContactMailProject({
+                            ...actie.project,
+                            leads:
+                              actie.project.leads || fromList || null,
+                          });
+                        }}
+                      >
+                        Mail: annulering of installatie
+                      </button>
+                    ) : null}
+                    {selectedRow.kind === "hold_sales_verlopen" ? (
                       <>
-                        <label className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
-                          Partner
-                          <select
-                            value={
-                              partnerKeuze[actie.id] ||
-                              actie.project?.installatie_partner_id ||
-                              defaultPartnerId ||
-                              ""
-                            }
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setPartnerKeuze((p) => ({
-                                ...p,
-                                [actie.id]: v,
-                              }));
-                              setSchouwAtKeuze((p) => {
-                                const n = { ...p };
-                                delete n[actie.id];
-                                return n;
-                              });
-                              setInstallatieAtKeuze((p) => {
-                                const n = { ...p };
-                                delete n[actie.id];
-                                return n;
-                              });
-                            }}
-                            className="mt-1 block h-9 w-full border border-line bg-white px-2 text-sm outline-none focus:border-green"
-                          >
-                            <option value="">Kies partner…</option>
-                            {partners.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.naam}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {focusActieKaart({
-                          icon: "pin",
-                          titel:
-                            busyId === `${actie.id}-schouw` ||
-                            busyId === `${actie.id}-installatie`
-                              ? "Bezig…"
-                              : isInstallatieActie(actie)
-                                ? "Installatie vastleggen"
-                                : selectedRow.kind === "schouw_week"
-                                  ? "Schouwweek zetten"
-                                  : "Schouwdag vastleggen",
-                          uitleg: isInstallatieActie(actie)
-                            ? "Leg de gekozen installatieslot vast bij de partner."
-                            : selectedRow.kind === "schouw_week"
-                              ? "Zet de schouwweek (placeholder) op dit project."
-                              : "Leg de gekozen schouwslot vast bij de partner.",
-                          tone: "orange",
-                          disabled:
-                            busyId === `${actie.id}-schouw` ||
-                            busyId === `${actie.id}-installatie` ||
-                            !(
-                              partnerKeuze[actie.id] ||
-                              actie.project?.installatie_partner_id ||
-                              defaultPartnerId
-                            ) ||
-                            (selectedRow.kind !== "schouw_week" &&
-                              !(
-                                schouwAtKeuze[actie.id] ||
-                                installatieAtKeuze[actie.id]
-                              )),
-                          onClick: () => {
-                            if (
-                              selectedRow.kind === "volgende_stap" &&
-                              isInstallatieActie(actie)
-                            ) {
-                              void planInstallatieFromActie(actie);
-                            } else {
-                              void planSchouwWeek(actie);
-                            }
-                          },
-                        })}
-                        {focusVervolgBlok(actie)}
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2 py-2 text-left text-sm font-medium disabled:opacity-50"
+                          disabled={busyId === `${actie.id}-hold-extend`}
+                          onClick={() =>
+                            void escalateHoldSales(actie, "extend")
+                          }
+                        >
+                          {busyId === `${actie.id}-hold-extend`
+                            ? "Bezig…"
+                            : `HOLD verlengen (+${HOLD_SALES_VERLENG_DAGEN}d)`}
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2 py-2 text-left text-sm font-medium disabled:opacity-50"
+                          disabled={
+                            busyId === `${actie.id}-hold-await_bedenktijd`
+                          }
+                          onClick={() =>
+                            void escalateHoldSales(actie, "await_bedenktijd")
+                          }
+                        >
+                          {busyId === `${actie.id}-hold-await_bedenktijd`
+                            ? "Bezig…"
+                            : "Afwachten bedenktijd"}
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-lg border border-[#9A3B1A]/30 bg-[#FFF6F2] px-2 py-2 text-left text-sm font-medium text-[#9A3B1A] disabled:opacity-50"
+                          disabled={busyId === `${actie.id}-annul-factuur`}
+                          onClick={() =>
+                            void escalateHoldSales(actie, "annulering")
+                          }
+                        >
+                          {busyId === `${actie.id}-annul-factuur`
+                            ? "Bezig…"
+                            : "Annuleringsfactuur"}
+                        </button>
                       </>
-                    ) : selectedRow.kind === "herplan" ? (
-                      <div className="space-y-1.5">
-                        <p className="text-[11px] leading-snug text-muted">
-                          Plan links een nieuw slot met de slimme inplanner.
-                          Daarna is deze herplan-actie klaar.
-                        </p>
-                        {focusActieKaart({
-                          icon: "pin",
-                          titel: "Open inplanner in popup",
-                          uitleg:
-                            "Zelfde planner als links, in een groter venster.",
-                          onClick: () => setHerplanActie(actie),
-                        })}
-                        {focusVervolgBlok(actie)}
-                        {focusActieKaart({
-                          icon: "check",
-                          titel:
-                            busyId === `${actie.id}-afronden`
-                              ? "…"
-                              : "Al herpland → afronden",
-                          uitleg:
-                            "Afspraak staat al elders gezet. Rond deze actie af en ga door.",
-                          tone: "green",
-                          disabled: busyId === `${actie.id}-afronden`,
-                          onClick: () => void afrondenEnVolgende(selectedRow),
-                        })}
-                      </div>
-                    ) : (
-                      <>
-                        {actieWerkPanel(selectedRow, {
-                          hideContact: true,
-                          compact: true,
-                        })}
-                        {focusVervolgBlok(actie)}
-                      </>
-                    )}
-
+                    ) : null}
+                    {focusVervolgBlok(actie)}
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-lg border border-border bg-white px-2 py-2 text-left text-sm font-medium disabled:opacity-50"
+                      disabled={busyId === `${actie.id}-afronden`}
+                      onClick={() => void afrondenEnVolgende(selectedRow)}
+                    >
+                      {busyId === `${actie.id}-afronden` ? "…" : "Afronden"}
+                    </button>
                     {notesOpen ? (
-                      <div className="max-h-24 overflow-y-auto">
+                      <div className="max-h-56 overflow-y-auto">
                         <SaleNotitiesAside
                           actie={actie}
                           projecten={projecten}
@@ -6086,37 +6627,9 @@ export function BackofficeActiesList({
                         />
                       </div>
                     ) : null}
-
-                    {selectedRow.kind !== "nabellen" &&
-                    selectedRow.kind !== "wf_aanbetaling_herinnering" &&
-                    selectedRow.kind !== "factuur_versturen" &&
-                    selectedRow.kind !== "schouw_inplannen" &&
-                    selectedRow.kind !== "schouw_week" &&
-                    selectedRow.kind !== "herplan" &&
-                    !(
-                      selectedRow.kind === "volgende_stap" &&
-                      isInstallatieActie(actie)
-                    ) ? (
-                      <button
-                        type="button"
-                        disabled={busyId === `${actie.id}-afronden`}
-                        onClick={() => void afrondenEnVolgende(selectedRow)}
-                        className="mt-auto flex h-9 w-full items-center justify-center bg-ink text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
-                      >
-                        {busyId === `${actie.id}-afronden`
-                          ? "…"
-                          : "Afronden & volgende →"}
-                      </button>
-                    ) : null}
-
-                    <ActiesEmailInbox
-                      email={
-                        leads.find((l) => l.id === actie.leadId)?.email || null
-                      }
-                      leadId={actie.leadId}
-                      leadNaam={actie.leadNaam}
-                    />
                   </div>
+                  }
+                />
                 </div>
               </>
             )}
@@ -6161,6 +6674,26 @@ export function BackofficeActiesList({
           }}
         />
       ) : null}
+
+      <HoldSalesRedenDialog
+        open={Boolean(holdSalesProject)}
+        project={holdSalesProject}
+        door={adviseurs.find((a) => a.id === adviseurId)?.naam || null}
+        onOpenChange={(open) => {
+          if (!open) setHoldSalesProject(null);
+        }}
+        onPlaced={(p) => {
+          onProjectUpdated?.(p);
+          setHoldSalesProject(null);
+          setMsg("HOLD sales — order terug naar de verkoper.");
+          if (
+            selectedIndex >= 0 &&
+            selectedIndex < visibleRows.length - 1
+          ) {
+            goNextActie();
+          }
+        }}
+      />
 
       {contactMailProject ? (
         <KlantContactMailModal

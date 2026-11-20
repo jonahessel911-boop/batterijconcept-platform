@@ -25,13 +25,26 @@ export function isServiceFoto(
   );
 }
 
+function compactLabel(value: string | null | undefined): string {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_\-./]+/g, "");
+}
+
 export function isSchouwFormulier(
   omschrijving: string | null | undefined
 ): boolean {
-  return (
-    (omschrijving || "").trim().toLowerCase() ===
-    SCHOUW_FORMULIER_OMSCHRIJVING.toLowerCase()
-  );
+  const raw = (omschrijving || "").trim().toLowerCase();
+  if (!raw) return false;
+  const compact = compactLabel(raw);
+  if (
+    compact === "schouwformulier" ||
+    compact.startsWith("schouwformulier")
+  ) {
+    return true;
+  }
+  return raw.includes("schouw") && raw.includes("formulier");
 }
 
 /** Bewijs dat de schouw is gedaan: vast label, of schouw-PDF/rapport. */
@@ -59,6 +72,33 @@ export function isOpleveringsrapport(
   return (
     (omschrijving || "").trim().toLowerCase() ===
     OPLEVERINGSRAPPORT_OMSCHRIJVING.toLowerCase()
+  );
+}
+
+/** Bewijs dat het opleverformulier is ingevuld: vast label, of oplever-PDF. */
+export function isOpleveringsrapportBewijs(
+  omschrijving?: string | null,
+  bestandsnaam?: string | null,
+  storagePath?: string | null
+): boolean {
+  if (isOpleveringsrapport(omschrijving)) return true;
+  const blob = [omschrijving, bestandsnaam, storagePath]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!blob) return false;
+  const compact = compactLabel(blob);
+  if (
+    compact.includes("opleveringsrapport") ||
+    compact.includes("opleverformulier")
+  ) {
+    return true;
+  }
+  if (!blob.includes("oplever")) return false;
+  return (
+    blob.includes("formulier") ||
+    blob.includes("rapport") ||
+    /\.pdf\b/.test(blob)
   );
 }
 

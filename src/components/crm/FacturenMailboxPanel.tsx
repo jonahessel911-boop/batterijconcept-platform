@@ -62,7 +62,7 @@ function parseAmount(s: string): number | null {
 
 function statusLabel(status: string | null | undefined) {
   if (status === "goedgekeurd") return "Goedgekeurd";
-  if (status === "betaald") return "Betaald";
+  if (status === "betaald") return "BETAALD";
   if (status === "afgewezen") return "Afgewezen";
   return "Te goedkeuren";
 }
@@ -284,6 +284,8 @@ export function FacturenMailboxPanel() {
         setMsg(
           `Goedgekeurd — meegenomen in uitbetaling wo ${item.betaal_woensdag || "…"}`
         );
+      } else if (extra?.status === "betaald") {
+        setMsg("BETAALD — staat in Uitbetalingen onder Betaald");
       } else if (extra?.status === "afgewezen") {
         setMsg("Factuur afgewezen");
       } else if (!opts?.silent) {
@@ -448,8 +450,20 @@ export function FacturenMailboxPanel() {
                         <span className="truncate">
                           {formatDateTimeNl(e.mail.receivedAt)}
                         </span>
-                        <span className="shrink-0 font-medium">
-                          {bedrag != null ? formatEuro(bedrag) : statusLabel(st)}
+                        <span
+                          className={cn(
+                            "shrink-0 font-medium",
+                            st === "betaald" &&
+                              !active &&
+                              "font-extrabold uppercase tracking-wide text-[#248A3D]",
+                            st === "betaald" && active && "font-extrabold"
+                          )}
+                        >
+                          {st === "betaald"
+                            ? "BETAALD"
+                            : bedrag != null
+                              ? formatEuro(bedrag)
+                              : statusLabel(st)}
                         </span>
                       </div>
                     </button>
@@ -545,11 +559,13 @@ export function FacturenMailboxPanel() {
                   <span
                     className={cn(
                       "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                      locked
-                        ? "bg-[#34C759]/15 text-[#248A3D]"
-                        : selected.item?.status === "afgewezen"
-                          ? "bg-[#FF3B30]/12 text-[#C62828]"
-                          : "bg-[#FF9500]/15 text-[#9A5B00]"
+                      selected.item?.status === "betaald"
+                        ? "bg-[#34C759]/20 text-[13px] font-extrabold uppercase tracking-wide text-[#248A3D]"
+                        : locked
+                          ? "bg-[#34C759]/15 text-[#248A3D]"
+                          : selected.item?.status === "afgewezen"
+                            ? "bg-[#FF3B30]/12 text-[#C62828]"
+                            : "bg-[#FF9500]/15 text-[#9A5B00]"
                     )}
                   >
                     {statusLabel(selected.item?.status)}
@@ -657,7 +673,20 @@ export function FacturenMailboxPanel() {
                       ) : (
                         <Check className="size-4" />
                       )}
-                      Goedkeuren → Uitbetalingen
+                      Goedkeuren → Uit te betalen
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void savePatch({ status: "betaald" })}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-[#248A3D] bg-[#E8F8EE] px-4 py-2.5 text-[14px] font-extrabold uppercase tracking-wide text-[#248A3D] disabled:opacity-50"
+                    >
+                      {saving ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Check className="size-4 stroke-[3]" />
+                      )}
+                      BETAALD
                     </button>
                     <div className="flex gap-2">
                       <button
@@ -680,11 +709,21 @@ export function FacturenMailboxPanel() {
                     </div>
                   </>
                 ) : (
-                  <p className="rounded-xl bg-[#F2F2F7] px-3 py-2.5 text-center text-[13px] text-[#3A3A3C]">
-                    Staat in Uitbetalingen
-                    {selected.item?.betaal_woensdag
-                      ? ` · wo ${selected.item.betaal_woensdag}`
-                      : ""}
+                  <p
+                    className={cn(
+                      "rounded-xl px-3 py-2.5 text-center text-[13px]",
+                      selected.item?.status === "betaald"
+                        ? "bg-[#E8F8EE] text-[15px] font-extrabold uppercase tracking-wide text-[#248A3D]"
+                        : "bg-[#F2F2F7] text-[#3A3A3C]"
+                    )}
+                  >
+                    {selected.item?.status === "betaald"
+                      ? "BETAALD · Uitbetalingen → Betaald"
+                      : `Staat in Uit te betalen${
+                          selected.item?.betaal_woensdag
+                            ? ` · wo ${selected.item.betaal_woensdag}`
+                            : ""
+                        }`}
                   </p>
                 )}
               </div>

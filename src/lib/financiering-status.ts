@@ -247,6 +247,61 @@ export function heeftWarmtefondsAfspraak(project: {
   return Boolean(project.warmtefonds_afspraak_at);
 }
 
+/**
+ * Financieringsfasen waarin BO wacht op Warmtefonds (geen escalatie,
+ * geen annuleringskosten): doorgestuurd, behandeling, ondertekenen,
+ * declaratie, wachten op betaling.
+ */
+export const FINANCIERING_WACHT_UITBETALING: ReadonlySet<FinancieringStatus> =
+  new Set([
+    "doorgestuurd_naar_edwin",
+    "in_behandeling",
+    "aanbod_ondertekenen",
+    "declaratie_indienen",
+    "wacht_op_betaling",
+  ]);
+
+export function isFinancieringWachtOpUitbetalingFase(
+  status: FinancieringStatus | string | null | undefined
+): boolean {
+  const n = normalizeFinancieringStatus(status);
+  return Boolean(n && FINANCIERING_WACHT_UITBETALING.has(n));
+}
+
+export function isFinancieringWachtOpUitbetaling(project: {
+  financiering_status?: string | null;
+  status?: string | null;
+}): boolean {
+  return isFinancieringWachtOpUitbetalingFase(resolveFinancieringStatus(project));
+}
+
+/** WF-traject loopt nog (niet uitbetaald / afgewezen). */
+export function isFinancieringNogBezig(project: {
+  financiering_status?: string | null;
+  status?: string | null;
+}): boolean {
+  const n = normalizeFinancieringStatus(resolveFinancieringStatus(project));
+  if (!n) return true;
+  return n !== "uitbetaald" && n !== "afgewezen";
+}
+
+/** Laatste financieringsfasewijziging, met fallback op bekende WF-timestamps. */
+export function financieringFaseGewijzigdAt(project: {
+  financiering_status_at?: string | null;
+  warmtefonds_aangevraagd_at?: string | null;
+  financiering_geschakeld_at?: string | null;
+  warmtefonds_afspraak_at?: string | null;
+  updated_at?: string | null;
+}): string | null {
+  return (
+    project.financiering_status_at ||
+    project.warmtefonds_aangevraagd_at ||
+    project.financiering_geschakeld_at ||
+    project.warmtefonds_afspraak_at ||
+    null
+  );
+}
+
 /** Nog vóór “in behandeling” in de WF-pipeline. */
 export function isWfVoorInBehandeling(
   status: FinancieringStatus | string | null | undefined

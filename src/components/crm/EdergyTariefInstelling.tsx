@@ -95,7 +95,7 @@ export function EdergyTariefInstelling({
           </h3>
           <p className="mt-1 text-xs text-muted">
             Fallback voor partners zonder eigen tarief. Per partner kun je in
-            het detail een ander bedrag zetten. Standaard €150 excl. btw.
+            het detail een ander bedrag zetten. Standaard €300 excl. btw.
           </p>
           {partnersTotaal != null && partnersTotaal > 0 ? (
             <p className="mt-2 text-[11px] font-medium text-muted">

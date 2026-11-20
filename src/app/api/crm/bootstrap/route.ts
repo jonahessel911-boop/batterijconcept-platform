@@ -95,6 +95,36 @@ export async function GET() {
     }[];
     let facturenScoped = facturen as { lead_id: string }[];
 
+    const { projectMoetNaarAfterSale } = await import(
+      "@/lib/project-na-oplevering"
+    );
+    const stuckOplever = (projectenScoped as { id: string; status?: string | null; oplever_formulier?: unknown; installatie_voltooid_at?: string | null }[]).filter(
+      (p) => projectMoetNaarAfterSale(p)
+    );
+    if (stuckOplever.length > 0) {
+      const now = new Date().toISOString();
+      const ids = stuckOplever.map((p) => p.id);
+      const { error: opleverErr } = await sb
+        .from("projecten")
+        .update({ status: "after_sale" })
+        .in("id", ids);
+      if (!opleverErr) {
+        const missingVoltooid = stuckOplever
+          .filter((p) => !p.installatie_voltooid_at)
+          .map((p) => p.id);
+        if (missingVoltooid.length > 0) {
+          await sb
+            .from("projecten")
+            .update({ installatie_voltooid_at: now })
+            .in("id", missingVoltooid);
+        }
+        for (const p of stuckOplever) {
+          (p as { status: string }).status = "after_sale";
+          if (!p.installatie_voltooid_at) p.installatie_voltooid_at = now;
+        }
+      }
+    }
+
     if (eigenScope) {
       const myLeadIds = new Set(
         (leads as { id: string }[]).map((l) => l.id)

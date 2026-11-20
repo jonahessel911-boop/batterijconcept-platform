@@ -8,8 +8,8 @@ import { resolveProjectStatusLabel } from "@/lib/labels";
 import {
   isFotoBatterij,
   isFotoMeterkast,
-  isOpleveringsrapport,
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   isVideoInstallatie,
 } from "@/lib/project-documenten";
 import { medewerkerNaamVanProject } from "@/lib/project-medewerker";
@@ -130,7 +130,14 @@ export function ProjectInstallatiesTab({
 
   const schouwDoc = useMemo(() => {
     const docs = fotos
-      .filter((f) => isSchouwFormulier(f.omschrijving) && f.url)
+      .filter(
+        (f) =>
+          isSchouwFormulierBewijs(
+            f.omschrijving,
+            f.bestandsnaam,
+            f.storage_path
+          ) && f.url
+      )
       .sort((a, b) =>
         String(a.created_at || "").localeCompare(String(b.created_at || ""))
       );
@@ -144,7 +151,14 @@ export function ProjectInstallatiesTab({
 
   const opleverDoc = useMemo(() => {
     const docs = fotos
-      .filter((f) => isOpleveringsrapport(f.omschrijving) && f.url)
+      .filter(
+        (f) =>
+          isOpleveringsrapportBewijs(
+            f.omschrijving,
+            f.bestandsnaam,
+            f.storage_path
+          ) && f.url
+      )
       .sort((a, b) =>
         String(a.created_at || "").localeCompare(String(b.created_at || ""))
       );

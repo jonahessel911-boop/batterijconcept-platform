@@ -1783,7 +1783,7 @@ export function InstellingenPanel({
             <div className="sm:col-span-2">
               <FormSection
                 title="Startadres & agenda"
-                hint="Vertrekpunt voor reistijd bij schouw/installatie · ochtend 09–12 / middag 13–17"
+                hint="Vertrekpunt voor reistijd bij schouw/installatie · ochtend 08–12 / middag 13–17"
               >
                 <div className="sm:col-span-2">
                   <StartAdresPostcodeField

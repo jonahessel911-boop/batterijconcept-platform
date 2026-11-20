@@ -28,6 +28,33 @@ export async function POST(req: NextRequest) {
       fromEmail?: string;
       klantEmail?: string;
       agentNaam?: string;
+      thread?: {
+        fromUs?: boolean;
+        fromName?: string;
+        at?: string;
+        subject?: string;
+        body?: string;
+      }[];
+      context?: {
+        folder?: string | null;
+        aiSummary?: string | null;
+        cancelAfspraak?: boolean;
+        leadGeenContact?: boolean;
+        leadGeenInteresse?: boolean;
+        createServiceVerzoek?: boolean;
+        leadNaam?: string | null;
+        leadStatus?: string | null;
+        leadPlaats?: string | null;
+        leadNumber?: string | null;
+        projectNummer?: string | null;
+        projectStatus?: string | null;
+        afspraak?: {
+          startAt?: string | null;
+          status?: string | null;
+          soort?: string | null;
+          adviseurNaam?: string | null;
+        } | null;
+      };
     };
     const draft = await draftInboxReply({
       subject: body.subject || "",
@@ -36,6 +63,19 @@ export async function POST(req: NextRequest) {
       fromEmail: body.fromEmail,
       klantEmail: body.klantEmail,
       agentNaam: body.agentNaam || session.naam || undefined,
+      thread: Array.isArray(body.thread)
+        ? body.thread
+            .filter((m) => typeof m?.body === "string")
+            .slice(-12)
+            .map((m) => ({
+              fromUs: Boolean(m.fromUs),
+              fromName: m.fromName,
+              at: m.at,
+              subject: m.subject,
+              body: m.body || "",
+            }))
+        : undefined,
+      context: body.context || null,
     });
     return NextResponse.json({ ok: true, ...draft });
   } catch (e) {

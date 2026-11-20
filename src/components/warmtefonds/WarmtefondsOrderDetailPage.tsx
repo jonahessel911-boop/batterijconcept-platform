@@ -91,6 +91,7 @@ type OrderDetail = {
   bedragen?: {
     totaalInc: number | null;
     aanbetalingInc: number | null;
+    teFinancierenInc?: number | null;
     warmtefondsInc: number | null;
     offerteGetekend: boolean;
   } | null;
@@ -599,9 +600,15 @@ export function WarmtefondsOrderDetailPage() {
             {/* Bedragen */}
             <div className="grid gap-2 sm:grid-cols-3">
               <div className="rounded-lg border border-line bg-wash/40 px-3 py-2.5">
-                <p className={SECTION_TITLE}>Warmtefonds-deel</p>
+                <p className={SECTION_TITLE}>Te financieren via WF</p>
                 <p className="mt-1 text-lg font-semibold tabular-nums text-green-dark">
-                  {euroOfStreep(order.bedragen?.warmtefondsInc)}
+                  {euroOfStreep(
+                    order.bedragen?.teFinancierenInc ??
+                      order.bedragen?.warmtefondsInc
+                  )}
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted">
+                  Order minus BTW-aanbetaling
                 </p>
               </div>
               <div className="rounded-lg border border-line bg-wash/40 px-3 py-2.5">
@@ -611,7 +618,7 @@ export function WarmtefondsOrderDetailPage() {
                 </p>
               </div>
               <div className="rounded-lg border border-line bg-wash/40 px-3 py-2.5">
-                <p className={SECTION_TITLE}>Aanbetaling</p>
+                <p className={SECTION_TITLE}>Aanbetaling (BTW)</p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <p className="text-lg font-semibold tabular-nums text-ink">
                     {euroOfStreep(order.bedragen?.aanbetalingInc)}

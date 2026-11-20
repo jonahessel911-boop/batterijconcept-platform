@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro, adresRegel } from "@/lib/format";
-import { offerteRegelsVoorWeergave, kortingIncVanRegels } from "@/lib/offerte-regels";
+import { offerteRegelsVoorWeergave, zichtbareKortingIncVanRegels, zichtbareOfferteTotalen } from "@/lib/offerte-regels";
 import { SignaturePadField } from "./SignaturePadField";
 
 type Props = {
@@ -44,7 +44,11 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
       }),
     [regels, offerte.financiering_voorbehoud]
   );
-  const kortingInc = useMemo(() => kortingIncVanRegels(regels), [regels]);
+  const kortingInc = useMemo(() => zichtbareKortingIncVanRegels(regels), [regels]);
+  const zichtbaarTotaal = useMemo(
+    () => zichtbareOfferteTotalen(offerte, regels),
+    [offerte, regels]
+  );
   const alreadySigned = offerte.status === "ondertekend";
   const klantAdres = offerte.leads ? adresRegel(offerte.leads) : "—";
 
@@ -304,13 +308,13 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                 <div className="flex items-center justify-between border border-[#d5ddd8] px-3 py-2 text-sm">
                   <span className="text-muted">Totaal excl. BTW</span>
                   <span className="tabular-nums text-ink">
-                    {formatEuro(offerte.subtotaal_ex_btw)}
+                    {formatEuro(zichtbaarTotaal.subtotaalEx)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
                   <span className="text-muted">21% BTW</span>
                   <span className="tabular-nums text-ink">
-                    {formatEuro(offerte.btw_bedrag)}
+                    {formatEuro(zichtbaarTotaal.btw)}
                   </span>
                 </div>
                 {kortingInc < 0 && (
@@ -324,7 +328,7 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
                 <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2.5 text-sm font-semibold">
                   <span className="text-green-deeper">Totaal incl. BTW</span>
                   <span className="tabular-nums text-green-deeper">
-                    {formatEuro(offerte.totaal_inc_btw)}
+                    {formatEuro(zichtbaarTotaal.totaalInc)}
                   </span>
                 </div>
               </div>

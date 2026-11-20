@@ -90,6 +90,7 @@ export type ProjectStatusKey =
   | "materiaal_besteld"
   | "installatie_ingepland"
   | "installatie_voltooid"
+  | "after_sale"
   | "review_gevraagd"
   | "afgerond"
   | "service"
@@ -314,20 +315,29 @@ export const PROJECT_STATUS_DEFS: ProjectStatusDef[] = [
   },
   {
     key: "installatie_voltooid",
-    label: "After sale - installatie voltooid",
+    label: "Installatie voltooid",
+    fase: "uitvoering",
+    scope: "beide",
+    inPipeline: true,
+    /** Opleverformulier gezet → after_sale (overstap + BTW + review). */
+    taak: null,
+  },
+  {
+    key: "after_sale",
+    label: "After sale",
     fase: "afronding",
     scope: "beide",
     inPipeline: true,
-    /** Nazorg: overstap + BTW + review via autoTakenVoorStatus. */
+    /** Overstap dynamische leverancier, BTW-terugvrage, review. */
     taak: null,
   },
   {
     key: "review_gevraagd",
-    label: "After sale - review gevraagd",
+    label: "After sale",
     fase: "afronding",
     scope: "beide",
-    /** Legacy tussenstap; eindstatus = afgerond (helemaal klaar). */
-    inPipeline: true,
+    /** Legacy alias van after_sale. */
+    inPipeline: false,
     taak: null,
   },
   {
@@ -411,7 +421,7 @@ export function projectPipelineFor(
       "materiaal_besteld",
       "installatie_ingepland",
       "installatie_voltooid",
-      "review_gevraagd",
+      "after_sale",
       "afgerond",
     ];
   }
@@ -426,7 +436,7 @@ export function projectPipelineFor(
     "materiaal_besteld",
     "installatie_ingepland",
     "installatie_voltooid",
-    "review_gevraagd",
+    "after_sale",
     "afgerond",
   ];
 }
@@ -443,6 +453,7 @@ export function projectStatusesFor(
       d.fase !== "financiering" &&
       d.key !== "aanbetaling_verstuurd" &&
       d.key !== "aanbetaling_betaald" &&
+      d.key !== "review_gevraagd" &&
       statusAppliesToBetaalwijze(d, betaalwijze)
   ).map((d) => d.key);
 }
@@ -521,7 +532,7 @@ export function remapLegacyProjectStatus(
     case "materiaal_besteld":
     case "installatie_ingepland":
     case "installatie_voltooid":
-    case "review_gevraagd":
+    case "after_sale":
     case "afgerond":
     case "service":
     case "annulering":
@@ -547,6 +558,8 @@ export function remapLegacyProjectStatus(
       return "installatie_ingepland";
     case "btw_factuur_eruit":
       return "restfactuur_verstuurd";
+    case "review_gevraagd":
+      return "after_sale";
 
     default:
       return "schouwweek_inplannen";

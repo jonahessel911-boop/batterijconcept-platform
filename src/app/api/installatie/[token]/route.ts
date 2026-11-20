@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
+  applyOwnJobsFilter,
   portalViewerPayload,
   resolveInstallatiePortal,
+  resolveOwnJobsScope,
   scopesToOwnJobsOnly,
 } from "@/lib/installatie-portal";
 
@@ -25,19 +27,40 @@ export async function GET(
     }
 
     const sb = getSupabaseAdmin();
-    let query = sb
-      .from("projecten")
-      .select(
-        "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_teamgenoot_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number)"
-      )
-      .eq("installatie_partner_id", session.partner.id)
-      .order("schouw_at", { ascending: true, nullsFirst: false });
+    const scope = await resolveOwnJobsScope(session);
+    const query = applyOwnJobsFilter(
+      sb
+        .from("projecten")
+        .select(
+          "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, installatie_koppel_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))"
+        )
+        .eq("installatie_partner_id", session.partner.id)
+        .order("schouw_at", { ascending: true, nullsFirst: false }),
+      scope
+    );
 
-    if (scopesToOwnJobsOnly(session)) {
-      query = query.eq("installatie_teamgenoot_id", session.teamgenoot.id);
+    let { data: orders, error } = await query;
+
+    if (
+      error &&
+      (error.message?.includes("installatie_koppel_id") ||
+        (error.code === "42703" &&
+          error.message?.includes("installatie_koppel_id")))
+    ) {
+      let retry = sb
+        .from("projecten")
+        .select(
+          "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, notities, monteur, installatie_partner_id, installatie_teamgenoot_id, offerte_id, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), offertes(offerte_regels(omschrijving, aantal))"
+        )
+        .eq("installatie_partner_id", session.partner.id)
+        .order("schouw_at", { ascending: true, nullsFirst: false });
+      if (scopesToOwnJobsOnly(session)) {
+        retry = retry.eq("installatie_teamgenoot_id", session.teamgenoot.id);
+      }
+      const second = await retry;
+      orders = second.data;
+      error = second.error;
     }
-
-    const { data: orders, error } = await query;
 
     if (error) {
       if (

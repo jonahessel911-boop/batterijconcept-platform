@@ -31,7 +31,7 @@ export async function GET(
     const { data: orders, error } = await sb
       .from("projecten")
       .select(
-        "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, installatie_partner_id, monteur, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), installatie_partners(id, naam, email, telefoon)"
+        "id, project_nummer, titel, status, schouw_at, schouw_jaar, schouw_week, schouw_notities, installatie_at, installatie_notities, installatie_partner_id, monteur, materiaal_checks, startdatum, opleverdatum, created_at, leads(naam, telefoon, email, postcode, huisnummer, toevoeging, straat, plaats, lead_number), installatie_partners(id, naam, email, telefoon)"
       )
       .eq("installatie_partner_id", id)
       .or("schouw_at.not.is.null,installatie_at.not.is.null")

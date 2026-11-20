@@ -83,6 +83,13 @@ export function canAutoPromoteToGesprekGepland(
   );
 }
 
+/** True als via het portaal de info-mail écht is verstuurd. */
+export function sollicitatieHeeftInfoToegestuurd(
+  notitie: string | null | undefined
+): boolean {
+  return /info toegestuurd\s*→/i.test(notitie || "");
+}
+
 /** FormData/JSON payload zonder File-objecten (voor jsonb). */
 export function sanitizeSollicitatiePayload(
   body: Record<string, unknown>

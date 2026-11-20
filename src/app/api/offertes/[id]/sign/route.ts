@@ -8,8 +8,15 @@ import {
   offerteOndertekendEmail,
   orderGetekendInternEmail,
 } from "@/lib/email/templates";
-import { DEFAULT_INSTALLATIE_STANDAARD, PRODUCT_SELECT_INKOOP } from "@/lib/inkoop";
-import { hardwareKostenVoorRegelsMetProducten } from "@/lib/project-kosten";
+import {
+  DEFAULT_INSTALLATIE_STANDAARD,
+  inkoopRegelsDetail,
+  loadProductenInkoop,
+} from "@/lib/inkoop";
+import {
+  hardwareKostenVoorRegelsMetProducten,
+  pnlInstallatieVoorOrder,
+} from "@/lib/project-kosten";
 import { commissiePctToFraction } from "@/lib/netto-boord";
 // Project + aanbetalingsfactuur pas na “Actie afronden” (niet bij ondertekenen)
 
@@ -246,34 +253,24 @@ export async function POST(
         (adv as { commissie_pct?: number | null } | null)?.commissie_pct ??
         null;
 
-      let producten: Parameters<
-        typeof hardwareKostenVoorRegelsMetProducten
-      >[1] = [];
-      const { data: prodRows, error: prodErr } = await supabase
-        .from("producten")
-        .select(PRODUCT_SELECT_INKOOP)
-        .eq("actief", true);
-      if (!prodErr && prodRows?.length) {
-        producten = prodRows as typeof producten;
-      }
+      const producten = await loadProductenInkoop(supabase);
 
       const bedragExBtw = Number(offerte.subtotaal_ex_btw) || 0;
-      const inkoop = hardwareKostenVoorRegelsMetProducten(
-        regels,
-        producten
-      ).totaal;
-      let installatie = DEFAULT_INSTALLATIE_STANDAARD;
+      const hw = hardwareKostenVoorRegelsMetProducten(regels, producten);
+      const inkoop = hw.totaal;
+      let standaard = DEFAULT_INSTALLATIE_STANDAARD;
       const { data: inst } = await supabase
         .from("dashboard_instellingen")
         .select("standaard_installatie")
         .eq("actief", true)
         .limit(1)
         .maybeSingle();
-      const standaard = Number(
+      const instVal = Number(
         (inst as { standaard_installatie?: number | null } | null)
           ?.standaard_installatie
       );
-      if (standaard > 0) installatie = standaard;
+      if (instVal > 0) standaard = instVal;
+      const installatie = pnlInstallatieVoorOrder(null, standaard, hw);
       const salesCommissie =
         Math.round(
           bedragExBtw * commissiePctToFraction(commissiePct) * 100
@@ -295,6 +292,7 @@ export async function POST(
         bedragExBtw,
         brutoMarge,
         inkoop,
+        inkoopRegels: inkoopRegelsDetail(regels, producten),
         installatie,
         salesCommissie,
         commissiePctLabel,

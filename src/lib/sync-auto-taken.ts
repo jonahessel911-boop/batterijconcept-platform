@@ -26,7 +26,7 @@ import {
 import type { Project } from "@/types/database";
 import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
-import { OPLEVERING_REVIEW_TAK_AUTO_KEY } from "@/lib/project-taken";
+import { OPLEVERING_AFTER_SALE_TAK_AUTO_KEY } from "@/lib/project-taken";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
@@ -53,6 +53,7 @@ type ProjectSchouwFields = {
   btw_terugvragen_aangevraagd_at?: string | null;
   overstap_dynamische_leverancier_at?: string | null;
   review_gevraagd_at?: string | null;
+  monteur_beoordeling_sterren?: number | null;
   leads?: { status?: string | null } | { status?: string | null }[] | null;
   offertes?:
     | {
@@ -155,7 +156,7 @@ export async function syncAutoTakenVoorProject(
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
+      "status, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, monteur_beoordeling_sterren, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -228,6 +229,7 @@ export async function syncAutoTakenVoorProject(
     // ook als status al review_gevraagd/service is.
     if (
       operational === "review_gevraagd" ||
+      operational === "after_sale" ||
       operational === "afgerond" ||
       operational === "service" ||
       operational === "installatie_voltooid"
@@ -244,20 +246,13 @@ export async function syncAutoTakenVoorProject(
       for (const d of afrondDefs) {
         if (defs.some((x) => x.autoKey === d.autoKey)) continue;
         if (
-          d.autoKey === "installatie_voltooid:overstap_leverancier" &&
-          project.overstap_dynamische_leverancier_at
-        ) {
-          continue;
-        }
-        if (
-          d.autoKey === "installatie_voltooid:btw_terugvragen" &&
-          project.btw_terugvragen_aangevraagd_at
-        ) {
-          continue;
-        }
-        if (
-          d.autoKey === OPLEVERING_REVIEW_TAK_AUTO_KEY &&
-          project.review_gevraagd_at
+          d.autoKey === OPLEVERING_AFTER_SALE_TAK_AUTO_KEY &&
+          project.overstap_dynamische_leverancier_at &&
+          project.btw_terugvragen_aangevraagd_at &&
+          project.review_gevraagd_at &&
+          (typeof project.monteur_beoordeling_sterren === "number" ||
+            operational === "afgerond" ||
+            operational === "service")
         ) {
           continue;
         }

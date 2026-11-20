@@ -87,6 +87,7 @@ const CANDIDATE_STATUSES = new Set([
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",

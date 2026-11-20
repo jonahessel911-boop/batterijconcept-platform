@@ -9,6 +9,7 @@ import {
   installatiePartnerEmail,
 } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
+import { feestdagPlanningFout } from "@/lib/nl-feestdagen";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,7 @@ export async function POST(
     installatie_at?: string;
     installatie_partner_id?: string;
     installatie_teamgenoot_id?: string | null;
+    installatie_koppel_id?: string | null;
     installatie_notities?: string | null;
   };
   try {
@@ -46,6 +48,10 @@ export async function POST(
       { error: "Ongeldige installatie_at" },
       { status: 400 }
     );
+  }
+  const feestdagFout = feestdagPlanningFout(installatieAt);
+  if (feestdagFout) {
+    return NextResponse.json({ error: feestdagFout }, { status: 400 });
   }
 
   try {
@@ -86,26 +92,21 @@ export async function POST(
       );
     }
 
-    let teamgenootId: string | null =
-      body.installatie_teamgenoot_id?.trim() || null;
+    const { resolveKoppelVanPartner, koppelWeergaveNaam, koppelEmails } =
+      await import("@/lib/installatie-koppel");
+    const koppelId = body.installatie_koppel_id?.trim() || null;
     let monteurNaam: string | null = null;
-    let monteurEmail: string | null = null;
-    if (teamgenootId) {
-      const { data: tg } = await sb
-        .from("installatie_partner_teamgenoten")
-        .select("id, naam, email, actief")
-        .eq("id", teamgenootId)
-        .eq("partner_id", partner.id)
-        .maybeSingle();
-      if (!tg || tg.actief === false) {
+    let extraMonteurEmails: string[] = [];
+    if (koppelId) {
+      const koppel = await resolveKoppelVanPartner(partner.id, koppelId);
+      if (!koppel) {
         return NextResponse.json(
-          { error: "Medewerker niet gevonden bij deze installateur" },
+          { error: "Koppel niet gevonden bij deze installateur" },
           { status: 400 }
         );
       }
-      teamgenootId = tg.id;
-      monteurNaam = tg.naam;
-      monteurEmail = tg.email?.trim() || null;
+      monteurNaam = koppelWeergaveNaam(koppel);
+      extraMonteurEmails = koppelEmails(koppel);
     }
 
     const installatieNotities = body.installatie_notities?.trim() || null;
@@ -114,7 +115,7 @@ export async function POST(
       installatie_notities: installatieNotities,
       installatie_partner_id: partner.id,
       monteur: monteurNaam,
-      installatie_teamgenoot_id: teamgenootId,
+      installatie_koppel_id: koppelId,
       status: "installatie_ingepland",
       installatie_herinnering_verstuurd: false,
       installatie_mail_klant_verstuurd: false,
@@ -130,6 +131,16 @@ export async function POST(
       )
       .single();
 
+    if (updateErr && updateErr.message?.includes("installatie_koppel_id")) {
+      return NextResponse.json(
+        {
+          error:
+            "Voer supabase/migrate-project-installatie-koppel.sql uit in Supabase (kolom installatie_koppel_id).",
+          detail: updateErr.message,
+        },
+        { status: 500 }
+      );
+    }
     if (
       updateErr &&
       (updateErr.message?.includes("installatie_teamgenoot_id") ||
@@ -247,7 +258,10 @@ export async function POST(
       };
     }
 
-    const monteurCc = monteurCcEmail(partner.email, monteurEmail);
+    const monteurCc = monteurCcEmail(
+      partner.email,
+      extraMonteurEmails[0] || null
+    );
     if ((partner.email?.trim() || monteurCc) && partner.portal_token) {
       const portalUrl = `${appBaseUrl()}/installatie/${partner.portal_token}`;
       const html = installatiePartnerEmail({

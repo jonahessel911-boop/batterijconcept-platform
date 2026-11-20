@@ -34,8 +34,8 @@ import {
   FOTO_METERKAST_OMSCHRIJVING,
   isFotoBatterij,
   isFotoMeterkast,
-  isOpleveringsrapport,
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   isVideoInstallatie,
   VIDEO_INSTALLATIE_OMSCHRIJVING,
 } from "@/lib/project-documenten";
@@ -58,6 +58,7 @@ const STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
 
 const VOLTOOID_STATUSES = new Set<string>([
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",
@@ -579,7 +580,14 @@ export function InstallatieOrderDetailPage({
                   .filter((f) => isFotoMeterkast(f.omschrijving) && f.url)
                   .at(-1);
                 const schouwDoc = [...fotos]
-                  .filter((f) => isSchouwFormulier(f.omschrijving) && f.url)
+                  .filter(
+                    (f) =>
+                      isSchouwFormulierBewijs(
+                        f.omschrijving,
+                        f.bestandsnaam,
+                        f.storage_path
+                      ) && f.url
+                  )
                   .sort((a, b) =>
                     String(a.created_at || "").localeCompare(
                       String(b.created_at || "")
@@ -788,7 +796,14 @@ export function InstallatieOrderDetailPage({
             <div className="mt-6 space-y-4 border-t border-line pt-4">
               {(() => {
                 const schouwDoc = [...fotos]
-                  .filter((f) => isSchouwFormulier(f.omschrijving) && f.url)
+                  .filter(
+                    (f) =>
+                      isSchouwFormulierBewijs(
+                        f.omschrijving,
+                        f.bestandsnaam,
+                        f.storage_path
+                      ) && f.url
+                  )
                   .at(-1);
                 const batterij = [...fotos]
                   .filter((f) => isFotoBatterij(f.omschrijving) && f.url)
@@ -797,7 +812,14 @@ export function InstallatieOrderDetailPage({
                   .filter((f) => isVideoInstallatie(f.omschrijving) && f.url)
                   .at(-1);
                 const oplever = [...fotos]
-                  .filter((f) => isOpleveringsrapport(f.omschrijving) && f.url)
+                  .filter(
+                    (f) =>
+                      isOpleveringsrapportBewijs(
+                        f.omschrijving,
+                        f.bestandsnaam,
+                        f.storage_path
+                      ) && f.url
+                  )
                   .at(-1);
                 return (
                   <>

@@ -5,6 +5,7 @@ import { factuurVerzondenEmail } from "@/lib/email/templates";
 import { formatDateShort, formatEuro } from "@/lib/format";
 import {
   COMPANY_ACCOUNT_NAME,
+  FACTUUR_BETAALTERMIJN_CREDIT_DAGEN,
   FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN,
   amsterdamDatePlusDays,
   factuurBetaaltermijnDagen,
@@ -102,12 +103,14 @@ export async function verstuurFactuurNaarKlant(
   const isCredit = Boolean(factuur.credit_van_factuur_id);
   const creditVanNummer = creditVan?.factuur_nummer || null;
 
-  const betaaltermijnDagen = isWarmtefondsRestant
-    ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
-    : factuurBetaaltermijnDagen({
-        factuurdatum: factuur.factuurdatum,
-        vervaldatum: factuur.vervaldatum,
-      });
+  const betaaltermijnDagen = isCredit
+    ? FACTUUR_BETAALTERMIJN_CREDIT_DAGEN
+    : isWarmtefondsRestant
+      ? FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN
+      : factuurBetaaltermijnDagen({
+          factuurdatum: factuur.factuurdatum,
+          vervaldatum: factuur.vervaldatum,
+        });
   const vervaldatum = amsterdamDatePlusDays(new Date(), betaaltermijnDagen);
   const factuurVoorPdf = {
     ...factuur,
@@ -157,8 +160,8 @@ export async function verstuurFactuurNaarKlant(
     naam: factuur.leads?.naam || "klant",
     factuurNummer: factuur.factuur_nummer,
     bedrag: formatEuro(factuur.bedrag_inc_btw),
-    vervaldatum: isCredit ? null : formatDateShort(vervaldatum),
-    betaaltermijnDagen: isCredit ? null : betaaltermijnDagen,
+    vervaldatum: formatDateShort(vervaldatum),
+    betaaltermijnDagen,
     iban: isCredit ? null : ibanVoorKlantfactuur(factuur),
     accountName: co.accountName || COMPANY_ACCOUNT_NAME,
     betalingskenmerk: offerte?.offerte_nummer || factuur.factuur_nummer,

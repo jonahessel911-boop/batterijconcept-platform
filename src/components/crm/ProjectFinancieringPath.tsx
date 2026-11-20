@@ -13,6 +13,7 @@ import {
   RESTANT_VAST_INC_BTW,
 } from "@/lib/aanbetaling";
 import { formatDateTimeNl, formatEuro } from "@/lib/format";
+import { WfAdviseurSlotPicker } from "./WfAdviseurSlotPicker";
 
 /**
  * Parallel Warmtefonds-spoor — los van orderstatus.
@@ -27,6 +28,10 @@ export function ProjectFinancieringPath({
   warmtefondsInc = null,
   restantFactuurStatus = null,
   onOpenFinancieel,
+  actiesAgenda = false,
+  leadId = null,
+  projectId = null,
+  onAgendaPlanned,
 }: {
   status: FinancieringStatus | null;
   afspraakAt?: string | null;
@@ -39,6 +44,11 @@ export function ProjectFinancieringPath({
   warmtefondsInc?: number | null;
   restantFactuurStatus?: string | null;
   onOpenFinancieel?: () => void;
+  /** Acties: WF-adviseur-slots 09/11/13/15/17/19, niet de sales-agenda. */
+  actiesAgenda?: boolean;
+  leadId?: string | null;
+  projectId?: string | null;
+  onAgendaPlanned?: (iso: string) => void;
 }) {
   const [editAfspraak, setEditAfspraak] = useState(false);
   const [afspraakDatum, setAfspraakDatum] = useState("");
@@ -183,19 +193,32 @@ export function ProjectFinancieringPath({
                   : "Nog geen afspraak gezet"}
               </p>
             </div>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={openAfspraakEditor}
-              className="bg-green px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-green-dark"
-            >
-              Maak WF Afspraak
-            </button>
+            {actiesAgenda ? null : (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={openAfspraakEditor}
+                className="bg-green px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-green-dark"
+              >
+                Maak WF Afspraak
+              </button>
+            )}
           </div>
-          {editAfspraak ? (
+          {actiesAgenda ? (
+            <div className="mt-3 border-t border-line pt-3">
+              <WfAdviseurSlotPicker
+                leadId={leadId}
+                projectId={projectId}
+                disabled={disabled}
+                compact
+                onPlanned={onAgendaPlanned}
+              />
+            </div>
+          ) : null}
+          {editAfspraak && !actiesAgenda ? (
             <div className="mt-2 space-y-2 border-t border-line pt-2">
               <p className="text-[11px] text-muted">
-                De klant krijgt een bevestiging per e-mail.
+                Interne afspraak — geen klantmail.
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <input

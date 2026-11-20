@@ -3,7 +3,10 @@ import { addMinutes, differenceInMinutes } from "date-fns";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
-import { afspraakGeannuleerdAdviseurEmail } from "@/lib/email/templates";
+import {
+  afspraakGeannuleerdAdviseurEmail,
+  afspraakGeannuleerdKlantEmail,
+} from "@/lib/email/templates";
 import {
   afspraakBevestigingSequenceEmail,
   afspraakMailVars,
@@ -185,6 +188,28 @@ export async function POST(
           { error: "Annuleren mislukt", detail: cancelErr.message },
           { status: 500 }
         );
+      }
+
+      const leadEmail = afspraak.leads?.email?.trim();
+      if (leadEmail && afspraakStuurtMail(afspraak.soort)) {
+        try {
+          await sendEmail({
+            to: leadEmail,
+            subject: "Bevestiging: afspraak geannuleerd — Batterijconcept",
+            html: afspraakGeannuleerdKlantEmail({
+              naam: afspraak.leads?.naam || "klant",
+              startAt: afspraak.start_at,
+            }),
+            tag: "afspraak-annulering-bevestiging",
+            replyTo: await replyToForAfspraak(sb, {
+              adviseurId: afspraak.adviseur_id,
+              leadId: afspraak.lead_id,
+              adviseurJoin: afspraak.adviseurs,
+            }),
+          });
+        } catch (mailErr) {
+          console.error("Annulering klant-bevestiging:", mailErr);
+        }
       }
 
       // Mail naar de adviseur (persoonlijke mail, niet info@)

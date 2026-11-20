@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "@/lib/supabase-fetch-all";
 
 /**
  * Inkoopprijzen — defaults + berekening.
@@ -138,7 +139,69 @@ export type HardwareKosten = {
   /** batterij + omvormer (+ warmtefonds indien meegenomen) */
   hardware: number;
   aantal: number;
+  /** Alpha ESS-pakket (niet accessoires, niet warmtepomp). */
+  aantalBatterijPakket: number;
+  aantalWarmtepomp: number;
 };
+
+export type OfferteInkoopRegel = {
+  omschrijving?: string | null;
+  aantal?: number | null;
+  product_id?: string | null;
+};
+
+/** Catalogus-inkoop voor P&L / interne ordermail. */
+export async function loadProductenInkoop(
+  sb: SupabaseClient
+): Promise<ProductInkoop[]> {
+  await probeInkoopSchemaOnce(sb);
+  const select = (
+    inkoopColumnsReady ? PRODUCT_SELECT_INKOOP : PRODUCT_SELECT_BASE
+  ) as typeof PRODUCT_SELECT_BASE;
+  const rows = await fetchAllRows<Partial<ProductInkoop>>((from, to) =>
+    sb
+      .from("producten")
+      .select(select)
+      .eq("actief", true)
+      .order("id")
+      .range(from, to)
+  ).catch(() => [] as Partial<ProductInkoop>[]);
+  return rows.map((p) => ({
+    id: String(p.id || ""),
+    sku: p.sku ?? null,
+    naam: p.naam || "",
+    omschrijving: p.omschrijving ?? null,
+    prijs_ex_btw: Number(p.prijs_ex_btw) || 0,
+    btw_percentage: Number(p.btw_percentage) || 21,
+    eenheid: p.eenheid || "stuk",
+    actief: p.actief !== false,
+    inkoop_batterij: Number(p.inkoop_batterij) || 0,
+    inkoop_omvormer: Number(p.inkoop_omvormer) || 0,
+    inkoop_installatie: Number(p.inkoop_installatie) || 0,
+    inkoop_warmtefonds: Number(p.inkoop_warmtefonds) || 0,
+  }));
+}
+
+export function isWarmtepompProduct(p: {
+  sku?: string | null;
+  naam?: string | null;
+}): boolean {
+  const sku = (p.sku || "").toUpperCase();
+  if (sku.startsWith("WP:") || /TC-GT\d{2}/.test(sku)) return true;
+  const n = (p.naam || "").toLowerCase();
+  return n.includes("tc swiss") || n.includes("warmtepomp");
+}
+
+export function isBatterijPakketProduct(p: {
+  sku?: string | null;
+  naam?: string | null;
+}): boolean {
+  const sku = (p.sku || "").toUpperCase();
+  if (sku.startsWith("WP:")) return false;
+  if (sku.startsWith("AE-G3-")) return true;
+  const n = (p.naam || "").toLowerCase();
+  return n.includes("alpha ess") && n.includes("kwh");
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -215,6 +278,14 @@ export function findProductForRegel(
   for (const p of producten) {
     if (p.sku && t.includes(normalizeText(p.sku))) return p;
   }
+  const tcCode = t.match(/tc-gt\d{2}-[a-z]+/i);
+  if (tcCode) {
+    const needle = tcCode[0].toUpperCase();
+    const hit = producten.find((p) =>
+      (p.sku || "").toUpperCase().includes(needle)
+    );
+    if (hit) return hit;
+  }
   for (const p of producten) {
     const naam = normalizeText(p.naam);
     if (naam && (t.includes(naam) || naam.includes(t))) return p;
@@ -255,21 +326,27 @@ export function findProductForRegel(
  * includeWarmtefonds: true telt warmtefonds-aanvraag mee in hardware-totaal.
  */
 export function inkoopKostenVoorRegels(
-  regels: { omschrijving?: string | null; aantal?: number | null }[],
+  regels: OfferteInkoopRegel[],
   producten: ProductInkoop[],
   opts?: { includeWarmtefonds?: boolean }
 ): HardwareKosten {
   const includeWf = opts?.includeWarmtefonds !== false;
+  const byId = new Map(producten.map((p) => [p.id, p]));
   let batterij = 0;
   let omvormer = 0;
   let installatie = 0;
   let warmtefonds = 0;
   let aantal = 0;
+  let aantalBatterijPakket = 0;
+  let aantalWarmtepomp = 0;
 
   for (const r of regels) {
     const n = Math.max(0, Number(r.aantal) || 0);
     if (n <= 0) continue;
-    const product = findProductForRegel(r.omschrijving, producten);
+    const pid = (r.product_id || "").trim();
+    const product =
+      (pid ? byId.get(pid) : undefined) ||
+      findProductForRegel(r.omschrijving, producten);
     if (!product) continue;
     // Skip zero-price adviesregels etc.
     if (
@@ -281,6 +358,8 @@ export function inkoopKostenVoorRegels(
       continue;
     }
     aantal += n;
+    if (isWarmtepompProduct(product)) aantalWarmtepomp += n;
+    else if (isBatterijPakketProduct(product)) aantalBatterijPakket += n;
     batterij += n * Number(product.inkoop_batterij || 0);
     omvormer += n * Number(product.inkoop_omvormer || 0);
     installatie += n * Number(product.inkoop_installatie || 0);
@@ -302,5 +381,35 @@ export function inkoopKostenVoorRegels(
     hardware,
     totaal: round2(hardware + installatie + (includeWf ? 0 : warmtefonds)),
     aantal,
+    aantalBatterijPakket,
+    aantalWarmtepomp,
   };
+}
+
+/** Hardware-inkoop per offertregel (voor interne ordermail). */
+export function inkoopRegelsDetail(
+  regels: OfferteInkoopRegel[],
+  producten: ProductInkoop[]
+): { label: string; inkoop: number }[] {
+  const byId = new Map(producten.map((p) => [p.id, p]));
+  const out: { label: string; inkoop: number }[] = [];
+  for (const r of regels) {
+    const n = Math.max(0, Number(r.aantal) || 0);
+    if (n <= 0) continue;
+    const pid = (r.product_id || "").trim();
+    const product =
+      (pid ? byId.get(pid) : undefined) ||
+      findProductForRegel(r.omschrijving, producten);
+    if (!product) continue;
+    const inkoop = round2(
+      n *
+        (Number(product.inkoop_batterij || 0) +
+          Number(product.inkoop_omvormer || 0) +
+          Number(product.inkoop_warmtefonds || 0))
+    );
+    if (inkoop <= 0) continue;
+    const naam = product.naam || r.omschrijving || "Product";
+    out.push({ label: n === 1 ? naam : `${n}× ${naam}`, inkoop });
+  }
+  return out;
 }

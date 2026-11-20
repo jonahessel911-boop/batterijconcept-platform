@@ -7,6 +7,7 @@ import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
 import {
   normalizeSollicitatieStatus,
   SOLLICITATIE_STATUS_LABEL,
+  sollicitatieHeeftInfoToegestuurd,
 } from "@/lib/sollicitatie";
 import {
   buildSollicitatieGeenContactPatch,
@@ -27,6 +28,7 @@ import {
   mergeSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
 import { SollicitatieAntwoordenRows } from "@/components/crm/recruitment/SollicitatieAntwoordenRows";
+import { RecruitmentKandidaatMailModal } from "@/components/crm/recruitment/RecruitmentKandidaatMailModal";
 
 function defaultTerugbelLocal(): string {
   const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
@@ -130,6 +132,8 @@ export function RecruitmentBelPanel({
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [lastAdvanceKey, setLastAdvanceKey] = useState(advanceAfterPlanKey);
+  const [mailOpen, setMailOpen] = useState(false);
+  const [mailTemplateId, setMailTemplateId] = useState("ontvangen_sollicitatie");
 
   const current = queue[Math.min(index, Math.max(queue.length - 1, 0))] || null;
   const position = current
@@ -536,9 +540,38 @@ export function RecruitmentBelPanel({
                   <span className="font-semibold text-ink">{provincie}</span>
                 </p>
               ) : null}
-              <p className="mt-1 text-sm text-muted">
-                {current.email?.trim() || "Geen e-mail"}
-              </p>
+              {current.email?.trim() ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMailTemplateId("ontvangen_sollicitatie");
+                      setMailOpen(true);
+                    }}
+                    className="text-left text-sm font-medium text-green-dark underline-offset-2 hover:underline"
+                  >
+                    {current.email.trim()}
+                  </button>
+                  {sollicitatieHeeftInfoToegestuurd(current.notitie) ? (
+                    <span className="rounded-md bg-green-soft px-2.5 py-1 text-[11px] font-semibold text-green-dark">
+                      Info toegestuurd
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMailTemplateId("info_toegestuurd");
+                        setMailOpen(true);
+                      }}
+                      className="rounded-md border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-wash"
+                    >
+                      Info toesturen
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-1 text-sm text-muted">Geen e-mail</p>
+              )}
               <p className="mt-1 text-xs text-muted">
                 Status:{" "}
                 {
@@ -730,6 +763,22 @@ export function RecruitmentBelPanel({
           </div>
         </aside>
       </div>
+      <RecruitmentKandidaatMailModal
+        kandidaat={mailOpen ? current : null}
+        initialTemplateId={mailTemplateId}
+        onClose={() => {
+          setMailOpen(false);
+          setMailTemplateId("ontvangen_sollicitatie");
+        }}
+        onSent={() => {
+          setMsg(
+            current?.email
+              ? `Mail verstuurd naar ${current.email}`
+              : "Mail verstuurd"
+          );
+          window.setTimeout(() => setMsg(null), 2800);
+        }}
+      />
     </div>
   );
 }

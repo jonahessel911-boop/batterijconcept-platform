@@ -13,7 +13,13 @@ export async function sendReviewVerzoekKlantMail(
   sb: SupabaseClient,
   projectId: string,
   projectRow?: Record<string, unknown> | null
-): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  messageId?: string;
+  to?: string;
+  subject?: string;
+}> {
   let lead = projectRow?.leads as
     | { naam?: string | null; email?: string | null }
     | { naam?: string | null; email?: string | null }[]
@@ -48,9 +54,10 @@ export async function sendReviewVerzoekKlantMail(
     referenceId: projectNummer || projectId,
   });
 
+  const subject = "Hoe was jouw installatie? — Batterijconcept";
   const sent = await sendEmail({
     to: email,
-    subject: "Hoe was jouw installatie? — Batterijconcept",
+    subject,
     html,
     tag: "review-verzoek",
     bcc: TRUSTPILOT_AFS_BCC,
@@ -59,5 +66,5 @@ export async function sendReviewVerzoekKlantMail(
   if (!sent.ok) {
     console.error("sendReviewVerzoekKlantMail failed:", sent.error);
   }
-  return sent;
+  return { ...sent, to: email, subject };
 }

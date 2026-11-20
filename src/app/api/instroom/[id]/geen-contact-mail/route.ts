@@ -10,6 +10,7 @@ import {
 import { appendStampedNotitie } from "@/lib/lead-notitie";
 import { SOLLICITATIE_MAX_BELPOGINGEN } from "@/lib/sollicitatie-bel";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
+import { storePostmarkMessageId } from "@/lib/inbox-message-id";
 
 export const runtime = "nodejs";
 
@@ -105,8 +106,10 @@ export async function POST(
         folder: "verzonden",
         status: "afgehandeld",
         direction: "outbound",
-        message_id: result.messageId || null,
-        thread_id: result.messageId || `sol-gc-${id}-${poging}`,
+        message_id: storePostmarkMessageId(result.messageId),
+        thread_id:
+          storePostmarkMessageId(result.messageId) ||
+          `sol-gc-${id}-${poging}`,
         from_name: "BatterijConcept Recruitment",
         from_email: fromEmail,
         to_email: email,

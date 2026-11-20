@@ -138,6 +138,7 @@ export function OperationeelRapportagePanel() {
               b.status === "annulering" || b.status === "hold_sales_actie";
             const isEnd =
               b.status === "installatie_voltooid" ||
+              b.status === "after_sale" ||
               b.status === "review_gevraagd" ||
               b.status === "afgerond";
             const isOpen = openStatus === b.status;

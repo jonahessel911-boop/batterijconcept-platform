@@ -30,6 +30,13 @@ export const MARCEL_KLAASMAN_ADVISEUR_ID =
   "1925468e-5645-44a0-a6fc-962b95d0f46c";
 export const MARCEL_KLAASMAN_SLOT_HOURS = [10, 12, 14, 16] as const;
 
+/**
+ * Warmtefonds-adviseur (Edwin): alleen kiesbaar via Acties.
+ * Niet in sales-agenda / bel-planner.
+ * Startadres: Bunschoten-Spakenburg. 2u-blokken.
+ */
+export const WF_ADVISEUR_SLOT_HOURS = [9, 11, 13, 15, 17, 19] as const;
+
 /** Alle uren die ergens als vaste slot voorkomen (validatie / agenda-union). */
 export const ALL_ADVISEUR_SLOT_HOURS = [10, 12, 13, 14, 16, 19] as const;
 
@@ -55,11 +62,9 @@ export function adviseurHeeftSlotUur(
 }
 
 /**
- * Agenda-raster voor meerdere adviseurs.
- * Team blijft 10/13/16/19. Extra uren van één adviseur (Marcel 12/14)
- * mogen nooit als extra rijen bij de rest verschijnen — dat zag eruit
- * alsof 12:00/14:00 bij iedereen geblokt stonden.
- * Alleen Marcel solo: zijn eigen 10/12/14/16.
+ * Agenda-raster: unie van de echte inplanuren van de zichtbare adviseurs.
+ * Marcel 12/14 verschijnt dus als hij in beeld is; andere kolommen zijn
+ * n.v.t. (niet “afgeblokt”).
  */
 export function unionSlotHours(
   adviseurIds?: (string | null | undefined)[]
@@ -67,10 +72,15 @@ export function unionSlotHours(
   const ids = (adviseurIds || []).filter(
     (id): id is string => Boolean(id)
   );
+  if (ids.length === 0) return [...ADVISEUR_SLOT_HOURS];
   if (ids.length === 1) {
     return [...slotHoursForAdviseur(ids[0])];
   }
-  return [...ADVISEUR_SLOT_HOURS];
+  const hours = new Set<number>();
+  for (const id of ids) {
+    for (const h of slotHoursForAdviseur(id)) hours.add(h);
+  }
+  return [...hours].sort((a, b) => a - b);
 }
 
 export function isKnownSlotHour(hour: number): hour is AdviseurSlotHour {

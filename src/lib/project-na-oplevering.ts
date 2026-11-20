@@ -1,10 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProjectStatus } from "@/types/database";
-import {
-  isFotoBatterij,
-  isOpleveringsrapport,
-  isVideoInstallatie,
-} from "@/lib/project-documenten";
+import { isOpleveringsrapportBewijs } from "@/lib/project-documenten";
+import { parseOpleverFormulierSnapshot } from "@/lib/oplever-formulier";
 import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
 import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
 
@@ -40,14 +37,49 @@ async function ensureOpleveringAfrondTaken(
   }
 }
 
+const AFTER_SALE_OVERSLAAN = new Set([
+  "annulering",
+  "hold_sales_actie",
+]);
+
+function snapshotIsOpleverFormulier(raw: unknown): boolean {
+  const snap = parseOpleverFormulierSnapshot(raw);
+  if (!snap) return false;
+  return Boolean(
+    snap.akkoord || snap.sin || snap.afgevinkt.length > 0 || snap.monteurNaam
+  );
+}
+
+/** Snapshot-formulier aanwezig, maar orderstatus nog niet After sale. */
+export function projectMoetNaarAfterSale(project: {
+  status?: string | null;
+  oplever_formulier?: unknown;
+}): boolean {
+  const st = String(project.status || "");
+  if (
+    AFTER_SALE_OVERSLAAN.has(st) ||
+    st === "after_sale" ||
+    st === "afgerond"
+  ) {
+    return false;
+  }
+  return snapshotIsOpleverFormulier(project.oplever_formulier);
+}
+
+type OpleverAdvanceOpts = {
+  /** Standaard: mail alleen bij eerste afronding (nog geen voltooid_at). */
+  sendKlantMail?: boolean;
+};
+
 /**
  * Na upload opleveringsrapport / opleverformulier (handtekening installateur):
- * zet status op installatie_voltooid + concept creditfactuur voor partner
+ * zet status op after_sale + concept creditfactuur voor partner
  * + backoffice-acties (overstap, BTW, review — deadline eerstvolgende werkdag na installatie).
  */
 export async function maybeAdvanceProjectNaOplevering(
   sb: SupabaseClient,
-  projectId: string
+  projectId: string,
+  opts?: OpleverAdvanceOpts
 ): Promise<{
   advanced: boolean;
   from: string | null;
@@ -55,42 +87,58 @@ export async function maybeAdvanceProjectNaOplevering(
   project?: Record<string, unknown> | null;
   creditfactuur_id?: string | null;
 }> {
-  const { data: project, error } = await sb
+  let { data: project, error } = await sb
     .from("projecten")
-    .select("id, status, project_nummer")
+    .select(
+      "id, status, project_nummer, oplever_formulier, installatie_voltooid_at"
+    )
     .eq("id", projectId)
     .maybeSingle();
+  if (
+    error &&
+    (error.code === "42703" || error.message?.includes("oplever_formulier"))
+  ) {
+    const retry = await sb
+      .from("projecten")
+      .select("id, status, project_nummer, installatie_voltooid_at")
+      .eq("id", projectId)
+      .maybeSingle();
+    project = retry.data;
+    error = retry.error;
+  }
 
   if (error || !project) {
     return { advanced: false, from: null, to: null };
   }
 
   const current = (project.status as string) || "";
-  if (current === "annulering") {
+  if (AFTER_SALE_OVERSLAAN.has(current)) {
     return { advanced: false, from: current, to: null };
   }
 
   const { data: fotos } = await sb
     .from("project_fotos")
-    .select("id, omschrijving")
+    .select("id, omschrijving, bestandsnaam, storage_path")
     .eq("project_id", projectId);
 
-  const hasRapport = (fotos || []).some((f) =>
-    isOpleveringsrapport(f.omschrijving)
-  );
-  const hasFotoBatterij = (fotos || []).some((f) =>
-    isFotoBatterij(f.omschrijving)
-  );
-  const hasVideoInstallatie = (fotos || []).some((f) =>
-    isVideoInstallatie(f.omschrijving)
-  );
-  // Oplevering pas afronden als formulier, foto batterij én installatievideo er zijn.
-  if (!hasRapport || !hasFotoBatterij || !hasVideoInstallatie) {
+  const hasRapport =
+    snapshotIsOpleverFormulier(
+      (project as { oplever_formulier?: unknown }).oplever_formulier
+    ) ||
+    (fotos || []).some((f) =>
+      isOpleveringsrapportBewijs(
+        f.omschrijving,
+        f.bestandsnaam,
+        f.storage_path
+      )
+    );
+  // Minimum: opleverformulier. Foto batterij / video blokkeren de status niet.
+  if (!hasRapport) {
     return { advanced: false, from: current, to: null };
   }
 
-  // Al op installatie_voltooid: afrond-taken + concept-CF alsnog zekerstellen
-  if (current === "installatie_voltooid") {
+  // Al in after sale: taken + concept-CF alsnog zekerstellen
+  if (current === "after_sale") {
     await ensureOpleveringAfrondTaken(sb, projectId, current);
     await ensureEindafrekening(sb, projectId);
     let creditfactuur_id: string | null = null;
@@ -114,18 +162,25 @@ export async function maybeAdvanceProjectNaOplevering(
       creditfactuur_id,
     };
   }
-  if (current === "review_gevraagd" || current === "afgerond" || current === "service") {
+  if (current === "afgerond") {
     return { advanced: false, from: current, to: null };
   }
 
-  const to: ProjectStatus = "installatie_voltooid";
+  const alreadyVoltooidAt = Boolean(
+    (project as { installatie_voltooid_at?: string | null })
+      .installatie_voltooid_at
+  );
+  const to: ProjectStatus = "after_sale";
+  const voltooidAt =
+    (project as { installatie_voltooid_at?: string | null })
+      .installatie_voltooid_at || new Date().toISOString();
   const selectCols =
     "*, leads(naam, email, telefoon, lead_number, postcode, huisnummer, toevoeging, straat, plaats), installatie_partners(id, naam, email, telefoon), offertes(id, offerte_nummer, totaal_inc_btw)";
   let { data: updated, error: updErr } = await sb
     .from("projecten")
     .update({
       status: to,
-      installatie_voltooid_at: new Date().toISOString(),
+      installatie_voltooid_at: voltooidAt,
     })
     .eq("id", projectId)
     .select(selectCols)
@@ -139,6 +194,26 @@ export async function maybeAdvanceProjectNaOplevering(
     const retry = await sb
       .from("projecten")
       .update({ status: to })
+      .eq("id", projectId)
+      .select(selectCols)
+      .maybeSingle();
+    updated = retry.data;
+    updErr = retry.error;
+  }
+
+  if (
+    updErr &&
+    (updErr.message?.includes("after_sale") ||
+      updErr.message?.includes("projecten_status_check") ||
+      updErr.code === "23514")
+  ) {
+    const fallback: Record<string, unknown> = {
+      status: "installatie_voltooid" as ProjectStatus,
+      installatie_voltooid_at: new Date().toISOString(),
+    };
+    const retry = await sb
+      .from("projecten")
+      .update(fallback)
       .eq("id", projectId)
       .select(selectCols)
       .maybeSingle();
@@ -244,11 +319,18 @@ export async function maybeAdvanceProjectNaOplevering(
 
   await ensureOpleveringAfrondTaken(sb, projectId, to);
 
-  // Klantmail: gefeliciteerd, batterij staat er + aankondiging overstap/BTW
-  try {
-    await sendInstallatieVoltooidKlantMail(sb, projectId, updated);
-  } catch (e) {
-    console.error("sendInstallatieVoltooidKlantMail:", e);
+  const sendMail =
+    opts?.sendKlantMail !== false &&
+    !alreadyVoltooidAt &&
+    current !== "installatie_voltooid" &&
+    current !== "review_gevraagd" &&
+    current !== "service";
+  if (sendMail) {
+    try {
+      await sendInstallatieVoltooidKlantMail(sb, projectId, updated);
+    } catch (e) {
+      console.error("sendInstallatieVoltooidKlantMail:", e);
+    }
   }
 
   return {
@@ -324,7 +406,9 @@ export async function projectHeeftOpleveringsrapport(
 ): Promise<boolean> {
   const { data: fotos } = await sb
     .from("project_fotos")
-    .select("id, omschrijving")
+    .select("id, omschrijving, bestandsnaam, storage_path")
     .eq("project_id", projectId);
-  return (fotos || []).some((f) => isOpleveringsrapport(f.omschrijving));
+  return (fotos || []).some((f) =>
+    isOpleveringsrapportBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
+  );
 }

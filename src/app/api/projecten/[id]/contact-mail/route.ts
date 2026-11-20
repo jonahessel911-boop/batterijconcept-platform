@@ -7,7 +7,7 @@ import { normalizeRol, gebruikerRolLabel } from "@/lib/rollen";
 import { sendEmail } from "@/lib/email/postmark";
 import { klantContactEmail } from "@/lib/email/templates";
 import { INFO_REPLY_TO } from "@/lib/email/adviseur-reply-to";
-import { logLeadEvent } from "@/lib/lead-events";
+import { logProjectKlantMail } from "@/lib/lead-events";
 
 export const runtime = "nodejs";
 
@@ -115,47 +115,37 @@ export async function POST(
     });
 
     if (!result.ok || !result.messageId) {
-      if (lead?.id || project.lead_id) {
-        await logLeadEvent({
-          leadId: (lead?.id || project.lead_id) as string,
-          soort: "email",
-          titel: "Contactmail mislukt",
-          detail: result.error || "Mail versturen mislukt",
-          meta: {
-            to,
-            subject,
-            project_id: id,
-            ok: false,
-            by: medewerkerNaam,
-            reply_to: replyTo,
-          },
-        });
-      }
+      await logProjectKlantMail({
+        leadId: lead?.id || project.lead_id,
+        projectId: id,
+        projectNummer: project.project_nummer,
+        to,
+        subject,
+        bericht,
+        ok: false,
+        tag: "project-klant-contact",
+        titel: "Contactmail mislukt",
+        by: medewerkerNaam,
+      });
       return NextResponse.json(
         { error: result.error || "Mail versturen mislukt", sent: false },
         { status: 502 }
       );
     }
 
-    if (lead?.id || project.lead_id) {
-      await logLeadEvent({
-        leadId: (lead?.id || project.lead_id) as string,
-        soort: "email",
-        titel: "Contactmail verstuurd",
-        detail: `Naar ${to}\n\n${bericht}`,
-        meta: {
-          to,
-          subject,
-          bericht,
-          project_id: id,
-          message_id: result.messageId,
-          by: medewerkerNaam,
-          reply_to: replyTo,
-          bcc,
-          ok: true,
-        },
-      });
-    }
+    await logProjectKlantMail({
+      leadId: lead?.id || project.lead_id,
+      projectId: id,
+      projectNummer: project.project_nummer,
+      to,
+      subject,
+      bericht,
+      ok: true,
+      messageId: result.messageId,
+      tag: "project-klant-contact",
+      titel: "Contactmail verstuurd",
+      by: medewerkerNaam,
+    });
 
     return NextResponse.json({
       ok: true,

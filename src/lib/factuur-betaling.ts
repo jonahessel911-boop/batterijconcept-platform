@@ -5,6 +5,9 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 /** Standaard betaaltermijn na verzenden factuur. */
 export const FACTUUR_BETAALTERMIJN_DAGEN = 3;
 
+/** Creditfactuur (klant) — altijd 14 dagen. */
+export const FACTUUR_BETAALTERMIJN_CREDIT_DAGEN = 14;
+
 /** Restantfactuur via Warmtefonds — altijd 14 dagen. */
 export const FACTUUR_BETAALTERMIJN_WARMTEFONDS_RESTANT_DAGEN = 14;
 
@@ -93,7 +96,9 @@ export function vervaldatumEndOfDay(vervaldatum: string): Date {
 }
 
 export function factuurIsOpenstaand(status: string): boolean {
-  return status === "verzonden" || status === "deels_betaald";
+  const st = (status || "").toLowerCase();
+  if (st === "concept" || st === "vervallen") return false;
+  return st === "verzonden" || st === "deels_betaald";
 }
 
 /**
@@ -225,6 +230,7 @@ export function factuurIsOverdue(opts: {
 }): boolean {
   if (opts.credit_van_factuur_id) return false;
   if (opts.heeftCredit) return false;
+  if ((opts.status || "").toLowerCase() === "concept") return false;
   if (opts.status === "betaald" || opts.betaald_op) return false;
   if (!factuurIsOpenstaand(opts.status)) return false;
   const deadline = factuurEffectieveDeadline(opts);
@@ -249,6 +255,7 @@ export function factuurOpvolgActie(opts: {
 }): "opvolgen" | "controleren" | null {
   if (opts.credit_van_factuur_id) return null;
   if (opts.heeftCredit) return null;
+  if ((opts.status || "").toLowerCase() === "concept") return null;
   if (opts.status === "betaald" || opts.betaald_op) return null;
   if (!factuurIsOpenstaand(opts.status)) return null;
 

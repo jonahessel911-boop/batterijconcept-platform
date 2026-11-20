@@ -14,6 +14,7 @@ export type MonteurProfielDraft = {
   rol: "beheerder" | "monteur";
   kan_schouw: boolean;
   kan_installatie: boolean;
+  kan_service: boolean;
   leeftijd: string;
   merken: string[];
   regios: string[];
@@ -24,6 +25,7 @@ export function emptyMonteurProfielDraft(): MonteurProfielDraft {
     rol: "monteur",
     kan_schouw: false,
     kan_installatie: true,
+    kan_service: false,
     leeftijd: "",
     merken: [],
     regios: [],
@@ -110,10 +112,20 @@ export function MonteurProfielFields({
                 />
                 Installatie
               </label>
+              <label className="inline-flex items-center gap-2 text-sm text-ink">
+                <Checkbox
+                  disabled={disabled}
+                  checked={value.kan_service}
+                  onCheckedChange={(v) =>
+                    onChange({ ...value, kan_service: v === true })
+                  }
+                />
+                Service
+              </label>
             </div>
             <p className="text-[11px] text-muted">
-              Standaard alleen installatie — vink schouw aan indien van
-              toepassing.
+              Standaard alleen installatie — vink Schouw of Service aan indien
+              van toepassing.
             </p>
           </div>
 

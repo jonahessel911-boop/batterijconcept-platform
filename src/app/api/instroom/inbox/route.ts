@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
-import { listInboxMails, rowToInboxMail } from "@/lib/inbox-persist";
+import {
+  listInboxMails,
+  listInboxMailsTouchingEmails,
+  rowToInboxMail,
+} from "@/lib/inbox-persist";
 import { imapConfigured, syncInboxFromImap } from "@/lib/inbox-imap";
 
 export const runtime = "nodejs";
@@ -139,7 +143,33 @@ export async function GET(req: NextRequest) {
 
     let rows;
     try {
-      rows = await listInboxMails(sb, { limit: Math.max(limit, 400) });
+      const recent = await listInboxMails(sb, { limit: Math.max(limit, 500) });
+      const extraEmails = new Set<string>();
+      for (const s of sols || []) {
+        const e = normEmail(s.email as string | null);
+        if (e) extraEmails.add(e);
+        if (extraEmails.size >= 150) break;
+      }
+      for (const row of recent) {
+        const raw = (row.raw_headers || {}) as Record<string, unknown>;
+        const tag =
+          typeof raw.postmark_tag === "string" ? raw.postmark_tag : "";
+        if (!/recruitment|sollicitatie/i.test(tag)) continue;
+        for (const e of [row.from_email, row.to_email]) {
+          const n = normEmail(e);
+          if (n && !INFO_RE.test(n)) extraEmails.add(n);
+        }
+      }
+      const touching = await listInboxMailsTouchingEmails(
+        sb,
+        [...extraEmails],
+        { limit: 400 }
+      );
+      const byId = new Map<string, (typeof recent)[number]>();
+      for (const row of [...recent, ...touching]) {
+        byId.set(row.id, row);
+      }
+      rows = Array.from(byId.values());
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (/inbox_mails|42P01|does not exist/i.test(msg)) {
@@ -321,7 +351,7 @@ export async function POST(req: NextRequest) {
       recent?: boolean;
     };
     const sb = getSupabaseAdmin();
-    const max = body.max ?? 40;
+    const max = body.max ?? 50;
 
     // 1) Ongelezen eerst (nieuwe kandidaten-mails)
     const unseen = await syncInboxFromImap(sb, {

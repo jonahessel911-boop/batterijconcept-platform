@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -46,8 +47,8 @@ import {
   FOTO_METERKAST_OMSCHRIJVING,
   isFotoBatterij,
   isFotoMeterkast,
-  isOpleveringsrapport,
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   isServiceFoto,
   isVideoInstallatie,
   OPLEVERINGSRAPPORT_OMSCHRIJVING,
@@ -58,6 +59,19 @@ import {
 import { validateInstallatieVideoDuration } from "@/lib/installatie-video";
 import { batterijPurchasingStatus } from "@/lib/project-inkoop-checklist";
 import { medewerkerNaamVanProject } from "@/lib/project-medewerker";
+import {
+  koppelBevatMonteur,
+  koppelWeergaveNaam,
+} from "@/lib/installatie-koppel";
+import {
+  installatieProductRegelsVoorMonteur,
+  isInstallatieProductRegel,
+} from "@/lib/offerte-regels";
+import { installatieBatterijKortLabel } from "@/lib/offerte-batterij-merk";
+import {
+  isServiceVvInstallatie,
+  SERVICE_VV_INSTALLATIE,
+} from "@/lib/oplever-formulier";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import {
   duurMinutenVoorKind,
@@ -88,10 +102,21 @@ import {
   schouwWeekValue,
 } from "@/lib/schouw-week";
 import {
+  MAX_INSTALLATIES_PER_DAG,
   PARTNER_VENSTERS,
+  installatieDuurMinutenVanaf,
   partnerAfblokKey,
+  vensterBoundsUtc,
   type PartnerVenster,
 } from "@/lib/partner-slots";
+import {
+  PORTAL_INSTALLATIES_VANAF,
+  isInstallatieVanafCutoff,
+} from "@/lib/installatie-vanaf";
+import {
+  feestdagOp,
+  feestdagPlanningFout,
+} from "@/lib/nl-feestdagen";
 
 type PlanSoort = "schouwweek" | "schouwdag" | "installatie" | "service";
 type AgendaView = "week" | "dag" | "maand" | "lijst";
@@ -109,6 +134,8 @@ type PlanbordBar = {
   at: string | null;
   duurMinuten: number;
   partnerId: string | null;
+  /** Kort product, bijv. "Alpha ESS 9,3" */
+  batterijKort?: string | null;
 };
 
 type DayCol = { key: string; date: Date; weekend: boolean };
@@ -185,6 +212,104 @@ function klantNaam(p: Project): string {
   return lead?.naam?.trim() || p.titel?.trim() || p.project_nummer || "Klant";
 }
 
+/** Achternaam voor compacte matrix: "H. Roest - Riemer" → "Roest - Riemer". */
+function klantAchternaam(p: Project): string {
+  const naam = klantNaam(p);
+  const initials = naam.match(/^(?:[A-Z]\.\s*)+(.+)$/i);
+  if (initials?.[1]) return initials[1].trim();
+  const parts = naam.trim().split(/\s+/);
+  if (parts.length >= 2) return parts.slice(1).join(" ");
+  return naam;
+}
+
+function koppelRijLabel(k: InstallatiePartnerKoppel): string {
+  const naam = (k.naam || "").trim();
+  if (naam) return naam;
+  return koppelWeergaveNaam(k);
+}
+
+function installatieKoppelIdVoorBar(
+  bar: PlanbordBar,
+  koppels: InstallatiePartnerKoppel[]
+): string | null {
+  const id = bar.project.installatie_koppel_id;
+  if (id) return id;
+  const tg = bar.project.installatie_teamgenoot_id;
+  if (tg) {
+    const viaMonteur = koppels.find((k) => koppelBevatMonteur(k, tg));
+    if (viaMonteur) return viaMonteur.id;
+  }
+  const partnerId =
+    bar.project.installatie_partner_id || bar.partnerId || null;
+  if (!partnerId) return null;
+  const vanPartner = koppels.filter((k) => k.partner_id === partnerId);
+  if (vanPartner.length === 1) return vanPartner[0].id;
+  return null;
+}
+
+function offerteRegelsVanProject(p: Project): {
+  omschrijving?: string | null;
+  aantal?: number | null;
+}[] {
+  const off = Array.isArray(p.offertes) ? p.offertes[0] : p.offertes;
+  const regels = (
+    off as { offerte_regels?: { omschrijving?: string | null; aantal?: number | null }[] } | null
+  )?.offerte_regels;
+  return Array.isArray(regels) ? regels : [];
+}
+
+function batterijKortVoorProject(
+  p: Project,
+  labels?: Record<string, string>
+): string | null {
+  const fromMap = p.offerte_id ? labels?.[p.offerte_id] : null;
+  if (fromMap) return fromMap;
+  return installatieBatterijKortLabel(offerteRegelsVanProject(p));
+}
+
+function installatieKopTekst(bar: PlanbordBar): string {
+  return bar.batterijKort
+    ? `Installatie - ${bar.batterijKort}`
+    : "Installatie";
+}
+
+function stampBatterijOpBars(
+  bars: PlanbordBar[],
+  labels: Record<string, string>
+): PlanbordBar[] {
+  return bars.map((b) =>
+    b.kind === "installatie"
+      ? { ...b, batterijKort: batterijKortVoorProject(b.project, labels) }
+      : b
+  );
+}
+
+type OfferteRegelKort = {
+  omschrijving?: string | null;
+  aantal?: number | null;
+  prijs_ex_btw?: number | null;
+  sort_order?: number | null;
+};
+
+function productenUitOfferteRegels(
+  regels: OfferteRegelKort[]
+): { omschrijving: string; aantal: number }[] {
+  const producten = installatieProductRegelsVoorMonteur(regels);
+  if (producten.length > 0) return producten;
+  return regels
+    .filter((r) =>
+      isInstallatieProductRegel({
+        omschrijving: r.omschrijving,
+        prijs_ex_btw: r.prijs_ex_btw,
+      })
+    )
+    .map((r) => ({
+      omschrijving: (r.omschrijving || "").trim(),
+      aantal: Math.max(1, Number(r.aantal) || 1),
+    }))
+    .filter((r) => r.omschrijving);
+}
+
 function klantPlaats(p: Project): string | null {
   return leadOf(p)?.plaats?.trim() || null;
 }
@@ -207,8 +332,44 @@ function projectSearchText(p: Project): string {
     .toLowerCase();
 }
 
+function barMatchesAgendaFilter(
+  bar: PlanbordBar,
+  filter: { kind: "all" } | { kind: "person"; id: string } | { kind: "koppel"; id: string },
+  koppels: InstallatiePartnerKoppel[]
+): boolean {
+  if (filter.kind === "all") return true;
+  const p = bar.project;
+  const isSchouw = bar.kind === "schouw" || bar.kind === "schouwweek";
+  if (filter.kind === "person") {
+    if (isSchouw) return p.installatie_teamgenoot_id === filter.id;
+    if (bar.kind === "installatie") {
+      if (p.installatie_koppel_id) {
+        const k = koppels.find((x) => x.id === p.installatie_koppel_id);
+        return koppelBevatMonteur(k, filter.id);
+      }
+      return p.installatie_teamgenoot_id === filter.id;
+    }
+    if (bar.kind === "service") {
+      return p.service_teamgenoot_id === filter.id;
+    }
+    return p.installatie_teamgenoot_id === filter.id;
+  }
+  if (bar.kind === "installatie") {
+    return p.installatie_koppel_id === filter.id;
+  }
+  const k = koppels.find((x) => x.id === filter.id);
+  if (bar.kind === "service") {
+    return koppelBevatMonteur(k, p.service_teamgenoot_id);
+  }
+  return koppelBevatMonteur(k, p.installatie_teamgenoot_id);
+}
+
 /** Alleen definitieve schouwdagen / installaties — geen schouwweken. */
-function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
+function barsForWeek(
+  projects: Project[],
+  days: DayCol[],
+  opts?: { installatieVanaf?: string | null }
+): PlanbordBar[] {
   if (!days.length) return [];
   const daySet = new Set(days.map((d) => d.key));
   const bars: PlanbordBar[] = [];
@@ -236,7 +397,11 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
       }
     }
 
-    if (p.installatie_at) {
+    if (
+      p.installatie_at &&
+      (!opts?.installatieVanaf ||
+        isInstallatieVanafCutoff(p.installatie_at, null, opts.installatieVanaf))
+    ) {
       const key = dayKeyAmsterdam(p.installatie_at);
       if (daySet.has(key)) {
         bars.push({
@@ -247,7 +412,7 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
           label: `Installatie · ${formatTimeNl(p.installatie_at)} · ${title}`,
           whenLabel: formatDateTimeNl(p.installatie_at),
           at: p.installatie_at,
-          duurMinuten: duurMinutenVoorKind("installatie"),
+          duurMinuten: installatieDuurMinutenVanaf(p.installatie_at),
           partnerId,
         });
       }
@@ -293,6 +458,18 @@ function barsForWeek(projects: Project[], days: DayCol[]): PlanbordBar[] {
 }
 
 function isBarPast(bar: PlanbordBar, now = new Date()): boolean {
+  if (bar.kind === "installatie") {
+    const st = normalizeProjectStatus(bar.project.status);
+    if (
+      st === "installatie_voltooid" ||
+      st === "after_sale" ||
+      st === "review_gevraagd" ||
+      st === "afgerond" ||
+      st === "service"
+    ) {
+      return true;
+    }
+  }
   if (!bar.at) return false;
   const end =
     new Date(bar.at).getTime() + Math.max(bar.duurMinuten, 1) * 60_000;
@@ -386,7 +563,10 @@ function layoutDayBars(bars: PlanbordBar[]): LaidOutDayBar[] {
 }
 
 /** Alle timed afspraken (voor lijst / maand), chronologisch. */
-function allTimedBars(projects: Project[]): PlanbordBar[] {
+function allTimedBars(
+  projects: Project[],
+  opts?: { installatieVanaf?: string | null }
+): PlanbordBar[] {
   const bars: PlanbordBar[] = [];
   for (const p of projects) {
     if (!isActiefOpPlanbord(p)) continue;
@@ -405,7 +585,11 @@ function allTimedBars(projects: Project[]): PlanbordBar[] {
         partnerId,
       });
     }
-    if (p.installatie_at) {
+    if (
+      p.installatie_at &&
+      (!opts?.installatieVanaf ||
+        isInstallatieVanafCutoff(p.installatie_at, null, opts.installatieVanaf))
+    ) {
       bars.push({
         key: `${p.id}-installatie`,
         project: p,
@@ -414,7 +598,7 @@ function allTimedBars(projects: Project[]): PlanbordBar[] {
         label: `Installatie · ${formatTimeNl(p.installatie_at)} · ${title}`,
         whenLabel: formatDateTimeNl(p.installatie_at),
         at: p.installatie_at,
-        duurMinuten: duurMinutenVoorKind("installatie"),
+        duurMinuten: installatieDuurMinutenVanaf(p.installatie_at),
         partnerId,
       });
     }
@@ -496,12 +680,16 @@ const KIND_STYLE: Record<
 
 function planbordKindLabel(
   kind: PlanbordBar["kind"],
-  short = false
+  short = false,
+  project?: Project
 ): string {
   switch (kind) {
     case "installatie":
       return short ? "Inst." : "Installatie";
     case "service":
+      if (isServiceVvInstallatie(project?.service_notities)) {
+        return short ? "VV Inst." : SERVICE_VV_INSTALLATIE;
+      }
       return "Service";
     case "levering":
       return short ? "LEVERING - INKOOP" : "Levering";
@@ -526,9 +714,6 @@ function formatTimeRangeNl(
   if (duurMinuten <= 0) return start;
   return `${start}–${formatTimeNl(endAtFromStart(at, duurMinuten))}`;
 }
-
-/** Max chips per maand-cel (rest via “+N meer”). */
-const MONTH_CHIPS_VISIBLE = 5;
 
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 20;
@@ -632,6 +817,8 @@ function PlanInplannenPanel({
   open,
   dayKey,
   defaultPartnerId,
+  defaultSoort,
+  defaultVenster,
   projects,
   partners,
   onClose,
@@ -640,6 +827,8 @@ function PlanInplannenPanel({
   open: boolean;
   dayKey: string | null;
   defaultPartnerId: string | null;
+  defaultSoort?: PlanSoort | null;
+  defaultVenster?: PartnerVenster | null;
   projects: Project[];
   partners: InstallatiePartner[];
   onClose: () => void;
@@ -672,18 +861,27 @@ function PlanInplannenPanel({
     if (!open || !dayKey) return;
     setQuery("");
     setSelectedId(null);
-    setSoort("schouwdag");
+    setSoort(defaultSoort || "schouwdag");
     setPartnerId(defaultPartnerId || "");
     setTeamgenootId("");
-    setDatetimeLocal(defaultDatetimeForDay(dayKey, 9));
-    setSlotIso(null);
+    setDatetimeLocal(
+      defaultDatetimeForDay(
+        dayKey,
+        defaultVenster === "middag" ? 13 : 8
+      )
+    );
+    setSlotIso(
+      defaultSoort === "installatie" && defaultVenster
+        ? vensterBoundsUtc(dayKey, defaultVenster).start.toISOString()
+        : null
+    );
     const w = schouwWeekFromDate(dayKey + "T12:00:00");
     setSchouwWeek(schouwWeekValue(w.jaar, w.week));
     setNotities("");
     setError(null);
     setPickerOpen(true);
     setInstallatieFollowUp(null);
-  }, [open, dayKey, defaultPartnerId]);
+  }, [open, dayKey, defaultPartnerId, defaultSoort, defaultVenster]);
 
   const selected = useMemo(
     () => projects.find((p) => p.id === selectedId) || null,
@@ -718,8 +916,10 @@ function PlanInplannenPanel({
       if (soort === "schouwdag" || soort === "schouwweek") {
         return t.kan_schouw === true;
       }
-      if (soort === "installatie" || soort === "service") {
-        // Default: installatie mag als kan_installatie niet expliciet false is
+      if (soort === "service") {
+        return t.kan_service === true;
+      }
+      if (soort === "installatie") {
         return t.kan_installatie !== false;
       }
       return true;
@@ -780,6 +980,9 @@ function PlanInplannenPanel({
     setError(null);
     try {
       if (soort === "schouwweek" || soort === "schouwdag") {
+        if (soort === "schouwdag" && !teamgenootId) {
+          throw new Error("Kies iemand die mag schouwen");
+        }
         const payload: Record<string, unknown> = {
           installatie_partner_id: partnerId,
           installatie_teamgenoot_id: teamgenootId || null,
@@ -794,6 +997,8 @@ function PlanInplannenPanel({
           if (!parsed || Number.isNaN(parsed.getTime())) {
             throw new Error("Kies een schouw-slot");
           }
+          const feestdagFout = feestdagPlanningFout(parsed);
+          if (feestdagFout) throw new Error(feestdagFout);
           payload.schouw_at = parsed.toISOString();
           const derived = schouwWeekFromDate(parsed);
           payload.schouw_jaar = derived.jaar;
@@ -858,11 +1063,18 @@ function PlanInplannenPanel({
               : "Kies een schouw-slot"
         );
       }
+      if (soort === "installatie") {
+        const feestdagFout = feestdagPlanningFout(parsed);
+        if (feestdagFout) throw new Error(feestdagFout);
+      }
       if (soort === "service") {
         if (!notities.trim()) {
           throw new Error(
             "Notitie is verplicht bij inplannen van een service-afspraak"
           );
+        }
+        if (!teamgenootId) {
+          throw new Error("Kies een monteur met Service in het account");
         }
         const res = await fetch(`/api/projecten/${selected.id}/service`, {
           method: "POST",
@@ -870,6 +1082,7 @@ function PlanInplannenPanel({
           body: JSON.stringify({
             service_at: parsed.toISOString(),
             installatie_partner_id: partnerId,
+            service_teamgenoot_id: teamgenootId,
             service_notities: notities.trim(),
           }),
         });
@@ -893,7 +1106,6 @@ function PlanInplannenPanel({
         body: JSON.stringify({
           installatie_at: parsed.toISOString(),
           installatie_partner_id: partnerId,
-          installatie_teamgenoot_id: teamgenootId || null,
           installatie_notities: notities.trim() || null,
         }),
       });
@@ -1064,7 +1276,16 @@ function PlanInplannenPanel({
                     setPartnerId(e.target.value);
                     setTeamgenootId("");
                     setDatetimeLocal(
-                      dayKey ? defaultDatetimeForDay(dayKey, 9) : ""
+                      dayKey
+                        ? defaultDatetimeForDay(
+                            dayKey,
+                            soort === "installatie"
+                              ? defaultVenster === "middag"
+                                ? 13
+                                : 8
+                              : 9
+                          )
+                        : ""
                     );
                     setSlotIso(null);
                   }}
@@ -1080,9 +1301,9 @@ function PlanInplannenPanel({
                 </select>
               </label>
 
-              {partnerId ? (
+              {partnerId && soort === "service" ? (
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                  Medewerker
+                  Medewerker (service)
                   <select
                     value={teamgenootId}
                     disabled={teamgenotenLoading}
@@ -1093,9 +1314,30 @@ function PlanInplannenPanel({
                       {teamgenotenLoading
                         ? "Laden…"
                         : teamgenotenVoorSoort.length === 0
-                          ? soort === "schouwdag" || soort === "schouwweek"
-                            ? "Geen monteurs met schouw-ervaring"
-                            : "Geen monteurs voor installatie"
+                          ? "Niemand met Service in het account"
+                          : "Kies iemand met Service…"}
+                    </option>
+                    {teamgenotenVoorSoort.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.naam}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : partnerId ? (
+                <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Medewerker (schouw)
+                  <select
+                    value={teamgenootId}
+                    disabled={teamgenotenLoading}
+                    onChange={(e) => setTeamgenootId(e.target.value)}
+                    className="mt-1.5 w-full border border-line bg-white px-3 py-2.5 text-sm outline-none focus:border-green disabled:opacity-60"
+                  >
+                    <option value="">
+                      {teamgenotenLoading
+                        ? "Laden…"
+                        : teamgenotenVoorSoort.length === 0
+                          ? "Niemand met Schouw in het account"
                           : "Nog niet gekoppeld…"}
                     </option>
                     {teamgenotenVoorSoort.map((t) => (
@@ -1169,7 +1411,14 @@ function PlanInplannenPanel({
                         if (!iso) {
                           setDatetimeLocal(
                             !installatieFollowUp && dayKey
-                              ? defaultDatetimeForDay(dayKey, 9)
+                              ? defaultDatetimeForDay(
+                                  dayKey,
+                                  soort === "installatie"
+                                    ? defaultVenster === "middag"
+                                      ? 13
+                                      : 8
+                                    : 9
+                                )
                               : ""
                           );
                           return;
@@ -1327,6 +1576,27 @@ type SchouwDocInfo = {
   bestandsnaam: string | null;
 };
 
+type PlanbordFotoRij = {
+  omschrijving: string | null;
+  url: string | null;
+  bestandsnaam: string | null;
+  storage_path?: string | null;
+  created_at: string;
+};
+
+function pickLatestPlanbordDoc(
+  fotos: PlanbordFotoRij[],
+  pred: (f: PlanbordFotoRij) => boolean
+): SchouwDocInfo | null {
+  const docs = fotos
+    .filter((f) => pred(f) && f.url)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const last = docs[docs.length - 1];
+  return last?.url
+    ? { url: last.url, bestandsnaam: last.bestandsnaam }
+    : null;
+}
+
 function leadAdresLines(lead: ReturnType<typeof leadOf>): string[] {
   if (!lead) return [];
   const nr = [lead.huisnummer, lead.toevoeging].filter(Boolean).join("");
@@ -1341,6 +1611,7 @@ function EventCard({
   compact = false,
   selected = false,
   hidePartner = false,
+  koppels = [],
   onSelect,
 }: {
   bar: PlanbordBar;
@@ -1348,6 +1619,7 @@ function EventCard({
   compact?: boolean;
   selected?: boolean;
   hidePartner?: boolean;
+  koppels?: InstallatiePartnerKoppel[];
   onSelect?: () => void;
 }) {
   const style = KIND_STYLE[bar.kind];
@@ -1355,7 +1627,10 @@ function EventCard({
   const partner = hidePartner ? null : partnerOf(bar.project);
   const isSchouwBar = bar.kind === "schouw" || bar.kind === "schouwweek";
   const past = isBarPast(bar);
-  const kindLabel = planbordKindLabel(bar.kind);
+  const kindLabel =
+    bar.kind === "installatie"
+      ? installatieKopTekst(bar)
+      : planbordKindLabel(bar.kind, false, bar.project);
   const timeRange = formatTimeRangeNl(bar.at, bar.duurMinuten);
   const naam = klantNaam(bar.project);
   const plaats = klantPlaats(bar.project);
@@ -1365,13 +1640,25 @@ function EventCard({
     bar.duurMinuten > 0 ? formatDuurLabel(bar.duurMinuten) : null;
   const missingSchouw =
     isSchouwBar && schouwDoc !== undefined && !schouwDoc?.url;
+  const koppel =
+    bar.kind === "installatie" && bar.project.installatie_koppel_id
+      ? koppels.find((k) => k.id === bar.project.installatie_koppel_id)
+      : null;
+  const medewerkerLabel =
+    bar.kind === "service"
+      ? bar.project.monteur?.trim() ||
+        medewerkerNaamVanProject(bar.project) ||
+        null
+      : (koppel ? koppelWeergaveNaam(koppel) : null) ||
+        medewerkerNaamVanProject(bar.project) ||
+        null;
   const monteurLabel = hidePartner
-    ? bar.project.monteur || null
+    ? medewerkerLabel
     : partner?.naam &&
-        bar.project.monteur &&
-        bar.project.monteur !== partner.naam
-      ? `${partner.naam} · ${bar.project.monteur}`
-      : partner?.naam || bar.project.monteur || null;
+        medewerkerLabel &&
+        medewerkerLabel !== partner.naam
+      ? `${partner.naam} · ${medewerkerLabel}`
+      : partner?.naam || medewerkerLabel || null;
   const subLine = [plaats, !compact ? adresLines[0] : null, monteurLabel]
     .filter(Boolean)
     .join(" · ");
@@ -1475,6 +1762,7 @@ const SCHOUW_DONE_STATUSES = new Set([
   "materiaal_besteld",
   "installatie_ingepland",
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
 ]);
@@ -1776,11 +2064,16 @@ function AgendaItemSidebar({
   allowSchouwUpload = false,
   allowOpleveringUpload = false,
   allowServiceComplete = false,
+  allowMedewerkerWijzig = false,
+  portalToken,
   fotosUploadUrl,
   notesPatchUrl,
   onSchouwDocChange,
   onOpleveringDocChange,
   onProjectUpdated,
+  onMedewerkerGewijzigd,
+  koppels: agendaKoppelsProp,
+  offerteRegels,
   onClose,
 }: {
   bar: PlanbordBar;
@@ -1795,6 +2088,9 @@ function AgendaItemSidebar({
   allowOpleveringUpload?: boolean;
   /** Service afvinken + optionele foto’s. */
   allowServiceComplete?: boolean;
+  /** Medewerker wisselen (CRM of partner-beheerder). */
+  allowMedewerkerWijzig?: boolean;
+  portalToken?: string | null;
   /** Override upload endpoint (portal token API). */
   fotosUploadUrl?: string | null;
   /** Override notes PATCH endpoint (portal token API). */
@@ -1805,6 +2101,9 @@ function AgendaItemSidebar({
     doc: SchouwDocInfo | null
   ) => void;
   onProjectUpdated?: (project: Project) => void;
+  onMedewerkerGewijzigd?: (teamgenootId: string | null) => void;
+  koppels?: InstallatiePartnerKoppel[];
+  offerteRegels?: OfferteRegelKort[];
   onClose: () => void;
 }) {
   const project = bar.project;
@@ -1814,7 +2113,9 @@ function AgendaItemSidebar({
     partners.find((p) => p.id === (bar.partnerId || project.installatie_partner_id)) ||
     partnerJoined ||
     null;
-  const kindLabel = planbordKindLabel(bar.kind);
+  const kindChip = planbordKindLabel(bar.kind, false, bar.project);
+  const batterijKort =
+    bar.kind === "installatie" ? bar.batterijKort?.trim() || null : null;
   const when =
     bar.kind === "installatie"
       ? project.installatie_at
@@ -1883,6 +2184,14 @@ function AgendaItemSidebar({
   const [formTeamgenoten, setFormTeamgenoten] = useState<
     InstallatiePartnerTeamgenoot[]
   >([]);
+  const [formKoppels, setFormKoppels] = useState<InstallatiePartnerKoppel[]>(
+    []
+  );
+  const [medewerkerBusy, setMedewerkerBusy] = useState(false);
+  const [medewerkerMsg, setMedewerkerMsg] = useState<string | null>(null);
+  const [installatieProducten, setInstallatieProducten] = useState<
+    { omschrijving: string; aantal: number }[] | null
+  >(null);
   const [serviceVerzoeken, setServiceVerzoeken] = useState<
     Pick<
       ServiceVerzoek,
@@ -1892,15 +2201,27 @@ function AgendaItemSidebar({
 
   useEffect(() => {
     setLocalDoc(schouwDoc);
-  }, [schouwDoc, bar.key]);
+    setLocalOplevering(opleveringDoc);
+    setLocalMeterkast(undefined);
+    setLocalBatterij(undefined);
+    setLocalVideo(undefined);
+  }, [bar.key]);
 
   useEffect(() => {
-    setLocalOplevering(opleveringDoc);
-  }, [opleveringDoc, bar.key]);
+    if (schouwDoc?.url) setLocalDoc(schouwDoc);
+  }, [schouwDoc]);
+
+  useEffect(() => {
+    if (opleveringDoc?.url) setLocalOplevering(opleveringDoc);
+  }, [opleveringDoc]);
 
   // Foto’s + documenten voor schouw/installatie sidebar.
   useEffect(() => {
-    if (bar.kind !== "installatie" && bar.kind !== "schouw" && bar.kind !== "schouwweek") {
+    if (
+      bar.kind !== "installatie" &&
+      bar.kind !== "schouw" &&
+      bar.kind !== "schouwweek"
+    ) {
       return;
     }
     let cancelled = false;
@@ -1910,81 +2231,89 @@ function AgendaItemSidebar({
           fotosUploadUrl || `/api/projecten/${project.id}/fotos`;
         const res = await fetch(url);
         const data = await res.json().catch(() => ({}));
-        if (cancelled || !res.ok) {
-          if (!cancelled) {
-            if (schouwDoc === undefined) setLocalDoc(null);
-            setLocalMeterkast(null);
-            setLocalBatterij(null);
-            setLocalVideo(null);
-          }
+        if (cancelled) return;
+        if (!res.ok) {
+          setLocalDoc((cur) => cur ?? null);
+          setLocalOplevering((cur) => cur ?? null);
+          setLocalMeterkast((cur) => cur ?? null);
+          setLocalBatterij((cur) => cur ?? null);
+          setLocalVideo((cur) => cur ?? null);
           return;
         }
-        const fotos = (data.fotos || []) as Array<{
-          omschrijving: string | null;
-          url: string | null;
-          bestandsnaam: string | null;
-          created_at: string;
-        }>;
-        const pick = (
-          pred: (o: string | null) => boolean
-        ): SchouwDocInfo | null => {
-          const docs = fotos
-            .filter((f) => pred(f.omschrijving) && f.url)
-            .sort((a, b) => a.created_at.localeCompare(b.created_at));
-          const last = docs[docs.length - 1];
-          return last?.url
-            ? { url: last.url, bestandsnaam: last.bestandsnaam }
-            : null;
-        };
-        if (!cancelled) {
-          if (schouwDoc === undefined) {
-            setLocalDoc(pick((o) => isSchouwFormulier(o)));
-          }
-          setLocalMeterkast(pick((o) => isFotoMeterkast(o)));
-          setLocalBatterij(pick((o) => isFotoBatterij(o)));
-          setLocalVideo(pick((o) => isVideoInstallatie(o)));
-          if (opleveringDoc === undefined && bar.kind === "installatie") {
-            setLocalOplevering(pick((o) => isOpleveringsrapport(o)));
-          }
+        const fotos = (data.fotos || []) as PlanbordFotoRij[];
+        setLocalDoc(
+          pickLatestPlanbordDoc(fotos, (f) =>
+            isSchouwFormulierBewijs(
+              f.omschrijving,
+              f.bestandsnaam,
+              f.storage_path
+            )
+          )
+        );
+        setLocalMeterkast(
+          pickLatestPlanbordDoc(fotos, (f) => isFotoMeterkast(f.omschrijving))
+        );
+        setLocalBatterij(
+          pickLatestPlanbordDoc(fotos, (f) => isFotoBatterij(f.omschrijving))
+        );
+        setLocalVideo(
+          pickLatestPlanbordDoc(fotos, (f) =>
+            isVideoInstallatie(f.omschrijving)
+          )
+        );
+        if (bar.kind === "installatie") {
+          setLocalOplevering(
+            pickLatestPlanbordDoc(fotos, (f) =>
+              isOpleveringsrapportBewijs(
+                f.omschrijving,
+                f.bestandsnaam,
+                f.storage_path
+              )
+            )
+          );
         }
       } catch {
         if (!cancelled) {
-          if (schouwDoc === undefined) setLocalDoc(null);
-          setLocalMeterkast(null);
-          setLocalBatterij(null);
-          setLocalVideo(null);
+          setLocalDoc((cur) => cur ?? null);
+          setLocalOplevering((cur) => cur ?? null);
+          setLocalMeterkast((cur) => cur ?? null);
+          setLocalBatterij((cur) => cur ?? null);
+          setLocalVideo((cur) => cur ?? null);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [
-    bar.kind,
-    bar.key,
-    schouwDoc,
-    opleveringDoc,
-    fotosUploadUrl,
-    project.id,
-  ]);
+  }, [bar.kind, bar.key, fotosUploadUrl, project.id]);
 
   const partnerIdForTeam =
     partner?.id || project.installatie_partner_id || null;
   useEffect(() => {
-    if (!partnerIdForTeam) {
+    if (!partnerIdForTeam && !portalToken) {
       setFormTeamgenoten([]);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerIdForTeam)}`
-        );
+        const url =
+          portalMode && portalToken
+            ? `/api/installatie/${encodeURIComponent(portalToken)}/teamgenoten`
+            : partnerIdForTeam
+              ? `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerIdForTeam)}`
+              : null;
+        if (!url) {
+          setFormTeamgenoten([]);
+          return;
+        }
+        const res = await fetch(url);
         const data = await res.json().catch(() => ({}));
         if (cancelled || !res.ok) return;
         setFormTeamgenoten(
-          (data.teamgenoten as InstallatiePartnerTeamgenoot[]) || []
+          ((data.teamgenoten as InstallatiePartnerTeamgenoot[]) || []).filter(
+            (t) => t.actief !== false
+          )
         );
       } catch {
         if (!cancelled) setFormTeamgenoten([]);
@@ -1993,7 +2322,112 @@ function AgendaItemSidebar({
     return () => {
       cancelled = true;
     };
-  }, [partnerIdForTeam, bar.key]);
+  }, [partnerIdForTeam, bar.key, portalMode, portalToken]);
+
+  useEffect(() => {
+    if (!partnerIdForTeam && !portalToken) {
+      setFormKoppels([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url =
+          portalMode && portalToken
+            ? `/api/installatie/${encodeURIComponent(portalToken)}/koppels`
+            : partnerIdForTeam
+              ? `/api/installatie-partners/koppels?partner_id=${encodeURIComponent(partnerIdForTeam)}`
+              : null;
+        if (!url) {
+          setFormKoppels([]);
+          return;
+        }
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        setFormKoppels(
+          ((data.koppels as InstallatiePartnerKoppel[]) || []).filter(
+            (k) => k.actief !== false
+          )
+        );
+      } catch {
+        if (!cancelled) setFormKoppels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [partnerIdForTeam, bar.key, portalMode, portalToken]);
+
+  useEffect(() => {
+    if (bar.kind !== "installatie") {
+      setInstallatieProducten(null);
+      return;
+    }
+    const nested = offerteRegelsVanProject(project);
+    const seed =
+      (offerteRegels && offerteRegels.length > 0
+        ? offerteRegels
+        : nested.length > 0
+          ? nested
+          : null) || null;
+    if (seed) {
+      setInstallatieProducten(productenUitOfferteRegels(seed));
+    } else {
+      setInstallatieProducten(null);
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (portalToken) {
+          const res = await fetch(
+            `/api/installatie/${encodeURIComponent(portalToken)}/orders/${encodeURIComponent(project.id)}/producten`
+          );
+          const data = await res.json().catch(() => ({}));
+          if (cancelled || !res.ok) {
+            if (!cancelled && !seed) setInstallatieProducten([]);
+            return;
+          }
+          if (!cancelled) {
+            setInstallatieProducten(
+              (data.producten as { omschrijving: string; aantal: number }[]) ||
+                []
+            );
+          }
+          return;
+        }
+        const offerteId = project.offerte_id;
+        if (!offerteId) {
+          if (!cancelled && !seed) setInstallatieProducten([]);
+          return;
+        }
+        const res = await fetch(
+          `/api/planbord/offerte-regels?ids=${encodeURIComponent(offerteId)}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) {
+          if (!cancelled && !seed) setInstallatieProducten([]);
+          return;
+        }
+        const regels = (data.regels || []) as OfferteRegelKort[];
+        if (!cancelled) {
+          setInstallatieProducten(productenUitOfferteRegels(regels));
+        }
+      } catch {
+        if (!cancelled && !seed) setInstallatieProducten([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bar.kind,
+    bar.key,
+    portalToken,
+    project.id,
+    project.offerte_id,
+    offerteRegels,
+  ]);
 
   useEffect(() => {
     setNoteDraft(
@@ -2142,6 +2576,7 @@ function AgendaItemSidebar({
       batterijFotoOk &&
       videoInstallatieOk) ||
     opStatus === "installatie_voltooid" ||
+    opStatus === "after_sale" ||
     opStatus === "review_gevraagd" ||
     opStatus === "service";
   const serviceAfgerond =
@@ -2151,15 +2586,180 @@ function AgendaItemSidebar({
         (Boolean(project.service_notities?.trim()) &&
           opStatus !== "service")));
   const orderVolledigBetaald = orderBetaald === true;
-  const batterijBijKlant = batterijPurchasingStatus(
-    project.materiaal_checks
-  ).geleverd;
+  const batterijKoop = batterijPurchasingStatus(project.materiaal_checks);
+  const batterijBesteld = batterijKoop.besteld;
+  const batterijBijKlant = batterijKoop.geleverd;
   const schouwMedewerker = medewerkerNaamVanProject(project);
+  const huidigeMedewerkerId = project.installatie_teamgenoot_id || "";
+  const huidigeKoppelId = project.installatie_koppel_id || "";
+  const koppelsVoorSelect = formKoppels.length
+    ? formKoppels
+    : agendaKoppelsProp || [];
+  const huidigeKoppel =
+    koppelsVoorSelect.find((k) => k.id === huidigeKoppelId) || null;
+  const koppelLabel = huidigeKoppel
+    ? koppelWeergaveNaam(huidigeKoppel)
+    : null;
+  const isInstallatieBar = bar.kind === "installatie";
+  const isSchouwBarSidebar =
+    bar.kind === "schouw" || bar.kind === "schouwweek";
+  const isServiceBar = bar.kind === "service";
+  const huidigeServiceId = project.service_teamgenoot_id || "";
+  const serviceKeuzes = useMemo(
+    () =>
+      formTeamgenoten.filter(
+        (t) =>
+          t.actief !== false &&
+          (t.kan_service === true || t.id === huidigeServiceId)
+      ),
+    [formTeamgenoten, huidigeServiceId]
+  );
+  const medewerkerKeuzes = useMemo(() => {
+    let list = formTeamgenoten.filter((t) => t.actief !== false);
+    if (isSchouwBarSidebar) {
+      list = list.filter(
+        (t) => t.kan_schouw === true || t.id === huidigeMedewerkerId
+      );
+    }
+    return list;
+  }, [formTeamgenoten, isSchouwBarSidebar, huidigeMedewerkerId]);
   const notesEndpoint =
     notesPatchUrl ||
     (allowSchouwUpload || allowOpleveringUpload || allowServiceComplete
       ? `/api/projecten/${project.id}`
       : null);
+  const medewerkerPatchUrl =
+    notesPatchUrl || `/api/projecten/${project.id}`;
+
+  async function saveMedewerker(id: string) {
+    if (!allowMedewerkerWijzig) return;
+    const nextId = id.trim() || null;
+    if ((huidigeMedewerkerId || null) === nextId) return;
+    setMedewerkerBusy(true);
+    setMedewerkerMsg(null);
+    try {
+      const res = await fetch(medewerkerPatchUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ installatie_teamgenoot_id: nextId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Medewerker opslaan mislukt"
+        );
+      }
+      const updated =
+        (data as { project?: Project; order?: Project }).project ||
+        (data as { order?: Project }).order;
+      const naam =
+        medewerkerKeuzes.find((t) => t.id === nextId)?.naam ||
+        formTeamgenoten.find((t) => t.id === nextId)?.naam ||
+        null;
+      const nextProject = {
+        ...project,
+        ...(updated || {}),
+        installatie_teamgenoot_id: nextId,
+      } as Project;
+      onProjectUpdated?.(nextProject);
+      onMedewerkerGewijzigd?.(nextId);
+      setMedewerkerMsg(
+        naam ? `Staat nu in de agenda van ${naam}.` : "Medewerker ontkoppeld."
+      );
+    } catch (err) {
+      setMedewerkerMsg(
+        err instanceof Error ? err.message : "Medewerker opslaan mislukt"
+      );
+    } finally {
+      setMedewerkerBusy(false);
+    }
+  }
+
+  async function saveKoppel(id: string) {
+    if (!allowMedewerkerWijzig) return;
+    const nextId = id.trim() || null;
+    if ((huidigeKoppelId || null) === nextId) return;
+    setMedewerkerBusy(true);
+    setMedewerkerMsg(null);
+    try {
+      const res = await fetch(medewerkerPatchUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ installatie_koppel_id: nextId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Koppel opslaan mislukt"
+        );
+      }
+      const updated =
+        (data as { project?: Project; order?: Project }).project ||
+        (data as { order?: Project }).order;
+      const k =
+        koppelsVoorSelect.find((x) => x.id === nextId) || null;
+      const naam = k ? koppelWeergaveNaam(k) : null;
+      const nextProject = {
+        ...project,
+        ...(updated || {}),
+        installatie_koppel_id: nextId,
+        monteur: naam,
+      } as Project;
+      onProjectUpdated?.(nextProject);
+      setMedewerkerMsg(
+        naam ? `Staat nu in de agenda van ${naam}.` : "Koppel ontkoppeld."
+      );
+    } catch (err) {
+      setMedewerkerMsg(
+        err instanceof Error ? err.message : "Koppel opslaan mislukt"
+      );
+    } finally {
+      setMedewerkerBusy(false);
+    }
+  }
+
+  async function saveServiceMedewerker(id: string) {
+    if (!allowMedewerkerWijzig) return;
+    const nextId = id.trim() || null;
+    if ((huidigeServiceId || null) === nextId) return;
+    setMedewerkerBusy(true);
+    setMedewerkerMsg(null);
+    try {
+      const res = await fetch(medewerkerPatchUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ service_teamgenoot_id: nextId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Service-monteur opslaan mislukt"
+        );
+      }
+      const updated =
+        (data as { project?: Project; order?: Project }).project ||
+        (data as { order?: Project }).order;
+      const naam =
+        serviceKeuzes.find((t) => t.id === nextId)?.naam || null;
+      const nextProject = {
+        ...project,
+        ...(updated || {}),
+        service_teamgenoot_id: nextId,
+        monteur: naam || project.monteur,
+      } as Project;
+      onProjectUpdated?.(nextProject);
+      onMedewerkerGewijzigd?.(nextId);
+      setMedewerkerMsg(
+        naam ? `Staat nu in de agenda van ${naam}.` : "Service-monteur ontkoppeld."
+      );
+    } catch (err) {
+      setMedewerkerMsg(
+        err instanceof Error ? err.message : "Service-monteur opslaan mislukt"
+      );
+    } finally {
+      setMedewerkerBusy(false);
+    }
+  }
 
   async function uploadRequiredDoc(
     file: File,
@@ -2394,31 +2994,39 @@ function AgendaItemSidebar({
         onClick={onClose}
       />
       <aside className="relative z-10 flex h-full w-full max-w-md flex-col border-l border-line bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-4 sm:px-5">
-          <div className="min-w-0">
-            <Badge
-              variant="secondary"
-              className={cn(
-                "rounded-full text-[10px] font-semibold uppercase tracking-[0.06em]",
-                bar.kind === "installatie" &&
-                  "border border-[#047857]/25 bg-[#E8F6EC] text-[#047857]",
-                bar.kind === "levering" &&
-                  "border border-[#EA580C]/25 bg-[#FFF0E6] text-[#EA580C]",
-                bar.kind === "service" &&
-                  "border border-[#C45A12]/25 bg-[#FFF0E6] text-[#C45A12]",
-                bar.kind !== "installatie" &&
-                  bar.kind !== "levering" &&
-                  bar.kind !== "service" &&
-                  "border border-[#854D0E]/25 bg-[#FFF8D6] text-[#854D0E]"
-              )}
-            >
-              {kindLabel}
-              {when
-                ? ` · ${formatTimeRangeNl(when, bar.duurMinuten) || formatTimeNl(when)}`
-                : ""}
-              {duurLabel ? ` · ${duurLabel}` : ""}
-              {isBarPast(bar) ? " · geweest" : ""}
-            </Badge>
+        <div className="border-b border-line px-4 py-3 sm:px-5">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "h-5 shrink-0 rounded-full px-2 text-[10px] font-semibold uppercase tracking-[0.06em]",
+                  bar.kind === "installatie" &&
+                    "border border-[#047857]/25 bg-[#E8F6EC] text-[#047857]",
+                  bar.kind === "levering" &&
+                    "border border-[#EA580C]/25 bg-[#FFF0E6] text-[#EA580C]",
+                  bar.kind === "service" &&
+                    "border border-[#C45A12]/25 bg-[#FFF0E6] text-[#C45A12]",
+                  bar.kind !== "installatie" &&
+                    bar.kind !== "levering" &&
+                    bar.kind !== "service" &&
+                    "border border-[#854D0E]/25 bg-[#FFF8D6] text-[#854D0E]"
+                )}
+              >
+                {kindChip}
+              </Badge>
+              {batterijKort ? (
+                <span className="truncate text-[13px] font-medium text-ink">
+                  {batterijKort}
+                </span>
+              ) : null}
+              {isBarPast(bar) ? (
+                <span className="text-[11px] font-medium text-muted">
+                  Geweest
+                </span>
+              ) : null}
+            </div>
             <h2 className="mt-2 font-display text-xl font-semibold tracking-tight text-ink">
               {lead?.naam || projectTitle(project)}
             </h2>
@@ -2430,13 +3038,103 @@ function AgendaItemSidebar({
           </div>
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon-sm"
             onClick={onClose}
-            className="shrink-0"
+            className="shrink-0 text-muted hover:text-ink"
+            aria-label="Sluiten"
           >
-            Sluiten
+            <X className="size-4" />
           </Button>
+        </div>
+            <div className="mt-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                {isInstallatieBar
+                  ? "Koppel"
+                  : isServiceBar
+                    ? "Medewerker (service)"
+                    : "Medewerker (schouw)"}
+              </p>
+              {allowMedewerkerWijzig && isInstallatieBar ? (
+                <div className="mt-1.5">
+                  <NativeSelect
+                    value={huidigeKoppelId}
+                    disabled={medewerkerBusy}
+                    aria-label="Koppel"
+                    onChange={(e) => void saveKoppel(e.target.value)}
+                    className="w-full"
+                  >
+                    <NativeSelectOption value="">
+                      {koppelsVoorSelect.length === 0
+                        ? "Nog geen koppels"
+                        : "Nog niet gekoppeld…"}
+                    </NativeSelectOption>
+                    {koppelsVoorSelect.map((k) => (
+                      <NativeSelectOption key={k.id} value={k.id}>
+                        {koppelWeergaveNaam(k)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  {medewerkerMsg ? (
+                    <p className="mt-1.5 text-xs text-muted">{medewerkerMsg}</p>
+                  ) : null}
+                </div>
+              ) : allowMedewerkerWijzig && isServiceBar ? (
+                <div className="mt-1.5">
+                  <NativeSelect
+                    value={huidigeServiceId}
+                    disabled={medewerkerBusy}
+                    aria-label="Service-monteur"
+                    onChange={(e) => void saveServiceMedewerker(e.target.value)}
+                    className="w-full"
+                  >
+                    <NativeSelectOption value="">
+                      {serviceKeuzes.length === 0
+                        ? "Niemand met Service"
+                        : "Nog niet gekoppeld…"}
+                    </NativeSelectOption>
+                    {serviceKeuzes.map((t) => (
+                      <NativeSelectOption key={t.id} value={t.id}>
+                        {t.naam}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  {medewerkerMsg ? (
+                    <p className="mt-1.5 text-xs text-muted">{medewerkerMsg}</p>
+                  ) : null}
+                </div>
+              ) : allowMedewerkerWijzig && isSchouwBarSidebar ? (
+                <div className="mt-1.5">
+                  <NativeSelect
+                    value={huidigeMedewerkerId}
+                    disabled={medewerkerBusy}
+                    aria-label="Medewerker"
+                    onChange={(e) => void saveMedewerker(e.target.value)}
+                    className="w-full"
+                  >
+                    <NativeSelectOption value="">
+                      {medewerkerKeuzes.length === 0
+                        ? "Niemand met Schouw"
+                        : "Nog niet gekoppeld…"}
+                    </NativeSelectOption>
+                    {medewerkerKeuzes.map((t) => (
+                      <NativeSelectOption key={t.id} value={t.id}>
+                        {t.naam}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  {medewerkerMsg ? (
+                    <p className="mt-1.5 text-xs text-muted">{medewerkerMsg}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {isInstallatieBar
+                    ? koppelLabel || "Nog geen koppel"
+                    : schouwMedewerker || "Nog niet gekoppeld"}
+                </p>
+              )}
+            </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-1 sm:px-5">
@@ -2473,6 +3171,10 @@ function AgendaItemSidebar({
                 <div className="space-y-2 rounded-lg border border-line bg-wash/60 px-3 py-2.5">
                   {portalMode ? (
                     <>
+                      <StatusCheckRow
+                        ok={batterijBesteld}
+                        label="Batterij besteld"
+                      />
                       {showSchouwForm ? (
                         <>
                           <StatusCheckRow
@@ -2520,6 +3222,10 @@ function AgendaItemSidebar({
                   ) : (
                     <>
                       <StatusCheckRow
+                        ok={batterijBesteld}
+                        label="Batterij besteld"
+                      />
+                      <StatusCheckRow
                         ok={orderVolledigBetaald}
                         loading={betaaldLoading}
                         label="Order volledig betaald"
@@ -2554,6 +3260,42 @@ function AgendaItemSidebar({
                 </div>
               </div>
             </DetailRow>
+
+            {bar.kind === "installatie" ? (
+              <DetailRow label="Producten">
+                {installatieProducten === null ? (
+                  <span className="text-muted">Laden…</span>
+                ) : installatieProducten.length === 0 ? (
+                  <span className="text-muted">Geen productregels op de offerte</span>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {installatieProducten.map((p, i) => {
+                      const o = p.omschrijving.toLowerCase();
+                      const extra =
+                        o.includes("meterkast") || o.includes("noodstroom");
+                      return (
+                        <li
+                          key={`${p.omschrijving}-${i}`}
+                          className="flex items-start justify-between gap-3"
+                        >
+                          <span className="min-w-0 font-medium leading-snug">
+                            {p.omschrijving}
+                            {extra ? (
+                              <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                                Extra
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-muted">
+                            {p.aantal}×
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </DetailRow>
+            ) : null}
 
             <DetailRow label="Telefoon">
               {tel ? (
@@ -2609,16 +3351,12 @@ function AgendaItemSidebar({
                     <p className="font-medium">
                       {partner?.naam || "Geen partner"}
                     </p>
-                    {project.monteur &&
-                    project.monteur !== partner?.naam ? (
-                      <p className="text-sm font-semibold text-ink">
-                        Medewerker: {project.monteur}
-                      </p>
-                    ) : project.installatie_partner_id &&
-                      !project.monteur ? (
+                    {project.installatie_partner_id &&
+                    isSchouwBarSidebar &&
+                    !huidigeMedewerkerId &&
+                    !project.monteur ? (
                       <p className="text-sm font-semibold text-[#C45A12]">
-                        Medewerker nog niet gekoppeld — koppel vóór
-                        schouw/oplevering
+                        Schouw-medewerker nog niet gekoppeld — kies bovenaan
                       </p>
                     ) : null}
                     {partner?.telefoon ? (
@@ -2741,8 +3479,7 @@ function AgendaItemSidebar({
                   />
                 </DetailRow>
               </>
-            ) : showOplevering &&
-              (allowOpleveringUpload || localOplevering !== undefined) ? (
+            ) : showOplevering ? (
               <>
                 {(schouwVoltooid ||
                   localDoc?.url ||
@@ -3130,7 +3867,7 @@ function AgendaItemSidebar({
             }
             const adv = result.status_advance;
             if (adv?.advanced) {
-              setUploadOk("Opleverformulier opgeslagen · installatie voltooid.");
+              setUploadOk("Opleverformulier opgeslagen · After sale.");
             } else {
               setUploadOk("Opleverformulier-PDF aangemaakt.");
             }
@@ -3164,7 +3901,10 @@ function TimedDayBlock({
   const height = Math.min(rawH, Math.max(HOUR_PX * 0.4, gridHeight - top - 4));
   const compact = height < HOUR_PX * 0.85;
   const past = isBarPast(bar);
-  const kindLabel = planbordKindLabel(bar.kind);
+  const kindLabel =
+    bar.kind === "installatie"
+      ? installatieKopTekst(bar)
+      : planbordKindLabel(bar.kind, false, bar.project);
   const timeRange = formatTimeRangeNl(bar.at, bar.duurMinuten);
   const naam = klantNaam(bar.project);
   const plaats = klantPlaats(bar.project);
@@ -3290,58 +4030,194 @@ function isSameMonthKey(dayKey: string, anchor: Date): boolean {
   );
 }
 
-function MonthEventChip({
-  bar,
-  selected,
-  onSelect,
+function barHourAmsterdam(bar: PlanbordBar): number | null {
+  if (!bar.at) return null;
+  return Number(formatInTimeZone(new Date(bar.at), AMSTERDAM_TZ, "H"));
+}
+
+function barInVenster(bar: PlanbordBar, venster: PartnerVenster): boolean {
+  const h = barHourAmsterdam(bar);
+  if (h == null) return false;
+  if (venster === "ochtend") return h >= 8 && h < 12;
+  return h >= 13 && h < 17;
+}
+
+function projectAdres(p: Project): string | null {
+  const lead = leadOf(p);
+  if (!lead) return null;
+  const a = adresRegel(lead);
+  return a && a !== "—" ? a : null;
+}
+
+function installPairForDay(bars: PlanbordBar[]): {
+  a: PlanbordBar;
+  b: PlanbordBar;
+} | null {
+  const inst = bars
+    .filter((b) => b.kind === "installatie" && b.at)
+    .sort((x, y) => String(x.at).localeCompare(String(y.at)));
+  const ochtend = inst.filter((b) => barInVenster(b, "ochtend"));
+  const middag = inst.filter((b) => barInVenster(b, "middag"));
+  for (const a of ochtend) {
+    const b = middag.find((m) => m.partnerId && m.partnerId === a.partnerId);
+    if (b) return { a, b };
+  }
+  if (ochtend[0] && middag[0]) return { a: ochtend[0], b: middag[0] };
+  return null;
+}
+
+const INSTALLATIE_OCHTEND_MIN = 240;
+const INSTALLATIE_PAUZE_MIN = 60;
+const INSTALLATIE_MIDDAG_MIN = 240;
+
+function InstallatieDagKolom({
+  bars,
+  showPlek,
+  travelLabel,
+  onPlanVenster,
+  onSelectBar,
+  selectedKey,
 }: {
-  bar: PlanbordBar;
-  selected: boolean;
-  onSelect: () => void;
+  bars: PlanbordBar[];
+  showPlek?: boolean;
+  travelLabel?: string | null;
+  onPlanVenster?: (venster: PartnerVenster) => void;
+  onSelectBar?: (bar: PlanbordBar) => void;
+  selectedKey?: string | null;
 }) {
-  const s = KIND_STYLE[bar.kind];
-  const past = isBarPast(bar);
-  const time = bar.at ? formatTimeNl(bar.at) : "";
-  const kindShort = planbordKindLabel(bar.kind, true);
-  const naam = klantNaam(bar.project);
+  const ochtend = bars.filter(
+    (b) => b.kind === "installatie" && barInVenster(b, "ochtend")
+  );
+  const middag = bars.filter(
+    (b) => b.kind === "installatie" && barInVenster(b, "middag")
+  );
+  const ochtendBar = ochtend[0] || null;
+  const middagBar = middag[0] || null;
+  if (!ochtendBar && !middagBar) return null;
+
+  const ochtendFill = ochtendBar
+    ? Math.min(INSTALLATIE_OCHTEND_MIN, ochtendBar.duurMinuten)
+    : 0;
+  const ochtendLead = ochtendBar
+    ? Math.max(0, INSTALLATIE_OCHTEND_MIN - ochtendFill)
+    : 0;
+  const middagFill = middagBar
+    ? Math.min(INSTALLATIE_MIDDAG_MIN, middagBar.duurMinuten)
+    : 0;
+  const middagLead = middagBar
+    ? Math.max(0, INSTALLATIE_MIDDAG_MIN - middagFill)
+    : 0;
+
+  function slotFill(bar: PlanbordBar) {
+    const range = formatTimeRangeNl(bar.at, bar.duurMinuten);
+    const naam = klantNaam(bar.project);
+    const kop = installatieKopTekst(bar);
+    const past = isBarPast(bar);
+    return (
+      <button
+        type="button"
+        onClick={() => onSelectBar?.(bar)}
+        title={`${range} · ${kop} · ${naam}${past ? " · gedaan" : ""}`}
+        className={[
+          "flex h-full w-full flex-col justify-start px-1.5 py-1 text-left",
+          past ? "bg-[#F3F4F3] text-muted" : "bg-[#ECFDF5] text-[#047857]",
+          selectedKey === bar.key
+            ? past
+              ? "bg-[#E7E8E7]"
+              : "bg-[#D1FAE5]"
+            : past
+              ? "hover:bg-[#ECEDEC]"
+              : "hover:bg-[#D1FAE5]/70",
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "text-[10px] font-bold leading-tight",
+            past ? "text-muted line-through decoration-1" : "text-[#047857]",
+          ].join(" ")}
+        >
+          {kop}
+        </span>
+        <span
+          className={[
+            "text-[10px] font-bold tabular-nums leading-tight",
+            past ? "line-through decoration-1" : "",
+          ].join(" ")}
+        >
+          {range}
+        </span>
+        <span
+          className={[
+            "truncate text-[10px] font-medium leading-tight",
+            past ? "text-muted line-through decoration-1" : "text-ink",
+          ].join(" ")}
+        >
+          {naam}
+        </span>
+      </button>
+    );
+  }
 
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
-      title={`${time} ${kindShort} · ${naam}`}
-      className={[
-        "flex w-full min-w-0 items-baseline gap-1 rounded-md border px-1.5 py-0.5 text-left leading-tight hover:opacity-90",
-        s.bg,
-        s.border,
-        s.text,
-        past ? "opacity-45 grayscale-[0.35]" : "",
-        selected ? "ring-1 ring-[#0D9488]" : "",
-      ].join(" ")}
-    >
-      <span
-        className={[
-          "shrink-0 text-[10px] font-bold tabular-nums",
-          past ? "line-through" : "",
-        ].join(" ")}
+    <div className="flex min-h-[8.25rem] flex-1 flex-col">
+      <div
+        className="flex min-h-0 flex-col"
+        style={{ flex: INSTALLATIE_OCHTEND_MIN }}
       >
-        {time}
-      </span>
-      <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide">
-        {kindShort}
-      </span>
-      <span
-        className={[
-          "min-w-0 truncate text-[11px] font-semibold text-ink",
-          past ? "line-through opacity-80" : "",
-        ].join(" ")}
+        {ochtendLead > 0 ? (
+          <div style={{ flex: ochtendLead }} aria-hidden />
+        ) : null}
+        {ochtendBar ? (
+          <div className="min-h-0" style={{ flex: ochtendFill }}>
+            {slotFill(ochtendBar)}
+          </div>
+        ) : showPlek ? (
+          <button
+            type="button"
+            onClick={() => onPlanVenster?.("ochtend")}
+            className="flex flex-1 items-start px-1.5 py-1 text-left text-[10px] text-muted hover:bg-wash hover:text-ink"
+          >
+            nog 08–12
+          </button>
+        ) : (
+          <div className="flex-1" />
+        )}
+      </div>
+      <div
+        className="flex shrink-0 flex-col items-start justify-center border-y border-line/80 px-1.5 py-0.5 leading-tight"
+        style={{ flex: INSTALLATIE_PAUZE_MIN }}
       >
-        {naam}
-      </span>
-    </button>
+        <span className="text-[9px] text-muted">pauze 12–13</span>
+        {travelLabel ? (
+          <span className="text-[9px] font-medium text-[#0F766E]">
+            reistijd {travelLabel}
+          </span>
+        ) : null}
+      </div>
+      <div
+        className="flex min-h-0 flex-col"
+        style={{ flex: INSTALLATIE_MIDDAG_MIN }}
+      >
+        {middagLead > 0 ? (
+          <div style={{ flex: middagLead }} aria-hidden />
+        ) : null}
+        {middagBar ? (
+          <div className="min-h-0" style={{ flex: middagFill }}>
+            {slotFill(middagBar)}
+          </div>
+        ) : showPlek ? (
+          <button
+            type="button"
+            onClick={() => onPlanVenster?.("middag")}
+            className="flex flex-1 items-start px-1.5 py-1 text-left text-[10px] text-muted hover:bg-wash hover:text-ink"
+          >
+            nog 13–17
+          </button>
+        ) : (
+          <div className="flex-1" />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -3366,7 +4242,7 @@ function AfblokVensterChip({
     venster === "ochtend"
       ? compact
         ? "Ocht."
-        : "Ochtend 09–12"
+        : "Ochtend 08–12"
       : compact
         ? "Mid."
         : "Middag 13–17";
@@ -3424,6 +4300,580 @@ function AfblokVensterChip({
     >
       {body}
     </button>
+  );
+}
+
+function sortBarsOpTijd(bars: PlanbordBar[]): PlanbordBar[] {
+  return [...bars].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
+}
+
+function MatrixJobLink({
+  bar,
+  selected,
+  onSelect,
+}: {
+  bar: PlanbordBar;
+  selected?: boolean;
+  onSelect?: (bar: PlanbordBar) => void;
+}) {
+  const past = isBarPast(bar);
+  const time = bar.at ? formatTimeNl(bar.at) : "";
+  const naam = klantAchternaam(bar.project);
+  const style = KIND_STYLE[bar.kind];
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect?.(bar)}
+      className={cn(
+        "flex w-full min-w-0 items-baseline gap-1 truncate rounded-md border px-1.5 py-0.5 text-left leading-tight",
+        style.bg,
+        style.border,
+        past ? "opacity-45" : "",
+        selected ? "ring-1 ring-[#0D9488]" : "hover:opacity-90"
+      )}
+      title={`${time} ${klantNaam(bar.project)}`}
+    >
+      {time ? (
+        <span
+          className={cn(
+            "shrink-0 text-[11px] font-bold tabular-nums",
+            style.text,
+            past ? "line-through" : ""
+          )}
+        >
+          {time}
+        </span>
+      ) : null}
+      <span
+        className={cn(
+          "min-w-0 truncate text-[11px] font-semibold text-ink",
+          past ? "line-through opacity-80" : ""
+        )}
+      >
+        {naam}
+      </span>
+    </button>
+  );
+}
+
+type AgendaPersoon = { id: string; naam: string; kanSchouw?: boolean };
+
+function schouwPersoonVanBar(
+  bar: PlanbordBar,
+  personen: AgendaPersoon[] = []
+): AgendaPersoon {
+  const id = bar.project.installatie_teamgenoot_id?.trim() || "";
+  if (id) {
+    const known = personen.find((p) => p.id === id);
+    const naam =
+      known?.naam ||
+      medewerkerNaamVanProject(bar.project).trim() ||
+      "Onbekend";
+    return { id, naam };
+  }
+  const naam =
+    medewerkerNaamVanProject(bar.project).trim() || "Nog niet gekoppeld";
+  const byName = personen.find(
+    (p) => p.naam.trim().toLowerCase() === naam.toLowerCase()
+  );
+  if (byName) return byName;
+  return { id: `naam:${naam.toLowerCase()}`, naam };
+}
+
+function WeekKoppelMatrix({
+  days,
+  bars,
+  koppels,
+  schouwPersonen = [],
+  toonLegeSchouwers = false,
+  selectedKey,
+  readOnly,
+  todayKey,
+  soortFilter,
+  showLegeSlots = true,
+  monthPrefix,
+  onDayClick,
+  onSelectBar,
+  onPlanInstallatie,
+}: {
+  days: DayCol[];
+  bars: PlanbordBar[];
+  koppels: InstallatiePartnerKoppel[];
+  schouwPersonen?: AgendaPersoon[];
+  toonLegeSchouwers?: boolean;
+  selectedKey?: string | null;
+  readOnly?: boolean;
+  todayKey: string;
+  soortFilter?: "" | "schouw" | "installatie" | "service";
+  showLegeSlots?: boolean;
+  monthPrefix?: string;
+  onDayClick?: (dayKey: string) => void;
+  onSelectBar: (bar: PlanbordBar) => void;
+  onPlanInstallatie?: (
+    dayKey: string,
+    partnerId: string | null,
+    venster: PartnerVenster
+  ) => void;
+}) {
+  const kolommen = days.filter(
+    (d) => !d.weekend || Boolean(feestdagOp(d.key))
+  );
+  const actieveKoppels = koppels.filter((k) => k.actief !== false);
+  const installatieBars = bars.filter((b) => b.kind === "installatie");
+  const schouwBars = bars.filter(
+    (b) => b.kind === "schouw" || b.kind === "schouwweek"
+  );
+  const serviceBars = bars.filter((b) => b.kind === "service");
+  const losseInstallaties = installatieBars.filter(
+    (b) => !installatieKoppelIdVoorBar(b, actieveKoppels)
+  );
+  const toonInstallatie = !soortFilter || soortFilter === "installatie";
+  const toonSchouw = !soortFilter || soortFilter === "schouw";
+  const toonService = !soortFilter || soortFilter === "service";
+  const colCount = Math.max(1, kolommen.length);
+
+  function buitenMaand(d: DayCol) {
+    return Boolean(monthPrefix) && !d.key.startsWith(monthPrefix);
+  }
+
+  function jobsOpDag(list: PlanbordBar[], dayKey: string) {
+    return sortBarsOpTijd(list.filter((b) => b.dayKeys.includes(dayKey)));
+  }
+
+  function legeInstallatieSlots(
+    jobs: PlanbordBar[],
+    dayKey: string,
+    partnerId: string | null,
+    dim?: boolean
+  ) {
+    if (
+      dim ||
+      feestdagOp(dayKey) ||
+      !showLegeSlots ||
+      readOnly ||
+      !onPlanInstallatie
+    ) {
+      return null;
+    }
+    const ochtendBezet = jobs.some((b) => barInVenster(b, "ochtend"));
+    const middagBezet = jobs.some((b) => barInVenster(b, "middag"));
+    const slots: { label: string; venster: PartnerVenster }[] = [];
+    if (!ochtendBezet) {
+      slots.push({ label: "+ 1e", venster: "ochtend" });
+    }
+    if (!middagBezet) {
+      slots.push({ label: "+ 2e", venster: "middag" });
+    }
+    return slots.map((s) => (
+      <button
+        key={s.venster}
+        type="button"
+        onClick={() => onPlanInstallatie(dayKey, partnerId, s.venster)}
+        className="block w-full rounded-md px-1 py-0.5 text-left text-[11px] font-medium text-muted/70 hover:bg-wash hover:text-ink"
+      >
+        {s.label}
+      </button>
+    ));
+  }
+
+  function jobLijst(jobs: PlanbordBar[]) {
+    return jobs.map((bar) => (
+      <MatrixJobLink
+        key={bar.key}
+        bar={bar}
+        selected={selectedKey === bar.key}
+        onSelect={onSelectBar}
+      />
+    ));
+  }
+
+  function cellBg(
+    d: DayCol,
+    opts?: { section?: boolean; sluitFeestdag?: boolean }
+  ) {
+    if (buitenMaand(d)) return "bg-[#F4F5F4]";
+    if (opts?.sluitFeestdag && feestdagOp(d.key)) return "bg-[#FEF2F2]";
+    if (d.key === todayKey) return "bg-[#F0FDFA]";
+    if (opts?.section) return "bg-[#FAFBFA]";
+    return "bg-white";
+  }
+
+  function rij(
+    key: string,
+    label: ReactNode,
+    render: (d: DayCol) => ReactNode,
+    opts?: { section?: boolean; indent?: boolean; sluitFeestdag?: boolean }
+  ) {
+    return (
+      <tr key={key} className="border-t border-line">
+        <th
+          scope="row"
+          className={cn(
+            "w-40 border-r border-line text-left align-top text-ink",
+            opts?.section
+              ? "bg-[#FAFBFA] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.07em]"
+              : "bg-white py-1.5 pr-3 text-[13px] font-semibold",
+            opts?.indent ? "pl-7" : "px-3"
+          )}
+        >
+          {label}
+        </th>
+        {kolommen.map((d) => (
+          <td
+            key={d.key}
+            className={cn(
+              "border-l border-line px-1 py-1 align-top",
+              cellBg(d, opts)
+            )}
+          >
+            {buitenMaand(d) ? null : (
+              <div className="flex flex-col gap-0.5">{render(d)}</div>
+            )}
+          </td>
+        ))}
+      </tr>
+    );
+  }
+
+  const serviceCount = serviceBars.filter((b) =>
+    kolommen.some((d) => !buitenMaand(d) && b.dayKeys.includes(d.key))
+  ).length;
+
+  const schouwRijen = (() => {
+    const map = new Map<string, AgendaPersoon>();
+    if (toonLegeSchouwers) {
+      for (const p of schouwPersonen) {
+        if (p.id && p.kanSchouw) map.set(p.id, p);
+      }
+    }
+    for (const b of schouwBars) {
+      const persoon = schouwPersoonVanBar(b, schouwPersonen);
+      const known = schouwPersonen.find((p) => p.id === persoon.id);
+      map.set(persoon.id, known || persoon);
+    }
+    return [...map.values()].sort((a, b) =>
+      a.naam.localeCompare(b.naam, "nl")
+    );
+  })();
+
+  return (
+    <div className="overflow-hidden border border-line bg-white">
+      <table className="w-full table-fixed border-collapse text-sm">
+        <colgroup>
+          <col className="w-40" />
+          {kolommen.map((d) => (
+            <col key={d.key} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr className="border-b border-line">
+            <th
+              scope="col"
+              className="w-40 bg-white px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted"
+            />
+            {kolommen.map((d) => {
+              const isToday = d.key === todayKey;
+              const dim = buitenMaand(d);
+              const feestdag = feestdagOp(d.key);
+              const inner = (
+                <>
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    {format(d.date, "EEE", { locale: nl })}
+                  </span>
+                  <span
+                    className={cn(
+                      "mt-0.5 inline-flex h-7 min-w-7 items-center justify-center text-[15px] font-semibold tabular-nums",
+                      isToday
+                        ? "bg-[#0D9488] px-1.5 text-white"
+                        : dim
+                          ? "text-muted/45"
+                          : "text-ink"
+                    )}
+                  >
+                    {format(d.date, "d")}
+                  </span>
+                  {feestdag && !dim ? (
+                    <span className="mt-1 block text-[10px] font-semibold leading-tight text-[#B91C1C]">
+                      {feestdag.naam}
+                    </span>
+                  ) : null}
+                </>
+              );
+              return (
+                <th
+                  key={d.key}
+                  scope="col"
+                  className={cn(
+                    "border-l border-line px-2 py-2 text-left",
+                    dim
+                      ? "bg-[#F4F5F4]"
+                      : feestdag
+                        ? "bg-[#FEF2F2]"
+                        : isToday
+                          ? "bg-[#F0FDFA]"
+                          : "bg-white"
+                  )}
+                >
+                  {onDayClick && !dim ? (
+                    <button
+                      type="button"
+                      onClick={() => onDayClick(d.key)}
+                      className="text-left hover:opacity-80"
+                    >
+                      {inner}
+                    </button>
+                  ) : (
+                    inner
+                  )}
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {toonInstallatie ? (
+            <tr className="border-t border-line">
+              <th
+                scope="row"
+                className="bg-[#FAFBFA] px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.07em] text-ink"
+              >
+                Installatie
+              </th>
+              <td
+                colSpan={colCount}
+                className="border-l border-line bg-[#FAFBFA]"
+              />
+            </tr>
+          ) : null}
+          {toonInstallatie &&
+            actieveKoppels.map((k) =>
+              rij(
+                `koppel-${k.id}`,
+                koppelRijLabel(k),
+                (d) => {
+                  const jobs = jobsOpDag(
+                    installatieBars.filter(
+                      (b) =>
+                        installatieKoppelIdVoorBar(b, actieveKoppels) === k.id
+                    ),
+                    d.key
+                  );
+                  if (feestdagOp(d.key)) {
+                    return jobs.length ? (
+                      jobLijst(jobs)
+                    ) : (
+                      <p className="px-0.5 text-[10px] font-medium text-[#B91C1C]">
+                        Gesloten
+                      </p>
+                    );
+                  }
+                  return (
+                    <>
+                      {jobLijst(jobs)}
+                      {legeInstallatieSlots(
+                        jobs,
+                        d.key,
+                        k.partner_id || null
+                      )}
+                    </>
+                  );
+                },
+                { indent: true, sluitFeestdag: true }
+              )
+            )}
+          {toonInstallatie && losseInstallaties.length > 0
+            ? rij(
+                "zonder-koppel",
+                "Zonder koppel",
+                (d) =>
+                  jobLijst(
+                    jobsOpDag(
+                      losseInstallaties.filter((b) =>
+                        b.dayKeys.includes(d.key)
+                      ),
+                      d.key
+                    )
+                  ),
+                { indent: true }
+              )
+            : null}
+
+          {toonSchouw ? (
+            <tr className="border-t border-line">
+              <th
+                scope="row"
+                className="bg-[#FAFBFA] px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.07em] text-ink"
+              >
+                Schouw
+              </th>
+              <td
+                colSpan={colCount}
+                className="border-l border-line bg-[#FAFBFA]"
+              />
+            </tr>
+          ) : null}
+          {toonSchouw &&
+            schouwRijen.map((persoon) =>
+              rij(
+                `schouw-${persoon.id}`,
+                persoon.naam,
+                (d) => {
+                  const jobs = jobsOpDag(
+                    schouwBars.filter((b) => {
+                      const p = schouwPersoonVanBar(b, schouwPersonen);
+                      return p.id === persoon.id;
+                    }),
+                    d.key
+                  );
+                  if (feestdagOp(d.key)) {
+                    return jobs.length ? (
+                      jobLijst(jobs)
+                    ) : (
+                      <p className="px-0.5 text-[10px] font-medium text-[#B91C1C]">
+                        Gesloten
+                      </p>
+                    );
+                  }
+                  return jobLijst(jobs);
+                },
+                { indent: true, sluitFeestdag: true }
+              )
+            )}
+          {toonSchouw && schouwRijen.length === 0
+            ? rij(
+                "schouw-leeg",
+                "Nog niemand",
+                (d) =>
+                  feestdagOp(d.key) ? (
+                    <p className="px-0.5 text-[10px] font-medium text-[#B91C1C]">
+                      Gesloten
+                    </p>
+                  ) : null,
+                { indent: true, sluitFeestdag: true }
+              )
+            : null}
+
+          {toonService
+            ? rij(
+                "sectie-service",
+                <span className="flex items-baseline justify-between gap-2">
+                  <span>Service</span>
+                  {serviceCount > 0 ? (
+                    <span className="font-semibold normal-case tracking-normal text-muted">
+                      {serviceCount}
+                    </span>
+                  ) : null}
+                </span>,
+                (d) => jobLijst(jobsOpDag(serviceBars, d.key)),
+                { section: true }
+              )
+            : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function maandWeekBlokken(monthDays: DayCol[]): DayCol[][] {
+  const weeks: DayCol[][] = [];
+  for (let i = 0; i < monthDays.length; i += 7) {
+    const chunk = monthDays.slice(i, i + 7);
+    if (chunk.length) weeks.push(chunk);
+  }
+  return weeks;
+}
+
+function MaandKoppelOverzicht({
+  monthDays,
+  bars,
+  koppels,
+  schouwPersonen = [],
+  toonLegeSchouwers = false,
+  selectedKey,
+  readOnly,
+  todayKey,
+  soortFilter,
+  monthPrefix,
+  onDayClick,
+  onSelectBar,
+  onPlanInstallatie,
+}: {
+  monthDays: DayCol[];
+  bars: PlanbordBar[];
+  koppels: InstallatiePartnerKoppel[];
+  schouwPersonen?: AgendaPersoon[];
+  toonLegeSchouwers?: boolean;
+  selectedKey?: string | null;
+  readOnly?: boolean;
+  todayKey: string;
+  soortFilter?: "" | "schouw" | "installatie" | "service";
+  monthPrefix: string;
+  onDayClick?: (dayKey: string) => void;
+  onSelectBar: (bar: PlanbordBar) => void;
+  onPlanInstallatie?: (
+    dayKey: string,
+    partnerId: string | null,
+    venster: PartnerVenster
+  ) => void;
+}) {
+  const weken = maandWeekBlokken(monthDays);
+  return (
+    <div className="space-y-4">
+      {weken.map((week) => {
+        const werk = week.filter((d) => !d.weekend);
+        const inMaand = werk.filter((d) => d.key.startsWith(monthPrefix));
+        if (inMaand.length === 0) return null;
+        const info = schouwWeekFromDate(inMaand[0]!.date);
+        const van = format(inMaand[0]!.date, "d", { locale: nl });
+        const tot = format(inMaand[inMaand.length - 1]!.date, "d MMM", {
+          locale: nl,
+        });
+        const weekKeys = new Set(inMaand.map((d) => d.key));
+        const nInst = bars.filter(
+          (b) => b.kind === "installatie" && b.dayKeys.some((k) => weekKeys.has(k))
+        ).length;
+        const nSchouw = bars.filter(
+          (b) =>
+            (b.kind === "schouw" || b.kind === "schouwweek") &&
+            b.dayKeys.some((k) => weekKeys.has(k))
+        ).length;
+        const nService = bars.filter(
+          (b) => b.kind === "service" && b.dayKeys.some((k) => weekKeys.has(k))
+        ).length;
+        return (
+          <section key={week[0]?.key || info.week}>
+            <div className="mb-1.5 flex items-baseline justify-between gap-3 px-0.5">
+              <p className="text-[13px] font-semibold text-ink">
+                Week {info.week}
+                <span className="ml-2 font-medium text-muted">
+                  {van}–{tot}
+                </span>
+              </p>
+              <p className="text-[11px] font-medium text-muted">
+                {nInst} inst. · {nSchouw} schouw
+                {nService ? ` · ${nService} service` : ""}
+              </p>
+            </div>
+            <WeekKoppelMatrix
+              days={week}
+              bars={bars}
+              koppels={koppels}
+              schouwPersonen={schouwPersonen}
+              toonLegeSchouwers={toonLegeSchouwers}
+              selectedKey={selectedKey}
+              readOnly={readOnly}
+              todayKey={todayKey}
+              soortFilter={soortFilter}
+              showLegeSlots={false}
+              monthPrefix={monthPrefix}
+              onDayClick={onDayClick}
+              onSelectBar={onSelectBar}
+              onPlanInstallatie={onPlanInstallatie}
+            />
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -3523,6 +4973,8 @@ export function Planbord({
   const [planOpen, setPlanOpen] = useState(false);
   const [planDayKey, setPlanDayKey] = useState<string | null>(null);
   const [planPartnerId, setPlanPartnerId] = useState<string | null>(null);
+  const [planSoort, setPlanSoort] = useState<PlanSoort | null>(null);
+  const [planVenster, setPlanVenster] = useState<PartnerVenster | null>(null);
   /** Filter: partner + soort op het planbord */
   const [filterPartnerId, setFilterPartnerId] = useState<string>("");
   const [filterSoort, setFilterSoort] = useState<
@@ -3534,13 +4986,25 @@ export function Planbord({
   const [agendaKoppels, setAgendaKoppels] = useState<InstallatiePartnerKoppel[]>(
     []
   );
+  const [agendaSchouwPersonen, setAgendaSchouwPersonen] = useState<
+    AgendaPersoon[]
+  >([]);
   const [localProjects, setLocalProjects] = useState(projecten);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [reistijden, setReistijden] = useState<Record<string, string>>(
+    {}
+  );
   const [schouwDocs, setSchouwDocs] = useState<
     Record<string, SchouwDocInfo | null>
   >({});
   const [opleveringDocs, setOpleveringDocs] = useState<
     Record<string, SchouwDocInfo | null>
+  >({});
+  const [batterijLabels, setBatterijLabels] = useState<Record<string, string>>(
+    {}
+  );
+  const [offerteRegelsById, setOfferteRegelsById] = useState<
+    Record<string, OfferteRegelKort[]>
   >({});
   const todayKey = useMemo(() => dayKeyAmsterdam(new Date()), []);
 
@@ -3621,16 +5085,36 @@ export function Planbord({
   }, [afblokPartnerId, readOnly, portalToken]);
 
   useEffect(() => {
-    if (!showTeamAgendaFilters || !portalToken) {
-      setAgendaKoppels([]);
-      return;
+    const crmPartnerId = filterPartnerId || afblokPartnerId || "";
+    if (portalToken) {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/installatie/${encodeURIComponent(portalToken)}/koppels`
+          );
+          const data = await res.json().catch(() => ({}));
+          if (cancelled || !res.ok) return;
+          setAgendaKoppels(
+            ((data.koppels || []) as InstallatiePartnerKoppel[]).filter(
+              (k) => k.actief !== false
+            )
+          );
+        } catch {
+          if (!cancelled) setAgendaKoppels([]);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
     let cancelled = false;
+    const qs = crmPartnerId
+      ? `?partner_id=${encodeURIComponent(crmPartnerId)}`
+      : "";
     void (async () => {
       try {
-        const res = await fetch(
-          `/api/installatie/${encodeURIComponent(portalToken)}/koppels`
-        );
+        const res = await fetch(`/api/installatie-partners/koppels${qs}`);
         const data = await res.json().catch(() => ({}));
         if (cancelled || !res.ok) return;
         setAgendaKoppels(
@@ -3645,7 +5129,89 @@ export function Planbord({
     return () => {
       cancelled = true;
     };
-  }, [showTeamAgendaFilters, portalToken]);
+  }, [portalToken, filterPartnerId, afblokPartnerId]);
+
+  const schouwPartnerIdsKey = useMemo(() => {
+    if (filterPartnerId) return filterPartnerId;
+    const ids = new Set<string>();
+    if (afblokPartnerId) ids.add(afblokPartnerId);
+    for (const k of agendaKoppels) {
+      if (k.partner_id) ids.add(k.partner_id);
+    }
+    return [...ids].sort().join(",");
+  }, [filterPartnerId, afblokPartnerId, agendaKoppels]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (readOnly && portalToken) {
+          const res = await fetch(
+            `/api/installatie/${encodeURIComponent(portalToken)}/teamgenoten`
+          );
+          const data = await res.json().catch(() => ({}));
+          if (cancelled || !res.ok) return;
+          const list = (
+            (data.teamgenoten || []) as InstallatiePartnerTeamgenoot[]
+          )
+            .filter((t) => t.actief !== false && t.id)
+            .map((t) => ({
+              id: t.id,
+              naam: (t.naam || "").trim() || "Onbekend",
+              kanSchouw: t.kan_schouw === true,
+            }));
+          setAgendaSchouwPersonen(list);
+          return;
+        }
+        const ids = schouwPartnerIdsKey
+          ? schouwPartnerIdsKey.split(",").filter(Boolean)
+          : [];
+        if (ids.length === 0) {
+          setAgendaSchouwPersonen([]);
+          return;
+        }
+        const lists = await Promise.all(
+          ids.map(async (partnerId) => {
+            const res = await fetch(
+              `/api/installatie-partners/teamgenoten?partner_id=${encodeURIComponent(partnerId)}`
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return [] as InstallatiePartnerTeamgenoot[];
+            return (data.teamgenoten || []) as InstallatiePartnerTeamgenoot[];
+          })
+        );
+        if (cancelled) return;
+        const byId = new Map<string, AgendaPersoon>();
+        for (const t of lists.flat()) {
+          if (t.actief === false || !t.id) continue;
+          byId.set(t.id, {
+            id: t.id,
+            naam: (t.naam || "").trim() || "Onbekend",
+            kanSchouw: t.kan_schouw === true,
+          });
+        }
+        setAgendaSchouwPersonen([...byId.values()]);
+      } catch {
+        if (!cancelled) setAgendaSchouwPersonen([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [readOnly, portalToken, schouwPartnerIdsKey]);
+
+  const schouwPersonenVoorMatrix = useMemo(() => {
+    const list =
+      agendaTeamFilter.kind === "person"
+        ? agendaSchouwPersonen.filter((p) => p.id === agendaTeamFilter.id)
+        : agendaSchouwPersonen;
+    return [...list].sort((a, b) => a.naam.localeCompare(b.naam, "nl"));
+  }, [agendaSchouwPersonen, agendaTeamFilter]);
+
+  const toonLegeSchouwers =
+    Boolean(filterPartnerId) ||
+    Boolean(readOnly) ||
+    agendaTeamFilter.kind === "person";
 
   const weekDays = useMemo(() => weekDaysFrom(anchor), [anchor]);
   const monthDays = useMemo(() => monthGridDays(anchor), [anchor]);
@@ -3838,27 +5404,8 @@ export function Planbord({
           partnerOf(p)?.id === filterPartnerId
       );
     }
-    if (showTeamAgendaFilters && agendaTeamFilter.kind === "person") {
-      const id = agendaTeamFilter.id;
-      list = list.filter((p) => p.installatie_teamgenoot_id === id);
-    } else if (showTeamAgendaFilters && agendaTeamFilter.kind === "koppel") {
-      const koppel = agendaKoppels.find((k) => k.id === agendaTeamFilter.id);
-      const ids = new Set(
-        [koppel?.monteur_1_id, koppel?.monteur_2_id].filter(Boolean) as string[]
-      );
-      list = list.filter(
-        (p) =>
-          !!p.installatie_teamgenoot_id && ids.has(p.installatie_teamgenoot_id)
-      );
-    }
     return list;
-  }, [
-    localProjects,
-    filterPartnerId,
-    showTeamAgendaFilters,
-    agendaTeamFilter,
-    agendaKoppels,
-  ]);
+  }, [localProjects, filterPartnerId]);
 
   const setAgendaPersonFilter = useCallback((id: string) => {
     setAgendaTeamFilter({ kind: "person", id });
@@ -3875,20 +5422,171 @@ export function Planbord({
     [agendaKoppels]
   );
 
-  const weekBars = useMemo(
-    () => barsForWeek(planProjects, weekDays),
-    [planProjects, weekDays]
-  );
+  const installatieVanaf = readOnly ? PORTAL_INSTALLATIES_VANAF : null;
 
-  const monthBars = useMemo(
-    () => barsForWeek(planProjects, monthDays),
-    [planProjects, monthDays]
-  );
+  const installatieOfferteIdsKey = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of planProjects) {
+      if (p.installatie_at && p.offerte_id) ids.add(p.offerte_id);
+    }
+    return [...ids].sort().join(",");
+  }, [planProjects]);
 
-  const timedAll = useMemo(
-    () => allTimedBars(planProjects),
-    [planProjects]
-  );
+  useEffect(() => {
+    if (readOnly || !installatieOfferteIdsKey) {
+      if (!installatieOfferteIdsKey) setBatterijLabels({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/planbord/offerte-regels?ids=${encodeURIComponent(installatieOfferteIdsKey)}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const regels = (data.regels || []) as (OfferteRegelKort & {
+          offerte_id: string;
+        })[];
+        const byOfferte = new Map<string, OfferteRegelKort[]>();
+        for (const r of regels) {
+          const list = byOfferte.get(r.offerte_id) || [];
+          list.push(r);
+          byOfferte.set(r.offerte_id, list);
+        }
+        const nextLabels: Record<string, string> = {};
+        const nextRegels: Record<string, OfferteRegelKort[]> = {};
+        for (const [id, list] of byOfferte) {
+          nextRegels[id] = list;
+          const label = installatieBatterijKortLabel(list);
+          if (label) nextLabels[id] = label;
+        }
+        if (!cancelled) {
+          setOfferteRegelsById(nextRegels);
+          setBatterijLabels(nextLabels);
+        }
+      } catch {
+        /* nested regels op het project blijven fallback */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [installatieOfferteIdsKey, readOnly]);
+
+  useEffect(() => {
+    setSelectedBar((prev) => {
+      if (!prev || prev.kind !== "installatie") return prev;
+      const next = batterijKortVoorProject(prev.project, batterijLabels);
+      if (next === prev.batterijKort) return prev;
+      return { ...prev, batterijKort: next };
+    });
+  }, [batterijLabels]);
+
+  const weekBars = useMemo(() => {
+    const bars = barsForWeek(planProjects, weekDays, { installatieVanaf });
+    return stampBatterijOpBars(
+      bars.filter((b) =>
+        barMatchesAgendaFilter(b, agendaTeamFilter, agendaKoppels)
+      ),
+      batterijLabels
+    );
+  }, [
+    planProjects,
+    weekDays,
+    installatieVanaf,
+    agendaTeamFilter,
+    agendaKoppels,
+    batterijLabels,
+  ]);
+
+  const monthBars = useMemo(() => {
+    const bars = barsForWeek(planProjects, monthDays, { installatieVanaf });
+    return stampBatterijOpBars(
+      bars.filter((b) =>
+        barMatchesAgendaFilter(b, agendaTeamFilter, agendaKoppels)
+      ),
+      batterijLabels
+    );
+  }, [
+    planProjects,
+    monthDays,
+    installatieVanaf,
+    agendaTeamFilter,
+    agendaKoppels,
+    batterijLabels,
+  ]);
+
+  const timedAll = useMemo(() => {
+    const bars = allTimedBars(planProjects, { installatieVanaf });
+    return stampBatterijOpBars(
+      bars.filter((b) =>
+        barMatchesAgendaFilter(b, agendaTeamFilter, agendaKoppels)
+      ),
+      batterijLabels
+    );
+  }, [
+    planProjects,
+    installatieVanaf,
+    agendaTeamFilter,
+    agendaKoppels,
+    batterijLabels,
+  ]);
+
+  const reistijdPairs = useMemo(() => {
+    const byDay = new Map<string, PlanbordBar[]>();
+    for (const b of timedAll) {
+      const k = b.dayKeys[0];
+      if (!k) continue;
+      const list = byDay.get(k) || [];
+      list.push(b);
+      byDay.set(k, list);
+    }
+    const pairs: { key: string; from: string; to: string }[] = [];
+    for (const [day, list] of byDay) {
+      const pair = installPairForDay(list);
+      if (!pair) continue;
+      const from = projectAdres(pair.a.project);
+      const to = projectAdres(pair.b.project);
+      if (!from || !to || from === to) continue;
+      pairs.push({ key: day, from, to });
+    }
+    return pairs;
+  }, [timedAll]);
+
+  const reistijdPairsKey = reistijdPairs
+    .map((p) => `${p.key}|${p.from}|${p.to}`)
+    .join(";;");
+
+  useEffect(() => {
+    if (reistijdPairs.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const pair of reistijdPairs) {
+        try {
+          const res = await fetch(
+            `/api/travel-time?from=${encodeURIComponent(pair.from)}&to=${encodeURIComponent(pair.to)}`
+          );
+          const data = await res.json().catch(() => ({}));
+          if (cancelled) return;
+          const label =
+            typeof data.durationText === "string" && data.available !== false
+              ? data.durationText
+              : null;
+          if (label) {
+            setReistijden((prev) =>
+              prev[pair.key] === label ? prev : { ...prev, [pair.key]: label }
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reistijdPairsKey, reistijdPairs]);
 
   const activeBarsRaw = view === "maand" ? monthBars : weekBars;
   const activeBars = useMemo(() => {
@@ -3901,10 +5599,9 @@ export function Planbord({
     });
   }, [activeBarsRaw, filterSoort]);
 
-  const schouwProjectIdsKey = useMemo(() => {
+  const planbordFotoIdsKey = useMemo(() => {
     const ids = new Set<string>();
-    for (const bar of [...weekBars, ...monthBars, ...timedAll]) {
-      // Ook bij installatie: schouwformulier downloadbaar in de sidebar.
+    for (const bar of [...weekBars, ...monthBars]) {
       if (
         bar.kind === "schouw" ||
         bar.kind === "schouwweek" ||
@@ -3914,113 +5611,92 @@ export function Planbord({
       }
     }
     return [...ids].sort().join(",");
-  }, [weekBars, monthBars, timedAll]);
-
-  const installatieProjectIdsKey = useMemo(() => {
-    const ids = new Set<string>();
-    for (const bar of [...weekBars, ...monthBars, ...timedAll]) {
-      if (bar.kind === "installatie") ids.add(bar.project.id);
-    }
-    return [...ids].sort().join(",");
-  }, [weekBars, monthBars, timedAll]);
+  }, [weekBars, monthBars]);
 
   useEffect(() => {
-    const schouwProjectIds = schouwProjectIdsKey
-      ? schouwProjectIdsKey.split(",")
+    const ids = planbordFotoIdsKey
+      ? planbordFotoIdsKey.split(",").filter(Boolean)
       : [];
-    if (schouwProjectIds.length === 0) {
+    if (ids.length === 0) {
       setSchouwDocs({});
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const entries = await Promise.all(
-        schouwProjectIds.map(async (id) => {
-          try {
-            const url =
-              portalFotosUrl(id) || `/api/projecten/${id}/fotos`;
-            const res = await fetch(url);
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return [id, null] as const;
-            const fotos = (data.fotos || []) as Array<{
-              omschrijving: string | null;
-              url: string | null;
-              bestandsnaam: string | null;
-              created_at: string;
-            }>;
-            const docs = fotos
-              .filter((f) => isSchouwFormulier(f.omschrijving) && f.url)
-              .sort((a, b) => a.created_at.localeCompare(b.created_at));
-            const last = docs[docs.length - 1];
-            return [
-              id,
-              last?.url
-                ? { url: last.url, bestandsnaam: last.bestandsnaam }
-                : null,
-            ] as const;
-          } catch {
-            return [id, null] as const;
-          }
-        })
-      );
-      if (cancelled) return;
-      const next: Record<string, SchouwDocInfo | null> = {};
-      for (const [id, doc] of entries) next[id] = doc;
-      setSchouwDocs(next);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [schouwProjectIdsKey, portalToken]);
-
-  useEffect(() => {
-    const installatieIds = installatieProjectIdsKey
-      ? installatieProjectIdsKey.split(",")
-      : [];
-    if (installatieIds.length === 0) {
       setOpleveringDocs({});
       return;
     }
     let cancelled = false;
     (async () => {
-      const entries = await Promise.all(
-        installatieIds.map(async (id) => {
-          try {
-            const url =
-              portalFotosUrl(id) || `/api/projecten/${id}/fotos`;
-            const res = await fetch(url);
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return [id, null] as const;
-            const fotos = (data.fotos || []) as Array<{
-              omschrijving: string | null;
-              url: string | null;
-              bestandsnaam: string | null;
-              created_at: string;
-            }>;
-            const docs = fotos
-              .filter((f) => isOpleveringsrapport(f.omschrijving) && f.url)
-              .sort((a, b) => a.created_at.localeCompare(b.created_at));
-            const first = docs[0];
-            return [
-              id,
-              first?.url
-                ? { url: first.url, bestandsnaam: first.bestandsnaam }
-                : null,
-            ] as const;
-          } catch {
-            return [id, null] as const;
-          }
-        })
-      );
-      if (cancelled) return;
-      const next: Record<string, SchouwDocInfo | null> = {};
-      for (const [id, doc] of entries) next[id] = doc;
-      setOpleveringDocs(next);
+      try {
+        const url = portalToken
+          ? null
+          : `/api/planbord/fotos?ids=${encodeURIComponent(ids.join(","))}`;
+        let fotos: (PlanbordFotoRij & { project_id?: string })[] = [];
+        if (url) {
+          const res = await fetch(url);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error("fotos");
+          fotos = (data.fotos || []) as (PlanbordFotoRij & {
+            project_id?: string;
+          })[];
+        } else {
+          const batches = await Promise.all(
+            ids.map(async (id) => {
+              try {
+                const res = await fetch(
+                  portalFotosUrl(id) || `/api/projecten/${id}/fotos`
+                );
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return [];
+                return ((data.fotos || []) as PlanbordFotoRij[]).map((f) => ({
+                  ...f,
+                  project_id: id,
+                }));
+              } catch {
+                return [];
+              }
+            })
+          );
+          fotos = batches.flat();
+        }
+        if (cancelled) return;
+        const byProject = new Map<string, PlanbordFotoRij[]>();
+        for (const id of ids) byProject.set(id, []);
+        for (const f of fotos) {
+          const pid = (f as { project_id?: string }).project_id;
+          if (!pid) continue;
+          const list = byProject.get(pid) || [];
+          list.push(f);
+          byProject.set(pid, list);
+        }
+        const nextSchouw: Record<string, SchouwDocInfo | null> = {};
+        const nextOplever: Record<string, SchouwDocInfo | null> = {};
+        for (const [id, list] of byProject) {
+          nextSchouw[id] = pickLatestPlanbordDoc(list, (f) =>
+            isSchouwFormulierBewijs(
+              f.omschrijving,
+              f.bestandsnaam,
+              f.storage_path
+            )
+          );
+          nextOplever[id] = pickLatestPlanbordDoc(list, (f) =>
+            isOpleveringsrapportBewijs(
+              f.omschrijving,
+              f.bestandsnaam,
+              f.storage_path
+            )
+          );
+        }
+        setSchouwDocs(nextSchouw);
+        setOpleveringDocs(nextOplever);
+      } catch {
+        if (!cancelled) {
+          setSchouwDocs({});
+          setOpleveringDocs({});
+        }
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [installatieProjectIdsKey, portalToken]);
+  }, [planbordFotoIdsKey, portalToken]);
 
   const barsByDay = useMemo(() => {
     const map = new Map<string, PlanbordBar[]>();
@@ -4105,14 +5781,20 @@ export function Planbord({
   }, [timedAll, monthPrefix]);
 
   const openPlan = useCallback(
-    (key: string, partnerId?: string | null) => {
+    (
+      key: string,
+      partnerId?: string | null,
+      opts?: { soort?: PlanSoort; venster?: PartnerVenster }
+    ) => {
       if (readOnly) return;
       setPlanDayKey(key);
-      setPlanPartnerId(partnerId || null);
+      setPlanPartnerId(partnerId || filterPartnerId || null);
+      setPlanSoort(opts?.soort || null);
+      setPlanVenster(opts?.venster || null);
       setPlanOpen(true);
       setOkMsg(null);
     },
-    [readOnly]
+    [readOnly, filterPartnerId]
   );
 
   const openBar = useCallback((bar: PlanbordBar) => {
@@ -4159,15 +5841,9 @@ export function Planbord({
     }
   }
 
-  const hours = useMemo(() => hourLabels(), []);
-  const dayGridHeight = (DAY_END_HOUR - DAY_START_HOUR) * HOUR_PX;
   const displayDayBars = useMemo(
     () => (dayBarsResolved.length ? dayBarsResolved : dayBars),
     [dayBarsResolved, dayBars]
-  );
-  const laidOutDayBars = useMemo(
-    () => layoutDayBars(displayDayBars),
-    [displayDayBars]
   );
 
   const horizonKeys = useMemo(() => {
@@ -4199,18 +5875,21 @@ export function Planbord({
       const installatieToday = todayBars.filter(
         (b) => b.kind === "installatie"
       ).length;
-      const freeVenstersToday = Math.max(0, 2 - installatieToday);
+      const freeVenstersToday = Math.max(
+        0,
+        MAX_INSTALLATIES_PER_DAG - installatieToday
+      );
       const schouw2w = weekBarsP.filter(
         (b) => b.kind === "schouw" || b.kind === "schouwweek"
       ).length;
       const installatie2w = weekBarsP.filter(
         (b) => b.kind === "installatie"
       ).length;
-      // Ruwe vrije installatie-vensters komende 14d (excl. zondag ≈ 12 werkdagen × 2)
+      // Ruwe vrije installatiedagen komende 14d (excl. zondag ≈ 12 werkdagen)
       const workDaysApprox = 12;
       const freeVensters2w = Math.max(
         0,
-        workDaysApprox * 2 - installatie2w
+        workDaysApprox * MAX_INSTALLATIES_PER_DAG - installatie2w
       );
       return {
         id: p.id,
@@ -4303,7 +5982,8 @@ export function Planbord({
                     {p.start}
                   </span>
                   <span className="mt-1.5 block text-[11px] font-medium text-ink">
-                    Vandaag: {p.freeVenstersToday}/2 vrij
+                    Vandaag: {p.freeVenstersToday}/{MAX_INSTALLATIES_PER_DAG}{" "}
+                    vrij
                     {p.schouwToday > 0
                       ? ` · ${p.schouwToday} schouw`
                       : ""}
@@ -4312,7 +5992,7 @@ export function Planbord({
                       : ""}
                   </span>
                   <span className="mt-0.5 block text-[10px] text-muted">
-                    2 wkn: ~{p.freeVensters2w} inst.-vensters vrij ·{" "}
+                    2 wkn: ~{p.freeVensters2w} installatiedagen vrij ·{" "}
                     {p.schouw2w} schouw · {p.installatie2w} inst.
                   </span>
                 </button>
@@ -4418,7 +6098,7 @@ export function Planbord({
                 const next = !v;
                 setOkMsg(
                   next
-                    ? "Afblok-modus: klik ochtend (09–12) of middag (13–17) om dicht/open te zetten"
+                    ? "Afblok-modus: klik ochtend (08–12) of middag (13–17) om dicht/open te zetten"
                     : null
                 );
                 return next;
@@ -4591,9 +6271,9 @@ export function Planbord({
       {afblokMode ? (
         <div className="space-y-2 border border-[#B91C1C]/25 bg-[#FEF2F2] px-4 py-3">
           <p className="text-xs font-medium text-[#B91C1C]">
-            Afblok-modus — per dag 2 blokken (zoals adviseurs 4, maar hier
-            halve dagen): ochtend = installatie 1, middag = installatie 2. Klik
-            om dicht ↔ open. Alles open → max 2 installaties die dag inplannen.
+            Afblok-modus — per dag 2 blokken (ochtend 08–12 / middag 13–17).
+            Klik om dicht ↔ open. Max. 1 installatie per dag (ochtend of
+            middag).
             {!afblokPerMonteur
               ? " Let op: geldt nu voor heel het team (migratie per monteur nog open)."
               : ""}
@@ -4661,11 +6341,30 @@ export function Planbord({
                   locale: nl,
                 })}
               </p>
+              {feestdagOp(dayKey) ? (
+                <p className="mt-1 text-xs font-semibold text-[#B91C1C]">
+                  {feestdagOp(dayKey)!.naam} — geen schouw of installatie
+                </p>
+              ) : null}
             </div>
             <p className="text-sm font-medium text-muted">
               {displayDayBars.length === 0
                 ? "Geen afspraken"
                 : `${displayDayBars.length} afspraak${displayDayBars.length === 1 ? "" : "en"}`}
+              {!readOnly && filterPartnerId
+                ? (() => {
+                    const inst = displayDayBars.filter(
+                      (b) => b.kind === "installatie"
+                    ).length;
+                    const over = Math.max(
+                      0,
+                      MAX_INSTALLATIES_PER_DAG - inst
+                    );
+                    return over > 0
+                      ? ` · nog ${over} installatie mogelijk`
+                      : " · vol";
+                  })()
+                : null}
             </p>
           </div>
           {afblokPartnerId &&
@@ -4692,475 +6391,207 @@ export function Planbord({
             </div>
           ) : null}
 
-          <div className="flex overflow-x-auto">
-            <div
-              className="sticky left-0 z-[1] w-[4.5rem] shrink-0 border-r border-line bg-[#FAFBFA]"
-              style={{ height: dayGridHeight + 16 }}
-            >
-              {hours.map((h) => (
-                <div
-                  key={h}
-                  className="relative border-b border-line/60"
-                  style={{ height: HOUR_PX }}
-                >
-                  <span className="absolute -top-2.5 right-2.5 text-sm font-bold tabular-nums text-ink">
-                    {String(h).padStart(2, "0")}:00
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="relative min-w-0 flex-1">
-              <div className="relative" style={{ height: dayGridHeight }}>
-                {hours.map((h, i) => (
-                  <div
-                    key={h}
-                    className={[
-                      "absolute inset-x-0 border-b border-line/50",
-                      i % 2 === 0 ? "bg-white" : "bg-[#FAFBFA]/80",
-                    ].join(" ")}
-                    style={{ top: i * HOUR_PX, height: HOUR_PX }}
-                  />
-                ))}
-
-                {!readOnly ? (
-                  <button
-                    type="button"
-                    onClick={() => openPlan(dayKey)}
-                    className="absolute inset-0 z-0"
-                    aria-label="Inplannen op deze dag"
-                  />
-                ) : null}
-
-                {laidOutDayBars.map(({ bar, col, colCount }) => (
-                  <TimedDayBlock
-                    key={bar.key}
-                    bar={bar}
-                    col={col}
-                    colCount={colCount}
-                    selected={selectedBar?.key === bar.key}
-                    onSelect={() => openBar(bar)}
-                    gridHeight={dayGridHeight}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {view === "week" ? (
-        <>
-        <div className="divide-y divide-line border border-line bg-white md:hidden">
-          {weekDays.map((d) => {
-            const list = barsByDay.get(d.key) || [];
-            const isToday = d.key === todayKey;
-            return (
-              <section key={d.key} className={isToday ? "bg-[#F0FDFA]/40" : ""}>
-                <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-                  <button
-                    type="button"
-                    onClick={() => goDay(d.key)}
-                    className="min-w-0 text-left"
-                  >
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      {format(d.date, "EEEE", { locale: nl })}
-                    </p>
-                    <p className="font-display text-lg font-semibold text-ink">
-                      {format(d.date, "d MMMM", { locale: nl })}
-                      {isToday ? (
-                        <span className="ml-2 text-xs font-semibold text-[#0F766E]">
-                          vandaag
-                        </span>
+          <div className="divide-y divide-line">
+            {PARTNER_VENSTERS.map((venster) => {
+              const items = displayDayBars.filter((b) =>
+                barInVenster(b, venster)
+              );
+              const instDag = displayDayBars.filter(
+                (b) => b.kind === "installatie"
+              ).length;
+              const blocked = Boolean(
+                feestdagOp(dayKey) ||
+                  (afblokPartnerId && isVensterBlocked(dayKey, venster))
+              );
+              const vol =
+                blocked ||
+                (Boolean(filterPartnerId || readOnly) &&
+                  instDag >= MAX_INSTALLATIES_PER_DAG);
+              const hoursLabel =
+                venster === "ochtend" ? "08:00–12:00" : "13:00–17:00";
+              return (
+                <Fragment key={venster}>
+                  {venster === "middag" ? (
+                    <div className="border-y border-line bg-[#FAFBFA] px-4 py-2 text-center">
+                      <p className="text-xs font-medium text-muted">
+                        Pauze 12:00–13:00
+                      </p>
+                      {reistijden[dayKey] ? (
+                        <p className="text-xs font-semibold text-[#0F766E]">
+                          Reistijd naar volgende installatie ·{" "}
+                          {reistijden[dayKey]}
+                        </p>
                       ) : null}
-                    </p>
-                  </button>
-                  {!readOnly ? (
-                    <button
-                      type="button"
-                      onClick={() => openPlan(d.key)}
-                      className="shrink-0 border border-line px-2.5 py-1.5 text-xs font-semibold text-ink"
-                    >
-                      + Inplannen
-                    </button>
+                    </div>
                   ) : null}
-                </div>
-                <div className="space-y-1 p-2">
-                  {list.length === 0 ? (
-                    <p className="px-1 py-1.5 text-[11px] text-muted">
-                      Niets gepland
-                    </p>
-                  ) : (
-                    list.map((bar) => (
-                      <EventCard
-                        key={bar.key}
-                        bar={bar}
-                        schouwDoc={schouwDocs[bar.project.id]}
-                        hidePartner={readOnly}
-                        compact
-                        selected={selectedBar?.key === bar.key}
-                        onSelect={() => openBar(bar)}
-                      />
-                    ))
-                  )}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-        <div className="hidden overflow-x-auto border border-line bg-white md:block">
-          <div className="min-w-[64rem]">
-            <div className="grid grid-cols-7 border-b border-line">
-              {weekDays.map((d) => {
-                const count = barsByDay.get(d.key)?.length ?? 0;
-                const isToday = d.key === todayKey;
-                return (
-                  <button
-                    key={d.key}
-                    type="button"
-                    onClick={() => goDay(d.key)}
-                    className={[
-                      "border-r border-line px-2.5 py-3 text-left last:border-r-0 transition-colors",
-                      isToday
-                        ? "bg-[#F0FDFA] hover:bg-[#CCFBF1]"
-                        : d.weekend
-                          ? "bg-[#F8FAFC] hover:bg-wash"
-                          : "bg-white hover:bg-wash",
-                    ].join(" ")}
-                    title="Open dagoverzicht"
-                  >
-                    <p
-                      className={[
-                        "text-xs font-semibold uppercase tracking-[0.06em]",
-                        isToday ? "text-[#0F766E]" : "text-muted",
-                      ].join(" ")}
-                    >
-                      {format(d.date, "EEE", { locale: nl })}
-                    </p>
-                    <p
-                      className={[
-                        "mt-1.5 font-display text-2xl font-semibold tabular-nums leading-none",
-                        isToday
-                          ? "inline-flex h-9 min-w-9 items-center justify-center bg-[#0D9488] px-2 text-lg text-white"
-                          : "text-ink",
-                      ].join(" ")}
-                    >
-                      {format(d.date, "d")}
-                    </p>
-                    <p className="mt-2 text-xs font-medium text-muted">
-                      {count > 0 ? `${count}×` : "Leeg · klik"}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="grid min-h-[280px] grid-cols-7">
-              {weekDays.map((d) => {
-                const list = barsByDay.get(d.key) || [];
-                const isToday = d.key === todayKey;
-                const ochtendDicht = Boolean(
-                  afblokPartnerId && isVensterBlocked(d.key, "ochtend")
-                );
-                const middagDicht = Boolean(
-                  afblokPartnerId && isVensterBlocked(d.key, "middag")
-                );
-                const dagAfgeblokt = ochtendDicht && middagDicht;
-                return (
-                  <div
-                    key={d.key}
-                    className={[
-                      "min-h-[280px] space-y-1 border-r border-line p-1 last:border-r-0",
-                      afblokMode
-                        ? "bg-[#FFF7F7]/50"
-                        : dagAfgeblokt
-                          ? "bg-[#FEE2E2]/55"
-                          : isToday
-                            ? "bg-[#F0FDFA]/35"
-                            : d.weekend
-                              ? "bg-[#F8FAFC]"
-                              : "bg-white",
-                    ].join(" ")}
-                  >
-                    {afblokPartnerId ? (
-                      <div className="space-y-1">
-                        {PARTNER_VENSTERS.map((venster) => {
-                          const blocked = isVensterBlocked(d.key, venster);
-                          const hasWork = list.some((b) => {
-                            if (!b.at) return false;
-                            const h = Number(
-                              formatInTimeZone(
-                                new Date(b.at),
-                                AMSTERDAM_TZ,
-                                "H"
-                              )
-                            );
-                            if (venster === "ochtend") return h >= 9 && h < 12;
-                            return h >= 13 && h < 17;
-                          });
-                          return (
-                            <AfblokVensterChip
-                              key={venster}
-                              venster={venster}
-                              blocked={blocked}
-                              interactive={afblokMode}
-                              disabled={blockBusy || !afblokPartnerId}
-                              hasWork={hasWork}
-                              onToggle={() =>
-                                void toggleVensterAfblok(d.key, venster)
-                              }
-                            />
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {afblokMode ? (
-                      list.length > 0 ? (
-                        <div className="space-y-1">
-                          {list.map((bar) => (
-                            <EventCard
-                              key={bar.key}
-                              bar={bar}
-                              schouwDoc={schouwDocs[bar.project.id]}
-                              hidePartner={readOnly}
-                              compact
-                              selected={selectedBar?.key === bar.key}
-                              onSelect={() => openBar(bar)}
-                            />
-                          ))}
-                        </div>
-                      ) : null
-                    ) : list.length === 0 ? (
-                      !readOnly ? (
+                <section className="px-4 py-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-ink">
+                        {venster === "ochtend" ? "Ochtend" : "Middag"}{" "}
+                        {hoursLabel}
+                      </p>
+                      <p className="text-xs text-muted">Installatieblok</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={[
+                          "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                          blocked
+                            ? "bg-[#FEE2E2] text-[#991B1B]"
+                            : vol
+                              ? "bg-[#FFF7ED] text-[#C2410C]"
+                              : "bg-[#ECFDF5] text-[#065F46]",
+                        ].join(" ")}
+                      >
+                        {blocked
+                          ? feestdagOp(dayKey)
+                            ? feestdagOp(dayKey)!.naam
+                            : "Dicht"
+                          : instDag >= MAX_INSTALLATIES_PER_DAG
+                            ? "1/1 bezet"
+                            : "vrij"}
+                      </span>
+                      {!readOnly && !feestdagOp(dayKey) ? (
                         <button
                           type="button"
-                          onClick={() => openPlan(d.key)}
-                          className="flex h-16 w-full items-center justify-center text-[11px] text-muted/60 hover:bg-wash hover:text-ink"
+                          onClick={() =>
+                            openPlan(dayKey, null, {
+                              soort: "installatie",
+                              venster,
+                            })
+                          }
+                          className="border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-wash"
                         >
-                          +
+                          Inplannen
                         </button>
-                      ) : (
-                        <div className="flex h-16 items-center justify-center text-[11px] text-muted/50">
-                          —
-                        </div>
-                      )
-                    ) : (
-                      list.map((bar) => (
+                      ) : null}
+                    </div>
+                  </div>
+                  {items.length === 0 ? (
+                    <p className="px-1 py-2 text-xs text-muted">
+                      {vol ? "Geen plek" : "Plek vrij"}
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      {items.map((bar) => (
                         <EventCard
                           key={bar.key}
                           bar={bar}
                           schouwDoc={schouwDocs[bar.project.id]}
                           hidePartner={readOnly}
+                          koppels={agendaKoppels}
                           compact
                           selected={selectedBar?.key === bar.key}
                           onSelect={() => openBar(bar)}
                         />
-                      ))
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                </Fragment>
+              );
+            })}
+            {displayDayBars.filter(
+              (b) =>
+                !barInVenster(b, "ochtend") && !barInVenster(b, "middag")
+            ).length > 0 ? (
+              <section className="px-4 py-3">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  Overig
+                </p>
+                <div className="space-y-1">
+                  {displayDayBars
+                    .filter(
+                      (b) =>
+                        !barInVenster(b, "ochtend") &&
+                        !barInVenster(b, "middag")
+                    )
+                    .map((bar) => (
+                      <EventCard
+                        key={bar.key}
+                        bar={bar}
+                        schouwDoc={schouwDocs[bar.project.id]}
+                        hidePartner={readOnly}
+                        koppels={agendaKoppels}
+                        compact
+                        selected={selectedBar?.key === bar.key}
+                        onSelect={() => openBar(bar)}
+                      />
+                    ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         </div>
-        </>
+      ) : null}
+
+      {view === "week" ? (
+        <WeekKoppelMatrix
+          days={weekDays}
+          bars={activeBars}
+          koppels={
+            agendaTeamFilter.kind === "koppel"
+              ? agendaKoppels.filter((k) => k.id === agendaTeamFilter.id)
+              : agendaTeamFilter.kind === "person"
+                ? agendaKoppels.filter((k) =>
+                    koppelBevatMonteur(k, agendaTeamFilter.id)
+                  )
+                : agendaKoppels
+          }
+          schouwPersonen={schouwPersonenVoorMatrix}
+          toonLegeSchouwers={toonLegeSchouwers}
+          selectedKey={selectedBar?.key}
+          readOnly={readOnly}
+          todayKey={todayKey}
+          soortFilter={filterSoort}
+          showLegeSlots={!readOnly}
+          onDayClick={goDay}
+          onSelectBar={openBar}
+          onPlanInstallatie={
+            readOnly
+              ? undefined
+              : (dayKey, partnerId, venster) =>
+                  openPlan(dayKey, partnerId, {
+                    soort: "installatie",
+                    venster,
+                  })
+          }
+        />
       ) : null}
 
       {view === "maand" ? (
-        <>
-        <div className="border border-line bg-white md:hidden">
-          <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
-            {["ma", "di", "wo", "do", "vr", "za", "zo"].map((d) => (
-              <div
-                key={d}
-                className="px-0.5 py-1.5 text-center text-[10px] font-bold uppercase text-muted"
-              >
-                {d}
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-7">
-            {monthDays.map((d) => {
-              const inMonth = isSameMonthKey(d.key, anchor);
-              const list = timedAll.filter((b) => b.dayKeys[0] === d.key);
-              const isToday = d.key === todayKey;
-              const visible = list.slice(0, 2);
-              const more = list.length - visible.length;
-              return (
-                <div
-                  key={d.key}
-                  className={[
-                    "flex min-h-[4.25rem] flex-col border-b border-r border-line p-0.5",
-                    inMonth
-                      ? isToday
-                        ? "bg-[#F0FDFA]"
-                        : "bg-white"
-                      : "bg-[#F4F6F5]",
-                  ].join(" ")}
-                >
-                  <button
-                    type="button"
-                    onClick={() => goDay(d.key)}
-                    className={[
-                      "mx-auto inline-flex h-6 min-w-6 items-center justify-center text-xs font-semibold tabular-nums",
-                      isToday
-                        ? "bg-[#0D9488] text-white"
-                        : inMonth
-                          ? "text-ink"
-                          : "text-muted/55",
-                    ].join(" ")}
-                  >
-                    {format(d.date, "d")}
-                  </button>
-                  <div className="mt-0.5 flex min-w-0 flex-col gap-0.5">
-                    {visible.map((bar) => (
-                      <button
-                        key={bar.key}
-                        type="button"
-                        onClick={() => openBar(bar)}
-                        className="truncate text-left text-[9px] font-semibold leading-tight text-ink"
-                        title={klantNaam(bar.project)}
-                      >
-                        {bar.at ? formatTimeNl(bar.at) : ""}{" "}
-                        {klantNaam(bar.project)}
-                      </button>
-                    ))}
-                    {more > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => goDay(d.key)}
-                        className="text-left text-[9px] font-semibold text-muted"
-                      >
-                        +{more}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <div className="hidden overflow-x-auto border border-line bg-white md:block">
-          <div className="min-w-[56rem]">
-            <div className="grid grid-cols-7 border-b border-line bg-[#FAFBFA]">
-              {["ma", "di", "wo", "do", "vr", "za", "zo"].map((d) => (
-                <div
-                  key={d}
-                  className="border-r border-line px-2 py-2 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-muted last:border-r-0"
-                >
-                  {d}
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-7 auto-rows-fr">
-              {monthDays.map((d) => {
-                const inMonth = isSameMonthKey(d.key, anchor);
-                const list = timedAll.filter((b) => b.dayKeys[0] === d.key);
-                const isToday = d.key === todayKey;
-                const visible = list.slice(0, MONTH_CHIPS_VISIBLE);
-                const more = list.length - visible.length;
-                const dagAfgeblokt =
-                  Boolean(afblokPartnerId) &&
-                  inMonth &&
-                  isVensterBlocked(d.key, "ochtend") &&
-                  isVensterBlocked(d.key, "middag");
-                return (
-                  <div
-                    key={d.key}
-                    className={[
-                      "flex min-h-[7.5rem] flex-col border-b border-r border-line p-1.5 last:border-r-0",
-                      inMonth
-                        ? dagAfgeblokt
-                          ? "bg-[#FEE2E2]/70"
-                          : isToday
-                            ? "bg-[#F0FDFA]"
-                            : "bg-white"
-                        : "bg-[#F4F6F5]",
-                    ].join(" ")}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-1">
-                      <button
-                        type="button"
-                        onClick={() => goDay(d.key)}
-                        className={[
-                          "inline-flex h-7 min-w-7 items-center justify-center font-display text-sm font-semibold tabular-nums leading-none hover:opacity-80",
-                          isToday
-                            ? "bg-[#0D9488] px-1.5 text-white"
-                            : inMonth
-                              ? "text-ink"
-                              : "text-muted/55",
-                        ].join(" ")}
-                        title="Open dagoverzicht"
-                      >
-                        {format(d.date, "d")}
-                      </button>
-                      {list.length > 0 ? (
-                        <span
-                          className={[
-                            "text-[10px] font-semibold tabular-nums",
-                            inMonth ? "text-muted" : "text-muted/50",
-                          ].join(" ")}
-                        >
-                          {list.length}×
-                        </span>
-                      ) : null}
-                    </div>
-                    {afblokPartnerId && inMonth ? (
-                      <div className="mb-1 space-y-0.5">
-                        {PARTNER_VENSTERS.map((venster) => (
-                          <AfblokVensterChip
-                            key={venster}
-                            venster={venster}
-                            blocked={isVensterBlocked(d.key, venster)}
-                            compact
-                            interactive={afblokMode}
-                            disabled={blockBusy || !afblokPartnerId}
-                            onToggle={() =>
-                              void toggleVensterAfblok(d.key, venster)
-                            }
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="flex min-h-0 flex-1 flex-col gap-0.5">
-                      {visible.map((bar) => (
-                        <MonthEventChip
-                          key={bar.key}
-                          bar={bar}
-                          selected={selectedBar?.key === bar.key}
-                          onSelect={() => openBar(bar)}
-                        />
-                      ))}
-                      {more > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => goDay(d.key)}
-                          className={[
-                            "px-0.5 text-left text-[10px] font-semibold hover:underline",
-                            inMonth ? "text-muted hover:text-ink" : "text-muted/60",
-                          ].join(" ")}
-                        >
-                          +{more} meer
-                        </button>
-                      ) : null}
-                      {list.length === 0 && inMonth && !readOnly && !afblokMode ? (
-                        <button
-                          type="button"
-                          onClick={() => openPlan(d.key)}
-                          className="mt-auto flex h-6 w-full items-center justify-center text-[10px] text-muted/40 hover:bg-wash hover:text-muted"
-                          title="Inplannen"
-                        >
-                          +
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        </>
+        <MaandKoppelOverzicht
+          monthDays={monthDays}
+          bars={activeBars}
+          koppels={
+            agendaTeamFilter.kind === "koppel"
+              ? agendaKoppels.filter((k) => k.id === agendaTeamFilter.id)
+              : agendaTeamFilter.kind === "person"
+                ? agendaKoppels.filter((k) =>
+                    koppelBevatMonteur(k, agendaTeamFilter.id)
+                  )
+                : agendaKoppels
+          }
+          schouwPersonen={schouwPersonenVoorMatrix}
+          toonLegeSchouwers={toonLegeSchouwers}
+          selectedKey={selectedBar?.key}
+          readOnly={readOnly}
+          todayKey={todayKey}
+          soortFilter={filterSoort}
+          monthPrefix={formatInTimeZone(anchor, AMSTERDAM_TZ, "yyyy-MM")}
+          onDayClick={goDay}
+          onSelectBar={openBar}
+          onPlanInstallatie={
+            readOnly
+              ? undefined
+              : (dayKey, partnerId, venster) =>
+                  openPlan(dayKey, partnerId, {
+                    soort: "installatie",
+                    venster,
+                  })
+          }
+        />
       ) : null}
 
       {view === "lijst" ? (
@@ -5207,6 +6638,7 @@ export function Planbord({
                           bar={bar}
                           schouwDoc={schouwDocs[bar.project.id]}
                           hidePartner={readOnly}
+                          koppels={agendaKoppels}
                           compact
                           selected={selectedBar?.key === bar.key}
                           onSelect={() => openBar(bar)}
@@ -5230,6 +6662,17 @@ export function Planbord({
           projectHref={resolveProjectHref}
           hidePartner={readOnly}
           portalMode={readOnly}
+          allowMedewerkerWijzig={!readOnly || showTeamAgendaFilters}
+          koppels={agendaKoppels}
+          offerteRegels={
+            selectedBar.project.offerte_id
+              ? offerteRegelsById[selectedBar.project.offerte_id]
+              : undefined
+          }
+          portalToken={portalToken || null}
+          onMedewerkerGewijzigd={(id) => {
+            if (id && showTeamAgendaFilters) setAgendaPersonFilter(id);
+          }}
           allowSchouwUpload={
             !readOnly ||
             (Boolean(portalToken) &&
@@ -5285,6 +6728,8 @@ export function Planbord({
           open={planOpen}
           dayKey={planDayKey}
           defaultPartnerId={planPartnerId}
+          defaultSoort={planSoort}
+          defaultVenster={planVenster}
           projects={planProjects}
           partners={partners}
           onClose={() => setPlanOpen(false)}

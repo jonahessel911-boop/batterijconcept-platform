@@ -1,4 +1,4 @@
-import { isKortingRegel } from "@/lib/offerte-regels";
+import { isKortingRegel, isVerborgenOfferteRegel } from "@/lib/offerte-regels";
 
 type RegelLike = {
   omschrijving?: string | null;
@@ -15,14 +15,17 @@ export function primaireProductOmschrijving(
   const sorted = [...regels].sort(
     (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
   );
-  const withProduct = sorted.find((r) => r.product_id);
+  const withProduct = sorted.find(
+    (r) => r.product_id && !isVerborgenOfferteRegel(r)
+  );
   const fromProduct = withProduct?.omschrijving?.trim();
   if (fromProduct) return fromProduct;
 
   const paid = sorted.find(
     (r) =>
       Number(r.prijs_ex_btw) > 0 &&
-      !isKortingRegel({ omschrijving: r.omschrijving || "" })
+      !isKortingRegel({ omschrijving: r.omschrijving || "" }) &&
+      !isVerborgenOfferteRegel(r)
   );
   return paid?.omschrijving?.trim() || null;
 }

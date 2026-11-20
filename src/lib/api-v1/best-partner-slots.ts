@@ -17,6 +17,7 @@ import {
   dayKeyAmsterdam,
   fitsWithTravelGap,
   generateAvailablePartnerSlots,
+  installatieCapaciteitVanKoppels,
   isPartnerVenster,
   vensterForStart,
   type BusySlot,
@@ -26,6 +27,7 @@ import {
 import { loadPartnerAfblokkingen } from "@/lib/partner-afblokkingen-db";
 import { resolvePartnerStartAdres } from "@/lib/start-adres";
 import { travelTimeBetween } from "@/lib/travel-time";
+import { isSchouwdagDefinitief } from "@/lib/schouw-week";
 
 export type PartnerSlotTokenPayload = {
   v: 1;
@@ -33,6 +35,15 @@ export type PartnerSlotTokenPayload = {
   s: string; // start_at ISO
   e: string; // end_at ISO
   k: PartnerSlotSoort;
+};
+
+export type PartnerDagStop = {
+  soort: "schouw" | "installatie";
+  start_at: string;
+  naam: string | null;
+  plaats: string | null;
+  adres: string | null;
+  project_nummer: string | null;
 };
 
 export type BestPartnerSlotOption = {
@@ -47,8 +58,12 @@ export type BestPartnerSlotOption = {
   soort: PartnerSlotSoort;
   reistijd_min: number | null;
   reistijd_vanaf_startadres: boolean;
+  reistijd_vanaf: "vorige_schouw" | "vorige_installatie" | "startadres" | null;
+  reistijd_naar_volgende_min: number | null;
   start_adres: string;
   start_adres_fallback: boolean;
+  vorige: PartnerDagStop | null;
+  volgende: PartnerDagStop | null;
 };
 
 function b64urlEncode(json: string): string {
@@ -262,11 +277,12 @@ export async function loadBestPartnerSlots(
 
   const partnerIds = partners.map((p) => p.id);
 
-  const [{ data: projects }, afblokLoaded, teamRes] = await Promise.all([
+  const [{ data: projects }, afblokLoaded, teamRes, koppelRes] =
+    await Promise.all([
     sb
       .from("projecten")
       .select(
-        "id, schouw_at, installatie_at, installatie_partner_id, leads(straat, huisnummer, toevoeging, postcode, plaats)"
+        "id, project_nummer, titel, schouw_at, schouw_jaar, schouw_week, installatie_at, installatie_partner_id, leads(naam, straat, huisnummer, toevoeging, postcode, plaats)"
       )
       .in("installatie_partner_id", partnerIds)
       .or(
@@ -278,7 +294,21 @@ export async function loadBestPartnerSlots(
       .select("id, partner_id")
       .in("partner_id", partnerIds)
       .eq("actief", true),
+    sb
+      .from("installatie_partner_koppels")
+      .select("id, partner_id")
+      .in("partner_id", partnerIds)
+      .eq("actief", true),
   ]);
+  const koppelCountByPartner = new Map<string, number>();
+  if (!koppelRes.error) {
+    for (const row of koppelRes.data || []) {
+      koppelCountByPartner.set(
+        row.partner_id,
+        (koppelCountByPartner.get(row.partner_id) || 0) + 1
+      );
+    }
+  }
 
   const teamByPartner = new Map<string, string[]>();
   for (const t of teamRes.data || []) {
@@ -345,6 +375,7 @@ export async function loadBestPartnerSlots(
     }
   }
 
+  type BusyLead = LeadAddr & { naam?: string | null; plaats?: string | null };
   type BusyWithMeta = BusySlot & {
     kind: "schouw" | "installatie";
     partner_id: string;
@@ -354,11 +385,22 @@ export async function loadBestPartnerSlots(
     if (excludeProjectId && row.id === excludeProjectId) continue;
     const pid = row.installatie_partner_id as string | null;
     if (!pid) continue;
-    const leadRaw = row.leads as LeadAddr | LeadAddr[] | null;
+    const leadRaw = row.leads as BusyLead | BusyLead[] | null;
     const leadObj = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
     const address = leadAddress(leadObj);
-    if (row.schouw_at) {
-      const start = new Date(row.schouw_at);
+    const stopMeta = {
+      naam: leadObj?.naam?.trim() || (row.titel as string | null) || null,
+      plaats: leadObj?.plaats?.trim() || null,
+      project_nummer: (row.project_nummer as string | null) || null,
+    };
+    if (
+      isSchouwdagDefinitief({
+        schouw_at: row.schouw_at,
+        schouw_jaar: row.schouw_jaar as number | null,
+        schouw_week: row.schouw_week as number | null,
+      })
+    ) {
+      const start = new Date(row.schouw_at as string);
       if (!Number.isNaN(start.getTime())) {
         busyAll.push({
           start_at: start.toISOString(),
@@ -366,6 +408,7 @@ export async function loadBestPartnerSlots(
           address,
           kind: "schouw",
           partner_id: pid,
+          ...stopMeta,
         });
       }
     }
@@ -379,6 +422,7 @@ export async function loadBestPartnerSlots(
           address,
           kind: "installatie",
           partner_id: pid,
+          ...stopMeta,
         });
       }
     }
@@ -436,6 +480,9 @@ export async function loadBestPartnerSlots(
       busy: partnerBusy,
       afblokkingen: afblokMap,
       fromDate: slotFrom,
+      installatieCapaciteit: installatieCapaciteitVanKoppels(
+        koppelCountByPartner.get(partner.id) || 0
+      ),
     }).filter((s) => {
       const key = dayKeyAmsterdam(s.start);
       if (key < van || key > tot) return false;
@@ -452,26 +499,48 @@ export async function loadBestPartnerSlots(
 
     const byDay = busyByDay(partnerBusy);
 
+    function toDagStop(b: BusySlot): PartnerDagStop {
+      return {
+        soort: b.kind === "installatie" ? "installatie" : "schouw",
+        start_at: b.start_at,
+        naam: b.naam || null,
+        plaats: b.plaats || null,
+        adres: b.address || null,
+        project_nummer: b.project_nummer || null,
+      };
+    }
+
     for (const slot of free) {
       const dayKey = dayKeyAmsterdam(slot.start);
-      const dayStops = (byDay.get(dayKey) || []).map((b) => ({
+      const dayBusy = byDay.get(dayKey) || [];
+      const dayStops = dayBusy.map((b) => ({
         start: new Date(b.start_at),
         end: new Date(b.end_at),
         address: b.address || null,
+        raw: b,
       }));
+      // Acties-schouw: reistijd alleen t.o.v. een échte schouwdag, niet schouwweek.
+      const travelStops =
+        soort === "schouw"
+          ? dayStops.filter((s) => s.raw.kind === "schouw")
+          : dayStops;
 
       let travelBefore = bufferMin;
       let travelAfter = bufferMin;
       let fromStart = true;
       let shownTravel: number | null = baseTravel;
+      let prevBusy: BusySlot | null = null;
+      let nextBusy: BusySlot | null = null;
 
       if (targetAddress) {
-        const prev = [...dayStops]
+        const prev = [...travelStops]
           .filter((s) => s.end.getTime() <= slot.start.getTime())
           .sort((a, b) => b.end.getTime() - a.end.getTime())[0];
-        const next = [...dayStops]
+        const next = [...travelStops]
           .filter((s) => s.start.getTime() >= slot.end.getTime())
           .sort((a, b) => a.start.getTime() - b.start.getTime())[0];
+        prevBusy = prev?.raw || null;
+        nextBusy = next?.raw || null;
         const fromAddr = prev?.address || resolved.address;
         travelBefore = fromAddr
           ? await travelMin(fromAddr, targetAddress, bufferMin)
@@ -482,28 +551,38 @@ export async function loadBestPartnerSlots(
         shownTravel = travelBefore;
         fromStart = !prev?.address;
       } else {
-        travelBefore = dayStops.length ? bufferMin : 0;
-        travelAfter = dayStops.length ? bufferMin : 0;
+        travelBefore = travelStops.length ? bufferMin : 0;
+        travelAfter = travelStops.length ? bufferMin : 0;
         shownTravel = null;
       }
 
-      const fits = fitsWithTravelGap({
-        candidateStart: slot.start,
-        candidateEnd: slot.end,
-        sameDayStops: dayStops.map((s) => ({ start: s.start, end: s.end })),
-        travelMinBefore: travelBefore,
-        travelMinAfter: travelAfter,
-      });
+      const fits =
+        soort === "installatie" ||
+        fitsWithTravelGap({
+          candidateStart: slot.start,
+          candidateEnd: slot.end,
+          sameDayStops: dayStops.map((s) => ({ start: s.start, end: s.end })),
+          travelMinBefore: travelBefore,
+          travelMinAfter: travelAfter,
+        });
       if (!fits) continue;
 
       const startIso = slot.start.toISOString();
       const endIso = slot.end.toISOString();
-      // Score: lagere reistijd eerst, dan vroeger; bonus als al stop op die dag
-      const clusterBonus = dayStops.length > 0 ? -15 : 0;
+      // Score: lagere reistijd eerst, dan vroeger; bonus als al een echte schouw die dag
+      const clusterBonus = travelStops.length > 0 ? -15 : 0;
       const score =
         (shownTravel ?? bufferMin) +
         clusterBonus +
         slot.start.getTime() / 1e12;
+
+      const reistijdVanaf: BestPartnerSlotOption["reistijd_vanaf"] = prevBusy
+        ? prevBusy.kind === "installatie"
+          ? "vorige_installatie"
+          : "vorige_schouw"
+        : shownTravel != null
+          ? "startadres"
+          : null;
 
       candidates.push({
         slot_id: encodePartnerSlotId({
@@ -523,15 +602,36 @@ export async function loadBestPartnerSlots(
         soort,
         reistijd_min: shownTravel,
         reistijd_vanaf_startadres: fromStart,
+        reistijd_vanaf: reistijdVanaf,
+        reistijd_naar_volgende_min: nextBusy ? travelAfter : null,
         start_adres: resolved.address,
         start_adres_fallback: resolved.isFallback,
+        vorige: prevBusy ? toDagStop(prevBusy) : null,
+        volgende: nextBusy ? toDagStop(nextBusy) : null,
         score,
       });
     }
   }
 
   candidates.sort((a, b) => a.score - b.score);
-  const slots = candidates.slice(0, limit).map(({ score: _s, ...rest }) => rest);
+  const picked: Cand[] = [];
+  const usedVenster = new Set<string>();
+  for (const c of candidates) {
+    const dk = dayKeyAmsterdam(new Date(c.start_at));
+    const key = `${c.partner_id}:${dk}:${c.venster}`;
+    if (usedVenster.has(key)) continue;
+    usedVenster.add(key);
+    picked.push(c);
+    if (picked.length >= limit) break;
+  }
+  if (picked.length < limit) {
+    for (const c of candidates) {
+      if (picked.includes(c)) continue;
+      picked.push(c);
+      if (picked.length >= limit) break;
+    }
+  }
+  const slots = picked.map(({ score: _s, ...rest }) => rest);
 
   return {
     ok: true,

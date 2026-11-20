@@ -2,7 +2,11 @@ import { jsPDF } from "jspdf";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { companyInfo, loadLogoDataUrl } from "@/lib/pdf-brand";
-import { offerteRegelsVoorWeergave, kortingIncVanRegels } from "@/lib/offerte-regels";
+import {
+  offerteRegelsVoorWeergave,
+  zichtbareKortingIncVanRegels,
+  zichtbareOfferteTotalen,
+} from "@/lib/offerte-regels";
 
 type SignPayload = {
   naam: string;
@@ -231,7 +235,8 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const weergaveRegels = offerteRegelsVoorWeergave(regels, {
     financieringVoorbehoud: offerte.financiering_voorbehoud,
   });
-  const kortingInc = kortingIncVanRegels(regels);
+  const kortingInc = zichtbareKortingIncVanRegels(regels);
+  const zichtbaarTotaal = zichtbareOfferteTotalen(offerte, regels);
 
   doc.setDrawColor(...DEEPER);
   doc.setLineWidth(0.7);
@@ -270,11 +275,11 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const totalRows: { label: string; value: string; bold?: boolean }[] = [
     {
       label: "Totaal excl. BTW",
-      value: formatEuro(Number(offerte.subtotaal_ex_btw)),
+      value: formatEuro(zichtbaarTotaal.subtotaalEx),
     },
     {
       label: "21% BTW",
-      value: formatEuro(Number(offerte.btw_bedrag)),
+      value: formatEuro(zichtbaarTotaal.btw),
     },
   ];
   if (kortingInc < 0) {
@@ -286,7 +291,7 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   }
   totalRows.push({
     label: "Totaal incl. BTW",
-    value: formatEuro(Number(offerte.totaal_inc_btw)),
+    value: formatEuro(zichtbaarTotaal.totaalInc),
     bold: true,
   });
 

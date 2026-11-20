@@ -12,6 +12,7 @@ import {
   schouwWeekToMondayIso,
 } from "@/lib/schouw-week";
 import { parseAfspraakStartAt } from "@/lib/plan-afspraak";
+import { feestdagPlanningFout } from "@/lib/nl-feestdagen";
 import type { AgendaTypeCode } from "./agenda-types";
 
 export type PlanAgendaInput = {
@@ -92,6 +93,10 @@ export async function planProjectAgenda(
       const parsed = parseAfspraakStartAt(raw) || new Date(raw);
       if (Number.isNaN(parsed.getTime())) {
         return { ok: false, status: 400, error: "Ongeldige schouw_at / start_at" };
+      }
+      const feestdagFout = feestdagPlanningFout(parsed);
+      if (feestdagFout) {
+        return { ok: false, status: 400, error: feestdagFout };
       }
       exactAt = parsed.toISOString();
       const derived = schouwWeekFromDate(parsed);
@@ -214,6 +219,10 @@ export async function planProjectAgenda(
   const parsed = parseAfspraakStartAt(raw) || new Date(raw);
   if (Number.isNaN(parsed.getTime())) {
     return { ok: false, status: 400, error: "Ongeldige installatie_at" };
+  }
+  const feestdagFout = feestdagPlanningFout(parsed);
+  if (feestdagFout) {
+    return { ok: false, status: 400, error: feestdagFout };
   }
 
   const partnerId = await resolvePartner(

@@ -182,6 +182,7 @@ function betaalYmd(raw: string | null): string | null {
 
 const NETTO_STATUSSEN = new Set([
   "installatie_voltooid",
+  "after_sale",
   "review_gevraagd",
   "afgerond",
   "service",

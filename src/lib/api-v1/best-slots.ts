@@ -31,6 +31,7 @@ import { AMSTERDAM_TZ, adresRegel, formatSlotLabelNl, formatSlotLabelSpokenNl } 
 import {
   generateAvailableSlots,
   HUISBEZOEK_PLAN_DAYS_AHEAD,
+  slotHoursForAdviseur,
 } from "@/lib/slots";
 import { buildDurationMap } from "@/lib/travel-time";
 import { loadAdviseurConversieMap } from "@/lib/adviseur-conversie";
@@ -127,25 +128,38 @@ function dayKeyAmsterdamIso(iso: string): string {
   return formatInTimeZone(new Date(iso), AMSTERDAM_TZ, "yyyy-MM-dd");
 }
 
-/** Agenda-blokken: 10 ochtend, 12/13/14/16 middag, 19 avond. */
+/** Agenda-blokken: team 10 / 13 / 16 / 19; Marcel 10 / 12 / 14 / 16. */
 export type FonioDagdeel = "ochtend" | "middag" | "avond";
 
-export function dagdeelVanHour(hour: number): FonioDagdeel | null {
+export function dagdeelVanHour(
+  hour: number,
+  adviseurId?: string | null
+): FonioDagdeel | null {
+  const hours = slotHoursForAdviseur(adviseurId);
+  if (hours.includes(hour)) {
+    if (hour === hours[0]) return "ochtend";
+    if (hour === hours[hours.length - 1]) return "avond";
+    return "middag";
+  }
   if (hour === 10) return "ochtend";
+  if (hour === 19) return "avond";
   if (hour === 12 || hour === 13 || hour === 14 || hour === 16) {
     return "middag";
   }
-  if (hour === 19) return "avond";
   return null;
+}
+
+function adviseurIdOfSlot(s: { adviseur_id?: string | null }): string | null {
+  return s.adviseur_id ?? null;
 }
 
 /**
  * Top 3 voor Fonio: 3 verschillende (vroegste) dagen ×
- * 1 ochtend (10) + 1 middag (13 of 16) + 1 avond (19).
+ * ochtend + middag + avond (Marcel: 10 / 12-of-14 / 16; team: 10 / 13-of-16 / 19).
  */
-export function pickFonioDaypartSlots<T extends { start_at: string }>(
-  pool: T[]
-): T[] {
+export function pickFonioDaypartSlots<
+  T extends { start_at: string; adviseur_id?: string | null },
+>(pool: T[]): T[] {
   if (pool.length === 0) return [];
   const sorted = [...pool].sort((a, b) => a.start_at.localeCompare(b.start_at));
 
@@ -163,16 +177,16 @@ export function pickFonioDaypartSlots<T extends { start_at: string }>(
     return null;
   };
 
-  const ochtend = pickFirst((s) => hourAmsterdam(s.start_at) === 10);
+  const deelVan = (s: T) =>
+    dagdeelVanHour(hourAmsterdam(s.start_at), adviseurIdOfSlot(s));
+
+  const ochtend = pickFirst((s) => deelVan(s) === "ochtend");
   if (ochtend) picked.push(ochtend);
 
-  const middag = pickFirst((s) => {
-    const h = hourAmsterdam(s.start_at);
-    return h === 12 || h === 13 || h === 14 || h === 16;
-  });
+  const middag = pickFirst((s) => deelVan(s) === "middag");
   if (middag) picked.push(middag);
 
-  const avond = pickFirst((s) => hourAmsterdam(s.start_at) === 19);
+  const avond = pickFirst((s) => deelVan(s) === "avond");
   if (avond) picked.push(avond);
 
   // Tekort? Vul met vroegste vrije slot op nog ongebruikte dag
@@ -191,7 +205,9 @@ export function pickFonioDaypartSlots<T extends { start_at: string }>(
 }
 
 /** Filter pool op dagdeel / weekdag / datum (klantvoorkeur). */
-export function filterSlotsByVoorkeur<T extends { start_at: string }>(
+export function filterSlotsByVoorkeur<
+  T extends { start_at: string; adviseur_id?: string | null },
+>(
   pool: T[],
   voorkeur: {
     dagdeel?: FonioDagdeel | null;
@@ -202,8 +218,10 @@ export function filterSlotsByVoorkeur<T extends { start_at: string }>(
   }
 ): T[] {
   return pool.filter((s) => {
-    const h = hourAmsterdam(s.start_at);
-    const deel = dagdeelVanHour(h);
+    const deel = dagdeelVanHour(
+      hourAmsterdam(s.start_at),
+      adviseurIdOfSlot(s)
+    );
     if (voorkeur.dagdeel && deel !== voorkeur.dagdeel) return false;
     if (voorkeur.date) {
       if (dayKeyAmsterdamIso(s.start_at) !== voorkeur.date) return false;
@@ -230,7 +248,11 @@ export function parseFonioVoorkeur(raw: string | null | undefined): {
 
   if (/ochtend|10\s*uur/.test(t)) out.dagdeel = "ochtend";
   else if (/avond|19\s*uur/.test(t)) out.dagdeel = "avond";
-  else if (/middag|13\s*uur|16\s*uur|dertien|zestien/.test(t))
+  else if (
+    /middag|12\s*uur|13\s*uur|14\s*uur|16\s*uur|dertien|veertien|zestien/.test(
+      t
+    )
+  )
     out.dagdeel = "middag";
 
   const days: Record<string, number> = {
@@ -747,8 +769,8 @@ export async function loadBestSlotsForLead(
       }
     }
 
-    // Altijd kalender-uren toevoegen (10/13/16/19) zodat diversifyHours
-    // niet alleen ochtend-FD-picks krijgt.
+    // Altijd kalender-uren toevoegen (per adviseur: team 10/13/16/19,
+    // Marcel 10/12/14/16) zodat diversifyHours niet alleen ochtend-FD krijgt.
     if (diversifyHours || !scored || scored.length === 0) {
       const calCap = diversifyHours ? 40 : 8;
       const seenStart = new Set(

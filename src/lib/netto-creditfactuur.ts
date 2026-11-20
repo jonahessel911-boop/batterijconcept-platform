@@ -722,6 +722,7 @@ export function isProjectKlaarVoorTrancheB(project: {
   const s = String(project.status || "");
   return (
     s === "installatie_voltooid" ||
+    s === "after_sale" ||
     s === "review_gevraagd" ||
     s === "afgerond" ||
     s === "service"

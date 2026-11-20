@@ -23,7 +23,8 @@ type Doc = {
 };
 
 const PROJECT_SELECT = `
-  id, project_nummer, status, betaalwijze, financiering_status, offerte_id,
+  id, project_nummer, status, betaalwijze, financiering_status,
+  warmtefonds_aangevraagd_at, offerte_id,
   leads(naam),
   offertes(id, offerte_nummer, status, ondertekend_op)
 `;

@@ -724,9 +724,11 @@ export function orderGetekendInternEmail(opts: {
   adviseurNaam: string;
   bedragExBtw: number;
   brutoMarge: number;
-  /** Hardware-inkoop (batterij + omvormer + WF). */
+  /** Hardware-inkoop (batterij + omvormer + WF + warmtepomp). */
   inkoop?: number;
-  /** Standaard installatiekosten. */
+  /** Catalogusregels (batterij / warmtepomp). */
+  inkoopRegels?: { label: string; inkoop: number }[];
+  /** Standaard installatiekosten (0 bij alleen warmtepomp). */
   installatie?: number;
   /** Salescommissie adviseur. */
   salesCommissie?: number;
@@ -746,10 +748,21 @@ export function orderGetekendInternEmail(opts: {
     opts.commissiePctLabel != null && Number.isFinite(opts.commissiePctLabel)
       ? ` (${Math.round(opts.commissiePctLabel)}%)`
       : "";
+  const inkoopRegelsHtml = (opts.inkoopRegels || [])
+    .map(
+      (r) =>
+        `<p style="margin:0 0 4px;font-size:13px;color:#555;">${r.label}<br />− ${formatEuro(r.inkoop)}</p>`
+    )
+    .join("");
   const kostenHtml = hasSplit
     ? `<p style="margin:12px 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#666;">Kosten</p>
          <p style="margin:0 0 6px;font-size:15px;"><strong>Inkoop hardware</strong><br />− ${formatEuro(opts.inkoop!)}</p>
-         <p style="margin:0 0 6px;font-size:15px;"><strong>Installatie</strong><br />− ${formatEuro(opts.installatie!)}</p>
+         ${inkoopRegelsHtml}
+         ${
+           opts.installatie!
+             ? `<p style="margin:0 0 6px;font-size:15px;"><strong>Installatie</strong><br />− ${formatEuro(opts.installatie!)}</p>`
+             : ""
+         }
          <p style="margin:0 0 8px;font-size:15px;"><strong>Salescommissie${pctLabel}</strong><br />− ${formatEuro(opts.salesCommissie!)}</p>`
     : "";
   return emailLayout({
@@ -845,7 +858,7 @@ export function afspraakGeannuleerdAdviseurEmail(opts: {
   });
 }
 
-/** Klant: afspraak geannuleerd/verwijderd door backoffice */
+/** Klant: bevestiging dat de afspraak is geannuleerd. */
 export function afspraakGeannuleerdKlantEmail(opts: {
   naam: string;
   startAt: string | Date;
@@ -853,13 +866,13 @@ export function afspraakGeannuleerdKlantEmail(opts: {
   const first = opts.naam.split(" ")[0] || opts.naam;
   const when = formatDateTimeLongNl(opts.startAt);
   return emailLayout({
-    title: "Afspraak geannuleerd — Batterijconcept",
-    preheader: `Je afspraak op ${when} is geannuleerd.`,
+    title: "Bevestiging: afspraak geannuleerd",
+    preheader: `Bevestiging: je afspraak op ${when} is geannuleerd.`,
     bodyHtml: [
       emailH1("Afspraak geannuleerd"),
       emailP(`Hoi ${first},`),
       emailP(
-        "Je adviesafspraak bij Batterijconcept is geannuleerd. Hieronder de oorspronkelijke datum en tijd:"
+        "Hierbij de bevestiging: je adviesafspraak bij Batterijconcept is geannuleerd."
       ),
       emailBox(
         `<p style="margin:0;font-size:15px;"><strong>Geplande tijd</strong><br />${when}</p>`
@@ -989,7 +1002,7 @@ export function factuurVerzondenEmail(opts: {
   iban?: string | null;
   accountName?: string | null;
   betalingskenmerk?: string | null;
-  /** Creditfactuur: andere tekst, geen betaalblok. */
+  /** Creditfactuur: andere tekst. */
   isCredit?: boolean;
   creditVanNummer?: string | null;
   trackUrl?: string | null;
@@ -1002,6 +1015,14 @@ export function factuurVerzondenEmail(opts: {
     : "CREDIT FACTUUR";
 
   if (isCredit) {
+    const creditTermijn =
+      typeof opts.betaaltermijnDagen === "number" &&
+      Number.isFinite(opts.betaaltermijnDagen) &&
+      opts.betaaltermijnDagen >= 0
+        ? Math.round(opts.betaaltermijnDagen)
+        : 14;
+    const creditTermijnLabel =
+      creditTermijn === 1 ? "1 dag" : `${creditTermijn} dagen`;
     return emailLayout({
       title: `Creditfactuur ${opts.factuurNummer}`,
       preheader: `Je creditfactuur ${opts.factuurNummer} van Batterijconcept.`,
@@ -1015,7 +1036,9 @@ export function factuurVerzondenEmail(opts: {
           `<p style="margin:0 0 8px;font-size:15px;"><strong>${creditLabel}</strong></p>
            <p style="margin:0 0 8px;font-size:15px;"><strong>Creditfactuur</strong><br />${opts.factuurNummer}</p>
            <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
-           <p style="margin:0;font-size:14px;">Er hoeft niets te worden betaald op dit document.</p>`
+           <p style="margin:0;font-size:15px;"><strong>Betaaltermijn</strong><br />${creditTermijnLabel}${
+             opts.vervaldatum ? ` (uiterlijk ${opts.vervaldatum})` : ""
+           }</p>`
         ),
         opts.trackUrl
           ? emailButton("Bekijk je order &amp; facturen", opts.trackUrl)
@@ -1688,8 +1711,8 @@ export function relatieFactuurAanBcEmail(opts: {
       ? `Factuur ${opts.factuurNummer} goedgekeurd`
       : `Factuur ${opts.factuurNummer}`,
     preheader: goedgekeurd
-      ? `Je hebt factuur ${opts.factuurNummer} goedgekeurd · uitbetaling binnen 7 dagen.`
-      : `Factuur ${opts.factuurNummer} aan Batterijconcept · uitbetaling binnen 7 dagen.`,
+      ? `Je hebt factuur ${opts.factuurNummer} goedgekeurd · uitbetaling binnen 14 dagen.`
+      : `Factuur ${opts.factuurNummer} aan Batterijconcept · uitbetaling binnen 14 dagen.`,
     bodyHtml: [
       emailH1(
         goedgekeurd
@@ -1705,7 +1728,7 @@ export function relatieFactuurAanBcEmail(opts: {
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Factuur</strong><br />${opts.factuurNummer}</p>
          <p style="margin:0 0 8px;font-size:15px;"><strong>Bedrag</strong><br />${opts.bedrag}</p>
-         <p style="margin:0 0 8px;font-size:15px;"><strong>Betaaltermijn</strong><br />7 dagen na goedkeuring (uiterlijk ${opts.vervaldatum})</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Betaaltermijn</strong><br />14 dagen na goedkeuring (uiterlijk ${opts.vervaldatum})</p>
          ${
            opts.iban
              ? `<p style="margin:0;font-size:14px;">Uitbetaling op IBAN <strong>${opts.iban}</strong></p>`
@@ -1714,7 +1737,7 @@ export function relatieFactuurAanBcEmail(opts: {
       ),
       goedgekeurd
         ? emailP(
-            "Batterijconcept betaalt deze factuur binnen 7 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+            "Batterijconcept betaalt deze factuur binnen 14 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
           )
         : emailP(
             opts.rolLabel === "adviseur"
@@ -1724,7 +1747,7 @@ export function relatieFactuurAanBcEmail(opts: {
       goedgekeurd
         ? ""
         : emailP(
-            "Na goedkeuring betaalt Batterijconcept binnen 7 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
+            "Na goedkeuring betaalt Batterijconcept binnen 14 dagen. Vragen? Mail info@batterijconcept.nl of bel 085 800 1645."
           ),
       emailMuted("Met vriendelijke groet, team Batterijconcept"),
     ]
@@ -1778,7 +1801,7 @@ export function zzpContractOndertekendEmail(opts: { naam: string }) {
  */
 export function overstapFrankEnergieEmail(opts: {
   naam: string;
-  afspraakAt: string;
+  afspraakAt?: string | null;
   batterijMerk: string;
   frankUrl?: string;
   logoBcUrl: string;
@@ -1786,7 +1809,7 @@ export function overstapFrankEnergieEmail(opts: {
   projectNummer?: string | null;
 }) {
   const first = opts.naam.split(" ")[0] || opts.naam;
-  const when = formatDateTimeLongNl(opts.afspraakAt);
+  const when = opts.afspraakAt ? formatDateTimeLongNl(opts.afspraakAt) : null;
   const frankUrl = opts.frankUrl || FRANK_ENERGIE_OVERSTAP_URL;
   const logos = `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 18px;">
   <tr>
@@ -1804,13 +1827,19 @@ export function overstapFrankEnergieEmail(opts: {
 
   return emailLayout({
     title: "Overstap dynamische energie — BatterijConcept × Frank",
-    preheader: `We regelen je overstap samen op ${when}. Bewaar deze mail.`,
+    preheader: when
+      ? `We regelen je overstap samen op ${when}. Bewaar deze mail.`
+      : "We regelen je overstap naar dynamische energie samen met Frank Energie.",
     bodyHtml: [
       logos,
-      emailH1("Je overstap-moment staat vast"),
+      emailH1(
+        when ? "Je overstap-moment staat vast" : "Overstap dynamische energie"
+      ),
       emailP(`Hoi ${first},`),
       emailP(
-        `We gaan de overstap samen met je inregelen op <strong>${when}</strong>.`
+        when
+          ? `We gaan de overstap samen met je inregelen op <strong>${when}</strong>.`
+          : "We gaan de overstap samen met je inregelen naar een dynamisch energiecontract bij Frank Energie."
       ),
       emailP(
         "Bewaar deze mail voor als we je gaan helpen met overstappen — dat doen we door op de knop hieronder te klikken:"

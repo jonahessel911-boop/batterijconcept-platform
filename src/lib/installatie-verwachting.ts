@@ -20,8 +20,11 @@ export const FORECAST_WEEKEN_NA_ONDERTEKENING = 7;
 /** Kijkvenster groei: afgelopen N dagen. */
 export const FORECAST_GROEI_DAGEN = 10;
 
-/** Komende ~2 maanden in weeklijst (huidige week + 8). */
+/** Korte weeklijst (legacy). Pipeline gebruikt FORECAST_HORIZON_WEEKEN. */
 export const FORECAST_WEEK_COUNT = 9;
+
+/** Pipeline: rolling jaar vooruit (niet hard stoppen op 1 januari). */
+export const FORECAST_HORIZON_WEEKEN = 52;
 
 /** Indicatieve capaciteit: installaties per monteur per week (fallback). */
 export const FORECAST_INSTALLS_PER_MONTEUR_WEEK = 4;
@@ -135,14 +138,14 @@ export function buildForecastWeeks(from: Date = new Date()): ForecastWeekCol[] {
   return out;
 }
 
-/** Weeklijst van nu tot (excl.) einddatum — voor groei tot 1 jan. */
+/** Weeklijst van nu tot (excl.) einddatum. */
 export function buildWeeksUntil(endExclusive: Date, from: Date = new Date()) {
   const start = schouwWeekFromDate(from);
   const endWeek = schouwWeekFromDate(addDays(endExclusive, -1));
   const endKey = schouwWeekValue(endWeek.jaar, endWeek.week);
   const out: ForecastWeekCol[] = [];
   let cursor = start;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 80; i++) {
     const col: ForecastWeekCol = {
       ...cursor,
       key: schouwWeekValue(cursor.jaar, cursor.week),
@@ -273,23 +276,23 @@ export function expectedInstallatie(p: ProjectLike): {
   }
 }
 
-function nextJan1(from: Date = new Date()): Date {
-  const y = from.getFullYear();
-  const candidate = new Date(Date.UTC(y + 1, 0, 1, 0, 0, 0));
-  // Als we al in januari zijn en voorbij 1 jan, gebruik volgend jaar;
-  // tot 1 jan = eerstvolgende 1 januari (als vandaag vóór 1 jan dit jaar… nooit;
-  // als vandaag Nov 2026 → 1 jan 2027).
-  const thisYearJan1 = new Date(Date.UTC(y, 0, 1, 0, 0, 0));
-  if (from.getTime() < thisYearJan1.getTime()) return thisYearJan1;
-  return candidate;
+/** Eerste moment ná het rolling pipeline-venster. */
+export function pipelineHorizonEnd(from: Date = new Date()): Date {
+  return addWeeks(from, FORECAST_HORIZON_WEEKEN);
+}
+
+export function buildPipelineWeeks(
+  from: Date = new Date()
+): ForecastWeekCol[] {
+  return buildWeeksUntil(pipelineHorizonEnd(from), from);
 }
 
 export function buildGroei(
   projects: ProjectLike[],
   bestaandInVenster: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  tot: Date = pipelineHorizonEnd(now)
 ): ForecastGroei {
-  const tot = nextJan1(now);
   const since = addDays(now, -FORECAST_GROEI_DAGEN);
   const sinceMs = since.getTime();
 
@@ -507,11 +510,7 @@ export function aggregateForecast(
   const acc = new Map<string, Map<string, ForecastOrder[]>>();
   let zonderSchatting = 0;
 
-  // Ook tellen tot 1 jan voor "bestaand" groei-totaal
-  const totJan1 = nextJan1(now);
-  const weeksTotJan = buildWeeksUntil(totJan1, now);
-  const keysTotJan = new Set(weeksTotJan.map((w) => w.key));
-  let bestaandTotJan = 0;
+  let bestaandInVenster = 0;
 
   const firstWeekKey = weeks[0]?.key || null;
 
@@ -539,8 +538,8 @@ export function aggregateForecast(
       }
     }
 
-    if (keysTotJan.has(weekKey) || weekKey === firstWeekKey) {
-      bestaandTotJan += 1;
+    if (weekKeys.has(weekKey) || weekKey === firstWeekKey) {
+      bestaandInVenster += 1;
     }
 
     if (!weekKeys.has(weekKey)) continue;
@@ -603,7 +602,19 @@ export function aggregateForecast(
     .map(([regio, aantal]) => ({ regio, aantal }))
     .sort((a, b) => b.aantal - a.aantal || a.regio.localeCompare(b.regio, "nl"));
 
-  const groei = buildGroei(projects, bestaandTotJan, now);
+  const totHorizon =
+    weeks.length > 0
+      ? addWeeks(
+          new Date(
+            schouwWeekToMondayIso(
+              weeks[weeks.length - 1]!.jaar,
+              weeks[weeks.length - 1]!.week
+            )
+          ),
+          1
+        )
+      : pipelineHorizonEnd(now);
+  const groei = buildGroei(projects, bestaandInVenster, now, totHorizon);
   const shares = regioShares(regioTotalen);
   const baseWeekVolume = Math.max(
     groei.perDag * 7,

@@ -5,7 +5,7 @@ import { errMessage } from "@/lib/errors";
 export const runtime = "nodejs";
 
 const SELECT_FULL =
-  "id, partner_id, naam, email, telefoon, actief, rol, kan_schouw, kan_installatie, leeftijd, merken_ervaring, foto_storage_path, dossier_compleet, created_at, updated_at";
+  "id, partner_id, naam, email, telefoon, actief, rol, kan_schouw, kan_installatie, kan_service, leeftijd, merken_ervaring, foto_storage_path, dossier_compleet, created_at, updated_at";
 const SELECT_MIN =
   "id, partner_id, naam, email, telefoon, actief, created_at, updated_at";
 
@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
       error &&
       (error.code === "42703" ||
         error.message?.includes("kan_schouw") ||
+        error.message?.includes("kan_service") ||
         error.message?.includes("rol") ||
         error.message?.includes("merken_ervaring"))
     ) {

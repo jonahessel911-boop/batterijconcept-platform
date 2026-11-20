@@ -128,20 +128,26 @@ export function CrmHeader({
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {showBekijkAls && adviseurs && onAdviseurChange && (
-            <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/50">
+            <label className="flex min-w-0 items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/50">
               <span className="hidden sm:inline">Bekijk als</span>
               <select
                 value={selectedAdviseurId || ""}
                 onChange={(e) => onAdviseurChange(e.target.value)}
-                className="max-w-[5.25rem] min-h-9 truncate border border-white/25 bg-white/10 px-1.5 py-1.5 text-xs font-medium normal-case tracking-normal text-white outline-none focus:border-white/50 sm:max-w-[9rem] sm:px-2 sm:min-h-0 lg:max-w-none"
+                className="h-9 min-w-[10.5rem] max-w-[16rem] truncate border border-white/25 bg-white/10 px-2 py-1.5 text-xs font-medium normal-case tracking-normal text-white outline-none focus:border-white/50 sm:h-8"
                 aria-label="Bekijk als adviseur"
               >
                 <option value="" className="text-ink">
                   Iedereen
                 </option>
+                {selectedAdviseurId &&
+                !adviseurs.some((a) => a.id === selectedAdviseurId) ? (
+                  <option value={selectedAdviseurId} className="text-ink">
+                    Onbekend
+                  </option>
+                ) : null}
                 {adviseurs.map((a) => (
                   <option key={a.id} value={a.id} className="text-ink">
-                    {a.naam}
+                    {a.naam || "—"}
                     {a.rol === "beller" ? " (beller)" : ""}
                   </option>
                 ))}

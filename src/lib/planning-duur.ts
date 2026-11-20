@@ -2,8 +2,8 @@
 export const SCHOUW_DUUR_MINUTEN = 30;
 /** Middag-installatie 13–17 (fallback als venster onbekend). */
 export const INSTALLATIE_DUUR_MINUTEN = 240;
-/** Ochtend-installatie 09–12 */
-export const INSTALLATIE_OCHTEND_DUUR_MINUTEN = 180;
+/** Ochtend-installatie 08–12 */
+export const INSTALLATIE_OCHTEND_DUUR_MINUTEN = 240;
 /** Middag-installatie 13–17 */
 export const INSTALLATIE_MIDDAG_DUUR_MINUTEN = 240;
 export const SERVICE_DUUR_MINUTEN = 60; // 1 uur

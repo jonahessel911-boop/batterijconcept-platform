@@ -1,19 +1,20 @@
 /**
  * Vergoeding per Warmtefonds-aanvraag.
- * Standaard €150 excl. btw (€181,50 incl.); per WF-adviseur kan een eigen tarief_inc.
+ * Standaard €300 excl. btw (€363 incl.); per WF-adviseur kan een eigen tarief_inc.
  */
 import { getSupabaseAdmin } from "@/lib/supabase";
 
-/** Standaardtarief — €150 excl. btw. */
-export const EDERGY_PER_AANVRAAG_EXCL = 150;
-export const EDERGY_PER_AANVRAAG_BTW = 31.5;
-export const EDERGY_PER_AANVRAAG_INC = 181.5;
+/** Standaardtarief — €300 excl. btw. */
+export const EDERGY_PER_AANVRAAG_EXCL = 300;
+export const EDERGY_PER_AANVRAAG_BTW = 63;
+export const EDERGY_PER_AANVRAAG_INC = 363;
 
 /**
- * Oud standaard (€150 incl.) — behandelen als nieuw standaard bij exacte match,
- * zodat opgeslagen “150” / null-equivalent niet blijft hangen op 123,97 excl.
+ * Oude standaarden — behandelen als huidig tarief bij exacte match,
+ * zodat opgeslagen 150 / 181,50 niet blijft hangen.
  */
 const EDERGY_LEGACY_150_INC = 150;
+const EDERGY_LEGACY_181_50_INC = 181.5;
 
 /** Historische Edergy-factuursplit (Edwin) — behouden bij exact €375. */
 const EDERGY_LEGACY_375_INC = 375;
@@ -74,8 +75,11 @@ export function edergyBedragenVanInc(incRaw: number): EdergyTarief {
   if (Math.abs(inc - EDERGY_PER_AANVRAAG_INC) < 0.005) {
     return standaardTarief();
   }
-  // Oud standaard €150 incl. → nieuw €150 excl.
-  if (Math.abs(inc - EDERGY_LEGACY_150_INC) < 0.005) {
+  // Oude standaarden (€150 incl. / €150 excl. = €181,50 incl.) → €300 excl.
+  if (
+    Math.abs(inc - EDERGY_LEGACY_150_INC) < 0.005 ||
+    Math.abs(inc - EDERGY_LEGACY_181_50_INC) < 0.005
+  ) {
     return standaardTarief();
   }
   // Historische Edergy-factuur €375
@@ -99,7 +103,7 @@ function defaultTarief(): EdergyTarief {
   return standaardTarief();
 }
 
-/** Huidig standaardtarief (storage of default €150 excl.). */
+/** Huidig standaardtarief (storage of default €300 excl.). */
 export async function leesEdergyTarief(): Promise<EdergyTarief> {
   try {
     const sb = getSupabaseAdmin();
@@ -117,7 +121,7 @@ export async function leesEdergyTarief(): Promise<EdergyTarief> {
 
 /**
  * Tarief voor één Warmtefonds-operator.
- * Heeft die persoon een eigen `tarief_inc`, dan die; anders standaard (€150 excl.).
+ * Heeft die persoon een eigen `tarief_inc`, dan die; anders standaard (€300 excl.).
  */
 export async function leesEdergyTariefVoorOperator(
   tariefInc: number | null | undefined
