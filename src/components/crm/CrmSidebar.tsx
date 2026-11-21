@@ -1,15 +1,16 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { CrmTab } from "@/types/database";
 import { BO_VIEWS, backofficeHref } from "@/lib/bo-view";
 import { useBoViewStore } from "@/lib/bo-view-store";
 
 type SidebarItem = {
-  id: CrmTab;
+  id: CrmTab | "opvolgingsflow";
   label: string;
   icon: React.ReactNode;
+  href?: string;
 };
 
 type SidebarGroup = {
@@ -138,6 +139,13 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </Icon>
   ),
+  opvolgingsflow: (
+    <Icon>
+      <path d="M4 4h16v16H4z" />
+      <path d="M4 8h16M8 4v4" />
+      <path d="M8 13h8M8 17h5" />
+    </Icon>
+  ),
 };
 
 const GROUPS: SidebarGroup[] = [
@@ -200,6 +208,7 @@ export function CrmSidebar({
   mobileOpen = false,
   onMobileClose,
   boCounts,
+  showOpvolgingsflow = false,
 }: {
   active: CrmTab;
   onChange: (tab: CrmTab) => void;
@@ -210,10 +219,13 @@ export function CrmSidebar({
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   boCounts?: { acties?: number };
+  showOpvolgingsflow?: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [activeBoView, setBoView] = useBoViewStore();
   const allowed = new Set(allowedTabs);
+  const opvolgingsflowActive = pathname?.startsWith("/email-preview") ?? false;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     sales: true,
     operatie: true,
@@ -274,10 +286,18 @@ export function CrmSidebar({
     }
   }, [active]);
 
-  const groups = GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter((i) => allowed.has(i.id)),
-  })).filter((g) => g.items.length > 0);
+  const groups = GROUPS.map((g) => {
+    const items = g.items.filter((i) => allowed.has(i.id as CrmTab));
+    if (showOpvolgingsflow && g.id === "sturing") {
+      items.push({
+        id: "opvolgingsflow",
+        label: "Opvolgingsflow",
+        icon: ICONS.opvolgingsflow,
+        href: "/email-preview",
+      });
+    }
+    return { ...g, items };
+  }).filter((g) => g.items.length > 0);
 
   function toggleGroup(id: string) {
     setOpenGroups((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -533,14 +553,25 @@ export function CrmSidebar({
                         );
                       }
 
-                      const isActive = active === item.id;
+                      const isLink = Boolean(item.href);
+                      const isActive = isLink
+                        ? item.id === "opvolgingsflow" && opvolgingsflowActive
+                        : active === item.id;
+                      const count =
+                        !isLink && typeof counts?.[item.id as CrmTab] === "number"
+                          ? counts[item.id as CrmTab]
+                          : undefined;
                       return (
                         <li key={item.id}>
                           <button
                             type="button"
                             title={item.label}
                             onClick={() => {
-                              onChange(item.id);
+                              if (item.href) {
+                                router.push(item.href);
+                              } else {
+                                onChange(item.id as CrmTab);
+                              }
                               onMobileClose?.();
                             }}
                             className={[
@@ -573,7 +604,7 @@ export function CrmSidebar({
                                 <span className="min-w-0 flex-1 truncate font-display tracking-tight">
                                   {item.label}
                                 </span>
-                                {typeof counts?.[item.id] === "number" ? (
+                                {typeof count === "number" ? (
                                   <span
                                     className={[
                                       "inline-flex min-w-[1.25rem] items-center justify-center px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
@@ -582,7 +613,7 @@ export function CrmSidebar({
                                         : "bg-[#eef1ef] text-muted",
                                     ].join(" ")}
                                   >
-                                    {counts[item.id]}
+                                    {count}
                                   </span>
                                 ) : null}
                               </>

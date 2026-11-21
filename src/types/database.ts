@@ -367,6 +367,13 @@ export interface Afspraak {
   herinnering_verstuurd: boolean;
   bevestiging_verstuurd: boolean;
   opwarm_verstuurd?: boolean;
+  /** null/legacy = v1; intensief/rustig = A/B opvolging */
+  opvolging_flow?: "legacy" | "intensief" | "rustig" | null;
+  bevestiging_sms_verstuurd?: boolean;
+  social_proof_verstuurd?: boolean;
+  reminder_48u_verstuurd?: boolean;
+  avond_sms_verstuurd?: boolean;
+  avond_mail_verstuurd?: boolean;
   created_at: string;
   updated_at: string;
   leads?: Pick<

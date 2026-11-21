@@ -45,6 +45,10 @@ function isPublicPath(pathname: string): boolean {
     return true;
   }
 
+  if (pathname === "/api/email-preview/calendar") {
+    return true;
+  }
+
   if (/^\/api\/offertes\/[^/]+\/sign\/?$/.test(pathname)) {
     return true;
   }

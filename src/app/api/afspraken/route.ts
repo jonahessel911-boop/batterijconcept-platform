@@ -684,13 +684,6 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const email = lead?.email?.trim();
-    if (!email) {
-      return NextResponse.json(
-        { error: "Lead heeft geen e-mailadres" },
-        { status: 400 }
-      );
-    }
     if (!afspraak.manage_token) {
       return NextResponse.json(
         { error: "Afspraak mist manage-token" },
@@ -698,44 +691,37 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const startAt = new Date(afspraak.start_at);
-    const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
-    const vars = afspraakMailVars({
-      naam: lead?.naam || "klant",
-      startAt,
-      adviseurNaam: adviseur?.naam || "Batterijconcept",
-      manageUrl,
+    const { sendOpvolgingBevestiging } = await import(
+      "@/lib/afspraak-opvolging/send-bevestiging"
+    );
+    const flow =
+      (afspraak as { opvolging_flow?: string | null }).opvolging_flow ||
+      "legacy";
+    const sent = await sendOpvolgingBevestiging({
+      sb,
+      afspraakId: afspraak.id as string,
+      flow,
+      leadId: afspraak.lead_id as string,
+      adviseurId: afspraak.adviseur_id as string,
+      manageToken: afspraak.manage_token as string,
+      startAt: new Date(afspraak.start_at as string),
       lead,
+      adviseur,
     });
 
-    const sent = await sendEmail({
-      to: email,
-      subject: "Afspraak bevestigd — Batterijconcept",
-      html: afspraakBevestigingSequenceEmail(vars),
-      tag: "afspraak-bevestiging",
-      replyTo: await replyToForAfspraak(sb, {
-        adviseurId: afspraak.adviseur_id,
-        leadId: afspraak.lead_id,
-        adviseurJoin: adviseur,
-      }),
-    });
-
-    if (!sent.ok) {
+    if (!sent.mailOk) {
       return NextResponse.json(
-        { error: sent.error || "Mail versturen mislukt" },
+        { error: sent.mailError || "Mail versturen mislukt" },
         { status: 502 }
       );
     }
 
-    await sb
-      .from("afspraken")
-      .update({ bevestiging_verstuurd: true })
-      .eq("id", afspraak.id);
-
     return NextResponse.json({
       ok: true,
       bevestiging_verstuurd: true,
-      to: email,
+      bevestiging_sms_verstuurd: sent.smsOk,
+      to: lead?.email?.trim() || null,
+      sms_error: sent.smsError,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Fout";
