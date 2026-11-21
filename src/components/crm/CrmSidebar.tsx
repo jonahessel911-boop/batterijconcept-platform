@@ -308,7 +308,11 @@ export function CrmSidebar({
   const boParentActive =
     active === "projecten" ||
     (hasBackoffice && (active === "purchasing" || active === "facturen"));
-  const boExtraTabs: SidebarItem[] = hasBackoffice
+  const boExtraTabs: Array<{
+    id: CrmTab;
+    label: string;
+    icon: React.ReactNode;
+  }> = hasBackoffice
     ? [
         ...(allowed.has("purchasing")
           ? [
@@ -590,12 +594,13 @@ export function CrmSidebar({
                             >
                               {item.icon}
                               {iconOnly &&
-                              typeof counts?.[item.id] === "number" &&
-                              (counts[item.id] || 0) > 0 ? (
+                              !item.href &&
+                              typeof counts?.[item.id as CrmTab] === "number" &&
+                              (counts[item.id as CrmTab] || 0) > 0 ? (
                                 <span className="absolute -top-1.5 -right-2 inline-flex min-w-[1.05rem] items-center justify-center rounded-full bg-green px-1 text-[9px] font-bold leading-4 text-white tabular-nums">
-                                  {(counts[item.id] || 0) > 99
+                                  {(counts[item.id as CrmTab] || 0) > 99
                                     ? "99+"
-                                    : counts[item.id]}
+                                    : counts[item.id as CrmTab]}
                                 </span>
                               ) : null}
                             </span>
