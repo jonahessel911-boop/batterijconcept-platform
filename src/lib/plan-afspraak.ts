@@ -6,12 +6,10 @@ import { addMinutes } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AMSTERDAM_TZ } from "@/lib/format";
-import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
-import { replyToForAfspraak } from "@/lib/email/adviseur-reply-to";
-import {
-  afspraakBevestigingSequenceEmail,
-  afspraakMailVars,
-} from "@/lib/email/afspraak-sequence";
+import { appBaseUrl } from "@/lib/email/postmark";
+import { assignOpvolgingFlow } from "@/lib/afspraak-opvolging/assign";
+import { sendOpvolgingBevestiging } from "@/lib/afspraak-opvolging/send-bevestiging";
+import type { OpvolgingFlow } from "@/lib/afspraak-opvolging/types";
 import { hasBlockingOverlap, hasWfAdviseurOverlap } from "@/lib/afspraak-busy";
 import {
   afspraakBlokkeertAgenda,
@@ -183,6 +181,14 @@ export async function planAfspraak(
         ? `${noteBase}\n\n${HERPLAN_NOTITIE_MARKER}`
         : HERPLAN_NOTITIE_MARKER
       : noteBase || null;
+  // A/B opvolging: alleen bij nieuw huisbezoek; anders legacy/null
+  let opvolgingFlow: OpvolgingFlow | null = null;
+  if (magMailen) {
+    opvolgingFlow = await assignOpvolgingFlow(sb, { soort });
+  }
+  const isAbFlow =
+    opvolgingFlow === "intensief" || opvolgingFlow === "rustig";
+
   const insertRow: Record<string, unknown> = {
     lead_id: input.lead_id,
     adviseur_id: input.adviseur_id,
@@ -194,9 +200,15 @@ export async function planAfspraak(
     partner_aanwezig: isHuisbezoek ? input.partner_aanwezig : null,
     andere_offertes_gehad: isHuisbezoek ? input.andere_offertes_gehad : null,
     // nieuw: alle mails open; vervolg: standaard dicht, tenzij herinnering opt-in
+    // A/B: legacy opwarm/24u-flags dichtzetten zodat v1-cron niet dubbel stuurt
     bevestiging_verstuurd: !magMailen,
-    herinnering_verstuurd: magMailen ? false : !herinneringOptIn,
-    opwarm_verstuurd: !magMailen,
+    herinnering_verstuurd: isAbFlow
+      ? true
+      : magMailen
+        ? false
+        : !herinneringOptIn,
+    opwarm_verstuurd: isAbFlow ? true : !magMailen,
+    ...(opvolgingFlow ? { opvolging_flow: opvolgingFlow } : {}),
   };
   if (ingeplandDoor) {
     insertRow.ingepland_door_id = ingeplandDoor;
@@ -335,6 +347,12 @@ export async function planAfspraak(
     "ingepland_door_id",
     "opwarm_verstuurd",
     "soort",
+    "opvolging_flow",
+    "bevestiging_sms_verstuurd",
+    "social_proof_verstuurd",
+    "reminder_48u_verstuurd",
+    "avond_sms_verstuurd",
+    "avond_mail_verstuurd",
   ] as const;
 
   function isMissingColumnError(err: {
@@ -412,9 +430,11 @@ async function afterCreate(
     start_at: string;
     manage_token: string;
     notities?: string | null;
+    opvolging_flow?: OpvolgingFlow | null;
     leads?: {
       naam?: string | null;
       email?: string | null;
+      telefoon?: string | null;
       postcode?: string | null;
       huisnummer?: string | null;
       toevoeging?: string | null;
@@ -518,43 +538,25 @@ async function afterCreate(
   }
 
   const manageUrl = `${appBaseUrl()}/afspraak/${afspraak.manage_token}`;
-  const email = afspraak.leads?.email?.trim();
   const startAt = new Date(afspraak.start_at);
 
   let mailedNow = false;
   let mailError: string | null = null;
-  if (afspraakStuurtMail(soort)) {
-    if (email) {
-      const vars = afspraakMailVars({
-        naam: afspraak.leads?.naam || "klant",
-        startAt,
-        adviseurNaam: afspraak.adviseurs?.naam || "Batterijconcept",
-        manageUrl,
-        lead: afspraak.leads,
-      });
-      const sent = await sendEmail({
-        to: email,
-        subject: "Afspraak bevestigd — Batterijconcept",
-        html: afspraakBevestigingSequenceEmail(vars),
-        tag: "afspraak-bevestiging",
-        replyTo: await replyToForAfspraak(sb, {
-          adviseurId: body.adviseur_id,
-          leadId: body.lead_id,
-          adviseurJoin: afspraak.adviseurs,
-        }),
-      });
-      if (sent.ok) {
-        await sb
-          .from("afspraken")
-          .update({ bevestiging_verstuurd: true })
-          .eq("id", afspraak.id);
-        mailedNow = true;
-      } else {
-        mailError = sent.error || "Mail versturen mislukt";
-      }
-    } else {
-      mailError = "Lead heeft geen e-mailadres";
-    }
+  const flow: OpvolgingFlow = afspraak.opvolging_flow || "legacy";
+  if (afspraakStuurtMail(soort) && afspraak.manage_token) {
+    const sent = await sendOpvolgingBevestiging({
+      sb,
+      afspraakId: afspraak.id,
+      flow,
+      leadId: body.lead_id,
+      adviseurId: body.adviseur_id,
+      manageToken: afspraak.manage_token,
+      startAt,
+      lead: afspraak.leads,
+      adviseur: afspraak.adviseurs,
+    });
+    mailedNow = sent.mailOk;
+    mailError = sent.mailError;
   }
 
   return {
@@ -562,6 +564,7 @@ async function afterCreate(
     afspraak: {
       ...afspraak,
       bevestiging_verstuurd: mailedNow,
+      opvolging_flow: flow,
     },
     manage_url: manageUrl,
     bevestiging_direct: mailedNow,

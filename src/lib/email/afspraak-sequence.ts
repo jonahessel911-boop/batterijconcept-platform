@@ -94,11 +94,16 @@ function wrapEmail(opts: {
   img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
   body { margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: ${CREAM}; }
   a { color: ${INK}; text-decoration: underline; }
-  @media screen and (max-width: 600px) {
-    .container { width: 100% !important; }
-    .px { padding-left: 24px !important; padding-right: 24px !important; }
-    .h1 { font-size: 26px !important; line-height: 32px !important; }
+  .container { width: 100% !important; max-width: 600px !important; }
+  @media screen and (max-width: 620px) {
+    .container { width: 100% !important; max-width: 100% !important; border-radius: 0 !important; }
+    .px { padding-left: 20px !important; padding-right: 20px !important; }
+    .h1 { font-size: 24px !important; line-height: 32px !important; }
     .table-cell { padding: 12px !important; font-size: 13px !important; }
+  }
+  @media screen and (max-width: 380px) {
+    .px { padding-left: 16px !important; padding-right: 16px !important; }
+    .h1 { font-size: 22px !important; line-height: 30px !important; }
   }
 </style>
 </head>
@@ -107,7 +112,7 @@ function wrapEmail(opts: {
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:${CREAM};">
   <tr>
     <td align="center" style="padding:24px 12px;">
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" class="container" style="width:600px;max-width:600px;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(13,92,50,0.08);">
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" class="container" style="width:100%;max-width:600px;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(13,92,50,0.08);">
         ${opts.bodyRows}
         ${brandFooter(opts.manageUrl)}
       </table>

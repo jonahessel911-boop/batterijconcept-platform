@@ -1641,6 +1641,7 @@ export function CrmShell() {
             boCounts={{
               acties: backofficeActieCount,
             }}
+            showOpvolgingsflow={userRol === "admin"}
           />
         )}
 

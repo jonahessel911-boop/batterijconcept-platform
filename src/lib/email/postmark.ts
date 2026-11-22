@@ -17,6 +17,9 @@ export type EmailAttachment = {
   contentType: string;
   /** Raw bytes or base64 string */
   content: Buffer | string;
+  /** Voor inline images: HTML gebruikt src="cid:…" */
+  contentId?: string;
+  disposition?: "inline" | "attachment";
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -81,13 +84,36 @@ export async function sendEmail(opts: {
   }
 
   try {
-    const Attachments = opts.attachments?.map((a) => {
-      const base64 =
-        typeof a.content === "string"
-          ? a.content
-          : a.content.toString("base64");
-      return new Attachment(a.name, base64, a.contentType);
-    });
+    const { emailIconAttachmentsForHtml } = await import("./email-icons");
+    const iconAttachments = emailIconAttachmentsForHtml(opts.html);
+    const merged = [...(opts.attachments ?? [])];
+    for (const icon of iconAttachments) {
+      if (!merged.some((a) => a.contentId && a.contentId === icon.contentId)) {
+        merged.push(icon);
+      }
+    }
+
+    const Attachments =
+      merged.length > 0
+        ? merged.map((a) => {
+            const base64 =
+              typeof a.content === "string"
+                ? a.content
+                : a.content.toString("base64");
+            const att = new Attachment(
+              a.name,
+              base64,
+              a.contentType,
+              a.contentId ?? null
+            );
+            if (a.disposition) {
+              att.Disposition = a.disposition;
+            } else if (a.contentId) {
+              att.Disposition = "inline";
+            }
+            return att;
+          })
+        : undefined;
 
     // Antwoorden van klanten altijd naar de AI-inbox, ook als een
     // caller nog een adviseur-adres meestuurt.
@@ -163,4 +189,12 @@ export function appBaseUrl(): string {
   }
 
   return "http://localhost:3000";
+}
+
+/**
+ * Link in mail/SMS: landingspagina met Google/Outlook (geen download).
+ * Apple kan daar optioneel nog via .ics.
+ */
+export function afspraakCalendarUrl(manageToken: string): string {
+  return `${appBaseUrl()}/afspraak/${encodeURIComponent(manageToken)}/agenda`;
 }

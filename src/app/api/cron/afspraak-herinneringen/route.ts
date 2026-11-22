@@ -15,6 +15,10 @@ import {
   afspraakStuurtMail,
   isVervolgMetHerinneringOptIn,
 } from "@/lib/afspraak-soort";
+import { isAbOpvolgingFlow } from "@/lib/afspraak-opvolging/assign";
+import { processAbFollowups } from "@/lib/afspraak-opvolging/process-ab";
+import { sendOpvolgingBevestiging } from "@/lib/afspraak-opvolging/send-bevestiging";
+import type { OpvolgingFlow } from "@/lib/afspraak-opvolging/types";
 
 export const runtime = "nodejs";
 
@@ -27,6 +31,7 @@ const NA_AFSPRAAK_VAN = new Set([
 type LeadRow = {
   naam?: string | null;
   email?: string | null;
+  telefoon?: string | null;
   postcode?: string | null;
   huisnummer?: string | null;
   toevoeging?: string | null;
@@ -34,12 +39,48 @@ type LeadRow = {
   plaats?: string | null;
 };
 
+type AfspraakCronRow = {
+  id: string;
+  lead_id?: string | null;
+  adviseur_id?: string | null;
+  start_at: string;
+  created_at: string;
+  manage_token: string | null;
+  bevestiging_verstuurd: boolean;
+  herinnering_verstuurd: boolean;
+  opwarm_verstuurd?: boolean;
+  opvolging_flow?: string | null;
+  bevestiging_sms_verstuurd?: boolean;
+  social_proof_verstuurd?: boolean;
+  reminder_48u_verstuurd?: boolean;
+  avond_sms_verstuurd?: boolean;
+  avond_mail_verstuurd?: boolean;
+  soort?: string | null;
+  leads?: LeadRow | LeadRow[] | null;
+  adviseurs?:
+    | { naam?: string | null; email?: string | null }
+    | { naam?: string | null; email?: string | null }[]
+    | null;
+};
+
+const SELECT_FULL =
+  "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, opvolging_flow, bevestiging_sms_verstuurd, social_proof_verstuurd, reminder_48u_verstuurd, avond_sms_verstuurd, avond_mail_verstuurd, soort, leads(naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)";
+
+const SELECT_LEGACY =
+  "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)";
+
 /**
  * GET /api/cron/afspraak-herinneringen
- * Mailsequentie:
- * 1. Bevestiging — direct bij inplannen (cron vangt gemiste mails op)
- * 2. Opwarm saldering — ~2 dagen (48u) voor de afspraak
- * 3. Reminder — ~24 uur voor de afspraak
+ *
+ * Legacy (opvolging_flow null/legacy):
+ * 1. Bevestiging — direct / catch-up
+ * 2. Opwarm saldering — ~48u voor
+ * 3. Reminder — ~24u voor
+ *
+ * A/B intensief / rustig:
+ * 1. Bevestiging mail+SMS catch-up
+ * 2. Intensief: social proof, 48u mail+SMS
+ * 3. Avond SMS (beide flows)
  */
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
@@ -55,44 +96,63 @@ export async function GET(req: Request) {
     const sb = getSupabaseAdmin();
     const now = new Date();
 
-    // Alle actieve toekomstige afspraken (ruim genoeg voor de hele sequentie)
-    const { data: afspraken, error } = await sb
+    let afspraken: AfspraakCronRow[] = [];
+    const { data, error } = await sb
       .from("afspraken")
-      .select(
-        "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, opwarm_verstuurd, soort, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
-      )
+      .select(SELECT_FULL)
       .in("status", ["gepland", "bevestigd", "verzet"])
       .gte("start_at", now.toISOString());
 
     if (error) {
-      // Soft-fail als opwarm-kolom nog ontbreekt
       if (
-        error.message?.includes("opwarm_verstuurd") ||
+        error.message?.includes("opvolging_flow") ||
+        error.message?.includes("bevestiging_sms") ||
+        error.message?.includes("social_proof") ||
+        error.message?.includes("reminder_48u") ||
+        error.message?.includes("avond_sms") ||
+        error.message?.includes("avond_mail") ||
         error.code === "42703"
       ) {
         const retry = await sb
           .from("afspraken")
-          .select(
-            "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, leads(naam, email, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
-          )
+          .select(SELECT_LEGACY)
           .in("status", ["gepland", "bevestigd", "verzet"])
           .gte("start_at", now.toISOString());
-        if (retry.error) throw retry.error;
-        const mailResult = await processBatch(
-          sb,
-          (retry.data || []).map((a) => ({
+        if (retry.error) {
+          if (
+            retry.error.message?.includes("opwarm_verstuurd") ||
+            retry.error.code === "42703"
+          ) {
+            const bare = await sb
+              .from("afspraken")
+              .select(
+                "id, lead_id, adviseur_id, start_at, created_at, manage_token, bevestiging_verstuurd, herinnering_verstuurd, soort, leads(naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
+              )
+              .in("status", ["gepland", "bevestigd", "verzet"])
+              .gte("start_at", now.toISOString());
+            if (bare.error) throw bare.error;
+            afspraken = (bare.data || []).map((a) => ({
+              ...a,
+              opwarm_verstuurd: true,
+              opvolging_flow: "legacy",
+            }));
+          } else {
+            throw retry.error;
+          }
+        } else {
+          afspraken = (retry.data || []).map((a) => ({
             ...a,
-            opwarm_verstuurd: true, // skip opwarm tot migratie
-          })),
-          now
-        );
-        const voltooid = await markVoltooideAfspraken(sb, now);
-        return NextResponse.json({ ...mailResult, ...voltooid });
+            opvolging_flow: "legacy",
+          }));
+        }
+      } else {
+        throw error;
       }
-      throw error;
+    } else {
+      afspraken = data || [];
     }
 
-    const mailResult = await processBatch(sb, afspraken || [], now);
+    const mailResult = await processBatch(sb, afspraken, now);
     const voltooid = await markVoltooideAfspraken(sb, now);
     return NextResponse.json({ ...mailResult, ...voltooid });
   } catch (e) {
@@ -103,31 +163,21 @@ export async function GET(req: Request) {
 
 async function processBatch(
   sb: ReturnType<typeof getSupabaseAdmin>,
-  afspraken: {
-    id: string;
-    lead_id?: string | null;
-    adviseur_id?: string | null;
-    start_at: string;
-    created_at: string;
-    manage_token: string | null;
-    bevestiging_verstuurd: boolean;
-    herinnering_verstuurd: boolean;
-    opwarm_verstuurd?: boolean;
-    soort?: string | null;
-    leads?: LeadRow | LeadRow[] | null;
-    adviseurs?:
-      | { naam?: string | null; email?: string | null }
-      | { naam?: string | null; email?: string | null }[]
-      | null;
-  }[],
+  afspraken: AfspraakCronRow[],
   now: Date
 ) {
   let bevestiging = 0;
+  let bevestigingSms = 0;
   let opwarm = 0;
   let herinnering = 0;
 
+  const abRows: Parameters<typeof processAbFollowups>[1] = [];
+
   for (const a of afspraken) {
     const fullSequence = afspraakStuurtMail(a.soort);
+    const flow = (a.opvolging_flow || "legacy") as OpvolgingFlow | string;
+    const isAb = isAbOpvolgingFlow(flow);
+
     const reminderOnly =
       !fullSequence &&
       isVervolgMetHerinneringOptIn(a.soort) &&
@@ -138,6 +188,54 @@ async function processBatch(
     const adviseur = Array.isArray(a.adviseurs)
       ? a.adviseurs[0]
       : a.adviseurs;
+
+    // —— A/B flows ——
+    if (isAb && fullSequence && a.manage_token) {
+      if (!a.bevestiging_verstuurd || !a.bevestiging_sms_verstuurd) {
+        const sent = await sendOpvolgingBevestiging({
+          sb,
+          afspraakId: a.id,
+          flow,
+          leadId: a.lead_id,
+          adviseurId: a.adviseur_id,
+          manageToken: a.manage_token,
+          startAt: new Date(a.start_at),
+          lead,
+          adviseur,
+          alreadyMailSent: Boolean(a.bevestiging_verstuurd),
+          alreadySmsSent: Boolean(a.bevestiging_sms_verstuurd),
+        });
+        if (sent.mailOk && !a.bevestiging_verstuurd) {
+          a.bevestiging_verstuurd = true;
+          bevestiging += 1;
+        }
+        if (sent.smsOk && !a.bevestiging_sms_verstuurd) {
+          a.bevestiging_sms_verstuurd = true;
+          bevestigingSms += 1;
+        }
+      }
+
+      abRows.push({
+        id: a.id,
+        lead_id: a.lead_id,
+        adviseur_id: a.adviseur_id,
+        start_at: a.start_at,
+        created_at: a.created_at,
+        manage_token: a.manage_token,
+        opvolging_flow: flow,
+        bevestiging_verstuurd: Boolean(a.bevestiging_verstuurd),
+        bevestiging_sms_verstuurd: Boolean(a.bevestiging_sms_verstuurd),
+        social_proof_verstuurd: Boolean(a.social_proof_verstuurd),
+        reminder_48u_verstuurd: Boolean(a.reminder_48u_verstuurd),
+        avond_sms_verstuurd: Boolean(a.avond_sms_verstuurd),
+        avond_mail_verstuurd: Boolean(a.avond_mail_verstuurd),
+        leads: lead,
+        adviseurs: adviseur,
+      });
+      continue;
+    }
+
+    // —— Legacy v1 (+ vervolg reminder-only) ——
     const email = lead?.email?.trim();
     if (!email || !a.manage_token) continue;
 
@@ -157,7 +255,6 @@ async function processBatch(
       lead,
     });
 
-    // 1. Bevestiging — alleen nieuw huisbezoek
     if (
       fullSequence &&
       shouldSendBevestigingNow({
@@ -184,7 +281,6 @@ async function processBatch(
       }
     }
 
-    // 2. Opwarm saldering — alleen nieuw huisbezoek
     if (
       fullSequence &&
       shouldSendOpwarmNow({
@@ -214,7 +310,6 @@ async function processBatch(
       }
     }
 
-    // 3. 24u reminder — nieuw altijd; vervolg alleen bij opt-in
     if (
       shouldSendReminderNow({
         now,
@@ -239,12 +334,16 @@ async function processBatch(
     }
   }
 
+  const ab = await processAbFollowups(sb, abRows, now);
+
   return {
     ok: true,
     checked: afspraken.length,
     bevestiging,
+    bevestiging_sms: bevestigingSms,
     opwarm,
     herinnering,
+    ...ab,
   };
 }
 
@@ -276,7 +375,6 @@ async function markVoltooideAfspraken(
     if (upErr) continue;
     voltooid += 1;
 
-    // Geen openstaande terugbel meer → vlag op lead wissen (blijft anders op leads-lijst staan)
     const { data: remainingBel } = await sb
       .from("afspraken")
       .select("id")
