@@ -1,8 +1,8 @@
 /**
- * Inline PNG-attachments voor Postmark (server-only — gebruikt fs).
+ * Inline PNG-attachments voor Postmark (alleen server-routes — gebruikt fs).
+ * Niet importeren vanuit client components.
  */
 
-import "server-only";
 import fs from "fs";
 import path from "path";
 import {
