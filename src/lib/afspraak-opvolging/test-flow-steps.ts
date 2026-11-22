@@ -8,6 +8,7 @@ import {
   afspraakSocialProofEmailV2,
   type AfspraakMailVarsV2,
 } from "@/lib/email/afspraak-sequence-v2";
+import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
 import {
@@ -83,6 +84,7 @@ export async function sendTestFlowStep(opts: {
           subject: `[TEST ${opts.flow}] ${built.subject}`,
           html: built.html,
           tag: `test-flow-${opts.flow}-${opts.stepId}`,
+          attachments: withEmailIconAttachments(built.html),
         });
         mailOk = sent.ok;
         mailError = sent.ok ? null : sent.error || "Mail mislukt";

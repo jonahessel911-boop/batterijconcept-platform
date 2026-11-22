@@ -7,6 +7,7 @@ import {
   afspraakBevestigingSequenceEmailV2,
   afspraakBevestigingSmsV2,
 } from "@/lib/email/afspraak-sequence-v2";
+import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
 import { isAbOpvolgingFlow } from "./assign";
@@ -75,12 +76,14 @@ export async function sendOpvolgingBevestiging(opts: {
       if (!email) {
         mailError = "Lead heeft geen e-mailadres";
       } else {
+        const html = afspraakBevestigingSequenceEmailV2(v2);
         const sent = await sendEmail({
           to: email,
           subject: "Afspraak bevestigd — Batterijconcept",
-          html: afspraakBevestigingSequenceEmailV2(v2),
+          html,
           tag: `afspraak-bevestiging-${flow}`,
           replyTo,
+          attachments: withEmailIconAttachments(html),
         });
         if (sent.ok) {
           mailOk = true;

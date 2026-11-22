@@ -7,6 +7,7 @@ import {
   afspraakReminder48uSmsV2,
   afspraakSocialProofEmailV2,
 } from "@/lib/email/afspraak-sequence-v2";
+import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
 import {
@@ -104,12 +105,14 @@ export async function processAbFollowups(
         alreadySent: Boolean(a.social_proof_verstuurd),
       })
     ) {
+      const html = afspraakSocialProofEmailV2(v2);
       const result = await sendEmail({
         to: email,
         subject: "Je afspraak staat klaar — Batterijconcept",
-        html: afspraakSocialProofEmailV2(v2),
+        html,
         tag: "afspraak-social-proof",
         replyTo,
+        attachments: withEmailIconAttachments(html),
       });
       if (result.ok) {
         await sb
@@ -133,12 +136,14 @@ export async function processAbFollowups(
     ) {
       let mailDone = false;
       if (email) {
+        const html = afspraakReminder48uEmailV2(v2);
         const result = await sendEmail({
           to: email,
           subject: "Over 2 dagen komt onze adviseur langs — Batterijconcept",
-          html: afspraakReminder48uEmailV2(v2),
+          html,
           tag: "afspraak-reminder-48u",
           replyTo,
+          attachments: withEmailIconAttachments(html),
         });
         mailDone = result.ok;
         if (result.ok) reminder_48u += 1;
@@ -175,12 +180,14 @@ export async function processAbFollowups(
         !a.avond_mail_verstuurd &&
         email
       ) {
+        const html = afspraakAvondVoorafEmailV2(v2);
         const result = await sendEmail({
           to: email,
           subject: "Morgen komt onze adviseur langs — Batterijconcept",
-          html: afspraakAvondVoorafEmailV2(v2),
+          html,
           tag: "afspraak-avond-mail",
           replyTo,
+          attachments: withEmailIconAttachments(html),
         });
         if (result.ok) {
           await sb

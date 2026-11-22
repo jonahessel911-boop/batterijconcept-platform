@@ -1,11 +1,7 @@
 /**
- * Inline e-mail icons via CID (werkt in Gmail zonder publieke URL).
- * Preview herschrijft cid: → /email/icons/*.png op de app-host.
+ * CID-helpers voor e-mail icons (geen Node fs — veilig voor alle bundles).
+ * Attachments laden: zie email-icon-attachments.ts (server-only).
  */
-
-import fs from "fs";
-import path from "path";
-import type { EmailAttachment } from "./postmark";
 
 export const EMAIL_ICON_CID_PREFIX = "bc-icon-";
 
@@ -33,39 +29,6 @@ export function emailIconSrc(file: EmailIconFile): string {
   return `cid:${emailIconCid(file)}`;
 }
 
-let cachedAttachments: EmailAttachment[] | null = null;
-
-/** Inline PNG-attachments voor Postmark (Content-ID). */
-export function emailIconAttachments(): EmailAttachment[] {
-  if (cachedAttachments) return cachedAttachments;
-
-  const dir = path.join(process.cwd(), "public", "email", "icons");
-  const out: EmailAttachment[] = [];
-
-  for (const file of ICON_FILES) {
-    const full = path.join(dir, file);
-    if (!fs.existsSync(full)) continue;
-    out.push({
-      name: file,
-      contentType: "image/png",
-      content: fs.readFileSync(full),
-      contentId: emailIconCid(file),
-      disposition: "inline",
-    });
-  }
-
-  cachedAttachments = out;
-  return out;
-}
-
-/** Welke icon-attachments horen bij deze HTML? */
-export function emailIconAttachmentsForHtml(html: string): EmailAttachment[] {
-  if (!html.includes(`cid:${EMAIL_ICON_CID_PREFIX}`)) return [];
-  return emailIconAttachments().filter((a) =>
-    html.includes(`cid:${a.contentId}`)
-  );
-}
-
 /** Voor browser-preview: cid: → absolute PNG-URL. */
 export function rewriteEmailIconCidsForPreview(
   html: string,
@@ -77,3 +40,5 @@ export function rewriteEmailIconCidsForPreview(
     (_m, id: string) => `${base}/email/icons/${id}.png`
   );
 }
+
+export { ICON_FILES as EMAIL_ICON_FILES };
