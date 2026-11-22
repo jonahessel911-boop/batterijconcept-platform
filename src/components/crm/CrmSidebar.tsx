@@ -308,7 +308,11 @@ export function CrmSidebar({
   const boParentActive =
     active === "projecten" ||
     (hasBackoffice && (active === "purchasing" || active === "facturen"));
-  const boExtraTabs: SidebarItem[] = hasBackoffice
+  const boExtraTabs: Array<{
+    id: CrmTab;
+    label: string;
+    icon: React.ReactNode;
+  }> = hasBackoffice
     ? [
         ...(allowed.has("purchasing")
           ? [
