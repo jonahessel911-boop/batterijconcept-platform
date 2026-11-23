@@ -104,7 +104,7 @@ export function ProjectKickoffChecklist({
   project: Project;
   facturen: Factuur[];
   onFinancieringUpdated?: (project: Project) => void;
-  onProjectUpdated?: (project: Project) => void;
+  onProjectUpdated?: (project: Project, notice?: string) => void;
   onFacturenChanged?: () => void;
   onFactuurUpdated?: (factuur: Factuur) => void;
   compact?: boolean;
@@ -368,17 +368,17 @@ export function ProjectKickoffChecklist({
       ...project,
       materiaal_checks: data.materiaal_checks || project.materiaal_checks,
     };
-    onProjectUpdated?.(nextProject);
+    const leadLabel = data.lead ? ` · ${data.lead}` : "";
+    const notice =
+      data.alreadySent || data.duplicate
+        ? `Al bekend bij TC Swiss${leadLabel}`
+        : `Doorgestuurd naar TC Swiss${leadLabel}`;
+    onProjectUpdated?.(nextProject, notice);
     const finalized = await finalizeKickoffIfReady(nextProject, facturen, {
       warmtepomp: true,
       tcswissSent: true,
     });
-    const leadLabel = data.lead ? ` · ${data.lead}` : "";
-    setActionHint(
-      data.alreadySent || data.duplicate
-        ? `Al bekend bij TC Swiss${leadLabel}`
-        : `Order ingeschoten bij TC Swiss${leadLabel}`
-    );
+    setActionHint(notice);
     if (finalized) {
       /* onProjectUpdated al via finalize */
     }
@@ -630,6 +630,10 @@ export function ProjectKickoffChecklist({
         {actionError ? (
           <p className="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">
             {actionError}
+          </p>
+        ) : actionHint ? (
+          <p className="shrink-0 rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-1.5 text-[12px] text-primary">
+            {actionHint}
           </p>
         ) : null}
         <ItemGroup className="min-h-0 gap-2 overflow-y-auto pr-0.5">

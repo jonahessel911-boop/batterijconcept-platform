@@ -4,7 +4,11 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { logLeadEvent } from "@/lib/lead-events";
-import { tcSwissConfigured, tcSwissLeadIntake } from "@/lib/tcswiss";
+import {
+  tcSwissConfigured,
+  tcSwissLeadIntake,
+  tcSwissNotitieToevoegen,
+} from "@/lib/tcswiss";
 import {
   parseTcSwissIntakeStored,
   regelsZijnWarmtepomp,
@@ -21,22 +25,21 @@ type OfferteRegelRow = {
   product_id?: string | null;
 };
 
-async function sessionOk(): Promise<boolean> {
-  const jar = await cookies();
-  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
-  return Boolean(session);
-}
+type WpRegel = {
+  sku: string | null;
+  naam: string | null;
+  omschrijving?: string | null;
+};
 
-async function offerteHeeftWarmtepomp(
+async function loadOfferteRegelsMetSku(
   sb: ReturnType<typeof getSupabaseAdmin>,
-  offerteId: string | null | undefined
-): Promise<boolean> {
-  if (!offerteId) return false;
+  offerteId: string
+): Promise<WpRegel[]> {
   const { data: regels, error } = await sb
     .from("offerte_regels")
     .select("omschrijving, product_id")
     .eq("offerte_id", offerteId);
-  if (error || !regels?.length) return false;
+  if (error || !regels?.length) return [];
 
   const productIds = [
     ...new Set(
@@ -59,16 +62,34 @@ async function offerteHeeftWarmtepomp(
     }
   }
 
-  return regelsZijnWarmtepomp(
-    (regels as OfferteRegelRow[]).map((r) => {
-      const prod = r.product_id ? skuByProduct.get(r.product_id) : null;
-      return {
-        sku: prod?.sku || null,
-        naam: prod?.naam || null,
-        omschrijving: r.omschrijving,
-      };
-    })
-  );
+  return (regels as OfferteRegelRow[]).map((r) => {
+    const prod = r.product_id ? skuByProduct.get(r.product_id) : null;
+    return {
+      sku: prod?.sku || null,
+      naam: prod?.naam || null,
+      omschrijving: r.omschrijving,
+    };
+  });
+}
+
+async function sessionOk(): Promise<boolean> {
+  const jar = await cookies();
+  const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+  return Boolean(session);
+}
+
+async function offerteHeeftWarmtepomp(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  offerteId: string | null | undefined
+): Promise<boolean> {
+  if (!offerteId) return false;
+  const regels = await loadOfferteRegelsMetSku(sb, offerteId);
+  return regelsZijnWarmtepomp(regels);
+}
+
+function euroPlain(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(Number(n))) return null;
+  return String(Math.round(Number(n) * 100) / 100);
 }
 
 function storedFromChecks(
@@ -138,13 +159,24 @@ export async function POST(
   const { id } = await ctx.params;
   try {
     const sb = getSupabaseAdmin();
-    const { data: project, error } = await sb
+    let { data: project, error } = await sb
       .from("projecten")
       .select(
-        "id, offerte_id, lead_id, project_nummer, materiaal_checks, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats)"
+        "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, schouw_notities, notities, backoffice_notitie, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, notities, adviseur_id, adviseurs!adviseur_id(id, naam))"
       )
       .eq("id", id)
       .single();
+    if (error) {
+      const retry = await sb
+        .from("projecten")
+        .select(
+          "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, schouw_notities, notities, backoffice_notitie, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, notities, adviseur_id)"
+        )
+        .eq("id", id)
+        .single();
+      project = retry.data;
+      error = retry.error;
+    }
     if (error || !project) {
       return NextResponse.json({ error: "Project niet gevonden" }, { status: 404 });
     }
@@ -198,6 +230,12 @@ export async function POST(
           toevoeging?: string | null;
           straat?: string | null;
           plaats?: string | null;
+          notities?: string | null;
+          adviseur_id?: string | null;
+          adviseurs?:
+            | { id?: string; naam?: string | null }
+            | { id?: string; naam?: string | null }[]
+            | null;
         }
       | {
           id?: string;
@@ -209,6 +247,12 @@ export async function POST(
           toevoeging?: string | null;
           straat?: string | null;
           plaats?: string | null;
+          notities?: string | null;
+          adviseur_id?: string | null;
+          adviseurs?:
+            | { id?: string; naam?: string | null }
+            | { id?: string; naam?: string | null }[]
+            | null;
         }[]
       | null;
     const lead = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
@@ -232,6 +276,82 @@ export async function POST(
       );
     }
 
+    const offerteId = (project.offerte_id as string | null) || null;
+    const [regels, offerteRow] = await Promise.all([
+      offerteId ? loadOfferteRegelsMetSku(sb, offerteId) : Promise.resolve([]),
+      offerteId
+        ? sb
+            .from("offertes")
+            .select(
+              "id, offerte_nummer, titel, intro_tekst, notities, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw"
+            )
+            .eq("id", offerteId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    const offerte = offerteRow.data as {
+      offerte_nummer?: string | null;
+      titel?: string | null;
+      intro_tekst?: string | null;
+      notities?: string | null;
+      subtotaal_ex_btw?: number | null;
+      btw_bedrag?: number | null;
+      totaal_inc_btw?: number | null;
+    } | null;
+
+    const wpRegels = regels.filter((r) => regelsZijnWarmtepomp([r]));
+    const sku = [...new Set(wpRegels.map((r) => r.sku).filter(Boolean))].join(
+      ", "
+    );
+    const warmtepompType = [
+      ...new Set(
+        wpRegels
+          .map((r) => (r.naam || r.omschrijving || "").trim())
+          .filter(Boolean)
+      ),
+    ].join(", ");
+
+    const advRaw = lead.adviseurs;
+    const adviseur = Array.isArray(advRaw) ? advRaw[0] : advRaw;
+    let adviseurNaam = (adviseur?.naam || "").trim();
+    if (!adviseurNaam && lead.adviseur_id) {
+      const { data: advRow } = await sb
+        .from("adviseurs")
+        .select("naam")
+        .eq("id", lead.adviseur_id)
+        .maybeSingle();
+      adviseurNaam = String(advRow?.naam || "").trim();
+    }
+
+    const notities = [
+      String(lead.notities || "").trim(),
+      String(project.notities || "").trim(),
+      String(project.backoffice_notitie || "").trim(),
+      String(offerte?.notities || "").trim(),
+    ]
+      .filter(Boolean)
+      .join("\n---\n");
+
+    const extra = {
+      project_nummer: String(project.project_nummer || "").trim() || null,
+      warmtepomp_type: warmtepompType || null,
+      sku: sku || null,
+      offerte_nummer: String(offerte?.offerte_nummer || "").trim() || null,
+      bedrag_inc: euroPlain(offerte?.totaal_inc_btw),
+      adviseur: adviseurNaam || null,
+    };
+
+    const notitieRegels = [
+      extra.project_nummer && `Project: ${extra.project_nummer}`,
+      extra.warmtepomp_type && `Warmtepomp: ${extra.warmtepomp_type}`,
+      extra.offerte_nummer && `Offerte: ${extra.offerte_nummer}`,
+      extra.sku && `SKU: ${extra.sku}`,
+      extra.bedrag_inc && `Totaal inc. btw: € ${extra.bedrag_inc}`,
+      extra.adviseur && `Adviseur: ${extra.adviseur}`,
+      notities && `Notities:\n${notities}`,
+    ].filter(Boolean);
+    const notitie = notitieRegels.join("\n");
+
     const result = await tcSwissLeadIntake({
       externId,
       lastName,
@@ -242,7 +362,14 @@ export async function POST(
       plaats: lead.plaats,
       straat: lead.straat,
       huisnummer: huisnummer || null,
+      extra,
+      notitie,
     });
+    if (result.lead && notitie) {
+      await tcSwissNotitieToevoegen({ lead: result.lead, tekst: notitie }).catch(
+        (e) => console.error("TC Swiss notitie:", e)
+      );
+    }
 
     const nextStored: TcSwissIntakeStored = {
       at: new Date().toISOString(),

@@ -3531,15 +3531,16 @@ export function ProjectPage() {
                   void refreshLeadEvents(p.lead_id);
                   setOkMsg("Doorgestuurd naar Edwin.");
                 }}
-                onProjectUpdated={(p) => {
+                onProjectUpdated={(p, notice) => {
                   setProject((prev) => (prev ? { ...prev, ...p } : p));
                   void refreshLeadEvents(p.lead_id);
                   setOkMsg(
-                    p.status === "hold_sales_actie"
-                      ? "HOLD sales — order terug naar de verkoper."
-                      : p.status === "opstarten_voltooid_afwachten_wf"
-                        ? "Opstarten voltooid — afwachten WF"
-                        : "Schouwweek gezet."
+                    notice ||
+                      (p.status === "hold_sales_actie"
+                        ? "HOLD sales — order terug naar de verkoper."
+                        : p.status === "opstarten_voltooid_afwachten_wf"
+                          ? "Opstarten voltooid — afwachten WF"
+                          : "Schouwweek gezet.")
                   );
                 }}
                 onFacturenChanged={() => {

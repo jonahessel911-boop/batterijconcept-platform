@@ -6,7 +6,7 @@
  * - Webhook push (gebeurtenissen) + signature verify
  */
 
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 
 export const TCSWISS_PRODUCT_WARMTEPOMP = "Warmtepomp";
 
@@ -60,6 +60,9 @@ export type TcSwissLeadIntakeInput = {
   product?: string;
   /** Override bron; default env TCSWISS_RELAYPRO_BRON */
   bron?: string;
+  /** Extra ordercontext (sku, prijzen, adviseur, schouw, …) — lege waarden worden weggelaten. */
+  extra?: Record<string, string | number | null | undefined>;
+  notitie?: string | null;
 };
 
 export type TcSwissLeadIntakeResult = {
@@ -327,6 +330,16 @@ export async function tcSwissLeadIntake(
   if (input.plaats?.trim()) body.plaats = input.plaats.trim();
   if (input.straat?.trim()) body.straat = input.straat.trim();
   if (input.huisnummer?.trim()) body.huisnummer = input.huisnummer.trim();
+  if (input.notitie?.trim()) body.notitie = input.notitie.trim();
+  if (input.extra) {
+    for (const [key, raw] of Object.entries(input.extra)) {
+      if (!key.trim() || key in body) continue;
+      if (raw == null) continue;
+      const val = String(raw).trim();
+      if (!val) continue;
+      body[key] = val;
+    }
+  }
 
   const url = `${baseUrl()}/api/method/relaypro.api.intake.lead_intake`;
   const res = await fetch(url, {
@@ -384,4 +397,34 @@ export async function tcSwissLeadIntake(
       typeof payload.extern_id === "string" ? payload.extern_id : externId,
     raw,
   };
+}
+
+/** Extra ordercontext op de TC Swiss-lead (na intake). Faalt niet hard. */
+export async function tcSwissNotitieToevoegen(opts: {
+  lead: string;
+  tekst: string;
+}): Promise<void> {
+  const t = token();
+  const lead = opts.lead.trim();
+  const tekst = opts.tekst.trim();
+  if (!t || !lead || !tekst) return;
+
+  const url = `${baseUrl()}/api/method/relaypro.api.partner.notitie_toevoegen`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-RelayPro-Token": t,
+      "Idempotency-Key": randomUUID(),
+    },
+    body: JSON.stringify({ lead, tekst }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(
+      "TC Swiss notitie_toevoegen:",
+      res.status,
+      detail.slice(0, 400)
+    );
+  }
 }
