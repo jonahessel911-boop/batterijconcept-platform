@@ -35,6 +35,8 @@ export type BelMetrics = {
   geenContact: number;
   /** Geannuleerde 1e huisbezoeken die in de periode zijn ingezet */
   geannuleerd: number;
+  /** PRIO omplannen — niet in ingepland/uitval */
+  omgepland: number;
   /**
    * Uitval % = geannuleerd ÷ (ingepland + geannuleerd).
    * Hoeveel van de geplaatste huisbezoeken later uitvielen.
@@ -214,6 +216,7 @@ type Acc = {
   geenInteresse: number;
   geenContact: number;
   geannuleerd: number;
+  omgepland: number;
   nonNieuwGebeld: number;
   nonNieuwIngepland: number;
 };
@@ -225,6 +228,7 @@ function newAcc(): Acc {
     geenInteresse: 0,
     geenContact: 0,
     geannuleerd: 0,
+    omgepland: 0,
     nonNieuwGebeld: 0,
     nonNieuwIngepland: 0,
   };
@@ -237,6 +241,7 @@ function addAcc(a: Acc, b: Acc): Acc {
     geenInteresse: a.geenInteresse + b.geenInteresse,
     geenContact: a.geenContact + b.geenContact,
     geannuleerd: a.geannuleerd + b.geannuleerd,
+    omgepland: a.omgepland + b.omgepland,
     nonNieuwGebeld: a.nonNieuwGebeld + b.nonNieuwGebeld,
     nonNieuwIngepland: a.nonNieuwIngepland + b.nonNieuwIngepland,
   };
@@ -252,6 +257,7 @@ function finalizeMetrics(a: Acc): BelMetrics {
     geenInteresse: a.geenInteresse,
     geenContact: a.geenContact,
     geannuleerd: a.geannuleerd,
+    omgepland: a.omgepland,
     annuleringsPct: uitval != null ? round2(uitval * 100) : null,
     leadToAppt: l2a != null ? round2(l2a * 100) : null,
     conv_gebeld_ingepland_pct: bruto != null ? round2(bruto * 100) : null,
@@ -484,6 +490,8 @@ export function buildBelRapportage(opts: {
       if (!a.created_at) continue;
       if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
 
+      const isPrio = (a.annulering_code || "") === "prio_omplannen";
+
       const door = (a.ingepland_door_id || "").trim();
       let belId = door || "";
       if (!belId || skipNonCallerIds.has(belId)) {
@@ -495,8 +503,13 @@ export function buildBelRapportage(opts: {
       if (filterBeller && belId !== filterBeller) continue;
 
       const aa = ensureBel(w.weekKey, belId);
-      wa.geannuleerd += 1;
-      aa.geannuleerd += 1;
+      if (isPrio) {
+        wa.omgepland += 1;
+        aa.omgepland += 1;
+      } else {
+        wa.geannuleerd += 1;
+        aa.geannuleerd += 1;
+      }
     }
   }
 
@@ -521,7 +534,8 @@ export function buildBelRapportage(opts: {
           r.ingepland > 0 ||
           r.geenInteresse > 0 ||
           r.geenContact > 0 ||
-          r.geannuleerd > 0
+          r.geannuleerd > 0 ||
+          r.omgepland > 0
       )
       .sort(
         (a, b) =>

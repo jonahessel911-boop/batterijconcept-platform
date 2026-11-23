@@ -185,6 +185,9 @@ function MetricsCells({
       <td className={`${base} whitespace-nowrap text-right`}>
         {num(m.geenContact)}
       </td>
+      <td className={`${base} whitespace-nowrap text-right`}>
+        {(m.omgepland || 0) > 0 ? num(m.omgepland) : "—"}
+      </td>
     </>
   );
 }
@@ -200,6 +203,9 @@ const METRIC_HEADERS = (
     </th>
     <th className={sheetHead}>Geen int.</th>
     <th className={sheetHead}>Geen cont.</th>
+    <th className={sheetHead} title="PRIO omplannen (geen KPI/pay)">
+      Omgepland
+    </th>
   </>
 );
 
@@ -791,7 +797,7 @@ export function BelDashboardPanel({
         <p className="text-sm text-muted">Laden…</p>
       ) : data ? (
         <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-8">
             <Kpi label="Gebeld" value={num(t?.gebeld)} />
             <Kpi label="Ingepland" value={num(t?.ingepland)} />
             <Kpi label="L→A" value={fmtPct(t?.leadToAppt)} />
@@ -809,6 +815,7 @@ export function BelDashboardPanel({
             />
             <Kpi label="Geen interesse" value={num(t?.geenInteresse)} />
             <Kpi label="Geen contact" value={num(t?.geenContact)} />
+            <Kpi label="Omgepland" value={num(t?.omgepland)} />
           </div>
 
           <section className="overflow-hidden rounded-2xl border border-line bg-white">

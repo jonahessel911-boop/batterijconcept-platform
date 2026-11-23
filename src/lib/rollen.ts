@@ -212,6 +212,13 @@ export function magNietGelopenAdviseur(rol: GebruikerRol | string | null | undef
   return r === "admin" || r === "backoffice";
 }
 
+/** Agenda: knop PRIO omplannen. Niet voor adviseur/beller. */
+export function magPrioOmplannen(
+  rol: GebruikerRol | string | null | undefined
+): boolean {
+  return magNietGelopenAdviseur(rol);
+}
+
 /** Mag “Bekijk als”-filter gebruiken. */
 export function magBekijkAls(rol: GebruikerRol): boolean {
   return rol === "admin" || rol === "sales_manager";
@@ -284,14 +291,18 @@ export function magRecruitment(rol: GebruikerRol | string | null | undefined): b
   return r === "admin" || r === "recruiter" || r === "backoffice";
 }
 
-/** Sales-adviseurs die afspraken kunnen krijgen. Inactief = niet inplannen. */
+/** Sales-adviseurs die afspraken kunnen krijgen. Inactief/geblokkeerd = niet inplannen. */
 export function isPlanbareAdviseur(a: {
   actief?: boolean | null;
   rol?: string | null;
   naam: string;
   email?: string | null;
+  geblokkeerd?: boolean | null;
+  bel_planning?: boolean | null;
 }): boolean {
+  if (a.geblokkeerd === true) return false;
   if (a.actief === false) return false;
+  if (a.bel_planning === false) return false;
   if (isWarmtefondsTeamAdviseur(a)) return false;
   if (isSpareAdviseur(a)) return false;
   return normalizeRol(a.rol) === "adviseur";
@@ -330,6 +341,8 @@ export function isBelPlanAdviseur(a: {
   rol?: string | null;
   naam: string;
   email?: string | null;
+  geblokkeerd?: boolean | null;
+  bel_planning?: boolean | null;
 }): boolean {
   if (!isPlanbareAdviseur(a)) return false;
   const email = a.email?.trim().toLowerCase();

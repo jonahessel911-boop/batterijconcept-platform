@@ -1371,8 +1371,10 @@ export function InstellingenPanel({
               </div>
               <p className="mt-3 max-w-lg text-[12px] text-muted">
                 {draft.bel_planning === false
-                  ? "Niet in het bel-systeem. Inactief of blokkeren zet dit standaard op Nee — je kunt het hier weer op Ja zetten."
-                  : "Komt mee in het bel-systeem (als de rol dat toelaat)."}
+                  ? "Niet in het bel-systeem. Inactief of geblokkeerd telt nooit mee in beschikbare blokken."
+                  : geblokkeerd || !actief
+                    ? "Staat op Ja, maar telt niet mee: account is inactief of geblokkeerd."
+                    : "Komt mee in het bel-systeem (als de rol dat toelaat)."}
               </p>
             </div>
           ) : (

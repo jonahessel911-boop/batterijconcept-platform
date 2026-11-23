@@ -232,5 +232,61 @@ export async function filesFromJsonPayload(
     }
   }
 
+  await harvestNestedFileUrls(body, out);
   return out.filter((f) => f.size > 0);
+}
+
+function looksLikeFileUrl(url: string, name?: string | null): boolean {
+  const u = url.split("?")[0].toLowerCase();
+  const n = (name || "").toLowerCase();
+  if (/\.(pdf|docx?|rtf)$/i.test(u) || /\.(pdf|docx?|rtf)$/i.test(n)) {
+    return true;
+  }
+  if (/\b(cv|resume|curriculum)\b/i.test(n)) return true;
+  return false;
+}
+
+async function harvestNestedFileUrls(
+  value: unknown,
+  out: File[],
+  depth = 0,
+  seen = new Set<string>()
+): Promise<void> {
+  if (depth > 5 || value == null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      await harvestNestedFileUrls(item, out, depth + 1, seen);
+    }
+    return;
+  }
+  if (typeof value !== "object") return;
+  const obj = value as Record<string, unknown>;
+  const url = pickStr(obj.url, obj.href, obj.src, obj.file_url, obj.download_url);
+  const name = pickStr(obj.name, obj.filename, obj.original_filename, obj.bestandsnaam);
+  if (url && /^https?:\/\//i.test(url) && looksLikeFileUrl(url, name)) {
+    if (!seen.has(url)) {
+      seen.add(url);
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const blob = await res.blob();
+          const fname =
+            name ||
+            decodeURIComponent(url.split("?")[0].split("/").pop() || "cv.pdf");
+          out.push(
+            new File([blob], fname, {
+              type: blob.type || "application/pdf",
+            })
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  for (const [key, child] of Object.entries(obj)) {
+    if (/cv|file|resume|upload|attachment|pdf/i.test(key) || depth < 2) {
+      await harvestNestedFileUrls(child, out, depth + 1, seen);
+    }
+  }
 }

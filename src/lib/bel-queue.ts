@@ -1,5 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import type { Afspraak, Lead, LeadStatus } from "@/types/database";
+import { isPrioOmplannenAfspraak } from "@/lib/prio-omplannen";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   afspraakBlokkeertAgenda,
@@ -429,7 +430,8 @@ export function latestKlantAnnuleringAfspraak(
         a.lead_id === leadId &&
         a.status === "geannuleerd" &&
         afspraakBlokkeertAgenda(a.soort) &&
-        isKlantAnnuleringAfspraak(a)
+        isKlantAnnuleringAfspraak(a) &&
+        !isPrioOmplannenAfspraak(a)
     )
     .sort(
       (a, b) =>
@@ -473,10 +475,77 @@ export function inAnnuleringBelQueue(
   if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
   if (inBelCooldown(lead)) return false;
 
+  if (inPrioOmplannenBelQueue(lead, afspraken, appointmentLeadIds)) {
+    return false;
+  }
+
   const latest = latestKlantAnnuleringAfspraak(afspraken, lead.id);
   if (!latest) return false;
   if (heeftVervangendHuisbezoek(afspraken, latest)) return false;
   return true;
+}
+
+export function latestPrioOmplannenAfspraak(
+  afspraken: Afspraak[],
+  leadId: string
+): Afspraak | null {
+  const list = afspraken
+    .filter(
+      (a) =>
+        a.lead_id === leadId &&
+        a.status === "geannuleerd" &&
+        afspraakBlokkeertAgenda(a.soort) &&
+        isPrioOmplannenAfspraak(a)
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.updated_at || b.start_at).getTime() -
+        new Date(a.updated_at || a.start_at).getTime()
+    );
+  return list[0] || null;
+}
+
+export function prioOmplannenMomentMs(
+  afspraken: Afspraak[],
+  leadId: string
+): number {
+  const latest = latestPrioOmplannenAfspraak(afspraken, leadId);
+  if (!latest) return 0;
+  const ms = new Date(latest.updated_at || latest.start_at).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/** PRIO-bak: CRM-annulering met code prio_omplannen, nog geen nieuw huisbezoek. */
+export function inPrioOmplannenBelQueue(
+  lead: Lead,
+  afspraken: Afspraak[],
+  appointmentLeadIds?: Set<string>
+): boolean {
+  if (isSollicitatieLead(lead)) return false;
+  if (!lead.telefoon?.trim()) return false;
+  if (BEL_BLOKKEER_STATUS.has(lead.status)) return false;
+  if (lead.status === "deur_niet_open") return false;
+  if (appointmentLeadIds?.has(lead.id)) return false;
+  if (belpogingenOf(lead) >= MAX_BELPOGINGEN) return false;
+  if (belpogingenVandaagOf(lead) >= MAX_BELPOGINGEN_PER_DAG) return false;
+  if (inBelCooldown(lead)) return false;
+
+  const latest = latestPrioOmplannenAfspraak(afspraken, lead.id);
+  if (!latest) return false;
+  if (heeftVervangendHuisbezoek(afspraken, latest)) return false;
+  return true;
+}
+
+export function sortPrioOmplannenBelQueue(
+  leads: Lead[],
+  afspraken: Afspraak[]
+): Lead[] {
+  return [...leads].sort((a, b) => {
+    const aMs = prioOmplannenMomentMs(afspraken, a.id);
+    const bMs = prioOmplannenMomentMs(afspraken, b.id);
+    if (aMs !== bMs) return bMs - aMs;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
 }
 
 /**

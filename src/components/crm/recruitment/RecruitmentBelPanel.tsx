@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Sollicitatie } from "@/types/database";
+import type { Sollicitatie, SollicitatieAfspraak } from "@/types/database";
 import { formatDateTimeNl } from "@/lib/format";
 import {
   normalizeSollicitatieStatus,
@@ -9,6 +9,8 @@ import {
   sollicitatieHeeftInfoToegestuurd,
 } from "@/lib/sollicitatie";
 import {
+  blockedSollicitatieContactKeys,
+  mergeBlockedContactKeys,
   buildSollicitatieGeenContactPatch,
   sollicitatieBelpogingenOf,
   sollicitatieGeenContactLabel,
@@ -87,23 +89,42 @@ function adresRegel(s: Sollicitatie) {
 
 export function RecruitmentBelPanel({
   kandidaten,
+  alleKandidaten,
+  afspraken = [],
+  leadContactKeys = [],
   onKandidaatUpdated,
   onOpenKandidaat,
   onPlanGesprek,
   advanceAfterPlanKey = 0,
 }: {
   kandidaten: Sollicitatie[];
+  /** Volledige lijst — duplicaten met een gesprek herkennen. */
+  alleKandidaten?: Sollicitatie[];
+  afspraken?: SollicitatieAfspraak[];
+  /** Sales-leads met hetzelfde nummer/mail — niet opnieuw in recruitment bellen. */
+  leadContactKeys?: string[];
   onKandidaatUpdated: (updated: Sollicitatie) => void;
   onOpenKandidaat?: (id: string) => void;
   onPlanGesprek?: (id: string) => void;
   /** Verhoog na succesvol gesprek-plannen → dan pas volgende kandidaat. */
   advanceAfterPlanKey?: number;
 }) {
-  const queue = useMemo(
-    () => sortSollicitatieBelQueue(kandidaten),
-    [kandidaten]
-  );
-  const [index, setIndex] = useState(0);
+  const [skippedIds, setSkippedIds] = useState(() => new Set<string>());
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const queue = useMemo(() => {
+    const ctx = mergeBlockedContactKeys(
+      blockedSollicitatieContactKeys(
+        alleKandidaten && alleKandidaten.length > 0
+          ? alleKandidaten
+          : kandidaten,
+        afspraken
+      ),
+      leadContactKeys
+    );
+    return sortSollicitatieBelQueue(kandidaten, ctx).filter(
+      (k) => !skippedIds.has(k.id)
+    );
+  }, [kandidaten, alleKandidaten, afspraken, leadContactKeys, skippedIds]);
   const [busy, setBusy] = useState(false);
   const [nextMode, setNextMode] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -115,7 +136,10 @@ export function RecruitmentBelPanel({
   const [mailOpen, setMailOpen] = useState(false);
   const [mailTemplateId, setMailTemplateId] = useState("ontvangen_sollicitatie");
 
-  const current = queue[Math.min(index, Math.max(queue.length - 1, 0))] || null;
+  const current =
+    (currentId ? queue.find((k) => k.id === currentId) : null) ||
+    queue[0] ||
+    null;
   const position = current
     ? queue.findIndex((k) => k.id === current.id) + 1
     : 0;
@@ -140,19 +164,27 @@ export function RecruitmentBelPanel({
     setError(null);
   }
 
-  /** Overslaan: volgende in de huidige volgorde. */
-  function goNext() {
+  function pickAfter(excludeId: string | null | undefined) {
     resetQueueUi();
-    setIndex((i) => {
-      if (queue.length <= 1) return 0;
-      return (i + 1) % queue.length;
+    const next = queue.find((k) => k.id !== excludeId) || null;
+    setCurrentId(next?.id ?? null);
+  }
+
+  /** Overslaan: deze kandidaat uit de bel-sessie, volgende tonen. */
+  function goNext() {
+    if (!current) return;
+    const skipId = current.id;
+    pickAfter(skipId);
+    setSkippedIds((prev) => {
+      const next = new Set(prev);
+      next.add(skipId);
+      return next;
     });
   }
 
-  /** Na uitkomst: kop van de lijst (nog niet gebeld eerst). */
+  /** Na uitkomst: volgende (niet dezelfde). */
   function goNewest() {
-    resetQueueUi();
-    setIndex(0);
+    pickAfter(current?.id);
   }
 
   useEffect(() => {
@@ -346,7 +378,8 @@ export function RecruitmentBelPanel({
         </div>
         <p className="px-4 py-16 text-center text-sm text-muted sm:px-6">
           Niemand om te bellen (Nieuw / Geen contact met telefoonnummer).
-          Terugbelafspraken staan niet in deze lijst.
+          Kandidaten met een gesprekafspraak en terugbelafspraken staan niet
+          in deze lijst.
         </p>
       </div>
     );
@@ -495,12 +528,37 @@ export function RecruitmentBelPanel({
               </p>
             </div>
 
+            {(current.sollicitatie_bestanden || []).length > 0 ? (
+              <div className="mt-4">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                  Bestanden
+                </p>
+                <ul className="divide-y divide-line border border-line bg-white">
+                  {(current.sollicitatie_bestanden || []).map((file) => (
+                    <li key={file.id} className="px-3 py-2">
+                      <a
+                        href={`/api/instroom/${current.id}/files/${file.id}`}
+                        download={file.bestandsnaam || "cv.pdf"}
+                        className="text-sm font-semibold text-green-dark underline-offset-2 hover:underline"
+                      >
+                        {file.bestandsnaam || "Download CV"}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             {antwoordRows.length > 0 ? (
               <div className="mt-4">
                 <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Antwoorden
                 </p>
-                <SollicitatieAntwoordenRows rows={antwoordRows} />
+                <SollicitatieAntwoordenRows
+                  rows={antwoordRows}
+                  sollicitatieId={current.id}
+                  bestanden={current.sollicitatie_bestanden || []}
+                />
               </div>
             ) : current.notitie?.trim() ? (
               <div className="mt-4 border border-line bg-wash/40 px-3.5 py-3">
@@ -557,7 +615,8 @@ export function RecruitmentBelPanel({
                 <p className="text-sm font-semibold text-ink">Kies de status</p>
                 <p className="text-xs text-muted">
                   Geen contact → eerst de rest bellen. Wel bereikt → eerst
-                  gesprek plannen. Terugbelafspraken staan niet in deze lijst.
+                  gesprek plannen. Wie al een gesprek heeft (ook een andere
+                  aanmelding met hetzelfde nummer) komt hier niet in.
                 </p>
                 <button
                   type="button"
@@ -598,7 +657,7 @@ export function RecruitmentBelPanel({
                 </button>
                 <button
                   type="button"
-                  disabled={busy || queue.length < 2}
+                  disabled={busy || !current}
                   onClick={goNext}
                   className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
                 >

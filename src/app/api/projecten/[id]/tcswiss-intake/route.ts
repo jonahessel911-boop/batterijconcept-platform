@@ -7,6 +7,7 @@ import { logLeadEvent } from "@/lib/lead-events";
 import {
   tcSwissConfigured,
   tcSwissLeadIntake,
+  tcSwissLeadsZoeken,
   tcSwissNotitieToevoegen,
 } from "@/lib/tcswiss";
 import {
@@ -103,7 +104,7 @@ function storedFromChecks(
  * Of dit een warmtepomp-order is en of die al naar TC Swiss is gestuurd.
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
   if (!(await sessionOk())) {
@@ -128,6 +129,28 @@ export async function GET(
       Boolean(stored) ||
       (await offerteHeeftWarmtepomp(sb, project.offerte_id as string | null));
 
+    const refresh = new URL(req.url).searchParams.get("refresh") === "1";
+    let lookup: {
+      ok: boolean;
+      error?: string;
+      leads: unknown[];
+    } | null = null;
+    if (refresh && stored) {
+      try {
+        const found = await tcSwissLeadsZoeken({
+          lead: stored.lead,
+          zoek: stored.lead ? null : stored.externId,
+        });
+        lookup = { ok: found.ok, leads: found.leads };
+      } catch (e) {
+        lookup = {
+          ok: false,
+          error: errMessage(e, "Ophalen bij TC Swiss mislukt"),
+          leads: [],
+        };
+      }
+    }
+
     return NextResponse.json({
       applicable,
       configured: tcSwissConfigured(),
@@ -136,6 +159,7 @@ export async function GET(
       tcswissLead: stored?.lead || null,
       externId: stored?.externId || null,
       duplicate: stored?.duplicate || false,
+      lookup,
     });
   } catch (e) {
     return NextResponse.json(

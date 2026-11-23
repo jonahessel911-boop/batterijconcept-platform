@@ -353,6 +353,13 @@ export interface Afspraak {
    * Los van adviseur_id (= wie het huisbezoek doet / planner in agenda).
    */
   ingepland_door_id?: string | null;
+  /**
+   * Vaste afboeking bij annuleren. `prio_omplannen` = backoffice PRIO-omplannen
+   * (niet in normale annuleringen-bak, niet in setter-KPI).
+   */
+  annulering_code?: string | null;
+  /** Nieuwe afspraak vanuit PRIO omplannen: id van de geannuleerde rij. */
+  herpland_van_afspraak_id?: string | null;
   start_at: string;
   end_at: string;
   status: AfspraakStatus;

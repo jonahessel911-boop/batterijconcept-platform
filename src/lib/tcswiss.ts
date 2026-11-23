@@ -73,6 +73,19 @@ export type TcSwissLeadIntakeResult = {
   raw: unknown;
 };
 
+export type TcSwissZoekLead = Record<string, unknown> & {
+  lead?: string;
+  extern_id?: string;
+  status?: unknown;
+  uitkomst?: unknown;
+};
+
+export type TcSwissLeadsZoekenResult = {
+  ok: boolean;
+  leads: TcSwissZoekLead[];
+  raw: unknown;
+};
+
 function baseUrl(): string {
   return (
     process.env.TCSWISS_RELAYPRO_BASE_URL?.trim() ||
@@ -349,37 +362,18 @@ export async function tcSwissLeadIntake(
       "X-RelayPro-Token": t,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
   });
 
-  const text = await res.text();
-  let raw: unknown = text;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    /* keep text */
-  }
+  const { raw, payload } = await parseTcSwissJson(res);
 
   if (!res.ok) {
     const msg =
-      typeof raw === "object" &&
-      raw &&
-      "message" in raw &&
-      typeof (raw as { message?: unknown }).message === "string"
-        ? (raw as { message: string }).message
+      typeof payload.message === "string"
+        ? payload.message
         : `TC Swiss intake HTTP ${res.status}`;
     throw new Error(msg);
   }
-
-  // Frappe wraps often as { message: { ... } }
-  const payload =
-    typeof raw === "object" &&
-    raw &&
-    "message" in raw &&
-    typeof (raw as { message: unknown }).message === "object"
-      ? ((raw as { message: Record<string, unknown> }).message || {})
-      : typeof raw === "object" && raw
-        ? (raw as Record<string, unknown>)
-        : {};
 
   const lead =
     typeof payload.lead === "string"
@@ -397,6 +391,81 @@ export async function tcSwissLeadIntake(
       typeof payload.extern_id === "string" ? payload.extern_id : externId,
     raw,
   };
+}
+
+function frappeUnwrap(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.message)) {
+    return { leads: obj.message };
+  }
+  if (obj.message && typeof obj.message === "object") {
+    return (obj.message as Record<string, unknown>) || {};
+  }
+  return obj;
+}
+
+async function parseTcSwissJson(
+  res: Response
+): Promise<{ raw: unknown; payload: Record<string, unknown> }> {
+  const text = await res.text();
+  let raw: unknown = text;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    /* keep text */
+  }
+  return { raw, payload: frappeUnwrap(raw) };
+}
+
+/**
+ * Live lead ophalen (rol afsprakenplanner).
+ * GET /api/method/relaypro.api.partner.leads_zoeken
+ */
+export async function tcSwissLeadsZoeken(opts: {
+  lead?: string | null;
+  zoek?: string | null;
+  limiet?: number;
+}): Promise<TcSwissLeadsZoekenResult> {
+  const t = token();
+  if (!t) throw new Error("TCSWISS_RELAYPRO_TOKEN ontbreekt");
+
+  const params = new URLSearchParams();
+  const lead = opts.lead?.trim() || "";
+  const zoek = opts.zoek?.trim() || "";
+  if (lead) params.set("lead", lead);
+  else if (zoek.length >= 2) params.set("zoek", zoek);
+  else throw new Error("Geef een TC Swiss-lead of zoekterm (min. 2 tekens)");
+  params.set("limiet", String(Math.min(Math.max(opts.limiet ?? 5, 1), 50)));
+
+  const url = `${baseUrl()}/api/method/relaypro.api.partner.leads_zoeken?${params}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { "X-RelayPro-Token": t },
+    signal: AbortSignal.timeout(20_000),
+  });
+  const { raw, payload } = await parseTcSwissJson(res);
+  if (!res.ok) {
+    const msg =
+      typeof payload.message === "string"
+        ? payload.message
+        : typeof payload.exc_type === "string"
+          ? String(payload.exc_type)
+          : `TC Swiss zoeken HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
+  const list =
+    (Array.isArray(payload.leads) && payload.leads) ||
+    (Array.isArray(payload.data) && payload.data) ||
+    (Array.isArray(payload.message) && payload.message) ||
+    (Array.isArray(raw) && raw) ||
+    [];
+  const leads = (list as unknown[]).filter(
+    (x): x is TcSwissZoekLead => Boolean(x) && typeof x === "object"
+  );
+
+  return { ok: payload.ok !== false, leads, raw };
 }
 
 /** Extra ordercontext op de TC Swiss-lead (na intake). Faalt niet hard. */

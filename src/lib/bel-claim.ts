@@ -8,17 +8,23 @@ import {
   inAnnuleringBelQueue,
   inBelQueue,
   inNormaleBelQueue,
+  inPrioOmplannenBelQueue,
   isNlProvincie,
   leadInProvincie,
   sortAnnuleringBelQueue,
   sortBelQueue,
+  sortPrioOmplannenBelQueue,
 } from "@/lib/bel-queue";
 import { isTerugbelSoort } from "@/lib/afspraak-soort";
 
-export type BelBakMode = "normaal" | "provincie" | "annuleringen";
+export type BelBakMode =
+  | "normaal"
+  | "provincie"
+  | "annuleringen"
+  | "prio_omplannen";
 
-/** Claim verloopt zonder heartbeat. */
-export const BEL_CLAIM_TTL_MS = 15 * 60 * 1000;
+/** Claim verloopt zonder heartbeat. Kort houden zodat een vastgelopen tab de lijst niet blokkeert. */
+export const BEL_CLAIM_TTL_MS = 4 * 60 * 1000;
 const BEL_CLAIM_TTL_SEC = Math.floor(BEL_CLAIM_TTL_MS / 1000);
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
@@ -53,7 +59,8 @@ function claimColumnsMissing(error: {
     error.code === "42703" ||
     msg.includes("bel_claimed_by") ||
     msg.includes("bel_claimed_at") ||
-    msg.includes("try_claim_bel_lead")
+    msg.includes("try_claim_bel_lead") ||
+    msg.includes("try_claim_first_bel_lead")
   );
 }
 
@@ -152,6 +159,79 @@ async function tryClaimLeadJs(
   return null;
 }
 
+function isUniqueClaimError(error: {
+  code?: string;
+  message?: string;
+} | null): boolean {
+  if (!error) return false;
+  const msg = error.message || "";
+  return (
+    error.code === "23505" ||
+    msg.includes("leads_one_bel_claim_per_caller") ||
+    msg.includes("duplicate key")
+  );
+}
+
+async function loadMineClaim(
+  sb: SupabaseClient,
+  callerId: string
+): Promise<Lead | null> {
+  const { data } = await sb
+    .from("leads")
+    .select("*")
+    .eq("bel_claimed_by", callerId)
+    .order("bel_claimed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lead = data as Lead | null;
+  if (!lead) return null;
+  if (!isBelClaimActive(lead.bel_claimed_at)) return null;
+  return lead;
+}
+
+const CLAIM_BATCH = 80;
+
+async function tryClaimFirstLead(
+  sb: SupabaseClient,
+  leadIds: string[],
+  callerId: string
+): Promise<Lead | null> {
+  const ids = leadIds.slice(0, CLAIM_BATCH);
+  if (ids.length === 0) return null;
+
+  const { data, error } = await sb.rpc("try_claim_first_bel_lead", {
+    p_lead_ids: ids,
+    p_caller_id: callerId,
+    p_ttl_seconds: BEL_CLAIM_TTL_SEC,
+  });
+
+  if (!error && data) {
+    const lead = data as Lead;
+    if (lead.bel_claimed_by === callerId) return lead;
+    return null;
+  }
+
+  if (isUniqueClaimError(error)) {
+    return loadMineClaim(sb, callerId);
+  }
+
+  if (
+    error &&
+    (claimColumnsMissing(error) ||
+      error.code === "PGRST202" ||
+      error.message?.includes("Could not find the function"))
+  ) {
+    for (const id of ids) {
+      const claimed = await tryClaimLead(sb, id, callerId);
+      if (claimed) return claimed;
+    }
+    return null;
+  }
+
+  if (error) throw error;
+  return null;
+}
+
 async function tryClaimLead(
   sb: SupabaseClient,
   leadId: string,
@@ -169,6 +249,10 @@ async function tryClaimLead(
     return null;
   }
 
+  if (isUniqueClaimError(error)) {
+    return loadMineClaim(sb, callerId);
+  }
+
   // Functie/kolom ontbreekt → JS-fallback (nooit lead zonder claim teruggeven)
   if (
     error &&
@@ -176,7 +260,13 @@ async function tryClaimLead(
       error.code === "PGRST202" ||
       error.message?.includes("Could not find the function"))
   ) {
-    return tryClaimLeadJs(sb, leadId, callerId);
+    try {
+      return await tryClaimLeadJs(sb, leadId, callerId);
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      if (isUniqueClaimError(err)) return loadMineClaim(sb, callerId);
+      throw e;
+    }
   }
 
   if (error) throw error;
@@ -186,15 +276,30 @@ async function tryClaimLead(
 async function loadRecentAfsprakenForAnnuleringen(
   sb: SupabaseClient
 ): Promise<Afspraak[]> {
+  const selectFull =
+    "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, updated_at, created_at, ingepland_door_id, annulering_code, herpland_van_afspraak_id";
+  const selectBasic =
+    "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, updated_at, created_at, ingepland_door_id";
+  let select = selectFull;
   const rows: Afspraak[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data } = await sb
+    const { data, error } = await sb
       .from("afspraken")
-      .select(
-        "id, lead_id, adviseur_id, start_at, end_at, status, soort, notities, updated_at, created_at, ingepland_door_id"
-      )
+      .select(select)
       .order("start_at", { ascending: false })
       .range(from, from + 999);
+    if (
+      error &&
+      select === selectFull &&
+      ((error.message || "").includes("annulering_code") ||
+        (error.message || "").includes("herpland_van") ||
+        error.code === "42703")
+    ) {
+      select = selectBasic;
+      from = -1000;
+      rows.length = 0;
+      continue;
+    }
     const chunk = (data || []) as Afspraak[];
     rows.push(...chunk);
     if (chunk.length < 1000) break;
@@ -215,7 +320,7 @@ export async function claimNextBelLead(
     provincie?: string | null;
     /** Bij wisselen van bak: nooit oude claim hergebruiken. */
     forceNew?: boolean;
-    /** normaal | provincie | annuleringen (klant-cancel op jouw naam) */
+    /** normaal | provincie | annuleringen | prio_omplannen */
     bak?: BelBakMode | null;
   }
 ): Promise<{
@@ -227,9 +332,11 @@ export async function claimNextBelLead(
   const bak: BelBakMode =
     opts?.bak === "annuleringen"
       ? "annuleringen"
-      : opts?.provincie
-        ? "provincie"
-        : "normaal";
+      : opts?.bak === "prio_omplannen"
+        ? "prio_omplannen"
+        : opts?.provincie
+          ? "provincie"
+          : "normaal";
   const provincie =
     bak === "provincie" && opts?.provincie && isNlProvincie(opts.provincie)
       ? opts.provincie
@@ -249,12 +356,13 @@ export async function claimNextBelLead(
   }
   if (mineErr) throw mineErr;
 
-  const afsprakenForMine =
-    bak === "annuleringen"
-      ? await loadRecentAfsprakenForAnnuleringen(sb)
-      : null;
-  const appointmentLeadIdsForMine =
-    bak === "annuleringen" ? await loadAppointmentLeadIds(sb) : null;
+  const needsAfspraken = bak === "annuleringen" || bak === "prio_omplannen";
+  const afsprakenForMine = needsAfspraken
+    ? await loadRecentAfsprakenForAnnuleringen(sb)
+    : null;
+  const appointmentLeadIdsForMine = needsAfspraken
+    ? await loadAppointmentLeadIds(sb)
+    : null;
 
   const staleMineIds: string[] = [];
   for (const row of (mine || []) as Lead[]) {
@@ -269,6 +377,17 @@ export async function claimNextBelLead(
     if (bak === "annuleringen") {
       if (
         !inAnnuleringBelQueue(
+          row,
+          afsprakenForMine || [],
+          appointmentLeadIdsForMine || undefined
+        )
+      ) {
+        staleMineIds.push(row.id);
+        continue;
+      }
+    } else if (bak === "prio_omplannen") {
+      if (
+        !inPrioOmplannenBelQueue(
           row,
           afsprakenForMine || [],
           appointmentLeadIdsForMine || undefined
@@ -312,7 +431,7 @@ export async function claimNextBelLead(
   // 2) Kandidaten laden en sorteren
   const appointmentLeadIds = await loadAppointmentLeadIds(sb);
 
-  if (bak === "annuleringen") {
+  if (bak === "annuleringen" || bak === "prio_omplannen") {
     const afspraken = afsprakenForMine || (await loadRecentAfsprakenForAnnuleringen(sb));
     const leadIds = [
       ...new Set(
@@ -338,20 +457,32 @@ export async function claimNextBelLead(
       rawLeads.push(...((chunk || []) as Lead[]));
     }
 
-    const candidates = sortAnnuleringBelQueue(
-      rawLeads.filter((l) => {
-        if (exclude.has(l.id)) return false;
-        if (isBelClaimedByOther(l, callerId, now)) return false;
-        return inAnnuleringBelQueue(l, afspraken, appointmentLeadIds);
-      }),
-      afspraken
-    );
+    const candidates =
+      bak === "prio_omplannen"
+        ? sortPrioOmplannenBelQueue(
+            rawLeads.filter((l) => {
+              if (exclude.has(l.id)) return false;
+              if (isBelClaimedByOther(l, callerId, now)) return false;
+              return inPrioOmplannenBelQueue(l, afspraken, appointmentLeadIds);
+            }),
+            afspraken
+          )
+        : sortAnnuleringBelQueue(
+            rawLeads.filter((l) => {
+              if (exclude.has(l.id)) return false;
+              if (isBelClaimedByOther(l, callerId, now)) return false;
+              return inAnnuleringBelQueue(l, afspraken, appointmentLeadIds);
+            }),
+            afspraken
+          );
 
-    for (const candidate of candidates) {
-      const claimed = await tryClaimLead(sb, candidate.id, callerId);
-      if (claimed) {
-        return { lead: claimed, mode: "new" };
-      }
+    const claimed = await tryClaimFirstLead(
+      sb,
+      candidates.map((c) => c.id),
+      callerId
+    );
+    if (claimed) {
+      return { lead: claimed, mode: "new" };
     }
     return { lead: null, mode: "empty" };
   }
@@ -379,6 +510,9 @@ export async function claimNextBelLead(
       if (inAnnuleringBelQueue(l, afsprakenNormaal, appointmentLeadIds)) {
         return false;
       }
+      if (inPrioOmplannenBelQueue(l, afsprakenNormaal, appointmentLeadIds)) {
+        return false;
+      }
       // inNormaleBelQueue excludes herplan; keep inBelQueue safety for phone etc.
       if (!inBelQueue(l, appointmentLeadIds)) return false;
       if (provincie && !leadInProvincie(l, provincie)) return false;
@@ -387,11 +521,13 @@ export async function claimNextBelLead(
     })
   );
 
-  for (const candidate of candidates) {
-    const claimed = await tryClaimLead(sb, candidate.id, callerId);
-    if (claimed) {
-      return { lead: claimed, mode: "new" };
-    }
+  const claimed = await tryClaimFirstLead(
+    sb,
+    candidates.map((c) => c.id),
+    callerId
+  );
+  if (claimed) {
+    return { lead: claimed, mode: "new" };
   }
 
   return { lead: null, mode: "empty" };

@@ -33,24 +33,33 @@ export async function GET() {
 
   try {
     const sb = getSupabaseAdmin();
-    const [leads, afspraken, offertesRaw, projecten, facturen, sCount] =
+    const afspraakSelectFull =
+      "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, updated_at, ingepland_door_id, annulering_code, herpland_van_afspraak_id, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)";
+    const afspraakSelectBasic =
+      "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, updated_at, ingepland_door_id, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)";
+    const loadAfspraken = (select: string) =>
+      fetchAllRows((from, to) => {
+        let q = sb
+          .from("afspraken")
+          .select(select)
+          .order("start_at", { ascending: true })
+          .range(from, to);
+        if (eigenScope) q = q.eq("adviseur_id", me);
+        return q;
+      });
+    let afspraken: unknown[] = [];
+    try {
+      afspraken = await loadAfspraken(afspraakSelectFull);
+    } catch {
+      afspraken = await loadAfspraken(afspraakSelectBasic);
+    }
+    const [leads, offertesRaw, projecten, facturen, sCount] =
       await Promise.all([
         fetchAllRows((from, to) => {
           let q = sb
             .from("leads")
             .select("*")
             .order("created_at", { ascending: false })
-            .range(from, to);
-          if (eigenScope) q = q.eq("adviseur_id", me);
-          return q;
-        }),
-        fetchAllRows((from, to) => {
-          let q = sb
-            .from("afspraken")
-            .select(
-              "id, start_at, end_at, status, adviseur_id, lead_id, soort, notities, created_at, updated_at, ingepland_door_id, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats, status), adviseurs!adviseur_id(naam, email)"
-            )
-            .order("start_at", { ascending: true })
             .range(from, to);
           if (eigenScope) q = q.eq("adviseur_id", me);
           return q;

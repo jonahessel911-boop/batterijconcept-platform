@@ -14,6 +14,10 @@ import {
 } from "@/lib/recruitment-form";
 import type { RecruitmentVacature } from "@/types/database";
 import { notifyNieuweSollicitatie } from "@/lib/email/sollicitatie-intern";
+import {
+  collectFormFiles,
+  uploadSollicitatieBestand,
+} from "@/lib/sollicitatie-bestanden";
 
 export const runtime = "nodejs";
 
@@ -61,6 +65,7 @@ function pickAnswerRows(raw: unknown): RecruitmentAnswerRow[] {
       o.type === "buttons" ||
       o.type === "text" ||
       o.type === "checkboxes" ||
+      o.type === "file" ||
       o.type === "contact"
         ? o.type
         : undefined;
@@ -74,10 +79,38 @@ function pickAnswerRows(raw: unknown): RecruitmentAnswerRow[] {
   return out;
 }
 
+async function parseSolliciteerBody(
+  req: NextRequest
+): Promise<{ body: Record<string, unknown>; files: File[] }> {
+  const contentType = req.headers.get("content-type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData();
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of form.entries()) {
+      if (typeof value === "string") body[key] = value;
+    }
+    for (const key of ["answers", "answer_rows"] as const) {
+      const raw = body[key];
+      if (typeof raw === "string" && raw.trim()) {
+        try {
+          body[key] = JSON.parse(raw) as unknown;
+        } catch {
+          /* laat string */
+        }
+      }
+    }
+    return { body, files: collectFormFiles(form) };
+  }
+  return {
+    body: (await req.json()) as Record<string, unknown>,
+    files: [],
+  };
+}
+
 /** Publiek sollicitatieformulier vanaf /werkenbij. */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as Record<string, unknown>;
+    const { body, files } = await parseSolliciteerBody(req);
     const naam = pickStr(body.naam);
     const email = pickStr(body.email);
     const telefoon = pickStr(body.telefoon);
@@ -231,6 +264,7 @@ export async function POST(req: NextRequest) {
     }
 
     const row = data as {
+      id?: string;
       naam?: string | null;
       email?: string | null;
       telefoon?: string | null;
@@ -239,6 +273,16 @@ export async function POST(req: NextRequest) {
       notitie?: string | null;
       bron?: string | null;
     } | null;
+
+    if (row?.id && files.length) {
+      for (const file of files) {
+        const uploaded = await uploadSollicitatieBestand(sb, row.id, file);
+        if ("error" in uploaded) {
+          console.error("Werkenbij CV-upload fout:", uploaded);
+        }
+      }
+    }
+
     void notifyNieuweSollicitatie({
       naam: row?.naam || naam,
       email: row?.email || email,

@@ -151,7 +151,7 @@ export async function loadBellerWeekCommissie(
     fetchAllRows<BellerAfspraakRow>((fromIdx, toIdx) =>
       sb
         .from("afspraken")
-        .select("id, lead_id, created_at, start_at, status, soort, ingepland_door_id")
+        .select("id, lead_id, created_at, start_at, status, soort, ingepland_door_id, herpland_van_afspraak_id, annulering_code")
         .eq("soort", "nieuw")
         .eq("ingepland_door_id", opts.bellerId)
         .gte("created_at", `${rangeStart}T00:00:00.000Z`)
@@ -179,7 +179,7 @@ export async function loadBellerWeekCommissie(
       const rows = await fetchAllRows<OpsCommissieAfspraak>((fromIdx, toIdx) =>
         sb
           .from("afspraken")
-          .select("id, lead_id, created_at, status, soort, ingepland_door_id")
+          .select("id, lead_id, created_at, status, soort, ingepland_door_id, herpland_van_afspraak_id, annulering_code")
           .eq("soort", "nieuw")
           .in("lead_id", chunk)
           .order("created_at", { ascending: true })

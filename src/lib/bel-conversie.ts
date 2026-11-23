@@ -50,6 +50,8 @@ export type BelConversieAfspraak = {
   adviseur_id?: string | null;
   /** Wie de afspraak heeft ingepland (bel-credit) */
   ingepland_door_id?: string | null;
+  annulering_code?: string | null;
+  herpland_van_afspraak_id?: string | null;
 };
 
 /** Huisbezoek dat op de gekozen dag is ingepland. */
@@ -527,6 +529,7 @@ export function isHuisbezoekSoort(a: BelConversieAfspraak): boolean {
 /** Actief huisbezoek (geen terugbel, niet geannuleerd) — telt mee voor L→A. */
 export function isHuisbezoekAfspraak(a: BelConversieAfspraak): boolean {
   if (a.status === "geannuleerd") return false;
+  if ((a.herpland_van_afspraak_id || "").trim()) return false;
   return isHuisbezoekSoort(a);
 }
 
@@ -635,6 +638,7 @@ export function countGeannuleerdeEersteHuisbezoeken(opts: {
   for (const a of pool) {
     if (!isHuisbezoekSoort(a)) continue;
     if (a.status !== "geannuleerd") continue;
+    if ((a.annulering_code || "") === "prio_omplannen") continue;
     if (eersteAny.get(a.lead_id) !== a.id) continue;
     // Herpland (actief nieuw bezoek later) → geen uitval; netto gered, geen extra
     if (eersteActief.has(a.lead_id)) continue;

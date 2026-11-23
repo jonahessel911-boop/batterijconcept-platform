@@ -29,18 +29,26 @@ import {
   geenContactPogingLabel,
   inAnnuleringBelQueue,
   inNormaleBelQueue,
+  inPrioOmplannenBelQueue,
   isHerplanBelLead,
   isMailPositiefBelLead,
   isTerugbelDue,
   isTerugbelForViewer,
   latestKlantAnnuleringAfspraak,
   latestPhysicalAfspraak,
+  latestPrioOmplannenAfspraak,
   leadInProvincie,
   maxBelpogingenVoor,
   sortAnnuleringBelQueue,
   sortBelQueue,
+  sortPrioOmplannenBelQueue,
 } from "@/lib/bel-queue";
 import { BATTERIJCONCEPT_BEL_TEL_DISPLAY } from "@/lib/email/bel-telefoon";
+import {
+  isBelClaimActive,
+  isBelClaimedByOther,
+  type BelBakMode,
+} from "@/lib/bel-claim";
 import {
   NL_PROVINCIES,
   adviseurVoorProvincie,
@@ -197,14 +205,12 @@ export function BelPanel({
   onNeedReload?: () => void | Promise<void>;
 }) {
   /** null = bak kiezen; daarna normaal, provincie of annuleringen. */
-  const [bakMode, setBakMode] = useState<
-    "normaal" | "provincie" | "annuleringen" | null
-  >(null);
+  const [bakMode, setBakMode] = useState<BelBakMode | null>(null);
   const [selectedProvincie, setSelectedProvincie] =
     useState<NlProvincie | null>(null);
   /** Sync bron voor claim-requests (voorkomt stale state / race). */
   const bakFilterRef = useRef<{
-    mode: "normaal" | "provincie" | "annuleringen" | null;
+    mode: BelBakMode | null;
     provincie: NlProvincie | null;
   }>({ mode: null, provincie: null });
   const claimGenRef = useRef(0);
@@ -330,24 +336,67 @@ export function BelPanel({
    * Afzegging door de klant of door ons, zonder nieuw huisbezoek erna.
    * Nieuwste annulering eerst · max 3 pogingen · 1× per dag (daarna volgende).
    */
+  const callerId = defaultAdviseurId || null;
+
   const annuleringQueue = useMemo(() => {
     return sortAnnuleringBelQueue(
-      leads.filter((l) =>
-        inAnnuleringBelQueue(l, afspraken, appointmentLeadIds)
-      ),
+      leads.filter((l) => {
+        if (
+          callerId &&
+          isBelClaimedByOther(l, callerId) &&
+          l.id !== currentId
+        ) {
+          return false;
+        }
+        return inAnnuleringBelQueue(l, afspraken, appointmentLeadIds);
+      }),
       afspraken
     );
-  }, [leads, afspraken, appointmentLeadIds]);
+  }, [leads, afspraken, appointmentLeadIds, callerId, currentId]);
+
+  const prioOmplannenQueue = useMemo(() => {
+    return sortPrioOmplannenBelQueue(
+      leads.filter((l) => {
+        if (
+          callerId &&
+          isBelClaimedByOther(l, callerId) &&
+          l.id !== currentId
+        ) {
+          return false;
+        }
+        return inPrioOmplannenBelQueue(l, afspraken, appointmentLeadIds);
+      }),
+      afspraken
+    );
+  }, [leads, afspraken, appointmentLeadIds, callerId, currentId]);
 
   const allBelQueue = useMemo(() => {
     const herplanIds = new Set(annuleringQueue.map((l) => l.id));
+    const prioIds = new Set(prioOmplannenQueue.map((l) => l.id));
     return sortBelQueue(
-      leads.filter(
-        (l) =>
-          inNormaleBelQueue(l, appointmentLeadIds) && !herplanIds.has(l.id)
-      )
+      leads.filter((l) => {
+        if (
+          callerId &&
+          isBelClaimedByOther(l, callerId) &&
+          l.id !== currentId
+        ) {
+          return false;
+        }
+        return (
+          inNormaleBelQueue(l, appointmentLeadIds) &&
+          !herplanIds.has(l.id) &&
+          !prioIds.has(l.id)
+        );
+      })
     );
-  }, [leads, appointmentLeadIds, annuleringQueue]);
+  }, [
+    leads,
+    appointmentLeadIds,
+    annuleringQueue,
+    prioOmplannenQueue,
+    callerId,
+    currentId,
+  ]);
 
   const provincieCounts = useMemo(() => {
     const map = new Map<NlProvincie, number>();
@@ -379,11 +428,20 @@ export function BelPanel({
     if (bakMode === "annuleringen") {
       return annuleringQueue;
     }
+    if (bakMode === "prio_omplannen") {
+      return prioOmplannenQueue;
+    }
     if (bakMode === "provincie" && selectedProvincie) {
       return allBelQueue.filter((l) => leadInProvincie(l, selectedProvincie));
     }
     return allBelQueue;
-  }, [allBelQueue, annuleringQueue, bakMode, selectedProvincie]);
+  }, [
+    allBelQueue,
+    annuleringQueue,
+    prioOmplannenQueue,
+    bakMode,
+    selectedProvincie,
+  ]);
 
   /** Viewer: Bekijk-als, anders ingelogde medewerker (defaultAdviseurId). */
   const effectiveTerugbelViewerId =
@@ -440,13 +498,30 @@ export function BelPanel({
   }, [terugbelDue, normalQueue, uitgesteldIds]);
 
   const current = useMemo(() => {
-    if (!currentId) return null;
-    return (
-      leads.find((l) => l.id === currentId) ||
-      queue.find((l) => l.id === currentId) ||
-      (claimedLead?.id === currentId ? claimedLead : null)
-    );
-  }, [leads, queue, currentId, claimedLead]);
+    if (!currentId || !claimedLead || claimedLead.id !== currentId) {
+      return null;
+    }
+    if (callerId && claimedLead.bel_claimed_by !== callerId) {
+      return null;
+    }
+    const live = leads.find((l) => l.id === currentId);
+    if (
+      live &&
+      callerId &&
+      live.bel_claimed_by &&
+      live.bel_claimed_by !== callerId &&
+      isBelClaimActive(live.bel_claimed_at)
+    ) {
+      return null;
+    }
+    if (!live) return claimedLead;
+    return {
+      ...claimedLead,
+      ...live,
+      bel_claimed_by: claimedLead.bel_claimed_by,
+      bel_claimed_at: claimedLead.bel_claimed_at,
+    };
+  }, [leads, currentId, claimedLead, callerId]);
 
   const currentTerugbel = current
     ? activeBelAfspraak(afspraken, current.id)
@@ -487,16 +562,30 @@ export function BelPanel({
     }
   }
 
+  const currentIdRef = useRef(currentId);
+  currentIdRef.current = currentId;
+  const bakModeRef = useRef(bakMode);
+  bakModeRef.current = bakMode;
+  const claimingRef = useRef(claiming);
+  claimingRef.current = claiming;
+  const callerIdRef = useRef(callerId);
+  callerIdRef.current = callerId;
+  const onLeadUpdatedRef = useRef(onLeadUpdated);
+  onLeadUpdatedRef.current = onLeadUpdated;
+
   async function claimNext(
     excludeLeadId?: string | null,
     opts?: {
       provincie?: NlProvincie | null;
       forceNew?: boolean;
-      bak?: "normaal" | "provincie" | "annuleringen" | null;
+      bak?: BelBakMode | null;
       /** Al overgeslagen ids bij provincie-mismatch retry */
       skipIds?: string[];
     }
   ) {
+    if (currentIdRef.current && !opts?.forceNew) {
+      return;
+    }
     const gen = ++claimGenRef.current;
     setClaiming(true);
     setClaimError(null);
@@ -507,7 +596,7 @@ export function BelPanel({
         filter.mode ??
         (filter.provincie ? "provincie" : "normaal");
       const provincie =
-        bak === "annuleringen"
+        bak === "annuleringen" || bak === "prio_omplannen"
           ? null
           : opts && "provincie" in opts
             ? opts.provincie || null
@@ -530,6 +619,7 @@ export function BelPanel({
       };
       if (gen !== claimGenRef.current) return; // verouderde response
       if (!res.ok) {
+        if (currentIdRef.current && !opts?.forceNew) return;
         setCurrentId(null);
         setClaimedLead(null);
         setClaimError(data.error || "Claimen mislukt");
@@ -557,22 +647,75 @@ export function BelPanel({
         return;
       }
       if (lead) {
+        const held = currentIdRef.current;
+        if (held && held !== lead.id && !opts?.forceNew) {
+          return;
+        }
         setClaimedLead(lead);
         setCurrentId(lead.id);
         onLeadUpdated(lead.id, lead);
-      } else {
+      } else if (!currentIdRef.current || opts?.forceNew) {
         setClaimedLead(null);
         setCurrentId(null);
       }
     } catch {
       if (gen !== claimGenRef.current) return;
       setClaimError("Claimen mislukt");
+      if (currentIdRef.current && !opts?.forceNew) return;
       setCurrentId(null);
       setClaimedLead(null);
     } finally {
       if (gen === claimGenRef.current) setClaiming(false);
     }
   }
+
+  const claimNextRef = useRef(claimNext);
+  claimNextRef.current = claimNext;
+
+  /** Live claims + nieuwe leads, zonder pagina-refresh. */
+  useEffect(() => {
+    let channel: ReturnType<
+      ReturnType<typeof getSupabaseBrowser>["channel"]
+    > | null = null;
+    try {
+      const sb = getSupabaseBrowser();
+      channel = sb
+        .channel("bel-leads-live")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "leads" },
+          (payload) => {
+            const row = (payload.new || payload.old) as Partial<Lead> | null;
+            if (!row?.id) return;
+            if (payload.eventType === "DELETE") return;
+            const next = payload.new as Lead;
+            onLeadUpdatedRef.current(next.id, next);
+
+            const mine = callerIdRef.current;
+            const openId = currentIdRef.current;
+            if (openId && next.id === openId) {
+              const other =
+                typeof next.bel_claimed_by === "string" &&
+                next.bel_claimed_by.length > 0 &&
+                mine &&
+                next.bel_claimed_by !== mine &&
+                isBelClaimActive(next.bel_claimed_at);
+              if (other) {
+                setClaimError(
+                  "Deze lead is overgenomen door iemand anders. Klik Volgende voor een nieuwe lead."
+                );
+              }
+            }
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.warn("[BelPanel] realtime niet beschikbaar:", e);
+    }
+    return () => {
+      if (channel) void getSupabaseBrowser().removeChannel(channel);
+    };
+  }, []);
 
   async function startNormaleBak() {
     bakFilterRef.current = { mode: "normaal", provincie: null };
@@ -617,6 +760,21 @@ export function BelPanel({
     });
   }
 
+  async function startPrioOmplannenBak() {
+    bakFilterRef.current = { mode: "prio_omplannen", provincie: null };
+    setBakMode("prio_omplannen");
+    setSelectedProvincie(null);
+    setClaimError(null);
+    setCurrentId(null);
+    setClaimedLead(null);
+    await releaseClaim();
+    await claimNext(null, {
+      provincie: null,
+      forceNew: true,
+      bak: "prio_omplannen",
+    });
+  }
+
   function resetBakKeuze() {
     claimGenRef.current += 1;
     bakFilterRef.current = { mode: null, provincie: null };
@@ -643,19 +801,48 @@ export function BelPanel({
     };
   }, []);
 
-  // Heartbeat: claim verlengen zolang lead open staat
+  // Heartbeat: claim verlengen. Bij falen dezelfde lead houden (niet
+  // automatisch de volgende pakken — dat verwisselde het scherm).
   useEffect(() => {
     if (!currentId) return;
-    const tick = () => {
-      void fetch("/api/bel/heartbeat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: currentId }),
-      });
+    const leadId = currentId;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/bel/heartbeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lead_id: leadId }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+        };
+        if (cancelled) return;
+        if (!res.ok || !data.ok) {
+          const retry = await fetch("/api/bel/heartbeat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lead_id: leadId }),
+          });
+          const retryData = (await retry.json().catch(() => ({}))) as {
+            ok?: boolean;
+          };
+          if (cancelled) return;
+          if (retry.ok && retryData.ok) return;
+          setClaimError(
+            "Claim kon niet verlengd worden. Blijf op deze lead of klik Volgende."
+          );
+        }
+      } catch {
+        /* volgende tick */
+      }
     };
-    tick();
-    const id = window.setInterval(tick, 2 * 60 * 1000);
-    return () => window.clearInterval(id);
+    void tick();
+    const id = window.setInterval(() => void tick(), 30 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [currentId]);
 
   useEffect(() => {
@@ -746,10 +933,7 @@ export function BelPanel({
       return next;
     });
     setNextMode(null);
-    void (async () => {
-      await releaseClaim(excludeId);
-      await claimNext(excludeId);
-    })();
+    void claimNext(excludeId, { forceNew: true });
   }
 
   /** Alle openstaande terugbels van de lead afronden (niet alleen de eerste). */
@@ -877,7 +1061,9 @@ export function BelPanel({
     setError(null);
     try {
       const herplan =
-        bakMode === "annuleringen" || isHerplanBelLead(current);
+        bakMode === "annuleringen" ||
+        bakMode === "prio_omplannen" ||
+        isHerplanBelLead(current);
       const maxPogingen = maxBelpogingenVoor({ herplan });
       const gc =
         status === "geen_contact"
@@ -994,6 +1180,10 @@ export function BelPanel({
       }
 
       const herplanAnnulering = bakMode === "annuleringen";
+      const prioHerplan = bakMode === "prio_omplannen";
+      const prioBron = prioHerplan
+        ? latestPrioOmplannenAfspraak(afspraken, current.id)
+        : null;
       const res = await fetch("/api/afspraken", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1006,7 +1196,8 @@ export function BelPanel({
           partner_aanwezig: partnerAanwezig,
           andere_offertes_gehad: andereOffertes,
           /** Herplan na klant-annulering: geen extra netto/commissie-booking */
-          herplan: herplanAnnulering || undefined,
+          herplan: herplanAnnulering || prioHerplan || undefined,
+          herpland_van_afspraak_id: prioBron?.id || undefined,
         }),
       });
       const data = (await res.json()) as {
@@ -1128,7 +1319,7 @@ export function BelPanel({
             Welke belbak?
           </p>
           <p className="mt-2 text-sm text-muted">
-            Normale wachtrij, provincie, of afzeggingen opnieuw inplannen.
+            Normale wachtrij, provincie, klant-annuleringen of PRIO omplannen.
           </p>
         </div>
         {eigenBellerId ? (
@@ -1172,7 +1363,7 @@ export function BelPanel({
           <button
             type="button"
             onClick={() => void startAnnuleringenBak()}
-            className="rounded-xl border border-[#1565C0]/35 bg-[#E3F2FD]/40 px-5 py-5 text-left transition hover:border-[#1565C0]/60 hover:bg-[#E3F2FD] sm:col-span-2"
+            className="rounded-xl border border-[#1565C0]/35 bg-[#E3F2FD]/40 px-5 py-5 text-left transition hover:border-[#1565C0]/60 hover:bg-[#E3F2FD]"
           >
             <p className="font-display text-base font-semibold text-ink">
               Annuleringen
@@ -1185,6 +1376,24 @@ export function BelPanel({
               {annuleringQueue.length === 0
                 ? "Geen openstaande annuleringen"
                 : `${annuleringQueue.length} te herplannen`}
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => void startPrioOmplannenBak()}
+            className="rounded-xl border border-[#C45A12]/40 bg-[#FFF6EE] px-5 py-5 text-left transition hover:border-[#C45A12]/70 hover:bg-[#FFECDD]"
+          >
+            <p className="font-display text-base font-semibold text-ink">
+              PRIO omplannen
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              Backoffice-annulering met code PRIO. Apart van klant-annuleringen.
+              Nieuwe booking telt niet mee voor KPI.
+            </p>
+            <p className="mt-3 text-xs font-semibold text-[#C45A12]">
+              {prioOmplannenQueue.length === 0
+                ? "Geen PRIO-leads"
+                : `${prioOmplannenQueue.length} te omplannen`}
             </p>
           </button>
         </div>
@@ -1309,20 +1518,27 @@ export function BelPanel({
   if (
     !current &&
     queue.length === 0 &&
-    (bakMode === "annuleringen" || terugbelDue.length === 0)
+    (bakMode === "annuleringen" ||
+      bakMode === "prio_omplannen" ||
+      terugbelDue.length === 0)
   ) {
     const isAnnuleringen = bakMode === "annuleringen";
+    const isPrioBak = bakMode === "prio_omplannen";
     return (
       <div className="px-6 py-14 text-center">
         <p className="font-display text-lg font-semibold text-ink">
-          {isAnnuleringen
+          {isPrioBak
+            ? "Geen PRIO-leads meer"
+            : isAnnuleringen
             ? "Geen annuleringen meer af te boeken"
             : bakMode === "provincie" && selectedProvincie
               ? `Geen leads in ${selectedProvincie}`
               : "Bellijst is leeg"}
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          {isAnnuleringen
+          {isPrioBak
+            ? "Alle PRIO-omplannen leads zijn opnieuw ingepland of afgehandeld."
+            : isAnnuleringen
             ? "Alle afzeggingen zijn afgehandeld of opnieuw ingepland."
             : bakMode === "provincie" && selectedProvincie
               ? "In deze provincie staan nu geen belbare leads. Kies een andere provincie of de normale belbak."
@@ -1388,7 +1604,9 @@ export function BelPanel({
               : "Geen leads in de bellijst"}
           </p>
           <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-            {bakMode === "annuleringen" && queue.length === 0
+            {bakMode === "prio_omplannen" && queue.length === 0
+              ? "Geen PRIO-leads meer."
+              : bakMode === "annuleringen" && queue.length === 0
               ? "Geen annuleringen meer af te boeken."
               : queue.length > 0
                 ? "Andere bellers hebben de openstaande leads nu vast. Klik op opnieuw om de volgende vrije te pakken."
@@ -1419,8 +1637,10 @@ export function BelPanel({
     );
   }
 
+  const isPrioBak = bakMode === "prio_omplannen";
+  const isAnnuleringenBak = bakMode === "annuleringen";
   const herplanHuidige =
-    bakMode === "annuleringen" || isHerplanBelLead(current);
+    isAnnuleringenBak || isPrioBak || isHerplanBelLead(current);
   const maxPogingenHuidige = maxBelpogingenVoor({ herplan: herplanHuidige });
   const pogingen = belpogingenOf(current);
   const pogingenVandaag = belpogingenVandaagOf(current);
@@ -1428,7 +1648,9 @@ export function BelPanel({
   const phone = current.telefoon!.trim();
   const position = queue.findIndex((l) => l.id === current.id) + 1;
   const cancelledVisit =
-    bakMode === "annuleringen"
+    isPrioBak
+      ? latestPrioOmplannenAfspraak(afspraken, current.id)
+      : isAnnuleringenBak
       ? latestKlantAnnuleringAfspraak(afspraken, current.id)
       : isHerplanBelLead(current)
         ? latestPhysicalAfspraak(afspraken, current.id)
@@ -1439,12 +1661,14 @@ export function BelPanel({
 
   return (
     <div>
-      {bakMode === "annuleringen" ? null : terugbelBanner}
+      {isAnnuleringenBak || isPrioBak ? null : terugbelBanner}
 
       <div
         className={[
           "flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 sm:px-5",
-          bakMode === "annuleringen"
+          isPrioBak
+            ? "border-[#C45A12]/25 bg-[#FFF6EE]"
+            : isAnnuleringenBak
             ? "border-[#1565C0]/25 bg-[#E3F2FD]/50"
             : "border-line bg-[#F7FBF8]",
         ].join(" ")}
@@ -1455,7 +1679,9 @@ export function BelPanel({
           ) : null}
           <p className="text-xs text-muted">
           <span className="font-semibold text-ink">
-            {bakMode === "annuleringen"
+            {isPrioBak
+              ? "PRIO omplannen"
+              : isAnnuleringenBak
               ? "Annuleringen"
               : bakMode === "provincie" && selectedProvincie
                 ? `Provincie belbak · ${selectedProvincie}`
@@ -1478,18 +1704,46 @@ export function BelPanel({
       <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
       <section className="border-b border-line p-4 sm:p-6 lg:border-b-0 lg:border-r">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          {bakMode === "annuleringen"
+          {isPrioBak
+            ? `${position > 0 ? position : "—"} van ${queue.length} PRIO`
+            : isAnnuleringenBak
             ? `${position > 0 ? position : "—"} van ${queue.length} annuleringen`
-            : `${position > 0 ? position : "—"} van ${queue.length} in de bellijst`}
+            : `${queue.length} vrij in de wachtrij`}
           <span className="ml-2 font-normal normal-case tracking-normal">
-            {bakMode === "annuleringen"
+            {isPrioBak
+              ? "· backoffice PRIO (niet in KPI)"
+              : isAnnuleringenBak
               ? "· op jouw naam (klant geannuleerd)"
-              : "· van jou (andere bellers krijgen de volgende)"}
+              : "· deze lead is van jou"}
           </span>
         </p>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <p className="inline-flex items-center rounded-full border border-green-dark/25 bg-green-soft px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-green-dark">
+            Geclaimd door jou — andere bellers zien deze niet
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setNextMode("status");
+              setError(null);
+            }}
+            className="inline-flex items-center rounded-full bg-orange px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white hover:bg-[#e0651c] disabled:opacity-60"
+          >
+            {isPrioBak
+              ? "Volgende PRIO"
+              : isAnnuleringenBak
+              ? "Volgende annulering"
+              : "Volgende lead"}
+          </button>
+        </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {bakMode === "annuleringen" || isHerplanBelLead(current) ? (
+          {isPrioBak ? (
+            <span className="rounded-full border border-[#C45A12]/30 bg-[#FFF0E6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#C45A12]">
+              PRIO omplannen
+            </span>
+          ) : isAnnuleringenBak || isHerplanBelLead(current) ? (
             <span className="rounded-full border border-[#1565C0]/30 bg-[#E3F2FD] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-[#0D47A1]">
               Annulering · herplannen
             </span>
@@ -1509,7 +1763,7 @@ export function BelPanel({
               Terugbellen
             </span>
           )}
-          {bakMode === "annuleringen" ? null : (
+          {isAnnuleringenBak || isPrioBak ? null : (
             <span className="rounded-full border border-line bg-wash px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-muted">
               Vandaag {pogingenVandaag}/{MAX_BELPOGINGEN_PER_DAG}
             </span>
@@ -1540,6 +1794,9 @@ export function BelPanel({
 
         <h2 className="mt-3 flex flex-wrap items-center gap-2 font-display text-2xl font-semibold text-ink sm:text-3xl">
           <span>{current.naam}</span>
+          <span className="rounded-md bg-green-dark px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
+            Jouw lead
+          </span>
           {isMailPositiefBelLead(current) ? (
             <span className="rounded-md bg-[#C45A12] px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
               Mail +
@@ -1717,15 +1974,19 @@ export function BelPanel({
               }}
               className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-14 sm:text-base"
             >
-              {bakMode === "annuleringen"
+              {isPrioBak
+                ? "Volgende PRIO"
+                : isAnnuleringenBak
                 ? "Volgende annulering"
-                : "Volgende"}
+                : "Volgende lead"}
             </button>
           ) : nextMode === "status" ? (
             <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
               <p className="text-sm font-semibold text-ink">Kies de status</p>
               <p className="text-xs text-muted">
-                {bakMode === "annuleringen"
+                {isPrioBak
+                  ? "Daarna komt de volgende PRIO-lead."
+                  : isAnnuleringenBak
                   ? "Daarna komt de volgende annulering."
                   : "Daarna komt de volgende lead in de bellijst."}
               </p>

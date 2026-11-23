@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/bel/claim-next
- * Body: { exclude_lead_id?: string, provincie?: string, bak?: "normaal"|"provincie"|"annuleringen", force_new?: boolean }
+ * Body: { exclude_lead_id?: string, provincie?: string, bak?: "normaal"|"provincie"|"annuleringen"|"prio_omplannen", force_new?: boolean }
  * Eerste vrije lead in bel-volgorde → soft claim voor de ingelogde beller.
  * Annuleringen-bak: alleen klant-cancels die jij had ingepland.
  */
@@ -34,9 +34,11 @@ export async function POST(req: NextRequest) {
     const bak: BelBakMode =
       bakRaw === "annuleringen"
         ? "annuleringen"
-        : bakRaw === "provincie" || provincie
-          ? "provincie"
-          : "normaal";
+        : bakRaw === "prio_omplannen"
+          ? "prio_omplannen"
+          : bakRaw === "provincie" || provincie
+            ? "provincie"
+            : "normaal";
 
     const sb = getSupabaseAdmin();
     const result = await claimNextBelLead(sb, session.adviseurId, {

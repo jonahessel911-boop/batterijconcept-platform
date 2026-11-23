@@ -16,6 +16,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Item,
   ItemContent,
   ItemDescription,
@@ -48,6 +60,11 @@ import {
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { formatEuro } from "@/lib/format";
 import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
+import {
+  AANBETALING_AFSPRAAK_KEY,
+  serializeAanbetalingAfspraak,
+  type AanbetalingAfspraakSoort,
+} from "@/lib/aanbetaling-afspraak";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -120,9 +137,22 @@ export function ProjectKickoffChecklist({
   );
   const [checkingId, setCheckingId] = useState<KickoffItemId | null>(null);
   const [confirmId, setConfirmId] = useState<KickoffItemId | null>(null);
+  const [afspraakOpen, setAfspraakOpen] = useState(false);
+  const [afspraakSoort, setAfspraakSoort] =
+    useState<AanbetalingAfspraakSoort>("datum");
+  const [afspraakDatum, setAfspraakDatum] = useState("");
+  const [afspraakNotitie, setAfspraakNotitie] = useState("");
+  const [afspraakBusy, setAfspraakBusy] = useState(false);
   const [wpApplicable, setWpApplicable] = useState(false);
   const [wpSent, setWpSent] = useState(false);
   const [wpConfigured, setWpConfigured] = useState(true);
+  const [tcswissResult, setTcswissResult] = useState<{
+    lead: string | null;
+    externId: string | null;
+    duplicate: boolean;
+  } | null>(null);
+  const [tcswissLookup, setTcswissLookup] = useState<string | null>(null);
+  const [tcswissLookupBusy, setTcswissLookupBusy] = useState(false);
 
   const kickoffExtra: KickoffExtra = useMemo(
     () => ({ warmtepomp: wpApplicable, tcswissSent: wpSent }),
@@ -185,6 +215,79 @@ export function ProjectKickoffChecklist({
   const offerteId = off?.id || project.offerte_id || null;
   const draftAanbetaling = aanbetalingConcept(facturen);
   const wf = isWarmtefondsProject(project);
+
+  function openBetaalafspraak() {
+    setAfspraakSoort(wf ? "edwin_wf" : "datum");
+    setAfspraakDatum("");
+    setAfspraakNotitie("");
+    setAfspraakOpen(true);
+  }
+
+  async function saveBetaalafspraak() {
+    if (afspraakSoort === "datum" && !/^\d{4}-\d{2}-\d{2}$/.test(afspraakDatum)) {
+      setActionError("Kies de datum waarop de klant betaalt.");
+      return;
+    }
+    setAfspraakBusy(true);
+    setActionError(null);
+    try {
+      const nextChecks = {
+        ...(project.materiaal_checks || {}),
+        [AANBETALING_AFSPRAAK_KEY]: serializeAanbetalingAfspraak({
+          soort: afspraakSoort,
+          datum: afspraakSoort === "datum" ? afspraakDatum : null,
+          notitie: afspraakNotitie.trim() || null,
+          at: new Date().toISOString(),
+        }),
+      };
+      const res = await fetch(`/api/projecten/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ materiaal_checks: nextChecks }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Afspraak opslaan mislukt"
+        );
+      }
+      const updated = (data as { project?: Project }).project;
+      const base = updated || {
+        ...project,
+        materiaal_checks: nextChecks,
+      };
+
+      const fac =
+        draftAanbetaling ||
+        facturen.find(
+          (f) =>
+            !f.credit_van_factuur_id &&
+            isAanbetalingFactuurOmschrijving(f.omschrijving)
+        );
+      if (fac && afspraakSoort === "datum") {
+        await fetch(`/api/facturen/${fac.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ afgesproken_betaaldatum: afspraakDatum }),
+        }).catch(() => null);
+      }
+
+      const finalized = await finalizeKickoffIfReady(base, facturen);
+      if (!finalized && updated) onProjectUpdated?.(updated);
+      setAfspraakOpen(false);
+      setActionHint(
+        afspraakSoort === "edwin_wf"
+          ? "Betaalafspraak: klant betaalt bij Edwin als Warmtefonds rond is. Geen Acties-opvolging."
+          : `Betaalafspraak gezet op ${afspraakDatum}. Geen Acties-opvolging.`
+      );
+    } catch (e) {
+      setActionError(
+        e instanceof Error ? e.message : "Afspraak opslaan mislukt"
+      );
+    } finally {
+      setAfspraakBusy(false);
+    }
+  }
 
   async function afvinkEdwinIntake() {
     setAfvinkBusy(true);
@@ -357,6 +460,7 @@ export function ProjectKickoffChecklist({
       alreadySent?: boolean;
       duplicate?: boolean;
       lead?: string | null;
+      externId?: string | null;
       materiaal_checks?: Record<string, boolean | string>;
     };
     if (!res.ok) {
@@ -368,9 +472,15 @@ export function ProjectKickoffChecklist({
       ...project,
       materiaal_checks: data.materiaal_checks || project.materiaal_checks,
     };
-    const leadLabel = data.lead ? ` · ${data.lead}` : "";
+    const result = {
+      lead: data.lead || null,
+      externId: data.externId || null,
+      duplicate: Boolean(data.alreadySent || data.duplicate),
+    };
+    setTcswissResult(result);
+    const leadLabel = result.lead ? ` · ${result.lead}` : "";
     const notice =
-      data.alreadySent || data.duplicate
+      result.duplicate
         ? `Al bekend bij TC Swiss${leadLabel}`
         : `Doorgestuurd naar TC Swiss${leadLabel}`;
     onProjectUpdated?.(nextProject, notice);
@@ -381,6 +491,73 @@ export function ProjectKickoffChecklist({
     setActionHint(notice);
     if (finalized) {
       /* onProjectUpdated al via finalize */
+    }
+  }
+
+  async function haalTcSwissOp() {
+    setTcswissLookupBusy(true);
+    setActionError(null);
+    try {
+      const res = await fetch(
+        `/api/projecten/${project.id}/tcswiss-intake?refresh=1`
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        tcswissLead?: string | null;
+        externId?: string | null;
+        lookup?: {
+          ok?: boolean;
+          error?: string;
+          leads?: Record<string, unknown>[];
+        } | null;
+      };
+      if (!res.ok) throw new Error(data.error || "Ophalen mislukt");
+      const first = data.lookup?.leads?.[0];
+      if (data.lookup?.error) {
+        throw new Error(data.lookup.error);
+      }
+      if (!first) {
+        setTcswissLookup(
+          [
+            data.tcswissLead && `Lead: ${data.tcswissLead}`,
+            data.externId && `extern_id: ${data.externId}`,
+            "Geen live record (leads_zoeken gaf niets terug — rol afsprakenplanner nodig).",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        );
+        return;
+      }
+      const status =
+        typeof first.status === "string"
+          ? first.status
+          : typeof first.uitkomst === "string"
+            ? first.uitkomst
+            : first.status != null
+              ? JSON.stringify(first.status)
+              : null;
+      const leadId =
+        (typeof first.lead === "string" && first.lead) ||
+        data.tcswissLead ||
+        null;
+      setTcswissLookup(
+        [
+          leadId && `Lead: ${leadId}`,
+          (typeof first.extern_id === "string" && first.extern_id) ||
+            data.externId
+            ? `extern_id: ${typeof first.extern_id === "string" ? first.extern_id : data.externId}`
+            : null,
+          status && `Status: ${status}`,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      );
+    } catch (e) {
+      setActionError(
+        e instanceof Error ? e.message : "Ophalen bij TC Swiss mislukt"
+      );
+    } finally {
+      setTcswissLookupBusy(false);
     }
   }
 
@@ -559,12 +736,15 @@ export function ProjectKickoffChecklist({
   function vraagBevestiging(id: KickoffItemId) {
     const item = items.find((i) => i.id === id);
     if (!item || item.done || item.blocked || optimisticDone.has(id)) return;
+    setTcswissResult(null);
     setConfirmId(id);
   }
 
-  async function checkItem(id: KickoffItemId) {
+  async function checkItem(id: KickoffItemId): Promise<boolean> {
     const item = items.find((i) => i.id === id);
-    if (!item || item.done || item.blocked || optimisticDone.has(id)) return;
+    if (!item || item.done || item.blocked || optimisticDone.has(id)) {
+      return false;
+    }
     setOptimisticDone((prev) => new Set(prev).add(id));
     setCheckingId(id);
     setActionError(null);
@@ -579,12 +759,14 @@ export function ProjectKickoffChecklist({
       } else if (id === "tcswiss") {
         await stuurNaarTcSwiss();
       }
+      return true;
     } catch {
       setOptimisticDone((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
       });
+      return false;
     } finally {
       setCheckingId(null);
     }
@@ -596,32 +778,194 @@ export function ProjectKickoffChecklist({
     <AlertDialog
       open={confirmId != null}
       onOpenChange={(open) => {
+        if (checkingId) return;
         if (!open) setConfirmId(null);
       }}
     >
       <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {confirmCopy?.title ?? "Weet je zeker?"}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {confirmCopy?.description}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Nee</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              const id = confirmId;
-              setConfirmId(null);
-              if (id) void checkItem(id);
-            }}
-          >
-            Ja, doe het
-          </AlertDialogAction>
-        </AlertDialogFooter>
+        {tcswissResult ? (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {tcswissResult.duplicate
+                  ? "Al bekend bij TC Swiss"
+                  : "Doorgestuurd naar TC Swiss"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Dit is hun antwoord. Met het leadnummer kun je later dezelfde
+                klant terughalen.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-1.5 rounded-lg border border-line bg-wash/60 px-3 py-2 text-sm">
+              <p>
+                <span className="text-muted">TC Swiss-lead</span>
+                <span className="ml-2 font-mono font-semibold text-ink">
+                  {tcswissResult.lead || "— niet in response —"}
+                </span>
+              </p>
+              <p>
+                <span className="text-muted">extern_id (onze lead)</span>
+                <span className="ml-2 font-mono text-ink">
+                  {tcswissResult.externId || "—"}
+                </span>
+              </p>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogAction
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setConfirmId(null);
+                }}
+              >
+                Sluiten
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </>
+        ) : (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {confirmCopy?.title ?? "Weet je zeker?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {confirmCopy?.description}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {actionError ? (
+              <p className="text-sm text-destructive">{actionError}</p>
+            ) : null}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={checkingId != null}>
+                Nee
+              </AlertDialogCancel>
+              <AlertDialogAction
+                type="button"
+                disabled={checkingId != null}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const id = confirmId;
+                  if (!id) return;
+                  void (async () => {
+                    const ok = await checkItem(id);
+                    if (ok && id !== "tcswiss") setConfirmId(null);
+                  })();
+                }}
+              >
+                {checkingId ? "Bezig…" : "Ja, doe het"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </>
+        )}
       </AlertDialogContent>
     </AlertDialog>
+  );
+
+  const afspraakDialog = (
+    <Dialog open={afspraakOpen} onOpenChange={setAfspraakOpen}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {wf ? "BTW-factuur — betaalafspraak" : "Aanbetaling — betaalafspraak"}
+          </DialogTitle>
+          <DialogDescription>
+            Leg vast hoe de klant later betaalt. Opstarten telt deze stap af;
+            er komt geen Acties-kaart (geen nabellen, geen herinnering).
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <RadioGroup
+            value={afspraakSoort}
+            onValueChange={(v) => {
+              const value = Array.isArray(v) ? v[0] : v;
+              if (value === "edwin_wf" || value === "datum") {
+                setAfspraakSoort(value);
+              }
+            }}
+          >
+            {wf ? (
+              <Label
+                className={
+                  afspraakSoort === "edwin_wf"
+                    ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-3 font-normal"
+                    : "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal"
+                }
+              >
+                <RadioGroupItem value="edwin_wf" className="mt-0.5" />
+                <span>
+                  <span className="block text-sm font-medium">
+                    Betaalt bij Edwin
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Als het Warmtefonds geregeld is. Edwin int; wij wachten.
+                  </span>
+                </span>
+              </Label>
+            ) : null}
+            <Label
+              className={
+                afspraakSoort === "datum"
+                  ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-3 font-normal"
+                  : "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal"
+              }
+            >
+              <RadioGroupItem value="datum" className="mt-0.5" />
+              <span>
+                <span className="block text-sm font-medium">
+                  Betaalt op een datum
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Bijv. salaris. Geen opvolging in Acties op die dag.
+                </span>
+              </span>
+            </Label>
+          </RadioGroup>
+          {afspraakSoort === "datum" ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="btw-afspraak-datum">Betaaldatum</Label>
+              <Input
+                id="btw-afspraak-datum"
+                type="date"
+                value={afspraakDatum}
+                onChange={(e) => setAfspraakDatum(e.target.value)}
+              />
+            </div>
+          ) : null}
+          <div className="space-y-1.5">
+            <Label htmlFor="btw-afspraak-notitie">Toelichting (optioneel)</Label>
+            <Textarea
+              id="btw-afspraak-notitie"
+              rows={2}
+              placeholder={
+                afspraakSoort === "edwin_wf"
+                  ? "Bijv. betaalt bij Edwin als WF rond is"
+                  : "Bijv. salaris op de 25e"
+              }
+              value={afspraakNotitie}
+              onChange={(e) => setAfspraakNotitie(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setAfspraakOpen(false)}
+            disabled={afspraakBusy}
+          >
+            Annuleren
+          </Button>
+          <Button
+            type="button"
+            disabled={afspraakBusy}
+            onClick={() => void saveBetaalafspraak()}
+          >
+            {afspraakBusy ? "Bezig…" : "Vastleggen"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 
   if (compact) {
@@ -673,9 +1017,20 @@ export function ProjectKickoffChecklist({
                 <ItemContent>
                   <ItemTitle className="text-[15px]">{item.label}</ItemTitle>
                   {done ? (
-                    <ItemDescription className="flex items-center gap-1.5 font-medium text-primary">
-                      <Check className="size-3.5" aria-hidden />
-                      Actie voltooid
+                    <ItemDescription className="flex flex-col gap-0.5 font-medium text-primary">
+                      <span className="flex items-center gap-1.5">
+                        <Check className="size-3.5" aria-hidden />
+                        {item.id === "tcswiss" ||
+                        (item.id === "aanbetaling" &&
+                          item.detail !== "Taak afgevinkt")
+                          ? item.detail
+                          : "Actie voltooid"}
+                      </span>
+                      {item.id === "tcswiss" && tcswissLookup ? (
+                        <span className="font-normal text-[12px] text-ink">
+                          {tcswissLookup}
+                        </span>
+                      ) : null}
                     </ItemDescription>
                   ) : (
                     <ItemDescription className="text-[13px]">
@@ -686,28 +1041,54 @@ export function ProjectKickoffChecklist({
                   )}
                 </ItemContent>
                 {done ? (
-                  <span className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check className="size-4" strokeWidth={2.5} aria-hidden />
-                  </span>
+                  item.id === "tcswiss" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={tcswissLookupBusy}
+                      onClick={() => void haalTcSwissOp()}
+                    >
+                      {tcswissLookupBusy ? "Ophalen…" : "Status ophalen"}
+                    </Button>
+                  ) : (
+                    <span className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <Check className="size-4" strokeWidth={2.5} aria-hidden />
+                    </span>
+                  )
                 ) : !item.blocked ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => vraagBevestiging(item.id)}
-                  >
-                    {busy
-                      ? "…"
-                      : item.id === "tcswiss"
-                        ? "Stuur naar TC Swiss"
-                        : "Check"}
-                  </Button>
+                  <div className="flex shrink-0 flex-col gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => vraagBevestiging(item.id)}
+                    >
+                      {busy
+                        ? "…"
+                        : item.id === "tcswiss"
+                          ? "Stuur naar TC Swiss"
+                          : "Check"}
+                    </Button>
+                    {item.id === "aanbetaling" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={afspraakBusy}
+                        onClick={openBetaalafspraak}
+                      >
+                        Afspraak
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </Item>
             );
           })}
         </ItemGroup>
         {confirmDialog}
+        {afspraakDialog}
       </div>
     );
   }
@@ -778,24 +1159,42 @@ export function ProjectKickoffChecklist({
                   {item.blockedReason}
                 </p>
               ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={checkingId === item.id}
-                  onClick={() => vraagBevestiging(item.id)}
-                >
-                  {checkingId === item.id
-                    ? "…"
-                    : item.id === "tcswiss"
-                      ? "Stuur naar TC Swiss"
-                      : "Check"}
-                </Button>
+                <div className="flex shrink-0 flex-col gap-1.5 sm:items-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={checkingId === item.id}
+                    onClick={() => vraagBevestiging(item.id)}
+                  >
+                    {checkingId === item.id
+                      ? "…"
+                      : item.id === "tcswiss"
+                        ? "Stuur naar TC Swiss"
+                        : "Check"}
+                  </Button>
+                  {item.id === "aanbetaling" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={afspraakBusy}
+                      onClick={openBetaalafspraak}
+                    >
+                      Betaalafspraak
+                    </Button>
+                  ) : null}
+                </div>
               )}
             </li>
           ))}
         </ul>
       ) : null}
 
+      {tcswissLookup ? (
+        <p className="mt-3 border border-primary/25 bg-primary/5 px-3 py-2 text-[12px] text-ink">
+          {tcswissLookup}
+        </p>
+      ) : null}
       {done.length > 0 ? (
         <ul className="mt-3 space-y-1">
           {done.map((item) => (
@@ -820,11 +1219,24 @@ export function ProjectKickoffChecklist({
               </span>
               <span className="font-medium">{item.label}</span>
               <span className="text-muted">· {item.detail}</span>
+              {item.id === "tcswiss" ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="ml-auto"
+                  disabled={tcswissLookupBusy}
+                  onClick={() => void haalTcSwissOp()}
+                >
+                  {tcswissLookupBusy ? "Ophalen…" : "Status ophalen"}
+                </Button>
+              ) : null}
             </li>
           ))}
         </ul>
       ) : null}
       {confirmDialog}
+      {afspraakDialog}
     </section>
   );
 }

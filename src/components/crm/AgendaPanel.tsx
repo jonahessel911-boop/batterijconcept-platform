@@ -36,7 +36,11 @@ import {
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
-import { isAgendaAdviseur, magNietGelopenAdviseur } from "@/lib/rollen";
+import {
+  isAgendaAdviseur,
+  magNietGelopenAdviseur,
+  magPrioOmplannen,
+} from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
@@ -1798,7 +1802,57 @@ export function AfspraakDetail({
   }
 
   const magNietGelopen = magNietGelopenAdviseur(sessionRol);
+  const magPrio = magPrioOmplannen(sessionRol);
   const alNietGelopen = current.niet_gelopen_door_adviseur === true;
+  const magPrioKnop =
+    magPrio &&
+    mode === "view" &&
+    !cancelled &&
+    (current.status === "gepland" ||
+      current.status === "bevestigd" ||
+      current.status === "verzet") &&
+    afspraakBlokkeertAgenda(current.soort);
+
+  async function prioOmplannen() {
+    if (!magPrioKnop) return;
+    const ok = window.confirm(
+      "PRIO omplannen?\n\nDe afspraak wordt geannuleerd, de klant krijgt een annuleringsmail, en de lead gaat in de aparte PRIO-omplannen belbak. Telt niet mee voor KPI of bel-pay."
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, action: "prio_omplannen" }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        afspraak?: Afspraak;
+        mail_sent?: boolean;
+      };
+      if (!res.ok) throw new Error(data.error || "PRIO omplannen mislukt");
+      const next = data.afspraak
+        ? { ...current, ...data.afspraak }
+        : {
+            ...current,
+            status: "geannuleerd" as const,
+            annulering_code: "prio_omplannen",
+          };
+      setCurrent(next);
+      onUpdated(next);
+      setOkMsg(
+        data.mail_sent
+          ? "Afspraak geannuleerd. Klant heeft een mail gekregen. Lead staat in de PRIO-bak."
+          : "Afspraak geannuleerd (geen klantmail verstuurd — geen e-mailadres?). Lead staat in de PRIO-bak."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function markNietGelopenDoorAdviseur() {
     if (cancelled || alNietGelopen) return;
@@ -1922,6 +1976,40 @@ export function AfspraakDetail({
                   </button>
                 </>
               )}
+              {magPrioKnop ? (
+                <>
+                  <p className="mt-5 text-sm text-muted">
+                    Annuleer officieel, mail de klant, en zet de lead in de
+                    aparte PRIO-bak (niet bij gewone annuleringen).
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void prioOmplannen()}
+                    className="mt-3 min-h-11 w-full bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-60"
+                  >
+                    PRIO omplannen
+                  </button>
+                </>
+              ) : null}
+            </section>
+          ) : magPrioKnop ? (
+            <section className="rounded-2xl border border-[#C45A12]/35 bg-[#FFF6EE] p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C45A12]">
+                Backoffice
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Annuleer officieel, mail de klant, en zet de lead in de aparte
+                PRIO-bak (niet bij gewone annuleringen).
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void prioOmplannen()}
+                className="mt-4 min-h-11 w-full bg-[#C45A12] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#A84A0E] disabled:opacity-60"
+              >
+                PRIO omplannen
+              </button>
             </section>
           ) : null}
 

@@ -39,6 +39,8 @@ export type OpsCommissieAfspraak = {
   status: string | null;
   soort: string | null;
   ingepland_door_id?: string | null;
+  herpland_van_afspraak_id?: string | null;
+  annulering_code?: string | null;
 };
 
 export type OpsCommissieAdviseur = {
@@ -66,7 +68,11 @@ function round2(n: number): number {
 }
 
 function isNieuwHuisbezoek(a: OpsCommissieAfspraak): boolean {
-  return (a.soort || "").trim() === "nieuw" && a.status !== "geannuleerd";
+  if ((a.soort || "").trim() !== "nieuw" || a.status === "geannuleerd") {
+    return false;
+  }
+  if ((a.herpland_van_afspraak_id || "").trim()) return false;
+  return true;
 }
 
 /** Eerste actieve nieuw-huisbezoek per lead (op created_at). */

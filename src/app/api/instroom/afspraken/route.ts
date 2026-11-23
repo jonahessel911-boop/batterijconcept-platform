@@ -13,6 +13,7 @@ import { sollicitatieGesprekBevestigingEmail } from "@/lib/email/templates";
 import { RECRUITMENT_GESPREK_LOCATIE } from "@/lib/sollicitatie";
 import type { SollicitatieAfspraakSoort } from "@/types/database";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
+import { sollicitatieContactKeys } from "@/lib/sollicitatie-bel";
 
 export const runtime = "nodejs";
 
@@ -65,18 +66,28 @@ export async function GET(req: NextRequest) {
     const sollicitatieId = pickStr(sp.get("sollicitatie_id"));
 
     const sb = getSupabaseAdmin();
-    let q = sb
-      .from("sollicitatie_afspraken")
-      .select(
-        "*, sollicitaties(id, naam, email, telefoon, functie, status)"
-      )
-      .order("start_at", { ascending: true });
+    const selectWithInterviewer =
+      "*, sollicitaties(id, naam, email, telefoon, functie, status), interviewer:adviseurs!interviewer_id(id, naam, email)";
+    const selectPlain =
+      "*, sollicitaties(id, naam, email, telefoon, functie, status)";
 
-    if (sollicitatieId) q = q.eq("sollicitatie_id", sollicitatieId);
-    if (from) q = q.gte("start_at", new Date(from).toISOString());
-    if (to) q = q.lte("start_at", new Date(to).toISOString());
+    const run = (select: string) => {
+      let q = sb
+        .from("sollicitatie_afspraken")
+        .select(select)
+        .order("start_at", { ascending: true });
+      if (sollicitatieId) q = q.eq("sollicitatie_id", sollicitatieId);
+      if (from) q = q.gte("start_at", new Date(from).toISOString());
+      if (to) q = q.lte("start_at", new Date(to).toISOString());
+      return q;
+    };
 
-    const { data, error } = await q;
+    let { data, error } = await run(selectWithInterviewer);
+    if (error) {
+      const retry = await run(selectPlain);
+      data = retry.data;
+      error = retry.error;
+    }
     if (error) {
       if (error.code === "42P01") {
         return NextResponse.json(
@@ -90,7 +101,21 @@ export async function GET(req: NextRequest) {
       throw error;
     }
 
-    return NextResponse.json({ afspraken: data || [] });
+    const { data: leadRows } = await sb
+      .from("leads")
+      .select("telefoon, email");
+    const leadContactKeys = [
+      ...new Set(
+        ((leadRows || []) as Array<{ telefoon?: string | null; email?: string | null }>).flatMap(
+          (row) => sollicitatieContactKeys(row)
+        )
+      ),
+    ];
+
+    return NextResponse.json({
+      afspraken: data || [],
+      leadContactKeys,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: errMessage(e, "Agenda laden mislukt") },

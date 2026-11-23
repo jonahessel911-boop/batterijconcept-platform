@@ -317,9 +317,8 @@ export function InstroomPanel() {
                 {(selected.sollicitatie_bestanden || []).map((file) => (
                   <li key={file.id} className="flex items-center justify-between gap-3 py-2">
                     <a
-                      href={file.url || "#"}
-                      target="_blank"
-                      rel="noreferrer"
+                      href={`/api/instroom/${selected.id}/files/${file.id}`}
+                      download={file.bestandsnaam || "cv.pdf"}
                       className="truncate text-sm text-green-dark hover:underline"
                     >
                       {file.bestandsnaam || "Bestand"}

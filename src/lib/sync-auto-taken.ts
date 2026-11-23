@@ -27,6 +27,8 @@ import type { Project } from "@/types/database";
 import { REFERRAL_TAK_AUTO_KEY } from "@/lib/sales-referral-taak";
 import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
 import { OPLEVERING_AFTER_SALE_TAK_AUTO_KEY } from "@/lib/project-taken";
+import { getDefaultBackofficeMedewerkerId } from "@/lib/admin-adviseur";
+import { parseAanbetalingAfspraak } from "@/lib/aanbetaling-afspraak";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
@@ -41,6 +43,8 @@ const CREDIT_ELIGIBLE_STATUSES = [
 
 type ProjectSchouwFields = {
   status: string;
+  verantwoordelijke_id?: string | null;
+  materiaal_checks?: Record<string, unknown> | null;
   betaalwijze?: string | null;
   financiering_status?: string | null;
   warmtefonds_afspraak_at?: string | null;
@@ -80,6 +84,29 @@ type ProjectSchouwFields = {
 function leadStatusOf(project: ProjectSchouwFields): string | null {
   const l = Array.isArray(project.leads) ? project.leads[0] : project.leads;
   return l?.status ?? null;
+}
+
+let defaultBoOwnerPromise: Promise<string | null> | null = null;
+
+async function fallbackBackofficeOwnerId(
+  sb: SupabaseClient
+): Promise<string | null> {
+  if (!defaultBoOwnerPromise) {
+    defaultBoOwnerPromise = getDefaultBackofficeMedewerkerId(sb);
+  }
+  return defaultBoOwnerPromise;
+}
+
+async function verantwoordelijkeVoorAutoTaak(
+  sb: SupabaseClient,
+  project: ProjectSchouwFields,
+  saleAdviseurId: string | null,
+  isReferral: boolean
+): Promise<string | null> {
+  if (isReferral && saleAdviseurId) return saleAdviseurId;
+  const gekoppeld = project.verantwoordelijke_id?.trim() || null;
+  if (gekoppeld) return gekoppeld;
+  return fallbackBackofficeOwnerId(sb);
 }
 
 function betaalwijzeOf(project: ProjectSchouwFields): Betaalwijze {
@@ -156,13 +183,14 @@ export async function syncAutoTakenVoorProject(
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, monteur_beoordeling_sterren, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
+      "status, verantwoordelijke_id, materiaal_checks, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, monteur_beoordeling_sterren, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
     )
     .eq("id", projectId)
     .maybeSingle();
 
   const project = (projectRow as ProjectSchouwFields | null) || {
     status,
+    verantwoordelijke_id: null,
     betaalwijze: null,
     financiering_status: null,
     warmtefonds_afspraak_at: null,
@@ -292,6 +320,12 @@ export async function syncAutoTakenVoorProject(
     }
   }
 
+  if (parseAanbetalingAfspraak(project.materiaal_checks)) {
+    for (let i = defs.length - 1; i >= 0; i -= 1) {
+      if (defs[i]?.autoKey === "kickoff:aanbetaling") defs.splice(i, 1);
+    }
+  }
+
   const wantedKeys = new Set(defs.map((d) => d.autoKey));
 
   const saleAdviseurId =
@@ -370,71 +404,50 @@ export async function syncAutoTakenVoorProject(
     const dueAt =
       def.dueAt !== undefined ? def.dueAt : dueAtFromDays(def.dueInDays);
     const isReferral = def.autoKey === REFERRAL_TAK_AUTO_KEY;
+    const ownerId = await verantwoordelijkeVoorAutoTaak(
+      sb,
+      project,
+      saleAdviseurId,
+      isReferral
+    );
     if (cur) {
+      const patch: Record<string, unknown> = {};
       // Schouwweek-indicatie ≠ echte schouwdag: taak mag niet op done blijven.
       if (def.autoKey === SCHOUWDAG_INPLAN_KEY && cur.status === "done") {
-        await sb
-          .from("project_taken")
-          .update({
-            status: "todo",
-            due_at: dueAt,
-            titel: def.titel,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", cur.id);
+        patch.status = "todo";
+        patch.due_at = dueAt;
+        patch.titel = def.titel;
       } else if (
         def.autoKey === SCHOUWDAG_INPLAN_KEY &&
         cur.status !== "done" &&
         cur.due_at !== dueAt
       ) {
-        await sb
-          .from("project_taken")
-          .update({
-            due_at: dueAt,
-            titel: def.titel,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", cur.id);
+        patch.due_at = dueAt;
+        patch.titel = def.titel;
       } else if (
         def.autoKey.startsWith(OPLEVERING_AUTO_PREFIX) &&
         cur.status !== "done" &&
         dueAt &&
         cur.due_at !== dueAt
       ) {
-        // Corrigeer deadline naar eerstvolgende werkdag na installatie
-        await sb
-          .from("project_taken")
-          .update({
-            due_at: dueAt,
-            titel: def.titel,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", cur.id);
+        patch.due_at = dueAt;
+        patch.titel = def.titel;
       } else if (
         def.autoKey === CREDITFACTUUR_KEY &&
         cur.status !== "done"
       ) {
-        await sb
-          .from("project_taken")
-          .update({
-            titel: def.titel,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", cur.id);
-      } else if (
-        isReferral &&
+        patch.titel = def.titel;
+      }
+      if (
         cur.status !== "done" &&
-        saleAdviseurId &&
-        cur.verantwoordelijke_id !== saleAdviseurId
+        ownerId &&
+        cur.verantwoordelijke_id !== ownerId
       ) {
-        // Altijd bij de sale-adviseur — ook bestaande open taken corrigeren
-        await sb
-          .from("project_taken")
-          .update({
-            verantwoordelijke_id: saleAdviseurId,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", cur.id);
+        patch.verantwoordelijke_id = ownerId;
+      }
+      if (Object.keys(patch).length > 0) {
+        patch.updated_at = new Date().toISOString();
+        await sb.from("project_taken").update(patch).eq("id", cur.id);
       }
       continue;
     }
@@ -446,9 +459,7 @@ export async function syncAutoTakenVoorProject(
       categorie: "project",
       due_at: dueAt,
       auto_key: def.autoKey,
-      ...(isReferral && saleAdviseurId
-        ? { verantwoordelijke_id: saleAdviseurId }
-        : {}),
+      ...(ownerId ? { verantwoordelijke_id: ownerId } : {}),
     };
     const { error: insertErr } = await sb
       .from("project_taken")

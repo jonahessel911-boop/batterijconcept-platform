@@ -93,17 +93,24 @@ export function bestelDeadlineVoorInstallatie(
 }
 
 /**
- * Nog open inkoop: checklist heeft “te kopen”, of er is niks afgevinkt
- * terwijl de order nog niet op “materiaal besteld” staat.
+ * Nog open inkoop: een echte productregel staat op “te kopen”, of er is
+ * niks afgevinkt terwijl de order nog niet op “materiaal besteld” staat.
+ *
+ * `__`-keys (krabbel/bevestiging, notities, TC Swiss, leverdatum-fallback)
+ * zijn geen inkoopstatus — na Bestellen in Purchasing blijven die staan en
+ * zouden anders de Acties-kaart “Batterij bestellen” ten onrechte openhouden.
  */
 export function materiaalNogTeBestellen(project: Project): boolean {
   const op = toOperationalStatus(project.status);
   if (KLAAR_ZONDER_INKOOP.has(op)) return false;
 
   const checks = project.materiaal_checks || {};
-  const values = Object.values(checks);
-  if (values.length > 0) {
-    return values.some((v) => parseInkoopRegelStatus(v) === "te_kopen");
+  const statuses = Object.entries(checks)
+    .filter(([key]) => !key.startsWith("__"))
+    .map(([, value]) => parseInkoopRegelStatus(value))
+    .filter((status) => status !== "geannuleerd");
+  if (statuses.length > 0) {
+    return statuses.some((status) => status === "te_kopen");
   }
 
   return op !== "materiaal_besteld";

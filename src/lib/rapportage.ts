@@ -241,6 +241,8 @@ export type RapportageRaw = {
     soort?: string | null;
     /** Wie de afspraak inplantte (bel-credit / loon Tarik). */
     ingepland_door_id?: string | null;
+    herpland_van_afspraak_id?: string | null;
+    annulering_code?: string | null;
   }[];
   offertes: {
     id: string;

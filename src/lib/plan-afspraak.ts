@@ -59,6 +59,8 @@ export type PlanAfspraakInput = {
    * Commisssie telt nog steeds max. 1 actief nieuw per lead (geen extra).
    */
   herplan?: boolean;
+  /** PRIO omplannen: id van de geannuleerde afspraak. Telt niet als extra KPI. */
+  herpland_van_afspraak_id?: string | null;
   /**
    * Alleen voor vervolg_fysiek / vervolg_tel: 24u-herinneringsmail sturen.
    * Geen bevestiging/opwarm — alleen de reminder-cron.
@@ -213,6 +215,10 @@ export async function planAfspraak(
   if (ingeplandDoor) {
     insertRow.ingepland_door_id = ingeplandDoor;
   }
+  const herplandVan = (input.herpland_van_afspraak_id || "").trim() || null;
+  if (herplandVan) {
+    insertRow.herpland_van_afspraak_id = herplandVan;
+  }
 
   // Terugbel / telefonisch: mag over bezette of afgeblokte fysieke blokken
   // én in geblokkeerde weken. Huisbezoeken blijven strikte agenda-regels volgen.
@@ -353,6 +359,7 @@ export async function planAfspraak(
     "reminder_48u_verstuurd",
     "avond_sms_verstuurd",
     "avond_mail_verstuurd",
+    "herpland_van_afspraak_id",
   ] as const;
 
   function isMissingColumnError(err: {

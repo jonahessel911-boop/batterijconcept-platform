@@ -116,6 +116,10 @@ import { ProjectFinancieringPath } from "./ProjectFinancieringPath";
 import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { KlantContactMailModal } from "./KlantContactMailModal";
 import { HoldSalesRedenDialog } from "./HoldSalesRedenDialog";
+import {
+  AnnuleringBedenktijdModal,
+  type AnnuleringKeuze,
+} from "./AnnuleringBedenktijdModal";
 import { INKOOP_PRODUCT_IMAGES } from "@/lib/inkoop-product-images";
 import { apexProductUrl } from "@/lib/apex-product-url";
 import { addDays } from "date-fns";
@@ -780,6 +784,10 @@ function opvolgTaakToRow(
     (t.project_id
       ? projecten.find((p) => p.id === t.project_id)
       : undefined) || undefined;
+  const rawV = t.verantwoordelijke;
+  const v = Array.isArray(rawV) ? rawV[0] : rawV;
+  const eigenaarId = t.verantwoordelijke_id || v?.id || null;
+  const eigenaarNaam = v?.naam?.trim() || null;
   return {
     key: `opvolg-${t.id}`,
     section: "handmatig",
@@ -808,6 +816,8 @@ function opvolgTaakToRow(
       projectNummer: t.projecten?.project_nummer || null,
       href: t.project_id ? `/projecten/${t.project_id}` : "#",
       project,
+      eigenaarId,
+      eigenaarNaam,
     },
   };
 }
@@ -977,6 +987,33 @@ function eigenaarVoorActie(
   /** Zonder project-eigenaar: standaard Tarik (backoffice). */
   defaultEigenaarId?: string | null
 ): { id: string | null; naam: string; initials: string; impliciet?: boolean } {
+  // Handmatige/opvolg-taken: gekoppelde medewerker op de taak (niet HOLD — dat blijft BO).
+  if (actie.soort !== "hold_sales_terug") {
+    if (actie.eigenaarId) {
+      const a = adviseurs.find((x) => x.id === actie.eigenaarId);
+      const naam = actie.eigenaarNaam?.trim() || a?.naam;
+      if (naam) {
+        return {
+          id: actie.eigenaarId,
+          naam,
+          initials: initialsVanNaam(naam),
+        };
+      }
+    }
+    const taakNaam = actie.eigenaarNaam?.trim();
+    if (taakNaam) {
+      const a = adviseurs.find(
+        (x) => x.naam.trim().toLowerCase() === taakNaam.toLowerCase()
+      );
+      if (a) {
+        return {
+          id: a.id,
+          naam: a.naam,
+          initials: initialsVanNaam(a.naam),
+        };
+      }
+    }
+  }
   const project =
     actie.project ||
     (actie.projectId
@@ -1717,6 +1754,8 @@ export function BackofficeActiesList({
   const [holdSalesProject, setHoldSalesProject] = useState<Project | null>(
     null
   );
+  const [annuleringActie, setAnnuleringActie] =
+    useState<BackofficeActie | null>(null);
   const [showWachtExtern, setShowWachtExtern] = useState(false);
   /** Vervolg: standaard datum + tijd; optioneel alleen een dag. */
   const [opvolgMode, setOpvolgMode] = useState<OpvolgMode>("specifiek");
@@ -2982,6 +3021,158 @@ export function BackofficeActiesList({
     }
   }
 
+  async function annuleerOrderVanActie(
+    actie: BackofficeActie,
+    keuze: AnnuleringKeuze
+  ) {
+    const project = actie.project;
+    if (!project) return;
+    setBusyId(`${actie.id}-annuleren`);
+    setError(null);
+    try {
+      if (!keuze.binnenBedenktijd) {
+        const facRes = await fetch(
+          `/api/projecten/${project.id}/annuleringsfactuur?send=1`,
+          { method: "POST" }
+        );
+        const facData = (await facRes.json().catch(() => ({}))) as {
+          error?: string;
+          factuur?: { factuur_nummer?: string } | null;
+          sent?: boolean;
+          sendError?: string | null;
+          message?: string;
+        };
+        if (!facRes.ok) {
+          throw new Error(facData.error || "Annuleringsfactuur mislukt");
+        }
+        onProjectUpdated?.({
+          ...project,
+          status: "annulering",
+          annulering_keuze_gecontroleerd_at: new Date().toISOString(),
+          hold_sales_deadline_at: null,
+          schouw_at: null,
+          schouw_jaar: null,
+          schouw_week: null,
+          installatie_at: null,
+        });
+        const bits: string[] = [];
+        if (facData.factuur) {
+          bits.push(
+            facData.sent
+              ? `Annuleringsfactuur ${facData.factuur.factuur_nummer} verstuurd`
+              : `Annuleringsfactuur ${facData.factuur.factuur_nummer} aangemaakt`
+          );
+          if (facData.sendError) {
+            setError(`Factuurmail mislukt: ${facData.sendError}`);
+          }
+        } else if (facData.message) {
+          bits.push(facData.message);
+        } else {
+          bits.push("Order geannuleerd");
+        }
+        if (keuze.stuurMail) {
+          const mailRes = await fetch(
+            `/api/projecten/${project.id}/annuleringsmail`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ binnenBedenktijd: false }),
+            }
+          );
+          if (!mailRes.ok) {
+            const mailData = await mailRes.json().catch(() => ({}));
+            setError(
+              (mailData as { error?: string }).error ||
+                "Annuleringsmail mislukt"
+            );
+          } else {
+            bits.push("bevestigingsmail verstuurd");
+          }
+        }
+        setMsg(`${bits.join(" · ")}.`);
+      } else {
+        const res = await fetch(`/api/projecten/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "annulering" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (data as { error?: string }).error || "Annuleren mislukt"
+          );
+        }
+        const updated = (data as { project?: Project }).project;
+        if (updated) onProjectUpdated?.(updated);
+        else onProjectUpdated?.({ ...project, status: "annulering" });
+
+        let creditExtra = "";
+        if (keuze.creditFacturen) {
+          const credRes = await fetch(
+            `/api/projecten/${project.id}/annulering-credits`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                binnenBedenktijd: true,
+                creditFacturen: true,
+              }),
+            }
+          );
+          const credData = (await credRes.json().catch(() => ({}))) as {
+            error?: string;
+            warning?: string;
+            results?: { ok: boolean; alVerwerkt: boolean }[];
+          };
+          if (!credRes.ok) {
+            throw new Error(credData.error || "Creditfacturen mislukt");
+          }
+          const nieuw = (credData.results || []).filter(
+            (r) => r.ok && !r.alVerwerkt
+          ).length;
+          if (nieuw) {
+            creditExtra = ` ${nieuw} creditfactuur${nieuw === 1 ? "" : "en"} verstuurd.`;
+          } else if (credData.warning) {
+            creditExtra = ` ${credData.warning}`;
+          }
+        }
+        if (keuze.stuurMail) {
+          const mailRes = await fetch(
+            `/api/projecten/${project.id}/annuleringsmail`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ binnenBedenktijd: true }),
+            }
+          );
+          if (!mailRes.ok) {
+            const mailData = await mailRes.json().catch(() => ({}));
+            setError(
+              (mailData as { error?: string }).error ||
+                "Status gezet, maar annuleringsmail mislukt"
+            );
+            setMsg(`Order geannuleerd.${creditExtra}`);
+          } else {
+            setMsg(
+              `Order geannuleerd en mail verstuurd (geen annuleringskosten).${creditExtra}`
+            );
+          }
+        } else {
+          setMsg(`Order geannuleerd.${creditExtra}`);
+        }
+      }
+      setAnnuleringActie(null);
+      void loadProjectTaken();
+      if (selectedIndex >= 0 && selectedIndex < visibleRows.length - 1) {
+        goNextActie();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Annuleren mislukt");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function voltooiHoldSalesTerug(actie: BackofficeActie) {
     if (!actie.projectId) return false;
     setBusyId(`${actie.id}-hold-terug`);
@@ -3334,8 +3525,13 @@ export function BackofficeActiesList({
       setError("Geen project om opvolging op te zetten.");
       return;
     }
+    const project = projecten.find((p) => p.id === projectId);
     const ownerId =
-      medewerkerId || adviseurId || defaultEigenaarId || null;
+      project?.verantwoordelijke_id?.trim() ||
+      medewerkerId ||
+      adviseurId ||
+      defaultEigenaarId ||
+      null;
     if (!ownerId) {
       setError("Geen medewerker om de terugbel-actie aan te koppelen.");
       return;
@@ -3985,13 +4181,23 @@ export function BackofficeActiesList({
                   : "Afvinken"}
               </button>
               {actie.project ? (
-                <button
-                  type="button"
-                  onClick={() => setHoldSalesProject(actie.project!)}
-                  className="inline-flex h-9 items-center border border-[#5A4A6E]/30 bg-[#F5F2F8] px-3 text-xs font-semibold text-[#4A3A5C] hover:bg-[#EDE8F3]"
-                >
-                  Opnieuw HOLD
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setHoldSalesProject(actie.project!)}
+                    className="inline-flex h-9 items-center border border-[#5A4A6E]/30 bg-[#F5F2F8] px-3 text-xs font-semibold text-[#4A3A5C] hover:bg-[#EDE8F3]"
+                  >
+                    Opnieuw HOLD
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId === `${actie.id}-annuleren`}
+                    onClick={() => setAnnuleringActie(actie)}
+                    className="inline-flex h-9 items-center border border-destructive/30 bg-destructive/5 px-3 text-xs font-semibold text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                  >
+                    {busyId === `${actie.id}-annuleren` ? "Bezig…" : "Annuleren"}
+                  </button>
+                </>
               ) : null}
             </>
           ) : null}
@@ -6623,13 +6829,28 @@ export function BackofficeActiesList({
                     {(selectedRow.kind === "opstarten" ||
                       selectedRow.kind === "hold_sales_terug") &&
                     actie.project ? (
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-lg border border-[#5A4A6E]/30 bg-[#F5F2F8] px-2 py-2 text-left text-sm font-medium text-[#4A3A5C]"
-                        onClick={() => setHoldSalesProject(actie.project!)}
-                      >
-                        HOLD sales actie
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-lg border border-[#5A4A6E]/30 bg-[#F5F2F8] px-2 py-2 text-left text-sm font-medium text-[#4A3A5C]"
+                          onClick={() => setHoldSalesProject(actie.project!)}
+                        >
+                          HOLD sales actie
+                        </button>
+                        {selectedRow.kind === "hold_sales_terug" ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            disabled={busyId === `${actie.id}-annuleren`}
+                            onClick={() => setAnnuleringActie(actie)}
+                          >
+                            {busyId === `${actie.id}-annuleren`
+                              ? "Bezig…"
+                              : "Annuleren"}
+                          </Button>
+                        ) : null}
+                      </>
                     ) : null}
                     {selectedRow.kind === "aangetekende_brief" ? (
                       <button
@@ -6757,6 +6978,21 @@ export function BackofficeActiesList({
             setMsg("Overstap-mail verstuurd naar de klant.");
             void loadProjectTaken();
           }}
+        />
+      ) : null}
+
+      {annuleringActie?.project ? (
+        <AnnuleringBedenktijdModal
+          project={annuleringActie.project}
+          busy={busyId === `${annuleringActie.id}-annuleren`}
+          onClose={() => {
+            if (busyId !== `${annuleringActie.id}-annuleren`) {
+              setAnnuleringActie(null);
+            }
+          }}
+          onConfirm={(keuze) =>
+            void annuleerOrderVanActie(annuleringActie, keuze)
+          }
         />
       ) : null}
 

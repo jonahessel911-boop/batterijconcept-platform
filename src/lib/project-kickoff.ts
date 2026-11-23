@@ -26,6 +26,10 @@ import {
   isSchouwdagDefinitief,
 } from "@/lib/schouw-week";
 import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
+import {
+  aanbetalingAfspraakLabel,
+  parseAanbetalingAfspraak,
+} from "@/lib/aanbetaling-afspraak";
 
 /**
  * Statussen ná opstarten (installatie-keten). Schouwweek-placeholder hoort
@@ -180,8 +184,10 @@ export function projectKickoffItems(
 ): KickoffItem[] {
   const wf = isWarmtefondsProject(project);
   const geenAanbetaling = projectHeeftGeenAanbetalingNodig(project);
+  const betaalAfspraak = parseAanbetalingAfspraak(project.materiaal_checks);
+  const aanbetalingVerstuurd = isEersteFactuurVerstuurd(facturen);
   const aanbetalingDone =
-    geenAanbetaling || isEersteFactuurVerstuurd(facturen);
+    geenAanbetaling || aanbetalingVerstuurd || Boolean(betaalAfspraak);
   const aanbetalingBetaald =
     geenAanbetaling || isEersteFactuurBetaald(facturen);
   const schouwDone = isSchouwweekKickoffDone(project);
@@ -197,10 +203,12 @@ export function projectKickoffItems(
       label: wf ? "BTW-factuur" : "50% aanbetaling",
       done: aanbetalingDone,
       detail: aanbetalingDone
-        ? "Taak afgevinkt"
+        ? betaalAfspraak
+          ? aanbetalingAfspraakLabel(betaalAfspraak)
+          : "Taak afgevinkt"
         : wf
-          ? "Check als de factuur is verstuurd"
-          : "Check als de 50%-factuur is verstuurd",
+          ? "Verstuur de factuur, of leg vast hoe de klant later betaalt"
+          : "Verstuur de 50%-factuur, of leg een betaalafspraak vast",
     });
   }
 

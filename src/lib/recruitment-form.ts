@@ -4,6 +4,7 @@ export type RecruitmentFormStepType =
   | "buttons"
   | "text"
   | "checkboxes"
+  | "file"
   | "contact";
 
 export type RecruitmentFormShowIf = {
@@ -104,6 +105,16 @@ export function emptyTextStep(): RecruitmentFormStep {
     vraag: "Nieuwe vraag",
     label: "Antwoord",
     placeholder: "",
+    required: true,
+  };
+}
+
+export function emptyFileStep(): RecruitmentFormStep {
+  return {
+    id: newStepId(),
+    type: "file",
+    vraag: "Upload je CV (pdf)",
+    label: "CV",
     required: true,
   };
 }
@@ -387,6 +398,7 @@ export function parseRecruitmentForm(raw: unknown): RecruitmentForm | null {
       type !== "buttons" &&
       type !== "text" &&
       type !== "checkboxes" &&
+      type !== "file" &&
       type !== "contact"
     ) {
       continue;
@@ -440,6 +452,18 @@ export function parseRecruitmentForm(raw: unknown): RecruitmentForm | null {
         required: row.required !== false,
         show_if,
       });
+    } else if (type === "file") {
+      steps.push({
+        id,
+        type,
+        vraag,
+        label:
+          typeof row.label === "string" && row.label.trim()
+            ? row.label.trim()
+            : "CV (pdf)",
+        required: row.required !== false,
+        show_if,
+      });
     } else {
       steps.push({
         id,
@@ -468,11 +492,27 @@ export function parseRecruitmentForm(raw: unknown): RecruitmentForm | null {
   };
 }
 
+function withCvFileStep(form: RecruitmentForm): RecruitmentForm {
+  if (form.steps.some((s) => s.type === "file")) return form;
+  const step: RecruitmentFormStep = {
+    id: stableStepId("cv"),
+    type: "file",
+    vraag: "Upload je CV (pdf)",
+    label: "CV",
+    required: true,
+  };
+  const steps = [...form.steps];
+  const contactIdx = steps.findIndex((s) => s.type === "contact");
+  if (contactIdx >= 0) steps.splice(contactIdx, 0, step);
+  else steps.push(step);
+  return { ...form, steps };
+}
+
 export function formOrDefault(
   raw: unknown,
   rol?: string | null
 ): RecruitmentForm {
-  return parseRecruitmentForm(raw) || defaultFormForRol(rol);
+  return withCvFileStep(parseRecruitmentForm(raw) || defaultFormForRol(rol));
 }
 
 function parseAnswerRows(raw: unknown): RecruitmentAnswerRow[] {
@@ -496,6 +536,7 @@ function parseAnswerRows(raw: unknown): RecruitmentAnswerRow[] {
       o.type === "buttons" ||
       o.type === "text" ||
       o.type === "checkboxes" ||
+      o.type === "file" ||
       o.type === "contact"
         ? o.type
         : undefined;

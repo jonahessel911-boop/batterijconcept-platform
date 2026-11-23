@@ -836,6 +836,8 @@ export function RecruitmentKandidaatDetail({
                 <SollicitatieAntwoordenRows
                   rows={quizPairs}
                   className="border-0"
+                  sollicitatieId={kandidaat.id}
+                  bestanden={bestanden}
                 />
               </CardContent>
             </Card>
@@ -949,9 +951,8 @@ export function RecruitmentKandidaatDetail({
                     className="group flex items-center justify-between gap-3 px-4 py-3 sm:px-5"
                   >
                     <a
-                      href={file.url || "#"}
-                      target="_blank"
-                      rel="noreferrer"
+                      href={`/api/instroom/${kandidaat.id}/files/${file.id}`}
+                      download={file.bestandsnaam || "cv.pdf"}
                       className="truncate text-sm font-medium text-green-deeper hover:underline"
                     >
                       {file.bestandsnaam || "Bestand"}

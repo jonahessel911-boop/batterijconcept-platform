@@ -896,6 +896,8 @@ export function buildFreeCashflow(
       for (const a of raw.afspraken || []) {
         if (a.status === "geannuleerd") continue;
         if (!isHuisbezoekVoorLoon(a.soort)) continue;
+        if ((a.herpland_van_afspraak_id || "").trim()) continue;
+        if ((a.annulering_code || "") === "prio_omplannen") continue;
         const door = (a.ingepland_door_id || "").trim();
         if (door !== tarikId) continue;
         const plannedAt = a.created_at || a.start_at;

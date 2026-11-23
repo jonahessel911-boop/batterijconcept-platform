@@ -46,6 +46,7 @@ export function WerkenbijQuiz({
   const [textDraft, setTextDraft] = useState("");
   const [checkDraft, setCheckDraft] = useState<string[]>([]);
   const [contact, setContact] = useState<ContactState>(emptyContact);
+  const [fileByStep, setFileByStep] = useState<Record<string, File>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -127,6 +128,19 @@ export function WerkenbijQuiz({
     goNext();
   }
 
+  function submitFile() {
+    if (!step) return;
+    const file = fileByStep[step.id];
+    if (step.required !== false && !file) {
+      setError("Upload je CV als pdf");
+      return;
+    }
+    if (file) {
+      setAnswers((a) => ({ ...a, [step.id]: file.name }));
+    }
+    goNext();
+  }
+
   function submitText() {
     if (!step) return;
     const val = textDraft.trim();
@@ -145,6 +159,13 @@ export function WerkenbijQuiz({
     }
     if (!contact.email.trim() && !contact.telefoon.trim()) {
       setError("E-mail of telefoon is verplicht");
+      return;
+    }
+    const missingCv = visibleSteps(form.steps, answers).some(
+      (s) => s.type === "file" && s.required !== false && !fileByStep[s.id]
+    );
+    if (missingCv) {
+      setError("Upload je CV als pdf");
       return;
     }
     setBusy(true);
@@ -172,22 +193,30 @@ export function WerkenbijQuiz({
           type: s.type,
         });
       }
+      const fd = new FormData();
+      fd.append("vacature_id", vacatureId);
+      fd.append("naam", naam);
+      if (contact.email.trim()) fd.append("email", contact.email.trim());
+      if (contact.telefoon.trim()) fd.append("telefoon", contact.telefoon.trim());
+      const pc = contact.postcode.trim()
+        ? contact.postcode.replace(/[^0-9A-Za-z]/g, "").toUpperCase()
+        : "";
+      if (pc) fd.append("postcode", pc);
+      if (contact.huisnummer.trim()) {
+        fd.append("huisnummer", contact.huisnummer.trim());
+      }
+      fd.append("answers", JSON.stringify(cleanAnswers));
+      fd.append("answer_rows", JSON.stringify(answerRows));
+      for (const s of finalVisible) {
+        if (s.type !== "file") continue;
+        const file = fileByStep[s.id];
+        if (!file) continue;
+        fd.append("cv", file, file.name);
+        fd.append(s.id, file, file.name);
+      }
       const res = await fetch("/api/werkenbij/solliciteer", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vacature_id: vacatureId,
-          naam,
-          email: contact.email.trim() || null,
-          telefoon: contact.telefoon.trim() || null,
-          postcode: contact.postcode.trim()
-            ? contact.postcode.replace(/[^0-9A-Za-z]/g, "").toUpperCase()
-            : null,
-          huisnummer: contact.huisnummer.trim() || null,
-          answers: cleanAnswers,
-          answer_rows: answerRows,
-          motivatie: null,
-        }),
+        body: fd,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Versturen mislukt");
@@ -295,6 +324,40 @@ export function WerkenbijQuiz({
             <button
               type="button"
               onClick={submitCheckboxes}
+              className="flex w-full items-center justify-between rounded-full bg-green px-6 py-4 text-base font-semibold text-white transition hover:bg-green-deeper sm:text-lg"
+            >
+              <span>Verder</span>
+              <ArrowRight className="size-5 shrink-0" />
+            </button>
+          </>
+        ) : null}
+
+        {step.type === "file" ? (
+          <>
+            <div className="space-y-2">
+              <Label className="text-base text-muted">
+                {step.label || "CV (pdf)"}
+              </Label>
+              <input
+                type="file"
+                accept="application/pdf,.pdf,.doc,.docx"
+                className="block w-full rounded-xl border border-line bg-white px-4 py-3 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-green file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file || !step) return;
+                  setFileByStep((prev) => ({ ...prev, [step.id]: file }));
+                  setError(null);
+                }}
+              />
+              {fileByStep[step.id] ? (
+                <p className="text-sm font-medium text-green-deeper">
+                  {fileByStep[step.id]!.name}
+                </p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={submitFile}
               className="flex w-full items-center justify-between rounded-full bg-green px-6 py-4 text-base font-semibold text-white transition hover:bg-green-deeper sm:text-lg"
             >
               <span>Verder</span>

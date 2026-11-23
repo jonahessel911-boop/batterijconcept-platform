@@ -1,5 +1,9 @@
 import { formatInTimeZone } from "date-fns-tz";
-import type { Sollicitatie, SollicitatieStatus } from "@/types/database";
+import type {
+  Sollicitatie,
+  SollicitatieAfspraak,
+  SollicitatieStatus,
+} from "@/types/database";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { normalizeSollicitatieStatus } from "@/lib/sollicitatie";
 
@@ -7,6 +11,65 @@ export const SOLLICITATIE_MAX_BELPOGINGEN = 3;
 
 /** Alleen recruitment-belqueue — nooit sales/callcenter (die werkt op leads). */
 const QUEUE_STATUSES = new Set<SollicitatieStatus>(["nieuw", "geen_contact"]);
+
+/** Al in de gespreks-/aanname-pijplijn: niet opnieuw bellen. */
+const GESPREK_PIPELINE = new Set<SollicitatieStatus>([
+  "gesprek_gepland",
+  "gesprek_gehad",
+  "aangenomen_training_gepland",
+  "aangenomen_actief",
+]);
+
+export type SollicitatieBelQueueCtx = {
+  /** Telefoon/e-mail van mensen die al een gesprek (of verder) hebben. */
+  blockedContactKeys?: Set<string>;
+  /** Sollicitaties met een rij in sollicitatie_afspraken. */
+  afspraakSollicitatieIds?: Set<string>;
+};
+
+export function mergeBlockedContactKeys(
+  ctx: SollicitatieBelQueueCtx,
+  extra: Iterable<string>
+): SollicitatieBelQueueCtx {
+  const blockedContactKeys = new Set(ctx.blockedContactKeys);
+  for (const k of extra) {
+    if (k) blockedContactKeys.add(k);
+  }
+  return { ...ctx, blockedContactKeys };
+}
+
+/** NL-mobiel: laatste 9 cijfers; e-mail lowercase. */
+export function sollicitatieContactKeys(
+  s: Pick<Sollicitatie, "telefoon" | "email">
+): string[] {
+  const keys: string[] = [];
+  const digits = (s.telefoon || "").replace(/\D/g, "");
+  if (digits.length >= 9) keys.push(`tel:${digits.slice(-9)}`);
+  const email = (s.email || "").trim().toLowerCase();
+  if (email.includes("@")) keys.push(`mail:${email}`);
+  return keys;
+}
+
+/** Identiteiten die niet in de bellijst mogen (afspraak of gesprek-status). */
+export function blockedSollicitatieContactKeys(
+  all: Sollicitatie[],
+  afspraken: Array<Pick<SollicitatieAfspraak, "sollicitatie_id">>
+): Required<SollicitatieBelQueueCtx> {
+  const byId = new Map(all.map((s) => [s.id, s]));
+  const afspraakSollicitatieIds = new Set(
+    afspraken.map((a) => a.sollicitatie_id).filter(Boolean)
+  );
+  const blockedContactKeys = new Set<string>();
+  const add = (s: Sollicitatie | undefined) => {
+    if (!s) return;
+    for (const k of sollicitatieContactKeys(s)) blockedContactKeys.add(k);
+  };
+  for (const id of afspraakSollicitatieIds) add(byId.get(id));
+  for (const s of all) {
+    if (GESPREK_PIPELINE.has(normalizeSollicitatieStatus(s.status))) add(s);
+  }
+  return { blockedContactKeys, afspraakSollicitatieIds };
+}
 
 export function sollicitatieBelpogingenOf(
   s: Pick<Sollicitatie, "belpogingen">
@@ -58,12 +121,21 @@ export function isSollicitatieTerugbelDue(
 }
 
 /** In bel-queue: nieuw of geen_contact (< 3 pogingen). Geen terugbelafspraken. */
-export function isSollicitatieBelbaar(s: Sollicitatie): boolean {
+export function isSollicitatieBelbaar(
+  s: Sollicitatie,
+  ctx?: SollicitatieBelQueueCtx
+): boolean {
   const st = normalizeSollicitatieStatus(s.status);
   if (!QUEUE_STATUSES.has(st)) return false;
   const tel = (s.telefoon || "").replace(/\D/g, "");
   if (tel.length < 8) return false;
   if (sollicitatieBelpogingenOf(s) >= SOLLICITATIE_MAX_BELPOGINGEN) return false;
+  if (ctx?.afspraakSollicitatieIds?.has(s.id)) return false;
+  if (ctx?.blockedContactKeys && ctx.blockedContactKeys.size > 0) {
+    if (sollicitatieContactKeys(s).some((k) => ctx.blockedContactKeys!.has(k))) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -110,8 +182,11 @@ export function buildSollicitatieGeenContactPatch(
  * 2) daarna geen-contact retries (1, dan 2) — nieuwste eerst
  * Terugbelafspraken komen hier niet in.
  */
-export function sortSollicitatieBelQueue(list: Sollicitatie[]): Sollicitatie[] {
-  return [...list].filter(isSollicitatieBelbaar).sort((a, b) => {
+export function sortSollicitatieBelQueue(
+  list: Sollicitatie[],
+  ctx?: SollicitatieBelQueueCtx
+): Sollicitatie[] {
+  return [...list].filter((s) => isSollicitatieBelbaar(s, ctx)).sort((a, b) => {
     const pa = sollicitatieBelpogingenOf(a);
     const pb = sollicitatieBelpogingenOf(b);
     if (pa !== pb) return pa - pb;

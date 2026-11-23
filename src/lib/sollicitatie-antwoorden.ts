@@ -31,6 +31,48 @@ export type SollicitatieAntwoordRow = {
   antwoord: string;
 };
 
+export type AntwoordBestand = {
+  id: string;
+  bestandsnaam?: string | null;
+};
+
+export function sollicitatieFileHref(
+  sollicitatieId: string,
+  fileId: string
+): string {
+  return `/api/instroom/${encodeURIComponent(sollicitatieId)}/files/${encodeURIComponent(fileId)}`;
+}
+
+export function isCvLikeAntwoord(vraag: string, antwoord: string): boolean {
+  const v = (vraag || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const a = (antwoord || "").trim();
+  if (/\.(pdf|docx?|rtf)$/i.test(a)) return true;
+  if (
+    v === "cv" ||
+    v.includes("curriculum") ||
+    v.includes("resume") ||
+    /\bcv\b/.test(v)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function bestandVoorAntwoord(
+  vraag: string,
+  antwoord: string,
+  bestanden: AntwoordBestand[]
+): AntwoordBestand | null {
+  if (!bestanden.length) return null;
+  const name = (antwoord || "").trim().toLowerCase();
+  const exact = bestanden.find(
+    (b) => (b.bestandsnaam || "").trim().toLowerCase() === name
+  );
+  if (exact) return exact;
+  if (isCvLikeAntwoord(vraag, antwoord)) return bestanden[0] || null;
+  return null;
+}
+
 export type AdresVoorAntwoorden = {
   postcode?: string | null;
   huisnummer?: string | null;

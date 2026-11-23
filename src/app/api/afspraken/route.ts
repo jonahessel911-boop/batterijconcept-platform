@@ -18,7 +18,11 @@ import {
 } from "@/lib/afspraak-soort";
 import { planAfspraak } from "@/lib/plan-afspraak";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
+import { magPrioOmplannen, normalizeRol } from "@/lib/rollen";
+import {
+  PRIO_OMPLANNEN_CODE,
+  PRIO_OMPLANNEN_REDEN,
+} from "@/lib/prio-omplannen";
 import { appendVerzetNotitie } from "@/lib/format";
 import { fetchAllRows } from "@/lib/supabase-fetch-all";
 
@@ -83,6 +87,7 @@ export async function PATCH(req: NextRequest) {
     "verzet",
     "verwijder",
     "annuleer",
+    "prio_omplannen",
     "verwijder_definitief",
     "send_annuleringsmail",
     "update_notities",
@@ -432,6 +437,165 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true, sent: true, to: email });
     }
 
+    if (body.action === "prio_omplannen") {
+      const jar = await cookies();
+      const session = await verifySessionToken(jar.get(COOKIE_NAME)?.value);
+      if (!session?.adviseurId) {
+        return NextResponse.json({ error: "Niet ingelogd" }, { status: 401 });
+      }
+      const { data: actor } = await sb
+        .from("adviseurs")
+        .select("naam, rol")
+        .eq("id", session.adviseurId)
+        .maybeSingle();
+      if (!magPrioOmplannen(actor?.rol || session.rol)) {
+        return NextResponse.json(
+          { error: "Alleen backoffice mag PRIO omplannen" },
+          { status: 403 }
+        );
+      }
+      if (afspraak.status === "geannuleerd") {
+        return NextResponse.json(
+          { error: "Deze afspraak is al geannuleerd" },
+          { status: 400 }
+        );
+      }
+      if (!afspraakBlokkeertAgenda(afspraak.soort)) {
+        return NextResponse.json(
+          { error: "PRIO omplannen is alleen voor huisbezoeken" },
+          { status: 400 }
+        );
+      }
+
+      const geannuleerdDoorNaam =
+        actor?.naam?.trim() || session.naam?.trim() || "";
+      const prefix = geannuleerdDoorNaam
+        ? `Annulering (CRM) door ${geannuleerdDoorNaam}:`
+        : "Annulering (CRM):";
+      const bestaande = (afspraak.notities as string | null)?.trim() || "";
+      const samengevoegd = bestaande
+        ? `${bestaande}\n\n${prefix} ${PRIO_OMPLANNEN_REDEN}`
+        : `${prefix} ${PRIO_OMPLANNEN_REDEN}`;
+
+      const patch: Record<string, unknown> = {
+        status: "geannuleerd",
+        herinnering_verstuurd: true,
+        notities: samengevoegd,
+        annulering_code: PRIO_OMPLANNEN_CODE,
+      };
+
+      let cancelledRow: Record<string, unknown> | null = null;
+      let cancelErr: { message?: string; code?: string } | null = null;
+      {
+        const first = await sb
+          .from("afspraken")
+          .update(patch)
+          .eq("id", afspraak.id)
+          .select(
+            "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
+          )
+          .single();
+        cancelledRow = first.data as Record<string, unknown> | null;
+        cancelErr = first.error;
+        if (
+          cancelErr &&
+          (cancelErr.code === "42703" ||
+            (cancelErr.message || "").includes("annulering_code"))
+        ) {
+          delete patch.annulering_code;
+          const retry = await sb
+            .from("afspraken")
+            .update(patch)
+            .eq("id", afspraak.id)
+            .select(
+              "*, leads(naam, email, telefoon, lead_number, notities, postcode, huisnummer, toevoeging, straat, plaats), adviseurs!adviseur_id(naam, email)"
+            )
+            .single();
+          cancelledRow = retry.data as Record<string, unknown> | null;
+          cancelErr = retry.error;
+        }
+      }
+
+      if (cancelErr || !cancelledRow) {
+        return NextResponse.json(
+          {
+            error:
+              "PRIO omplannen mislukt. Voer supabase/migrate-prio-omplannen.sql uit in Supabase als de kolom ontbreekt.",
+            detail: cancelErr?.message,
+          },
+          { status: 500 }
+        );
+      }
+
+      await syncLeadNaAfspraak(sb, afspraak.lead_id as string);
+
+      let mailSent = false;
+      let mailTo: string | null = null;
+      const klant = (Array.isArray(lead) ? lead[0] : lead) as {
+        naam?: string | null;
+        email?: string | null;
+      } | null;
+      const email = klant?.email?.trim();
+      if (email && afspraakStuurtMail(afspraak.soort)) {
+        const sent = await sendEmail({
+          to: email,
+          subject: "Afspraak geannuleerd — Batterijconcept",
+          html: afspraakGeannuleerdKlantEmail({
+            naam: klant?.naam || "klant",
+            startAt: afspraak.start_at,
+          }),
+          tag: "afspraak-verwijderd-klant",
+          replyTo: await replyToForAfspraak(sb, {
+            adviseurId: afspraak.adviseur_id,
+            leadId: afspraak.lead_id,
+            adviseurJoin: adviseur,
+          }),
+        });
+        mailSent = sent.ok;
+        mailTo = email;
+      }
+
+      try {
+        const { logLeadEvent } = await import("@/lib/lead-events");
+        const { formatDateTimeNl } = await import("@/lib/format");
+        const { afspraakSoortLabel, normalizeAfspraakSoort } = await import(
+          "@/lib/afspraak-soort"
+        );
+        const soortLabel =
+          afspraakSoortLabel[normalizeAfspraakSoort(afspraak.soort)] ||
+          "Afspraak";
+        await logLeadEvent({
+          leadId: afspraak.lead_id as string,
+          soort: "afspraak",
+          titel: `${soortLabel} geannuleerd`,
+          detail: [
+            formatDateTimeNl(afspraak.start_at as string),
+            geannuleerdDoorNaam || null,
+            `Reden: ${PRIO_OMPLANNEN_REDEN}`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          meta: {
+            afspraak_id: afspraak.id,
+            status: "geannuleerd",
+            reden: PRIO_OMPLANNEN_REDEN,
+            annulering_code: PRIO_OMPLANNEN_CODE,
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
+
+      return NextResponse.json({
+        ok: true,
+        cancelled: true,
+        prio_omplannen: true,
+        mail_sent: mailSent,
+        to: mailTo,
+        afspraak: cancelledRow,
+      });
+    }
+
     if (body.action === "verwijder" || body.action === "annuleer") {
       // Geen automatische klantmail — knop na annuleren.
       const annuleerNotitie = body.notitie?.trim() || "";
@@ -740,6 +904,7 @@ export async function POST(req: NextRequest) {
     andere_offertes_gehad?: boolean;
     soort?: string;
     herplan?: boolean;
+    herpland_van_afspraak_id?: string | null;
   };
   try {
     body = await req.json();
@@ -779,6 +944,8 @@ export async function POST(req: NextRequest) {
     const result = await planAfspraak(sb, {
       ...body,
       herplan: Boolean(body.herplan),
+      herpland_van_afspraak_id:
+        body.herpland_van_afspraak_id?.trim() || null,
       ingepland_door_id: ingeplandDoorId,
     });
     if (!result.ok) {

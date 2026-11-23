@@ -12,6 +12,19 @@ import {
   type AnnuleringAfrekening,
 } from "@/lib/av-annulering";
 import { formatEuro } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { cn } from "@/lib/utils";
 
 export type AnnuleringKeuze = {
   binnenBedenktijd: boolean;
@@ -33,32 +46,32 @@ function AfrekeningSheet({ afrekening }: { afrekening: AnnuleringAfrekening }) {
   const bij = afrekening.richting === "bijbetalen";
   const terug = afrekening.richting === "terugbetalen";
   return (
-    <div className="border border-line bg-wash/50 px-3 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+    <div className="rounded-lg border bg-muted/40 px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         Rekensom · art. 4A AV
       </p>
       <dl className="mt-2 space-y-1.5 text-sm">
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">Order incl. btw</dt>
-          <dd className="tabular-nums font-medium text-ink">
+          <dt className="text-muted-foreground">Order incl. btw</dt>
+          <dd className="tabular-nums font-medium">
             {formatEuro(afrekening.orderInc)}
           </dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">
+          <dt className="text-muted-foreground">
             Annuleringskosten ({afrekening.pct}%)
           </dt>
-          <dd className="tabular-nums font-medium text-ink">
+          <dd className="tabular-nums font-medium">
             {formatEuro(afrekening.kostenInc)}
           </dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">Al betaald (aanbetaling e.d.)</dt>
-          <dd className="tabular-nums font-medium text-ink">
+          <dt className="text-muted-foreground">Al betaald (aanbetaling e.d.)</dt>
+          <dd className="tabular-nums font-medium">
             − {formatEuro(afrekening.alBetaaldInc)}
           </dd>
         </div>
-        <div className="border-t border-line pt-1.5">
+        <div className="border-t pt-1.5">
           {bij ? (
             <div className="flex justify-between gap-3">
               <dt className="font-semibold text-[#9A3B1A]">
@@ -79,15 +92,15 @@ function AfrekeningSheet({ afrekening }: { afrekening: AnnuleringAfrekening }) {
             </div>
           ) : (
             <div className="flex justify-between gap-3">
-              <dt className="font-semibold text-ink">Vereffend</dt>
-              <dd className="tabular-nums font-semibold text-ink">
+              <dt className="font-semibold">Vereffend</dt>
+              <dd className="tabular-nums font-semibold">
                 {formatEuro(0)}
               </dd>
             </div>
           )}
         </div>
       </dl>
-      <p className="mt-2 text-[11px] leading-snug text-muted">
+      <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
         {bij
           ? "Bij doorzetten: factuur voor dit restant wordt automatisch aangemaakt en naar de klant gemaild."
           : terug
@@ -208,14 +221,6 @@ export function AnnuleringBedenktijdModal({
   }, [binnenBedenktijd, orderIncBtw, facturen.length, project.id]);
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-
-  useEffect(() => {
     if (ondertekendOpVanProject(project)) {
       setOndertekendOp(ondertekendOpVanProject(project));
       setLoadingDatum(false);
@@ -282,163 +287,176 @@ export function AnnuleringBedenktijdModal({
     (!toontWfFork || wfVervolg != null);
 
   return (
-    <div
-      className="fixed inset-0 z-[90] flex items-end justify-center bg-ink/40 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="annulering-bedenktijd-title"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose();
       }}
     >
-      <div className="w-full max-w-md border border-line bg-white shadow-xl">
-        <div className="border-b border-line px-4 py-3">
-          <h2
-            id="annulering-bedenktijd-title"
-            className="font-display text-lg font-semibold text-ink"
-          >
+      <DialogContent
+        className="sm:max-w-lg"
+        showCloseButton={!busy}
+      >
+        <DialogHeader>
+          <DialogTitle>
             {mailOnly ? "Annuleringsmail versturen" : "Order annuleren"}
-          </h2>
-          <p className="mt-0.5 text-xs text-muted">
+          </DialogTitle>
+          <DialogDescription>
             {project.project_nummer || "Project"} ·{" "}
             {project.leads?.naam || "klant"}
             {warmtefonds ? " · Warmtefonds" : ""}
-          </p>
-        </div>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="space-y-4 px-4 py-4">
+        <div className="space-y-4">
           <div>
-            <p className="text-sm font-semibold text-ink">
+            <p className="text-sm font-medium">
               Heeft de klant binnen zijn bedenktijd geannuleerd?
             </p>
-            <p className="mt-2 text-sm text-muted">
+            <p className="mt-1.5 text-sm text-muted-foreground">
               Schriftelijke annulering had moeten plaatsvinden vóór{" "}
               {loadingDatum ? (
-                <span className="font-medium text-ink">…</span>
+                "…"
               ) : info ? (
-                <span className="font-semibold text-ink">{info.eindLabel}</span>
-              ) : (
-                <span className="font-medium text-ink">
-                  (ondertekeningsdatum onbekend)
+                <span className="font-medium text-foreground">
+                  {info.eindLabel}
                 </span>
+              ) : (
+                "(ondertekeningsdatum onbekend)"
               )}
               {info && !loadingDatum ? (
                 <>
                   {" "}
-                  <span className="text-muted">
-                    ({info.klaar
-                      ? "bedenktijd is verlopen"
-                      : `nog ${info.dagenOver} dag${info.dagenOver === 1 ? "" : "en"}`}
-                    ).
-                  </span>
+                  (
+                  {info.klaar
+                    ? "bedenktijd is verlopen"
+                    : `nog ${info.dagenOver} dag${info.dagenOver === 1 ? "" : "en"}`}
+                  ).
                 </>
               ) : null}
             </p>
           </div>
 
-          <div className="grid gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
+          <RadioGroup
+            value={
+              binnenBedenktijd === true
+                ? "ja"
+                : binnenBedenktijd === false
+                  ? "nee"
+                  : ""
+            }
+            disabled={busy}
+            onValueChange={(v) => {
+              const value = Array.isArray(v) ? v[0] : v;
+              if (value === "ja") {
                 setBinnenBedenktijd(true);
                 setCreditFacturen(true);
                 setWfVervolg(null);
                 setError(null);
-              }}
-              className={[
-                "border px-3 py-2.5 text-left text-sm transition",
-                binnenBedenktijd === true
-                  ? "border-green bg-green-soft/60 font-semibold text-green-deeper"
-                  : "border-line bg-white text-ink hover:bg-wash",
-              ].join(" ")}
-            >
-              <span className="block font-semibold">
-                Ja — binnen bedenktijd
-              </span>
-              <span className="mt-0.5 block text-[11px] text-muted">
-                Geen annuleringskosten in de mail
-              </span>
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
+              } else if (value === "nee") {
                 setBinnenBedenktijd(false);
                 setWfVervolg(null);
                 setError(null);
-              }}
-              className={[
-                "border px-3 py-2.5 text-left text-sm transition",
-                binnenBedenktijd === false
-                  ? "border-[#C45A12] bg-[#FFF0E6] font-semibold text-[#9A3B1A]"
-                  : "border-line bg-white text-ink hover:bg-wash",
-              ].join(" ")}
+              }
+            }}
+          >
+            <Label
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
+                binnenBedenktijd === true
+                  ? "border-primary bg-primary/5"
+                  : "border-border"
+              )}
             >
-              <span className="block font-semibold">
-                Nee — na de bedenktijd
+              <RadioGroupItem value="ja" className="mt-0.5" />
+              <span>
+                <span className="block text-sm font-medium">
+                  Ja — binnen bedenktijd
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Geen annuleringskosten in de mail
+                </span>
               </span>
-              <span className="mt-0.5 block text-[11px] text-muted">
-                {warmtefonds && !mailOnly
-                  ? "Kies hieronder: meewerken of annuleringskosten"
-                  : "20% annuleringskosten · zie rekensom"}
+            </Label>
+            <Label
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
+                binnenBedenktijd === false
+                  ? "border-destructive/40 bg-destructive/5"
+                  : "border-border"
+              )}
+            >
+              <RadioGroupItem value="nee" className="mt-0.5" />
+              <span>
+                <span className="block text-sm font-medium">
+                  Nee — na de bedenktijd
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {warmtefonds && !mailOnly
+                    ? "Kies hieronder: meewerken of annuleringskosten"
+                    : "20% annuleringskosten · zie rekensom"}
+                </span>
               </span>
-            </button>
-          </div>
+            </Label>
+          </RadioGroup>
 
           {toontWfFork ? (
-            <div className="space-y-2 border-t border-line pt-4">
-              <p className="text-sm font-semibold text-ink">
+            <div className="space-y-2 border-t pt-4">
+              <p className="text-sm font-medium">
                 Warmtefonds — wat wil de klant?
               </p>
-              <p className="text-xs text-muted">
+              <p className="text-xs text-muted-foreground">
                 Na de bedenktijd: meewerken met de Warmtefonds-aanvraag en
                 verder inregelen, of annuleren met de kosten uit de AV.
               </p>
-              <div className="grid gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setWfVervolg("meewerken");
+              <RadioGroup
+                value={wfVervolg || ""}
+                disabled={busy}
+                onValueChange={(v) => {
+                  const value = Array.isArray(v) ? v[0] : v;
+                  if (value === "meewerken" || value === "annuleren_kosten") {
+                    setWfVervolg(value);
                     setError(null);
-                  }}
-                  className={[
-                    "border px-3 py-2.5 text-left text-sm transition",
+                  }
+                }}
+              >
+                <Label
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
                     wfVervolg === "meewerken"
-                      ? "border-green bg-green-soft/60 font-semibold text-green-deeper"
-                      : "border-line bg-white text-ink hover:bg-wash",
-                  ].join(" ")}
+                      ? "border-primary bg-primary/5"
+                      : "border-border"
+                  )}
                 >
-                  <span className="block font-semibold">
-                    Meewerken met Warmtefonds
+                  <RadioGroupItem value="meewerken" className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium">
+                      Meewerken met Warmtefonds
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      Order blijft staan — verder inregelen (aanvraag / schouw)
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-muted">
-                    Order blijft staan — verder inregelen (aanvraag / schouw)
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setWfVervolg("annuleren_kosten");
-                    setError(null);
-                  }}
-                  className={[
-                    "border px-3 py-2.5 text-left text-sm transition",
+                </Label>
+                <Label
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
                     wfVervolg === "annuleren_kosten"
-                      ? "border-[#C45A12] bg-[#FFF0E6] font-semibold text-[#9A3B1A]"
-                      : "border-line bg-white text-ink hover:bg-wash",
-                  ].join(" ")}
+                      ? "border-destructive/40 bg-destructive/5"
+                      : "border-border"
+                  )}
                 >
-                  <span className="block font-semibold">
-                    Annuleren met annuleringskosten
+                  <RadioGroupItem value="annuleren_kosten" className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium">
+                      Annuleren met annuleringskosten
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      20% van het orderbedrag (art. 4A AV) · zie rekensom
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-muted">
-                    20% van het orderbedrag (art. 4A AV) · zie rekensom
-                  </span>
-                </button>
-              </div>
+                </Label>
+              </RadioGroup>
             </div>
           ) : null}
 
@@ -446,7 +464,7 @@ export function AnnuleringBedenktijdModal({
 
           {wilAnnulerenMetKosten && !wilMeewerken ? (
             mailOnly ? (
-              <p className="text-xs text-muted">
+              <p className="text-xs text-muted-foreground">
                 De mail gaat naar de klant
                 {binnenBedenktijd === true
                   ? " zonder annuleringskosten."
@@ -455,12 +473,11 @@ export function AnnuleringBedenktijdModal({
                     : "."}
               </p>
             ) : (
-              <label className="flex items-start gap-2 text-sm text-ink">
-                <input
-                  type="checkbox"
+              <Label className="items-start font-normal">
+                <Checkbox
                   checked={stuurMail}
                   disabled={busy}
-                  onChange={(e) => setStuurMail(e.target.checked)}
+                  onCheckedChange={(c) => setStuurMail(c === true)}
                   className="mt-0.5"
                 />
                 <span>
@@ -471,62 +488,56 @@ export function AnnuleringBedenktijdModal({
                       ? " (met annuleringskosten)"
                       : ""}
                 </span>
-              </label>
+              </Label>
             )
           ) : null}
 
           {binnenBedenktijd === true && !wilMeewerken ? (
-            <label className="flex items-start gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
+            <Label className="items-start font-normal">
+              <Checkbox
                 checked={creditFacturen}
                 disabled={busy}
-                onChange={(e) => setCreditFacturen(e.target.checked)}
+                onCheckedChange={(c) => setCreditFacturen(c === true)}
                 className="mt-0.5"
               />
               <span>
                 Facturen direct crediteren
-                <span className="mt-0.5 block text-xs font-normal text-muted">
+                <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
                   Binnen de 14 dagen: elke verstuurde factuur (betaald, deels
                   betaald of nog open) krijgt een eigen creditfactuur. Die gaat
                   naar de klant en wordt meteen geboekt. Conceptfacturen blijven
                   staan.
                 </span>
               </span>
-            </label>
+            </Label>
           ) : null}
 
           {wilMeewerken ? (
-            <p className="text-xs text-muted">
+            <p className="text-xs text-muted-foreground">
               De order wordt niet geannuleerd. Sluit deze popup en regel de
               Warmtefonds-aanvraag verder.
             </p>
           ) : null}
 
           {error ? (
-            <p className="text-sm text-[#C45A12]">{error}</p>
+            <p className="text-sm text-destructive">{error}</p>
           ) : null}
         </div>
 
-        <div className="flex flex-wrap justify-end gap-2 border-t border-line px-4 py-3">
-          <button
+        <DialogFooter>
+          <Button
             type="button"
+            variant="outline"
             disabled={busy}
             onClick={onClose}
-            className="border border-line px-3 py-2 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-50"
           >
-            Annuleren
-          </button>
-          <button
+            Sluiten
+          </Button>
+          <Button
             type="button"
+            variant={wilMeewerken ? "default" : "destructive"}
             disabled={busy || !canSubmit}
             onClick={() => void submit()}
-            className={[
-              "px-3 py-2 text-sm font-semibold text-white disabled:opacity-50",
-              wilMeewerken
-                ? "bg-green hover:bg-green-deeper"
-                : "bg-[#C45A12] hover:bg-[#a84c0f]",
-            ].join(" ")}
           >
             {busy
               ? "Bezig…"
@@ -535,9 +546,9 @@ export function AnnuleringBedenktijdModal({
                 : mailOnly
                   ? "Mail versturen"
                   : "Order annuleren"}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -401,7 +401,7 @@ export async function GET(req: NextRequest) {
           sb
             .from("afspraken")
             .select(
-              "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id"
+              "id, lead_id, created_at, updated_at, start_at, status, soort, adviseur_id, ingepland_door_id, annulering_code, herpland_van_afspraak_id"
             )
             .gte("created_at", padStart)
             .lte("created_at", padEnd)
@@ -411,7 +411,13 @@ export async function GET(req: NextRequest) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const code = (e as { code?: string })?.code;
-        if (!msg.includes("ingepland_door_id") && code !== "42703") throw e;
+        if (
+          !msg.includes("ingepland_door_id") &&
+          !msg.includes("annulering_code") &&
+          !msg.includes("herpland_van") &&
+          code !== "42703"
+        )
+          throw e;
         return fetchAllRows<BelConversieAfspraak>((fromIdx, toIdx) =>
           sb
             .from("afspraken")

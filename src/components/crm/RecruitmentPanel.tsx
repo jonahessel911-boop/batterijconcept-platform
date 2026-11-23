@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   CalendarClock,
+  CalendarDays,
   CalendarPlus,
   Check,
   Copy,
@@ -104,12 +105,14 @@ import { RecruitmentJobsView } from "@/components/crm/recruitment/RecruitmentJob
 import { RecruitmentBelPanel } from "@/components/crm/recruitment/RecruitmentBelPanel";
 import { RecruitmentInboxPanel } from "@/components/crm/recruitment/RecruitmentInboxPanel";
 import { RecruitmentKaartView } from "@/components/crm/recruitment/RecruitmentKaartView";
+import { RecruitmentAgendaView } from "@/components/crm/recruitment/RecruitmentAgendaView";
 import { RecruitmentKandidaatMailModal } from "@/components/crm/recruitment/RecruitmentKandidaatMailModal";
 import { cn } from "@/lib/utils";
 
 type ViewMode =
   | "tabel"
   | "bellen"
+  | "agenda"
   | "inbox"
   | "deadlines"
   | "kaart"
@@ -128,6 +131,7 @@ const VIEW_NAV: Array<{
   group: "werk" | "beheer";
 }> = [
   { id: "bellen", label: "Bellen", icon: PhoneCall, group: "werk" },
+  { id: "agenda", label: "Agenda", icon: CalendarDays, group: "werk" },
   { id: "inbox", label: "Inbox", icon: Inbox, group: "werk" },
   { id: "deadlines", label: "Deadlines", icon: CalendarClock, group: "werk" },
   { id: "tabel", label: "Aanmeldingen", icon: Table2, group: "werk" },
@@ -299,6 +303,7 @@ export function RecruitmentPanel() {
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [deleting, setDeleting] = useState(false);
   const [afspraken, setAfspraken] = useState<SollicitatieAfspraak[]>([]);
+  const [leadContactKeys, setLeadContactKeys] = useState<string[]>([]);
   const [trainingen, setTrainingen] = useState<TrainingMoment[]>([]);
   const [beoordelingId, setBeoordelingId] = useState<string | null>(null);
   const [beoordelingNotitie, setBeoordelingNotitie] = useState("");
@@ -340,6 +345,11 @@ export function RecruitmentPanel() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return;
       setAfspraken((data.afspraken || []) as SollicitatieAfspraak[]);
+      setLeadContactKeys(
+        Array.isArray(data.leadContactKeys)
+          ? (data.leadContactKeys as string[])
+          : []
+      );
     } catch {
       /* non-blocking */
     }
@@ -1077,9 +1087,19 @@ export function RecruitmentPanel() {
           <div className="min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-4">
             <RecruitmentKaartView />
           </div>
+        ) : view === "agenda" ? (
+          <RecruitmentAgendaView
+            afspraken={afspraken}
+            kandidaten={items}
+            onOpenKandidaat={openDetail}
+            onRefresh={loadAfspraken}
+          />
         ) : view === "bellen" ? (
           <RecruitmentBelPanel
             kandidaten={filtered}
+            alleKandidaten={items}
+            afspraken={afspraken}
+            leadContactKeys={leadContactKeys}
             advanceAfterPlanKey={belAdvanceKey}
             onOpenKandidaat={openDetail}
             onPlanGesprek={(id) => {

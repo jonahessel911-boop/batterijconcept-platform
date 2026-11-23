@@ -37,6 +37,7 @@ import {
   isWarmtefondsFactuurContext,
 } from "@/lib/factuur-soort";
 import { afspraakBlokkeertAgenda } from "@/lib/afspraak-soort";
+import { parseAanbetalingAfspraak } from "@/lib/aanbetaling-afspraak";
 import {
   annuleringsDoorFromAfspraak,
   annuleringsNotitieFromAfspraak,
@@ -912,6 +913,15 @@ export function openNabellenFactuurActies(
     if (
       (linkedProject && isWarmtefondsProject(linkedProject)) ||
       isWarmtefondsFactuurContext({ project: linkedProject })
+    ) {
+      continue;
+    }
+
+    // Klant-betaalafspraak (Edwin / salarisdatum): niet in Acties
+    if (
+      linkedProject &&
+      parseAanbetalingAfspraak(linkedProject.materiaal_checks) &&
+      isAanbetalingFactuurOmschrijving(f.omschrijving)
     ) {
       continue;
     }

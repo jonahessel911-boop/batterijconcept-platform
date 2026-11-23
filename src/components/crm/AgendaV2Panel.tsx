@@ -18,7 +18,11 @@ import type {
   LeadStatus,
 } from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
-import { isAdminAdviseur, isSpareAdviseur } from "@/lib/admin-adviseur";
+import {
+  isAdminAdviseur,
+  isPlanbaarAdviseur,
+  isSpareAdviseur,
+} from "@/lib/admin-adviseur";
 import { isAgendaAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
@@ -552,8 +556,7 @@ export function AgendaPanel({
   const weekInfo = useMemo(() => schouwWeekFromDate(weekAnchor), [weekAnchor]);
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
 
-  // Inactieve adviseurs blijven zichtbaar (afblokken / eigen agenda),
-  // bel-systeem filtert hen apart op actief.
+  // Alle sales-kolommen (ook inactief) — voor afblokken / eigen rooster.
   const planAdviseurs = useMemo(
     () =>
       adviseurs
@@ -567,13 +570,29 @@ export function AgendaPanel({
     [adviseurs]
   );
 
+  /** Teamweek: alleen inplanbaar (actief in planning, niet geblokkeerd, week open). */
+  const weekPlanbareAdviseurs = useMemo(() => {
+    const wk = `${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
+    return planAdviseurs.filter((a) => {
+      if (!isPlanbaarAdviseur(a)) return false;
+      if (beschikbaarMap.get(`${a.id}:${wk}`) === false) return false;
+      return true;
+    });
+  }, [planAdviseurs, beschikbaarMap, weekInfo.jaar, weekInfo.week]);
+
   const visibleAdviseurs = useMemo(() => {
-    let list = planAdviseurs;
     if (defaultAdviseurId) {
-      list = list.filter((a) => a.id === defaultAdviseurId);
+      return planAdviseurs.filter(
+        (a) => a.id === defaultAdviseurId && !hiddenIds.has(a.id)
+      );
     }
-    return list.filter((a) => !hiddenIds.has(a.id));
-  }, [planAdviseurs, defaultAdviseurId, hiddenIds]);
+    return weekPlanbareAdviseurs.filter((a) => !hiddenIds.has(a.id));
+  }, [
+    planAdviseurs,
+    weekPlanbareAdviseurs,
+    defaultAdviseurId,
+    hiddenIds,
+  ]);
 
   // Mobiel: één adviseur in het grid (swipe Agenda↔Leads uit; chips om te wisselen)
   useEffect(() => {
@@ -595,38 +614,6 @@ export function AgendaPanel({
     }
   }, [isNarrow]);
 
-  useEffect(() => {
-    if (!isNarrow || visibleAdviseurs.length === 0) return;
-    if (
-      mobileAdviseurId &&
-      visibleAdviseurs.some((a) => a.id === mobileAdviseurId)
-    ) {
-      return;
-    }
-    setMobileAdviseurId(visibleAdviseurs[0]!.id);
-  }, [isNarrow, visibleAdviseurs, mobileAdviseurId]);
-
-  const displayAdviseurs = useMemo(() => {
-    if (!isNarrow || defaultAdviseurId || visibleAdviseurs.length <= 1) {
-      return visibleAdviseurs;
-    }
-    const id = mobileAdviseurId;
-    const one = visibleAdviseurs.find((a) => a.id === id);
-    return one ? [one] : visibleAdviseurs.slice(0, 1);
-  }, [
-    isNarrow,
-    defaultAdviseurId,
-    visibleAdviseurs,
-    mobileAdviseurId,
-  ]);
-
-  /** Agenda-rijen: team = 10/13/16/19; alleen Marcel solo = 10/12/14/16. */
-  const SLOT_ROWS = useMemo(
-    () =>
-      slotRowsFromHours(unionSlotHours(displayAdviseurs.map((a) => a.id))),
-    [displayAdviseurs]
-  );
-
   /**
    * Per adviseur deze week: geplande blokken / totaal beschikbare blokken.
    * Beschikbaar = elk niet-geblokkeerd planbaar slot (ongeacht of er al iets in staat).
@@ -639,7 +626,10 @@ export function AgendaPanel({
 
     for (const adv of planAdviseurs) {
       const weekKey = `${adv.id}:${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
-      if (beschikbaarMap.get(weekKey) === false) {
+      if (
+        !isPlanbaarAdviseur(adv) ||
+        beschikbaarMap.get(weekKey) === false
+      ) {
         gepland.set(adv.id, 0);
         beschikbaar.set(adv.id, 0);
         vrij.set(adv.id, 0);
@@ -699,6 +689,46 @@ export function AgendaPanel({
   const afsprakenCountByAdviseur = slotStatsByAdviseur.gepland;
   const beschikbaarSlotsByAdviseur = slotStatsByAdviseur.beschikbaar;
 
+  /** Geen kolom als deze week 0 boekbare slots heeft. */
+  const kolomAdviseurs = useMemo(() => {
+    if (defaultAdviseurId) return visibleAdviseurs;
+    return visibleAdviseurs.filter(
+      (a) => (slotStatsByAdviseur.beschikbaar.get(a.id) || 0) > 0
+    );
+  }, [visibleAdviseurs, defaultAdviseurId, slotStatsByAdviseur]);
+
+  const displayAdviseurs = useMemo(() => {
+    if (!isNarrow || defaultAdviseurId || kolomAdviseurs.length <= 1) {
+      return kolomAdviseurs;
+    }
+    const id = mobileAdviseurId;
+    const one = kolomAdviseurs.find((a) => a.id === id);
+    return one ? [one] : kolomAdviseurs.slice(0, 1);
+  }, [
+    isNarrow,
+    defaultAdviseurId,
+    kolomAdviseurs,
+    mobileAdviseurId,
+  ]);
+
+  /** Agenda-rijen: team = 10/13/16/19; alleen Marcel solo = 10/12/14/16. */
+  const SLOT_ROWS = useMemo(
+    () =>
+      slotRowsFromHours(unionSlotHours(displayAdviseurs.map((a) => a.id))),
+    [displayAdviseurs]
+  );
+
+  useEffect(() => {
+    if (!isNarrow || kolomAdviseurs.length === 0) return;
+    if (
+      mobileAdviseurId &&
+      kolomAdviseurs.some((a) => a.id === mobileAdviseurId)
+    ) {
+      return;
+    }
+    setMobileAdviseurId(kolomAdviseurs[0]!.id);
+  }, [isNarrow, kolomAdviseurs, mobileAdviseurId]);
+
   /**
    * Ingepland vs totaal planbare slots deze week (admin-kpi).
    */
@@ -707,18 +737,19 @@ export function AgendaPanel({
     let ingepland = 0;
     let totaal = 0;
     // Alleen zichtbare adviseurs (filter Adviseurs)
-    for (const adv of visibleAdviseurs) {
+    for (const adv of kolomAdviseurs) {
+      if (!isPlanbaarAdviseur(adv)) continue;
       ingepland += slotStatsByAdviseur.gepland.get(adv.id) || 0;
       totaal += slotStatsByAdviseur.beschikbaar.get(adv.id) || 0;
     }
     return { ingepland, totaal };
-  }, [showAdminSlots, visibleAdviseurs, slotStatsByAdviseur]);
+  }, [showAdminSlots, kolomAdviseurs, slotStatsByAdviseur]);
 
   /** Fysiek nieuwe huisbezoeken (soort=nieuw) in de geselecteerde week. */
   const nieuweHuisbezoekenWeek = useMemo(() => {
     if (!showAdminSlots) return 0;
     const dayKeys = new Set(days.map((d) => d.key));
-    const advIds = new Set(visibleAdviseurs.map((a) => a.id));
+    const advIds = new Set(kolomAdviseurs.map((a) => a.id));
     return afspraken.filter((a) => {
       if (a.status === "geannuleerd") return false;
       if (normalizeAfspraakSoort(a.soort) !== "nieuw") return false;
@@ -726,11 +757,11 @@ export function AgendaPanel({
       if (!advIds.has(a.adviseur_id)) return false;
       return true;
     }).length;
-  }, [showAdminSlots, days, visibleAdviseurs, afspraken]);
+  }, [showAdminSlots, days, kolomAdviseurs, afspraken]);
 
   /** Leads met een zichtbare agenda-afspraak op de gekozen leads-dag. */
   const leadsVoorDag = useMemo(() => {
-    const visibleAdvIds = new Set(visibleAdviseurs.map((a) => a.id));
+    const visibleAdvIds = new Set(kolomAdviseurs.map((a) => a.id));
     const opDag = afspraken
       .filter((a) => {
         if (a.status === "geannuleerd") return false;
@@ -764,7 +795,7 @@ export function AgendaPanel({
     leads,
     leadsDayKey,
     defaultAdviseurId,
-    visibleAdviseurs,
+    kolomAdviseurs,
   ]);
 
   const leadStatusById = useMemo(() => {
@@ -1287,9 +1318,11 @@ export function AgendaPanel({
     isNarrow
   );
   const adviseurNamen = displayAdviseurs.map((a) => a.naam);
-  const hiddenCount = planAdviseurs.length - visibleAdviseurs.length;
+  const hiddenCount = defaultAdviseurId
+    ? 0
+    : weekPlanbareAdviseurs.length - kolomAdviseurs.length;
   const showMobileAdviseurPicker =
-    isNarrow && !defaultAdviseurId && visibleAdviseurs.length > 1;
+    isNarrow && !defaultAdviseurId && kolomAdviseurs.length > 1;
 
   return (
     <div className="flex h-full min-h-[70vh] flex-col bg-white">
@@ -1575,14 +1608,19 @@ export function AgendaPanel({
                         className="flex-1 rounded border border-line px-2 py-1 text-[11px] font-semibold hover:bg-wash"
                         onClick={() =>
                           setHiddenIds(
-                            new Set(planAdviseurs.map((a) => a.id))
+                            new Set(weekPlanbareAdviseurs.map((a) => a.id))
                           )
                         }
                       >
                         Geen
                       </button>
                     </div>
-                    {planAdviseurs.map((a) => {
+                    {weekPlanbareAdviseurs
+                      .filter(
+                        (a) =>
+                          (slotStatsByAdviseur.beschikbaar.get(a.id) || 0) > 0
+                      )
+                      .map((a) => {
                       const hidden = hiddenIds.has(a.id);
                       const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
                       const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
@@ -1667,7 +1705,7 @@ export function AgendaPanel({
         >
         {loading ? (
           <p className="p-8 text-center text-sm text-muted">Laden…</p>
-        ) : visibleAdviseurs.length === 0 ? (
+        ) : kolomAdviseurs.length === 0 ? (
           <p className="p-8 text-center text-sm text-muted">
             Geen adviseurs zichtbaar.
             {!defaultAdviseurId && hiddenCount > 0 ? (
@@ -1678,7 +1716,7 @@ export function AgendaPanel({
                   className="font-semibold text-green underline"
                   onClick={() => setHiddenIds(new Set())}
                 >
-                  Toon alle {planAdviseurs.length}
+                  Toon alle {weekPlanbareAdviseurs.length}
                 </button>
               </>
             ) : null}
@@ -1690,10 +1728,13 @@ export function AgendaPanel({
           >
             {showMobileAdviseurPicker ? (
               <div className="sticky top-0 z-40 flex gap-1.5 overflow-x-auto border-b border-line bg-white px-2 py-2">
-                {visibleAdviseurs.map((a) => {
+                {kolomAdviseurs.map((a) => {
                   const active = displayAdviseurs[0]?.id === a.id;
                   const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
                   const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
+                  const slotsLabel = isPlanbaarAdviseur(a)
+                    ? `${gepland}/${totaal}`
+                    : "—";
                   return (
                     <button
                       key={a.id}
@@ -1708,7 +1749,7 @@ export function AgendaPanel({
                     >
                       {adviseurKortLabel(
                         a.naam,
-                        visibleAdviseurs.map((x) => x.naam)
+                        kolomAdviseurs.map((x) => x.naam)
                       )}
                       <span
                         className={[
@@ -1716,7 +1757,7 @@ export function AgendaPanel({
                           active ? "text-white/80" : "text-muted",
                         ].join(" ")}
                       >
-                        {gepland}/{totaal}
+                        {slotsLabel}
                       </span>
                     </button>
                   );
@@ -1732,20 +1773,22 @@ export function AgendaPanel({
                 >
                   <div className="border-r border-line bg-[#FAFBFA]" />
                   {displayAdviseurs.map((a) => {
+                    const planbaar = isPlanbaarAdviseur(a);
                     const gepland = afsprakenCountByAdviseur.get(a.id) || 0;
                     const totaal = beschikbaarSlotsByAdviseur.get(a.id) || 0;
                     const cr = showConversie
                       ? conversieByAdviseur.get(a.id)
                       : undefined;
                     const label = adviseurKortLabel(a.naam, adviseurNamen);
+                    const slotsLabel = planbaar ? `${gepland}/${totaal}` : "—";
                     return (
                       <div
                         key={a.id}
                         className="min-w-0 border-r border-line px-0.5 py-1.5 text-center"
                         title={
                           cr != null
-                            ? `${a.naam} · ${gepland}/${totaal} · ${cr}% cr (maand)`
-                            : `${a.naam} · ${gepland}/${totaal}`
+                            ? `${a.naam} · ${slotsLabel} · ${cr}% cr (maand)`
+                            : `${a.naam} · ${slotsLabel}`
                         }
                       >
                         <p className="truncate text-[11px] font-semibold leading-tight text-ink">
@@ -1769,7 +1812,7 @@ export function AgendaPanel({
                           ) : null}
                         </p>
                         <p className="mt-0.5 text-[10px] font-medium tabular-nums text-muted">
-                          {gepland}/{totaal}
+                          {slotsLabel}
                         </p>
                         {(nietGelopenCounts[a.id] || 0) > 0 ? (
                           <p className="mt-0.5 text-[9px] font-semibold text-[#C62828]">
