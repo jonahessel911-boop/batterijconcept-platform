@@ -4,6 +4,22 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
+/** Zelfde kalenderdag in Europe/Amsterdam? */
+export function sameAmsterdamDay(a: Date, b: Date): boolean {
+  return (
+    formatInTimeZone(a, AMSTERDAM_TZ, "yyyy-MM-dd") ===
+    formatInTimeZone(b, AMSTERDAM_TZ, "yyyy-MM-dd")
+  );
+}
+
+/**
+ * Geen follow-up stap op de dag van inplannen (bevestiging mail+SMS).
+ * Voorkomt o.a. bevestiging + 48u/avond op dezelfde dag.
+ */
+function isBevestigingDay(now: Date, createdAt: Date): boolean {
+  return sameAmsterdamDay(now, createdAt);
+}
+
 /** Social-proof (intensief): ~dag 3 na inplannen, alleen bij genoeg leadtime. */
 export function shouldSendSocialProofNow(opts: {
   now: Date;
@@ -13,6 +29,7 @@ export function shouldSendSocialProofNow(opts: {
   alreadySent: boolean;
 }): boolean {
   if (opts.alreadySent || !opts.bevestigingSent) return false;
+  if (isBevestigingDay(opts.now, opts.createdAt)) return false;
 
   const leadtimeAtCreate = opts.startAt.getTime() - opts.createdAt.getTime();
   // ≤ 4 dagen leadtime → overslaan (direct naar 48u-zone)
@@ -28,14 +45,19 @@ export function shouldSendSocialProofNow(opts: {
   return true;
 }
 
-/** 48u reminder (intensief): venster ~47–49u vóór start (uurlijkse cron). */
+/**
+ * 48u reminder (intensief): venster ~47–49u vóór start (uurlijkse cron).
+ * Nooit op dezelfde Amsterdam-dag als de bevestiging.
+ */
 export function shouldSendReminder48uNow(opts: {
   now: Date;
   startAt: Date;
+  createdAt: Date;
   bevestigingSent: boolean;
   alreadySent: boolean;
 }): boolean {
   if (opts.alreadySent || !opts.bevestigingSent) return false;
+  if (isBevestigingDay(opts.now, opts.createdAt)) return false;
   const msUntil = opts.startAt.getTime() - opts.now.getTime();
   return msUntil >= 47 * HOUR && msUntil <= 49 * HOUR;
 }
@@ -43,13 +65,16 @@ export function shouldSendReminder48uNow(opts: {
 /**
  * Avond vóór SMS (intensief + rustig).
  * Amsterdam-kalenderdag vóór de afspraak, tussen 18:00–20:00.
+ * Nooit op dezelfde dag als de bevestiging (bijv. vandaag ingepland voor morgen).
  */
 export function shouldSendAvondSmsNow(opts: {
   now: Date;
   startAt: Date;
+  createdAt: Date;
   alreadySent: boolean;
 }): boolean {
   if (opts.alreadySent) return false;
+  if (isBevestigingDay(opts.now, opts.createdAt)) return false;
 
   const apptDay = formatInTimeZone(opts.startAt, AMSTERDAM_TZ, "yyyy-MM-dd");
   const today = formatInTimeZone(opts.now, AMSTERDAM_TZ, "yyyy-MM-dd");
