@@ -36,19 +36,26 @@ import {
   TooltipTrigger,
 } from "@/components/crm/sales-cockpit/ui/tooltip";
 import { Avatar, AvatarFallback } from "@/components/crm/sales-cockpit/ui/avatar";
-import { DualAreaChart, type ChartSeries } from "@/components/crm/sales-cockpit/ui/charts";
+import {
+  DistributionPieChart,
+  DualAreaChart,
+  HorizontalBarChart,
+  type ChartSeries,
+} from "@/components/crm/sales-cockpit/ui/charts";
 import { DataTable, type DataColumn } from "@/components/crm/sales-cockpit/ui/data-table";
 import { AMSTERDAM_TZ, formatEuro } from "@/lib/format";
-import type {
-  DayAdvisorAppt,
-  DayAdvisorRow,
-  DayOfferSignal,
-  DayOverview,
-  SalesQualityAdvisorRow,
-  SalesQualityOverview,
-  TrendPoint,
-  WeekLeaderboardRow,
-  WeekOverview,
+import {
+  SALES_PIPELINE_PIE_GROUPS,
+  type DayAdvisorAppt,
+  type DayAdvisorRow,
+  type DayOfferSignal,
+  type DayOverview,
+  type QualityTrendPoint,
+  type SalesQualityAdvisorRow,
+  type SalesQualityOverview,
+  type TrendPoint,
+  type WeekLeaderboardRow,
+  type WeekOverview,
 } from "@/lib/sales-cockpit/cockpit-metrics";
 import type { WallboardOverview } from "@/lib/sales-cockpit/wallboard";
 import {
@@ -81,6 +88,13 @@ type Report = {
   weekTrend: TrendPoint[];
   weekLeaderboard?: WeekLeaderboardRow[];
   salesQuality?: SalesQualityOverview;
+  salesQualityTrend?: QualityTrendPoint[];
+  qualityTrend?: {
+    from: string;
+    to: string;
+    label: string;
+    group: GroupBy;
+  };
   trend?: {
     from: string;
     to: string;
@@ -202,7 +216,7 @@ function parseTrendMetrics(raw: string | null): TrendMetricId[] {
 
 const VIEWS = [
   ["cockpit", "Cockpit"],
-  ["kwaliteit", "Kwaliteit"],
+  ["kwaliteit", "Kwaliteit sales"],
 ] as const;
 
 const QUALITY_PERIODS: { id: QualityPeriodId; label: string }[] = [
@@ -215,6 +229,75 @@ const QUALITY_PERIODS: { id: QualityPeriodId; label: string }[] = [
   { id: "dit_jaar", label: "Dit jaar" },
   { id: "vrij", label: "Aangepaste periode" },
 ];
+
+type QualityTrendMetricId =
+  | "deals"
+  | "timelyPct"
+  | "holdPct"
+  | "cancelledPct"
+  | "paidLatePct"
+  | "holdOrCancelledPct";
+
+const QUALITY_TREND_METRICS: {
+  id: QualityTrendMetricId;
+  label: string;
+  short: string;
+  color: string;
+  percent?: boolean;
+}[] = [
+  { id: "deals", label: "Hoeveelheid deals", short: "Deals", color: "#0f766e" },
+  {
+    id: "timelyPct",
+    label: "Op tijd aanbetaald",
+    short: "Op tijd %",
+    color: "#059669",
+    percent: true,
+  },
+  {
+    id: "holdPct",
+    label: "Op hold",
+    short: "Hold %",
+    color: "#d97706",
+    percent: true,
+  },
+  {
+    id: "cancelledPct",
+    label: "Geannuleerd",
+    short: "Geannuleerd %",
+    color: "#e11d48",
+    percent: true,
+  },
+  {
+    id: "paidLatePct",
+    label: "Betaald te laat",
+    short: "Te laat %",
+    color: "#ca8a04",
+    percent: true,
+  },
+  {
+    id: "holdOrCancelledPct",
+    label: "Hold of geannuleerd",
+    short: "Hold/annul. %",
+    color: "#9f1239",
+    percent: true,
+  },
+];
+
+const QUALITY_TREND_METRIC_IDS = new Set(
+  QUALITY_TREND_METRICS.map((m) => m.id)
+);
+
+function parseQualityTrendMetrics(raw: string | null): QualityTrendMetricId[] {
+  const list = (raw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s): s is QualityTrendMetricId =>
+      QUALITY_TREND_METRIC_IDS.has(s as QualityTrendMetricId)
+    );
+  return list.length > 0
+    ? list
+    : ["deals", "timelyPct", "holdPct", "cancelledPct"];
+}
 
 function pctOf(part: number, total: number): number {
   if (total <= 0) return 0;
@@ -1545,18 +1628,40 @@ function WeekKpiCards({ week }: { week: WeekOverview }) {
 
 function SalesQualitySection({
   quality,
+  trendPoints,
+  trendPeriod,
+  trendGroup,
+  trendMetrics,
+  trendCustomFrom,
+  trendCustomTo,
+  trendRangeLabel,
   period,
   customFrom,
   customTo,
   onPeriodChange,
   onCustomRangeChange,
+  onTrendPeriodChange,
+  onTrendGroupChange,
+  onTrendCustomRangeChange,
+  onTrendMetricsChange,
 }: {
   quality: SalesQualityOverview | null | undefined;
+  trendPoints: QualityTrendPoint[];
+  trendPeriod: TrendPeriodId;
+  trendGroup: GroupBy;
+  trendMetrics: QualityTrendMetricId[];
+  trendCustomFrom: string;
+  trendCustomTo: string;
+  trendRangeLabel?: string;
   period: QualityPeriodId;
   customFrom: string;
   customTo: string;
   onPeriodChange: (id: QualityPeriodId) => void;
   onCustomRangeChange: (from: string, to: string) => void;
+  onTrendPeriodChange: (id: TrendPeriodId) => void;
+  onTrendGroupChange: (id: GroupBy) => void;
+  onTrendCustomRangeChange: (from: string, to: string) => void;
+  onTrendMetricsChange: (ids: QualityTrendMetricId[]) => void;
 }) {
   const columns: DataColumn<SalesQualityAdvisorRow & { rank: number }>[] = [
     {
@@ -1684,7 +1789,7 @@ function SalesQualitySection({
             Saleskwaliteit
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            Aanbetalingen, op tijd (3 dagen na factuur/bel) en hold
+            Overzicht na tekenen en ranking per adviseur
             {quality?.label ? ` · ${quality.label}` : ""}
           </p>
         </div>
@@ -1731,69 +1836,150 @@ function SalesQualitySection({
       </div>
 
       {quality ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl border border-line bg-white px-4 py-4 shadow-sm">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              Deals
-            </p>
-            <p className="mt-2 font-display text-4xl font-semibold tabular-nums text-ink">
-              {quality.deals}
-            </p>
-            <p className="mt-1 text-xs text-muted">getekend in periode</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-white px-4 py-4 shadow-sm">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              Aanbetaald
-            </p>
-            <p className="mt-2 font-display text-4xl font-semibold tabular-nums text-teal-800">
-              {quality.aanbetaald}
-              <span className="ml-1 text-lg font-medium text-muted">
-                /{quality.dealsWithDepositDue}
-              </span>
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {pctLabel(quality.aanbetaaldPct)} van deals met vereiste
-              aanbetaling
-            </p>
-          </div>
-          <div className="rounded-2xl border border-line bg-white px-4 py-4 shadow-sm">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              Op tijd betaald
-            </p>
-            <p className="mt-2 font-display text-4xl font-semibold tabular-nums text-sky-800">
-              {quality.tijdig}
-              <span className="ml-1 text-lg font-medium text-muted">
-                /{quality.tijdigBeoordeeld}
-              </span>
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {pctLabel(quality.tijdigPct)} binnen 3 dagen na factuur
-              (en bel indien bekend)
-            </p>
-          </div>
-          <div className="rounded-2xl border border-line bg-white px-4 py-4 shadow-sm">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-              Hold sales actie
-            </p>
-            <p className="mt-2 font-display text-4xl font-semibold tabular-nums text-amber-800">
-              {quality.hold}
-              <span className="ml-1 text-lg font-medium text-muted">
-                /{quality.deals}
-              </span>
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {pctLabel(quality.holdPct)} van getekende deals
-            </p>
-          </div>
-        </div>
+        <Card className="overflow-hidden border-line shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Waar staan de sales?</CardTitle>
+            <CardDescription>
+              Verdeling van {quality.pipelineTotal} getekende deals — van
+              sales-actie tot aanbetaling
+              {quality.label ? ` · ${quality.label}` : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {quality.pipelineTotal > 0 ? (
+              <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                  <div className="flex min-h-0 min-w-0 flex-col gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">
+                        Detailstatussen
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        Alle pipeline-stappen na tekenen
+                      </p>
+                    </div>
+                    <div className="min-h-[22rem] min-w-0 flex-1">
+                      <HorizontalBarChart
+                        data={quality.pipeline.map((b) => ({
+                          label: b.short,
+                          value: b.n,
+                          key: b.key,
+                        }))}
+                        labelKey="label"
+                        valueKey="value"
+                        labelWidth={128}
+                        color={(row) => {
+                          const hit = quality.pipeline.find(
+                            (b) => b.key === String(row.key || "")
+                          );
+                          return hit?.color || "#18181b";
+                        }}
+                        formatValue={(value) =>
+                          `${value.toLocaleString("nl-NL")} deals`
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex min-w-0 flex-col gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">
+                        Samenvatting
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        Hover voor dezelfde detailstatussen als links
+                      </p>
+                    </div>
+                    <div className="h-[18rem] min-h-0 sm:h-[20rem]">
+                      <DistributionPieChart
+                        data={SALES_PIPELINE_PIE_GROUPS.map((group) => {
+                          const details = group.detailKeys.map((key) => {
+                            const bucket = quality.pipeline.find(
+                              (b) => b.key === key
+                            );
+                            return {
+                              label: bucket?.short || key,
+                              value: bucket?.n || 0,
+                              color: bucket?.color,
+                            };
+                          });
+                          const value = details.reduce(
+                            (sum, d) => sum + d.value,
+                            0
+                          );
+                          return {
+                            key: group.key,
+                            label: group.short,
+                            value,
+                            color: group.color,
+                            details,
+                          };
+                        })}
+                        formatValue={(value) =>
+                          `${value.toLocaleString("nl-NL")} deals`
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      {SALES_PIPELINE_PIE_GROUPS.map((group) => {
+                        const n = group.detailKeys.reduce((sum, key) => {
+                          const bucket = quality.pipeline.find(
+                            (b) => b.key === key
+                          );
+                          return sum + (bucket?.n || 0);
+                        }, 0);
+                        const share =
+                          quality.pipelineTotal > 0
+                            ? Math.round((n / quality.pipelineTotal) * 1000) /
+                              10
+                            : 0;
+                        return (
+                          <div
+                            key={group.key}
+                            className="flex items-center justify-between gap-2 text-xs"
+                          >
+                            <p className="flex min-w-0 items-center gap-1.5 text-muted">
+                              <span
+                                className="size-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: group.color }}
+                              />
+                              <span className="truncate text-ink">
+                                {group.label}
+                              </span>
+                            </p>
+                            <span className="shrink-0 tabular-nums font-medium text-ink">
+                              {n} · {share.toLocaleString("nl-NL")}%
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+              </div>
+            ) : (
+              <p className="py-8 text-center text-sm text-muted">
+                Geen getekende deals in deze periode
+              </p>
+            )}
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Skeleton className="h-28 rounded-2xl" />
-          <Skeleton className="h-28 rounded-2xl" />
-          <Skeleton className="h-28 rounded-2xl" />
-          <Skeleton className="h-28 rounded-2xl" />
-        </div>
+        <Skeleton className="h-[28rem] w-full rounded-xl" />
       )}
+
+      <QualityTrendCard
+        points={trendPoints}
+        period={trendPeriod}
+        group={trendGroup}
+        metrics={trendMetrics}
+        rangeLabel={trendRangeLabel}
+        customFrom={trendCustomFrom}
+        customTo={trendCustomTo}
+        onPeriodChange={onTrendPeriodChange}
+        onGroupChange={onTrendGroupChange}
+        onCustomRangeChange={onTrendCustomRangeChange}
+        onMetricsChange={onTrendMetricsChange}
+        loading={!quality}
+      />
 
       <Card className="overflow-hidden border-line shadow-sm">
         {quality ? (
@@ -1810,6 +1996,252 @@ function SalesQualitySection({
         )}
       </Card>
     </section>
+  );
+}
+
+function QualityTrendCard({
+  points,
+  period,
+  group,
+  metrics,
+  rangeLabel,
+  customFrom,
+  customTo,
+  onPeriodChange,
+  onGroupChange,
+  onCustomRangeChange,
+  onMetricsChange,
+  loading,
+}: {
+  points: QualityTrendPoint[];
+  period: TrendPeriodId;
+  group: GroupBy;
+  metrics: QualityTrendMetricId[];
+  rangeLabel?: string;
+  customFrom: string;
+  customTo: string;
+  onPeriodChange: (id: TrendPeriodId) => void;
+  onGroupChange: (id: GroupBy) => void;
+  onCustomRangeChange: (from: string, to: string) => void;
+  onMetricsChange: (ids: QualityTrendMetricId[]) => void;
+  loading?: boolean;
+}) {
+  const selectedMetas = QUALITY_TREND_METRICS.filter((m) =>
+    metrics.includes(m.id)
+  );
+  const hasPercent = selectedMetas.some((m) => m.percent);
+  const hasCount = selectedMetas.some((m) => !m.percent);
+  const dualAxis = hasPercent && hasCount;
+
+  const chartData = points.map((p) => {
+    const row: Record<string, string | number> = { label: p.label };
+    for (const m of selectedMetas) {
+      const raw = p[m.id];
+      row[m.id] = raw == null ? 0 : Number(raw);
+    }
+    return row;
+  });
+
+  const series: ChartSeries[] = selectedMetas.map((m) => ({
+    key: m.id,
+    label: m.short,
+    color: m.color,
+    yAxisId: dualAxis ? (m.percent ? "right" : "left") : undefined,
+  }));
+
+  const latest = points[points.length - 1];
+  const groupLabel =
+    TREND_GROUPS.find((g) => g.id === group)?.label.replace(/^Per /, "") ||
+    group;
+
+  function toggleMetric(id: QualityTrendMetricId) {
+    if (metrics.includes(id)) {
+      if (metrics.length === 1) return;
+      onMetricsChange(metrics.filter((m) => m !== id));
+      return;
+    }
+    onMetricsChange([...metrics, id]);
+  }
+
+  if (loading) {
+    return <Skeleton className="h-[28rem] w-full rounded-xl" />;
+  }
+
+  return (
+    <Card className="border-line shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-base">Kwaliteitstrend</CardTitle>
+            <CardDescription>
+              {rangeLabel || `${points.length} periodes`}
+              {" · "}
+              {TREND_GROUPS.find((g) => g.id === group)?.label || group}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex min-w-[11rem] flex-col gap-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                Periode
+              </span>
+              <select
+                value={period}
+                onChange={(e) =>
+                  onPeriodChange(e.target.value as TrendPeriodId)
+                }
+                className={selectClassName()}
+              >
+                {TREND_PERIODS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {period === "vrij" ? (
+              <>
+                <label className="flex min-w-[9.5rem] flex-col gap-1">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                    Van
+                  </span>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      if (!isYmd(next)) return;
+                      onCustomRangeChange(next, customTo || next);
+                    }}
+                    className={selectClassName()}
+                    aria-label="Kwaliteitstrend van"
+                  />
+                </label>
+                <label className="flex min-w-[9.5rem] flex-col gap-1">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                    Tot
+                  </span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      if (!isYmd(next)) return;
+                      onCustomRangeChange(customFrom || next, next);
+                    }}
+                    className={selectClassName()}
+                    aria-label="Kwaliteitstrend tot"
+                  />
+                </label>
+              </>
+            ) : null}
+            <label className="flex min-w-[9rem] flex-col gap-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                Interval
+              </span>
+              <select
+                value={group}
+                onChange={(e) => onGroupChange(e.target.value as GroupBy)}
+                className={selectClassName()}
+              >
+                {TREND_GROUPS.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-1.5">
+          {QUALITY_TREND_METRICS.map((m) => {
+            const on = metrics.includes(m.id);
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => toggleMetric(m.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                  on
+                    ? "border-transparent text-white shadow-sm"
+                    : "border-line bg-white text-muted hover:bg-wash hover:text-ink"
+                )}
+                style={on ? { backgroundColor: m.color } : undefined}
+                aria-pressed={on}
+              >
+                <span
+                  className="size-1.5 rounded-full"
+                  style={{ backgroundColor: on ? "#fff" : m.color }}
+                />
+                {m.short}
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedMetas.length > 0 && latest ? (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {selectedMetas.map((m) => {
+              const raw = latest[m.id];
+              const value = raw == null ? null : Number(raw);
+              return (
+                <div
+                  key={m.id}
+                  className="rounded-xl border border-line bg-wash/50 px-3 py-2.5"
+                >
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
+                    <span
+                      className="size-2 rounded-full"
+                      style={{ backgroundColor: m.color }}
+                    />
+                    {m.short}
+                  </p>
+                  <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
+                    {m.percent
+                      ? pctLabel(value)
+                      : (value ?? 0).toLocaleString("nl-NL")}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
+        <div className="h-64 w-full sm:h-80">
+          <DualAreaChart
+            data={chartData}
+            xKey="label"
+            series={series}
+            allowDecimals={
+              (!dualAxis && hasPercent) ||
+              (dualAxis && !hasCount)
+            }
+            yWidth={dualAxis || !hasPercent ? 36 : 40}
+            yWidthRight={40}
+            formatValue={(value, key) => {
+              const meta = QUALITY_TREND_METRICS.find((m) => m.id === key);
+              if (meta?.percent) return pctLabel(value);
+              return value.toLocaleString("nl-NL");
+            }}
+            formatAxis={(value) => {
+              if (dualAxis) return String(Math.round(value));
+              if (hasPercent) return `${Math.round(value)}%`;
+              return String(Math.round(value));
+            }}
+            formatAxisRight={(value) => `${Math.round(value)}%`}
+          />
+        </div>
+        <p className="text-xs text-muted">
+          Laatste punt = meest recente {groupLabel.toLowerCase()}
+          {dualAxis ? " · aantallen links, percentages rechts" : ""}
+          {" · op tijd % = van deals met bekende aanbetalingsuitkomst"}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -2323,6 +2755,34 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
   const qualityCustomTo = isYmd(qualityTotRaw)
     ? qualityTotRaw
     : defaultQualityCustom.to;
+  const qualityTrendPeriodRaw = sp.get("kwaliteit_trend_periode") || "w12";
+  const qualityTrendPeriod = TREND_PERIOD_IDS.has(
+    qualityTrendPeriodRaw as TrendPeriodId
+  )
+    ? (qualityTrendPeriodRaw as TrendPeriodId)
+    : "w12";
+  const qualityTrendVanRaw = sp.get("kwaliteit_trend_van") || "";
+  const qualityTrendTotRaw = sp.get("kwaliteit_trend_tot") || "";
+  const defaultQualityTrendCustom = useMemo(
+    () => trendPeriodRange("d30", todayYmd()),
+    []
+  );
+  const qualityTrendCustomFrom = isYmd(qualityTrendVanRaw)
+    ? qualityTrendVanRaw
+    : defaultQualityTrendCustom.from;
+  const qualityTrendCustomTo = isYmd(qualityTrendTotRaw)
+    ? qualityTrendTotRaw
+    : defaultQualityTrendCustom.to;
+  const qualityTrendGroupRaw = sp.get("kwaliteit_trend_groep");
+  const qualityTrendGroup: GroupBy | null =
+    qualityTrendGroupRaw === "dag" ||
+    qualityTrendGroupRaw === "week" ||
+    qualityTrendGroupRaw === "maand"
+      ? qualityTrendGroupRaw
+      : null;
+  const qualityTrendMetrics = parseQualityTrendMetrics(
+    sp.get("kwaliteit_trend_metrics")
+  );
 
   const dataQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -2343,6 +2803,14 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
       params.set("kwaliteit_van", qualityCustomFrom);
       params.set("kwaliteit_tot", qualityCustomTo);
     }
+    params.set("kwaliteit_trend_periode", qualityTrendPeriod);
+    if (qualityTrendPeriod === "vrij") {
+      params.set("kwaliteit_trend_van", qualityTrendCustomFrom);
+      params.set("kwaliteit_trend_tot", qualityTrendCustomTo);
+    }
+    if (qualityTrendGroup) {
+      params.set("kwaliteit_trend_groep", qualityTrendGroup);
+    }
     return params.toString();
   }, [
     weekAnchor,
@@ -2355,6 +2823,10 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
     qualityPeriod,
     qualityCustomFrom,
     qualityCustomTo,
+    qualityTrendPeriod,
+    qualityTrendCustomFrom,
+    qualityTrendCustomTo,
+    qualityTrendGroup,
   ]);
 
   const playNextSigned = useCallback(() => {
@@ -2866,6 +3338,7 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
   const day = report?.dayOverview;
   const wallboard = report?.wallboard;
   const salesQuality = report?.salesQuality;
+  const salesQualityTrend = report?.salesQualityTrend || [];
   const weekTrend = report?.weekTrend || [];
   const weekLeaderboard = report?.weekLeaderboard || [];
   const activeTrendGroup =
@@ -2874,6 +3347,13 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
     defaultGroupBy({
       from: report?.trend?.from || weekAnchor,
       to: report?.trend?.to || weekAnchor,
+    });
+  const activeQualityTrendGroup =
+    report?.qualityTrend?.group ||
+    qualityTrendGroup ||
+    defaultGroupBy({
+      from: report?.qualityTrend?.from || qualityTrendCustomFrom,
+      to: report?.qualityTrend?.to || qualityTrendCustomTo,
     });
 
   function setQualityPeriod(id: QualityPeriodId) {
@@ -2905,6 +3385,55 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
       kwaliteit_periode: "vrij",
       kwaliteit_van: nextFrom,
       kwaliteit_tot: nextTo,
+    });
+  }
+
+  function setQualityTrendPeriod(id: TrendPeriodId) {
+    if (id === "vrij") {
+      const seed = trendPeriodRange("d30", todayYmd());
+      setParams({
+        kwaliteit_trend_periode: id,
+        kwaliteit_trend_groep: null,
+        kwaliteit_trend_van: isYmd(qualityTrendVanRaw)
+          ? qualityTrendVanRaw
+          : seed.from,
+        kwaliteit_trend_tot: isYmd(qualityTrendTotRaw)
+          ? qualityTrendTotRaw
+          : seed.to,
+      });
+      return;
+    }
+    setParams({
+      kwaliteit_trend_periode: id,
+      kwaliteit_trend_groep: null,
+      kwaliteit_trend_van: null,
+      kwaliteit_trend_tot: null,
+    });
+  }
+
+  function setQualityTrendCustomRange(from: string, to: string) {
+    let nextFrom = from;
+    let nextTo = to;
+    if (nextFrom > nextTo) {
+      const swap = nextFrom;
+      nextFrom = nextTo;
+      nextTo = swap;
+    }
+    setParams({
+      kwaliteit_trend_periode: "vrij",
+      kwaliteit_trend_groep: null,
+      kwaliteit_trend_van: nextFrom,
+      kwaliteit_trend_tot: nextTo,
+    });
+  }
+
+  function setQualityTrendGroup(id: GroupBy) {
+    setParams({ kwaliteit_trend_groep: id });
+  }
+
+  function setQualityTrendMetrics(ids: QualityTrendMetricId[]) {
+    setParams({
+      kwaliteit_trend_metrics: ids.join(","),
     });
   }
 
@@ -3103,11 +3632,22 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
         ) : (
           <SalesQualitySection
             quality={salesQuality}
+            trendPoints={salesQualityTrend}
+            trendPeriod={qualityTrendPeriod}
+            trendGroup={activeQualityTrendGroup}
+            trendMetrics={qualityTrendMetrics}
+            trendCustomFrom={qualityTrendCustomFrom}
+            trendCustomTo={qualityTrendCustomTo}
+            trendRangeLabel={report?.qualityTrend?.label}
             period={qualityPeriod}
             customFrom={qualityCustomFrom}
             customTo={qualityCustomTo}
             onPeriodChange={setQualityPeriod}
             onCustomRangeChange={setQualityCustomRange}
+            onTrendPeriodChange={setQualityTrendPeriod}
+            onTrendGroupChange={setQualityTrendGroup}
+            onTrendCustomRangeChange={setQualityTrendCustomRange}
+            onTrendMetricsChange={setQualityTrendMetrics}
           />
         )
       ) : null}

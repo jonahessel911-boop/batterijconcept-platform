@@ -6,11 +6,14 @@ const COOKIE_NAME = "bc_session";
 const SESSION_DAYS = 30;
 
 function sessionSecret(): string {
-  return (
-    process.env.SESSION_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    "batterijconcept-dev-secret"
-  );
+  // Statische process.env.* refs — Edge/middleware bundelt die alleen zo.
+  // Zonder gedeelde SESSION_SECRET faalt verify in middleware terwijl
+  // /api/auth/login wél slaagt → redirect-loop terug naar /login.
+  const dedicated = process.env.SESSION_SECRET;
+  if (dedicated && dedicated.trim()) return dedicated.trim();
+  const fallback = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (fallback && fallback.trim()) return fallback.trim();
+  return "batterijconcept-dev-secret";
 }
 
 export type SessionPayload = {
@@ -109,14 +112,10 @@ export async function verifySessionToken(
   if (!payloadB64 || !sig) return null;
 
   try {
-    const key = await hmacKey();
-    const ok = await crypto.subtle.verify(
-      "HMAC",
-      key,
-      fromBase64Url(sig),
-      new TextEncoder().encode(payloadB64)
-    );
-    if (!ok) return null;
+    // Opnieuw signen i.p.v. subtle.verify — Edge middleware faalde soms
+    // op verify terwijl Node API dezelfde cookie wél accepteerde.
+    const expected = await sign(payloadB64);
+    if (expected !== sig) return null;
 
     const json = new TextDecoder().decode(fromBase64Url(payloadB64));
     const payload = JSON.parse(json) as SessionPayload;

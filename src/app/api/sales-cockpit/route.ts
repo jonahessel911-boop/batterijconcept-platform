@@ -185,6 +185,41 @@ export function parseReportQuery(sp: URLSearchParams) {
     qualityTo = swap;
   }
   const qualityRange = { from: qualityFrom, to: qualityTo };
+  const qualityTrendPeriodRaw = sp.get("kwaliteit_trend_periode") || "w12";
+  const qualityTrendPeriod = TREND_PERIOD_IDS.has(
+    qualityTrendPeriodRaw as TrendPeriodId
+  )
+    ? (qualityTrendPeriodRaw as TrendPeriodId)
+    : "w12";
+  let qualityTrendFrom = sp.get("kwaliteit_trend_van") || "";
+  let qualityTrendTo = sp.get("kwaliteit_trend_tot") || "";
+  if (qualityTrendPeriod === "vrij") {
+    if (!isYmd(qualityTrendFrom) || !isYmd(qualityTrendTo)) {
+      const tr = trendPeriodRange("d30", today);
+      qualityTrendFrom = tr.from;
+      qualityTrendTo = tr.to;
+    }
+  } else {
+    const tr = trendPeriodRange(qualityTrendPeriod, today);
+    qualityTrendFrom = tr.from;
+    qualityTrendTo = tr.to;
+  }
+  if (qualityTrendFrom > qualityTrendTo) {
+    const swap = qualityTrendFrom;
+    qualityTrendFrom = qualityTrendTo;
+    qualityTrendTo = swap;
+  }
+  const qualityTrendRange = {
+    from: qualityTrendFrom,
+    to: qualityTrendTo,
+  };
+  const qualityTrendGroupRaw = sp.get("kwaliteit_trend_groep");
+  const qualityTrendGroup: GroupBy =
+    qualityTrendGroupRaw === "dag" ||
+    qualityTrendGroupRaw === "week" ||
+    qualityTrendGroupRaw === "maand"
+      ? qualityTrendGroupRaw
+      : defaultGroupBy(qualityTrendRange);
   return {
     range,
     compare,
@@ -200,5 +235,7 @@ export function parseReportQuery(sp: URLSearchParams) {
     trendGroup,
     trendAdvisorIds,
     qualityRange,
+    qualityTrendRange,
+    qualityTrendGroup,
   };
 }

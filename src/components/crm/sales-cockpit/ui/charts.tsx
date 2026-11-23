@@ -8,6 +8,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -25,7 +27,16 @@ export type ChartSeries = {
   yAxisId?: "left" | "right";
 };
 
-export type ChartRow = Record<string, string | number>;
+export type ChartTooltipDetail = {
+  label: string;
+  value: number;
+  color?: string;
+};
+
+export type ChartRow = Record<
+  string,
+  string | number | ChartTooltipDetail[] | undefined
+>;
 
 type TipItem = {
   name?: string;
@@ -47,26 +58,78 @@ function ChartTooltip({
   formatValue?: (value: number, key: string) => string;
 }) {
   if (!active || !payload?.length) return null;
+  const first = payload[0];
+  const details = first?.payload?.details;
+  const detailList = Array.isArray(details) ? details : null;
+  const heading =
+    label ||
+    (typeof first?.payload?.label === "string"
+      ? first.payload.label
+      : first?.name) ||
+    "";
+
   return (
-    <div className="min-w-44 rounded-xl border border-zinc-200 bg-white/95 px-3.5 py-3 shadow-xl backdrop-blur">
-      <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">{label}</p>
-      <div className="space-y-1.5">
-        {payload.map((item) => {
-          const key = String(item.dataKey ?? item.name ?? "");
-          const value = Number(item.value ?? 0);
-          return (
-            <div key={key} className="flex items-center justify-between gap-8 text-xs">
+    <div className="min-w-48 max-w-72 rounded-xl border border-zinc-200 bg-white/95 px-3.5 py-3 shadow-xl backdrop-blur">
+      <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+        {heading}
+      </p>
+      {detailList && detailList.length > 0 ? (
+        <div className="space-y-1.5">
+          {detailList.map((detail) => (
+            <div
+              key={detail.label}
+              className="flex items-center justify-between gap-8 text-xs"
+            >
               <span className="inline-flex items-center gap-2 text-zinc-600">
-                <span className="size-2.5 rounded-full" style={{ background: item.color }} />
-                {item.name}
+                <span
+                  className="size-2.5 rounded-full"
+                  style={{ background: detail.color || "#a1a1aa" }}
+                />
+                {detail.label}
               </span>
               <span className="font-semibold tabular-nums text-zinc-950">
-                {formatValue ? formatValue(value, key) : value.toLocaleString("nl-NL")}
+                {formatValue
+                  ? formatValue(detail.value, detail.label)
+                  : detail.value.toLocaleString("nl-NL")}
               </span>
             </div>
-          );
-        })}
-      </div>
+          ))}
+          <div className="mt-1 flex items-center justify-between gap-8 border-t border-zinc-100 pt-2 text-xs">
+            <span className="font-medium text-zinc-500">Totaal</span>
+            <span className="font-semibold tabular-nums text-zinc-950">
+              {formatValue
+                ? formatValue(Number(first?.value ?? 0), String(heading))
+                : Number(first?.value ?? 0).toLocaleString("nl-NL")}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {payload.map((item) => {
+            const key = String(item.dataKey ?? item.name ?? "");
+            const value = Number(item.value ?? 0);
+            return (
+              <div
+                key={key}
+                className="flex items-center justify-between gap-8 text-xs"
+              >
+                <span className="inline-flex items-center gap-2 text-zinc-600">
+                  <span
+                    className="size-2.5 rounded-full"
+                    style={{ background: item.color }}
+                  />
+                  {item.name}
+                </span>
+                <span className="font-semibold tabular-nums text-zinc-950">
+                  {formatValue
+                    ? formatValue(value, key)
+                    : value.toLocaleString("nl-NL")}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -278,6 +341,90 @@ export function AreaTrendChart({
   );
 }
 
+/** Donut/pie voor categorische verdeling (shadcn-stijl). */
+export function DistributionPieChart({
+  data,
+  nameKey = "label",
+  valueKey = "value",
+  colorKey = "color",
+  formatValue,
+  innerRadius = 62,
+  outerRadius = 96,
+}: {
+  data: ChartRow[];
+  nameKey?: string;
+  valueKey?: string;
+  colorKey?: string;
+  formatValue?: (value: number, key: string) => string;
+  innerRadius?: number;
+  outerRadius?: number;
+}) {
+  const total = data.reduce((s, row) => s + (Number(row[valueKey]) || 0), 0);
+  const slices = data.filter((row) => (Number(row[valueKey]) || 0) > 0);
+
+  return (
+    <ChartFrame series={[]} empty={slices.length === 0}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+          <Tooltip
+            content={(props) => (
+              <ChartTooltip
+                active={props.active}
+                payload={props.payload as unknown as readonly TipItem[] | undefined}
+                label={props.label}
+                formatValue={formatValue}
+              />
+            )}
+          />
+          <Pie
+            data={slices}
+            dataKey={valueKey}
+            nameKey={nameKey}
+            cx="50%"
+            cy="50%"
+            innerRadius={innerRadius}
+            outerRadius={outerRadius}
+            paddingAngle={slices.length > 1 ? 2 : 0}
+            stroke="#fff"
+            strokeWidth={2}
+          >
+            {slices.map((row, index) => (
+              <Cell
+                key={String(row[nameKey] ?? index)}
+                fill={String(row[colorKey] || "#18181b")}
+              />
+            ))}
+          </Pie>
+          {total > 0 ? (
+            <text
+              x="50%"
+              y="48%"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="fill-zinc-950"
+              style={{ fontSize: 28, fontWeight: 600 }}
+            >
+              {total.toLocaleString("nl-NL")}
+            </text>
+          ) : null}
+          {total > 0 ? (
+            <text
+              x="50%"
+              y="58%"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="fill-zinc-400"
+              style={{ fontSize: 11, fontWeight: 500 }}
+            >
+              deals
+            </text>
+          ) : null}
+        </PieChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  );
+}
+
 export function HorizontalBarChart({
   data,
   labelKey = "label",
@@ -285,6 +432,7 @@ export function HorizontalBarChart({
   color = "#18181b",
   formatValue,
   reference,
+  labelWidth = 120,
 }: {
   data: ChartRow[];
   labelKey?: string;
@@ -292,6 +440,7 @@ export function HorizontalBarChart({
   color?: string | ((row: ChartRow) => string);
   formatValue?: (value: number, key: string) => string;
   reference?: number;
+  labelWidth?: number;
 }) {
   const max = Math.max(1, ...data.map((row) => Number(row[valueKey] || 0)), reference || 0);
   return (
@@ -300,7 +449,7 @@ export function HorizontalBarChart({
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
           <CartesianGrid stroke={GRID} strokeDasharray="4 4" horizontal={false} />
           <XAxis type="number" domain={[0, Math.ceil(max * 1.05)]} {...axisProps} />
-          <YAxis type="category" dataKey={labelKey} width={108} {...axisProps} />
+          <YAxis type="category" dataKey={labelKey} width={labelWidth} {...axisProps} />
           <Tooltip
             content={(props) => (
               <ChartTooltip

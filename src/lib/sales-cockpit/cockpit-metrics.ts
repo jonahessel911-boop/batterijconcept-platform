@@ -2,6 +2,7 @@ import {
   isGeenInteresseStatus,
   isNietGelopenUitkomst,
   leadStatusLabel,
+  normalizeProjectStatus,
 } from "@/lib/labels";
 import {
   isSaleUitkomst,
@@ -13,13 +14,14 @@ import {
   type RawAppt,
   type RawOffer,
 } from "@/lib/sales-cockpit/classify";
+import { isSchouwweekGepland } from "@/lib/schouw-week";
 import { AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
 import type { LeadStatus } from "@/types/database";
 import {
   addYmd,
   bucketKey,
-  dateOnlyYmd,
   formatRangeLabel,
+  isYmd,
   isoToYmd,
   listBuckets,
   ymdInRange,
@@ -114,6 +116,7 @@ export type WeekOverview = {
   gelopen: number;
   nogTeLopen: number;
   nietGelopen: number;
+  /** Offertes met ondertekend_op in deze week (niet op afspraakweek). */
   deals: number;
   dealsWithDepositDue: number;
   dealsDeposited: number;
@@ -441,6 +444,10 @@ function outcomeList(map: Map<string, number>): CockpitVisitOutcome[] {
 export function buildWeekOverview(input: {
   dossiers: Dossier[];
   appointments: RawAppt[];
+  /** Ondertekende offertes — deals/orderwaarde op tekendatum (ondertekend_op). */
+  offers?: RawOffer[];
+  /** Offerte-ids met projectstatus annulering — tellen niet mee als sale. */
+  cancelledOfferIds?: Set<string>;
   leadStatusById: Map<string, string>;
   appointmentsByLead: Map<string, RawAppt[]>;
   week: DateRange & { key?: string };
@@ -455,6 +462,8 @@ export function buildWeekOverview(input: {
   const {
     dossiers,
     appointments,
+    offers,
+    cancelledOfferIds = new Set<string>(),
     leadStatusById,
     appointmentsByLead,
     week,
@@ -560,17 +569,41 @@ export function buildWeekOverview(input: {
   let orderwaardeEx = 0;
   let orderwaardeInc = 0;
   let aanbetalingenInc = 0;
-  for (const row of dossiers) {
-    if (!ymdInRange(row.signedYmd, week)) continue;
-    if (row.cancelled) continue;
-    deals += 1;
-    orderwaardeEx = round2(orderwaardeEx + row.signedEx);
-    orderwaardeInc = round2(orderwaardeInc + row.signedInc);
-    if (!row.depositNone) {
+  // Sales = offertes getekend in de week (ondertekend_op), niet op afspraakweek.
+  // Fallback zonder offers: primaire dossier-signedYmd (trend zonder offer-lijst).
+  const weekSigned =
+    offers != null
+      ? signedOffersInRange(offers, week, cancelledOfferIds)
+      : null;
+  if (weekSigned) {
+    deals = weekSigned.length;
+    for (const offer of weekSigned) {
+      orderwaardeEx = round2(orderwaardeEx + (Number(offer.ex) || 0));
+      orderwaardeInc = round2(orderwaardeInc + (Number(offer.inc) || 0));
+    }
+    const depositLeads = new Set(weekSigned.map((o) => o.leadId));
+    for (const leadId of depositLeads) {
+      const row = dossierByLead.get(leadId);
+      if (!row || row.cancelled || row.depositNone) continue;
       dealsWithDepositDue += 1;
       if (row.depositMet) {
         dealsDeposited += 1;
         aanbetalingenInc = round2(aanbetalingenInc + row.depositRequiredInc);
+      }
+    }
+  } else {
+    for (const row of dossiers) {
+      if (!ymdInRange(row.signedYmd, week)) continue;
+      if (row.cancelled) continue;
+      deals += 1;
+      orderwaardeEx = round2(orderwaardeEx + row.signedEx);
+      orderwaardeInc = round2(orderwaardeInc + row.signedInc);
+      if (!row.depositNone) {
+        dealsWithDepositDue += 1;
+        if (row.depositMet) {
+          dealsDeposited += 1;
+          aanbetalingenInc = round2(aanbetalingenInc + row.depositRequiredInc);
+        }
       }
     }
   }
@@ -637,12 +670,15 @@ function emptyLeaderboardRow(
 
 /**
  * Leaderboard voor actieve adviseurs in de geselecteerde schouwweek.
- * Bezoeken op `appt.adviseurId`, deals op `dossier.adviseurId`.
+ * Bezoeken op `appt.adviseurId`, deals op tekendatum (`ondertekend_op`).
  */
 export function buildWeekLeaderboard(input: {
   advisors: { id: string; naam: string; actief: boolean }[];
   dossiers: Dossier[];
   appointments: RawAppt[];
+  /** Ondertekende offertes — deals op tekendatum. */
+  offers?: RawOffer[];
+  cancelledOfferIds?: Set<string>;
   leadStatusById: Map<string, string>;
   appointmentsByLead: Map<string, RawAppt[]>;
   week: DateRange;
@@ -652,6 +688,8 @@ export function buildWeekLeaderboard(input: {
     advisors,
     dossiers,
     appointments,
+    offers,
+    cancelledOfferIds = new Set<string>(),
     leadStatusById,
     appointmentsByLead,
     week,
@@ -710,14 +748,29 @@ export function buildWeekLeaderboard(input: {
     }
   }
 
-  for (const dossier of dossiers) {
-    if (!dossier.adviseurId) continue;
-    if (!ymdInRange(dossier.signedYmd, week)) continue;
-    if (dossier.cancelled) continue;
-    const row = rows.get(dossier.adviseurId);
-    if (!row) continue;
-    row.deals += 1;
-    row.orderwaardeEx = round2(row.orderwaardeEx + dossier.signedEx);
+  if (offers != null) {
+    for (const offer of signedOffersInRange(offers, week, cancelledOfferIds)) {
+      const adviseurId = advisorForSignedOffer(
+        offer,
+        dossierByLead,
+        appointments
+      );
+      if (!adviseurId) continue;
+      const row = rows.get(adviseurId);
+      if (!row) continue;
+      row.deals += 1;
+      row.orderwaardeEx = round2(row.orderwaardeEx + (Number(offer.ex) || 0));
+    }
+  } else {
+    for (const dossier of dossiers) {
+      if (!dossier.adviseurId) continue;
+      if (!ymdInRange(dossier.signedYmd, week)) continue;
+      if (dossier.cancelled) continue;
+      const row = rows.get(dossier.adviseurId);
+      if (!row) continue;
+      row.deals += 1;
+      row.orderwaardeEx = round2(row.orderwaardeEx + dossier.signedEx);
+    }
   }
 
   const list = [...rows.values()].map((row) => ({
@@ -791,23 +844,40 @@ export function isLiveApptSettled(
 }
 
 /**
- * Live dagoverzicht: aantallen + per actieve adviseur huidige/volgende afspraak
- * en of er voor de huidige lead een offerte is aangemaakt/verstuurd.
+ * Tekendatum van een offerte (Amsterdam-kalenderdag).
+ * Pure `yyyy-MM-dd` blijft intact; timestamps gaan via Europe/Amsterdam.
  */
-function offerSignedYmd(offer: RawOffer): string | null {
-  return dateOnlyYmd(offer.ondertekendOp) ?? isoToYmd(offer.ondertekendOp);
+export function offerSignedYmd(offer: RawOffer): string | null {
+  const raw = (offer.ondertekendOp || "").trim();
+  if (!raw) return null;
+  if (isYmd(raw)) return raw;
+  return isoToYmd(raw);
 }
 
-/** Adviseur die de ondertekening toegekend krijgt. */
+function signedOffersInRange(
+  offers: RawOffer[],
+  range: DateRange,
+  cancelledOfferIds: Set<string> = new Set()
+): RawOffer[] {
+  return offers.filter((offer) => {
+    const signedYmd = offerSignedYmd(offer);
+    if (!signedYmd || !ymdInRange(signedYmd, range)) return false;
+    // Per offerte: alleen uitsluiten als háár project op annulering staat.
+    // Niet dossier.cancelled — die hing aan de eerste (soms geannuleerde) offerte.
+    if (cancelledOfferIds.has(offer.id)) return false;
+    return true;
+  });
+}
+
+/**
+ * Adviseur die de ondertekening toegekend krijgt.
+ * Voorkeur: afspraak op de tekendag, daarna dossier / maker / eerdere afspraak.
+ */
 function advisorForSignedOffer(
   offer: RawOffer,
   dossierByLead: Map<string, Dossier>,
   appointments: RawAppt[]
 ): string | null {
-  const dossier = dossierByLead.get(offer.leadId);
-  if (dossier?.adviseurId) return dossier.adviseurId;
-  if (offer.aangemaaktDoorId) return offer.aangemaaktDoorId;
-
   const signedYmd = offerSignedYmd(offer);
   const leadAppts = appointments
     .filter(
@@ -824,6 +894,10 @@ function advisorForSignedOffer(
     if (onDay.length > 0) return onDay[onDay.length - 1]!.adviseurId;
   }
 
+  const dossier = dossierByLead.get(offer.leadId);
+  if (dossier?.adviseurId) return dossier.adviseurId;
+  if (offer.aangemaaktDoorId) return offer.aangemaaktDoorId;
+
   const prior = leadAppts.filter((a) => a.startAt <= offer.ondertekendOp);
   if (prior.length > 0) return prior[prior.length - 1]!.adviseurId;
   return leadAppts[leadAppts.length - 1]?.adviseurId ?? null;
@@ -835,6 +909,7 @@ export function buildDayOverview(input: {
   appointments: RawAppt[];
   /** Alle ondertekende offertes (niet alleen primaire deal per lead). */
   offers: RawOffer[];
+  cancelledOfferIds?: Set<string>;
   leadMetaById: Map<string, { leadNumber: string; naam: string }>;
   offerFlagsByLead: Map<string, DayAdvisorOfferFlags>;
   dayYmd: string;
@@ -846,6 +921,7 @@ export function buildDayOverview(input: {
     dossiers,
     appointments,
     offers,
+    cancelledOfferIds = new Set<string>(),
     leadMetaById,
     offerFlagsByLead,
     dayYmd,
@@ -894,11 +970,11 @@ export function buildDayOverview(input: {
     string,
     { deals: number; orderwaardeEx: number }
   >();
-  for (const offer of offers) {
-    const signedYmd = offerSignedYmd(offer);
-    if (!signedYmd || !ymdInRange(signedYmd, dayRange)) continue;
-    const dossier = dossierByLead.get(offer.leadId);
-    if (dossier?.cancelled) continue;
+  for (const offer of signedOffersInRange(
+    offers,
+    dayRange,
+    cancelledOfferIds
+  )) {
     deals += 1;
     orderwaardeEx = round2(orderwaardeEx + (Number(offer.ex) || 0));
     orderwaardeInc = round2(orderwaardeInc + (Number(offer.inc) || 0));
@@ -1112,6 +1188,38 @@ export function buildDayOverview(input: {
       signed: flags.signed,
     });
   }
+  // Offertes getekend vandaag zonder afspraak vandaag (oude offerte die later tekent).
+  for (const offer of signedOffersInRange(
+    offers,
+    dayRange,
+    cancelledOfferIds
+  )) {
+    if (seenOfferLeads.has(offer.leadId)) continue;
+    seenOfferLeads.add(offer.leadId);
+    const flags = offerFlagsByLead.get(offer.leadId) || {
+      created: false,
+      sent: false,
+      signed: true,
+    };
+    const adviseurId = advisorForSignedOffer(
+      offer,
+      dossierByLead,
+      appointments
+    );
+    const meta = leadMetaById.get(offer.leadId);
+    offerSignals.push({
+      leadId: offer.leadId,
+      leadNumber: meta?.leadNumber || offer.leadId,
+      leadNaam: meta?.naam || "Lead",
+      adviseurId,
+      adviseurNaam: adviseurId
+        ? advisorNameById.get(adviseurId) || null
+        : null,
+      created: flags.created,
+      sent: flags.sent,
+      signed: true,
+    });
+  }
 
   return {
     ymd: dayYmd,
@@ -1159,6 +1267,8 @@ function bucketRange(
 export function buildTrendSeries(input: {
   dossiers: Dossier[];
   appointments: RawAppt[];
+  offers?: RawOffer[];
+  cancelledOfferIds?: Set<string>;
   leadStatusById: Map<string, string>;
   appointmentsByLead: Map<string, RawAppt[]>;
   range: DateRange;
@@ -1173,6 +1283,8 @@ export function buildTrendSeries(input: {
     const overview = buildWeekOverview({
       dossiers: input.dossiers,
       appointments: input.appointments,
+      offers: input.offers,
+      cancelledOfferIds: input.cancelledOfferIds,
       leadStatusById: input.leadStatusById,
       appointmentsByLead: input.appointmentsByLead,
       week: { ...span, key: b.key },
@@ -1490,6 +1602,29 @@ export type SalesQualityAdvisorRow = {
   tijdigPct: number | null;
 };
 
+/**
+ * Waar een getekende sale staat tussen sales-actie en backoffice-opstart.
+ * Elke deal valt in precies één bucket (prioriteit: annulering → hold → …).
+ */
+export type SalesPipelineBucketKey =
+  | "nog_niet_doorgezet"
+  | "niet_opgepakt"
+  | "wacht_termijn"
+  | "betaald_tijdig"
+  | "betaald_laat"
+  | "te_laat"
+  | "hold"
+  | "geannuleerd";
+
+export type SalesPipelineBucket = {
+  key: SalesPipelineBucketKey;
+  label: string;
+  short: string;
+  description: string;
+  color: string;
+  n: number;
+};
+
 export type SalesQualityOverview = {
   from: string;
   to: string;
@@ -1503,8 +1638,172 @@ export type SalesQualityOverview = {
   tijdig: number;
   tijdigBeoordeeld: number;
   tijdigPct: number | null;
+  /** Alle getekende deals in de periode (incl. geannuleerd) per pipeline-status. */
+  pipelineTotal: number;
+  pipeline: SalesPipelineBucket[];
   advisors: SalesQualityAdvisorRow[];
 };
+
+export const SALES_PIPELINE_BUCKETS: Omit<SalesPipelineBucket, "n">[] = [
+  {
+    key: "nog_niet_doorgezet",
+    label: "Nog niet doorgezet naar backoffice",
+    short: "Niet doorgezet",
+    description: "Getekend, sales heeft Actie afronden nog niet gedaan (geen project).",
+    color: "#94a3b8",
+  },
+  {
+    key: "niet_opgepakt",
+    label: "Doorgezet, nog niet opgepakt",
+    short: "Niet opgepakt",
+    description:
+      "Project bestaat, maar schouwweek (WF) of schouwdatum (EM) is nog niet gezet.",
+    color: "#64748b",
+  },
+  {
+    key: "wacht_termijn",
+    label: "Opgepakt — nog niet betaald (binnen termijn)",
+    short: "Wacht op betaling",
+    description:
+      "Schouwweek of -datum gepland; factuur nog niet verstuurd, of verstuurd en binnen 3 dagen nog niet betaald.",
+    color: "#0284c7",
+  },
+  {
+    key: "betaald_tijdig",
+    label: "Factuur verstuurd — betaald (binnen termijn)",
+    short: "Betaald op tijd",
+    description: "Aanbetaling ontvangen binnen 3 dagen na factuur/bel (of geen aanbetaling vereist).",
+    color: "#059669",
+  },
+  {
+    key: "betaald_laat",
+    label: "Factuur verstuurd — betaald (buiten termijn)",
+    short: "Betaald te laat",
+    description: "Aanbetaling wel ontvangen, maar na de 3-dagen termijn.",
+    color: "#ca8a04",
+  },
+  {
+    key: "te_laat",
+    label: "Factuur verstuurd — niet betaald (te laat)",
+    short: "Onbetaald te laat",
+    description: "Opgestart, factuur verstuurd, nog niet betaald na 3 dagen.",
+    color: "#ea580c",
+  },
+  {
+    key: "hold",
+    label: "Hold salesactie",
+    short: "Hold",
+    description: "Project staat op hold_sales_actie.",
+    color: "#d97706",
+  },
+  {
+    key: "geannuleerd",
+    label: "Geannuleerd",
+    short: "Geannuleerd",
+    description: "Getekende deal die later is geannuleerd.",
+    color: "#e11d48",
+  },
+];
+
+/** Geaggregeerde pie-groepen (detailbuckets via detailKeys). */
+export type SalesPipelinePieGroup = {
+  key: string;
+  label: string;
+  short: string;
+  color: string;
+  detailKeys: SalesPipelineBucketKey[];
+};
+
+export const SALES_PIPELINE_PIE_GROUPS: SalesPipelinePieGroup[] = [
+  {
+    key: "stop",
+    label: "Geannuleerd / hold",
+    short: "Geannuleerd / hold",
+    color: "#e11d48",
+    detailKeys: ["geannuleerd", "hold"],
+  },
+  {
+    key: "op_schema",
+    label: "Aanbetaald of opgepakt binnen 3 dagen",
+    short: "Op schema",
+    color: "#059669",
+    detailKeys: ["betaald_tijdig", "betaald_laat", "wacht_termijn"],
+  },
+  {
+    key: "niet_gestart",
+    label: "Nog niet opgepakt / nog niet doorgezet",
+    short: "Niet gestart",
+    color: "#94a3b8",
+    detailKeys: ["niet_opgepakt", "nog_niet_doorgezet"],
+  },
+  {
+    key: "buiten_termijn",
+    label: "Gestart, nog niet aanbetaald buiten 3 dagen",
+    short: "Buiten termijn",
+    color: "#ea580c",
+    detailKeys: ["te_laat"],
+  },
+];
+
+export type SalesPipelineProject = {
+  status: string;
+  schouwJaar?: number | null;
+  schouwWeek?: number | null;
+  schouwAt?: string | null;
+};
+
+/**
+ * Classificeert een getekende deal in precies één pipeline-bucket.
+ * "Opgepakt" = schouwweek of schouwdatum gepland (WF: week, EM: directe datum).
+ */
+export function classifySalesPipelineBucket(
+  dossier: Dossier,
+  project: SalesPipelineProject | null | undefined,
+  todayYmd: string
+): SalesPipelineBucketKey {
+  const status = project ? normalizeProjectStatus(project.status) : null;
+
+  if (dossier.cancelled || status === "annulering") return "geannuleerd";
+  if (status === "hold_sales_actie") return "hold";
+  if (!project) return "nog_niet_doorgezet";
+
+  const opgepakt = isSchouwweekGepland({
+    schouw_jaar: project.schouwJaar,
+    schouw_week: project.schouwWeek,
+    schouw_at: project.schouwAt,
+  });
+  if (!opgepakt) return "niet_opgepakt";
+
+  const invoiceSent = Boolean(dossier.depositInvoiceSentYmd);
+  const paid = dossier.depositNone || dossier.depositMet;
+  const deadline = dossier.depositPayDeadlineYmd;
+  const termOver = Boolean(deadline && todayYmd > deadline);
+
+  // Geen aanbetaling vereist: opgepakt = klaar t.o.v. saleskwaliteit.
+  if (dossier.depositNone) return "betaald_tijdig";
+
+  if (invoiceSent && paid) {
+    if (dossier.timelyDepositKnown === false) return "betaald_laat";
+    if (dossier.timelyDepositKnown === true) return "betaald_tijdig";
+    // Fallback als tijdigheid onbekend is maar betaal- + deadline-data er wel zijn.
+    if (
+      dossier.depositYmd &&
+      deadline &&
+      dossier.depositYmd > deadline
+    ) {
+      return "betaald_laat";
+    }
+    return "betaald_tijdig";
+  }
+
+  if (invoiceSent && !paid) {
+    if (dossier.timelyDepositKnown === false || termOver) return "te_laat";
+    return "wacht_termijn";
+  }
+
+  // Opgepakt (schouw gezet), aanbetalingsfactuur nog niet verstuurd.
+  return "wacht_termijn";
+}
 
 /**
  * Saleskwaliteit in een periode: getekende deals per adviseur,
@@ -1513,15 +1812,33 @@ export type SalesQualityOverview = {
 export function buildSalesQuality(input: {
   advisors: { id: string; naam: string; actief: boolean }[];
   dossiers: Dossier[];
-  projects: { leadId: string; offerteId: string | null; status: string }[];
+  projects: (SalesPipelineProject & {
+    leadId: string;
+    offerteId: string | null;
+  })[];
   range: DateRange;
+  todayYmd?: string;
 }): SalesQualityOverview {
-  const { advisors, dossiers, projects, range } = input;
+  const {
+    advisors,
+    dossiers,
+    projects,
+    range,
+    todayYmd = range.to,
+  } = input;
 
+  type Proj = SalesPipelineProject & {
+    leadId: string;
+    offerteId: string | null;
+  };
+  const projectsByOffer = new Map<string, Proj>();
+  const projectsByLead = new Map<string, Proj>();
   const holdLeadIds = new Set<string>();
   const holdOfferIds = new Set<string>();
   for (const p of projects) {
-    if (p.status !== "hold_sales_actie") continue;
+    if (p.offerteId) projectsByOffer.set(p.offerteId, p);
+    if (!projectsByLead.has(p.leadId)) projectsByLead.set(p.leadId, p);
+    if (normalizeProjectStatus(p.status) !== "hold_sales_actie") continue;
     holdLeadIds.add(p.leadId);
     if (p.offerteId) holdOfferIds.add(p.offerteId);
   }
@@ -1558,11 +1875,24 @@ export function buildSalesQuality(input: {
   let hold = 0;
   let tijdig = 0;
   let tijdigBeoordeeld = 0;
+  const bucketCounts = new Map<SalesPipelineBucketKey, number>();
+  for (const b of SALES_PIPELINE_BUCKETS) bucketCounts.set(b.key, 0);
+  let pipelineTotal = 0;
 
   for (const dossier of dossiers) {
     if (!ymdInRange(dossier.signedYmd, range)) continue;
-    if (dossier.cancelled) continue;
     if (!isAttributed(dossier) || !dossier.adviseurId) continue;
+
+    const project =
+      (dossier.offerId ? projectsByOffer.get(dossier.offerId) : undefined) ||
+      projectsByLead.get(dossier.leadId) ||
+      null;
+    const bucket = classifySalesPipelineBucket(dossier, project, todayYmd);
+    bucketCounts.set(bucket, (bucketCounts.get(bucket) || 0) + 1);
+    pipelineTotal += 1;
+
+    // Adviseur-KPI’s: actieve (niet-geannuleerde) deals.
+    if (dossier.cancelled || bucket === "geannuleerd") continue;
 
     const row = rows.get(dossier.adviseurId);
     if (!row) continue;
@@ -1580,6 +1910,7 @@ export function buildSalesQuality(input: {
     }
 
     const onHold =
+      bucket === "hold" ||
       (dossier.offerId != null && holdOfferIds.has(dossier.offerId)) ||
       holdLeadIds.has(dossier.leadId);
     if (onHold) {
@@ -1607,11 +1938,18 @@ export function buildSalesQuality(input: {
     }))
     .sort(
       (a, b) =>
+        (b.holdPct ?? -1) - (a.holdPct ?? -1) ||
+        b.hold - a.hold ||
         b.deals - a.deals ||
         (b.tijdigPct ?? -1) - (a.tijdigPct ?? -1) ||
         (b.aanbetaaldPct ?? -1) - (a.aanbetaaldPct ?? -1) ||
         a.naam.localeCompare(b.naam, "nl")
     );
+
+  const pipeline: SalesPipelineBucket[] = SALES_PIPELINE_BUCKETS.map((b) => ({
+    ...b,
+    n: bucketCounts.get(b.key) || 0,
+  }));
 
   return {
     from: range.from,
@@ -1626,6 +1964,105 @@ export function buildSalesQuality(input: {
     tijdig,
     tijdigBeoordeeld,
     tijdigPct: pct(tijdig, tijdigBeoordeeld),
+    pipelineTotal,
+    pipeline,
     advisors: advisorsOut,
   };
+}
+
+/** Datapunt voor de kwaliteitstrend onder “Waar staan de sales?”. */
+export type QualityTrendPoint = {
+  key: string;
+  label: string;
+  from: string;
+  to: string;
+  /** Getekende deals in het interval. */
+  deals: number;
+  /** % deals met bekende tijdig-aanbetaling die op tijd betaalden. */
+  timelyPct: number | null;
+  /** % deals op hold. */
+  holdPct: number | null;
+  /** % deals geannuleerd. */
+  cancelledPct: number | null;
+  /** % deals betaald na de 3-dagen termijn. */
+  paidLatePct: number | null;
+  /** % deals op hold of geannuleerd. */
+  holdOrCancelledPct: number | null;
+};
+
+/**
+ * Trendreeks voor saleskwaliteit (dag / week / maand) over getekende deals.
+ */
+export function buildQualityTrendSeries(input: {
+  dossiers: Dossier[];
+  projects: (SalesPipelineProject & {
+    leadId: string;
+    offerteId: string | null;
+  })[];
+  range: DateRange;
+  group: GroupBy;
+  todayYmd: string;
+}): QualityTrendPoint[] {
+  const projectsByOffer = new Map<
+    string,
+    SalesPipelineProject & { leadId: string; offerteId: string | null }
+  >();
+  const projectsByLead = new Map<
+    string,
+    SalesPipelineProject & { leadId: string; offerteId: string | null }
+  >();
+  for (const p of input.projects) {
+    if (p.offerteId) projectsByOffer.set(p.offerteId, p);
+    if (!projectsByLead.has(p.leadId)) projectsByLead.set(p.leadId, p);
+  }
+
+  const buckets = listBuckets(input.range, input.group);
+  return buckets.map((b) => {
+    const span = bucketRange(input.range, input.group, b.key);
+    let deals = 0;
+    let tijdig = 0;
+    let tijdigBeoordeeld = 0;
+    let hold = 0;
+    let cancelled = 0;
+    let paidLate = 0;
+
+    for (const dossier of input.dossiers) {
+      if (!ymdInRange(dossier.signedYmd, span)) continue;
+      if (!isAttributed(dossier) || !dossier.adviseurId) continue;
+
+      const project =
+        (dossier.offerId
+          ? projectsByOffer.get(dossier.offerId)
+          : undefined) ||
+        projectsByLead.get(dossier.leadId) ||
+        null;
+      const bucket = classifySalesPipelineBucket(
+        dossier,
+        project,
+        input.todayYmd
+      );
+
+      deals += 1;
+      if (bucket === "geannuleerd") cancelled += 1;
+      if (bucket === "hold") hold += 1;
+      if (bucket === "betaald_laat") paidLate += 1;
+      if (dossier.timelyDepositKnown != null) {
+        tijdigBeoordeeld += 1;
+        if (dossier.timelyDepositKnown) tijdig += 1;
+      }
+    }
+
+    return {
+      key: b.key,
+      label: b.label,
+      from: span.from,
+      to: span.to,
+      deals,
+      timelyPct: pct(tijdig, tijdigBeoordeeld),
+      holdPct: pct(hold, deals),
+      cancelledPct: pct(cancelled, deals),
+      paidLatePct: pct(paidLate, deals),
+      holdOrCancelledPct: pct(hold + cancelled, deals),
+    };
+  });
 }

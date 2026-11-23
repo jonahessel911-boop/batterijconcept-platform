@@ -81,6 +81,11 @@ export function isUitgeslotenVanSalesCommissie(person: {
   return normalizeRol(person.rol) !== "adviseur";
 }
 
+/** Extra accounts met salescockpit-toegang (naast rol admin). */
+const SALES_COCKPIT_EXTRA_EMAILS = new Set([
+  "tarik@batterijconcept.nl",
+]);
+
 /** Tabs die deze rol mag zien (volgorde = menuvvolgorde). */
 export function tabsVoorRol(
   rol: GebruikerRol,
@@ -177,6 +182,19 @@ export function tabsVoorRol(
       rol === "admin")
   ) {
     tabs = ["today", ...tabs.filter((t) => t !== "today")];
+  }
+  // Salescockpit: admin + expliciete extra accounts (o.a. Tarik/Rik)
+  const email = opts?.email?.trim().toLowerCase();
+  if (
+    email &&
+    SALES_COCKPIT_EXTRA_EMAILS.has(email) &&
+    !tabs.includes("sales_cockpit")
+  ) {
+    const idx = tabs.indexOf("rapportage");
+    tabs =
+      idx >= 0
+        ? [...tabs.slice(0, idx), "sales_cockpit", ...tabs.slice(idx)]
+        : [...tabs, "sales_cockpit"];
   }
   return tabs;
 }

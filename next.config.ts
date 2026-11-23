@@ -12,6 +12,10 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
     ...(commit ? { NEXT_PUBLIC_APP_COMMIT: commit } : {}),
+    // Zelfde secret in Edge middleware + Node API (voorkomt login-loop)
+    ...(process.env.SESSION_SECRET
+      ? { SESSION_SECRET: process.env.SESSION_SECRET }
+      : {}),
   },
   serverExternalPackages: ["imapflow", "mailparser"],
   // Voice-uploads: body limiet voor proxy (geen FormData door Next meer, wel veiligheidsmarge)
