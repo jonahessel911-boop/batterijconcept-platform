@@ -483,6 +483,73 @@ function run() {
   assert.equal(totals.conversion.den, 3);
   assert.equal(totals.openVervolg, 1);
 
+  // Eerdere getekende offerte geannuleerd + nieuwe hertekening → primaire sale = hertekening.
+  const resign = classifyLead({
+    todayYmd: TODAY,
+    lead: lead("sale_financiering"),
+    appointments: [
+      appt({
+        id: "n",
+        startAt: "2026-10-05T08:00:00.000Z",
+        soort: "nieuw",
+        adviseurId: "verkoper",
+      }),
+    ],
+    offers: [
+      {
+        id: "o-old",
+        leadId: "l1",
+        ondertekendOp: "2026-10-05T11:00:00.000Z",
+        ex: 8500,
+        btw: 1785,
+        inc: 10285,
+        modus: null,
+        bedragInc: null,
+        teInnen: null,
+        financiering: true,
+        aangemaaktDoorId: "verkoper",
+      },
+      {
+        id: "o-new",
+        leadId: "l1",
+        ondertekendOp: "2026-10-19T14:00:00.000Z",
+        ex: 8300,
+        btw: 1743,
+        inc: 10043,
+        modus: null,
+        bedragInc: null,
+        teInnen: null,
+        financiering: true,
+        aangemaaktDoorId: "verkoper",
+      },
+    ],
+    projects: [
+      {
+        leadId: "l1",
+        offerteId: "o-old",
+        status: "annulering",
+        installatieVoltooidAt: null,
+        projectkosten: 0,
+        betaalwijze: "warmtefonds",
+      },
+      {
+        leadId: "l1",
+        offerteId: "o-new",
+        status: "schouwweek_inplannen",
+        installatieVoltooidAt: null,
+        projectkosten: 0,
+        betaalwijze: "warmtefonds",
+      },
+    ],
+    invoices: [],
+  });
+  assert.equal(resign.stand, "sale");
+  assert.equal(resign.cancelled, false);
+  assert.equal(resign.offerId, "o-new");
+  assert.equal(resign.signedYmd, "2026-10-19");
+  assert.equal(resign.signedEx, 8300);
+  assert.equal(resign.extraOrders, 1);
+
   const week = presetRange("deze_week", new Date("2026-10-30T12:00:00.000Z"));
   assert.equal(week.from <= "2026-10-30" && week.to >= "2026-10-30", true);
   assert.equal(daysInclusive(week.from, week.to), 7);

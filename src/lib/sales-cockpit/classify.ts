@@ -57,6 +57,10 @@ export type RawProject = {
   betaalwijze: string | null;
   /** Eerste backoffice-bel voor schouw + aanbetaling. */
   belSchouwAanbetalingAt?: string | null;
+  /** ISO-schouwweek (WF); exacte dag staat in schouwAt. */
+  schouwJaar?: number | null;
+  schouwWeek?: number | null;
+  schouwAt?: string | null;
 };
 
 export type RawFactuur = {
@@ -128,6 +132,8 @@ export type Dossier = {
    */
   depositClockStartYmd: string | null;
   depositPayDeadlineYmd: string | null;
+  /** Verzenddatum van de (eerste) aanbetalingsfactuur, indien herkend. */
+  depositInvoiceSentYmd: string | null;
   /**
    * Op tijd t.o.v. betaalklok (+3 dagen).
    * null = n.v.t., nog lopend, of data incompleet.
@@ -233,9 +239,29 @@ export function classifyLead(input: {
   const signed = [...input.offers]
     .filter((o) => o.ondertekendOp)
     .sort((a, b) => a.ondertekendOp.localeCompare(b.ondertekendOp));
-  const primary = signed[0] ?? null;
-  const extras = signed.slice(1);
-  const signedYmd = primary ? dateOnlyYmd(primary.ondertekendOp) ?? isoToYmd(primary.ondertekendOp) : null;
+  // Primaire sale = eerste getekende offerte waarvan het project níet geannuleerd is.
+  // Anders telt een hertekening na annulering ten onrechte niet mee (dossier.cancelled).
+  const isOfferCancelled = (offerId: string) => {
+    const project = input.projects.find((p) => p.offerteId === offerId);
+    return (
+      project != null &&
+      normalizeProjectStatus(project.status) === "annulering"
+    );
+  };
+  const primary =
+    signed.find((o) => !isOfferCancelled(o.id)) ?? signed[0] ?? null;
+  const extras = primary
+    ? signed.filter((o) => o.id !== primary.id)
+    : [];
+  // Timestamps → Amsterdam-dag; pure yyyy-MM-dd blijft intact.
+  const signedYmd = primary
+    ? (() => {
+        const raw = (primary.ondertekendOp || "").trim();
+        if (!raw) return null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        return isoToYmd(raw) ?? dateOnlyYmd(raw);
+      })()
+    : null;
 
   const status = input.lead.status || "";
   const hasFollowUp = followUps.length > 0;
@@ -594,6 +620,8 @@ export function classifyLead(input: {
     timelyKnown: sold ? timelyKnown : null,
     depositClockStartYmd: sold && !depositNone ? depositClockStartYmd : null,
     depositPayDeadlineYmd: sold && !depositNone ? depositPayDeadlineYmd : null,
+    depositInvoiceSentYmd:
+      sold && !depositNone ? depositInvoiceSentYmd : null,
     timelyDepositKnown: sold ? timelyDepositKnown : null,
     inTerm,
     openOver7: Boolean(openOver7 && !cancelled),

@@ -130,6 +130,7 @@ export async function processAbFollowups(
       shouldSendReminder48uNow({
         now,
         startAt,
+        createdAt,
         bevestigingSent: Boolean(a.bevestiging_verstuurd),
         alreadySent: Boolean(a.reminder_48u_verstuurd),
       })
@@ -172,6 +173,7 @@ export async function processAbFollowups(
     const avondWindow = shouldSendAvondSmsNow({
       now,
       startAt,
+      createdAt,
       alreadySent: false,
     });
     if (avondWindow) {

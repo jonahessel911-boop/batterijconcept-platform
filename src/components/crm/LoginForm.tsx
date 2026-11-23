@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { normalizeRol } from "@/lib/rollen";
 import {
   clearCrmShellCache,
@@ -9,7 +9,6 @@ import {
 } from "@/lib/crm-shell-cache";
 
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
 
@@ -26,6 +25,7 @@ export function LoginForm() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
@@ -39,8 +39,10 @@ export function LoginForm() {
           rol: normalizeRol(data.adviseur.rol),
         });
       }
-      router.replace(next.startsWith("/") ? next : "/");
-      router.refresh();
+      // Hard navigatie zodat middleware de nieuwe session-cookie zeker ziet
+      const dest = next.startsWith("/") ? next : "/";
+      window.location.assign(dest);
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Inloggen mislukt");
     } finally {

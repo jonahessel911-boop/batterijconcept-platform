@@ -5,6 +5,7 @@ import {
   isLeaderboardAdviseur,
   isPlanbaarAdviseur,
 } from "@/lib/admin-adviseur";
+import { normalizeProjectStatus } from "@/lib/labels";
 import {
   buildBelConversie,
   type BelConversieAfspraak,
@@ -19,7 +20,7 @@ import {
   loadSlotVrijgaven,
   loadUnavailableWeekKeys,
 } from "@/lib/adviseur-beschikbaarheid";
-import { slotHoursForAdviseur } from "@/lib/slots";
+import { ADVISEUR_SLOT_HOURS } from "@/lib/slots";
 import {
   advisorRows,
   applyFilters,
@@ -45,10 +46,12 @@ import {
 } from "@/lib/sales-cockpit/classify";
 import {
   buildDayOverview,
+  buildQualityTrendSeries,
   buildSalesQuality,
   buildTrendSeries,
   buildWeekLeaderboard,
   buildWeekOverview,
+  offerSignedYmd,
 } from "@/lib/sales-cockpit/cockpit-metrics";
 import {
   buildWallboard,
@@ -1087,6 +1090,10 @@ export async function buildSalesCockpitReport(
     dayAnchorYmd?: string;
     /** Periode voor de sales-kwaliteit tab. */
     qualityRange?: DateRange;
+    /** Periode voor de kwaliteitstrend-chart (los van qualityRange). */
+    qualityTrendRange?: DateRange;
+    /** Interval voor de kwaliteitstrend-chart. */
+    qualityTrendGroup?: GroupBy;
     includePeriodRows?: boolean;
   }
 ) {
@@ -1169,7 +1176,7 @@ export async function buildSalesCockpitReport(
       sb
         .from("projecten")
         .select(
-          "lead_id, offerte_id, status, installatie_voltooid_at, projectkosten, betaalwijze, bel_schouw_aanbetaling_at"
+          "lead_id, offerte_id, status, installatie_voltooid_at, projectkosten, betaalwijze, bel_schouw_aanbetaling_at, schouw_jaar, schouw_week, schouw_at"
         )
         .in("lead_id", ids),
       sb
@@ -1184,12 +1191,15 @@ export async function buildSalesCockpitReport(
       const msg = projectRes.error.message || "";
       if (
         projectRes.error.code === "42703" ||
-        msg.includes("bel_schouw_aanbetaling_at")
+        msg.includes("bel_schouw_aanbetaling_at") ||
+        msg.includes("schouw_jaar") ||
+        msg.includes("schouw_week") ||
+        msg.includes("schouw_at")
       ) {
         const retry = await sb
           .from("projecten")
           .select(
-            "lead_id, offerte_id, status, installatie_voltooid_at, projectkosten, betaalwijze"
+            "lead_id, offerte_id, status, installatie_voltooid_at, projectkosten, betaalwijze, schouw_jaar, schouw_week, schouw_at"
           )
           .in("lead_id", ids);
         if (retry.error) warnings.push("Projecten konden niet geladen worden.");
@@ -1204,6 +1214,11 @@ export async function buildSalesCockpitReport(
               projectkosten: num(row.projectkosten),
               betaalwijze: (row.betaalwijze as string | null) ?? null,
               belSchouwAanbetalingAt: null,
+              schouwJaar:
+                row.schouw_jaar == null ? null : Number(row.schouw_jaar),
+              schouwWeek:
+                row.schouw_week == null ? null : Number(row.schouw_week),
+              schouwAt: (row.schouw_at as string | null) ?? null,
             });
           }
         }
@@ -1221,6 +1236,9 @@ export async function buildSalesCockpitReport(
           betaalwijze: (row.betaalwijze as string | null) ?? null,
           belSchouwAanbetalingAt:
             (row.bel_schouw_aanbetaling_at as string | null) ?? null,
+          schouwJaar: row.schouw_jaar == null ? null : Number(row.schouw_jaar),
+          schouwWeek: row.schouw_week == null ? null : Number(row.schouw_week),
+          schouwAt: (row.schouw_at as string | null) ?? null,
         });
       }
     }
@@ -1332,6 +1350,15 @@ export async function buildSalesCockpitReport(
     const list = invoicesByLead.get(invoice.leadId) ?? [];
     list.push(invoice);
     invoicesByLead.set(invoice.leadId, list);
+  }
+
+  // Offerte-ids met project op annulering — per offerte uitsluiten van sales-KPI’s.
+  const cancelledOfferIds = new Set<string>();
+  for (const project of projects) {
+    if (!project.offerteId) continue;
+    if (normalizeProjectStatus(project.status) === "annulering") {
+      cancelledOfferIds.add(project.offerteId);
+    }
   }
 
   const dossiers: Dossier[] = [];
@@ -1453,6 +1480,8 @@ export async function buildSalesCockpitReport(
   const weekOverview = buildWeekOverview({
     dossiers,
     appointments,
+    offers,
+    cancelledOfferIds,
     leadStatusById,
     appointmentsByLead: byLeadAppt,
     week: selectedWeek,
@@ -1467,16 +1496,20 @@ export async function buildSalesCockpitReport(
     opts.dayAnchorYmd && isYmd(opts.dayAnchorYmd)
       ? opts.dayAnchorYmd
       : opts.todayYmd;
+  // Ook leads zonder afspraak vandaag meenemen als hun offerte die dag getekend is.
   const dayLeadIds = [
-    ...new Set(
-      appointments
+    ...new Set([
+      ...appointments
         .filter((a) => {
           if (a.status === "geannuleerd" || a.status === "verzet") return false;
           const ymd = isoToYmd(a.startAt);
           return ymd === dayYmd;
         })
-        .map((a) => a.leadId)
-    ),
+        .map((a) => a.leadId),
+      ...offers
+        .filter((o) => offerSignedYmd(o) === dayYmd)
+        .map((o) => o.leadId),
+    ]),
   ];
   const offerFlagsByLead = await loadOfferFlagsByLead(
     sb,
@@ -1498,6 +1531,7 @@ export async function buildSalesCockpitReport(
     dossiers,
     appointments,
     offers,
+    cancelledOfferIds,
     leadMetaById,
     offerFlagsByLead,
     dayYmd,
@@ -1526,6 +1560,8 @@ export async function buildSalesCockpitReport(
     advisors: advisors.filter((a) => isLeaderboardAdviseur(a)),
     dossiers,
     appointments,
+    offers,
+    cancelledOfferIds,
     leadStatusById,
     appointmentsByLead: byLeadAppt,
     week: selectedWeek,
@@ -1569,6 +1605,17 @@ export async function buildSalesCockpitReport(
     dossiers,
     projects,
     range: qualityRange,
+    todayYmd: opts.todayYmd,
+  });
+  const qualityTrendRange = opts.qualityTrendRange || qualityRange;
+  const qualityTrendGroup =
+    opts.qualityTrendGroup || defaultGroupBy(qualityTrendRange);
+  const salesQualityTrend = buildQualityTrendSeries({
+    dossiers,
+    projects,
+    range: qualityTrendRange,
+    group: qualityTrendGroup,
+    todayYmd: opts.todayYmd,
   });
 
   const trendAdvisorIds = [
@@ -1599,6 +1646,8 @@ export async function buildSalesCockpitReport(
   const weekTrend = buildTrendSeries({
     dossiers: trendDossiers,
     appointments: trendAppointments,
+    offers,
+    cancelledOfferIds,
     leadStatusById,
     appointmentsByLead: byLeadAppt,
     range: trendRange,
@@ -1649,6 +1698,13 @@ export async function buildSalesCockpitReport(
     weekLeaderboard,
     weekTrend,
     salesQuality,
+    salesQualityTrend,
+    qualityTrend: {
+      from: qualityTrendRange.from,
+      to: qualityTrendRange.to,
+      label: formatRangeLabel(qualityTrendRange),
+      group: qualityTrendGroup,
+    },
     trend: {
       from: trendRange.from,
       to: trendRange.to,
@@ -1822,7 +1878,7 @@ async function loadAvailableBlocksByYmd(
       let total = 0;
       planbaar.forEach((adv, index) => {
         if (unavailableSets[index]?.has(weekKey)) return;
-        for (const hour of slotHoursForAdviseur(adv.id)) {
+        for (const hour of ADVISEUR_SLOT_HOURS) {
           const noon = new Date(`${day}T12:00:00.000Z`);
           if (isBeforeStartdatum(noon, adv.startdatum)) continue;
           if (isSlotGeblokkeerd(adv.id, day, hour, blocked, open)) continue;
@@ -1888,7 +1944,7 @@ async function loadAvailability(
           day = addYmd(day, 1);
           continue;
         }
-        for (const hour of slotHoursForAdviseur(adv.id)) {
+        for (const hour of ADVISEUR_SLOT_HOURS) {
           const noon = new Date(`${day}T12:00:00.000Z`);
           if (isBeforeStartdatum(noon, adv.startdatum)) continue;
           if (isSlotGeblokkeerd(adv.id, day, hour, blocked, open)) continue;

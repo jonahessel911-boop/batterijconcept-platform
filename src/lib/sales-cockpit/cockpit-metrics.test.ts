@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import {
   buildDayOverview,
+  buildQualityTrendSeries,
   buildSalesQuality,
   buildWeekLeaderboard,
   buildWeekOverview,
   huisbezoekenInRange,
   vervolgAfsprakenInRange,
 } from "./cockpit-metrics";
-import type { Dossier, RawAppt } from "./classify";
+import type { Dossier, RawAppt, RawOffer } from "./classify";
 
 const WEEK = { from: "2026-10-27", to: "2026-11-02", key: "2026-W44" };
 const TODAY = "2026-10-30";
@@ -22,6 +23,24 @@ function appt(partial: Partial<RawAppt> & Pick<RawAppt, "id" | "leadId" | "start
     endAt: partial.endAt ?? null,
     status: partial.status ?? "gepland",
     soort: partial.soort ?? "nieuw",
+  };
+}
+
+function offer(
+  partial: Partial<RawOffer> & Pick<RawOffer, "id" | "leadId" | "ondertekendOp">
+): RawOffer {
+  return {
+    id: partial.id,
+    leadId: partial.leadId,
+    ondertekendOp: partial.ondertekendOp,
+    ex: partial.ex ?? 1000,
+    btw: partial.btw ?? 210,
+    inc: partial.inc ?? 1210,
+    modus: partial.modus ?? null,
+    bedragInc: partial.bedragInc ?? null,
+    teInnen: partial.teInnen ?? null,
+    financiering: partial.financiering ?? null,
+    aangemaaktDoorId: partial.aangemaaktDoorId ?? null,
   };
 }
 
@@ -58,6 +77,7 @@ function dossier(partial: Partial<Dossier> & Pick<Dossier, "leadId">): Dossier {
     timelyKnown: partial.timelyKnown ?? null,
     depositClockStartYmd: partial.depositClockStartYmd ?? null,
     depositPayDeadlineYmd: partial.depositPayDeadlineYmd ?? null,
+    depositInvoiceSentYmd: partial.depositInvoiceSentYmd ?? null,
     timelyDepositKnown: partial.timelyDepositKnown ?? null,
     inTerm: partial.inTerm ?? false,
     openOver7: partial.openOver7 ?? false,
@@ -194,9 +214,29 @@ function run() {
   assert.equal(followOnly.find((v) => v.leadId === "lv1")?.id, "vf1");
   assert.equal(followOnly.find((v) => v.leadId === "lv2")?.id, "vf2");
 
+  const weekOffers = [
+    offer({
+      id: "o1",
+      leadId: "l3",
+      ondertekendOp: "2026-10-29T10:00:00.000Z",
+      ex: 5000,
+      btw: 1050,
+      inc: 6050,
+    }),
+    offer({
+      id: "o2",
+      leadId: "lv1",
+      ondertekendOp: "2026-10-30T10:00:00.000Z",
+      ex: 2000,
+      btw: 420,
+      inc: 2420,
+    }),
+  ];
+
   const week = buildWeekOverview({
     dossiers: [sold, followSold],
     appointments: weekAppts,
+    offers: weekOffers,
     leadStatusById: new Map([
       ["l1", "nieuw"],
       ["l3", "sale_eigen_middelen"],
@@ -247,6 +287,7 @@ function run() {
     ],
     dossiers: [sold, followSold],
     appointments: weekAppts,
+    offers: weekOffers,
     leadStatusById: new Map([
       ["l1", "nieuw"],
       ["l3", "sale_eigen_middelen"],
@@ -266,6 +307,163 @@ function run() {
   assert.equal(board[0]!.vervolgGelopen, 1);
   assert.equal(board[1]!.id, "adv-2");
   assert.equal(board[1]!.deals, 0);
+
+  // Oude offerte (bezoek vorige week) getekend deze week → telt bij Sales.
+  const lateSignDossier = dossier({
+    leadId: "old1",
+    adviseurId: "adv-1",
+    status: "sale_eigen_middelen",
+    gelopen: true,
+    stand: "sale",
+    bezoek: "gesprek",
+    signedYmd: "2026-10-29",
+    signedEx: 3500,
+    signedInc: 4235,
+    assignmentYmd: "2026-10-20",
+    conversationYmd: "2026-10-20",
+  });
+  const lateSignAppts = [
+    appt({
+      id: "old-a1",
+      leadId: "old1",
+      adviseurId: "adv-1",
+      startAt: "2026-10-20T09:00:00.000Z",
+      status: "voltooid",
+    }),
+  ];
+  const lateSignByLead = new Map<string, RawAppt[]>([
+    ["old1", lateSignAppts],
+  ]);
+  const lateSignOffer = offer({
+    id: "old-o1",
+    leadId: "old1",
+    ondertekendOp: "2026-10-29T15:00:00.000Z",
+    ex: 3500,
+    btw: 735,
+    inc: 4235,
+    aangemaaktDoorId: "adv-1",
+  });
+  const lateWeek = buildWeekOverview({
+    dossiers: [lateSignDossier],
+    appointments: lateSignAppts,
+    offers: [lateSignOffer],
+    leadStatusById: new Map([["old1", "sale_eigen_middelen"]]),
+    appointmentsByLead: lateSignByLead,
+    week: WEEK,
+    todayYmd: TODAY,
+    label: "27 okt – 2 nov",
+    isCurrent: true,
+  });
+  assert.equal(lateWeek.deals, 1);
+  assert.equal(lateWeek.orderwaardeEx, 3500);
+  assert.equal(lateWeek.ingepland, 0); // geen nieuw bezoek deze week
+  assert.equal(lateWeek.salesFromGelopen, 0);
+
+  const lateBoard = buildWeekLeaderboard({
+    advisors: [{ id: "adv-1", naam: "Ada", actief: true }],
+    dossiers: [lateSignDossier],
+    appointments: lateSignAppts,
+    offers: [lateSignOffer],
+    leadStatusById: new Map([["old1", "sale_eigen_middelen"]]),
+    appointmentsByLead: lateSignByLead,
+    week: WEEK,
+    todayYmd: TODAY,
+  });
+  assert.equal(lateBoard[0]!.deals, 1);
+  assert.equal(lateBoard[0]!.orderwaardeEx, 3500);
+
+  const lateDay = buildDayOverview({
+    advisors: [{ id: "adv-1", naam: "Ada", actief: true }],
+    dossiers: [lateSignDossier],
+    appointments: lateSignAppts,
+    offers: [lateSignOffer],
+    leadMetaById: new Map([
+      ["old1", { leadNumber: "9001", naam: "Oude offerte" }],
+    ]),
+    offerFlagsByLead: new Map([
+      ["old1", { created: false, sent: false, signed: true }],
+    ]),
+    dayYmd: "2026-10-29",
+    todayYmd: TODAY,
+    nowIso: "2026-10-29T16:00:00.000Z",
+  });
+  assert.equal(lateDay.deals, 1);
+  assert.equal(lateDay.advisors.length, 1);
+  assert.equal(lateDay.advisors[0]!.deals, 1);
+  assert.equal(lateDay.advisors[0]!.apptTotal, 0);
+  assert.equal(
+    lateDay.offerSignals.find((s) => s.leadId === "old1")?.signed,
+    true
+  );
+
+  // Hertekening na annulering: dossier.cancelled op eerdere offerte mag
+  // actieve hertekening deze week niet blokkeren (Jorrit / Jan van Vliet-case).
+  const resignOffers = [
+    offer({
+      id: "cx-old",
+      leadId: "cx1",
+      ondertekendOp: "2026-10-28T11:00:00.000Z",
+      ex: 8500,
+      btw: 1785,
+      inc: 10285,
+    }),
+    offer({
+      id: "cx-new",
+      leadId: "cx1",
+      ondertekendOp: "2026-10-29T14:00:00.000Z",
+      ex: 8300,
+      btw: 1743,
+      inc: 10043,
+      aangemaaktDoorId: "adv-1",
+    }),
+  ];
+  // Zoals de bug: dossier nog “cancelled” door 1e offerte, terwijl 2e actief is.
+  const resignDossier = dossier({
+    leadId: "cx1",
+    adviseurId: "adv-1",
+    stand: "sale",
+    signedYmd: "2026-10-28",
+    signedEx: 8500,
+    signedInc: 10285,
+    cancelled: true,
+    offerId: "cx-old",
+  });
+  const resignAppts = [
+    appt({
+      id: "cx-a",
+      leadId: "cx1",
+      adviseurId: "adv-1",
+      startAt: "2026-10-20T09:00:00.000Z",
+      status: "voltooid",
+    }),
+  ];
+  const resignCancelled = new Set(["cx-old"]);
+  const resignWeek = buildWeekOverview({
+    dossiers: [resignDossier],
+    appointments: resignAppts,
+    offers: resignOffers,
+    cancelledOfferIds: resignCancelled,
+    leadStatusById: new Map([["cx1", "sale_financiering"]]),
+    appointmentsByLead: new Map([["cx1", resignAppts]]),
+    week: WEEK,
+    todayYmd: TODAY,
+    label: "27 okt – 2 nov",
+  });
+  assert.equal(resignWeek.deals, 1);
+  assert.equal(resignWeek.orderwaardeEx, 8300);
+  const resignBoard = buildWeekLeaderboard({
+    advisors: [{ id: "adv-1", naam: "Ada", actief: true }],
+    dossiers: [resignDossier],
+    appointments: resignAppts,
+    offers: resignOffers,
+    cancelledOfferIds: resignCancelled,
+    leadStatusById: new Map([["cx1", "sale_financiering"]]),
+    appointmentsByLead: new Map([["cx1", resignAppts]]),
+    week: WEEK,
+    todayYmd: TODAY,
+  });
+  assert.equal(resignBoard[0]!.deals, 1);
+  assert.equal(resignBoard[0]!.orderwaardeEx, 8300);
 
   const dayAppts = [
     appt({
@@ -680,37 +878,96 @@ function run() {
       dossier({
         leadId: "q1",
         adviseurId: "adv-1",
+        offerId: "oq1",
         signedYmd: "2026-10-28",
         depositNone: false,
         depositMet: true,
         depositYmd: "2026-10-30",
+        depositInvoiceSentYmd: "2026-10-28",
+        depositPayDeadlineYmd: "2026-10-31",
         timelyDepositKnown: true,
         stand: "sale",
       }),
       dossier({
         leadId: "q2",
         adviseurId: "adv-1",
+        offerId: "oq2",
         signedYmd: "2026-10-29",
         depositNone: false,
         depositMet: true,
         depositYmd: "2026-11-05",
+        depositInvoiceSentYmd: "2026-10-29",
+        depositPayDeadlineYmd: "2026-11-01",
         timelyDepositKnown: false,
         stand: "sale",
       }),
       dossier({
         leadId: "q3",
         adviseurId: "adv-2",
+        offerId: "oq3",
         signedYmd: "2026-10-30",
         depositNone: false,
         depositMet: false,
+        depositInvoiceSentYmd: "2026-10-30",
+        depositPayDeadlineYmd: "2026-11-02",
         timelyDepositKnown: null,
         stand: "sale",
       }),
+      dossier({
+        leadId: "q4",
+        adviseurId: "adv-2",
+        offerId: "oq4",
+        signedYmd: "2026-10-30",
+        depositNone: false,
+        depositMet: false,
+        stand: "sale",
+      }),
+      dossier({
+        leadId: "q5",
+        adviseurId: "adv-2",
+        offerId: "oq5",
+        signedYmd: "2026-10-29",
+        cancelled: true,
+        stand: "sale",
+      }),
     ],
-    projects: [],
+    projects: [
+      {
+        leadId: "q1",
+        offerteId: "oq1",
+        status: "schouwweek_inplannen",
+        schouwJaar: 2026,
+        schouwWeek: 44,
+        schouwAt: "2026-10-26T11:00:00.000Z",
+      },
+      {
+        leadId: "q2",
+        offerteId: "oq2",
+        status: "schouwweek_inplannen",
+        schouwJaar: 2026,
+        schouwWeek: 45,
+        schouwAt: "2026-11-02T11:00:00.000Z",
+      },
+      {
+        leadId: "q3",
+        offerteId: "oq3",
+        status: "schouwdag_ingepland",
+        schouwJaar: 2026,
+        schouwWeek: 45,
+        schouwAt: "2026-11-04T09:00:00.000Z",
+      },
+      // Project zonder schouwweek/-datum → niet opgepakt
+      {
+        leadId: "q4",
+        offerteId: "oq4",
+        status: "schouwweek_inplannen",
+      },
+      { leadId: "q5", offerteId: "oq5", status: "annulering" },
+    ],
     range: WEEK,
+    todayYmd: "2026-10-30",
   });
-  assert.equal(quality.deals, 3);
+  assert.equal(quality.deals, 4);
   assert.equal(quality.tijdig, 1);
   assert.equal(quality.tijdigBeoordeeld, 2);
   assert.equal(quality.tijdigPct, 50);
@@ -720,6 +977,65 @@ function run() {
   assert.equal(quality.advisors[0]!.tijdigPct, 50);
   assert.equal(quality.advisors[1]!.tijdigBeoordeeld, 0);
   assert.equal(quality.advisors[1]!.tijdigPct, null);
+  assert.equal(quality.pipelineTotal, 5);
+  const byKey = Object.fromEntries(quality.pipeline.map((b) => [b.key, b.n]));
+  assert.equal(byKey.betaald_tijdig, 1);
+  assert.equal(byKey.betaald_laat, 1);
+  assert.equal(byKey.wacht_termijn, 1);
+  assert.equal(byKey.niet_opgepakt, 1);
+  assert.equal(byKey.nog_niet_doorgezet, 0);
+  assert.equal(byKey.geannuleerd, 1);
+
+  const qualityTrend = buildQualityTrendSeries({
+    dossiers: [
+      dossier({
+        leadId: "q1",
+        adviseurId: "adv-1",
+        offerId: "oq1",
+        signedYmd: "2026-10-28",
+        depositNone: false,
+        depositMet: true,
+        depositYmd: "2026-10-30",
+        depositInvoiceSentYmd: "2026-10-28",
+        depositPayDeadlineYmd: "2026-10-31",
+        timelyDepositKnown: true,
+        stand: "sale",
+      }),
+      dossier({
+        leadId: "q5",
+        adviseurId: "adv-2",
+        offerId: "oq5",
+        signedYmd: "2026-10-29",
+        cancelled: true,
+        stand: "sale",
+      }),
+    ],
+    projects: [
+      {
+        leadId: "q1",
+        offerteId: "oq1",
+        status: "schouwweek_inplannen",
+        schouwJaar: 2026,
+        schouwWeek: 44,
+        schouwAt: "2026-10-26T11:00:00.000Z",
+      },
+      { leadId: "q5", offerteId: "oq5", status: "annulering" },
+    ],
+    range: WEEK,
+    group: "week",
+    todayYmd: "2026-10-30",
+  });
+  assert.ok(qualityTrend.length >= 1);
+  const withDeals = qualityTrend.filter((p) => p.deals > 0);
+  assert.equal(
+    withDeals.reduce((s, p) => s + p.deals, 0),
+    2
+  );
+  const first = withDeals[0]!;
+  assert.equal(first.deals, 2);
+  assert.equal(first.timelyPct, 100);
+  assert.equal(first.cancelledPct, 50);
+  assert.equal(first.holdOrCancelledPct, 50);
 
   console.log("cockpit-metrics.test.ts ok");
 }
