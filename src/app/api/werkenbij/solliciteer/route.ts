@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import {
+  formatSollicitatieAdres,
   pickAdresFromPayload,
   resolveSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
@@ -12,6 +13,7 @@ import {
   type RecruitmentAnswerRow,
 } from "@/lib/recruitment-form";
 import type { RecruitmentVacature } from "@/types/database";
+import { notifyNieuweSollicitatie } from "@/lib/email/sollicitatie-intern";
 
 export const runtime = "nodejs";
 
@@ -227,6 +229,28 @@ export async function POST(req: NextRequest) {
       }
       throw error;
     }
+
+    const row = data as {
+      naam?: string | null;
+      email?: string | null;
+      telefoon?: string | null;
+      functie?: string | null;
+      status?: string | null;
+      notitie?: string | null;
+      bron?: string | null;
+    } | null;
+    void notifyNieuweSollicitatie({
+      naam: row?.naam || naam,
+      email: row?.email || email,
+      telefoon: row?.telefoon || telefoon,
+      functie: row?.functie || vacature.titel,
+      adres: formatSollicitatieAdres(adres),
+      status: row?.status || "nieuw",
+      notitie: row?.notitie || notitie,
+      bron: row?.bron || "werkenbij",
+    }).catch((mailErr) =>
+      console.error("Sollicitatie notificatie mail fout:", mailErr)
+    );
 
     return NextResponse.json({ ok: true, sollicitatie: data }, { status: 201 });
   } catch (e) {

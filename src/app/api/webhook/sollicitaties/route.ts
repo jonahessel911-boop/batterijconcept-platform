@@ -17,8 +17,7 @@ import {
   pickAdresFromPayload,
   resolveSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
-import { sendEmail } from "@/lib/email/postmark";
-import { emailBox, emailH1, emailLayout, emailMuted, emailP } from "@/lib/email/layout";
+import { notifyNieuweSollicitatie } from "@/lib/email/sollicitatie-intern";
 
 export const runtime = "nodejs";
 
@@ -211,49 +210,29 @@ export async function POST(req: NextRequest) {
       bestanden.push(uploaded.bestand);
     }
 
-    try {
-      const notitieHtml = (data.notitie || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\n/g, "<br />");
-      const detailBlok = [
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Naam</strong><br />${data.naam}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>E-mail</strong><br />${data.email || "-"}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Telefoon</strong><br />${pickStr(body.telefoon, body.phone, body.mobiel) || "-"}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Functie</strong><br />${pickStr(body.functie, body.function, body.role, body.vacature, body.job) || "-"}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${formatSollicitatieAdres(adres) || "-"}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Status</strong><br />${status}</p>`,
-        `<p style="margin:0 0 8px;font-size:15px;"><strong>Notitie</strong><br />${notitieHtml || "-"}</p>`,
-        `<p style="margin:0;font-size:15px;"><strong>Bestanden</strong><br />${
-          bestanden.length
-            ? bestanden.map((b) => b.bestandsnaam).join(", ")
-            : uploadFiles.length
-              ? `Upload mislukt (${uploadErrors.join("; ") || "onbekend"})`
-              : "Geen bestand meegestuurd"
-        }</p>`,
-      ].join("");
-
-      const html = emailLayout({
-        title: `Nieuwe sollicitatie: ${data.naam}`,
-        preheader: "Er is een nieuwe kandidaat binnengekomen in Recruitment.",
-        bodyHtml: [
-          emailH1("Nieuwe sollicitatie"),
-          emailP("Er is een nieuwe sollicitatie binnengekomen in de Recruitment-tab."),
-          emailBox(detailBlok),
-          emailMuted("Dit is een interne melding van het Batterijconcept CRM."),
-        ].join(""),
-      });
-
-      await sendEmail({
-        to: "jona@batterijconcept.nl, jonahessel911@gmail.com",
-        subject: `Nieuwe sollicitatie: ${data.naam}`,
-        html,
-        tag: "sollicitatie-intern",
-      });
-    } catch (mailErr) {
-      console.error("Sollicitatie notificatie mail fout:", mailErr);
-    }
+    void notifyNieuweSollicitatie({
+      naam: data.naam,
+      email: data.email,
+      telefoon: pickStr(body.telefoon, body.phone, body.mobiel),
+      functie: pickStr(
+        body.functie,
+        body.function,
+        body.role,
+        body.vacature,
+        body.job
+      ),
+      adres: formatSollicitatieAdres(adres),
+      status,
+      notitie: data.notitie,
+      bron: pickStr(body.bron, body.source) || "webhook",
+      bestanden: bestanden.length
+        ? bestanden.map((b) => b.bestandsnaam).join(", ")
+        : uploadFiles.length
+          ? `Upload mislukt (${uploadErrors.join("; ") || "onbekend"})`
+          : "Geen bestand meegestuurd",
+    }).catch((mailErr) =>
+      console.error("Sollicitatie notificatie mail fout:", mailErr)
+    );
 
     if (uploadFiles.length > 0 && bestanden.length === 0) {
       return NextResponse.json(

@@ -4,10 +4,12 @@ import { errMessage } from "@/lib/errors";
 import { parseSollicitatieStatus } from "@/lib/sollicitatie";
 import {
   extractAdresFromNotitie,
+  formatSollicitatieAdres,
   mergeSollicitatieAdres,
   pickAdresFromPayload,
   resolveSollicitatieAdres,
 } from "@/lib/sollicitatie-adres";
+import { notifyNieuweSollicitatie } from "@/lib/email/sollicitatie-intern";
 import { normalizePostcode } from "@/lib/postcode";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
 
@@ -187,6 +189,27 @@ export async function POST(req: NextRequest) {
     }
 
     if (error) throw error;
+    const row = data as {
+      naam?: string | null;
+      email?: string | null;
+      telefoon?: string | null;
+      functie?: string | null;
+      status?: string | null;
+      notitie?: string | null;
+      bron?: string | null;
+    } | null;
+    void notifyNieuweSollicitatie({
+      naam: row?.naam || naam,
+      email: row?.email || pickStr(body.email),
+      telefoon: row?.telefoon || pickStr(body.telefoon),
+      functie: row?.functie || pickStr(body.functie),
+      adres: formatSollicitatieAdres(adres),
+      status: row?.status || status,
+      notitie: row?.notitie || notitie,
+      bron: row?.bron || pickStr(body.bron) || "crm",
+    }).catch((mailErr) =>
+      console.error("Sollicitatie notificatie mail fout:", mailErr)
+    );
     return NextResponse.json({ sollicitatie: data }, { status: 201 });
   } catch (e) {
     return NextResponse.json(
