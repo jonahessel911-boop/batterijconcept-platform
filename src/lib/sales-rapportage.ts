@@ -373,7 +373,7 @@ export async function buildSalesRapportage(
       .from("adviseurs")
       .select("id, naam, actief, rol, startdatum")
       .order("naam");
-    adviseursRaw = retry.data;
+    adviseursRaw = retry.data as typeof adviseursRaw;
     advErr = retry.error;
   }
   if (advErr) throw advErr;

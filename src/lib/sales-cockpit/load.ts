@@ -1126,7 +1126,8 @@ export async function buildSalesCockpitReport(
     id: String(row.id),
     naam: String(row.naam || "Onbekend"),
     actief: row.actief !== false,
-    geblokkeerd: row.geblokkeerd === true,
+    geblokkeerd:
+      (row as { geblokkeerd?: boolean | null }).geblokkeerd === true,
     rol: (row.rol as string | null) ?? null,
     email: (row.email as string | null) ?? null,
     startdatum: (row.startdatum as string | null) ?? null,

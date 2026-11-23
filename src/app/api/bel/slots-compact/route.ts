@@ -123,6 +123,8 @@ export async function GET(req: NextRequest) {
         .order("naam");
       adviseursRaw = (fb.data || []).map((a) => ({
         ...a,
+        geblokkeerd: null,
+        bel_planning: null,
         start_vanaf_huis_maandag: null as boolean | null,
       }));
       advErr = fb.error;

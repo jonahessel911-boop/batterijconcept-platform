@@ -94,12 +94,12 @@ export async function POST(
       (offRes.error.code === "42703" ||
         offRes.error.message?.includes("commissie_pct"))
     ) {
-      offRes = await sb
+      offRes = (await sb
         .from("offertes")
         .select(offSelectCore)
         .eq("leads.adviseur_id", id)
         .eq("status", "ondertekend")
-        .order("ondertekend_op", { ascending: true });
+        .order("ondertekend_op", { ascending: true })) as typeof offRes;
     }
     const offertes = offRes.data || [];
     const offerteIds = offertes
