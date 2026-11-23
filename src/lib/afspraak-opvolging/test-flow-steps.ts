@@ -11,6 +11,8 @@ import {
 import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
+import { getSupabaseAdmin } from "@/lib/supabase";
+import { logOpvolgingBericht } from "./log-bericht";
 import {
   TEST_FLOW_STEPS,
   type TestFlowId,
@@ -64,6 +66,8 @@ export async function sendTestFlowStep(opts: {
   }
 
   const v = sampleVars(opts.voornaam || "Test");
+  const sb = getSupabaseAdmin();
+  const klantNaam = opts.voornaam?.trim() || "Test";
   let mailOk: boolean | null = null;
   let smsOk: boolean | null = null;
   let mailError: string | null = null;
@@ -79,15 +83,30 @@ export async function sendTestFlowStep(opts: {
         mailOk = false;
         mailError = "Geen mail voor deze stap";
       } else {
+        const subject = `[TEST ${opts.flow}] ${built.subject}`;
+        const tag = `test-flow-${opts.flow}-${opts.stepId}`;
         const sent = await sendEmail({
           to: opts.email,
-          subject: `[TEST ${opts.flow}] ${built.subject}`,
+          subject,
           html: built.html,
-          tag: `test-flow-${opts.flow}-${opts.stepId}`,
+          tag,
           attachments: withEmailIconAttachments(built.html),
         });
         mailOk = sent.ok;
         mailError = sent.ok ? null : sent.error || "Mail mislukt";
+        await logOpvolgingBericht(sb, {
+          opvolgingFlow: opts.flow,
+          step: "test",
+          channel: "email",
+          status: sent.ok ? "sent" : "failed",
+          klantNaam,
+          toEmail: opts.email,
+          subject,
+          provider: "postmark",
+          providerMessageId: sent.messageId,
+          tag,
+          error: mailError,
+        });
       }
     }
   }
@@ -102,13 +121,27 @@ export async function sendTestFlowStep(opts: {
         smsOk = false;
         smsError = "Geen SMS voor deze stap";
       } else {
+        const tag = `test-flow-${opts.flow}-${opts.stepId}-sms`;
         const sent = await sendSms({
           to: opts.telefoon,
           body: built.sms,
-          tag: `test-flow-${opts.flow}-${opts.stepId}-sms`,
+          tag,
         });
         smsOk = sent.ok;
         smsError = sent.ok ? null : sent.error || "SMS mislukt";
+        await logOpvolgingBericht(sb, {
+          opvolgingFlow: opts.flow,
+          step: "test",
+          channel: "sms",
+          status: sent.ok ? "sent" : "failed",
+          klantNaam,
+          toPhone: opts.telefoon,
+          bodyPreview: built.sms,
+          provider: "bird",
+          providerMessageId: sent.messageId,
+          tag,
+          error: smsError,
+        });
       }
     }
   }

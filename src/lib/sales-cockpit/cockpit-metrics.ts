@@ -1978,6 +1978,13 @@ export type QualityTrendPoint = {
   to: string;
   /** Getekende deals in het interval. */
   deals: number;
+  /** Absolute aantallen (voor tooltips bij percentages). */
+  timelyN: number;
+  timelyBeoordeeldN: number;
+  holdN: number;
+  cancelledN: number;
+  paidLateN: number;
+  holdOrCancelledN: number;
   /** % deals met bekende tijdig-aanbetaling die op tijd betaalden. */
   timelyPct: number | null;
   /** % deals op hold. */
@@ -2052,17 +2059,24 @@ export function buildQualityTrendSeries(input: {
       }
     }
 
+    const holdOrCancelled = hold + cancelled;
     return {
       key: b.key,
       label: b.label,
       from: span.from,
       to: span.to,
       deals,
+      timelyN: tijdig,
+      timelyBeoordeeldN: tijdigBeoordeeld,
+      holdN: hold,
+      cancelledN: cancelled,
+      paidLateN: paidLate,
+      holdOrCancelledN: holdOrCancelled,
       timelyPct: pct(tijdig, tijdigBeoordeeld),
       holdPct: pct(hold, deals),
       cancelledPct: pct(cancelled, deals),
       paidLatePct: pct(paidLate, deals),
-      holdOrCancelledPct: pct(hold + cancelled, deals),
+      holdOrCancelledPct: pct(holdOrCancelled, deals),
     };
   });
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddToCalendarPanel } from "@/components/afspraak/AddToCalendarPanel";
 import type { CalendarEventInput } from "@/lib/add-to-calendar";
+import type { AgendaProvider } from "@/lib/afspraak-opvolging/agenda-track";
 import { adresRegel } from "@/lib/format";
 import { AFSPRAAK_DUUR_MINUTEN } from "@/lib/slots";
 
@@ -31,10 +32,25 @@ function asOne<T>(raw: T | T[] | null | undefined): T | null {
   return Array.isArray(raw) ? (raw[0] ?? null) : raw;
 }
 
+function trackAgenda(
+  token: string,
+  body: { event: "open" } | { event: "add"; provider: AgendaProvider }
+) {
+  void fetch(`/api/afspraken/${encodeURIComponent(token)}/agenda-track`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    keepalive: true,
+  }).catch(() => {
+    /* fire-and-forget */
+  });
+}
+
 export function AfspraakAgendaClient({ token }: { token: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [afspraak, setAfspraak] = useState<AfspraakPayload | null>(null);
+  const openTracked = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +74,19 @@ export function AfspraakAgendaClient({ token }: { token: string }) {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!afspraak || openTracked.current) return;
+    openTracked.current = true;
+    trackAgenda(token, { event: "open" });
+  }, [afspraak, token]);
+
+  const onTrack = useCallback(
+    (provider: AgendaProvider) => {
+      trackAgenda(token, { event: "add", provider });
+    },
+    [token]
+  );
 
   const event = useMemo((): CalendarEventInput | null => {
     if (!afspraak?.start_at) return null;
@@ -104,6 +133,7 @@ export function AfspraakAgendaClient({ token }: { token: string }) {
         <AddToCalendarPanel
           event={event}
           icsHref={`/api/afspraken/${encodeURIComponent(token)}/calendar`}
+          onTrack={onTrack}
         />
       )}
     </main>

@@ -16,6 +16,7 @@ import {
   isVervolgMetHerinneringOptIn,
 } from "@/lib/afspraak-soort";
 import { isAbOpvolgingFlow } from "@/lib/afspraak-opvolging/assign";
+import { logOpvolgingBericht } from "@/lib/afspraak-opvolging/log-bericht";
 import { processAbFollowups } from "@/lib/afspraak-opvolging/process-ab";
 import { sendOpvolgingBevestiging } from "@/lib/afspraak-opvolging/send-bevestiging";
 import type { OpvolgingFlow } from "@/lib/afspraak-opvolging/types";
@@ -264,11 +265,13 @@ async function processBatch(
         alreadySent: Boolean(a.bevestiging_verstuurd),
       })
     ) {
+      const subject = "Afspraak bevestigd — Batterijconcept";
+      const tag = "afspraak-bevestiging";
       const result = await sendEmail({
         to: email,
-        subject: "Afspraak bevestigd — Batterijconcept",
+        subject,
         html: afspraakBevestigingSequenceEmail(vars),
-        tag: "afspraak-bevestiging",
+        tag,
         replyTo,
       });
       if (result.ok) {
@@ -278,6 +281,35 @@ async function processBatch(
           .eq("id", a.id);
         a.bevestiging_verstuurd = true;
         bevestiging += 1;
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "bevestiging",
+          channel: "email",
+          status: "sent",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          providerMessageId: result.messageId,
+          tag,
+        });
+      } else {
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "bevestiging",
+          channel: "email",
+          status: "failed",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          tag,
+          error: result.error || "Mail versturen mislukt",
+        });
       }
     }
 
@@ -291,11 +323,13 @@ async function processBatch(
         alreadySent: Boolean(a.opwarm_verstuurd),
       })
     ) {
+      const subject = "Salderingsregeling stopt in 2027 — Batterijconcept";
+      const tag = "afspraak-opwarm";
       const result = await sendEmail({
         to: email,
-        subject: "Salderingsregeling stopt in 2027 — Batterijconcept",
+        subject,
         html: afspraakOpwarmSalderingEmail(vars),
-        tag: "afspraak-opwarm",
+        tag,
         replyTo,
       });
       if (result.ok) {
@@ -307,6 +341,35 @@ async function processBatch(
           a.opwarm_verstuurd = true;
           opwarm += 1;
         }
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "opwarm",
+          channel: "email",
+          status: "sent",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          providerMessageId: result.messageId,
+          tag,
+        });
+      } else {
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "opwarm",
+          channel: "email",
+          status: "failed",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          tag,
+          error: result.error || "Mail versturen mislukt",
+        });
       }
     }
 
@@ -317,11 +380,13 @@ async function processBatch(
         alreadySent: Boolean(a.herinnering_verstuurd),
       })
     ) {
+      const subject = "Morgen je adviesafspraak — Batterijconcept";
+      const tag = "afspraak-herinnering";
       const result = await sendEmail({
         to: email,
-        subject: "Morgen je adviesafspraak — Batterijconcept",
+        subject,
         html: afspraakReminder24uEmail(vars),
-        tag: "afspraak-herinnering",
+        tag,
         replyTo,
       });
       if (result.ok) {
@@ -330,6 +395,35 @@ async function processBatch(
           .update({ herinnering_verstuurd: true })
           .eq("id", a.id);
         herinnering += 1;
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "herinnering-24u",
+          channel: "email",
+          status: "sent",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          providerMessageId: result.messageId,
+          tag,
+        });
+      } else {
+        await logOpvolgingBericht(sb, {
+          afspraakId: a.id,
+          leadId: a.lead_id,
+          opvolgingFlow: "legacy",
+          step: "herinnering-24u",
+          channel: "email",
+          status: "failed",
+          klantNaam: lead?.naam,
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          tag,
+          error: result.error || "Mail versturen mislukt",
+        });
       }
     }
   }

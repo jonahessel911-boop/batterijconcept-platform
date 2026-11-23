@@ -11,6 +11,7 @@ import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
 import { isAbOpvolgingFlow } from "./assign";
+import { logOpvolgingBericht } from "./log-bericht";
 import { buildOpvolgingVars } from "./vars";
 import type { OpvolgingFlow } from "./types";
 
@@ -50,6 +51,7 @@ export async function sendOpvolgingBevestiging(opts: {
   const flow = opts.flow ?? "legacy";
   const email = opts.lead?.email?.trim() || null;
   const telefoon = opts.lead?.telefoon?.trim() || null;
+  const klantNaam = opts.lead?.naam?.trim() || null;
   const manageUrl = `${appBaseUrl()}/afspraak/${opts.manageToken}`;
   const { v1, v2 } = buildOpvolgingVars({
     naam: opts.lead?.naam || "klant",
@@ -66,6 +68,14 @@ export async function sendOpvolgingBevestiging(opts: {
     adviseurJoin: opts.adviseur,
   });
 
+  const logBase = {
+    afspraakId: opts.afspraakId,
+    leadId: opts.leadId,
+    opvolgingFlow: flow,
+    step: "bevestiging" as const,
+    klantNaam,
+  };
+
   let mailOk = Boolean(opts.alreadyMailSent);
   let smsOk = Boolean(opts.alreadySmsSent);
   let mailError: string | null = null;
@@ -75,13 +85,21 @@ export async function sendOpvolgingBevestiging(opts: {
     if (!opts.alreadyMailSent) {
       if (!email) {
         mailError = "Lead heeft geen e-mailadres";
+        await logOpvolgingBericht(opts.sb, {
+          ...logBase,
+          channel: "email",
+          status: "skipped",
+          error: mailError,
+        });
       } else {
+        const subject = "Afspraak bevestigd — Batterijconcept";
         const html = afspraakBevestigingSequenceEmailV2(v2);
+        const tag = `afspraak-bevestiging-${flow}`;
         const sent = await sendEmail({
           to: email,
-          subject: "Afspraak bevestigd — Batterijconcept",
+          subject,
           html,
-          tag: `afspraak-bevestiging-${flow}`,
+          tag,
           replyTo,
           attachments: withEmailIconAttachments(html),
         });
@@ -91,8 +109,28 @@ export async function sendOpvolgingBevestiging(opts: {
             .from("afspraken")
             .update({ bevestiging_verstuurd: true })
             .eq("id", opts.afspraakId);
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "email",
+            status: "sent",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            providerMessageId: sent.messageId,
+            tag,
+          });
         } else {
           mailError = sent.error || "Mail versturen mislukt";
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "email",
+            status: "failed",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            tag,
+            error: mailError,
+          });
         }
       }
     }
@@ -100,11 +138,19 @@ export async function sendOpvolgingBevestiging(opts: {
     if (!opts.alreadySmsSent) {
       if (!telefoon) {
         smsError = "Lead heeft geen telefoonnummer";
+        await logOpvolgingBericht(opts.sb, {
+          ...logBase,
+          channel: "sms",
+          status: "skipped",
+          error: smsError,
+        });
       } else {
+        const body = afspraakBevestigingSmsV2(v2);
+        const tag = `afspraak-bevestiging-sms-${flow}`;
         const sent = await sendSms({
           to: telefoon,
-          body: afspraakBevestigingSmsV2(v2),
-          tag: `afspraak-bevestiging-sms-${flow}`,
+          body,
+          tag,
         });
         if (sent.ok) {
           smsOk = true;
@@ -112,8 +158,28 @@ export async function sendOpvolgingBevestiging(opts: {
             .from("afspraken")
             .update({ bevestiging_sms_verstuurd: true })
             .eq("id", opts.afspraakId);
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "sms",
+            status: "sent",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            providerMessageId: sent.messageId,
+            tag,
+          });
         } else {
           smsError = sent.error || "SMS versturen mislukt";
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "sms",
+            status: "failed",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            tag,
+            error: smsError,
+          });
         }
       }
     }
@@ -122,12 +188,20 @@ export async function sendOpvolgingBevestiging(opts: {
     if (!opts.alreadyMailSent) {
       if (!email) {
         mailError = "Lead heeft geen e-mailadres";
+        await logOpvolgingBericht(opts.sb, {
+          ...logBase,
+          channel: "email",
+          status: "skipped",
+          error: mailError,
+        });
       } else {
+        const subject = "Afspraak bevestigd — Batterijconcept";
+        const tag = "afspraak-bevestiging";
         const sent = await sendEmail({
           to: email,
-          subject: "Afspraak bevestigd — Batterijconcept",
+          subject,
           html: afspraakBevestigingSequenceEmail(v1),
-          tag: "afspraak-bevestiging",
+          tag,
           replyTo,
         });
         if (sent.ok) {
@@ -136,8 +210,28 @@ export async function sendOpvolgingBevestiging(opts: {
             .from("afspraken")
             .update({ bevestiging_verstuurd: true })
             .eq("id", opts.afspraakId);
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "email",
+            status: "sent",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            providerMessageId: sent.messageId,
+            tag,
+          });
         } else {
           mailError = sent.error || "Mail versturen mislukt";
+          await logOpvolgingBericht(opts.sb, {
+            ...logBase,
+            channel: "email",
+            status: "failed",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            tag,
+            error: mailError,
+          });
         }
       }
     }

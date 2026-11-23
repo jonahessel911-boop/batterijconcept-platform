@@ -10,6 +10,7 @@ import {
 import { withEmailIconAttachments } from "@/lib/email/email-icon-attachments";
 import { appBaseUrl, sendEmail } from "@/lib/email/postmark";
 import { sendSms } from "@/lib/sms/bird";
+import { logOpvolgingBericht } from "./log-bericht";
 import {
   shouldSendAvondSmsNow,
   shouldSendReminder48uNow,
@@ -76,6 +77,7 @@ export async function processAbFollowups(
     const adviseur = Array.isArray(a.adviseurs) ? a.adviseurs[0] : a.adviseurs;
     const email = lead?.email?.trim();
     const telefoon = lead?.telefoon?.trim();
+    const klantNaam = lead?.naam?.trim() || null;
     const startAt = new Date(a.start_at);
     const createdAt = new Date(a.created_at);
     const manageUrl = `${appBaseUrl()}/afspraak/${a.manage_token}`;
@@ -93,6 +95,13 @@ export async function processAbFollowups(
       adviseurJoin: adviseur,
     });
 
+    const logBase = {
+      afspraakId: a.id,
+      leadId: a.lead_id,
+      opvolgingFlow: a.opvolging_flow,
+      klantNaam,
+    };
+
     // Intensief: social proof
     if (
       a.opvolging_flow === "intensief" &&
@@ -105,12 +114,14 @@ export async function processAbFollowups(
         alreadySent: Boolean(a.social_proof_verstuurd),
       })
     ) {
+      const subject = "Je afspraak staat klaar — Batterijconcept";
       const html = afspraakSocialProofEmailV2(v2);
+      const tag = "afspraak-social-proof";
       const result = await sendEmail({
         to: email,
-        subject: "Je afspraak staat klaar — Batterijconcept",
+        subject,
         html,
-        tag: "afspraak-social-proof",
+        tag,
         replyTo,
         attachments: withEmailIconAttachments(html),
       });
@@ -121,6 +132,29 @@ export async function processAbFollowups(
           .eq("id", a.id);
         a.social_proof_verstuurd = true;
         social_proof += 1;
+        await logOpvolgingBericht(sb, {
+          ...logBase,
+          step: "social-proof",
+          channel: "email",
+          status: "sent",
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          providerMessageId: result.messageId,
+          tag,
+        });
+      } else {
+        await logOpvolgingBericht(sb, {
+          ...logBase,
+          step: "social-proof",
+          channel: "email",
+          status: "failed",
+          toEmail: email,
+          subject,
+          provider: "postmark",
+          tag,
+          error: result.error || "Mail versturen mislukt",
+        });
       }
     }
 
@@ -137,27 +171,82 @@ export async function processAbFollowups(
     ) {
       let mailDone = false;
       if (email) {
+        const subject =
+          "Over 2 dagen komt onze adviseur langs — Batterijconcept";
         const html = afspraakReminder48uEmailV2(v2);
+        const tag = "afspraak-reminder-48u";
         const result = await sendEmail({
           to: email,
-          subject: "Over 2 dagen komt onze adviseur langs — Batterijconcept",
+          subject,
           html,
-          tag: "afspraak-reminder-48u",
+          tag,
           replyTo,
           attachments: withEmailIconAttachments(html),
         });
         mailDone = result.ok;
-        if (result.ok) reminder_48u += 1;
+        if (result.ok) {
+          reminder_48u += 1;
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "reminder-48u",
+            channel: "email",
+            status: "sent",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            providerMessageId: result.messageId,
+            tag,
+          });
+        } else {
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "reminder-48u",
+            channel: "email",
+            status: "failed",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            tag,
+            error: result.error || "Mail versturen mislukt",
+          });
+        }
       }
       let smsDone = !telefoon;
       if (telefoon) {
+        const body = afspraakReminder48uSmsV2(v2);
+        const tag = "afspraak-reminder-48u-sms";
         const result = await sendSms({
           to: telefoon,
-          body: afspraakReminder48uSmsV2(v2),
-          tag: "afspraak-reminder-48u-sms",
+          body,
+          tag,
         });
         smsDone = result.ok;
-        if (result.ok) reminder_48u_sms += 1;
+        if (result.ok) {
+          reminder_48u_sms += 1;
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "reminder-48u",
+            channel: "sms",
+            status: "sent",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            providerMessageId: result.messageId,
+            tag,
+          });
+        } else {
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "reminder-48u",
+            channel: "sms",
+            status: "failed",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            tag,
+            error: result.error || "SMS versturen mislukt",
+          });
+        }
       }
       // Markeer als verstuurd als mail ok (SMS mag later opnieuw via missing flag — we zetten één flag)
       if (mailDone || smsDone) {
@@ -182,12 +271,14 @@ export async function processAbFollowups(
         !a.avond_mail_verstuurd &&
         email
       ) {
+        const subject = "Morgen komt onze adviseur langs — Batterijconcept";
         const html = afspraakAvondVoorafEmailV2(v2);
+        const tag = "afspraak-avond-mail";
         const result = await sendEmail({
           to: email,
-          subject: "Morgen komt onze adviseur langs — Batterijconcept",
+          subject,
           html,
-          tag: "afspraak-avond-mail",
+          tag,
           replyTo,
           attachments: withEmailIconAttachments(html),
         });
@@ -198,14 +289,39 @@ export async function processAbFollowups(
             .eq("id", a.id);
           a.avond_mail_verstuurd = true;
           avond_mail += 1;
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "avond-vooraf",
+            channel: "email",
+            status: "sent",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            providerMessageId: result.messageId,
+            tag,
+          });
+        } else {
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "avond-vooraf",
+            channel: "email",
+            status: "failed",
+            toEmail: email,
+            subject,
+            provider: "postmark",
+            tag,
+            error: result.error || "Mail versturen mislukt",
+          });
         }
       }
 
       if (!a.avond_sms_verstuurd && telefoon) {
+        const body = afspraakAvondVoorafSmsV2(v2);
+        const tag = `afspraak-avond-sms-${a.opvolging_flow}`;
         const result = await sendSms({
           to: telefoon,
-          body: afspraakAvondVoorafSmsV2(v2),
-          tag: `afspraak-avond-sms-${a.opvolging_flow}`,
+          body,
+          tag,
         });
         if (result.ok) {
           await sb
@@ -214,6 +330,29 @@ export async function processAbFollowups(
             .eq("id", a.id);
           a.avond_sms_verstuurd = true;
           avond_sms += 1;
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "avond-vooraf",
+            channel: "sms",
+            status: "sent",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            providerMessageId: result.messageId,
+            tag,
+          });
+        } else {
+          await logOpvolgingBericht(sb, {
+            ...logBase,
+            step: "avond-vooraf",
+            channel: "sms",
+            status: "failed",
+            toPhone: telefoon,
+            bodyPreview: body,
+            provider: "bird",
+            tag,
+            error: result.error || "SMS versturen mislukt",
+          });
         }
       }
     }

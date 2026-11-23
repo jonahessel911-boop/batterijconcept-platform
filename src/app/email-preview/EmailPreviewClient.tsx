@@ -21,6 +21,7 @@ import {
   Monitor,
   Play,
   RefreshCw,
+  ScrollText,
   Smartphone,
   Sparkles,
   Square,
@@ -28,6 +29,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
+import { OpvolgingBerichtenPanel } from "./OpvolgingBerichtenPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -82,7 +84,7 @@ type MailPreview = {
 };
 
 type ViewMode = "mail" | "html";
-type PageMode = "ab" | "legacy";
+type PageMode = "ab" | "legacy" | "berichten";
 type FlowKey = "intensief" | "rustig" | "legacy";
 
 type FlowMetrics = {
@@ -94,6 +96,14 @@ type FlowMetrics = {
   doorgegaan: number;
   mails_verstuurd: number;
   sms_verstuurd: number;
+  agenda_opened?: number;
+  agenda_added?: number;
+  agenda_providers?: {
+    google: number;
+    outlook_live: number;
+    outlook_office: number;
+    ics: number;
+  };
 };
 
 type AbApiResponse = {
@@ -242,10 +252,17 @@ export function EmailPreviewClient({
                   <History className="size-3.5 shrink-0" />
                   <span className="truncate">Legacy v1</span>
                 </TabsTrigger>
+                <TabsTrigger
+                  value="berichten"
+                  className="h-8 flex-1 gap-1.5 rounded-lg px-2.5 sm:flex-none sm:px-3 data-active:bg-green-soft data-active:text-green-deeper"
+                >
+                  <ScrollText className="size-3.5 shrink-0" />
+                  <span className="truncate">Berichten</span>
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
-            {detailMail?.html ? (
+            {detailMail?.html && pageMode !== "berichten" ? (
               <Tabs
                 value={view}
                 onValueChange={(v) => setView(v as ViewMode)}
@@ -268,7 +285,9 @@ export function EmailPreviewClient({
       </header>
 
       <div className="relative mx-auto w-full max-w-[100rem] px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-8">
-        {pageMode === "ab" ? (
+        {pageMode === "berichten" ? (
+          <OpvolgingBerichtenPanel />
+        ) : pageMode === "ab" ? (
           <div className="space-y-4 sm:space-y-6">
             <AbControlCard
               enabled={enabled}
@@ -801,6 +820,11 @@ function AbControlCard({
   );
 }
 
+function pct(part: number, total: number): string {
+  if (total <= 0) return "—";
+  return `${Math.round((part / total) * 100)}%`;
+}
+
 function MetricsGrid({
   metrics,
   loading,
@@ -810,10 +834,13 @@ function MetricsGrid({
 }) {
   if (loading && !metrics) {
     return (
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-14 rounded-lg" />
-        ))}
+      <div className="space-y-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-14 rounded-lg" />
+          ))}
+        </div>
+        <Skeleton className="h-10 rounded-lg" />
       </div>
     );
   }
@@ -828,21 +855,66 @@ function MetricsGrid({
     { label: "SMS", value: metrics.sms_verstuurd },
   ];
 
+  const opened = metrics.agenda_opened ?? 0;
+  const added = metrics.agenda_added ?? 0;
+  const providers = metrics.agenda_providers;
+  const providerBits = providers
+    ? [
+        providers.google ? `Google ${providers.google}` : null,
+        providers.outlook_live ? `Outlook ${providers.outlook_live}` : null,
+        providers.outlook_office
+          ? `M365 ${providers.outlook_office}`
+          : null,
+        providers.ics ? `Apple/ICS ${providers.ics}` : null,
+      ].filter(Boolean)
+    : [];
+
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-      {cells.map((c) => (
-        <div
-          key={c.label}
-          className="min-w-0 rounded-lg border border-border/70 bg-wash/70 px-1.5 py-2 text-center sm:px-2"
-        >
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        {cells.map((c) => (
+          <div
+            key={c.label}
+            className="min-w-0 rounded-lg border border-border/70 bg-wash/70 px-1.5 py-2 text-center sm:px-2"
+          >
+            <p className="text-base font-semibold tabular-nums tracking-tight text-green-deeper sm:text-lg">
+              {c.value}
+            </p>
+            <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {c.label}
+            </p>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="min-w-0 rounded-lg border border-border/70 bg-wash/70 px-2 py-2 text-center">
           <p className="text-base font-semibold tabular-nums tracking-tight text-green-deeper sm:text-lg">
-            {c.value}
+            {opened}
+            <span className="ml-1 text-xs font-medium text-muted-foreground">
+              ({pct(opened, metrics.ingepland)})
+            </span>
           </p>
           <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            {c.label}
+            Agenda open
           </p>
         </div>
-      ))}
+        <div className="min-w-0 rounded-lg border border-border/70 bg-wash/70 px-2 py-2 text-center">
+          <p className="text-base font-semibold tabular-nums tracking-tight text-green-deeper sm:text-lg">
+            {added}
+            <span className="ml-1 text-xs font-medium text-muted-foreground">
+              ({pct(added, metrics.ingepland)})
+            </span>
+          </p>
+          <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Agenda toegevoegd
+          </p>
+        </div>
+      </div>
+      {providerBits.length > 0 ? (
+        <p className="text-center text-[10px] text-muted-foreground">
+          Providers: {providerBits.join(" · ")}
+        </p>
+      ) : null}
     </div>
   );
 }

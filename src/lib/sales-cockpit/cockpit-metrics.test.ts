@@ -1034,8 +1034,11 @@ function run() {
   const first = withDeals[0]!;
   assert.equal(first.deals, 2);
   assert.equal(first.timelyPct, 100);
+  assert.equal(first.timelyN, 1);
   assert.equal(first.cancelledPct, 50);
+  assert.equal(first.cancelledN, 1);
   assert.equal(first.holdOrCancelledPct, 50);
+  assert.equal(first.holdOrCancelledN, 1);
 
   console.log("cockpit-metrics.test.ts ok");
 }

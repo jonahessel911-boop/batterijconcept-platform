@@ -7,14 +7,18 @@ import {
   type CalendarEventInput,
 } from "@/lib/add-to-calendar";
 import { formatDateTimeLongNl } from "@/lib/format";
+import type { AgendaProvider } from "@/lib/afspraak-opvolging/agenda-track";
 
 export function AddToCalendarPanel({
   event,
   icsHref,
+  onTrack,
 }: {
   event: CalendarEventInput;
   /** Optioneel: Apple / andere agenda’s via .ics */
   icsHref?: string;
+  /** Fire-and-forget vóór navigatie / download */
+  onTrack?: (provider: AgendaProvider) => void;
 }) {
   const google = googleCalendarUrl(event);
   const outlook = outlookLiveCalendarUrl(event);
@@ -47,6 +51,7 @@ export function AddToCalendarPanel({
             href={google}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => onTrack?.("google")}
             className="rounded-xl bg-[#0D5C32] px-4 py-3 text-center text-sm font-semibold text-white hover:bg-[#0a4a28]"
           >
             Google Agenda
@@ -55,6 +60,7 @@ export function AddToCalendarPanel({
             href={outlook}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => onTrack?.("outlook_live")}
             className="rounded-xl border border-[#d9d2c8] bg-white px-4 py-3 text-center text-sm font-semibold text-[#1e3a2f] hover:bg-[#f7f4ef]"
           >
             Outlook.com
@@ -63,6 +69,7 @@ export function AddToCalendarPanel({
             href={office}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => onTrack?.("outlook_office")}
             className="rounded-xl border border-[#d9d2c8] bg-white px-4 py-3 text-center text-sm font-semibold text-[#1e3a2f] hover:bg-[#f7f4ef]"
           >
             Outlook / Microsoft 365
@@ -70,6 +77,7 @@ export function AddToCalendarPanel({
           {icsHref ? (
             <a
               href={icsHref}
+              onClick={() => onTrack?.("ics")}
               className="rounded-xl border border-dashed border-[#d9d2c8] bg-[#f7f4ef] px-4 py-3 text-center text-sm font-medium text-[#3a4a44] hover:border-[#0D5C32]/40"
             >
               Apple Agenda of andere app
