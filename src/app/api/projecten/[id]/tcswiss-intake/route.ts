@@ -174,7 +174,7 @@ export async function POST(
         )
         .eq("id", id)
         .single();
-      project = retry.data;
+      project = retry.data as typeof project;
       error = retry.error;
     }
     if (error || !project) {
